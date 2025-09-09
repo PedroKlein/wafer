@@ -1,0 +1,49 @@
+# Justfile for Rust examples
+
+# Justfile for Rust examples
+
+# Build all Rust plugins
+build-rust: build-math-plugin
+
+# Build the advanced math plugin (with wasm-bindgen)
+build-math-plugin:
+    @echo "Building advanced Rust math plugin..."
+    @cd math_plugin && \
+    if ! command -v wasm-pack >/dev/null 2>&1; then \
+        echo "Error: wasm-pack not found. Run 'just install-tools' from the root directory."; \
+        exit 1; \
+    fi && \
+    wasm-pack build --target web --out-dir pkg && \
+    echo "Copying WASM file to plugins directory..." && \
+    cp pkg/math_plugin_bg.wasm ../../../plugins/math_plugin.wasm && \
+    echo "Advanced math plugin built successfully!"
+
+# Run cargo check on all Rust plugins
+check:
+    @cd math_plugin && cargo check
+
+# Format all Rust code
+fmt:
+    @cd math_plugin && cargo fmt
+
+# Clean all Rust build artifacts
+clean:
+    @cd math_plugin && cargo clean
+    @rm -rf math_plugin/pkg/
+
+# Run all Rust tests
+test:
+    @cd math_plugin && cargo test
+
+# Show Rust plugin info
+info:
+    @echo "\nAdvanced Math Plugin:"
+    @cd math_plugin && cargo tree
+
+# Development build with debug info
+dev-build:
+    @echo "Building advanced math plugin in development mode..."
+    @cd math_plugin && \
+    wasm-pack build --dev --target web --out-dir pkg && \
+    cp pkg/math_plugin_bg.wasm ../../../plugins/math_plugin.wasm && \
+    echo "Development builds complete!"

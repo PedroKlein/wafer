@@ -1,32 +1,116 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
-#
-# Binaries for programs and plugins
+# Wafer POC - .gitignore
+
+# Go binaries and executables
+bin/*
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 
-# Test binary, built with `go test -c`
+# Go test artifacts
 *.test
-
-# Code coverage profiles and other test artifacts
 *.out
 coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-# Go workspace file
+# Go workspace and modules
 go.work
 go.work.sum
+/vendor/
 
-# env file
+# WebAssembly files (generated plugins)
+*.wasm
+!plugins/example.wasm  # Keep the hand-written example
+
+# Build and package directories
+/target/
+/build/
+/dist/
+
+# Rust build artifacts
+examples/rust/*/target/
+examples/rust/*/pkg/
+examples/rust/*/Cargo.lock
+
+# TinyGo/Go build artifacts
+examples/go/*/pkg/
+examples/go/*/*.wasm
+
+# Node.js (for future JS/TS examples)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+*.tgz
+.yarn-integrity
+
+# Python (for future Python examples)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.iml
+*.ipr
+*.iws
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Environment and configuration
 .env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# Logs and temporary files
+*.log
+logs/
+*.tmp
+*.temp
+.tmp/
+.temp/
+
+# Backup and archive files
+*.bak
+*.backup
+*.tar.gz
+*.zip
+*.rar
+
+# Documentation build
+site/
+docs/_build/
+
+# Debug and profiling
+debug
+*.debug
+*.prof
+*.pprof
+
+# Security files
+*.pem
+*.key
+*.crt
+*.p12
