@@ -12,7 +12,7 @@ run:
 # Build the Go application
 build:
     @echo "Building Go application..."
-    go build -o wafer-poc main.go
+    go build -o bin/wafer-poc main.go
 
 # Install dependencies
 deps:
@@ -20,41 +20,21 @@ deps:
     go mod download
     go mod tidy
 
-# Run tests
-test:
-    @echo "Running Go tests..."
-    go test ./...
-    @echo "Testing plugin loading..."
-    just run
-
-# Run tests with coverage
-test-coverage:
-    @echo "Running tests with coverage..."
-    go test -cover ./...
-
 # Clean build artifacts
 clean:
     @echo "Cleaning build artifacts..."
-    rm -f wafer-poc
-    rm -rf examples/*/pkg/
-    find plugins/ -name "*.wasm" ! -name "example.wasm" -delete
-    @echo "Cleaned! (Kept plugins/example.wasm)"
+    find plugins/ -name "*.wasm" -delete
+    @echo "Cleaned!"
+    just examples/rust/clean
+    just examples/go/clean
+    rm -rf bin
 
 # Build all example plugins
 build-examples:
     @echo "Building all example plugins..."
     just examples/rust/build-rust
     just examples/go/build-go
-
-# Build only Rust examples
-build-rust:
-    @echo "Building Rust examples..."
-    just examples/rust/build-rust
-
-# Build only Go examples
-build-go:
-    @echo "Building Go examples..."
-    just examples/go/build-go
+    just build-wat 
 
 # Install required tools
 install-tools:
@@ -97,40 +77,25 @@ build-wat:
         fi; \
     done
 
-# Test parallel execution specifically
-test-parallel:
-    @echo "Testing parallel plugin execution..."
-    go run main.go
-
 # Format code
 fmt:
     @echo "Formatting Go code..."
     go fmt ./...
     @echo "Formatting Rust code..."
-    @cd examples/rust/math_plugin && cargo fmt 2>/dev/null || true
+    just examples/rust/fmt
     @echo "Formatting Go examples..."
-    @cd examples/go/math_plugin && go fmt ./... 2>/dev/null || true
+    just examples/go/fmt
 
 # Check code quality
 check:
     @echo "Checking Go code..."
     go vet ./...
     @echo "Checking Rust code..."
-    @cd examples/rust/math_plugin && cargo check 2>/dev/null || true
+    just examples/rust/check
     @echo "Checking Go examples..."
-    @cd examples/go/math_plugin && go fmt -l . 2>/dev/null || true
-
-# Show project structure
-tree:
-    @echo "Project structure:"
-    @tree -I 'target|pkg|node_modules' || ls -la
+    just examples/go/check
 
 # Development setup - install tools and build examples
 setup: install-tools build-examples
     @echo "Development environment setup complete!"
     @echo "Run 'just run' to test the plugin loader."
-
-# Watch for changes and rebuild (requires entr)
-watch:
-    @echo "Watching for changes (requires 'entr' to be installed)..."
-    @find . -name "*.go" -o -name "*.rs" -o -name "*.wat" | entr -r just build-examples run

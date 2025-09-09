@@ -1,5 +1,3 @@
-# Justfile for Go examples using TinyGo
-
 # Build all Go plugins
 build-go: build-math-plugin
 
@@ -7,26 +5,14 @@ build-go: build-math-plugin
 build-math-plugin:
     @echo "Building Go math plugin with TinyGo..."
     @cd math_plugin && \
-    if ! command -v tinygo >/dev/null 2>&1; then \
-        echo "Error: tinygo not found. Run 'just install-tools' from the root directory."; \
-        exit 1; \
-    fi && \
     tinygo build -o math_plugin.wasm -target wasm -no-debug -opt=2 ./main.go && \
     echo "Copying WASM file to plugins directory..." && \
     cp math_plugin.wasm ../../../plugins/go_math_plugin.wasm && \
     echo "Go math plugin built successfully!"
 
-# Development build with debug info
-dev-build:
-    @echo "Building Go math plugin in development mode..."
-    @cd math_plugin && \
-    tinygo build -o math_plugin.wasm -target wasm -panic=trap -scheduler=none -gc=leaking ./main.go && \
-    cp math_plugin.wasm ../../../plugins/go_math_plugin.wasm && \
-    echo "Development build complete!"
-
 # Check Go code formatting
 check:
-    @cd math_plugin && go fmt -l .
+    @cd math_plugin && go vet ./...
 
 # Format Go code
 fmt:
@@ -35,14 +21,6 @@ fmt:
 # Clean build artifacts
 clean:
     @cd math_plugin && rm -f *.wasm
-
-# Run Go tests (if any)
-test:
-    @cd math_plugin && go test ./...
-
-# Show module info
-info:
-    @cd math_plugin && go list -m all
 
 # Optimize the WASM file (requires wasm-opt from binaryen)
 optimize:
