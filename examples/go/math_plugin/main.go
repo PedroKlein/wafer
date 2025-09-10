@@ -1,18 +1,23 @@
 package main
 
 //export add
-func add(a, b int32) int32 {
+func Add(a, b int32) int32 {
 	return a + b
 }
 
 //export subtract
-func subtract(a, b int32) int32 {
+func Subtract(a, b int32) int32 {
 	return a - b
 }
 
 //export multiply
-func multiply(a, b int32) int32 {
+func Multiply(a, b int32) int32 {
 	return a * b
+}
+
+//export hello
+func Hello() string {
+	return "Hello from Go WASM plugin!"
 }
 
 // Required main function for TinyGo (but not used in WASM)

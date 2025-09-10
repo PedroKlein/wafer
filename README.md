@@ -156,8 +156,8 @@ result, err := manager.CallFunction(plugin, "add", int32(5), int32(3))
 
 // Parallel calls
 calls := []FunctionCall{
-    {PluginName: "example", FunctionName: "add", Args: []interface{}{int32(10), int32(20)}},
-    {PluginName: "example", FunctionName: "multiply", Args: []interface{}{int32(6), int32(7)}},
+    {PluginName: "example", FunctionName: "add", Args: []any{int32(10), int32(20)}},
+    {PluginName: "example", FunctionName: "multiply", Args: []any{int32(6), int32(7)}},
 }
 results := manager.CallFunctionParallel(calls)
 ```
