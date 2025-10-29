@@ -1,0 +1,18 @@
+package my:pipeline
+
+// Reuse the standard stream types from WASI:
+use wasi:io/streams@0.2.0.{input-stream, output-stream}
+
+// Your pipeline contract:
+interface filter {
+  /// Transform the input stream into a new output stream.
+  process: func(input: input-stream) -> result<output-stream, error-code>
+  type error-code = u16
+}
+
+// What the component (plugin) exports, and what it may import.
+world plugin {
+  // (Optional) bring in logging/clock/etc later:
+  // use wasi:logging/logging@0.2.0.{log}
+  export filter
+}

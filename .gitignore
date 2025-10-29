@@ -114,3 +114,8 @@ debug
 *.key
 *.crt
 *.p12
+
+
+# Added by cargo
+
+/target
