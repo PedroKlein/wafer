@@ -1,0 +1,8 @@
+[package]
+name = "wafer-poc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+wasmtime = "38.0.3"
+
