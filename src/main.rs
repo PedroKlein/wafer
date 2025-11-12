@@ -9,9 +9,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing");
 
     let engine = wasmtime::Engine::default();
-    let module = wasmtime::Module::from_file(&engine, "../plugins/hello.wat")?;
+    let module = wasmtime::Module::from_file(&engine, "plugins/hello.wat")?;
 
-    println!("Ïnitializing");
+    println!("Initializing");
 
     let mut store = wasmtime::Store::new(
         &engine,
