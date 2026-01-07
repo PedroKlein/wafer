@@ -1,5 +1,3 @@
-use wasmtime::{Caller, Instance};
-
 struct MyState {
     name: String,
     count: usize,
@@ -9,6 +7,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Testing");
 
     let engine = wasmtime::Engine::default();
+    let mut linker = wasmtime::Linker::new(&engine);
     let module = wasmtime::Module::from_file(&engine, "plugins/hello.wat")?;
 
     println!("Initializing");
@@ -21,17 +20,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    let hello_func = wasmtime::Func::wrap(&mut store, |mut caller: Caller<'_, MyState>| {
+    linker.func_wrap("", "hello",  |mut caller: wasmtime::Caller<'_, MyState>| {
         println!("calling back...");
         println!("> {}", caller.data().name);
         caller.data_mut().count += 1;
-    });
+        println!("> count: {}", caller.data().count);
+    })?;
 
-    let imports = [hello_func.into()];
-    let instance = Instance::new(&mut store, &module, &imports)?;
+    let instance = linker.instantiate( &mut store, &module)?;
 
     let run = instance.get_typed_func::<(), ()>(&mut store, "run")?;
 
+    run.call(&mut store, ())?;
     run.call(&mut store, ())?;
     Ok(())
 }
