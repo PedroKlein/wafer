@@ -6,6 +6,6 @@ use crate::normal::normal_host;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     component_host()?;
-    normal_host()?;
+    // normal_host()?;
     Ok(())
 }

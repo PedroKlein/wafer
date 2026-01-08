@@ -2,6 +2,7 @@
     "rust-analyzer.linkedProjects": [
         "./Cargo.toml",
         "./examples/rust/hello_wasi/Cargo.toml",
+        "./examples/rust/hello_wit/Cargo.toml",
     ],
     "rust-analyzer.inlayHints.typeHints.enable": false,
     "rust-analyzer.inlayHints.parameterHints.enable": false,
