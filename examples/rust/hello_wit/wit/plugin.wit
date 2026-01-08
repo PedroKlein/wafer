@@ -1,0 +1,8 @@
+package demo:plugin@0.1.0;
+
+world plugin {
+  import hello: func(msg: string) -> u32;
+  
+  export run: func() -> u32;
+  export greeting: func() -> string;
+}
