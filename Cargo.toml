@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 wasmtime = "40.0.0"
-
+wasmtime-wasi = "40.0.0"
