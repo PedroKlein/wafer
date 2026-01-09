@@ -118,3 +118,9 @@ debug
 # Added by cargo
 
 /target
+
+# MQTT broker runtime data and logs
+mqtt/data/
+mqtt/log/
+
+docker-compose.override.yml

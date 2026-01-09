@@ -7,9 +7,3 @@ fn main() -> anyhow::Result<()> {
 
     Ok(())
 }
-
-
-
-fn add(a: String, b: String) -> String {
-    format!("{}{}", a, b)
-}

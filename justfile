@@ -1,101 +1,89 @@
-# Main justfile for wafer-poc project
+# Use bash for richer scripting (loops, conditionals)
+set shell := ["bash", "-c"]
 
-# Default recipe - show available commands
-default:
-    @just --list
+# Config
+BROKER_HOST := "mosquitto"
+BROKER_PORT := "1883"
+CLI := "docker compose run --rm mqttcli"
 
-# Build and run the main Go application
-run:
-    @echo "Building and running WASM plugin loader..."
-    go run main.go
+# Broker lifecycle
+mqtt-up:
+  docker compose up -d mosquitto
 
-# Build the Go application
-build:
-    @echo "Building Go application..."
-    go build -o bin/wafer-poc main.go
+mqtt-logs:
+  docker compose logs -f mosquitto
 
-# Install dependencies
-deps:
-    @echo "Installing Go dependencies..."
-    go mod download
-    go mod tidy
+mqtt-down:
+  docker compose down
 
-# Clean build artifacts
-clean:
-    @echo "Cleaning build artifacts..."
-    find plugins/ -name "*.wasm" -delete
-    @echo "Cleaned!"
-    just examples/rust/clean
-    just examples/go/clean
-    rm -rf bin
+# Run the Rust MQTT subscriber (connects to localhost:1883)
+run-mqtt:
+  cargo run -- mqtt
 
-# Build all example plugins
-build-examples:
-    @echo "Building all example plugins..."
-    just examples/rust/build-rust
-    just examples/go/build-go
-    just build-wat 
+# Basic publish/subscribe using efrecon/mqtt-client in Docker
+# Usage:
+#   just mqtt-pub <topic> <message> <qos>
+#   just mqtt-sub <topic> <qos>
+mqtt-pub topic message qos:
+  {{CLI}} pub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -m "{{message}}" -q "{{qos}}"
 
-# Install required tools
-install-tools:
-    @echo "Installing required tools..."
-    @echo "Installing wasm-pack for Rust..."
-    @if ! command -v wasm-pack >/dev/null 2>&1; then \
-        curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh; \
-    else \
-        echo "wasm-pack already installed"; \
-    fi
-    @echo "Installing TinyGo for Go..."
-    @if ! command -v tinygo >/dev/null 2>&1; then \
-        if command -v brew >/dev/null 2>&1; then \
-            brew tap tinygo-org/tools && brew install tinygo; \
-        else \
-            echo "Please install TinyGo manually: https://tinygo.org/getting-started/install/"; \
-        fi; \
-    else \
-        echo "TinyGo already installed"; \
-    fi
-    @echo "Installing wabt (WebAssembly Binary Toolkit)..."
-    @if ! command -v wat2wasm >/dev/null 2>&1; then \
-        if command -v brew >/dev/null 2>&1; then \
-            brew install wabt; \
-        else \
-            echo "Please install wabt manually: https://github.com/WebAssembly/wabt"; \
-        fi; \
-    else \
-        echo "wabt already installed"; \
-    fi
+# Retained publish: persists for future subscribers until replaced
+# Usage:
+#   just mqtt-pub-retained <topic> <message> <qos>
+mqtt-pub-retained topic message qos:
+  {{CLI}} pub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -m "{{message}}" -q "{{qos}}" -r
 
-# Compile WAT files to WASM
-build-wat:
-    @echo "Compiling WAT files to WASM..."
-    @cd plugins && \
-    for wat_file in *.wat; do \
-        if [ -f "$wat_file" ]; then \
-            echo "Compiling $wat_file..."; \
-            wat2wasm "$wat_file"; \
-        fi; \
-    done
+mqtt-sub topic qos:
+  {{CLI}} sub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -q "{{qos}}"
 
-# Format code
-fmt:
-    @echo "Formatting Go code..."
-    go fmt ./...
-    @echo "Formatting Rust code..."
-    just examples/rust/fmt
-    @echo "Formatting Go examples..."
-    just examples/go/fmt
+# Stream publisher: send messages at a fixed interval.
+# Sends `count` messages; if count is 0, runs indefinitely.
+# Message payload: "<prefix>-<seq> @<ts>"
+# Usage:
+#   just mqtt-stream <topic> <interval_sec> <count> <qos> <prefix>
+mqtt-stream topic interval_sec count qos prefix:
+  docker compose run --rm --entrypoint /bin/sh mqttcli -c '\
+    i=0; \
+    while [ "{{count}}" -eq 0 ] || [ "$i" -lt "{{count}}" ]; do \
+      ts=$(date +%s); \
+      payload="{{prefix}}-$i @$ts"; \
+      mqtt pub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -m "$payload" -q "{{qos}}"; \
+      i=$((i+1)); \
+      sleep "{{interval_sec}}"; \
+    done \
+  '
 
-# Check code quality
-check:
-    @echo "Checking Go code..."
-    go vet ./...
-    @echo "Checking Rust code..."
-    just examples/rust/check
-    @echo "Checking Go examples..."
-    just examples/go/check
+# Burst publisher: sends bursts of messages with a gap between bursts.
+# Sends `bursts` groups; each group has `burst_size` messages.
+# Usage:
+#   just mqtt-burst <topic> <burst_size> <bursts> <gap_sec> <qos> <prefix>
+mqtt-burst topic burst_size bursts gap_sec qos prefix:
+  docker compose run --rm --entrypoint /bin/sh mqttcli -c '\
+    b=0; \
+    while [ "$b" -lt "{{bursts}}" ]; do \
+      i=0; \
+      while [ "$i" -lt "{{burst_size}}" ]; do \
+        ts=$(date +%s); \
+        payload="{{prefix}}-b${b}-i${i} @$ts"; \
+        mqtt pub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -m "$payload" -q "{{qos}}"; \
+        i=$((i+1)); \
+      done; \
+      b=$((b+1)); \
+      if [ "$b" -lt "{{bursts}}" ]; then sleep "{{gap_sec}}"; fi; \
+    done \
+  '
 
-# Development setup - install tools and build examples
-setup: install-tools build-examples
-    @echo "Development environment setup complete!"
-    @echo "Run 'just run' to test the plugin loader."
+# JSON publisher: emits simple JSON with timestamp and sequence.
+# Usage:
+#   just mqtt-json <topic> <interval_sec> <count> <qos>
+mqtt-json topic interval_sec count qos:
+  docker compose run --rm --entrypoint /bin/sh mqttcli -c '\
+    i=0; \
+    while [ "{{count}}" -eq 0 ] || [ "$i" -lt "{{count}}" ]; do \
+      ts=$(date +%s); \
+      payload=$(printf "{\"ts\":%s,\"seq\":%s}" "$ts" "$i"); \
+      mqtt pub -h {{BROKER_HOST}} -p {{BROKER_PORT}} -t "{{topic}}" -m "$payload" -q "{{qos}}"; \
+      i=$((i+1)); \
+      sleep "{{interval_sec}}"; \
+    done \
+  '

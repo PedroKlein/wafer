@@ -3,7 +3,7 @@ struct MyState {
     count: usize,
 }
 
-pub fn normal_host() -> Result<(), Box<dyn std::error::Error>> {
+pub fn normal_host() -> anyhow::Result<()>  {
     println!("Testing");
 
     let engine = wasmtime::Engine::default();
