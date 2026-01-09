@@ -28,7 +28,7 @@ impl PluginImports for MyComponentState {
     }
 }
 
-pub fn component_host() -> Result<(), Box<dyn std::error::Error>> {
+pub fn component_host() -> anyhow::Result<()>  {
     println!("Testing");
 
     let engine = wasmtime::Engine::default();
@@ -48,7 +48,7 @@ pub fn component_host() -> Result<(), Box<dyn std::error::Error>> {
     b.inherit_stdio().inherit_env().env("FOO", "bar"); // builder supports env/envs/inherit_env
 
     // Preopened dirs are how you grant filesystem capability (sandboxed):
-    b.preopened_dir(".", ".", DirPerms::READ, FilePerms::READ)?;
+    b.preopened_dir(std::path::Path::new("."), ".", DirPerms::READ, FilePerms::READ)?;
 
     let mut store = wasmtime::Store::new(
         &engine,
