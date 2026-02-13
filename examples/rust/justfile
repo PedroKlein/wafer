@@ -1,5 +1,5 @@
 # Build all Rust plugins
-build-rust: build-math-plugin
+build-rust: build-math-plugin build-hello-wasi build-hello-wit
 
 # Build the advanced math plugin (with wasm-bindgen)
 build-math-plugin:

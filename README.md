@@ -1,205 +1,185 @@
-# Wafer POC - WebAssembly Plugin Loader
+# Wafer PoC
 
-A simple WebAssembly plugin loader built in Go, demonstrating parallel execution, benchmarking, and multi-language plugin support.
+A Rust-based WebAssembly plugin loader using wasmtime, designed for extensible application architectures.
 
-## 🚀 Features
+## Features
 
-- **WASM Plugin Loading**: Load and execute WebAssembly plugins dynamically
-- **Parallel Execution**: Run multiple plugin functions concurrently with goroutines
-- **Benchmarking**: Performance testing with detailed statistics
-- **Multi-language Support**: Examples in Rust, TinyGo, and hand-written WAT
-- **Build Automation**: Comprehensive justfile for development workflow
-- **Simple Architecture**: Everything in a single main.go for easy understanding
+- **wasmtime 40.x runtime** - Production-ready WASM execution
+- **WASI support** - System interface for plugins (filesystem, environment, clocks)
+- **Async execution** - Tokio-based async runtime integration
+- **MQTT integration** - Event-driven plugin communication via rumqttc
 
-## 📁 Project Structure
+## Quick Start
+
+```bash
+# Build the project
+cargo build
+
+# Run in release mode
+cargo run --release
+```
+
+## Project Structure
 
 ```
 wafer-poc/
-├── main.go                 # Main application with all plugin logic
-├── plugins/                # WASM plugin files
-│   └── example.wasm        # Hand-written WAT example (working)
-├── examples/               # Source code for building plugins
-│   ├── rust/               # Rust plugin examples
-│   └── go/                 # TinyGo plugin examples
-├── justfile                # Build automation
-├── go.mod                  # Go module definition
-└── README.md               # This file
-```
-│   └── example.wasm        # Hand-written WAT example (working)
-├── examples/               # Source code for building plugins
-│   ├── rust/               # Rust plugin examples
-│   └── go/                 # TinyGo plugin examples
-├── justfile                # Build automation
-├── go.mod                  # Go module definition
-├── main.go.backup          # Original monolithic implementation
-└── STRUCTURE.md            # Detailed architecture documentation
+├── src/              # Core plugin loader implementation
+├── plugins/          # WASM plugin modules
+├── .opencode/        # AI agent configurations
+│   └── agents/       # Specialist subagents
+└── Cargo.toml        # Dependencies and build config
 ```
 
-## 🛠️ Quick Start
+---
+
+## Vibe Coding Workflow
+
+This project uses [OpenCode](https://opencode.ai) with specialized AI agents and the [Beads](https://github.com/steveyegge/beads) task tracking system for an optimized AI-assisted development workflow.
 
 ### Prerequisites
-- Go 1.24.3+
-- just (command runner)
-- Rust with wasm-pack (for Rust examples)
-- TinyGo (for Go WASM examples)
-- WABT tools (for WAT compilation)
-
-### Installation & Setup
-```bash
-# Install tools and dependencies
-just install-tools
-just deps
-
-# Build the application
-just build
-
-# Run the demo
-just run
-```
-
-### Basic Usage
-```bash
-# Build and run the application
-just run
-
-# Or run directly
-go run main.go
-
-# Build standalone executable
-just build
-./wafer-poc
-
-# Run tests
-just test
-```
-
-## 🔧 Building Plugins
-
-### Build All Examples
-```bash
-just build-examples
-```
-
-### Build Specific Language
-```bash
-just build-rust    # Rust examples
-just build-go      # TinyGo examples
-```
-
-### Manual WAT Compilation
-```bash
-wat2wasm plugins/example.wat -o plugins/example.wasm
-```
-
-## 📊 Performance
-
-Current benchmark results (on example plugin):
-- **Function Call Latency**: ~1.5μs average
-- **Parallel Coordination**: ~67μs overhead for 6 concurrent calls
-- **Plugin Loading**: ~3-6ms per plugin
-- **Success Rate**: 100% for hand-written WAT plugins
-
-## 🧪 Testing
 
 ```bash
-# Run tests (includes running the application)
-just test
+# Install beads CLI
+brew install beads
+# OR
+curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
 
-# Run with coverage
-just test-coverage
+# Initialize beads in the project
+bd init
 ```
 
-## 🔍 Architecture Highlights
-
-### Simple Monolithic Design
-- **Single File**: All functionality in main.go for easy understanding
-- **Direct Implementation**: No interface layers - straightforward code flow
-- **Plugin Management**: Built-in PluginManager struct with essential methods
-```go
-type Manager interface {
-### Core Components
-```go
-// Plugin represents a loaded WASM plugin
-type Plugin struct {
-    Name     string
-    Instance *wasmtime.Instance
-    Module   *wasmtime.Module
-}
-
-// PluginManager manages WASM plugins
-type PluginManager struct {
-    engine  *wasmtime.Engine
-    store   *wasmtime.Store
-    plugins map[string]*Plugin
-}
-```
-
-### Concurrency
-- Parallel function execution with goroutines
-- Concurrent plugin loading support
-- Built-in benchmarking with performance statistics
-
-## 🎯 Working Examples
-
-### Hand-written WAT (✅ Fully Working)
-```bash
-# Located in plugins/example.wasm
-# Exports: add(i32, i32) -> i32, multiply(i32, i32) -> i32
-# Pure WebAssembly with no external dependencies
-```
-
-### Plugin Function Calls
-```go
-// Single call
-result, err := manager.CallFunction(plugin, "add", int32(5), int32(3))
-// result: 8
-
-// Parallel calls
-calls := []FunctionCall{
-    {PluginName: "example", FunctionName: "add", Args: []any{int32(10), int32(20)}},
-    {PluginName: "example", FunctionName: "multiply", Args: []any{int32(6), int32(7)}},
-}
-results := manager.CallFunctionParallel(calls)
-```
-
-## 📈 Performance Benchmarks
-
-The system includes built-in benchmarking capabilities:
+### Workflow Overview
 
 ```
-Benchmarking example.add:
-  100 iterations: avg=1.368µs, min=1.167µs, max=3.375µs, success=100.0%
-  1000 iterations: avg=1.617µs, min=1.083µs, max=4.917µs, success=100.0%
-  10000 iterations: avg=1.593µs, min=1µs, max=50.25µs, success=100.0%
+┌─────────────────────────────────────────────────────────────────┐
+│                     VIBE CODING LOOP                            │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   1. DESCRIBE  ──►  2. DECOMPOSE  ──►  3. EXECUTE  ──►  4. VERIFY  │
+│        │                 │                  │               │   │
+│   "Add caching"    @orchestrator      @specialists      tests   │
+│                    breaks it down     do the work       pass    │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🔄 Development Workflow
+### Step-by-Step
+
+1. **Describe** what you want to build in natural language
+2. **Decompose** with `@orchestrator` to break complex features into tasks
+3. **Execute** tasks with specialist agents or `@beads-task-agent`
+4. **Verify** changes work, then repeat
+
+### Using Beads Tasks
 
 ```bash
-# Full development cycle
-just clean           # Clean artifacts
-just install-tools   # Install dependencies
-just build-examples  # Build plugin examples
-just build           # Build main application
-just test            # Run unit tests
-just run             # Execute demo
+# Create a task
+bd create "Implement plugin caching" -p 1
+
+# See what's ready to work on
+bd ready
+
+# Claim a task before starting
+bd update <id> --claim
+
+# Add notes as you work
+bd update <id> --notes "Using LRU with 100MB limit"
+
+# Complete the task
+bd close <id> --reason "Implemented with SHA256-based cache keys"
+
+# Sync to git
+bd sync
 ```
 
-## 📚 Learning Resources
+### Agent Capabilities
 
-- **main.go**: Complete implementation with detailed comments
-- **examples/**: Multi-language plugin source code
-- **plugins/example.wat**: Hand-written WebAssembly example
-- **justfile**: Build automation and development workflow
+| Agent                  | Purpose                             | Can Modify Code? |
+| ---------------------- | ----------------------------------- | ---------------- |
+| `@orchestrator`        | Task decomposition & coordination   | Yes              |
+| `@beads-task-agent`    | Autonomous task execution           | Yes              |
+| `@wasm-specialist`     | Wasmtime runtime & plugin arch      | Yes              |
+| `@cargo-expert`        | Dependencies & build configuration  | Yes              |
+| `@benchmarker`         | Performance analysis & optimization | Yes              |
+| `@rust-analyzer`       | Code audits & safety reviews        | No (read-only)   |
+| `@rust-best-practices` | Idiomatic Rust pattern reviews      | No (read-only)   |
+| `@rust-teacher`        | Concept explanations & teaching     | No (read-only)   |
 
-## 🤝 Contributing
+### Example Workflows
 
-This is a proof-of-concept project demonstrating WebAssembly plugin loading in Go. Key areas for enhancement:
-1. Plugin import resolution for Rust/TinyGo generated modules
-2. More plugin examples and use cases
-3. Plugin hot-reloading capabilities
-4. WebAssembly System Interface (WASI) support
+#### Adding a New Feature
 
-## 📄 License
+```
+You: Add hot-reload support for plugins
 
-This project is for educational purposes and demonstration of WebAssembly plugin architecture in Go.
+@orchestrator: Breaking this down into tasks...
+  1. Design file watcher integration
+  2. Implement module reload mechanism  
+  3. Handle in-flight requests during reload
+  4. Add integration tests
+
+[Creates beads tasks with dependencies]
+
+You: @beads-task-agent work on ready tasks
+
+[Agent claims and completes tasks autonomously]
+```
+
+#### Performance Investigation
+
+```
+You: Plugin loading feels slow
+
+@benchmarker: Let me measure the current state...
+  - Cold start: 45ms
+  - Warm start: 2ms
+  - Bottleneck: Module compilation
+
+@orchestrator: Creating optimization tasks...
+  1. Implement module caching
+  2. Add precompilation on startup
+  3. Measure improvements
+```
+
+#### Code Review
+
+```
+You: Review the plugin loader for safety issues
+
+@rust-analyzer: Analyzing src/loader.rs...
+  
+  Critical Issues:
+  - Line 47: unwrap() on user input
+  - Line 89: potential race condition
+  
+  Recommendations:
+  - Add timeout for plugin initialization
+  - Use parking_lot for better mutex performance
+```
+
+### Key Commands
+
+| Command                       | Description                     |
+| ----------------------------- | ------------------------------- |
+| `bd ready`                    | List unblocked tasks            |
+| `bd create "title" -p <0-3>`  | Create task (0=critical, 3=low) |
+| `bd update <id> --claim`      | Claim a task                    |
+| `bd update <id> --notes "x"`  | Add notes                       |
+| `bd close <id> --reason "x"`  | Complete task                   |
+| `bd dep add <child> <parent>` | Add dependency                  |
+| `bd sync`                     | Commit task changes to git      |
+| `bd status`                   | Show all tasks                  |
+
+### Tips for Effective Vibe Coding
+
+1. **Start broad, refine narrow** - Let `@orchestrator` break down big ideas
+2. **Use read-only agents for reviews** - `@rust-analyzer` and `@rust-best-practices` won't accidentally change code
+3. **Trust `bd ready`** - It ensures you work on unblocked tasks
+4. **Add notes liberally** - Future you (and agents) will thank you
+5. **Sync frequently** - `bd sync` persists task state in git
+
+---
+
+## License
+
+MIT
