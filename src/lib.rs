@@ -13,10 +13,10 @@
 
 pub mod error;
 
-mod config;
-mod engine;
+pub mod config;
+pub mod engine;
 mod metrics;
 mod pipeline;
-mod queue;
+pub mod queue;
 
 pub use error::{Result, WaferError};
