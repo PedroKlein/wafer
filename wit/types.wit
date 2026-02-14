@@ -1,0 +1,56 @@
+package pipeline:types@0.1.0;
+
+/// Core types for WAFER pipeline runtime
+interface types {
+    /// Unique message identifier
+    type message-id = string;
+    
+    /// Unix timestamp in milliseconds
+    type timestamp = u64;
+    
+    /// Key-value metadata entry
+    record metadata-entry {
+        key: string,
+        value: string,
+    }
+    
+    /// Message payload - MVP supports only raw bytes
+    variant payload {
+        /// Raw byte payload
+        raw(list<u8>),
+    }
+    
+    /// Envelope wrapping a message through the pipeline
+    record envelope {
+        /// Unique message ID
+        id: message-id,
+        /// Creation timestamp
+        timestamp: timestamp,
+        /// Source node name
+        source: string,
+        /// Message metadata
+        metadata: list<metadata-entry>,
+        /// Message payload
+        payload: payload,
+    }
+    
+    /// Result of processing a message
+    variant process-result {
+        /// Emit the envelope downstream
+        emit(envelope),
+        /// Filter (drop) the message
+        filter,
+        /// Processing error
+        error(process-error),
+    }
+    
+    /// Error details from processing
+    record process-error {
+        /// Error code
+        code: u32,
+        /// Error message
+        message: string,
+        /// Whether the error is retriable
+        retriable: bool,
+    }
+}

@@ -1,0 +1,18 @@
+package pipeline:transform@0.1.0;
+
+/// Transform node interface
+interface transform {
+    use pipeline:types/types.{envelope, process-result};
+    
+    /// Process a single envelope
+    /// Returns emit to pass downstream, filter to drop, or error
+    process: func(input: envelope) -> process-result;
+}
+
+/// World for transform node plugins
+world transform-node {
+    import pipeline:types/types;
+    
+    export pipeline:node/lifecycle;
+    export transform;
+}

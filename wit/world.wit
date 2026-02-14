@@ -1,0 +1,8 @@
+package pipeline:runtime@0.1.0;
+
+/// WAFER runtime world - imports all interfaces
+world wafer-runtime {
+    import pipeline:types/types;
+    import pipeline:node/lifecycle;
+    import pipeline:transform/transform;
+}
