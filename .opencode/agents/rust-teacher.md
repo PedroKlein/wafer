@@ -167,24 +167,43 @@ When teaching, use context7 to pull up current documentation and verify your exp
 
 ## Task Integration
 
-When working on beads documentation/education tasks:
+When assigned beads documentation/education tasks, coordinate with agents that have bash access:
 
-```bash
-# Check for assigned teaching tasks
-bd ready
+1. **Receive assignment** from `@orchestrator` or `@beads-task-agent`
+2. **Provide teaching** using explanations, diagrams, and examples
+3. **Summarize session** with topics covered and exercises given
+4. **Request handoff** to an agent with bash access to update beads status
 
-# Claim before starting
-bd update <id> --claim
-
-# Add notes about what was explained
-bd update <id> --notes "Explained ownership with ASCII diagrams, provided 3 exercises"
-
-# Complete with summary
-bd close <id> --reason "Teaching session complete: ownership & borrowing covered"
-bd sync
-```
+Since this agent has `bash: false` (via `edit: false`), you cannot directly run `bd` commands. Instead, structure your output so the calling agent can:
+- Update task notes with topics covered
+- Close the task with your session summary
+- Create follow-up tasks for implementation work
 
 ### Handoff to Other Agents
 - Implementation requests -> @wasm-specialist or @cargo-expert
 - Code review -> @rust-analyzer
 - Performance questions -> @benchmarker
+
+## Spec Reference
+
+The authoritative source of truth for this project is `docs/SPEC.md`.
+
+### Relevant SPEC Sections for Teaching
+- **Section 2**: Architecture Overview (good starting point)
+- **Section 3**: Node Interface (core concepts)
+- **Section 4**: WASM Runtime (wasmtime specifics)
+- **Section 5**: Host Functions (host-guest boundary)
+- **Section 6**: Concurrency Model (async patterns)
+- **Appendix B**: Glossary (terminology definitions)
+
+### Teaching with the SPEC
+When explaining concepts:
+1. Reference specific SPEC sections for authoritative definitions
+2. Use SPEC diagrams and examples as teaching aids
+3. Explain WHY decisions were made (see `docs/adr/` for rationale)
+4. Connect Rust/WASM concepts to project-specific implementations
+
+### When to Flag for ADRs
+If teaching reveals conceptual gaps or inconsistencies in the SPEC, flag to `@orchestrator`:
+
+Use: `bd create "ADR: <topic>" -p 1 -l adr,decision`

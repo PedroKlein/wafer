@@ -166,7 +166,7 @@ When working on beads build/dependency tasks:
 bd ready
 
 # Claim before starting
-bd update <id> --claim
+bd update <id> --status in_progress
 
 # Document changes made
 bd update <id> --notes "Updated wasmtime 40->41, added cache feature"
@@ -176,7 +176,28 @@ bd close <id> --reason "Dependencies updated, tested with cargo build --release"
 bd sync
 ```
 
+**Session Completion**: When ending a session, follow the full protocol in `AGENTS.md` - work is not complete until `git push` succeeds.
+
 ### Handoff to Other Agents
 - WASM runtime issues -> @wasm-specialist
 - Performance validation -> @benchmarker
 - Code review -> @rust-analyzer
+
+## Spec Reference
+
+The authoritative source of truth for this project is `docs/SPEC.md`.
+
+### Relevant SPEC Sections
+- **Section 1.3**: Dependencies (required crate versions)
+- **Section 4.1**: Wasmtime Configuration (feature flags)
+- **Section 13**: Build & Release (profiles, targets)
+- **Appendix A**: Cargo.toml Reference
+
+### When to Flag for ADRs
+Flag to `@orchestrator` for ADR creation when:
+- Major dependency version upgrades (wasmtime, tokio)
+- Adding new feature flags that affect behavior
+- Workspace structure changes
+- Build profile modifications affecting performance
+
+Use: `bd create "ADR: <topic>" -p 1 -l adr,decision`

@@ -65,7 +65,7 @@ When working on beads tasks:
 bd ready
 
 # Claim before starting implementation
-bd update <id> --claim
+bd update <id> --status in_progress
 
 # Document technical decisions
 bd update <id> --notes "Using async Store for concurrent plugin calls"
@@ -75,8 +75,33 @@ bd close <id> --reason "Implemented with wasmtime async support"
 bd sync
 ```
 
+**Session Completion**: When ending a session, follow the full protocol in `AGENTS.md` - work is not complete until `git push` succeeds.
+
 ### Handoff to Other Agents
 - Performance concerns -> @benchmarker
 - Code review needed -> @rust-analyzer
 - Build/dependency issues -> @cargo-expert
 - Complex multi-step work -> @orchestrator
+
+## Spec Reference
+
+The authoritative source of truth for this project is `docs/SPEC.md`.
+
+### Relevant SPEC Sections
+- **Section 2**: Architecture Overview (DAG pipeline, plugin model)
+- **Section 3**: Node Interface (`node_start`, `process_message`, lifecycle)
+- **Section 4.1-4.2**: WASM Runtime (wasmtime config, Store/Engine setup)
+- **Section 4.3**: Plugin Loading & Instantiation
+- **Section 5**: Host Functions (logging, state, timer APIs)
+- **Section 8**: Hot-Swap Protocol (drain-and-flip mechanism)
+- **Section 10**: Error Handling (WASM traps, host errors)
+
+### When to Create ADRs
+Flag decisions to `@orchestrator` for ADR creation when:
+- Choosing between WASI Preview 1 vs Preview 2
+- Modifying wasmtime Engine/Store configuration
+- Changing host function signatures
+- Altering plugin isolation boundaries
+- Implementing new Component Model features
+
+Use: `bd create "ADR: <topic>" -p 1 -l adr,decision`

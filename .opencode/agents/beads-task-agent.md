@@ -114,3 +114,49 @@ Title: <task title>
 - **Document as you go**: Notes help others understand decisions
 - **Sync frequently**: Keep the task state persisted
 - **Know your limits**: Escalate to specialists when appropriate
+
+## Session Completion Protocol
+
+**CRITICAL**: Before ending any session, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+### Mandatory Checklist
+
+```bash
+# 1. Check what changed
+git status
+
+# 2. Stage code changes
+git add <files>
+
+# 3. Sync beads state
+bd sync
+
+# 4. Commit code changes
+git commit -m "descriptive message"
+
+# 5. Sync any new beads changes
+bd sync
+
+# 6. Pull and push to remote
+git pull --rebase
+git push
+
+# 7. Verify push succeeded
+git status  # MUST show "up to date with origin"
+```
+
+### Critical Rules
+
+- Work is **NOT complete** until `git push` succeeds
+- **NEVER** stop before pushing - that leaves work stranded locally
+- **NEVER** say "ready to push when you are" - YOU must push
+- If push fails, resolve conflicts and retry until it succeeds
+- File beads issues for any remaining work before ending
+
+### After Completing Multiple Tasks
+
+When you've completed a batch of tasks:
+1. Run through the session completion checklist above
+2. Report summary of all completed tasks
+3. List any new tasks created for follow-up work
+4. Confirm `git status` shows clean state and pushed

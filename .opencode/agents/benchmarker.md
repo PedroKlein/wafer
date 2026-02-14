@@ -81,7 +81,7 @@ When working on beads performance tasks:
 bd ready
 
 # Claim before starting measurements
-bd update <id> --claim
+bd update <id> --status in_progress
 
 # Document baseline and methodology
 bd update <id> --notes "Baseline: 45ms cold start, 2ms warm. Testing with criterion"
@@ -94,7 +94,30 @@ bd close <id> --reason "Optimized cold start by 73% via module caching"
 bd sync
 ```
 
+**Session Completion**: When ending a session, follow the full protocol in `AGENTS.md` - work is not complete until `git push` succeeds.
+
 ### Handoff to Other Agents
 - Implementation of optimizations -> @wasm-specialist
 - Code review of changes -> @rust-analyzer
 - Build configuration -> @cargo-expert
+
+## Spec Reference
+
+The authoritative source of truth for this project is `docs/SPEC.md`.
+
+### Relevant SPEC Sections
+- **Section 4.4**: Performance Targets (latency, throughput goals)
+- **Section 6.2**: Queue Performance (SPSC bounded queues)
+- **Section 7**: Memory Budgets (per-plugin limits)
+- **Section 8.3**: Hot-Swap Performance (drain timing)
+- **Section 9**: Metrics & Observability (what to measure)
+- **Section 12.3**: Benchmark Requirements (criterion setup)
+
+### When to Flag for ADRs
+Flag to `@orchestrator` for ADR creation when:
+- Performance targets in SPEC cannot be met
+- Proposing changes to queue sizing or memory limits
+- Recommending different concurrency strategies
+- Benchmark results suggest architectural changes
+
+Use: `bd create "ADR: <topic>" -p 1 -l adr,decision`

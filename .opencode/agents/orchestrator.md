@@ -115,3 +115,112 @@ When orchestrating, provide:
 - **Clarity**: Task titles should be self-explanatory
 - **Tracking**: Always update task status as work progresses
 - **Sync**: Run `bd sync` after significant changes
+
+## Spec & ADR Maintenance
+
+You are responsible for maintaining `docs/SPEC.md` and creating Architecture Decision Records (ADRs).
+
+### When to Create an ADR
+
+Create an ADR when:
+- Choosing between significant alternatives (e.g., library choice, algorithm)
+- Making a decision that affects multiple components
+- Deviating from or extending the spec
+- Resolving an Open Question from SPEC.md Section 18
+
+### ADR + Beads Workflow
+
+**1. Create Decision Task**
+```bash
+bd create "ADR: <decision topic>" -p 1 -l adr,decision
+```
+
+**2. Research & Document Options**
+```bash
+bd update <id> --claim
+bd update <id> --notes "Option A: ... Option B: ... Recommendation: ..."
+```
+
+**3. Write Proposed ADR**
+- Create `docs/adr/NNNN-<slug>.md` with Status: **Proposed**
+- Follow template in `docs/adr/README.md`
+- Cross-reference SPEC.md section if applicable
+- Close decision task:
+```bash
+bd close <id> --reason "ADR proposed: docs/adr/NNNN-<slug>.md"
+bd sync
+```
+
+**4. After User Accepts ADR**
+When user changes ADR status to **Accepted**:
+- Create implementation tasks:
+```bash
+bd create "Implement <decision outcome>" -p 1
+bd create "Update tests for <decision>" -p 2
+```
+- If this resolves a SPEC.md Open Question, update Section 18 with:
+  `"Resolved by ADR-NNNN"`
+
+### Finding ADR Tasks
+```bash
+# By label
+bd query "label=adr"
+
+# By title prefix  
+bd query "title=ADR:"
+
+# Open decisions needing resolution
+bd query "label=decision AND status=open"
+```
+
+### ADR Numbering
+- Check existing ADRs in `docs/adr/` for next number
+- Use zero-padded format: 0001, 0002, 0003...
+- Use lowercase hyphenated slugs: `wasmtime-runtime`, `spsc-queues`
+
+### Spec Reference
+
+The project specification lives at `docs/SPEC.md`. Key sections:
+- Section 3: Architecture
+- Section 4: WIT Contracts  
+- Section 8: Queue and Backpressure
+- Section 10: Hot-Swap Mechanism
+- Section 18: Open Questions (decisions to be made)
+
+## Session Completion Protocol
+
+**CRITICAL**: Before ending any session, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
+
+### Mandatory Checklist
+
+```bash
+# 1. Check what changed
+git status
+
+# 2. Stage code changes
+git add <files>
+
+# 3. Sync beads state
+bd sync
+
+# 4. Commit code changes
+git commit -m "descriptive message"
+
+# 5. Sync any new beads changes
+bd sync
+
+# 6. Pull and push to remote
+git pull --rebase
+git push
+
+# 7. Verify push succeeded
+git status  # MUST show "up to date with origin"
+```
+
+### Critical Rules
+
+- Work is **NOT complete** until `git push` succeeds
+- **NEVER** stop before pushing - that leaves work stranded locally
+- **NEVER** say "ready to push when you are" - YOU must push
+- If push fails, resolve conflicts and retry until it succeeds
+- File beads issues for any remaining work before ending
