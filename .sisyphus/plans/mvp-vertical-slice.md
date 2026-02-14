@@ -507,7 +507,7 @@ Wave 5 (Final):
 
 ### Task 1: Fix Cargo.toml - Edition and Dependencies
 
-- [ ] 1. Fix Cargo.toml - Edition and Dependencies
+- [x] 1. Fix Cargo.toml - Edition and Dependencies
 
   **What to do**:
   - Change `edition = "2024"` to `edition = "2021"` (Rust 2024 doesn't exist)
@@ -589,7 +589,7 @@ Wave 5 (Final):
 
 ### Task 2: Create Minimal WIT Contracts
 
-- [ ] 2. Create Minimal WIT Contracts
+- [x] 2. Create Minimal WIT Contracts
 
   **What to do**:
   - Create `wit/` directory structure
