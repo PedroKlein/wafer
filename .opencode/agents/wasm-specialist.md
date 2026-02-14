@@ -31,7 +31,6 @@ You are a WebAssembly implementation specialist with deep expertise in the wasmt
 - `wasmtime-wasi` crate configuration
 - Filesystem, environment, and clock capabilities
 - Capability-based security model
-- Preview 1 vs Preview 2 differences
 
 ### Component Model (Emerging)
 - WIT (WebAssembly Interface Types) definitions
@@ -98,7 +97,6 @@ The authoritative source of truth for this project is `docs/SPEC.md`.
 
 ### When to Create ADRs
 Flag decisions to `@orchestrator` for ADR creation when:
-- Choosing between WASI Preview 1 vs Preview 2
 - Modifying wasmtime Engine/Store configuration
 - Changing host function signatures
 - Altering plugin isolation boundaries
