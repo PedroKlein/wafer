@@ -44,7 +44,7 @@ wafer-poc/
 - **SPSC bounded queues** for node communication
 - **Drain-and-flip hot-swap** for zero-downtime updates
 - **Fuel-based metering** for execution limits
-- **WASI Preview 1** for plugin capabilities
+- **WASI Preview 2** for plugin capabilities
 
 ## Contributing
 
