@@ -12,3 +12,4 @@ pub use instance::TransformInstance;
 pub use loader::{WaferEngine, DEFAULT_FUEL_LIMIT};
 
 pub use instance::pipeline;
+pub use instance::exports;
