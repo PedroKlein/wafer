@@ -1,0 +1,10 @@
+# WAFER Pipeline Configuration
+# Pass-through demo: stdin -> transform -> stdout
+
+name = "pass-through-demo"
+
+[transform]
+name = "passthrough"
+plugin_path = "plugins/pass-through/target/wasm32-wasip1/release/pass_through_transform.wasm"
+fuel_limit = 1000000
+queue_capacity = 1024
