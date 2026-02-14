@@ -1,36 +1,6 @@
 # Wafer PoC
 
-A Rust-based WebAssembly plugin loader using wasmtime, designed for extensible application architectures.
-
-## Features
-
-- **wasmtime 40.x runtime** - Production-ready WASM execution
-- **WASI support** - System interface for plugins (filesystem, environment, clocks)
-- **Async execution** - Tokio-based async runtime integration
-- **MQTT integration** - Event-driven plugin communication via rumqttc
-
-## Quick Start
-
-```bash
-# Build the project
-cargo build
-
-# Run in release mode
-cargo run --release
-```
-
-## Project Structure
-
-```
-wafer-poc/
-├── src/              # Core plugin loader implementation
-├── plugins/          # WASM plugin modules
-├── .opencode/        # AI agent configurations
-│   └── agents/       # Specialist subagents
-└── Cargo.toml        # Dependencies and build config
-```
-
----
+WAFER -> WebAssembly Flow Execution Runtime
 
 ## Vibe Coding Workflow
 
