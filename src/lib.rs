@@ -15,7 +15,7 @@ pub mod error;
 
 pub mod config;
 pub mod engine;
-mod metrics;
+pub mod metrics;
 pub mod pipeline;
 pub mod queue;
 

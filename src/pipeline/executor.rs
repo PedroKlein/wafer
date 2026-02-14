@@ -5,6 +5,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::engine::{pipeline, TransformInstance, WaferEngine};
 use crate::error::Result;
+use crate::metrics::{PipelineMetrics, ProcessTimer};
 use crate::queue::RuntimeEnvelope;
 
 /// Executes a single transform node in a read-process-write loop.
@@ -13,6 +14,7 @@ pub struct PipelineExecutor {
     engine: WaferEngine,
     instance: TransformInstance,
     source_name: String,
+    metrics: PipelineMetrics,
 }
 
 impl PipelineExecutor {
@@ -26,6 +28,7 @@ impl PipelineExecutor {
             engine,
             instance,
             source_name: source_name.into(),
+            metrics: PipelineMetrics::new(),
         }
     }
 
@@ -50,6 +53,8 @@ impl PipelineExecutor {
 
             let wit_envelope = runtime_to_wit_envelope(&envelope);
 
+            // Time the process() call - timer auto-records on drop
+            let _timer = ProcessTimer::start(&self.metrics);
             match self.instance.call_process(&wit_envelope).await {
                 Ok(result) => {
                     self.handle_process_result(result, &mut stdout)?;
@@ -59,6 +64,15 @@ impl PipelineExecutor {
                 }
             }
         }
+
+        // Log metrics on shutdown
+        let report = self.metrics.report();
+        info!(
+            messages_total = report.messages_total,
+            avg_process_time_ns = report.avg_process_time_ns,
+            queue_depth = report.queue_depth,
+            "Pipeline metrics"
+        );
 
         info!("Pipeline executor finished (EOF)");
         Ok(())
