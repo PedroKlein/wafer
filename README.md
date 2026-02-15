@@ -2,7 +2,7 @@
 
 **WAFER** - WebAssembly Flow Execution Runtime
 
-A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmtime, with support for hot-swapping, bounded queues, and fuel-based execution metering.
+A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmtime, with support for bounded queues and fuel-based execution metering.
 
 ## Documentation
 
@@ -19,11 +19,15 @@ A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmti
 # Build the project
 cargo build
 
-# Run tests (includes DAG integration tests)
+# Run tests
 cargo test
 
-# Run single-transform pipeline
-echo "hello" | cargo run -- --config pipeline.toml
+# Run DAG pipeline with stdin/stdout
+echo "hello" | cargo run -- --config examples/dag-passthrough.toml
+
+# Run with uppercase transform
+echo "hello" | cargo run -- --config examples/dag-uppercase.toml
+# Output: HELLO
 
 # Using just (if installed)
 just build        # Build the project
@@ -32,20 +36,27 @@ just plugin       # Build the plugin
 just run          # Run with pass-through plugin
 ```
 
-### DAG Pipelines
+### Example DAG Configs
 
-Multi-node DAG pipelines are available via the `DagOrchestrator` API:
+```bash
+# Passthrough (stdin → transform → stdout)
+echo "test" | cargo run -- --config examples/dag-passthrough.toml
 
-```rust
-// FileSource → Transform → FileSink
-let config: DagConfig = toml::from_str(config_toml)?;
-let mut orchestrator = DagOrchestrator::from_config(config)?;
-orchestrator.register_node("source", AnyNode::from_source(FileSource::new("source", "in.txt")))?;
-orchestrator.wire_queues()?;
-orchestrator.run().await?;
+# Uppercase transform
+echo "hello world" | cargo run -- --config examples/dag-uppercase.toml
+
+# JSON validation and pretty-print
+echo '{"key": "value"}' | cargo run -- --config examples/dag-json-parse.toml
+
+# Filter (drops lines matching pattern)
+printf "DEBUG: test\nINFO: keep\nDEBUG: drop" | cargo run -- --config examples/dag-filter.toml
+
+# Chained transforms (uppercase → filter)
+echo "keep this" | cargo run -- --config examples/dag-chain.toml
+
+# File-based I/O
+cargo run -- --config examples/dag-file-io.toml
 ```
-
-See [MVP.md](docs/MVP.md) for detailed usage and [examples/dag-config.toml](examples/dag-config.toml) for configuration format.
 
 ## Project Structure
 
@@ -55,16 +66,24 @@ wafer-poc/
 │   ├── dag/               # DAG orchestrator with petgraph
 │   ├── engine/            # Wasmtime engine and WASI bindings
 │   ├── node/              # Source, Transform, Sink traits and impls
-│   ├── pipeline/          # Single-transform pipeline executor
 │   ├── queue/             # Bounded SPSC queues
 │   └── config/            # TOML configuration loading
 ├── wit/                    # WIT interface definitions
-├── plugins/                # Example WASM plugins
+├── plugins/                # WASM transform plugins
+│   ├── pass-through/      # No-op passthrough
+│   ├── uppercase/         # ASCII uppercase
+│   ├── json-parse/        # JSON validation/pretty-print
+│   └── filter/            # Pattern-based filtering
 ├── tests/
 │   ├── integration.rs     # DAG pipeline integration tests
 │   └── fixtures/          # Test TOML configs
-├── examples/
-│   └── dag-config.toml    # Example DAG pipeline config
+├── examples/              # Example DAG pipeline configs
+│   ├── dag-passthrough.toml
+│   ├── dag-uppercase.toml
+│   ├── dag-json-parse.toml
+│   ├── dag-filter.toml
+│   ├── dag-chain.toml
+│   └── dag-file-io.toml
 └── docs/
     ├── SPEC.md            # Technical specification
     ├── MVP.md             # Current implementation status
@@ -74,18 +93,46 @@ wafer-poc/
 
 ## Key Features
 
-- **Multi-node DAG pipelines** with linear chain execution
+- **DAG-only architecture** - All pipelines defined as directed acyclic graphs
+- **StdinSource/StdoutSink** - First-class stdin/stdout I/O for CLI usage
+- **FileSource/FileSink** - File-based I/O for batch processing
 - **Wasmtime 41.x** runtime with async support
 - **SPSC bounded queues** for inter-node communication with backpressure
 - **petgraph-based topology** for DAG management
-- **FileSource/FileSink** for file-based I/O
 - **Fuel-based metering** for execution limits
 - **WASI Preview 2** for plugin capabilities
 - **Graceful shutdown** in reverse topological order
 
+## DAG Configuration Format
+
+```toml
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"  # or "file" with config.path
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+config = { plugin_path = "path/to/plugin.wasm" }
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"  # or "file" with config.path
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+```
+
 ## Contributing
 
-This project uses AI-assisted development with [OpenCode](https://opencode.ai). See [AI_WORKFLOW.md](docs/AI_WORKFLOW.md) for the development workflow, agent capabilities, and task management with Beads.
+This project uses AI-assisted development with [OpenCode](https://opencode.ai). See [AI_WORKFLOW.md](docs/AI_WORKFLOW.md) for the development workflow.
 
 ## License
 
