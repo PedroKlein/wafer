@@ -164,6 +164,9 @@ impl DagOrchestrator {
             }
         }
 
+        self.queue_senders.clear();
+        self.queue_receivers.clear();
+
         for handle in handles {
             if let Err(e) = handle.await {
                 tracing::error!(error = %e, "Node task panicked");

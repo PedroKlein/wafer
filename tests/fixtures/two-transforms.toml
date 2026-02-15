@@ -1,0 +1,35 @@
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "file-source"
+node_type = "source"
+[nodes.config]
+
+[[nodes]]
+id = "transform-1"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass_through.wasm"
+
+[[nodes]]
+id = "transform-2"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass_through.wasm"
+
+[[nodes]]
+id = "file-sink"
+node_type = "sink"
+[nodes.config]
+
+[[edges]]
+from = "file-source"
+to = "transform-1"
+
+[[edges]]
+from = "transform-1"
+to = "transform-2"
+
+[[edges]]
+from = "transform-2"
+to = "file-sink"
