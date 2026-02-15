@@ -3,10 +3,10 @@
 use tracing::info;
 
 use crate::config::PipelineConfig;
-use crate::engine::{exports, pipeline, TransformInstance, WaferEngine};
+use crate::engine::{exports, TransformInstance, WaferEngine};
 use crate::error::Result;
 
-use super::executor::PipelineExecutor;
+use super::executor::PipelineExecutorCore;
 
 /// Builder for constructing pipeline executors from configuration.
 pub struct PipelineBuilder {
@@ -23,10 +23,12 @@ impl PipelineBuilder {
         self
     }
 
-    pub async fn build(self) -> Result<PipelineExecutor> {
-        let config = self
-            .config
-            .expect("PipelineBuilder requires config (call with_config first)");
+    pub async fn build(self) -> Result<PipelineExecutorCore> {
+        let config = self.config.ok_or_else(|| {
+            crate::error::WaferError::Config(crate::error::ConfigError::Message(
+                "PipelineBuilder requires config (call with_config first)".into(),
+            ))
+        })?;
 
         let transform_config = config.transform();
 
@@ -46,8 +48,8 @@ impl PipelineBuilder {
 
         info!(transform = %transform_config.name(), "Transform initialized");
 
-        let executor = PipelineExecutor::new(engine, instance, transform_config.name());
-        Ok(executor)
+        let core = PipelineExecutorCore::new(engine, instance, transform_config.name());
+        Ok(core)
     }
 }
 
@@ -60,40 +62,20 @@ impl Default for PipelineBuilder {
 fn build_node_config(
     config: &crate::config::TransformConfig,
 ) -> exports::pipeline::transform::lifecycle::NodeConfig {
-    use pipeline::transform::types::MetadataEntry;
-
-    let config_entries: Vec<MetadataEntry> = config
+    // Serialize TOML config to bytes for the new config_bytes field
+    let config_bytes: Vec<u8> = config
         .config
         .as_ref()
-        .map(toml_to_metadata_entries)
+        .map(|v| toml::to_string(v).unwrap_or_default().into_bytes())
         .unwrap_or_default();
 
+    // Metadata is now list<tuple<string, string>> = Vec<(String, String)>
+    let metadata: Vec<(String, String)> = Vec::new();
+
     exports::pipeline::transform::lifecycle::NodeConfig {
-        name: config.name().to_string(),
-        config: config_entries,
+        id: config.name().to_string(),
+        node_type: "transform".to_string(),
+        config_bytes,
+        metadata,
     }
-}
-
-fn toml_to_metadata_entries(value: &toml::Value) -> Vec<pipeline::transform::types::MetadataEntry> {
-    use pipeline::transform::types::MetadataEntry;
-
-    let mut entries = Vec::new();
-
-    if let toml::Value::Table(table) = value {
-        for (key, val) in table {
-            let string_value = match val {
-                toml::Value::String(s) => s.clone(),
-                toml::Value::Integer(i) => i.to_string(),
-                toml::Value::Float(f) => f.to_string(),
-                toml::Value::Boolean(b) => b.to_string(),
-                _ => continue,
-            };
-            entries.push(MetadataEntry {
-                key: key.clone(),
-                value: string_value,
-            });
-        }
-    }
-
-    entries
 }

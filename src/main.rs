@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
     let mut executor = PipelineBuilder::new()
         .with_config(config)
         .build()
-        .await?;
+        .await?
+        .with_stdio();
 
     info!("Pipeline started");
 

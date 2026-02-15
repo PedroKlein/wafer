@@ -1,59 +1,26 @@
+/// pipeline:transform - Interface for transform nodes that process messages
+///
+/// Transform nodes receive one message and produce zero or one message.
+/// Examples: JSON parser, filter, enricher, field extractor
 package pipeline:transform@0.1.0;
-
-interface types {
-    type message-id = string;
-    type timestamp = u64;
-    
-    record metadata-entry {
-        key: string,
-        value: string,
-    }
-    
-    variant payload {
-        raw(list<u8>),
-    }
-    
-    record envelope {
-        id: message-id,
-        timestamp: timestamp,
-        source: string,
-        metadata: list<metadata-entry>,
-        payload: payload,
-    }
-    
-    variant process-result {
-        emit(envelope),
-        filter,
-        error(process-error),
-    }
-    
-    record process-error {
-        code: u32,
-        message: string,
-        retriable: bool,
-    }
-}
-
-interface lifecycle {
-    use types.{metadata-entry};
-    
-    record node-config {
-        name: string,
-        config: list<metadata-entry>,
-    }
-    
-    init: func(config: node-config) -> result<_, string>;
-}
 
 interface transform {
     use types.{envelope, process-result};
-    
+
+    /// Process a single message
+    ///
+    /// Returns:
+    /// - emit(envelope): Pass transformed message downstream
+    /// - filter: Message filtered out (not an error, just dropped)
+    /// - error(e): Processing failed, route to error handling
     process: func(input: envelope) -> process-result;
 }
 
+/// Transform node world - implements lifecycle + transform
 world transform-node {
-    import types;
-    
+    /// Export lifecycle (validate, init, close)
     export lifecycle;
+
+    /// Export transform-specific interface
     export transform;
 }

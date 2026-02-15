@@ -1,6 +1,6 @@
 //! Pipeline executor - single transform execution loop.
 
-use std::io::{self, BufRead, Write};
+use std::io::{BufRead, Write};
 use tracing::{debug, error, info, warn};
 
 use crate::engine::{pipeline, TransformInstance, WaferEngine};
@@ -9,16 +9,48 @@ use crate::metrics::{PipelineMetrics, ProcessTimer};
 use crate::queue::RuntimeEnvelope;
 
 /// Executes a single transform node in a read-process-write loop.
-pub struct PipelineExecutor {
+///
+/// The executor is generic over input/output streams, making it testable
+/// without requiring actual stdin/stdout.
+///
+/// # Type Parameters
+///
+/// * `R` - Input reader implementing [`BufRead`]
+/// * `W` - Output writer implementing [`Write`]
+///
+/// # Example
+///
+/// ```ignore
+/// // Production usage with stdin/stdout
+/// let executor = PipelineExecutor::new(engine, instance, "source")
+///     .with_io(std::io::stdin().lock(), std::io::stdout());
+///
+/// // Test usage with buffers
+/// let input = std::io::Cursor::new(b"test\n");
+/// let mut output = Vec::new();
+/// let executor = PipelineExecutor::new(engine, instance, "source")
+///     .with_io(input, &mut output);
+/// ```
+pub struct PipelineExecutor<R, W> {
     #[allow(dead_code)]
+    engine: WaferEngine,
+    instance: TransformInstance,
+    source_name: String,
+    metrics: PipelineMetrics,
+    reader: R,
+    writer: W,
+}
+
+/// Builder for constructing PipelineExecutor without I/O (for deferred setup).
+pub struct PipelineExecutorCore {
     engine: WaferEngine,
     instance: TransformInstance,
     source_name: String,
     metrics: PipelineMetrics,
 }
 
-impl PipelineExecutor {
-    /// Create a new pipeline executor.
+impl PipelineExecutorCore {
+    /// Create a new pipeline executor core without I/O.
     pub fn new(
         engine: WaferEngine,
         instance: TransformInstance,
@@ -32,35 +64,83 @@ impl PipelineExecutor {
         }
     }
 
-    /// Run the pipeline: read stdin line-by-line, process through WASM, write to stdout.
-    pub async fn run(&mut self) -> Result<()> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
+    /// Attach I/O streams to create a runnable executor.
+    pub fn with_io<R: BufRead, W: Write>(self, reader: R, writer: W) -> PipelineExecutor<R, W> {
+        PipelineExecutor {
+            engine: self.engine,
+            instance: self.instance,
+            source_name: self.source_name,
+            metrics: self.metrics,
+            reader,
+            writer,
+        }
+    }
 
+    /// Create executor with default stdin/stdout.
+    ///
+    /// Note: This locks stdin for the lifetime of the executor.
+    pub fn with_stdio(self) -> PipelineExecutor<std::io::StdinLock<'static>, std::io::Stdout> {
+        // SAFETY: We leak the stdin handle to get 'static lifetime.
+        // This is acceptable because:
+        // 1. There's only one stdin per process
+        // 2. The executor typically runs for the process lifetime
+        let stdin = Box::leak(Box::new(std::io::stdin()));
+        PipelineExecutor {
+            engine: self.engine,
+            instance: self.instance,
+            source_name: self.source_name,
+            metrics: self.metrics,
+            reader: stdin.lock(),
+            writer: std::io::stdout(),
+        }
+    }
+
+    /// Get remaining fuel in the WASM store.
+    pub fn remaining_fuel(&self) -> Result<u64> {
+        self.instance.remaining_fuel()
+    }
+}
+
+impl<R: BufRead, W: Write> PipelineExecutor<R, W> {
+    /// Run the pipeline: read lines, process through WASM, write output.
+    pub async fn run(&mut self) -> Result<()> {
         info!(source = %self.source_name, "Starting pipeline executor");
 
-        for line in stdin.lock().lines() {
-            let line = match line {
-                Ok(l) => l,
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match self.reader.read_line(&mut line) {
+                Ok(0) => break, // EOF
+                Ok(_) => {
+                    // Remove trailing newline
+                    let trimmed = line.trim_end();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    let envelope = RuntimeEnvelope::from_string(&self.source_name, trimmed);
+                    debug!(id = %envelope.id, "Processing envelope");
+
+                    let wit_envelope = runtime_to_wit_envelope(&envelope);
+
+                    // Time the process() call and get result
+                    let process_result = {
+                        let _timer = ProcessTimer::start(&self.metrics);
+                        self.instance.call_process(&wit_envelope).await
+                    };
+                    // Timer dropped here, handle result outside the timed block
+                    match process_result {
+                        Ok(result) => {
+                            self.handle_process_result(result)?;
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Transform process error");
+                        }
+                    }
+                }
                 Err(e) => {
-                    error!(error = %e, "Error reading from stdin");
+                    error!(error = %e, "Error reading input");
                     break;
-                }
-            };
-
-            let envelope = RuntimeEnvelope::from_string(&self.source_name, &line);
-            debug!(id = %envelope.id, "Processing envelope");
-
-            let wit_envelope = runtime_to_wit_envelope(&envelope);
-
-            // Time the process() call - timer auto-records on drop
-            let _timer = ProcessTimer::start(&self.metrics);
-            match self.instance.call_process(&wit_envelope).await {
-                Ok(result) => {
-                    self.handle_process_result(result, &mut stdout)?;
-                }
-                Err(e) => {
-                    error!(error = %e, "Transform process error");
                 }
             }
         }
@@ -79,17 +159,16 @@ impl PipelineExecutor {
     }
 
     fn handle_process_result(
-        &self,
+        &mut self,
         result: pipeline::transform::types::ProcessResult,
-        stdout: &mut io::Stdout,
     ) -> Result<()> {
         use pipeline::transform::types::ProcessResult;
 
         match result {
             ProcessResult::Emit(envelope) => {
                 let output = wit_envelope_to_payload(&envelope);
-                writeln!(stdout, "{}", String::from_utf8_lossy(&output))?;
-                stdout.flush()?;
+                writeln!(self.writer, "{}", String::from_utf8_lossy(&output))?;
+                self.writer.flush()?;
                 debug!(id = %envelope.id, "Emitted envelope");
             }
             ProcessResult::Filter => {
@@ -111,21 +190,37 @@ impl PipelineExecutor {
     pub fn remaining_fuel(&self) -> Result<u64> {
         self.instance.remaining_fuel()
     }
+
+    /// Get the metrics report.
+    pub fn metrics(&self) -> &PipelineMetrics {
+        &self.metrics
+    }
+}
+
+// Keep legacy constructor for backward compatibility
+impl PipelineExecutorCore {
+    /// Legacy constructor - prefer `new().with_io()` for testability.
+    #[deprecated(note = "Use PipelineExecutorCore::new().with_stdio() instead")]
+    pub fn new_legacy(
+        engine: WaferEngine,
+        instance: TransformInstance,
+        source_name: impl Into<String>,
+    ) -> PipelineExecutor<std::io::StdinLock<'static>, std::io::Stdout> {
+        Self::new(engine, instance, source_name).with_stdio()
+    }
 }
 
 /// Convert a RuntimeEnvelope to WIT Envelope type.
 pub(crate) fn runtime_to_wit_envelope(
     envelope: &RuntimeEnvelope,
 ) -> pipeline::transform::types::Envelope {
-    use pipeline::transform::types::{Envelope, MetadataEntry, Payload};
+    use pipeline::transform::types::{Envelope, Payload};
 
-    let metadata: Vec<MetadataEntry> = envelope
+    // Metadata is now list<tuple<string, string>> = Vec<(String, String)>
+    let metadata: Vec<(String, String)> = envelope
         .metadata
         .iter()
-        .map(|(k, v)| MetadataEntry {
-            key: k.clone(),
-            value: v.clone(),
-        })
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
     Envelope {
@@ -144,10 +239,11 @@ pub(crate) fn wit_to_runtime_envelope(
 ) -> RuntimeEnvelope {
     use pipeline::transform::types::Payload;
 
+    // Metadata is now Vec<(String, String)> - already correct format
     let metadata = envelope
         .metadata
         .iter()
-        .map(|e| (e.key.clone(), e.value.clone()))
+        .cloned()
         .collect();
 
     let payload = match &envelope.payload {

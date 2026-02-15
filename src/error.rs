@@ -40,6 +40,9 @@ pub enum ConfigError {
 
     #[error("plugin path does not exist: {0}")]
     PluginNotFound(PathBuf),
+
+    #[error("{0}")]
+    Message(String),
 }
 
 /// Convenience Result type for WAFER operations.
