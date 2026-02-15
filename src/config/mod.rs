@@ -15,4 +15,7 @@ mod loader;
 mod schema;
 
 pub use loader::{load_config, load_config_unchecked};
-pub use schema::{PipelineConfig, TransformConfig, DEFAULT_FUEL_LIMIT, DEFAULT_QUEUE_CAPACITY};
+pub use schema::{
+    DagConfig, EdgeDefinition, NodeDefinition, NodeType, PipelineConfig, TransformConfig,
+    DEFAULT_FUEL_LIMIT, DEFAULT_QUEUE_CAPACITY,
+};

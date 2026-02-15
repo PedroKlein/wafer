@@ -19,8 +19,8 @@ mod source;
 mod traits;
 mod transform;
 
-pub use sink::Sink;
-pub use source::Source;
+pub use sink::{FileSink, Sink};
+pub use source::{FileSource, Source};
 pub use traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
 pub use transform::WasmTransform;
 

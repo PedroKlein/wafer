@@ -25,6 +25,7 @@
 pub mod error;
 
 pub mod config;
+pub mod dag;
 pub mod engine;
 pub mod metrics;
 pub mod node;
