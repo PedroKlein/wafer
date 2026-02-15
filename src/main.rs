@@ -16,7 +16,8 @@ struct Args {
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::from_default_env().add_directive("wafer_poc=info".parse().unwrap()),
+            EnvFilter::from_default_env()
+                .add_directive("wafer_poc=info".parse().expect("valid log directive")),
         )
         .init();
 

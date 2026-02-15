@@ -2,6 +2,34 @@
 //!
 //! Manages graph topology, node lifecycle, queue wiring, and coordinated
 //! async execution of all nodes in the pipeline.
+//!
+//! # MVP Limitations
+//!
+//! ## Graceful Shutdown / Cancellation
+//!
+//! The current implementation does not support graceful shutdown via cancellation
+//! tokens. Node loops (`run_source_loop`, `run_transform_loop`, `run_sink_loop`)
+//! will run until either:
+//! - The source reaches EOF
+//! - An error occurs
+//! - The upstream queue closes
+//!
+//! For production use, consider adding `tokio_util::sync::CancellationToken` to
+//! enable external cancellation (e.g., SIGTERM handling). This would require:
+//! 1. Adding `CancellationToken` to `DagOrchestrator`
+//! 2. Using `tokio::select!` in each loop to check for cancellation
+//! 3. Exposing a `shutdown()` method to trigger cancellation
+//!
+//! ## Mutex Holding Strategy
+//!
+//! Node loops acquire the mutex at the start and hold it for the entire loop
+//! duration. This is intentional for the MVP to ensure single-threaded access
+//! to each node (WASM stores are not thread-safe). The tradeoff is that node
+//! state cannot be inspected while the loop is running.
+//!
+//! For production use, consider:
+//! - Message passing instead of shared mutable state
+//! - Releasing the lock between operations for better observability
 
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -206,12 +234,21 @@ impl DagOrchestrator {
         Ok(())
     }
 
+    /// Run the main loop for a node.
+    ///
+    /// # Mutex Strategy
+    ///
+    /// The mutex is acquired at the start and held for the entire loop.
+    /// This ensures single-threaded access to the node (required because WASM
+    /// stores are not thread-safe). See module-level docs for discussion of
+    /// tradeoffs and potential improvements.
     async fn run_node_loop(
         node_id: String,
         node: Arc<Mutex<AnyNode>>,
         input_receivers: Vec<QueueReceiver<RuntimeEnvelope>>,
         output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
     ) {
+        // Hold lock for entire loop duration - see module docs for rationale
         let mut locked = node.lock().await;
 
         match &mut *locked {
@@ -690,6 +727,8 @@ mod tests {
 
     #[test]
     fn test_register_node_unknown_id_fails() {
+        use crate::node::FileSource;
+
         let config = DagConfig {
             nodes: vec![make_node("source", NodeType::Source)],
             edges: vec![],
@@ -697,7 +736,6 @@ mod tests {
         };
 
         let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        use crate::node::FileSource;
         let node = AnyNode::from_source(FileSource::new("wrong-id", "/tmp/test.txt"));
         let result = orchestrator.register_node("unknown", node);
 

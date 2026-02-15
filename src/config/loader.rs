@@ -79,7 +79,7 @@ queue_capacity = 512
         let config = load_config_unchecked(file.path()).unwrap();
         assert_eq!(config.name, "test-pipeline");
         assert_eq!(config.transform.name, "passthrough");
-        assert_eq!(config.transform.fuel_limit, 500000);
+        assert_eq!(config.transform.fuel_limit, 500_000);
         assert_eq!(config.transform.queue_capacity, 512);
     }
 
