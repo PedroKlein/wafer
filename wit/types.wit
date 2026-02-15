@@ -2,6 +2,18 @@
 ///
 /// This interface contains common types used across Source, Transform,
 /// Router, Joiner, and Sink nodes.
+///
+/// ## MVP Status
+///
+/// Currently implemented:
+/// - `envelope` record with all fields
+/// - `payload::raw` variant only
+/// - `process-result` with emit/filter/error
+/// - `process-error` with string code
+///
+/// Not yet implemented:
+/// - Additional payload variants (json, sensor-reading, tensor, image)
+/// - Router/Joiner specific types (port-id is defined but unused)
 interface types {
     /// Unique identifier for messages
     type message-id = string;
@@ -10,6 +22,7 @@ interface types {
     type timestamp = u64;
 
     /// Port identifier for routing (used by Router/Joiner nodes)
+    /// MVP: Defined but not used - Router/Joiner not yet implemented
     type port-id = string;
 
     /// Generic key-value metadata

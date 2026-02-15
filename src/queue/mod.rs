@@ -1,15 +1,23 @@
-//! Queue module - SPSC bounded channel wrapper.
+//! Queue module - async bounded channel wrapper.
 //!
-//! Provides backpressure-aware message passing between pipeline stages.
+//! Provides backpressure-aware message passing between pipeline stages
+//! using `tokio::sync::mpsc` channels internally.
 //!
 //! # Example
 //!
-//! ```
+//! ```no_run
 //! use wafer_poc::queue::{BoundedQueue, RuntimeEnvelope};
 //!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let queue: BoundedQueue<RuntimeEnvelope> = BoundedQueue::new(100);
+//! let (sender, mut receiver) = queue.split();
+//!
 //! let envelope = RuntimeEnvelope::from_string("stdin", "hello");
-//! queue.send(envelope).unwrap();
+//! sender.send(envelope).await?;
+//!
+//! let received = receiver.recv().await;
+//! # Ok(())
+//! # }
 //! ```
 
 mod bounded;

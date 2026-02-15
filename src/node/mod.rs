@@ -21,10 +21,11 @@ mod transform;
 
 pub use sink::{FileSink, Sink};
 pub use source::{FileSource, Source};
-pub use traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
+pub use traits::{ConfigParseError, Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
 pub use transform::WasmTransform;
 
 use crate::error::Result;
+use std::fmt;
 
 /// Enum for heterogeneous node storage in DAG orchestration.
 ///
@@ -34,6 +35,28 @@ pub enum AnyNode {
     Transform(Box<dyn Transform>),
     Source(Box<dyn Source>),
     Sink(Box<dyn Sink>),
+}
+
+impl fmt::Debug for AnyNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            AnyNode::Transform(t) => f
+                .debug_struct("AnyNode::Transform")
+                .field("id", &t.id())
+                .field("node_type", &t.node_type())
+                .finish(),
+            AnyNode::Source(s) => f
+                .debug_struct("AnyNode::Source")
+                .field("id", &s.id())
+                .field("node_type", &s.node_type())
+                .finish(),
+            AnyNode::Sink(s) => f
+                .debug_struct("AnyNode::Sink")
+                .field("id", &s.id())
+                .field("node_type", &s.node_type())
+                .finish(),
+        }
+    }
 }
 
 impl AnyNode {

@@ -50,10 +50,10 @@ impl FileSink {
     ///
     /// The file is not opened until `init()` is called.
     #[must_use]
-    pub fn new(id: impl Into<String>, path: PathBuf) -> Self {
+    pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
         Self {
             id: id.into(),
-            path,
+            path: path.into(),
             writer: None,
         }
     }
@@ -64,7 +64,7 @@ impl Lifecycle for FileSink {
         &self.id
     }
 
-    fn node_type(&self) -> &str {
+    fn node_type(&self) -> &'static str {
         "sink/file"
     }
 
@@ -73,8 +73,8 @@ impl Lifecycle for FileSink {
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
                 return Err(WaferError::Config(ConfigError::Message(format!(
-                    "Parent directory does not exist: {:?}",
-                    parent
+                    "Parent directory does not exist: {}",
+                    parent.display()
                 ))));
             }
         }

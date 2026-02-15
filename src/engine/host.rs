@@ -7,15 +7,32 @@ use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 ///
 /// Controls what system resources a plugin can access.
 /// By default, plugins get minimal capabilities (sandbox mode).
+///
+/// # MVP Limitations
+///
+/// Currently only `inherit_stdio` and `inherit_env` are functional.
+/// The `allow_network` and `allow_filesystem` fields are **placeholders**
+/// for future capability-based security and have no effect in this MVP.
+///
+/// Future versions will support:
+/// - Fine-grained filesystem access (allowlist of paths)
+/// - Network access control (allowlist of hosts/ports)
+/// - Resource limits (memory, CPU time)
 #[derive(Debug, Clone, Default)]
 pub struct Capabilities {
     /// Allow inheriting stdin/stdout/stderr from the host process.
     pub inherit_stdio: bool,
     /// Allow access to environment variables.
     pub inherit_env: bool,
-    /// Allow network access (future: specific hosts/ports).
+    /// Allow network access.
+    ///
+    /// **MVP: Placeholder only - has no effect.**
+    /// Future: will support specific hosts/ports allowlist.
     pub allow_network: bool,
-    /// Allow filesystem access (future: specific paths).
+    /// Allow filesystem access.
+    ///
+    /// **MVP: Placeholder only - has no effect.**
+    /// Future: will support specific paths allowlist.
     pub allow_filesystem: bool,
 }
 
@@ -49,6 +66,8 @@ impl Capabilities {
 pub struct WaferState {
     ctx: WasiCtx,
     table: ResourceTable,
+    /// Retained for future capability inspection/auditing.
+    /// Currently unused but will be used for runtime capability queries.
     #[allow(dead_code)]
     capabilities: Capabilities,
 }

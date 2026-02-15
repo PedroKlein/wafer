@@ -8,6 +8,19 @@ use crate::error::Result;
 use crate::queue::RuntimeEnvelope;
 use std::future::Future;
 use std::pin::Pin;
+use thiserror::Error;
+
+/// Error type for configuration parsing.
+#[derive(Error, Debug)]
+pub enum ConfigParseError {
+    /// Config bytes are not valid UTF-8.
+    #[error("config bytes are not valid UTF-8: {0}")]
+    InvalidUtf8(#[from] std::str::Utf8Error),
+
+    /// Config string is not valid TOML.
+    #[error("config is not valid TOML: {0}")]
+    InvalidToml(#[from] toml::de::Error),
+}
 
 /// Configuration provided to nodes at initialization.
 ///
@@ -49,11 +62,19 @@ impl NodeConfig {
     }
 
     /// Parse config_bytes as TOML.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - `config_bytes` is not valid UTF-8
+    /// - The UTF-8 string is not valid TOML
+    /// - The TOML does not deserialize to type `T`
     pub fn parse_config<T: serde::de::DeserializeOwned>(
         &self,
-    ) -> std::result::Result<T, toml::de::Error> {
-        let config_str = std::str::from_utf8(&self.config_bytes).unwrap_or("");
-        toml::from_str(config_str)
+    ) -> std::result::Result<T, ConfigParseError> {
+        let config_str =
+            std::str::from_utf8(&self.config_bytes).map_err(ConfigParseError::InvalidUtf8)?;
+        toml::from_str(config_str).map_err(ConfigParseError::InvalidToml)
     }
 }
 

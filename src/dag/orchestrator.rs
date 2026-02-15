@@ -1,3 +1,8 @@
+//! DAG orchestrator for multi-node pipeline execution.
+//!
+//! Manages graph topology, node lifecycle, queue wiring, and coordinated
+//! async execution of all nodes in the pipeline.
+
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::Direction;
@@ -17,7 +22,7 @@ use crate::queue::{BoundedQueue, QueueReceiver, QueueSender, RuntimeEnvelope};
 /// - Graph topology validation (cycle detection, source/sink constraints)
 /// - Node instance registration and lifecycle management
 /// - Queue wiring for inter-node message passing
-/// - Coordinated execution of all nodes with proper shutdown
+/// - Coordinated async execution of all nodes with proper shutdown
 pub struct DagOrchestrator {
     graph: DiGraph<String, ()>,
     node_indices: HashMap<String, NodeIndex>,
@@ -120,9 +125,17 @@ impl DagOrchestrator {
         Ok(())
     }
 
+    /// Run the DAG pipeline.
+    ///
+    /// This method:
+    /// 1. Initializes all nodes in topological order
+    /// 2. Spawns async tasks for each node
+    /// 3. Waits for all tasks to complete
+    /// 4. Closes all nodes in reverse topological order
     pub async fn run(&mut self) -> Result<()> {
         self.validate_nodes_registered()?;
 
+        // Initialize nodes in topological order
         for node_id in &self.topo_order.clone() {
             if let Some(node) = self.nodes.get(node_id) {
                 let mut locked = node.lock().await;
@@ -141,6 +154,7 @@ impl DagOrchestrator {
             let node = self.nodes.get(node_id).cloned();
             let node_id_owned = node_id.clone();
 
+            // Collect output senders for this node
             let output_senders: Vec<_> = self
                 .queue_senders
                 .iter()
@@ -148,11 +162,15 @@ impl DagOrchestrator {
                 .map(|((_, to), sender)| (to.clone(), sender.clone()))
                 .collect();
 
+            // Take ownership of input receivers for this node
             let input_receivers: Vec<_> = self
                 .queue_receivers
-                .iter()
-                .filter(|((_, to), _)| to == node_id)
-                .map(|(_, receiver)| receiver.clone())
+                .keys()
+                .filter(|(_, to)| to == node_id)
+                .cloned()
+                .collect::<Vec<_>>()
+                .into_iter()
+                .filter_map(|key| self.queue_receivers.remove(&key))
                 .collect();
 
             if let Some(node_arc) = node {
@@ -164,15 +182,17 @@ impl DagOrchestrator {
             }
         }
 
+        // Clear remaining senders so receivers will see channel close
         self.queue_senders.clear();
-        self.queue_receivers.clear();
 
+        // Wait for all node tasks to complete
         for handle in handles {
             if let Err(e) = handle.await {
                 tracing::error!(error = %e, "Node task panicked");
             }
         }
 
+        // Close nodes in reverse topological order
         for node_id in self.topo_order.iter().rev() {
             if let Some(node) = self.nodes.get(node_id) {
                 let mut locked = node.lock().await;
@@ -225,9 +245,19 @@ impl DagOrchestrator {
         loop {
             match source.poll().await {
                 Ok(Some(envelope)) => {
-                    for (_, sender) in output_senders {
-                        if let Err(e) = sender.send(envelope.clone()) {
+                    // Optimization: avoid clone for single downstream
+                    if output_senders.len() == 1 {
+                        if let Err(e) = output_senders[0].1.send(envelope).await {
                             tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                        }
+                    } else {
+                        // Clone for all downstream senders
+                        // Note: We clone for all senders since we're iterating. Future optimization
+                        // could use ownership tracking to avoid the final clone.
+                        for (_, sender) in output_senders {
+                            if let Err(e) = sender.send(envelope.clone()).await {
+                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                            }
                         }
                     }
                 }
@@ -246,15 +276,23 @@ impl DagOrchestrator {
     async fn run_transform_loop(
         node_id: &str,
         transform: &mut dyn Transform,
-        receiver: QueueReceiver<RuntimeEnvelope>,
+        mut receiver: QueueReceiver<RuntimeEnvelope>,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
     ) {
-        while let Ok(envelope) = receiver.recv() {
+        // Async receive - properly yields to tokio runtime
+        while let Some(envelope) = receiver.recv().await {
             match transform.process(envelope).await {
                 Ok(ProcessResult::Emit(output)) => {
-                    for (_, sender) in output_senders {
-                        if let Err(e) = sender.send(output.clone()) {
+                    // Optimization: avoid clone for single downstream
+                    if output_senders.len() == 1 {
+                        if let Err(e) = output_senders[0].1.send(output).await {
                             tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                        }
+                    } else {
+                        for (_, sender) in output_senders {
+                            if let Err(e) = sender.send(output.clone()).await {
+                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                            }
                         }
                     }
                 }
@@ -278,9 +316,10 @@ impl DagOrchestrator {
     async fn run_sink_loop(
         node_id: &str,
         sink: &mut dyn Sink,
-        receiver: QueueReceiver<RuntimeEnvelope>,
+        mut receiver: QueueReceiver<RuntimeEnvelope>,
     ) {
-        while let Ok(envelope) = receiver.recv() {
+        // Async receive - properly yields to tokio runtime
+        while let Some(envelope) = receiver.recv().await {
             if let Err(e) = sink.collect(envelope).await {
                 tracing::error!(node = %node_id, error = %e, "Sink collect failed");
             }
@@ -339,8 +378,7 @@ impl DagOrchestrator {
             ))),
             1 => Ok(()),
             _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple source nodes found (expected 1): {:?}",
-                sources
+                "Multiple source nodes found (expected 1): {sources:?}"
             )))),
         }
     }
@@ -364,8 +402,7 @@ impl DagOrchestrator {
             ))),
             1 => Ok(()),
             _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple sink nodes found (expected 1): {:?}",
-                sinks
+                "Multiple sink nodes found (expected 1): {sinks:?}"
             )))),
         }
     }
@@ -396,24 +433,27 @@ impl DagOrchestrator {
             Ok(())
         } else {
             Err(WaferError::Config(ConfigError::Message(format!(
-                "Orphan nodes found (no connections): {:?}",
-                orphans
+                "Orphan nodes found (no connections): {orphans:?}"
             ))))
         }
     }
 
+    /// Get the topological order of nodes.
     pub fn topo_order(&self) -> &[String] {
         &self.topo_order
     }
 
+    /// Get the DAG configuration.
     pub fn config(&self) -> &DagConfig {
         &self.config
     }
 
+    /// Get the number of nodes in the DAG.
     pub fn node_count(&self) -> usize {
         self.node_indices.len()
     }
 
+    /// Get the number of edges in the DAG.
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
