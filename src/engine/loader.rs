@@ -4,7 +4,9 @@ use crate::config::DEFAULT_FUEL_LIMIT;
 use crate::error::{Result, WaferError};
 use std::path::Path;
 use std::sync::OnceLock;
+use std::time::Duration;
 
+use tokio::task::JoinHandle;
 use wasmtime::{
     component::{Component, Linker},
     Config, Engine,
@@ -15,6 +17,9 @@ use super::host::WaferState;
 
 /// Default epoch deadline (ticks before interruption).
 pub const DEFAULT_EPOCH_DEADLINE: u64 = 100; // 1 second at 10ms ticks
+
+/// Default epoch tick interval in milliseconds.
+pub const DEFAULT_EPOCH_TICK_MS: u64 = 10;
 
 /// Configured wasmtime Engine with fuel metering and epoch interruption enabled.
 pub struct WaferEngine {
@@ -135,13 +140,59 @@ impl WaferEngine {
     pub fn epoch_deadline(&self) -> u64 {
         self.epoch_deadline
     }
-}
 
-impl Default for WaferEngine {
-    fn default() -> Self {
-        Self::new().expect("Failed to create default WaferEngine")
+    /// Start the epoch ticker background task.
+    ///
+    /// This spawns a tokio task that increments the engine's epoch counter
+    /// at regular intervals (default: every 10ms). This is required for
+    /// epoch-based interruption to function - without it, long-running
+    /// WASM code will never be interrupted even though `epoch_interruption`
+    /// is enabled in the config.
+    ///
+    /// The returned `JoinHandle` can be used to cancel the ticker by calling
+    /// `.abort()` on it when the engine is no longer needed.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wafer_poc::engine::WaferEngine;
+    ///
+    /// # async fn example() -> wafer_poc::error::Result<()> {
+    /// let engine = WaferEngine::new()?;
+    /// let ticker_handle = engine.start_epoch_ticker();
+    ///
+    /// // ... use the engine ...
+    ///
+    /// // When done, stop the ticker
+    /// ticker_handle.abort();
+    /// # Ok(())
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn start_epoch_ticker(&self) -> JoinHandle<()> {
+        self.start_epoch_ticker_with_interval(Duration::from_millis(DEFAULT_EPOCH_TICK_MS))
+    }
+
+    /// Start the epoch ticker with a custom tick interval.
+    ///
+    /// See [`start_epoch_ticker`](Self::start_epoch_ticker) for details.
+    #[must_use]
+    pub fn start_epoch_ticker_with_interval(&self, interval: Duration) -> JoinHandle<()> {
+        let engine = self.engine.clone();
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            // First tick completes immediately, skip it
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                engine.increment_epoch();
+            }
+        })
     }
 }
 
+// Note: WaferEngine intentionally does not implement Default because
+// engine creation is fallible. Use WaferEngine::new() explicitly.
+//
 // WaferEngine cannot be Clone because OnceLock<Linker> isn't Clone.
 // This is intentional - engines should be shared via Arc if needed.

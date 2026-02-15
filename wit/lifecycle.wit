@@ -2,6 +2,12 @@
 ///
 /// All nodes (Source, Transform, Router, Joiner, Sink) implement this
 /// interface for consistent lifecycle management.
+///
+/// ## MVP Status
+///
+/// Implemented for Transform nodes only. Source/Sink are host-only
+/// Rust implementations (not WASM components). Router/Joiner not
+/// yet implemented.
 interface lifecycle {
     use types.{metadata};
 
@@ -36,6 +42,6 @@ interface lifecycle {
     ///
     /// Called when node is being retired (shutdown or hot-swap).
     /// Node should release resources and flush any buffered data.
-    /// This is critical for the drain-and-flip hot-swap mechanism.
+    /// MVP: Hot-swap not implemented - close() only called at shutdown.
     close: func();
 }

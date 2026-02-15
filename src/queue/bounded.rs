@@ -1,22 +1,28 @@
-//! Bounded SPSC queue wrapper around crossbeam-channel.
+//! Async bounded SPSC queue using tokio::sync::mpsc.
+//!
+//! This module provides async-native bounded channels for inter-node
+//! communication in the DAG pipeline. Using tokio channels ensures
+//! proper cooperative scheduling without blocking the async runtime.
 
 use crate::config::DEFAULT_QUEUE_CAPACITY;
-use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
+use tokio::sync::mpsc::{self, error::SendError, error::TrySendError};
 
 /// A bounded single-producer single-consumer queue.
 ///
-/// Wraps crossbeam_channel for backpressure-aware message passing.
+/// Wraps `tokio::sync::mpsc` for async-native backpressure-aware message passing.
+/// Unlike crossbeam channels, this integrates properly with the tokio runtime
+/// and won't block executor threads.
 #[derive(Debug)]
 pub struct BoundedQueue<T> {
-    sender: Sender<T>,
-    receiver: Receiver<T>,
+    sender: mpsc::Sender<T>,
+    receiver: mpsc::Receiver<T>,
     capacity: usize,
 }
 
 impl<T> BoundedQueue<T> {
     /// Create a new bounded queue with specified capacity.
     pub fn new(capacity: usize) -> Self {
-        let (sender, receiver) = bounded(capacity);
+        let (sender, receiver) = mpsc::channel(capacity);
         Self {
             sender,
             receiver,
@@ -29,39 +35,33 @@ impl<T> BoundedQueue<T> {
         Self::new(DEFAULT_QUEUE_CAPACITY)
     }
 
-    /// Send an item, blocking if the queue is full.
-    pub fn send(&self, item: T) -> Result<(), crossbeam_channel::SendError<T>> {
-        self.sender.send(item)
+    /// Send an item asynchronously, waiting if the queue is full.
+    ///
+    /// This is the preferred method for sending in async contexts.
+    /// It will yield to other tasks while waiting for capacity.
+    pub async fn send(&self, item: T) -> Result<(), SendError<T>> {
+        self.sender.send(item).await
     }
 
-    /// Receive an item, blocking if the queue is empty.
-    pub fn recv(&self) -> Result<T, crossbeam_channel::RecvError> {
-        self.receiver.recv()
+    /// Receive an item asynchronously, waiting if the queue is empty.
+    ///
+    /// Returns `None` if all senders have been dropped (channel closed).
+    pub async fn recv(&mut self) -> Option<T> {
+        self.receiver.recv().await
     }
 
-    /// Try to send an item without blocking.
+    /// Try to send an item without waiting.
+    ///
+    /// Returns immediately with an error if the queue is full.
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(item)
     }
 
-    /// Try to receive an item without blocking.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+    /// Try to receive an item without waiting.
+    ///
+    /// Returns immediately with an error if the queue is empty.
+    pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
         self.receiver.try_recv()
-    }
-
-    /// Get the current number of items in the queue.
-    pub fn len(&self) -> usize {
-        self.receiver.len()
-    }
-
-    /// Check if the queue is empty.
-    pub fn is_empty(&self) -> bool {
-        self.receiver.is_empty()
-    }
-
-    /// Check if the queue is full.
-    pub fn is_full(&self) -> bool {
-        self.receiver.len() >= self.capacity
     }
 
     /// Get the queue capacity.
@@ -70,6 +70,9 @@ impl<T> BoundedQueue<T> {
     }
 
     /// Split into separate sender and receiver handles.
+    ///
+    /// This consumes the queue and returns owned handles that can be
+    /// moved to different tasks.
     pub fn split(self) -> (QueueSender<T>, QueueReceiver<T>) {
         (
             QueueSender {
@@ -83,65 +86,64 @@ impl<T> BoundedQueue<T> {
     }
 }
 
-impl<T> Clone for BoundedQueue<T> {
-    fn clone(&self) -> Self {
-        Self {
-            sender: self.sender.clone(),
-            receiver: self.receiver.clone(),
-            capacity: self.capacity,
-        }
-    }
-}
-
 /// Sender half of a bounded queue.
+///
+/// Can be cloned to create multiple senders (though SPSC pattern
+/// typically uses only one).
 #[derive(Debug, Clone)]
 pub struct QueueSender<T> {
-    sender: Sender<T>,
+    sender: mpsc::Sender<T>,
 }
 
 impl<T> QueueSender<T> {
-    /// Send an item, blocking if full.
-    pub fn send(&self, item: T) -> Result<(), crossbeam_channel::SendError<T>> {
-        self.sender.send(item)
+    /// Send an item asynchronously, waiting if full.
+    pub async fn send(&self, item: T) -> Result<(), SendError<T>> {
+        self.sender.send(item).await
     }
 
-    /// Try to send without blocking.
+    /// Try to send without waiting.
     pub fn try_send(&self, item: T) -> Result<(), TrySendError<T>> {
         self.sender.try_send(item)
+    }
+
+    /// Check if the receiver has been dropped.
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
     }
 }
 
 /// Receiver half of a bounded queue.
-#[derive(Debug, Clone)]
+///
+/// Cannot be cloned - there is exactly one receiver per queue.
+#[derive(Debug)]
 pub struct QueueReceiver<T> {
-    receiver: Receiver<T>,
+    receiver: mpsc::Receiver<T>,
     capacity: usize,
 }
 
 impl<T> QueueReceiver<T> {
-    /// Receive an item, blocking if empty.
-    pub fn recv(&self) -> Result<T, crossbeam_channel::RecvError> {
-        self.receiver.recv()
+    /// Receive an item asynchronously, waiting if empty.
+    ///
+    /// Returns `None` when all senders are dropped (channel closed).
+    pub async fn recv(&mut self) -> Option<T> {
+        self.receiver.recv().await
     }
 
-    /// Try to receive without blocking.
-    pub fn try_recv(&self) -> Result<T, TryRecvError> {
+    /// Try to receive without waiting.
+    pub fn try_recv(&mut self) -> Result<T, mpsc::error::TryRecvError> {
         self.receiver.try_recv()
-    }
-
-    /// Get current queue depth.
-    pub fn len(&self) -> usize {
-        self.receiver.len()
-    }
-
-    /// Check if empty.
-    pub fn is_empty(&self) -> bool {
-        self.receiver.is_empty()
     }
 
     /// Get capacity.
     pub fn capacity(&self) -> usize {
         self.capacity
+    }
+
+    /// Close the receiver, preventing further sends.
+    ///
+    /// Any pending messages can still be received.
+    pub fn close(&mut self) {
+        self.receiver.close();
     }
 }
 
@@ -149,19 +151,19 @@ impl<T> QueueReceiver<T> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_send_recv() {
-        let queue: BoundedQueue<String> = BoundedQueue::new(10);
-        queue.send("hello".to_string()).unwrap();
-        let msg = queue.recv().unwrap();
+    #[tokio::test]
+    async fn test_send_recv() {
+        let mut queue: BoundedQueue<String> = BoundedQueue::new(10);
+        queue.send("hello".to_string()).await.unwrap();
+        let msg = queue.recv().await.unwrap();
         assert_eq!(msg, "hello");
     }
 
-    #[test]
-    fn test_capacity_limit() {
+    #[tokio::test]
+    async fn test_capacity_limit() {
         let queue: BoundedQueue<i32> = BoundedQueue::new(2);
-        queue.send(1).unwrap();
-        queue.send(2).unwrap();
+        queue.send(1).await.unwrap();
+        queue.send(2).await.unwrap();
 
         // Third send should fail with try_send
         let result = queue.try_send(3);
@@ -169,26 +171,33 @@ mod tests {
         assert!(matches!(result, Err(TrySendError::Full(_))));
     }
 
-    #[test]
-    fn test_len_and_capacity() {
+    #[tokio::test]
+    async fn test_capacity() {
         let queue: BoundedQueue<i32> = BoundedQueue::new(5);
         assert_eq!(queue.capacity(), 5);
-        assert_eq!(queue.len(), 0);
-        assert!(queue.is_empty());
-
-        queue.send(1).unwrap();
-        queue.send(2).unwrap();
-        assert_eq!(queue.len(), 2);
-        assert!(!queue.is_empty());
     }
 
-    #[test]
-    fn test_split() {
+    #[tokio::test]
+    async fn test_split() {
         let queue: BoundedQueue<i32> = BoundedQueue::new(10);
-        let (sender, receiver) = queue.split();
+        let (sender, mut receiver) = queue.split();
 
-        sender.send(42).unwrap();
-        let val = receiver.recv().unwrap();
+        sender.send(42).await.unwrap();
+        let val = receiver.recv().await.unwrap();
         assert_eq!(val, 42);
+    }
+
+    #[tokio::test]
+    async fn test_channel_close_on_sender_drop() {
+        let queue: BoundedQueue<i32> = BoundedQueue::new(10);
+        let (sender, mut receiver) = queue.split();
+
+        sender.send(1).await.unwrap();
+        drop(sender);
+
+        // Should still receive pending message
+        assert_eq!(receiver.recv().await, Some(1));
+        // Now should return None (channel closed)
+        assert_eq!(receiver.recv().await, None);
     }
 }

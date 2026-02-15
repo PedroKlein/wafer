@@ -45,6 +45,8 @@ use crate::queue::RuntimeEnvelope;
 ///     .with_io(input, &mut output);
 /// ```
 pub struct PipelineExecutor<R, W> {
+    /// Engine must be kept alive for the instance's lifetime.
+    /// The instance holds references to the engine's compiled code.
     #[allow(dead_code)]
     engine: WaferEngine,
     instance: TransformInstance,
@@ -246,6 +248,9 @@ pub(crate) fn runtime_to_wit_envelope(
 }
 
 /// Convert a WIT Envelope to RuntimeEnvelope.
+///
+/// This function is currently unused but will be needed when implementing
+/// bidirectional conversion for router/joiner nodes that receive WIT envelopes.
 #[allow(dead_code)]
 pub(crate) fn wit_to_runtime_envelope(
     envelope: &pipeline::transform::types::Envelope,

@@ -11,8 +11,7 @@ exclude = ["plugins/pass-through"]
 petgraph = "0.6"
 wasmtime = "41"
 wasmtime-wasi = "41"
-tokio = { version = "1", features = ["rt", "macros", "io-std"] }
-crossbeam-channel = "0.5"
+tokio = { version = "1", features = ["rt", "macros", "io-std", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
@@ -28,7 +27,6 @@ petgraph.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 tokio.workspace = true
-crossbeam-channel.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true

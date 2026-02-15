@@ -30,8 +30,10 @@ pub enum WaferError {
     /// The `process()` function returned an error result.
     ///
     /// This is a domain error from the plugin, not a runtime failure.
+    /// The `code` field is a string to allow meaningful error codes
+    /// like "FUEL_ERROR", "WASM_TRAP", "PARSE_FAILED", etc.
     #[error("process() returned error: code={code}, message={message}")]
-    ProcessError { code: u32, message: String },
+    ProcessError { code: String, message: String },
 
     /// Configuration loading or validation failed.
     #[error("configuration error: {0}")]

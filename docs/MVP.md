@@ -139,11 +139,12 @@ wit/
 - [x] Placeholders for network/filesystem scoping
 
 ### Infrastructure
-- [x] Bounded SPSC queue integrated for inter-node communication
+- [x] Async bounded queues using `tokio::sync::mpsc` for inter-node communication
 - [x] RuntimeEnvelope ↔ WIT Envelope conversion
 - [x] Atomic metrics: `messages_total`, `process_time_ns`, `queue_depth`
 - [x] ProcessTimer RAII guard for timing
 - [x] Error types: `WaferError`, `ConfigError` (with `Message` variant)
+- [x] Epoch ticker for cooperative WASM scheduling
 
 ### Example Plugin
 - [x] `pass-through` transform (wit-bindgen 0.53.1)
@@ -218,7 +219,7 @@ wit/
 | wasmtime-wasi | 41.0.3 | WASI P2 bindings |
 | wit-bindgen | 0.53.1 | Guest code generation |
 | Target | `wasm32-wasip2` | WASI Preview 2 |
-| crossbeam-channel | 0.5 | Queue implementation |
+| tokio | 1.x | Async runtime (with `sync`, `time` features) |
 | petgraph | 0.6 | DAG topology management |
 
 ---
@@ -316,6 +317,33 @@ WaferState::with_capabilities(Capabilities::with_stdio())
 // Full access (trusted plugins only)
 WaferState::with_capabilities(Capabilities::full())
 ```
+
+---
+
+## MVP Simplifications vs SPEC
+
+This section documents intentional deviations from the full SPEC for MVP simplicity:
+
+| Area | SPEC | MVP Simplification |
+|------|------|--------------------|
+| **Error codes** | String-based (e.g., "PARSE_FAILED") | String-based (aligned) |
+| **Capabilities** | Full network/filesystem scoping | `allow_network`/`allow_filesystem` are placeholders only |
+| **Epoch ticker** | Automatic interruption | Requires explicit `engine.start_epoch_ticker()` call |
+| **Queue impl** | Unspecified | `tokio::sync::mpsc` async channels |
+| **Source/Sink** | WASM components | Host-only Rust implementations |
+| **Router/Joiner** | Full support | Not implemented |
+| **Hot-swap** | Drain-and-flip | Not implemented |
+| **Payload types** | Multiple variants | Only `raw(list<u8>)` |
+
+### Why These Simplifications?
+
+1. **Placeholders over stubs**: Network/filesystem capabilities require careful security design. Placeholders document intent without half-baked implementations.
+
+2. **Explicit over magic**: Epoch ticker requires explicit start to allow different scheduling strategies in the future.
+
+3. **Host-only I/O nodes**: WASM-based Source/Sink would require additional WIT interfaces and component model complexity. Host implementations prove the architecture.
+
+4. **Async-first**: Using `tokio::sync::mpsc` instead of blocking channels ensures the runtime is async-friendly throughout.
 
 ---
 

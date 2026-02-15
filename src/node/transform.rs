@@ -19,7 +19,8 @@ use super::traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transfor
 pub struct WasmTransform {
     /// Node configuration
     config: NodeConfig,
-    /// The wasmtime engine (kept alive for the instance)
+    /// The wasmtime engine - must be kept alive for the instance's lifetime.
+    /// The instance holds references to the engine's compiled code.
     #[allow(dead_code)]
     engine: WaferEngine,
     /// The instantiated WASM component

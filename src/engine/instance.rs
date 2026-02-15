@@ -96,7 +96,7 @@ impl TransformInstance {
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WaferError::ProcessError {
-                code: 1,
+                code: "FUEL_ERROR".to_string(),
                 message: e.to_string(),
             })?;
 
@@ -105,7 +105,7 @@ impl TransformInstance {
             .call_process(&mut self.store, envelope)
             .await
             .map_err(|e| WaferError::ProcessError {
-                code: 1,
+                code: "WASM_TRAP".to_string(),
                 message: e.to_string(),
             })
     }
@@ -153,7 +153,7 @@ impl TransformInstance {
     /// Returns [`WaferError::ProcessError`] if fuel query fails.
     pub fn remaining_fuel(&self) -> Result<u64> {
         self.store.get_fuel().map_err(|e| WaferError::ProcessError {
-            code: 1,
+            code: "FUEL_QUERY_ERROR".to_string(),
             message: e.to_string(),
         })
     }

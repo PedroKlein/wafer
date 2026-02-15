@@ -64,7 +64,7 @@ impl Lifecycle for FileSource {
         &self.id
     }
 
-    fn node_type(&self) -> &str {
+    fn node_type(&self) -> &'static str {
         "source/file"
     }
 
@@ -78,8 +78,8 @@ impl Lifecycle for FileSource {
         // Check it's a file, not a directory
         if !self.path.is_file() {
             return Err(WaferError::Config(ConfigError::Message(format!(
-                "Path is not a file: {:?}",
-                self.path
+                "Path is not a file: {}",
+                self.path.display()
             ))));
         }
         Ok(())
