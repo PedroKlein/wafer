@@ -146,10 +146,13 @@ wit/
 - [x] Error types: `WaferError`, `ConfigError` (with `Message` variant)
 - [x] Epoch ticker for cooperative WASM scheduling
 
-### Example Plugin
-- [x] `pass-through` transform (wit-bindgen 0.53.1)
-- [x] Implements full lifecycle: `validate`, `init`, `close`
-- [x] Compiles to `wasm32-wasip2` target
+### Example Plugins
+- [x] `pass-through` transform - No-op, emits input unchanged
+- [x] `uppercase` transform - Converts payload to ASCII uppercase (errors on non-UTF8)
+- [x] `json-parse` transform - Validates JSON syntax, pretty-prints with 2-space indent
+- [x] `filter` transform - Drops messages matching pattern (requires `pattern = "..."` config)
+- [x] All plugins implement full lifecycle: `validate`, `init`, `close`
+- [x] All compile to `wasm32-wasip2` target (wit-bindgen 0.53.1)
 
 ---
 
