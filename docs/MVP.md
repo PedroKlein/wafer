@@ -165,6 +165,11 @@ wit/
 - [ ] Joiner nodes (N→1 merge)
 - [ ] WASM-based Source/Sink (currently host-only Rust implementations)
 
+### Sink Features (SPEC §4.9)
+- [ ] Sink batching: `batch_size` configuration (SPEC §4.9)
+- [ ] Sink batching: `batch_timeout` configuration (SPEC §4.9)
+- [ ] Sink `flush()` interface for buffered output (SPEC §4.9)
+
 ### DAG Orchestration
 - [x] ~~Multi-node pipelines~~ - Linear chain implemented
 - [x] ~~Edge wiring between nodes~~ - BoundedQueue integration complete
@@ -172,12 +177,17 @@ wit/
 - [x] ~~Backpressure propagation~~ - Blocking queues implemented
 - [ ] Fan-out/fan-in topologies (Router/Joiner)
 - [ ] CLI `--dag-config` flag (tests use DagOrchestrator directly)
+- [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
 
 ### Dynamic Features
 - [ ] Hot-swap (drain-and-flip)
 - [ ] Dynamic topology (add/remove nodes)
 - [ ] Config file watching
 - [ ] REST API for topology changes
+
+### Queue Features (SPEC §8)
+- [ ] Overflow policy: `drop` (SPEC §8.2) - only `slow`/blocking exists
+- [ ] Overflow policy: `dead-letter` (SPEC §8.2)
 
 ### External Integration
 - [ ] MQTT source/sink
@@ -195,6 +205,11 @@ wit/
 - [ ] Network capability enforcement (currently placeholder)
 - [ ] Filesystem capability enforcement (currently placeholder)
 
+### Observability (SPEC §12)
+- [ ] Prometheus `/metrics` endpoint (SPEC §12.3) - metrics are in-memory only
+- [ ] Health endpoints: `/health`, `/ready`, `/live` (SPEC §12.5)
+- [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
+
 ---
 
 ## Known Limitations
@@ -207,6 +222,8 @@ wit/
 | **WIT** | Only `raw(list<u8>)` payload supported |
 | **State** | Stateless transforms only |
 | **Metrics** | In-memory only (no Prometheus export) |
+| **Logging** | Text format only (no JSON export) |
+| **Error handling** | No DLQ, errors logged only |
 | **Capabilities** | Network/filesystem flags are placeholders |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
 | **CLI** | DAG config not exposed via CLI (use DagOrchestrator API) |
