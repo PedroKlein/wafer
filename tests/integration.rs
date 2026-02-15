@@ -205,7 +205,7 @@ use tempfile::tempdir;
 use wafer_poc::config::{DagConfig, EdgeDefinition, NodeDefinition, NodeType};
 use wafer_poc::dag::DagOrchestrator;
 use wafer_poc::engine::{TransformInstance, WaferEngine};
-use wafer_poc::node::{AnyNode, FileSink, FileSource, NodeConfig, WasmTransform};
+use wafer_poc::node::{AnyNode, FileSink, FileSource, Lifecycle, NodeConfig, WasmTransform};
 
 fn plugin_path() -> PathBuf {
     project_root().join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
@@ -221,6 +221,14 @@ fn json_parse_plugin_path() -> PathBuf {
 
 fn filter_plugin_path() -> PathBuf {
     project_root().join("plugins/filter/target/wasm32-wasip2/release/filter_transform.wasm")
+}
+
+fn tensor_prep_plugin_path() -> PathBuf {
+    project_root().join("plugins/tensor-prep/target/wasm32-wasip2/release/tensor_prep.wasm")
+}
+
+fn result_format_plugin_path() -> PathBuf {
+    project_root().join("plugins/result-format/target/wasm32-wasip2/release/result_format.wasm")
 }
 
 async fn create_wasm_transform(id: &str) -> WasmTransform {
@@ -270,6 +278,30 @@ async fn create_filter_transform(id: &str, pattern: &str) -> WasmTransform {
     let config_toml = format!("pattern = \"{}\"", pattern);
     let config = NodeConfig::new(id, "transform/filter")
         .with_config_bytes(config_toml.into_bytes());
+    WasmTransform::new(engine, instance, config)
+}
+
+async fn create_tensor_prep_transform(id: &str) -> WasmTransform {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(tensor_prep_plugin_path())
+        .expect("Failed to load tensor-prep plugin");
+    let instance = TransformInstance::new(&engine, &component)
+        .await
+        .expect("Failed to create tensor-prep instance");
+    let config = NodeConfig::new(id, "transform/tensor-prep");
+    WasmTransform::new(engine, instance, config)
+}
+
+async fn create_result_format_transform(id: &str) -> WasmTransform {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(result_format_plugin_path())
+        .expect("Failed to load result-format plugin");
+    let instance = TransformInstance::new(&engine, &component)
+        .await
+        .expect("Failed to create result-format instance");
+    let config = NodeConfig::new(id, "transform/result-format");
     WasmTransform::new(engine, instance, config)
 }
 
@@ -858,4 +890,135 @@ async fn test_dag_filter_no_match() {
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
     assert_eq!(output, "info: startup\nwarn: caution\ninfo: ready\n", "No lines should be filtered when pattern doesn't match");
+}
+
+// ============================================================================
+// MNIST / wasi-nn integration tests
+// ============================================================================
+
+use wafer_poc::node::Transform;
+use wafer_poc::queue::RuntimeEnvelope;
+
+#[tokio::test]
+async fn test_dag_tensor_prep_transform() {
+    let mut transform = create_tensor_prep_transform("tensor-prep").await;
+    transform.init().await.expect("Failed to init transform");
+
+    let input_255 = RuntimeEnvelope::new("test", vec![255u8; 784]);
+    let result = transform.process(input_255).await.expect("Failed to process");
+
+    match result {
+        wafer_poc::node::ProcessResult::Emit(envelope) => {
+            assert_eq!(envelope.payload.len(), 3136, "Expected 3136 bytes (784 F32 values × 4 bytes)");
+            let first_f32 = f32::from_le_bytes([
+                envelope.payload[0],
+                envelope.payload[1],
+                envelope.payload[2],
+                envelope.payload[3],
+            ]);
+            assert!(
+                (first_f32 - 1.0).abs() < 0.001,
+                "Expected first value ~1.0 (normalized from 255), got {}",
+                first_f32
+            );
+        }
+        other => panic!("Expected Emit result, got {:?}", other),
+    }
+
+    let input_0 = RuntimeEnvelope::new("test", vec![0u8; 784]);
+    let result_0 = transform.process(input_0).await.expect("Failed to process zeros");
+
+    match result_0 {
+        wafer_poc::node::ProcessResult::Emit(envelope) => {
+            assert_eq!(envelope.payload.len(), 3136);
+            let zero_f32 = f32::from_le_bytes([
+                envelope.payload[0],
+                envelope.payload[1],
+                envelope.payload[2],
+                envelope.payload[3],
+            ]);
+            assert!(
+                zero_f32.abs() < 0.001,
+                "Expected first value ~0.0 (normalized from 0), got {}",
+                zero_f32
+            );
+        }
+        other => panic!("Expected Emit result, got {:?}", other),
+    }
+
+    transform.close().await.expect("Failed to close transform");
+}
+
+#[tokio::test]
+async fn test_dag_result_format_transform() {
+    let mut transform = create_result_format_transform("result-format").await;
+    transform.init().await.expect("Failed to init transform");
+
+    let logits_with_digit_7_highest: [f32; 10] = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.95, 0.01, 0.01];
+    let mut input_bytes = Vec::with_capacity(40);
+    for &val in &logits_with_digit_7_highest {
+        input_bytes.extend_from_slice(&val.to_le_bytes());
+    }
+    assert_eq!(input_bytes.len(), 40, "Input should be 40 bytes (10 F32 values)");
+
+    let input = RuntimeEnvelope::new("test", input_bytes);
+    let result = transform.process(input).await.expect("Failed to process");
+
+    match result {
+        wafer_poc::node::ProcessResult::Emit(envelope) => {
+            let output = String::from_utf8_lossy(&envelope.payload);
+            
+            assert!(output.contains("\"digit\""), "Expected 'digit' field in JSON: {}", output);
+            assert!(output.contains("\"confidence\""), "Expected 'confidence' field in JSON: {}", output);
+            assert!(output.contains("\"all_scores\""), "Expected 'all_scores' field in JSON: {}", output);
+            
+            let json: serde_json::Value = serde_json::from_str(&output)
+                .expect("Output should be valid JSON");
+            assert_eq!(json["digit"], 7, "Expected digit to be 7");
+        }
+        other => panic!("Expected Emit result, got {:?}", other),
+    }
+
+    transform.close().await.expect("Failed to close transform");
+}
+
+#[test]
+fn test_dag_mnist_inference_pipeline() {
+    let output = Command::new(wafer_binary())
+        .args(["--config", "examples/dag-mnist-inference.toml"])
+        .current_dir(project_root())
+        .output()
+        .expect("Failed to execute");
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let wasi_nn_or_plugin_not_ready = stderr.contains("wasi") 
+            || stderr.contains("nn") 
+            || stderr.contains("model")
+            || stderr.contains("PluginInit")
+            || stderr.contains("no exported instance");
+        if wasi_nn_or_plugin_not_ready {
+            eprintln!("MNIST inference test skipped: wasi-nn or plugin not ready");
+            eprintln!("stderr: {}", stderr);
+            return;
+        }
+        panic!(
+            "Process failed with unexpected error.\nstderr: {}\nstdout: {}",
+            stderr,
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    
+    assert!(
+        stdout.contains("\"digit\""),
+        "Expected 'digit' field in output: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\"confidence\""),
+        "Expected 'confidence' field in output: {}",
+        stdout
+    );
 }

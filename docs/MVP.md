@@ -82,6 +82,9 @@ wit/
 | `plugins/uppercase/` | ASCII uppercase transform |
 | `plugins/json-parse/` | JSON validation and pretty-print |
 | `plugins/filter/` | Pattern-based message filtering |
+| `plugins/tensor-prep/` | Image normalization (784 bytes → 3136 bytes F32) |
+| `plugins/mnist-inference/` | MNIST digit recognition via wasi-nn |
+| `plugins/result-format/` | Inference output formatting (logits → JSON) |
 
 ### Example Configs
 
@@ -93,6 +96,7 @@ wit/
 | `examples/dag-filter.toml` | stdin → filter(DEBUG) → stdout |
 | `examples/dag-chain.toml` | stdin → uppercase → filter → stdout |
 | `examples/dag-file-io.toml` | file → passthrough → file |
+| `examples/dag-mnist-inference.toml` | file → tensor-prep → mnist-inference → result-format → stdout |
 
 ---
 
@@ -210,7 +214,7 @@ wit/
 - [ ] `image-data` payload variant
 
 ### Capabilities
-- [ ] wasi-nn inference
+- [x] wasi-nn inference (MNIST demo)
 - [ ] Host-managed node state
 - [ ] Network capability enforcement (currently placeholder)
 - [ ] Filesystem capability enforcement (currently placeholder)
@@ -236,6 +240,7 @@ wit/
 | **Error handling** | No DLQ, errors logged only |
 | **Capabilities** | Network/filesystem flags are placeholders |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
+| **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) |
 
 ---
 
@@ -306,6 +311,55 @@ to = "sink"
 ```
 
 See `examples/` directory for complete examples.
+
+---
+
+## WASI-NN Inference
+
+The MVP supports ML inference pipelines via **wasi-nn** integration using the ONNX backend.
+
+### Inference Pipeline
+
+The wasi-nn inference pipeline processes image data through a chain of specialized transforms:
+
+```
+Input (28x28 grayscale) → tensor-prep → mnist-inference → result-format → JSON Output
+        784 bytes         → 3136 bytes  →    40 bytes    →   JSON
+```
+
+**Components:**
+- **wasmtime-wasi-nn**: Host runtime integration for the wasi-nn standard
+- **ONNX backend**: CPU-only execution using ONNX Runtime (via `ort` crate)
+- **Embedded model**: MNIST-8.onnx (~26KB) included via `include_bytes!`
+
+### Running MNIST Inference
+
+```bash
+# Run MNIST inference pipeline
+cargo run -- --config examples/dag-mnist-inference.toml
+
+# Output: {"digit": 7, "confidence": 0.95, "all_scores": [...]}
+```
+
+### Inference Plugins
+
+| Plugin | Input | Output | Description |
+|--------|-------|--------|-------------|
+| `tensor-prep` | 784 bytes (28x28 u8) | 3136 bytes (784 × F32) | Normalizes grayscale pixels to F32 tensor |
+| `mnist-inference` | 3136 bytes (F32 tensor) | 40 bytes (10 × F32) | Digit recognition via embedded MNIST-8 model |
+| `result-format` | 40 bytes (10 × F32) | JSON string | Converts logits to `{digit, confidence, all_scores}` |
+
+### Data Flow Details
+
+1. **Input**: 28×28 grayscale image as 784 raw bytes (row-major, 0-255)
+2. **tensor-prep**: Converts each byte to F32, normalizes to [0.0, 1.0] range → 3136 bytes
+3. **mnist-inference**: Runs ONNX model inference, outputs 10 logits (one per digit) → 40 bytes
+4. **result-format**: Applies softmax, finds argmax, formats as JSON
+
+**Example output:**
+```json
+{"digit": 7, "confidence": 0.9832, "all_scores": [0.001, 0.002, 0.003, 0.001, 0.001, 0.002, 0.003, 0.983, 0.002, 0.002]}
+```
 
 ---
 

@@ -2,6 +2,8 @@
 
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_nn::wit::WasiNnCtx;
+use wasmtime_wasi_nn::InMemoryRegistry;
 
 /// Capability configuration for WASM plugins.
 ///
@@ -34,6 +36,8 @@ pub struct Capabilities {
     /// **MVP: Placeholder only - has no effect.**
     /// Future: will support specific paths allowlist.
     pub allow_filesystem: bool,
+    /// Allow machine learning inference via wasi-nn.
+    pub allow_inference: bool,
 }
 
 impl Capabilities {
@@ -60,6 +64,7 @@ impl Capabilities {
             inherit_env: true,
             allow_network: true,
             allow_filesystem: true,
+            allow_inference: true,
         }
     }
 
@@ -94,6 +99,13 @@ impl Capabilities {
         self.allow_filesystem = enabled;
         self
     }
+
+    /// Enable machine learning inference via wasi-nn (builder pattern).
+    #[must_use]
+    pub fn inference(mut self, enabled: bool) -> Self {
+        self.allow_inference = enabled;
+        self
+    }
 }
 
 /// Host state for WASM component execution.
@@ -105,6 +117,7 @@ pub struct WaferState {
     /// Currently unused but will be used for runtime capability queries.
     #[allow(dead_code)]
     capabilities: Capabilities,
+    nn_ctx: Option<WasiNnCtx>,
 }
 
 impl WaferState {
@@ -131,16 +144,28 @@ impl WaferState {
 
         let ctx = builder.build();
 
+        let nn_ctx = if capabilities.allow_inference {
+            Some(WasiNnCtx::new([], InMemoryRegistry::new().into()))
+        } else {
+            None
+        };
+
         Self {
             ctx,
             table: ResourceTable::new(),
             capabilities,
+            nn_ctx,
         }
     }
 
     /// Create a sandboxed state with no host access.
     pub fn sandboxed() -> Self {
         Self::with_capabilities(Capabilities::sandbox())
+    }
+
+    pub fn nn_view(&mut self) -> wasmtime_wasi_nn::wit::WasiNnView<'_> {
+        let nn_ctx = self.nn_ctx.as_mut().expect("inference not enabled");
+        wasmtime_wasi_nn::wit::WasiNnView::new(&mut self.table, nn_ctx)
     }
 }
 

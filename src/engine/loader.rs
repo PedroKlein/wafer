@@ -12,6 +12,7 @@ use wasmtime::{
     Config, Engine,
 };
 use wasmtime_wasi::p2::add_to_linker_async;
+use wasmtime_wasi_nn::wit::add_to_linker as add_nn_to_linker;
 
 use super::host::WaferState;
 
@@ -114,6 +115,10 @@ impl WaferEngine {
 
         let mut linker = Linker::new(&self.engine);
         add_to_linker_async(&mut linker).map_err(|e| WaferError::PluginInit {
+            message: e.to_string(),
+        })?;
+        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view())
+        .map_err(|e| WaferError::PluginInit {
             message: e.to_string(),
         })?;
 

@@ -1,0 +1,4 @@
+interface transform {
+    use types.{envelope, process-result};
+    process: func(input: envelope) -> process-result;
+}

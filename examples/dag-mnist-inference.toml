@@ -1,0 +1,70 @@
+# MNIST Digit Recognition Inference Pipeline
+#
+# This DAG demonstrates a complete ML inference pipeline:
+#   digit_7.bin (784 bytes raw grayscale)
+#     → tensor-prep (normalize to F32 tensor, 784→3136 bytes)
+#     → mnist-inference (run digit recognition model, 3136→40 bytes)
+#     → result-format (format probabilities as JSON)
+#     → stdout (display results)
+#
+# Usage:
+#   cargo run -- --dag examples/dag-mnist-inference.toml
+
+default_queue_capacity = 1024
+
+# Node 1: File source - reads raw 28x28 grayscale image (784 bytes)
+[[nodes]]
+id = "file-source"
+node_type = "source"
+[nodes.config]
+path = "tests/fixtures/digit_7.bin"
+
+# Node 2: Tensor preparation - normalizes pixels to F32 and structures as tensor
+# Input: 784 bytes (u8 grayscale pixels)
+# Output: 3136 bytes (784 F32 normalized values)
+[[nodes]]
+id = "tensor-prep"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/tensor-prep/target/wasm32-wasip2/release/tensor_prep.wasm"
+
+# Node 3: MNIST inference - runs the digit recognition neural network
+# Input: 3136 bytes (F32 tensor)
+# Output: 40 bytes (10 F32 probability values for digits 0-9)
+[[nodes]]
+id = "mnist-inference"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/mnist-inference/target/wasm32-wasip2/release/mnist_inference.wasm"
+
+# Node 4: Result formatter - converts raw probabilities to human-readable JSON
+# Input: 40 bytes (10 F32 probabilities)
+# Output: JSON with predicted digit and confidence scores
+[[nodes]]
+id = "result-format"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/result-format/target/wasm32-wasip2/release/result_format.wasm"
+
+# Node 5: Standard output sink - displays the formatted result
+[[nodes]]
+id = "stdout-sink"
+node_type = "sink"
+sink_type = "stdout"
+
+# Linear pipeline: file → tensor-prep → inference → format → stdout
+[[edges]]
+from = "file-source"
+to = "tensor-prep"
+
+[[edges]]
+from = "tensor-prep"
+to = "mnist-inference"
+
+[[edges]]
+from = "mnist-inference"
+to = "result-format"
+
+[[edges]]
+from = "result-format"
+to = "stdout-sink"
