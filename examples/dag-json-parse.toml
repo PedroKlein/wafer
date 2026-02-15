@@ -1,0 +1,31 @@
+# WAFER DAG Configuration: JSON Parse Transform
+# Pipeline: stdin → json-parse transform → stdout
+#
+# Usage:
+#   echo '{"name": "wafer", "version": 1}' | cargo run -- dag examples/dag-json-parse.toml
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "json-parse"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/json-parse/target/wasm32-wasip2/release/json_parse_transform.wasm"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+[[edges]]
+from = "source"
+to = "json-parse"
+
+[[edges]]
+from = "json-parse"
+to = "sink"

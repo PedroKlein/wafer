@@ -1,0 +1,35 @@
+# WAFER DAG Configuration: Passthrough
+# Simple pipeline: stdin → passthrough transform → stdout
+#
+# Usage:
+#   echo "Hello World" | cargo run -- dag examples/dag-passthrough.toml
+
+default_queue_capacity = 1024
+
+# Source node: reads from stdin
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+# Transform node: passes data through unchanged
+[[nodes]]
+id = "passthrough"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+# Sink node: writes to stdout
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+# Edge definitions: source → passthrough → sink
+[[edges]]
+from = "source"
+to = "passthrough"
+
+[[edges]]
+from = "passthrough"
+to = "sink"
