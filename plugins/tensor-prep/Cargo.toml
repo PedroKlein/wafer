@@ -1,0 +1,17 @@
+[package]
+name = "tensor-prep"
+version = "0.1.0"
+edition = "2021"
+description = "Image-to-tensor normalization plugin for WAFER pipeline (28x28 grayscale to F32)"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
