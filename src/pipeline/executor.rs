@@ -13,7 +13,8 @@
 //! The async `run()` method is async only because `call_process()` requires async
 //! for WASM component model calls, not because of I/O.
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Stdin, Write};
+use std::sync::OnceLock;
 use tracing::{debug, error, info, warn};
 
 use crate::engine::{pipeline, TransformInstance, WaferEngine};
@@ -94,12 +95,14 @@ impl PipelineExecutorCore {
     /// Create executor with default stdin/stdout.
     ///
     /// Note: This locks stdin for the lifetime of the executor.
+    /// Uses a global `OnceLock` to ensure stdin is only allocated once
+    /// per process, avoiding memory leaks if multiple executors are created.
     pub fn with_stdio(self) -> PipelineExecutor<std::io::StdinLock<'static>, std::io::Stdout> {
-        // SAFETY: We leak the stdin handle to get 'static lifetime.
-        // This is acceptable because:
-        // 1. There's only one stdin per process
-        // 2. The executor typically runs for the process lifetime
-        let stdin = Box::leak(Box::new(std::io::stdin()));
+        // Use OnceLock to ensure stdin is only allocated once per process.
+        // This avoids memory leaks from Box::leak if multiple executors are created.
+        static STDIN: OnceLock<Stdin> = OnceLock::new();
+        let stdin = STDIN.get_or_init(std::io::stdin);
+
         PipelineExecutor {
             engine: self.engine,
             instance: self.instance,

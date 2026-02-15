@@ -54,22 +54,19 @@ impl WasmTransform {
         }
     }
 
-    /// Convert RuntimeEnvelope to WIT Envelope
-    fn to_wit_envelope(envelope: &RuntimeEnvelope) -> pipeline::transform::types::Envelope {
+    /// Convert RuntimeEnvelope to WIT Envelope (takes ownership to avoid clones)
+    fn to_wit_envelope(envelope: RuntimeEnvelope) -> pipeline::transform::types::Envelope {
         use pipeline::transform::types::{Envelope, Payload};
 
-        let metadata: Vec<(String, String)> = envelope
-            .metadata
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        // Convert HashMap to Vec<(String, String)> by taking ownership
+        let metadata: Vec<(String, String)> = envelope.metadata.into_iter().collect();
 
         Envelope {
-            id: envelope.id.clone(),
+            id: envelope.id,
             timestamp: envelope.timestamp,
-            source: envelope.source.clone(),
+            source: envelope.source,
             metadata,
-            payload: Payload::Raw(envelope.payload.clone()),
+            payload: Payload::Raw(envelope.payload),
         }
     }
 
@@ -79,11 +76,8 @@ impl WasmTransform {
 
         let metadata = envelope.metadata.into_iter().collect();
 
-        // Use exhaustive match for future-proofing when Payload gains variants
-        #[allow(clippy::infallible_destructuring_match)]
-        let payload = match envelope.payload {
-            Payload::Raw(bytes) => bytes,
-        };
+        // Use let-else for cleaner destructuring (will need update when Payload gains variants)
+        let Payload::Raw(payload) = envelope.payload;
 
         RuntimeEnvelope {
             id: envelope.id,
@@ -163,7 +157,7 @@ impl Transform for WasmTransform {
                 });
             }
 
-            let wit_envelope = Self::to_wit_envelope(&input);
+            let wit_envelope = Self::to_wit_envelope(input);
             let result = self.instance.call_process(&wit_envelope).await?;
             Ok(Self::from_wit_result(result))
         })

@@ -38,11 +38,13 @@ pub struct Capabilities {
 
 impl Capabilities {
     /// Create default capabilities (minimal sandbox).
+    #[must_use]
     pub fn sandbox() -> Self {
         Self::default()
     }
 
     /// Create capabilities that inherit stdio (for debugging).
+    #[must_use]
     pub fn with_stdio() -> Self {
         Self {
             inherit_stdio: true,
@@ -51,6 +53,7 @@ impl Capabilities {
     }
 
     /// Create full capabilities (for trusted plugins).
+    #[must_use]
     pub fn full() -> Self {
         Self {
             inherit_stdio: true,
@@ -58,6 +61,38 @@ impl Capabilities {
             allow_network: true,
             allow_filesystem: true,
         }
+    }
+
+    /// Enable stdio inheritance (builder pattern).
+    #[must_use]
+    pub fn stdio(mut self, enabled: bool) -> Self {
+        self.inherit_stdio = enabled;
+        self
+    }
+
+    /// Enable environment variable access (builder pattern).
+    #[must_use]
+    pub fn env(mut self, enabled: bool) -> Self {
+        self.inherit_env = enabled;
+        self
+    }
+
+    /// Enable network access (builder pattern).
+    ///
+    /// **MVP: Placeholder only - has no effect.**
+    #[must_use]
+    pub fn network(mut self, enabled: bool) -> Self {
+        self.allow_network = enabled;
+        self
+    }
+
+    /// Enable filesystem access (builder pattern).
+    ///
+    /// **MVP: Placeholder only - has no effect.**
+    #[must_use]
+    pub fn filesystem(mut self, enabled: bool) -> Self {
+        self.allow_filesystem = enabled;
+        self
     }
 }
 

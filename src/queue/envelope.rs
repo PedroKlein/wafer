@@ -27,13 +27,15 @@ impl RuntimeEnvelope {
     pub fn new(source: impl Into<String>, payload: Vec<u8>) -> Self {
         // Timestamp in milliseconds since UNIX epoch
         // Saturates at u64::MAX for dates far in the future (~584 million years)
-        let timestamp = u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis(),
-        )
-        .unwrap_or(u64::MAX);
+        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
+            |_| {
+                // System clock is before UNIX epoch (misconfigured system)
+                // This should be extremely rare but we handle it gracefully
+                tracing::warn!("system clock before UNIX epoch, using 0 as timestamp");
+                0
+            },
+            |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX),
+        );
 
         Self {
             id: Uuid::new_v4().to_string(),

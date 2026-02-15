@@ -66,8 +66,16 @@ fn build_node_config(
     let config_bytes: Vec<u8> = config
         .config
         .as_ref()
-        .map(|v| toml::to_string(v).unwrap_or_default().into_bytes())
-        .unwrap_or_default();
+        .map(|v| {
+            toml::to_string(v).unwrap_or_else(|e| {
+                // Log the serialization error but don't fail - use empty config
+                // This is a best-effort approach for MVP; production should propagate error
+                tracing::warn!(error = %e, "failed to serialize node config to TOML, using empty config");
+                String::new()
+            })
+        })
+        .unwrap_or_default()
+        .into_bytes();
 
     // Metadata is now list<tuple<string, string>> = Vec<(String, String)>
     let metadata: Vec<(String, String)> = Vec::new();

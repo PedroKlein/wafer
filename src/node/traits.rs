@@ -69,6 +69,7 @@ impl NodeConfig {
     /// - `config_bytes` is not valid UTF-8
     /// - The UTF-8 string is not valid TOML
     /// - The TOML does not deserialize to type `T`
+    #[must_use = "parsing config without using the result is likely a bug"]
     pub fn parse_config<T: serde::de::DeserializeOwned>(
         &self,
     ) -> std::result::Result<T, ConfigParseError> {

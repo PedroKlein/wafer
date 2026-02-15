@@ -102,11 +102,9 @@ impl WaferEngine {
     ///
     /// # Errors
     ///
-    /// Returns [`WaferError::PluginInit`] if WASI imports cannot be added to the linker.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the linker was set but immediately became unavailable (should never happen).
+    /// Returns [`WaferError::PluginInit`] if:
+    /// - WASI imports cannot be added to the linker
+    /// - The linker initialization failed unexpectedly (race condition edge case)
     pub fn linker(&self) -> Result<&Linker<WaferState>> {
         // Use get_or_init with a fallible inner closure pattern
         // We can't use get_or_try_init as it's unstable
@@ -122,8 +120,11 @@ impl WaferEngine {
         // Ignore the result of set - if another thread already set it, that's fine
         let _ = self.linker.set(linker);
 
-        // Return whatever is in the cell now
-        Ok(self.linker.get().expect("linker was just set"))
+        // Return whatever is in the cell now - use ok_or_else instead of expect
+        // to avoid panics in library code
+        self.linker.get().ok_or_else(|| WaferError::PluginInit {
+            message: "linker initialization failed unexpectedly".to_string(),
+        })
     }
 
     /// Get the inner wasmtime Engine.
