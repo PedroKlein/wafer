@@ -10,6 +10,7 @@ A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmti
 | ------------------------------------- | ------------------------------------------ |
 | [SPEC.md](docs/SPEC.md)               | Complete technical specification           |
 | [AI_WORKFLOW.md](docs/AI_WORKFLOW.md) | AI-assisted development guide with OpenCode |
+| [MVP.md](docs/MVP.md)                 | Current MVP state and module structure     |
 | [ADRs](docs/adr/)                     | Architecture Decision Records              |
 
 ## Quick Start
@@ -23,6 +24,12 @@ cargo test
 
 # Run with a plugin
 cargo run -- --plugin plugins/example.wasm
+
+# Using just (if installed)
+just build        # Build the project
+just test         # Run tests
+just plugin       # Build the plugin
+just run          # Run with pass-through plugin
 ```
 
 ## Project Structure
@@ -30,6 +37,7 @@ cargo run -- --plugin plugins/example.wasm
 ```
 wafer-poc/
 ├── src/                    # Runtime implementation
+├── wit/                    # WIT interface definitions
 ├── plugins/                # Example WASM plugins
 ├── docs/
 │   ├── SPEC.md            # Technical specification
@@ -40,7 +48,7 @@ wafer-poc/
 
 ## Key Features
 
-- **Wasmtime 40.x** runtime with async support
+- **Wasmtime 41.x** runtime with async support
 - **SPSC bounded queues** for node communication
 - **Drain-and-flip hot-swap** for zero-downtime updates
 - **Fuel-based metering** for execution limits

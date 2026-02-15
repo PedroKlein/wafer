@@ -5,67 +5,7 @@
 //! for testing the WASM plugin infrastructure.
 
 wit_bindgen::generate!({
-    inline: r#"
-        package pipeline:transform@0.1.0;
-
-        interface types {
-            type message-id = string;
-            type timestamp = u64;
-            
-            record metadata-entry {
-                key: string,
-                value: string,
-            }
-            
-            variant payload {
-                raw(list<u8>),
-            }
-            
-            record envelope {
-                id: message-id,
-                timestamp: timestamp,
-                source: string,
-                metadata: list<metadata-entry>,
-                payload: payload,
-            }
-            
-            variant process-result {
-                emit(envelope),
-                filter,
-                error(process-error),
-            }
-            
-            record process-error {
-                code: u32,
-                message: string,
-                retriable: bool,
-            }
-        }
-
-        interface lifecycle {
-            use types.{metadata-entry};
-            
-            record node-config {
-                name: string,
-                config: list<metadata-entry>,
-            }
-            
-            init: func(config: node-config) -> result<_, string>;
-        }
-
-        interface transform {
-            use types.{envelope, process-result};
-            
-            process: func(input: envelope) -> process-result;
-        }
-
-        world transform-node {
-            import types;
-            
-            export lifecycle;
-            export transform;
-        }
-    "#,
+    path: "../../wit",
     world: "transform-node",
 });
 

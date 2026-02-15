@@ -1,74 +1,15 @@
 //! Transform component instance wrapper.
 
 use wasmtime::{Store, component::{Component, Linker}};
-use wasmtime_wasi::add_to_linker_async;
+use wasmtime_wasi::p2::add_to_linker_async;
 use crate::error::{Result, WaferError};
 use super::host::WaferState;
 use super::loader::WaferEngine;
 
 wasmtime::component::bindgen!({
-    inline: r#"
-        package pipeline:transform@0.1.0;
-
-        interface types {
-            type message-id = string;
-            type timestamp = u64;
-            
-            record metadata-entry {
-                key: string,
-                value: string,
-            }
-            
-            variant payload {
-                raw(list<u8>),
-            }
-            
-            record envelope {
-                id: message-id,
-                timestamp: timestamp,
-                source: string,
-                metadata: list<metadata-entry>,
-                payload: payload,
-            }
-            
-            variant process-result {
-                emit(envelope),
-                filter,
-                error(process-error),
-            }
-            
-            record process-error {
-                code: u32,
-                message: string,
-                retriable: bool,
-            }
-        }
-
-        interface lifecycle {
-            use types.{metadata-entry};
-            
-            record node-config {
-                name: string,
-                config: list<metadata-entry>,
-            }
-            
-            init: func(config: node-config) -> result<_, string>;
-        }
-
-        interface transform {
-            use types.{envelope, process-result};
-            
-            process: func(input: envelope) -> process-result;
-        }
-
-        world transform-node {
-            import types;
-            
-            export lifecycle;
-            export transform;
-        }
-    "#,
-    async: true,
+    path: "wit",
+    world: "transform-node",
+    exports: { default: async },
 });
 
 pub struct TransformInstance {

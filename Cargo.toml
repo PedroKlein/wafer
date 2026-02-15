@@ -8,8 +8,8 @@ members = ["."]
 exclude = ["plugins/pass-through"]
 
 [workspace.dependencies]
-wasmtime = "29"
-wasmtime-wasi = "29"
+wasmtime = "41"
+wasmtime-wasi = "41"
 tokio = { version = "1", features = ["rt", "macros", "io-std"] }
 crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
