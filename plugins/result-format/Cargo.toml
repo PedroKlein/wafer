@@ -1,0 +1,17 @@
+[package]
+name = "result-format"
+version = "0.1.0"
+edition = "2021"
+description = "Result format plugin for WAFER inference output parsing"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
