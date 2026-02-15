@@ -50,7 +50,7 @@ src/
 │   ├── builder.rs    # PipelineBuilder: config→PipelineExecutorCore
 │   └── mod.rs
 ├── queue/
-│   ├── bounded.rs    # BoundedQueue<T>: SPSC with crossbeam-channel
+│   ├── bounded.rs    # BoundedQueue<T>: SPSC with tokio::sync::mpsc
 │   ├── envelope.rs   # RuntimeEnvelope: host-side message wrapper
 │   └── mod.rs
 ├── config/
