@@ -1,10 +1,10 @@
 //! Transform component instance wrapper.
 
-use wasmtime::Store;
-use wasmtime::component::Component;
-use crate::error::{Result, WaferError};
 use super::host::WaferState;
 use super::loader::WaferEngine;
+use crate::error::{Result, WaferError};
+use wasmtime::component::Component;
+use wasmtime::Store;
 
 wasmtime::component::bindgen!({
     path: "wit",
@@ -31,10 +31,13 @@ impl TransformInstance {
     /// - The linker fails to instantiate the component
     pub async fn new(engine: &WaferEngine, component: &Component) -> Result<Self> {
         let mut store = Store::new(engine.inner(), WaferState::new());
-        
+
         // Set initial fuel
-        store.set_fuel(engine.fuel_limit())
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        store
+            .set_fuel(engine.fuel_limit())
+            .map_err(|e| WaferError::PluginInit {
+                message: e.to_string(),
+            })?;
 
         // Set epoch deadline for cooperative interruption
         store.set_epoch_deadline(engine.epoch_deadline());
@@ -44,10 +47,12 @@ impl TransformInstance {
 
         let bindings = TransformNode::instantiate_async(&mut store, component, linker)
             .await
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+            .map_err(|e| WaferError::PluginInit {
+                message: e.to_string(),
+            })?;
 
-        Ok(Self { 
-            store, 
+        Ok(Self {
+            store,
             bindings,
             fuel_limit: engine.fuel_limit(),
         })
@@ -58,11 +63,17 @@ impl TransformInstance {
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if the init call fails.
-    pub async fn call_init(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<()> {
-        self.bindings.pipeline_transform_lifecycle()
+    pub async fn call_init(
+        &mut self,
+        config: &exports::pipeline::transform::lifecycle::NodeConfig,
+    ) -> Result<()> {
+        self.bindings
+            .pipeline_transform_lifecycle()
             .call_init(&mut self.store, config)
             .await
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?
+            .map_err(|e| WaferError::PluginInit {
+                message: e.to_string(),
+            })?
             .map_err(|e| WaferError::PluginInit { message: e })?;
         Ok(())
     }
@@ -82,15 +93,20 @@ impl TransformInstance {
     ) -> Result<pipeline::transform::types::ProcessResult> {
         // Reset fuel before each call for consistent metering
         // This ensures each call gets a fresh fuel budget
-        self.store.set_fuel(self.fuel_limit)
-            .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })?;
+        self.store
+            .set_fuel(self.fuel_limit)
+            .map_err(|e| WaferError::ProcessError {
+                code: 1,
+                message: e.to_string(),
+            })?;
 
-        self.bindings.pipeline_transform_transform()
+        self.bindings
+            .pipeline_transform_transform()
             .call_process(&mut self.store, envelope)
             .await
-            .map_err(|e| WaferError::ProcessError { 
-                code: 1, 
-                message: e.to_string() 
+            .map_err(|e| WaferError::ProcessError {
+                code: 1,
+                message: e.to_string(),
             })
     }
 
@@ -101,11 +117,17 @@ impl TransformInstance {
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if the validate call fails.
-    pub async fn call_validate(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<Option<String>> {
-        self.bindings.pipeline_transform_lifecycle()
+    pub async fn call_validate(
+        &mut self,
+        config: &exports::pipeline::transform::lifecycle::NodeConfig,
+    ) -> Result<Option<String>> {
+        self.bindings
+            .pipeline_transform_lifecycle()
             .call_validate(&mut self.store, config)
             .await
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })
+            .map_err(|e| WaferError::PluginInit {
+                message: e.to_string(),
+            })
     }
 
     /// Call the lifecycle close function.
@@ -114,10 +136,13 @@ impl TransformInstance {
     ///
     /// Returns [`WaferError::PluginInit`] if the close call fails.
     pub async fn call_close(&mut self) -> Result<()> {
-        self.bindings.pipeline_transform_lifecycle()
+        self.bindings
+            .pipeline_transform_lifecycle()
             .call_close(&mut self.store)
             .await
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+            .map_err(|e| WaferError::PluginInit {
+                message: e.to_string(),
+            })?;
         Ok(())
     }
 
@@ -127,7 +152,9 @@ impl TransformInstance {
     ///
     /// Returns [`WaferError::ProcessError`] if fuel query fails.
     pub fn remaining_fuel(&self) -> Result<u64> {
-        self.store.get_fuel()
-            .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })
+        self.store.get_fuel().map_err(|e| WaferError::ProcessError {
+            code: 1,
+            message: e.to_string(),
+        })
     }
 }

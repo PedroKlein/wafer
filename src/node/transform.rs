@@ -78,7 +78,11 @@ impl WasmTransform {
 
         let metadata = envelope.metadata.into_iter().collect();
 
-        let Payload::Raw(payload) = envelope.payload;
+        // Use exhaustive match for future-proofing when Payload gains variants
+        #[allow(clippy::infallible_destructuring_match)]
+        let payload = match envelope.payload {
+            Payload::Raw(bytes) => bytes,
+        };
 
         RuntimeEnvelope {
             id: envelope.id,
@@ -115,10 +119,10 @@ impl Lifecycle for WasmTransform {
     }
 
     fn validate(&self) -> Result<()> {
-        // Note: validate() is sync in the trait but async in WASM
-        // For MVP, we defer validation to init() since the current
-        // TransformInstance doesn't expose call_validate().
-        // TODO: Add call_validate() to TransformInstance
+        // Note: validate() is sync in the trait but async in WASM.
+        // TransformInstance::call_validate() exists but requires &mut self,
+        // and this trait method takes &self. For MVP, validation is deferred
+        // to init() which can return errors if validation fails.
         Ok(())
     }
 
@@ -137,9 +141,10 @@ impl Lifecycle for WasmTransform {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // TODO: Add call_close() to TransformInstance
-            // For now, just mark as not initialized
-            self.initialized = false;
+            if self.initialized {
+                self.instance.call_close().await?;
+                self.initialized = false;
+            }
             Ok(())
         })
     }

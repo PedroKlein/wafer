@@ -253,11 +253,7 @@ pub(crate) fn wit_to_runtime_envelope(
     use pipeline::transform::types::Payload;
 
     // Metadata is now Vec<(String, String)> - already correct format
-    let metadata = envelope
-        .metadata
-        .iter()
-        .cloned()
-        .collect();
+    let metadata = envelope.metadata.iter().cloned().collect();
 
     let payload = match &envelope.payload {
         Payload::Raw(bytes) => bytes.clone(),
