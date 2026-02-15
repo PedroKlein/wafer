@@ -10,7 +10,7 @@ description = "Pass-through transform plugin for WAFER pipeline"
 crate-type = ["cdylib"]
 
 [dependencies]
-wit-bindgen = "0.41"
+wit-bindgen = "0.53"
 
 [profile.release]
 opt-level = "s"
