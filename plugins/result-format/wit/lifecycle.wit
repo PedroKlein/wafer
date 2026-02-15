@@ -1,0 +1,14 @@
+interface lifecycle {
+    use types.{metadata};
+
+    record node-config {
+        id: string,
+        node-type: string,
+        config-bytes: list<u8>,
+        metadata: metadata,
+    }
+
+    validate: func(config: node-config) -> option<string>;
+    init: func(config: node-config) -> result<_, string>;
+    close: func();
+}
