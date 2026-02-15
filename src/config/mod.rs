@@ -14,8 +14,7 @@
 mod loader;
 mod schema;
 
-pub use loader::{load_config, load_config_unchecked};
+// Legacy load_config functions removed - use DagConfig with toml::from_str directly
 pub use schema::{
-    DagConfig, EdgeDefinition, NodeDefinition, NodeType, PipelineConfig, TransformConfig,
-    DEFAULT_FUEL_LIMIT, DEFAULT_QUEUE_CAPACITY,
+    DagConfig, EdgeDefinition, NodeDefinition, NodeType, DEFAULT_FUEL_LIMIT, DEFAULT_QUEUE_CAPACITY,
 };

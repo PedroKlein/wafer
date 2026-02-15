@@ -8,7 +8,6 @@
 //! - [`engine`] - Wasmtime component loading
 //! - [`node`] - Node traits and implementations
 //! - [`queue`] - SPSC bounded queues
-//! - [`pipeline`] - Pipeline execution
 //! - [`config`] - TOML configuration
 //! - [`metrics`] - Runtime metrics
 
@@ -29,7 +28,6 @@ pub mod dag;
 pub mod engine;
 pub mod metrics;
 pub mod node;
-pub mod pipeline;
 pub mod queue;
 
 pub use error::{Result, WaferError};
