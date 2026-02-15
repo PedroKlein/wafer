@@ -6,4 +6,4 @@ mod builder;
 mod executor;
 
 pub use builder::PipelineBuilder;
-pub use executor::PipelineExecutor;
+pub use executor::{PipelineExecutor, PipelineExecutorCore};

@@ -1,7 +1,7 @@
 //! Transform component instance wrapper.
 
-use wasmtime::{Store, component::{Component, Linker}};
-use wasmtime_wasi::p2::add_to_linker_async;
+use wasmtime::Store;
+use wasmtime::component::Component;
 use crate::error::{Result, WaferError};
 use super::host::WaferState;
 use super::loader::WaferEngine;
@@ -12,30 +12,42 @@ wasmtime::component::bindgen!({
     exports: { default: async },
 });
 
+/// A WASM transform component instance with its store.
 pub struct TransformInstance {
     store: Store<WaferState>,
     bindings: TransformNode,
+    fuel_limit: u64,
 }
 
 impl TransformInstance {
+    /// Create a new transform instance.
+    ///
+    /// Uses the engine's cached linker for efficient instantiation.
     pub async fn new(engine: &WaferEngine, component: &Component) -> Result<Self> {
         let mut store = Store::new(engine.inner(), WaferState::new());
         
+        // Set initial fuel
         store.set_fuel(engine.fuel_limit())
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        let mut linker = Linker::new(engine.inner());
-        
-        add_to_linker_async(&mut linker)
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        // Set epoch deadline for cooperative interruption
+        store.set_epoch_deadline(engine.epoch_deadline());
 
-        let bindings = TransformNode::instantiate_async(&mut store, component, &linker)
+        // Use the cached linker from the engine
+        let linker = engine.linker()?;
+
+        let bindings = TransformNode::instantiate_async(&mut store, component, linker)
             .await
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        Ok(Self { store, bindings })
+        Ok(Self { 
+            store, 
+            bindings,
+            fuel_limit: engine.fuel_limit(),
+        })
     }
 
+    /// Call the lifecycle init function.
     pub async fn call_init(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<()> {
         self.bindings.pipeline_transform_lifecycle()
             .call_init(&mut self.store, config)
@@ -45,16 +57,17 @@ impl TransformInstance {
         Ok(())
     }
 
+    /// Call the transform process function.
+    ///
+    /// Resets fuel before each call to ensure consistent metering.
     pub async fn call_process(
         &mut self,
         envelope: &pipeline::transform::types::Envelope,
     ) -> Result<pipeline::transform::types::ProcessResult> {
-        let fuel = self.store.get_fuel()
+        // Reset fuel before each call for consistent metering
+        // This ensures each call gets a fresh fuel budget
+        self.store.set_fuel(self.fuel_limit)
             .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })?;
-        if fuel == 0 {
-            self.store.set_fuel(1_000_000)
-                .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })?;
-        }
 
         self.bindings.pipeline_transform_transform()
             .call_process(&mut self.store, envelope)
@@ -65,6 +78,25 @@ impl TransformInstance {
             })
     }
 
+    /// Call the lifecycle validate function.
+    /// Returns Ok(None) if valid, Ok(Some(error_msg)) if invalid.
+    pub async fn call_validate(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<Option<String>> {
+        self.bindings.pipeline_transform_lifecycle()
+            .call_validate(&mut self.store, config)
+            .await
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })
+    }
+
+    /// Call the lifecycle close function.
+    pub async fn call_close(&mut self) -> Result<()> {
+        self.bindings.pipeline_transform_lifecycle()
+            .call_close(&mut self.store)
+            .await
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        Ok(())
+    }
+
+    /// Get remaining fuel in the store.
     pub fn remaining_fuel(&self) -> Result<u64> {
         self.store.get_fuel()
             .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })

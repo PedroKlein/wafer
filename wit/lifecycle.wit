@@ -1,0 +1,41 @@
+/// Base lifecycle interface for all node types
+///
+/// All nodes (Source, Transform, Router, Joiner, Sink) implement this
+/// interface for consistent lifecycle management.
+interface lifecycle {
+    use types.{metadata};
+
+    /// Configuration provided to nodes at initialization
+    record node-config {
+        /// Unique node instance identifier
+        id: string,
+        /// Node type name (e.g., "transform/json-parse", "source/mqtt")
+        node-type: string,
+        /// User-provided configuration (serialized JSON/TOML bytes)
+        /// More flexible than key-value pairs for complex configs
+        config-bytes: list<u8>,
+        /// Pipeline-level metadata for this node
+        metadata: metadata,
+    }
+
+    /// Validate configuration before initialization
+    ///
+    /// Called before init(). If validation fails, the node will not be
+    /// instantiated and the pipeline will not start.
+    ///
+    /// Returns: None if valid, Some(error_message) if invalid
+    validate: func(config: node-config) -> option<string>;
+
+    /// Initialize the node with configuration
+    ///
+    /// Called once after successful validation. Node should parse config
+    /// and prepare for processing.
+    init: func(config: node-config) -> result<_, string>;
+
+    /// Graceful shutdown
+    ///
+    /// Called when node is being retired (shutdown or hot-swap).
+    /// Node should release resources and flush any buffered data.
+    /// This is critical for the drain-and-flip hot-swap mechanism.
+    close: func();
+}

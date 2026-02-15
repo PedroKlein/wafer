@@ -6,6 +6,7 @@
 //!
 //! - [`error`] - Centralized error types
 //! - [`engine`] - Wasmtime component loading
+//! - [`node`] - Node traits and implementations
 //! - [`queue`] - SPSC bounded queues
 //! - [`pipeline`] - Pipeline execution
 //! - [`config`] - TOML configuration
@@ -16,6 +17,7 @@ pub mod error;
 pub mod config;
 pub mod engine;
 pub mod metrics;
+pub mod node;
 pub mod pipeline;
 pub mod queue;
 
