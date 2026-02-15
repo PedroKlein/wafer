@@ -11,6 +11,7 @@ exclude = ["plugins/pass-through"]
 petgraph = "0.6"
 wasmtime = "41"
 wasmtime-wasi = "41"
+wasmtime-wasi-nn = { version = "41", features = ["onnx"] }
 tokio = { version = "1", features = ["rt", "macros", "io-std", "sync", "time"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
@@ -26,6 +27,7 @@ tempfile = "3"
 petgraph.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
+wasmtime-wasi-nn.workspace = true
 tokio.workspace = true
 serde.workspace = true
 thiserror.workspace = true
