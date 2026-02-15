@@ -1,0 +1,30 @@
+# Linear chain DAG: source → transform → sink
+# Used by integration tests for basic 3-node pipeline
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "file-source"
+node_type = "source"
+[nodes.config]
+# path will be set programmatically in tests
+
+[[nodes]]
+id = "passthrough"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass_through.wasm"
+
+[[nodes]]
+id = "file-sink"
+node_type = "sink"
+[nodes.config]
+# path will be set programmatically in tests
+
+[[edges]]
+from = "file-source"
+to = "passthrough"
+
+[[edges]]
+from = "passthrough"
+to = "file-sink"
