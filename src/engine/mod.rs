@@ -9,7 +9,10 @@ mod instance;
 mod loader;
 
 pub use instance::TransformInstance;
-pub use loader::{WaferEngine, DEFAULT_FUEL_LIMIT};
+pub use loader::WaferEngine;
 
-pub use instance::pipeline;
+// Re-export from canonical location (config module)
+pub use crate::config::DEFAULT_FUEL_LIMIT;
+
 pub use instance::exports;
+pub use instance::pipeline;

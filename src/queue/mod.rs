@@ -15,5 +15,8 @@
 mod bounded;
 mod envelope;
 
-pub use bounded::{BoundedQueue, QueueReceiver, QueueSender, DEFAULT_QUEUE_CAPACITY};
+pub use bounded::{BoundedQueue, QueueReceiver, QueueSender};
+
+// Re-export from canonical location (config module)
+pub use crate::config::DEFAULT_QUEUE_CAPACITY;
 pub use envelope::RuntimeEnvelope;

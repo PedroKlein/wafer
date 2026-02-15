@@ -1,9 +1,7 @@
 //! Bounded SPSC queue wrapper around crossbeam-channel.
 
+use crate::config::DEFAULT_QUEUE_CAPACITY;
 use crossbeam_channel::{bounded, Receiver, Sender, TryRecvError, TrySendError};
-
-/// Default queue capacity.
-pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 
 /// A bounded single-producer single-consumer queue.
 ///

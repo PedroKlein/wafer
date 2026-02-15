@@ -1,5 +1,6 @@
 //! Wasmtime Engine configuration and component loading.
 
+use crate::config::DEFAULT_FUEL_LIMIT;
 use crate::error::{Result, WaferError};
 use std::path::Path;
 use std::sync::OnceLock;
@@ -11,9 +12,6 @@ use wasmtime::{
 use wasmtime_wasi::p2::add_to_linker_async;
 
 use super::host::WaferState;
-
-/// Default fuel limit per process() call (1 million instructions).
-pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
 
 /// Default epoch deadline (ticks before interruption).
 pub const DEFAULT_EPOCH_DEADLINE: u64 = 100; // 1 second at 10ms ticks
