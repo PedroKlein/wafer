@@ -33,17 +33,14 @@ impl WasmTransform {
     ///
     /// The component must implement the `transform-node` world.
     /// Call `init()` before `process()`.
-    pub async fn new(
-        engine: WaferEngine,
-        instance: TransformInstance,
-        config: NodeConfig,
-    ) -> Result<Self> {
-        Ok(Self {
+    #[must_use]
+    pub fn new(engine: WaferEngine, instance: TransformInstance, config: NodeConfig) -> Self {
+        Self {
             config,
             engine,
             instance,
             initialized: false,
-        })
+        }
     }
 
     /// Convert NodeConfig to WIT NodeConfig

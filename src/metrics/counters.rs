@@ -110,7 +110,9 @@ impl<'a> ProcessTimer<'a> {
 impl Drop for ProcessTimer<'_> {
     fn drop(&mut self) {
         let elapsed = self.start.elapsed();
-        self.metrics.record_process_time(elapsed.as_nanos() as u64);
+        // Saturate at u64::MAX for extremely long durations (>584 years)
+        let nanos = u64::try_from(elapsed.as_nanos()).unwrap_or(u64::MAX);
+        self.metrics.record_process_time(nanos);
         self.metrics.increment_messages();
     }
 }

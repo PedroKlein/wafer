@@ -30,25 +30,25 @@ impl PipelineBuilder {
             ))
         })?;
 
-        let transform_config = config.transform();
+        let transform_config = &config.transform;
 
         info!(
-            pipeline = %config.name(),
-            transform = %transform_config.name(),
-            plugin = %transform_config.plugin_path().display(),
+            pipeline = %config.name,
+            transform = %transform_config.name,
+            plugin = %transform_config.plugin_path.display(),
             "Building pipeline executor"
         );
 
-        let engine = WaferEngine::with_fuel_limit(transform_config.fuel_limit())?;
-        let component = engine.load_component(transform_config.plugin_path())?;
+        let engine = WaferEngine::with_fuel_limit(transform_config.fuel_limit)?;
+        let component = engine.load_component(&transform_config.plugin_path)?;
         let mut instance = TransformInstance::new(&engine, &component).await?;
 
         let node_config = build_node_config(transform_config);
         instance.call_init(&node_config).await?;
 
-        info!(transform = %transform_config.name(), "Transform initialized");
+        info!(transform = %transform_config.name, "Transform initialized");
 
-        let core = PipelineExecutorCore::new(engine, instance, transform_config.name());
+        let core = PipelineExecutorCore::new(engine, instance, &transform_config.name);
         Ok(core)
     }
 }
@@ -73,7 +73,7 @@ fn build_node_config(
     let metadata: Vec<(String, String)> = Vec::new();
 
     exports::pipeline::transform::lifecycle::NodeConfig {
-        id: config.name().to_string(),
+        id: config.name.clone(),
         node_type: "transform".to_string(),
         config_bytes,
         metadata,

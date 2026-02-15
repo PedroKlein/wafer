@@ -1,4 +1,17 @@
 //! Pipeline executor - single transform execution loop.
+//!
+//! # Design Note: Blocking I/O
+//!
+//! This executor uses **blocking I/O** (`BufRead::read_line`) rather than async I/O.
+//! This is intentional:
+//!
+//! - **Simplicity**: Blocking I/O avoids async runtime complexity for stdin/stdout
+//! - **Performance**: No async overhead for line-by-line processing
+//! - **Compatibility**: Works with any `BufRead`/`Write` impl (files, pipes, buffers)
+//! - **Testability**: Easy to inject mock readers/writers for unit tests
+//!
+//! The async `run()` method is async only because `call_process()` requires async
+//! for WASM component model calls, not because of I/O.
 
 use std::io::{BufRead, Write};
 use tracing::{debug, error, info, warn};

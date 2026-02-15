@@ -23,6 +23,12 @@ impl TransformInstance {
     /// Create a new transform instance.
     ///
     /// Uses the engine's cached linker for efficient instantiation.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if:
+    /// - Initial fuel cannot be set
+    /// - The linker fails to instantiate the component
     pub async fn new(engine: &WaferEngine, component: &Component) -> Result<Self> {
         let mut store = Store::new(engine.inner(), WaferState::new());
         
@@ -48,6 +54,10 @@ impl TransformInstance {
     }
 
     /// Call the lifecycle init function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the init call fails.
     pub async fn call_init(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<()> {
         self.bindings.pipeline_transform_lifecycle()
             .call_init(&mut self.store, config)
@@ -60,6 +70,12 @@ impl TransformInstance {
     /// Call the transform process function.
     ///
     /// Resets fuel before each call to ensure consistent metering.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::ProcessError`] if:
+    /// - Fuel reset fails
+    /// - The WASM process call fails
     pub async fn call_process(
         &mut self,
         envelope: &pipeline::transform::types::Envelope,
@@ -79,7 +95,12 @@ impl TransformInstance {
     }
 
     /// Call the lifecycle validate function.
-    /// Returns Ok(None) if valid, Ok(Some(error_msg)) if invalid.
+    ///
+    /// Returns `Ok(None)` if valid, `Ok(Some(error_msg))` if invalid.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the validate call fails.
     pub async fn call_validate(&mut self, config: &exports::pipeline::transform::lifecycle::NodeConfig) -> Result<Option<String>> {
         self.bindings.pipeline_transform_lifecycle()
             .call_validate(&mut self.store, config)
@@ -88,6 +109,10 @@ impl TransformInstance {
     }
 
     /// Call the lifecycle close function.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the close call fails.
     pub async fn call_close(&mut self) -> Result<()> {
         self.bindings.pipeline_transform_lifecycle()
             .call_close(&mut self.store)
@@ -97,6 +122,10 @@ impl TransformInstance {
     }
 
     /// Get remaining fuel in the store.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::ProcessError`] if fuel query fails.
     pub fn remaining_fuel(&self) -> Result<u64> {
         self.store.get_fuel()
             .map_err(|e| WaferError::ProcessError { code: 1, message: e.to_string() })

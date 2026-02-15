@@ -48,37 +48,3 @@ fn default_fuel_limit() -> u64 {
 fn default_queue_capacity() -> usize {
     DEFAULT_QUEUE_CAPACITY
 }
-
-impl PipelineConfig {
-    /// Get the pipeline name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Get the transform configuration.
-    pub fn transform(&self) -> &TransformConfig {
-        &self.transform
-    }
-}
-
-impl TransformConfig {
-    /// Get the node name.
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
-    /// Get the plugin path.
-    pub fn plugin_path(&self) -> &PathBuf {
-        &self.plugin_path
-    }
-
-    /// Get the fuel limit.
-    pub fn fuel_limit(&self) -> u64 {
-        self.fuel_limit
-    }
-
-    /// Get the queue capacity.
-    pub fn queue_capacity(&self) -> usize {
-        self.queue_capacity
-    }
-}
