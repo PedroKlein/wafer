@@ -211,6 +211,18 @@ fn plugin_path() -> PathBuf {
     project_root().join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
 }
 
+fn uppercase_plugin_path() -> PathBuf {
+    project_root().join("plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm")
+}
+
+fn json_parse_plugin_path() -> PathBuf {
+    project_root().join("plugins/json-parse/target/wasm32-wasip2/release/json_parse_transform.wasm")
+}
+
+fn filter_plugin_path() -> PathBuf {
+    project_root().join("plugins/filter/target/wasm32-wasip2/release/filter_transform.wasm")
+}
+
 async fn create_wasm_transform(id: &str) -> WasmTransform {
     let engine = WaferEngine::new().expect("Failed to create engine");
     let component = engine
@@ -220,6 +232,44 @@ async fn create_wasm_transform(id: &str) -> WasmTransform {
         .await
         .expect("Failed to create instance");
     let config = NodeConfig::new(id, "transform/passthrough");
+    WasmTransform::new(engine, instance, config)
+}
+
+async fn create_uppercase_transform(id: &str) -> WasmTransform {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(uppercase_plugin_path())
+        .expect("Failed to load uppercase plugin");
+    let instance = TransformInstance::new(&engine, &component)
+        .await
+        .expect("Failed to create uppercase instance");
+    let config = NodeConfig::new(id, "transform/uppercase");
+    WasmTransform::new(engine, instance, config)
+}
+
+async fn create_json_parse_transform(id: &str) -> WasmTransform {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(json_parse_plugin_path())
+        .expect("Failed to load json-parse plugin");
+    let instance = TransformInstance::new(&engine, &component)
+        .await
+        .expect("Failed to create json-parse instance");
+    let config = NodeConfig::new(id, "transform/json-parse");
+    WasmTransform::new(engine, instance, config)
+}
+
+async fn create_filter_transform(id: &str, pattern: &str) -> WasmTransform {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(filter_plugin_path())
+        .expect("Failed to load filter plugin");
+    let instance = TransformInstance::new(&engine, &component)
+        .await
+        .expect("Failed to create filter instance");
+    let config_toml = format!("pattern = \"{}\"", pattern);
+    let config = NodeConfig::new(id, "transform/filter")
+        .with_config_bytes(config_toml.into_bytes());
     WasmTransform::new(engine, instance, config)
 }
 
@@ -496,4 +546,266 @@ async fn test_dag_large_file() {
     assert_eq!(output_lines.len(), 1000);
     assert_eq!(output_lines[0], "line-0");
     assert_eq!(output_lines[999], "line-999");
+}
+
+#[tokio::test]
+async fn test_dag_uppercase_transform() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_path = dir.path().join("output.txt");
+
+    std::fs::write(&input_path, "hello world\n").expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform".to_string(),
+                node_type: NodeType::Transform,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "transform".to_string(),
+                queue_capacity: None,
+            },
+            EdgeDefinition {
+                from: "transform".to_string(),
+                to: "sink".to_string(),
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+    };
+
+    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    let source = FileSource::new("source", &input_path);
+    let transform = create_uppercase_transform("transform").await;
+    let sink = FileSink::new("sink", output_path.clone());
+
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("transform", AnyNode::from_transform(transform))
+        .expect("Failed to register transform");
+    orchestrator
+        .register_node("sink", AnyNode::from_sink(sink))
+        .expect("Failed to register sink");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
+    assert_eq!(output, "HELLO WORLD\n");
+}
+
+#[tokio::test]
+async fn test_dag_json_parse_transform() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_path = dir.path().join("output.txt");
+
+    std::fs::write(&input_path, "{\"key\":\"value\"}\n").expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform".to_string(),
+                node_type: NodeType::Transform,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "transform".to_string(),
+                queue_capacity: None,
+            },
+            EdgeDefinition {
+                from: "transform".to_string(),
+                to: "sink".to_string(),
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+    };
+
+    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    let source = FileSource::new("source", &input_path);
+    let transform = create_json_parse_transform("transform").await;
+    let sink = FileSink::new("sink", output_path.clone());
+
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("transform", AnyNode::from_transform(transform))
+        .expect("Failed to register transform");
+    orchestrator
+        .register_node("sink", AnyNode::from_sink(sink))
+        .expect("Failed to register sink");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
+    assert!(output.contains("\"key\""), "Expected key in output: {}", output);
+    assert!(output.contains("\"value\""), "Expected value in output: {}", output);
+    assert!(output.contains(": ") || output.contains(":\n"), "Expected pretty-printed JSON: {}", output);
+}
+
+#[tokio::test]
+async fn test_dag_filter_transform() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_path = dir.path().join("output.txt");
+
+    std::fs::write(&input_path, "info: startup\ndebug: trace\ninfo: ready\ndebug: data\n")
+        .expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform".to_string(),
+                node_type: NodeType::Transform,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "transform".to_string(),
+                queue_capacity: None,
+            },
+            EdgeDefinition {
+                from: "transform".to_string(),
+                to: "sink".to_string(),
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+    };
+
+    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    let source = FileSource::new("source", &input_path);
+    let transform = create_filter_transform("transform", "debug").await;
+    let sink = FileSink::new("sink", output_path.clone());
+
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("transform", AnyNode::from_transform(transform))
+        .expect("Failed to register transform");
+    orchestrator
+        .register_node("sink", AnyNode::from_sink(sink))
+        .expect("Failed to register sink");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
+    assert!(!output.contains("debug"), "Expected debug lines to be filtered out: {}", output);
+    assert!(output.contains("info: startup"), "Expected info lines to remain: {}", output);
+    assert!(output.contains("info: ready"), "Expected info lines to remain: {}", output);
+}
+
+#[tokio::test]
+async fn test_dag_filter_no_match() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_path = dir.path().join("output.txt");
+
+    std::fs::write(&input_path, "info: startup\nwarn: caution\ninfo: ready\n")
+        .expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform".to_string(),
+                node_type: NodeType::Transform,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "transform".to_string(),
+                queue_capacity: None,
+            },
+            EdgeDefinition {
+                from: "transform".to_string(),
+                to: "sink".to_string(),
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+    };
+
+    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    let source = FileSource::new("source", &input_path);
+    let transform = create_filter_transform("transform", "ERROR").await;
+    let sink = FileSink::new("sink", output_path.clone());
+
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("transform", AnyNode::from_transform(transform))
+        .expect("Failed to register transform");
+    orchestrator
+        .register_node("sink", AnyNode::from_sink(sink))
+        .expect("Failed to register sink");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
+    assert_eq!(output, "info: startup\nwarn: caution\ninfo: ready\n", "No lines should be filtered when pattern doesn't match");
 }
