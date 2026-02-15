@@ -2,24 +2,28 @@
 
 > Current state of the WebAssembly Flow Execution Runtime proof-of-concept
 
-**Version:** 0.1.0  
-**Tech Stack:** Rust 1.88+, wasmtime 41.0.3, wit-bindgen 0.53.1, WASI Preview 2
+**Version:** 0.2.0  
+**Tech Stack:** Rust 1.88+, wasmtime 41.0.3, wit-bindgen 0.53.1, WASI Preview 2, petgraph
 
 ---
 
 ## Current State
 
-The MVP implements a **single-transform pipeline** with:
+The MVP implements **multi-node DAG pipelines** with:
+- Linear chain execution: `FileSource → Transform → Transform → FileSink`
 - WASI Preview 2 component loading via wasmtime
 - WIT-based type contracts (`transform-node` world)
 - Fuel-based execution metering with per-call reset
 - Epoch interruption for cooperative scheduling
 - Capability-scoped WASI contexts
 - Generic I/O for testability
-- SPSC bounded queues (not yet integrated into pipeline)
-- TOML configuration loading
+- **SPSC bounded queues integrated for inter-node communication**
+- **petgraph-based DAG topology management**
+- TOML configuration loading for both single-transform and DAG pipelines
 
-**What works:** Load a transform plugin, initialize it with full lifecycle (`validate`, `init`, `close`), pipe stdin through `process()`, write to stdout.
+**What works:**
+- Single-transform pipeline: Load a transform plugin, pipe stdin through `process()`, write to stdout
+- Multi-node DAG: Load DAG config, wire nodes with bounded queues, execute with backpressure, graceful shutdown
 
 ---
 
@@ -35,7 +39,12 @@ src/
 ├── node/
 │   ├── traits.rs     # Lifecycle and Transform traits
 │   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
-│   └── mod.rs        # AnyNode enum for heterogeneous DAG storage
+│   ├── source.rs     # Source trait + FileSource implementation
+│   ├── sink.rs       # Sink trait + FileSink implementation
+│   └── mod.rs        # AnyNode enum (Transform, Source, Sink variants)
+├── dag/
+│   ├── orchestrator.rs # DagOrchestrator: petgraph topology, queue wiring, async execution
+│   └── mod.rs
 ├── pipeline/
 │   ├── executor.rs   # PipelineExecutor<R, W>: generic I/O processing loop
 │   ├── builder.rs    # PipelineBuilder: config→PipelineExecutorCore
@@ -46,7 +55,7 @@ src/
 │   └── mod.rs
 ├── config/
 │   ├── loader.rs     # TOML file loading
-│   ├── schema.rs     # PipelineConfig, TransformConfig structs
+│   ├── schema.rs     # PipelineConfig, TransformConfig, DagConfig structs
 │   └── mod.rs
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
@@ -94,18 +103,33 @@ wit/
 ### Rust Trait Architecture
 - [x] `Lifecycle` trait: `init`, `validate`, `close` async methods
 - [x] `Transform` trait: `process` async method
-- [x] `WasmTransform` struct implementing both traits
-- [x] `AnyNode` enum for future heterogeneous DAG storage
+- [x] `Source` trait: `poll` async method for data ingestion
+- [x] `Sink` trait: `collect` async method for data output
+- [x] `WasmTransform` struct implementing Lifecycle + Transform
+- [x] `FileSource` struct implementing Lifecycle + Source (line-based file reading)
+- [x] `FileSink` struct implementing Lifecycle + Sink (line-based file writing)
+- [x] `AnyNode` enum with `Transform`, `Source`, `Sink` variants
 - [x] Traits are `Send` but not `Sync` (WASM stores aren't thread-safe)
 
 ### Pipeline Execution
-- [x] Single transform node execution
+- [x] Single transform node execution (stdin/stdout)
 - [x] Generic I/O: `PipelineExecutor<R: BufRead, W: Write>`
 - [x] `PipelineExecutorCore` builder for deferred I/O attachment
 - [x] `.with_io(reader, writer)` for testing
 - [x] `.with_stdio()` for production
 - [x] ProcessResult handling: `emit`, `filter`, `error`
 - [x] Configuration via TOML files
+
+### DAG Orchestration
+- [x] `DagOrchestrator` with petgraph-based topology
+- [x] `DagConfig` schema with nodes and edges definitions
+- [x] Linear chain execution: `Source → Transform(s) → Sink`
+- [x] Topological sort for execution order
+- [x] Cycle detection (rejects invalid DAGs)
+- [x] Bounded queue wiring between nodes
+- [x] Async execution with tokio::spawn per node
+- [x] Graceful shutdown in reverse topological order
+- [x] Error handling: log and continue (non-fatal)
 
 ### Capability Scoping
 - [x] `Capabilities` struct for security boundaries
@@ -115,7 +139,7 @@ wit/
 - [x] Placeholders for network/filesystem scoping
 
 ### Infrastructure
-- [x] Bounded SPSC queue (implemented, not integrated)
+- [x] Bounded SPSC queue integrated for inter-node communication
 - [x] RuntimeEnvelope ↔ WIT Envelope conversion
 - [x] Atomic metrics: `messages_total`, `process_time_ns`, `queue_depth`
 - [x] ProcessTimer RAII guard for timing
@@ -131,16 +155,19 @@ wit/
 ## What's NOT Implemented
 
 ### Node Types (SPEC §5)
-- [ ] Source nodes (`poll`, `ack`)
-- [ ] Sink nodes (`collect`, `flush`)
+- [x] ~~Source nodes (`poll`, `ack`)~~ - FileSource implemented (host-only, no WASM)
+- [x] ~~Sink nodes (`collect`, `flush`)~~ - FileSink implemented (host-only, no WASM)
 - [ ] Router nodes (1→N routing)
 - [ ] Joiner nodes (N→1 merge)
+- [ ] WASM-based Source/Sink (currently host-only Rust implementations)
 
 ### DAG Orchestration
-- [ ] Multi-node pipelines
-- [ ] Edge wiring between nodes
-- [ ] Queue integration for inter-node communication
-- [ ] Backpressure propagation
+- [x] ~~Multi-node pipelines~~ - Linear chain implemented
+- [x] ~~Edge wiring between nodes~~ - BoundedQueue integration complete
+- [x] ~~Queue integration for inter-node communication~~ - Done
+- [x] ~~Backpressure propagation~~ - Blocking queues implemented
+- [ ] Fan-out/fan-in topologies (Router/Joiner)
+- [ ] CLI `--dag-config` flag (tests use DagOrchestrator directly)
 
 ### Dynamic Features
 - [ ] Hot-swap (drain-and-flip)
@@ -170,14 +197,15 @@ wit/
 
 | Area | Limitation |
 |------|------------|
-| **Pipeline** | Single transform only (no DAG) |
-| **I/O** | stdin/stdout only (no MQTT, no files) |
+| **Pipeline** | Linear chains only (no fan-out/fan-in) |
+| **I/O** | stdin/stdout for single-transform; file-based for DAG |
+| **Source/Sink** | Host-only Rust implementations (no WASM) |
 | **WIT** | Only `raw(list<u8>)` payload supported |
 | **State** | Stateless transforms only |
-| **Queues** | BoundedQueue exists but unused |
 | **Metrics** | In-memory only (no Prometheus export) |
 | **Capabilities** | Network/filesystem flags are placeholders |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
+| **CLI** | DAG config not exposed via CLI (use DagOrchestrator API) |
 
 ---
 
@@ -191,6 +219,7 @@ wit/
 | wit-bindgen | 0.53.1 | Guest code generation |
 | Target | `wasm32-wasip2` | WASI Preview 2 |
 | crossbeam-channel | 0.5 | Queue implementation |
+| petgraph | 0.6 | DAG topology management |
 
 ---
 
@@ -205,7 +234,7 @@ cd plugins/pass-through
 cargo build --release --target wasm32-wasip2
 cd ../..
 
-# Run with plugin
+# Run single-transform pipeline (stdin/stdout)
 echo "hello world" | cargo run -- --config pipeline.toml
 
 # Run tests
@@ -214,6 +243,32 @@ cargo test
 # Run integration tests specifically
 cargo test --test integration
 ```
+
+### DAG Pipeline Usage
+
+DAG pipelines are currently used via the `DagOrchestrator` API (not CLI):
+
+```rust
+use wafer_poc::dag::DagOrchestrator;
+use wafer_poc::config::DagConfig;
+use wafer_poc::node::{AnyNode, FileSource, FileSink};
+
+// Load config
+let config: DagConfig = toml::from_str(config_str)?;
+
+// Create orchestrator
+let mut orchestrator = DagOrchestrator::from_config(config)?;
+
+// Register nodes
+orchestrator.register_node("source", AnyNode::from_source(FileSource::new("source", "input.txt")))?;
+orchestrator.register_node("sink", AnyNode::from_sink(FileSink::new("sink", "output.txt")))?;
+
+// Wire queues and run
+orchestrator.wire_queues()?;
+orchestrator.run().await?;
+```
+
+See `tests/integration.rs` for complete examples.
 
 ---
 
