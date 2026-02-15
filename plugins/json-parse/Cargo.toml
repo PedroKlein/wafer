@@ -1,0 +1,19 @@
+[package]
+name = "json-parse-transform"
+version = "0.1.0"
+edition = "2021"
+description = "JSON parse transform plugin for WAFER pipeline"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+serde = { version = "1", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
