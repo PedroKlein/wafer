@@ -112,7 +112,7 @@ impl<T> QueueSender<T> {
 }
 
 /// Receiver half of a bounded queue.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct QueueReceiver<T> {
     receiver: Receiver<T>,
     capacity: usize,
