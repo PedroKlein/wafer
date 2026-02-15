@@ -8,6 +8,7 @@ members = ["."]
 exclude = ["plugins/pass-through"]
 
 [workspace.dependencies]
+petgraph = "0.6"
 wasmtime = "41"
 wasmtime-wasi = "41"
 tokio = { version = "1", features = ["rt", "macros", "io-std"] }
@@ -15,7 +16,7 @@ crossbeam-channel = "0.5"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 anyhow = "1"
-toml = "0.8"
+toml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
@@ -23,6 +24,7 @@ uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
 
 [dependencies]
+petgraph.workspace = true
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 tokio.workspace = true
