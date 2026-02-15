@@ -12,11 +12,14 @@
 The MVP implements a **single-transform pipeline** with:
 - WASI Preview 2 component loading via wasmtime
 - WIT-based type contracts (`transform-node` world)
-- Fuel-based execution metering
+- Fuel-based execution metering with per-call reset
+- Epoch interruption for cooperative scheduling
+- Capability-scoped WASI contexts
+- Generic I/O for testability
 - SPSC bounded queues (not yet integrated into pipeline)
 - TOML configuration loading
 
-**What works:** Load a transform plugin, initialize it, pipe stdin through `process()`, write to stdout.
+**What works:** Load a transform plugin, initialize it with full lifecycle (`validate`, `init`, `close`), pipe stdin through `process()`, write to stdout.
 
 ---
 
@@ -25,13 +28,17 @@ The MVP implements a **single-transform pipeline** with:
 ```
 src/
 ├── engine/
-│   ├── host.rs       # WaferState: WasiView impl, WASI context
+│   ├── host.rs       # WaferState: WasiView impl, Capabilities for scoping
 │   ├── instance.rs   # TransformInstance: bindgen!, component instantiation
-│   ├── loader.rs     # WaferEngine: wasmtime config, component loading
+│   ├── loader.rs     # WaferEngine: wasmtime config, cached Linker, component loading
 │   └── mod.rs
+├── node/
+│   ├── traits.rs     # Lifecycle and Transform traits
+│   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
+│   └── mod.rs        # AnyNode enum for heterogeneous DAG storage
 ├── pipeline/
-│   ├── executor.rs   # PipelineExecutor: stdin→process()→stdout loop
-│   ├── builder.rs    # PipelineBuilder: config→executor construction
+│   ├── executor.rs   # PipelineExecutor<R, W>: generic I/O processing loop
+│   ├── builder.rs    # PipelineBuilder: config→PipelineExecutorCore
 │   └── mod.rs
 ├── queue/
 │   ├── bounded.rs    # BoundedQueue<T>: SPSC with crossbeam-channel
@@ -43,16 +50,25 @@ src/
 │   └── mod.rs
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
-├── error.rs          # WaferError enum, Result type
+├── error.rs          # WaferError enum, ConfigError, Result type
 ├── lib.rs
 └── main.rs           # CLI: --config flag, pipeline.toml
+```
+
+### WIT Files
+
+```
+wit/
+├── types.wit         # Shared types: envelope, payload, process-result, metadata
+├── lifecycle.wit     # Lifecycle interface: validate, init, close
+└── transform.wit     # Transform interface and transform-node world
 ```
 
 ### External Files
 
 | File | Purpose |
 |------|---------|
-| `wit/transform.wit` | WIT contract for transform nodes |
+| `wit/*.wit` | WIT contracts (flat single-package structure) |
 | `plugins/pass-through/` | Example transform (no-op, emits input unchanged) |
 
 ---
@@ -63,31 +79,51 @@ src/
 - [x] Wasmtime engine with component model support
 - [x] WASI Preview 2 via `wasmtime-wasi` P2 bindings
 - [x] Async support (`async_support(true)`)
-- [x] Fuel metering (default: 1,000,000 per call)
+- [x] Fuel metering with per-call reset (default: 1,000,000)
+- [x] Epoch interruption for cooperative scheduling
+- [x] Cached Linker in `WaferEngine` via `OnceLock`
 - [x] Component loading from `.wasm` files
 
 ### WIT Contract (`transform-node` world)
-- [x] `types` interface: `Envelope`, `ProcessResult`, `MetadataEntry`
-- [x] `lifecycle` interface: `init(NodeConfig)`
+- [x] `types` interface: `Envelope`, `Payload`, `ProcessResult`, `ProcessError`, `Metadata`
+- [x] `lifecycle` interface: `validate(NodeConfig)`, `init(NodeConfig)`, `close()`
 - [x] `transform` interface: `process(Envelope) -> ProcessResult`
 - [x] Payload variant: `raw(list<u8>)` only
+- [x] Metadata as `list<tuple<string, string>>` (no external deps)
+
+### Rust Trait Architecture
+- [x] `Lifecycle` trait: `init`, `validate`, `close` async methods
+- [x] `Transform` trait: `process` async method
+- [x] `WasmTransform` struct implementing both traits
+- [x] `AnyNode` enum for future heterogeneous DAG storage
+- [x] Traits are `Send` but not `Sync` (WASM stores aren't thread-safe)
 
 ### Pipeline Execution
 - [x] Single transform node execution
-- [x] stdin→transform→stdout data flow
+- [x] Generic I/O: `PipelineExecutor<R: BufRead, W: Write>`
+- [x] `PipelineExecutorCore` builder for deferred I/O attachment
+- [x] `.with_io(reader, writer)` for testing
+- [x] `.with_stdio()` for production
 - [x] ProcessResult handling: `emit`, `filter`, `error`
 - [x] Configuration via TOML files
-- [x] Per-call fuel refill when exhausted
+
+### Capability Scoping
+- [x] `Capabilities` struct for security boundaries
+- [x] `Capabilities::sandbox()` - minimal access
+- [x] `Capabilities::with_stdio()` - inherit stdin/stdout (default)
+- [x] `Capabilities::full()` - trusted plugins
+- [x] Placeholders for network/filesystem scoping
 
 ### Infrastructure
 - [x] Bounded SPSC queue (implemented, not integrated)
 - [x] RuntimeEnvelope ↔ WIT Envelope conversion
 - [x] Atomic metrics: `messages_total`, `process_time_ns`, `queue_depth`
 - [x] ProcessTimer RAII guard for timing
-- [x] Error types: `WaferError`, `ConfigError`
+- [x] Error types: `WaferError`, `ConfigError` (with `Message` variant)
 
 ### Example Plugin
 - [x] `pass-through` transform (wit-bindgen 0.53.1)
+- [x] Implements full lifecycle: `validate`, `init`, `close`
 - [x] Compiles to `wasm32-wasip2` target
 
 ---
@@ -121,12 +157,12 @@ src/
 - [ ] `sensor-reading` payload variant
 - [ ] `tensor` payload variant (wasi-nn)
 - [ ] `image-data` payload variant
-- [ ] Full `process-error` with original envelope
 
 ### Capabilities
 - [ ] wasi-nn inference
 - [ ] Host-managed node state
-- [ ] Capability-scoped isolation beyond stdio
+- [ ] Network capability enforcement (currently placeholder)
+- [ ] Filesystem capability enforcement (currently placeholder)
 
 ---
 
@@ -137,10 +173,11 @@ src/
 | **Pipeline** | Single transform only (no DAG) |
 | **I/O** | stdin/stdout only (no MQTT, no files) |
 | **WIT** | Only `raw(list<u8>)` payload supported |
-| **Lifecycle** | No `validate()` or `close()` in WIT |
 | **State** | Stateless transforms only |
 | **Queues** | BoundedQueue exists but unused |
 | **Metrics** | In-memory only (no Prometheus export) |
+| **Capabilities** | Network/filesystem flags are placeholders |
+| **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
 
 ---
 
@@ -170,6 +207,59 @@ cd ../..
 
 # Run with plugin
 echo "hello world" | cargo run -- --config pipeline.toml
+
+# Run tests
+cargo test
+
+# Run integration tests specifically
+cargo test --test integration
+```
+
+---
+
+## Architecture Highlights
+
+### Generic I/O Pattern
+
+The `PipelineExecutor` is generic over I/O streams for testability:
+
+```rust
+// Production: uses stdin/stdout
+let executor = PipelineBuilder::new()
+    .with_config(config)
+    .build()
+    .await?
+    .with_stdio();
+
+// Testing: uses in-memory buffers
+let input = std::io::Cursor::new(b"test data\n");
+let mut output = Vec::new();
+let executor = core.with_io(input, &mut output);
+```
+
+### Cached Linker
+
+The `WaferEngine` caches the WASI linker via `OnceLock` to avoid expensive re-creation:
+
+```rust
+pub fn linker(&self) -> Result<&Linker<WaferState>> {
+    // Returns cached linker or creates on first call
+}
+```
+
+### Capability Scoping
+
+Plugins can be sandboxed with different capability levels:
+
+```rust
+// Minimal sandbox (no host access)
+WaferState::sandboxed()
+
+// Inherit stdio (default for debugging)
+WaferState::with_capabilities(Capabilities::with_stdio())
+
+// Full access (trusted plugins only)
+WaferState::with_capabilities(Capabilities::full())
 ```
 
 ---
