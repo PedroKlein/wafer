@@ -1,0 +1,17 @@
+[package]
+name = "mnist-inference"
+version = "0.1.0"
+edition = "2021"
+description = "MNIST inference plugin using wasi-nn"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
