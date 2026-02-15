@@ -1,4 +1,4 @@
-# AI-Assisted Development Workflow
+# AI-Assisted Development Workflow (meant for humans to read)
 
 This project uses [OpenCode](https://opencode.ai) with specialized AI agents and the [Beads](https://github.com/steveyegge/beads) task tracking system for an optimized AI-assisted development workflow.
 
