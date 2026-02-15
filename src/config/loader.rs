@@ -6,6 +6,13 @@ use std::fs;
 use std::path::Path;
 
 /// Load and parse a pipeline configuration file.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file cannot be read ([`ConfigError::Read`])
+/// - The TOML is invalid ([`ConfigError::Parse`])
+/// - The plugin path does not exist ([`ConfigError::PluginNotFound`])
 pub fn load_config(path: impl AsRef<Path>) -> Result<PipelineConfig> {
     let path = path.as_ref();
 
@@ -27,7 +34,14 @@ pub fn load_config(path: impl AsRef<Path>) -> Result<PipelineConfig> {
 }
 
 /// Load config without validating plugin path exists.
+///
 /// Useful for testing or when plugin will be built later.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The file cannot be read ([`ConfigError::Read`])
+/// - The TOML is invalid ([`ConfigError::Parse`])
 pub fn load_config_unchecked(path: impl AsRef<Path>) -> Result<PipelineConfig> {
     let path = path.as_ref();
 

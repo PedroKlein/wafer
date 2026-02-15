@@ -25,12 +25,19 @@ pub struct RuntimeEnvelope {
 impl RuntimeEnvelope {
     /// Create a new envelope with the given payload.
     pub fn new(source: impl Into<String>, payload: Vec<u8>) -> Self {
-        Self {
-            id: Uuid::new_v4().to_string(),
-            timestamp: SystemTime::now()
+        // Timestamp in milliseconds since UNIX epoch
+        // Saturates at u64::MAX for dates far in the future (~584 million years)
+        let timestamp = u64::try_from(
+            SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
-                .as_millis() as u64,
+                .as_millis(),
+        )
+        .unwrap_or(u64::MAX);
+
+        Self {
+            id: Uuid::new_v4().to_string(),
+            timestamp,
             source: source.into(),
             metadata: HashMap::new(),
             payload,

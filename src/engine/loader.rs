@@ -29,16 +29,28 @@ pub struct WaferEngine {
 
 impl WaferEngine {
     /// Create a new engine with default configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
     pub fn new() -> Result<Self> {
         Self::with_fuel_limit(DEFAULT_FUEL_LIMIT)
     }
 
     /// Create a new engine with custom fuel limit.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
     pub fn with_fuel_limit(fuel_limit: u64) -> Result<Self> {
         Self::with_config(fuel_limit, DEFAULT_EPOCH_DEADLINE)
     }
 
     /// Create a new engine with full configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
     pub fn with_config(fuel_limit: u64, epoch_deadline: u64) -> Result<Self> {
         let mut config = Config::new();
 
@@ -68,6 +80,10 @@ impl WaferEngine {
     }
 
     /// Load a WASM component from file path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::ComponentLoad`] if the component file cannot be loaded.
     pub fn load_component(&self, path: impl AsRef<Path>) -> Result<Component> {
         let path = path.as_ref();
         Component::from_file(&self.engine, path).map_err(|source| WaferError::ComponentLoad {
@@ -80,6 +96,14 @@ impl WaferEngine {
     ///
     /// The linker is expensive to create because it requires setting up
     /// all WASI imports. By caching it, we avoid this cost for each instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::PluginInit`] if WASI imports cannot be added to the linker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the linker was set but immediately became unavailable (should never happen).
     pub fn linker(&self) -> Result<&Linker<WaferState>> {
         // Use get_or_init with a fallible inner closure pattern
         // We can't use get_or_try_init as it's unstable
