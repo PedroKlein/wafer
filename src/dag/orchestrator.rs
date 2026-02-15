@@ -505,6 +505,8 @@ mod tests {
         NodeDefinition {
             id: id.to_string(),
             node_type,
+            source_type: None,
+            sink_type: None,
             config: toml::Value::Table(toml::map::Map::new()),
         }
     }
