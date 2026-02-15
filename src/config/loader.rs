@@ -1,55 +1,51 @@
 //! Configuration file loading.
 
-use super::schema::PipelineConfig;
+use super::schema::DagConfig;
 use crate::error::{ConfigError, Result, WaferError};
 use std::fs;
 use std::path::Path;
 
-/// Load and parse a pipeline configuration file.
+/// Load and parse a DAG pipeline configuration file.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The file cannot be read ([`ConfigError::Read`])
 /// - The TOML is invalid ([`ConfigError::Parse`])
-/// - The plugin path does not exist ([`ConfigError::PluginNotFound`])
-pub fn load_config(path: impl AsRef<Path>) -> Result<PipelineConfig> {
+/// - The config validation fails
+pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 
     let contents = fs::read_to_string(path)
         .map_err(ConfigError::Read)
         .map_err(WaferError::Config)?;
 
-    let config: PipelineConfig = toml::from_str(&contents)
+    let config: DagConfig = toml::from_str(&contents)
         .map_err(ConfigError::Parse)
         .map_err(WaferError::Config)?;
 
-    if !config.transform.plugin_path.exists() {
-        return Err(WaferError::Config(ConfigError::PluginNotFound(
-            config.transform.plugin_path.clone(),
-        )));
-    }
+    config.validate().map_err(WaferError::Config)?;
 
     Ok(config)
 }
 
-/// Load config without validating plugin path exists.
+/// Load DAG config without validation.
 ///
-/// Useful for testing or when plugin will be built later.
+/// Useful for testing or when validation will be done separately.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The file cannot be read ([`ConfigError::Read`])
 /// - The TOML is invalid ([`ConfigError::Parse`])
-pub fn load_config_unchecked(path: impl AsRef<Path>) -> Result<PipelineConfig> {
+pub fn load_dag_config_unchecked(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 
     let contents = fs::read_to_string(path)
         .map_err(ConfigError::Read)
         .map_err(WaferError::Config)?;
 
-    let config: PipelineConfig = toml::from_str(&contents)
+    let config: DagConfig = toml::from_str(&contents)
         .map_err(ConfigError::Parse)
         .map_err(WaferError::Config)?;
 
@@ -63,40 +59,49 @@ mod tests {
     use tempfile::NamedTempFile;
 
     #[test]
-    fn test_parse_valid_config() {
+    fn test_parse_valid_dag_config() {
         let config_str = r#"
-name = "test-pipeline"
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
 
-[transform]
-name = "passthrough"
-plugin_path = "/tmp/test.wasm"
-fuel_limit = 500000
-queue_capacity = 512
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+[[edges]]
+from = "source"
+to = "sink"
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(config_str.as_bytes()).unwrap();
 
-        let config = load_config_unchecked(file.path()).unwrap();
-        assert_eq!(config.name, "test-pipeline");
-        assert_eq!(config.transform.name, "passthrough");
-        assert_eq!(config.transform.fuel_limit, 500_000);
-        assert_eq!(config.transform.queue_capacity, 512);
+        let config = load_dag_config(file.path()).unwrap();
+        assert_eq!(config.nodes.len(), 2);
+        assert_eq!(config.edges.len(), 1);
     }
 
     #[test]
-    fn test_default_values() {
+    fn test_dag_config_default_queue_capacity() {
         let config_str = r#"
-name = "minimal"
+[[nodes]]
+id = "source"
+node_type = "source"
 
-[transform]
-name = "node1"
-plugin_path = "/tmp/test.wasm"
+[[nodes]]
+id = "sink"
+node_type = "sink"
+
+[[edges]]
+from = "source"
+to = "sink"
 "#;
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(config_str.as_bytes()).unwrap();
 
-        let config = load_config_unchecked(file.path()).unwrap();
-        assert_eq!(config.transform.fuel_limit, 1_000_000);
-        assert_eq!(config.transform.queue_capacity, 1024);
+        let config = load_dag_config_unchecked(file.path()).unwrap();
+        assert_eq!(config.default_queue_capacity, 1024);
     }
 }

@@ -2,28 +2,33 @@
 
 > Current state of the WebAssembly Flow Execution Runtime proof-of-concept
 
-**Version:** 0.2.0  
+**Version:** 0.3.0  
 **Tech Stack:** Rust 1.88+, wasmtime 41.0.3, wit-bindgen 0.53.1, WASI Preview 2, petgraph
 
 ---
 
 ## Current State
 
-The MVP implements **multi-node DAG pipelines** with:
-- Linear chain execution: `FileSource → Transform → Transform → FileSink`
+The MVP implements **DAG-only pipelines** with:
+- Linear chain execution: `StdinSource/FileSource → Transform(s) → StdoutSink/FileSink`
 - WASI Preview 2 component loading via wasmtime
 - WIT-based type contracts (`transform-node` world)
 - Fuel-based execution metering with per-call reset
 - Epoch interruption for cooperative scheduling
 - Capability-scoped WASI contexts
-- Generic I/O for testability
-- **SPSC bounded queues integrated for inter-node communication**
+- **SPSC bounded queues for inter-node communication**
 - **petgraph-based DAG topology management**
-- TOML configuration loading for both single-transform and DAG pipelines
+- **CLI with DAG config loading**
 
 **What works:**
-- Single-transform pipeline: Load a transform plugin, pipe stdin through `process()`, write to stdout
-- Multi-node DAG: Load DAG config, wire nodes with bounded queues, execute with backpressure, graceful shutdown
+```bash
+# stdin/stdout pipeline
+echo "hello" | cargo run -- --config examples/dag-uppercase.toml
+# Output: HELLO
+
+# File-based pipeline
+cargo run -- --config examples/dag-file-io.toml
+```
 
 ---
 
@@ -39,29 +44,25 @@ src/
 ├── node/
 │   ├── traits.rs     # Lifecycle and Transform traits
 │   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
-│   ├── source.rs     # Source trait + FileSource implementation
-│   ├── sink.rs       # Sink trait + FileSink implementation
+│   ├── source.rs     # Source trait + FileSource + StdinSource
+│   ├── sink.rs       # Sink trait + FileSink + StdoutSink
 │   └── mod.rs        # AnyNode enum (Transform, Source, Sink variants)
 ├── dag/
 │   ├── orchestrator.rs # DagOrchestrator: petgraph topology, queue wiring, async execution
-│   └── mod.rs
-├── pipeline/
-│   ├── executor.rs   # PipelineExecutor<R, W>: generic I/O processing loop
-│   ├── builder.rs    # PipelineBuilder: config→PipelineExecutorCore
 │   └── mod.rs
 ├── queue/
 │   ├── bounded.rs    # BoundedQueue<T>: SPSC with tokio::sync::mpsc
 │   ├── envelope.rs   # RuntimeEnvelope: host-side message wrapper
 │   └── mod.rs
 ├── config/
-│   ├── loader.rs     # TOML file loading
-│   ├── schema.rs     # PipelineConfig, TransformConfig, DagConfig structs
+│   ├── loader.rs     # DAG config loading with validation
+│   ├── schema.rs     # DagConfig, NodeDefinition, EdgeDefinition
 │   └── mod.rs
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
 ├── error.rs          # WaferError enum, ConfigError, Result type
 ├── lib.rs
-└── main.rs           # CLI: --config flag, pipeline.toml
+└── main.rs           # CLI: --config flag, DAG-only execution
 ```
 
 ### WIT Files
@@ -73,12 +74,25 @@ wit/
 └── transform.wit     # Transform interface and transform-node world
 ```
 
-### External Files
+### Plugins
 
-| File | Purpose |
-|------|---------|
-| `wit/*.wit` | WIT contracts (flat single-package structure) |
-| `plugins/pass-through/` | Example transform (no-op, emits input unchanged) |
+| Plugin | Purpose |
+|--------|---------|
+| `plugins/pass-through/` | No-op transform (emits input unchanged) |
+| `plugins/uppercase/` | ASCII uppercase transform |
+| `plugins/json-parse/` | JSON validation and pretty-print |
+| `plugins/filter/` | Pattern-based message filtering |
+
+### Example Configs
+
+| Config | Description |
+|--------|-------------|
+| `examples/dag-passthrough.toml` | stdin → passthrough → stdout |
+| `examples/dag-uppercase.toml` | stdin → uppercase → stdout |
+| `examples/dag-json-parse.toml` | stdin → json-parse → stdout |
+| `examples/dag-filter.toml` | stdin → filter(DEBUG) → stdout |
+| `examples/dag-chain.toml` | stdin → uppercase → filter → stdout |
+| `examples/dag-file-io.toml` | file → passthrough → file |
 
 ---
 
@@ -108,19 +122,12 @@ wit/
 - [x] `WasmTransform` struct implementing Lifecycle + Transform
 - [x] `FileSource` struct implementing Lifecycle + Source (line-based file reading)
 - [x] `FileSink` struct implementing Lifecycle + Sink (line-based file writing)
+- [x] `StdinSource` struct implementing Lifecycle + Source (stdin line reading)
+- [x] `StdoutSink` struct implementing Lifecycle + Sink (stdout line writing)
 - [x] `AnyNode` enum with `Transform`, `Source`, `Sink` variants
 - [x] Traits are `Send` but not `Sync` (WASM stores aren't thread-safe)
 
-### Pipeline Execution
-- [x] Single transform node execution (stdin/stdout)
-- [x] Generic I/O: `PipelineExecutor<R: BufRead, W: Write>`
-- [x] `PipelineExecutorCore` builder for deferred I/O attachment
-- [x] `.with_io(reader, writer)` for testing
-- [x] `.with_stdio()` for production
-- [x] ProcessResult handling: `emit`, `filter`, `error`
-- [x] Configuration via TOML files
-
-### DAG Orchestration
+### DAG Orchestration (CLI)
 - [x] `DagOrchestrator` with petgraph-based topology
 - [x] `DagConfig` schema with nodes and edges definitions
 - [x] Linear chain execution: `Source → Transform(s) → Sink`
@@ -130,6 +137,9 @@ wit/
 - [x] Async execution with tokio::spawn per node
 - [x] Graceful shutdown in reverse topological order
 - [x] Error handling: log and continue (non-fatal)
+- [x] CLI `--config` flag for DAG TOML files
+- [x] `source_type` discriminator: `stdin` or `file`
+- [x] `sink_type` discriminator: `stdout` or `file`
 
 ### Capability Scoping
 - [x] `Capabilities` struct for security boundaries
@@ -159,8 +169,8 @@ wit/
 ## What's NOT Implemented
 
 ### Node Types (SPEC §5)
-- [x] ~~Source nodes (`poll`, `ack`)~~ - FileSource implemented (host-only, no WASM)
-- [x] ~~Sink nodes (`collect`, `flush`)~~ - FileSink implemented (host-only, no WASM)
+- [x] ~~Source nodes~~ - FileSource + StdinSource implemented (host-only)
+- [x] ~~Sink nodes~~ - FileSink + StdoutSink implemented (host-only)
 - [ ] Router nodes (1→N routing)
 - [ ] Joiner nodes (N→1 merge)
 - [ ] WASM-based Source/Sink (currently host-only Rust implementations)
@@ -175,8 +185,8 @@ wit/
 - [x] ~~Edge wiring between nodes~~ - BoundedQueue integration complete
 - [x] ~~Queue integration for inter-node communication~~ - Done
 - [x] ~~Backpressure propagation~~ - Blocking queues implemented
+- [x] ~~CLI integration~~ - `--config` flag for DAG TOML files
 - [ ] Fan-out/fan-in topologies (Router/Joiner)
-- [ ] CLI `--dag-config` flag (tests use DagOrchestrator directly)
 - [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
 
 ### Dynamic Features
@@ -217,7 +227,7 @@ wit/
 | Area | Limitation |
 |------|------------|
 | **Pipeline** | Linear chains only (no fan-out/fan-in) |
-| **I/O** | stdin/stdout for single-transform; file-based for DAG |
+| **I/O** | stdin/stdout or file-based (no network sources) |
 | **Source/Sink** | Host-only Rust implementations (no WASM) |
 | **WIT** | Only `raw(list<u8>)` payload supported |
 | **State** | Stateless transforms only |
@@ -226,7 +236,6 @@ wit/
 | **Error handling** | No DLQ, errors logged only |
 | **Capabilities** | Network/filesystem flags are placeholders |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
-| **CLI** | DAG config not exposed via CLI (use DagOrchestrator API) |
 
 ---
 
@@ -250,13 +259,15 @@ wit/
 # Build host runtime
 cargo build
 
-# Build pass-through plugin
-cd plugins/pass-through
-cargo build --release --target wasm32-wasip2
-cd ../..
+# Build all plugins
+just plugin
 
-# Run single-transform pipeline (stdin/stdout)
-echo "hello world" | cargo run -- --config pipeline.toml
+# Run DAG pipeline with stdin/stdout
+echo "hello world" | cargo run -- --config examples/dag-passthrough.toml
+
+# Run with uppercase transform
+echo "hello" | cargo run -- --config examples/dag-uppercase.toml
+# Output: HELLO
 
 # Run tests
 cargo test
@@ -265,53 +276,40 @@ cargo test
 cargo test --test integration
 ```
 
-### DAG Pipeline Usage
+### DAG Configuration
 
-DAG pipelines are currently used via the `DagOrchestrator` API (not CLI):
+DAG pipelines are configured via TOML files:
 
-```rust
-use wafer_poc::dag::DagOrchestrator;
-use wafer_poc::config::DagConfig;
-use wafer_poc::node::{AnyNode, FileSource, FileSink};
+```toml
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"  # or "file" with config.path
 
-// Load config
-let config: DagConfig = toml::from_str(config_str)?;
+[[nodes]]
+id = "transform"
+node_type = "transform"
+config = { plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm" }
 
-// Create orchestrator
-let mut orchestrator = DagOrchestrator::from_config(config)?;
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"  # or "file" with config.path
 
-// Register nodes
-orchestrator.register_node("source", AnyNode::from_source(FileSource::new("source", "input.txt")))?;
-orchestrator.register_node("sink", AnyNode::from_sink(FileSink::new("sink", "output.txt")))?;
+[[edges]]
+from = "source"
+to = "transform"
 
-// Wire queues and run
-orchestrator.wire_queues()?;
-orchestrator.run().await?;
+[[edges]]
+from = "transform"
+to = "sink"
 ```
 
-See `tests/integration.rs` for complete examples.
+See `examples/` directory for complete examples.
 
 ---
 
 ## Architecture Highlights
-
-### Generic I/O Pattern
-
-The `PipelineExecutor` is generic over I/O streams for testability:
-
-```rust
-// Production: uses stdin/stdout
-let executor = PipelineBuilder::new()
-    .with_config(config)
-    .build()
-    .await?
-    .with_stdio();
-
-// Testing: uses in-memory buffers
-let input = std::io::Cursor::new(b"test data\n");
-let mut output = Vec::new();
-let executor = core.with_io(input, &mut output);
-```
 
 ### Cached Linker
 
@@ -342,10 +340,8 @@ WaferState::with_capabilities(Capabilities::full())
 
 ## MVP Simplifications vs SPEC
 
-This section documents intentional deviations from the full SPEC for MVP simplicity:
-
 | Area | SPEC | MVP Simplification |
-|------|------|--------------------|
+|------|------|--------------------
 | **Error codes** | String-based (e.g., "PARSE_FAILED") | String-based (aligned) |
 | **Capabilities** | Full network/filesystem scoping | `allow_network`/`allow_filesystem` are placeholders only |
 | **Epoch ticker** | Automatic interruption | Requires explicit `engine.start_epoch_ticker()` call |
@@ -354,16 +350,6 @@ This section documents intentional deviations from the full SPEC for MVP simplic
 | **Router/Joiner** | Full support | Not implemented |
 | **Hot-swap** | Drain-and-flip | Not implemented |
 | **Payload types** | Multiple variants | Only `raw(list<u8>)` |
-
-### Why These Simplifications?
-
-1. **Placeholders over stubs**: Network/filesystem capabilities require careful security design. Placeholders document intent without half-baked implementations.
-
-2. **Explicit over magic**: Epoch ticker requires explicit start to allow different scheduling strategies in the future.
-
-3. **Host-only I/O nodes**: WASM-based Source/Sink would require additional WIT interfaces and component model complexity. Host implementations prove the architecture.
-
-4. **Async-first**: Using `tokio::sync::mpsc` instead of blocking channels ensures the runtime is async-friendly throughout.
 
 ---
 
