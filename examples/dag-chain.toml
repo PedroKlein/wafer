@@ -1,0 +1,45 @@
+# WAFER DAG Configuration: Chained Transforms
+# Pipeline: stdin → uppercase → filter (only lines containing "KEEP") → stdout
+#
+# Usage:
+#   printf "keep this line\ndrop this one\nKEEP this too" | cargo run -- dag examples/dag-chain.toml
+# Output:
+#   KEEP THIS LINE
+#   KEEP THIS TOO
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "uppercase"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"
+
+[[nodes]]
+id = "filter"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/filter/target/wasm32-wasip2/release/filter_transform.wasm"
+pattern = "KEEP"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+[[edges]]
+from = "source"
+to = "uppercase"
+
+[[edges]]
+from = "uppercase"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "sink"

@@ -4,7 +4,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 
-const CONFIG_PATH: &str = "examples/pass-through.toml";
+const CONFIG_PATH: &str = "examples/dag-passthrough.toml";
 
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -168,14 +168,14 @@ fn test_metrics_logged() {
     );
 
     assert!(
-        combined.contains("Pipeline started"),
-        "Expected 'Pipeline started' in logs, got: {}",
+        combined.contains("pipeline started") || combined.contains("Pipeline started"),
+        "Expected 'pipeline started' in logs, got: {}",
         combined
     );
 
     assert!(
-        combined.contains("Pipeline stopped"),
-        "Expected 'Pipeline stopped' in logs, got: {}",
+        combined.contains("pipeline stopped") || combined.contains("Pipeline stopped"),
+        "Expected 'pipeline stopped' in logs, got: {}",
         combined
     );
 }

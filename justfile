@@ -24,9 +24,9 @@ plugin:
 validate: plugin
     wasm-tools validate --features component-model plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm
 
-# Run the pipeline with pass-through plugin
+# Run the pipeline with passthrough DAG config
 run:
-    cargo run -- --config examples/pass-through.toml
+    cargo run -- --config examples/dag-passthrough.toml
 
 # Clean all build artifacts
 clean:

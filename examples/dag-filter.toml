@@ -1,0 +1,33 @@
+# WAFER DAG Configuration: Filter Transform
+# Pipeline: stdin → filter (only lines containing "DEBUG") → stdout
+#
+# Usage:
+#   printf "INFO: starting\nDEBUG: value=42\nERROR: failed" | cargo run -- dag examples/dag-filter.toml
+# Output: DEBUG: value=42
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "filter"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/filter/target/wasm32-wasip2/release/filter_transform.wasm"
+pattern = "DEBUG"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+[[edges]]
+from = "source"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "sink"

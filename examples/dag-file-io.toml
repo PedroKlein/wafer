@@ -1,0 +1,35 @@
+# WAFER DAG Configuration: File I/O
+# Pipeline: file-source → passthrough transform → file-sink
+#
+# Usage:
+#   echo "test data" > /tmp/input.txt
+#   cargo run -- dag examples/dag-file-io.toml
+#   cat /tmp/output.txt
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "source"
+node_type = "source"
+[nodes.config]
+path = "/tmp/input.txt"
+
+[[nodes]]
+id = "passthrough"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+[nodes.config]
+path = "/tmp/output.txt"
+
+[[edges]]
+from = "source"
+to = "passthrough"
+
+[[edges]]
+from = "passthrough"
+to = "sink"
