@@ -9,6 +9,9 @@ exclude = ["plugins/pass-through"]
 
 [workspace.dependencies]
 petgraph = "0.6"
+# NOTE: Using git revision for wasmtime because wasmtime-wasi-nn 41.0.3 on crates.io
+# has a bug with the ort (ONNX Runtime) crate API - "no method named 'context' found".
+# This revision contains the fix. Can switch back to crates.io when wasmtime 42.x releases.
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "456310751e355b9fb0aea533c6d04be3b07d32b7" }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "456310751e355b9fb0aea533c6d04be3b07d32b7" }
 wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", rev = "456310751e355b9fb0aea533c6d04be3b07d32b7", features = ["onnx"] }

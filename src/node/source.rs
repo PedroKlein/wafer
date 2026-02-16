@@ -5,7 +5,7 @@
 
 use std::fs::File;
 use std::future::Future;
-use std::io::{BufRead, BufReader, Stdin};
+use std::io::{BufRead, BufReader, Read, Stdin};
 use std::path::PathBuf;
 use std::pin::Pin;
 
@@ -44,6 +44,8 @@ pub struct FileSource {
     path: PathBuf,
     /// Buffered reader, initialized in init()
     reader: Option<BufReader<File>>,
+    /// Track if binary content has been sent (binary files are read once as a whole)
+    binary_sent: bool,
 }
 
 impl FileSource {
@@ -55,6 +57,7 @@ impl FileSource {
             id: id.into(),
             path: path.into(),
             reader: None,
+            binary_sent: false,
         }
     }
 }
@@ -89,6 +92,7 @@ impl Lifecycle for FileSource {
         Box::pin(async move {
             let file = File::open(&self.path)?;
             self.reader = Some(BufReader::new(file));
+            self.binary_sent = false;
             Ok(())
         })
     }
@@ -111,6 +115,16 @@ impl Source for FileSource {
                     message: "FileSource not initialized - call init() first".into(),
                 }
             })?;
+
+            if self.path.extension().is_some_and(|ext| ext == "bin") {
+                if self.binary_sent {
+                    return Ok(None);
+                }
+                let mut bytes = Vec::new();
+                reader.read_to_end(&mut bytes)?;
+                self.binary_sent = true;
+                return Ok(Some(RuntimeEnvelope::new(&self.id, bytes)));
+            }
 
             let mut line = String::new();
             match reader.read_line(&mut line) {

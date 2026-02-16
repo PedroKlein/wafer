@@ -2,6 +2,7 @@
 
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_nn::backend::onnx::OnnxBackend;
 use wasmtime_wasi_nn::wit::WasiNnCtx;
 use wasmtime_wasi_nn::InMemoryRegistry;
 
@@ -145,7 +146,10 @@ impl WaferState {
         let ctx = builder.build();
 
         let nn_ctx = if capabilities.allow_inference {
-            Some(WasiNnCtx::new([], InMemoryRegistry::new().into()))
+            Some(WasiNnCtx::new(
+                [OnnxBackend::default().into()],
+                InMemoryRegistry::new().into(),
+            ))
         } else {
             None
         };

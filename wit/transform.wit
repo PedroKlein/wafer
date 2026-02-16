@@ -24,3 +24,22 @@ world transform-node {
     /// Export transform-specific interface
     export transform;
 }
+
+/// Inference node world - extends transform-node with wasi-nn imports
+///
+/// This world has all the same exports as transform-node but also imports
+/// wasi:nn interfaces for ML inference capabilities. Use this world for
+/// plugins that need to run neural network inference.
+world inference-node {
+    /// Export lifecycle (validate, init, close)
+    export lifecycle;
+
+    /// Export transform-specific interface
+    export transform;
+
+    /// Import wasi-nn interfaces for ML inference
+    import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+    import wasi:nn/graph@0.2.0-rc-2024-10-28;
+    import wasi:nn/inference@0.2.0-rc-2024-10-28;
+    import wasi:nn/errors@0.2.0-rc-2024-10-28;
+}
