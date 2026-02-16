@@ -110,6 +110,14 @@ async fn main() -> Result<()> {
 
     orchestrator.wire_queues()?;
 
+    // Set up signal handler for graceful shutdown
+    let cancel_token = orchestrator.cancel_token();
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.ok();
+        tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
+        cancel_token.cancel();
+    });
+
     info!("DAG pipeline started");
 
     orchestrator.run().await?;
