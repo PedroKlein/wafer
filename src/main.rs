@@ -1,14 +1,11 @@
+use anyhow::{Context, Result};
 use clap::Parser;
-use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use wafer_poc::{
-    config::{DagConfig, NodeType},
+    config::DagConfig,
     dag::DagOrchestrator,
-    engine::{Capabilities, TransformInstance, WaferEngine},
-    error::{ConfigError, WaferError},
-    node::{AnyNode, FileSink, FileSource, NodeConfig, StdinSource, StdoutSink, WasmTransform},
-    Result,
+    factory::{create_node, FactoryContext},
 };
 
 /// WAFER - WebAssembly Flow Execution Runtime
@@ -32,83 +29,33 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let toml_str = std::fs::read_to_string(&args.config)
-        .map_err(ConfigError::Read)?;
+        .with_context(|| format!("failed to read config file: {}", args.config.display()))?;
+    
     let config: DagConfig = toml::from_str(&toml_str)
-        .map_err(ConfigError::Parse)?;
-    config.validate()?;
+        .with_context(|| format!("failed to parse TOML config: {}", args.config.display()))?;
+    
+    config
+        .validate()
+        .with_context(|| format!("config validation failed: {}", args.config.display()))?;
 
-    let mut orchestrator = DagOrchestrator::from_config(config.clone())?;
-
-    // Track epoch ticker handles for cleanup
-    let mut epoch_tickers: Vec<JoinHandle<()>> = Vec::new();
+    let mut orchestrator = DagOrchestrator::from_config(config.clone())
+        .context("failed to build DAG orchestrator from config")?;
+    
+    let mut factory_ctx = FactoryContext::new();
 
     for node_def in &config.nodes {
-        let any_node = match node_def.node_type {
-            NodeType::Source => {
-                let source_type = node_def.source_type.as_deref().unwrap_or("file");
-                match source_type {
-                    "stdin" => AnyNode::from_source(StdinSource::new(&node_def.id)),
-                    _ => {
-                        // Default to file source
-                        let path = node_def.config
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| WaferError::Config(ConfigError::Message(
-                                format!("source '{}' requires 'path' in config", node_def.id)
-                            )))?;
-                        AnyNode::from_source(FileSource::new(&node_def.id, path))
-                    }
-                }
-            }
-            NodeType::Transform => {
-                let plugin_path = node_def.config
-                    .get("plugin_path")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| WaferError::Config(ConfigError::Message(
-                        format!("transform '{}' requires 'plugin_path' in config", node_def.id)
-                    )))?;
-
-                let engine = WaferEngine::new()?;
-                // Start epoch ticker for cooperative interruption
-                epoch_tickers.push(engine.start_epoch_ticker());
-
-                let component = engine.load_component(plugin_path)?;
-                // Use stdio + inference capabilities for MVP
-                // TODO: Add per-node capability configuration in TOML schema
-                let capabilities = Capabilities::with_stdio().inference(true);
-                let instance =
-                    TransformInstance::new(&engine, &component, capabilities).await?;
-
-                let config_str = toml::to_string(&node_def.config)
-                    .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
-                let node_config = NodeConfig::new(&node_def.id, "transform")
-                    .with_config_bytes(config_str.into_bytes());
-
-                let transform = WasmTransform::new(engine, instance, node_config);
-                AnyNode::from_transform(transform)
-            }
-            NodeType::Sink => {
-                let sink_type = node_def.sink_type.as_deref().unwrap_or("file");
-                match sink_type {
-                    "stdout" => AnyNode::from_sink(StdoutSink::new(&node_def.id)),
-                    _ => {
-                        // Default to file sink
-                        let path = node_def.config
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| WaferError::Config(ConfigError::Message(
-                                format!("sink '{}' requires 'path' in config", node_def.id)
-                            )))?;
-                        AnyNode::from_sink(FileSink::new(&node_def.id, path))
-                    }
-                }
-            }
-        };
-
-        orchestrator.register_node(&node_def.id, any_node)?;
+        let any_node = create_node(node_def, &mut factory_ctx)
+            .await
+            .with_context(|| format!("failed to create node '{}'", node_def.id))?;
+        
+        orchestrator
+            .register_node(&node_def.id, any_node)
+            .with_context(|| format!("failed to register node '{}'", node_def.id))?;
     }
 
-    orchestrator.wire_queues()?;
+    orchestrator
+        .wire_queues()
+        .context("failed to wire inter-node queues")?;
 
     // Set up signal handler for graceful shutdown
     let cancel_token = orchestrator.cancel_token();
@@ -120,12 +67,13 @@ async fn main() -> Result<()> {
 
     info!("DAG pipeline started");
 
-    orchestrator.run().await?;
+    orchestrator
+        .run()
+        .await
+        .context("pipeline execution failed")?;
 
     // Stop epoch tickers after pipeline completes
-    for ticker in epoch_tickers {
-        ticker.abort();
-    }
+    factory_ctx.abort_tickers();
 
     info!("DAG pipeline stopped");
     Ok(())

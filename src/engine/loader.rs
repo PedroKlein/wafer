@@ -1,4 +1,38 @@
 //! Wasmtime Engine configuration and component loading.
+//!
+//! This module provides [`WaferEngine`], a configured wasmtime engine with:
+//! - Fuel metering for instruction counting
+//! - Epoch-based interruption for cooperative scheduling
+//! - Async support for non-blocking WASM execution
+//! - WASM Component Model support
+//!
+//! # Example
+//!
+//! ```no_run
+//! use wafer_poc::engine::WaferEngine;
+//!
+//! let engine = WaferEngine::new()?;
+//! let component = engine.load_component("path/to/component.wasm")?;
+//! let ticker = engine.start_epoch_ticker();
+//!
+//! // Use the component...
+//!
+//! ticker.abort(); // Stop epoch ticker when done
+//! # Ok::<(), wafer_poc::error::WaferError>(())
+//! ```
+//!
+//! # Fuel Metering
+//!
+//! Fuel is consumed as WASM instructions execute. When fuel runs out,
+//! execution traps. This prevents infinite loops and runaway plugins.
+//! The default fuel limit is 1,000,000 units.
+//!
+//! # Epoch Interruption
+//!
+//! The epoch ticker runs in the background and increments a counter every
+//! 10ms. WASM code checks this counter at safe points (loop iterations,
+//! function calls) and traps if the deadline is exceeded. This provides
+//! cooperative preemption without OS-level threading.
 
 use crate::config::DEFAULT_FUEL_LIMIT;
 use crate::error::{Result, WaferError};
@@ -37,6 +71,7 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
+    #[must_use = "creating an engine without using it is expensive"]
     pub fn new() -> Result<Self> {
         Self::with_fuel_limit(DEFAULT_FUEL_LIMIT)
     }
@@ -46,6 +81,7 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
+    #[must_use = "creating an engine without using it is expensive"]
     pub fn with_fuel_limit(fuel_limit: u64) -> Result<Self> {
         Self::with_config(fuel_limit, DEFAULT_EPOCH_DEADLINE)
     }
@@ -55,6 +91,7 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if the wasmtime engine fails to initialize.
+    #[must_use = "creating an engine without using it is expensive"]
     pub fn with_config(fuel_limit: u64, epoch_deadline: u64) -> Result<Self> {
         let mut config = Config::new();
 
@@ -88,6 +125,7 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns [`WaferError::ComponentLoad`] if the component file cannot be loaded.
+    #[must_use = "loading a component without using it is expensive"]
     pub fn load_component(&self, path: impl AsRef<Path>) -> Result<Component> {
         let path = path.as_ref();
         Component::from_file(&self.engine, path).map_err(|source| WaferError::ComponentLoad {
@@ -202,3 +240,132 @@ impl WaferEngine {
 //
 // WaferEngine cannot be Clone because OnceLock<Linker> isn't Clone.
 // This is intentional - engines should be shared via Arc if needed.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_engine_creation_default() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        assert_eq!(engine.fuel_limit(), DEFAULT_FUEL_LIMIT);
+        assert_eq!(engine.epoch_deadline(), DEFAULT_EPOCH_DEADLINE);
+    }
+
+    #[test]
+    fn test_engine_with_custom_fuel_limit() {
+        let fuel = 500_000;
+        let engine = WaferEngine::with_fuel_limit(fuel).expect("Failed to create engine");
+        assert_eq!(engine.fuel_limit(), fuel);
+        assert_eq!(engine.epoch_deadline(), DEFAULT_EPOCH_DEADLINE);
+    }
+
+    #[test]
+    fn test_engine_with_full_config() {
+        let fuel = 250_000;
+        let epoch = 50;
+        let engine = WaferEngine::with_config(fuel, epoch).expect("Failed to create engine");
+        assert_eq!(engine.fuel_limit(), fuel);
+        assert_eq!(engine.epoch_deadline(), epoch);
+    }
+
+    #[test]
+    fn test_engine_inner_is_valid() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        // Inner engine should be accessible
+        let _inner = engine.inner();
+    }
+
+    #[test]
+    fn test_load_component_nonexistent_file() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let result = engine.load_component("/nonexistent/path/to/component.wasm");
+        assert!(result.is_err());
+        
+        let err = result.err().expect("Expected error");
+        match err {
+            WaferError::ComponentLoad { path, .. } => {
+                assert_eq!(path.to_string_lossy(), "/nonexistent/path/to/component.wasm");
+            }
+            other => panic!("Expected ComponentLoad error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_component_invalid_file() {
+        use std::io::Write;
+        
+        let temp_dir = std::env::temp_dir();
+        let invalid_wasm = temp_dir.join("invalid_test.wasm");
+        
+        // Write invalid data to the file
+        let mut file = std::fs::File::create(&invalid_wasm).expect("Failed to create temp file");
+        file.write_all(b"not a valid wasm file").expect("Failed to write");
+        drop(file);
+        
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let result = engine.load_component(&invalid_wasm);
+        
+        // Clean up
+        let _ = std::fs::remove_file(&invalid_wasm);
+        
+        assert!(result.is_err());
+        let err = result.err().expect("Expected error");
+        assert!(matches!(err, WaferError::ComponentLoad { .. }));
+    }
+
+    #[test]
+    fn test_linker_is_cached() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        
+        // First call initializes the linker
+        let linker1 = engine.linker().expect("Failed to get linker");
+        
+        // Second call should return the same cached linker
+        let linker2 = engine.linker().expect("Failed to get linker");
+        
+        // Both should be the same reference (pointer comparison)
+        assert!(std::ptr::eq(linker1, linker2), "Linker should be cached");
+    }
+
+    #[tokio::test]
+    async fn test_epoch_ticker_starts() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let handle = engine.start_epoch_ticker();
+        
+        // Give it a moment to start
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        
+        // It should still be running (not finished)
+        assert!(!handle.is_finished());
+        
+        // Clean up
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn test_epoch_ticker_custom_interval() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let handle = engine.start_epoch_ticker_with_interval(Duration::from_millis(5));
+        
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        
+        assert!(!handle.is_finished());
+        
+        handle.abort();
+    }
+
+    #[test]
+    fn test_zero_fuel_limit() {
+        // Zero fuel should still create a valid engine
+        let engine = WaferEngine::with_fuel_limit(0).expect("Failed to create engine");
+        assert_eq!(engine.fuel_limit(), 0);
+    }
+
+    #[test]
+    fn test_max_fuel_limit() {
+        // Maximum u64 should still work
+        let engine = WaferEngine::with_fuel_limit(u64::MAX).expect("Failed to create engine");
+        assert_eq!(engine.fuel_limit(), u64::MAX);
+    }
+}

@@ -13,18 +13,31 @@ use std::path::Path;
 /// - The file cannot be read ([`ConfigError::Read`])
 /// - The TOML is invalid ([`ConfigError::Parse`])
 /// - The config validation fails
+///
+/// Error messages include the file path for debugging context.
 pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 
-    let contents = fs::read_to_string(path)
-        .map_err(ConfigError::Read)
-        .map_err(WaferError::Config)?;
+    let contents = fs::read_to_string(path).map_err(|e| {
+        WaferError::Config(ConfigError::Message(format!(
+            "failed to read config '{}': {e}",
+            path.display()
+        )))
+    })?;
 
-    let config: DagConfig = toml::from_str(&contents)
-        .map_err(ConfigError::Parse)
-        .map_err(WaferError::Config)?;
+    let config: DagConfig = toml::from_str(&contents).map_err(|e| {
+        WaferError::Config(ConfigError::Message(format!(
+            "failed to parse TOML '{}': {e}",
+            path.display()
+        )))
+    })?;
 
-    config.validate().map_err(WaferError::Config)?;
+    config.validate().map_err(|e| {
+        WaferError::Config(ConfigError::Message(format!(
+            "config validation failed for '{}': {e}",
+            path.display()
+        )))
+    })?;
 
     Ok(config)
 }
@@ -38,16 +51,24 @@ pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
 /// Returns an error if:
 /// - The file cannot be read ([`ConfigError::Read`])
 /// - The TOML is invalid ([`ConfigError::Parse`])
+///
+/// Error messages include the file path for debugging context.
 pub fn load_dag_config_unchecked(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 
-    let contents = fs::read_to_string(path)
-        .map_err(ConfigError::Read)
-        .map_err(WaferError::Config)?;
+    let contents = fs::read_to_string(path).map_err(|e| {
+        WaferError::Config(ConfigError::Message(format!(
+            "failed to read config '{}': {e}",
+            path.display()
+        )))
+    })?;
 
-    let config: DagConfig = toml::from_str(&contents)
-        .map_err(ConfigError::Parse)
-        .map_err(WaferError::Config)?;
+    let config: DagConfig = toml::from_str(&contents).map_err(|e| {
+        WaferError::Config(ConfigError::Message(format!(
+            "failed to parse TOML '{}': {e}",
+            path.display()
+        )))
+    })?;
 
     Ok(config)
 }
