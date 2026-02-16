@@ -1,10 +1,11 @@
 use clap::Parser;
+use tokio::task::JoinHandle;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use wafer_poc::{
     config::{DagConfig, NodeType},
     dag::DagOrchestrator,
-    engine::{TransformInstance, WaferEngine},
+    engine::{Capabilities, TransformInstance, WaferEngine},
     error::{ConfigError, WaferError},
     node::{AnyNode, FileSink, FileSource, NodeConfig, StdinSource, StdoutSink, WasmTransform},
     Result,
@@ -38,13 +39,17 @@ async fn main() -> Result<()> {
 
     let mut orchestrator = DagOrchestrator::from_config(config.clone())?;
 
+    // Track epoch ticker handles for cleanup
+    let mut epoch_tickers: Vec<JoinHandle<()>> = Vec::new();
+
     for node_def in &config.nodes {
         let any_node = match node_def.node_type {
             NodeType::Source => {
                 let source_type = node_def.source_type.as_deref().unwrap_or("file");
                 match source_type {
                     "stdin" => AnyNode::from_source(StdinSource::new(&node_def.id)),
-                    "file" | _ => {
+                    _ => {
+                        // Default to file source
                         let path = node_def.config
                             .get("path")
                             .and_then(|v| v.as_str())
@@ -64,8 +69,15 @@ async fn main() -> Result<()> {
                     )))?;
 
                 let engine = WaferEngine::new()?;
+                // Start epoch ticker for cooperative interruption
+                epoch_tickers.push(engine.start_epoch_ticker());
+
                 let component = engine.load_component(plugin_path)?;
-                let instance = TransformInstance::new(&engine, &component).await?;
+                // Use stdio + inference capabilities for MVP
+                // TODO: Add per-node capability configuration in TOML schema
+                let capabilities = Capabilities::with_stdio().inference(true);
+                let instance =
+                    TransformInstance::new(&engine, &component, capabilities).await?;
 
                 let config_str = toml::to_string(&node_def.config)
                     .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -79,7 +91,8 @@ async fn main() -> Result<()> {
                 let sink_type = node_def.sink_type.as_deref().unwrap_or("file");
                 match sink_type {
                     "stdout" => AnyNode::from_sink(StdoutSink::new(&node_def.id)),
-                    "file" | _ => {
+                    _ => {
+                        // Default to file sink
                         let path = node_def.config
                             .get("path")
                             .and_then(|v| v.as_str())
@@ -100,6 +113,11 @@ async fn main() -> Result<()> {
     info!("DAG pipeline started");
 
     orchestrator.run().await?;
+
+    // Stop epoch tickers after pipeline completes
+    for ticker in epoch_tickers {
+        ticker.abort();
+    }
 
     info!("DAG pipeline stopped");
     Ok(())

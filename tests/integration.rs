@@ -204,7 +204,7 @@ fn test_missing_config_flag() {
 use tempfile::tempdir;
 use wafer_poc::config::{DagConfig, EdgeDefinition, NodeDefinition, NodeType};
 use wafer_poc::dag::DagOrchestrator;
-use wafer_poc::engine::{TransformInstance, WaferEngine};
+use wafer_poc::engine::{Capabilities, TransformInstance, WaferEngine};
 use wafer_poc::node::{AnyNode, FileSink, FileSource, Lifecycle, NodeConfig, WasmTransform};
 
 fn plugin_path() -> PathBuf {
@@ -236,7 +236,7 @@ async fn create_wasm_transform(id: &str) -> WasmTransform {
     let component = engine
         .load_component(plugin_path())
         .expect("Failed to load plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create instance");
     let config = NodeConfig::new(id, "transform/passthrough");
@@ -248,7 +248,7 @@ async fn create_uppercase_transform(id: &str) -> WasmTransform {
     let component = engine
         .load_component(uppercase_plugin_path())
         .expect("Failed to load uppercase plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create uppercase instance");
     let config = NodeConfig::new(id, "transform/uppercase");
@@ -260,7 +260,7 @@ async fn create_json_parse_transform(id: &str) -> WasmTransform {
     let component = engine
         .load_component(json_parse_plugin_path())
         .expect("Failed to load json-parse plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create json-parse instance");
     let config = NodeConfig::new(id, "transform/json-parse");
@@ -272,12 +272,12 @@ async fn create_filter_transform(id: &str, pattern: &str) -> WasmTransform {
     let component = engine
         .load_component(filter_plugin_path())
         .expect("Failed to load filter plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create filter instance");
     let config_toml = format!("pattern = \"{}\"", pattern);
-    let config = NodeConfig::new(id, "transform/filter")
-        .with_config_bytes(config_toml.into_bytes());
+    let config =
+        NodeConfig::new(id, "transform/filter").with_config_bytes(config_toml.into_bytes());
     WasmTransform::new(engine, instance, config)
 }
 
@@ -286,7 +286,7 @@ async fn create_tensor_prep_transform(id: &str) -> WasmTransform {
     let component = engine
         .load_component(tensor_prep_plugin_path())
         .expect("Failed to load tensor-prep plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create tensor-prep instance");
     let config = NodeConfig::new(id, "transform/tensor-prep");
@@ -298,7 +298,7 @@ async fn create_result_format_transform(id: &str) -> WasmTransform {
     let component = engine
         .load_component(result_format_plugin_path())
         .expect("Failed to load result-format plugin");
-    let instance = TransformInstance::new(&engine, &component)
+    let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create result-format instance");
     let config = NodeConfig::new(id, "transform/result-format");

@@ -86,15 +86,13 @@ impl DagConfig {
 
         if stdin_count > 1 {
             return Err(ConfigError::Message(format!(
-                "at most one source can have source_type = 'stdin', found {}",
-                stdin_count
+                "at most one source can have source_type = 'stdin', found {stdin_count}"
             )));
         }
 
         if stdout_count > 1 {
             return Err(ConfigError::Message(format!(
-                "at most one sink can have sink_type = 'stdout', found {}",
-                stdout_count
+                "at most one sink can have sink_type = 'stdout', found {stdout_count}"
             )));
         }
 

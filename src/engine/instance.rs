@@ -17,20 +17,37 @@ pub struct TransformInstance {
     store: Store<WaferState>,
     bindings: TransformNode,
     fuel_limit: u64,
+    /// Security capabilities for this instance.
+    /// Retained for future capability inspection/auditing APIs.
+    #[allow(dead_code)]
+    capabilities: Capabilities,
 }
 
 impl TransformInstance {
-    /// Create a new transform instance.
+    /// Create a new transform instance with specified capabilities.
     ///
     /// Uses the engine's cached linker for efficient instantiation.
+    ///
+    /// # Arguments
+    ///
+    /// * `engine` - The WASM engine to use
+    /// * `component` - The compiled WASM component
+    /// * `capabilities` - Security capabilities for this instance
     ///
     /// # Errors
     ///
     /// Returns [`WaferError::PluginInit`] if:
     /// - Initial fuel cannot be set
     /// - The linker fails to instantiate the component
-    pub async fn new(engine: &WaferEngine, component: &Component) -> Result<Self> {
-        let mut store = Store::new(engine.inner(), WaferState::with_capabilities(Capabilities::full()));
+    pub async fn new(
+        engine: &WaferEngine,
+        component: &Component,
+        capabilities: Capabilities,
+    ) -> Result<Self> {
+        let mut store = Store::new(
+            engine.inner(),
+            WaferState::with_capabilities(capabilities.clone()),
+        );
 
         // Set initial fuel
         store
@@ -55,6 +72,7 @@ impl TransformInstance {
             store,
             bindings,
             fuel_limit: engine.fuel_limit(),
+            capabilities,
         })
     }
 
