@@ -3,22 +3,27 @@
 //! Manages graph topology, node lifecycle, queue wiring, and coordinated
 //! async execution of all nodes in the pipeline.
 //!
+//! # Graceful Shutdown
+//!
+//! The orchestrator supports graceful shutdown via `CancellationToken` from
+//! `tokio_util`. All node loops (`run_source_loop`, `run_transform_loop`,
+//! `run_sink_loop`) use `tokio::select!` to check for cancellation at each
+//! iteration, allowing clean shutdown on SIGTERM/SIGINT.
+//!
+//! To trigger shutdown externally:
+//! ```no_run
+//! # use wafer_poc::dag::DagOrchestrator;
+//! # async fn example(orchestrator: &DagOrchestrator) {
+//! // Option 1: Get token for external use
+//! let token = orchestrator.cancel_token();
+//! token.cancel();
+//!
+//! // Option 2: Use shutdown() method
+//! orchestrator.shutdown();
+//! # }
+//! ```
+//!
 //! # MVP Limitations
-//!
-//! ## Graceful Shutdown / Cancellation
-//!
-//! The current implementation does not support graceful shutdown via cancellation
-//! tokens. Node loops (`run_source_loop`, `run_transform_loop`, `run_sink_loop`)
-//! will run until either:
-//! - The source reaches EOF
-//! - An error occurs
-//! - The upstream queue closes
-//!
-//! For production use, consider adding `tokio_util::sync::CancellationToken` to
-//! enable external cancellation (e.g., SIGTERM handling). This would require:
-//! 1. Adding `CancellationToken` to `DagOrchestrator`
-//! 2. Using `tokio::select!` in each loop to check for cancellation
-//! 3. Exposing a `shutdown()` method to trigger cancellation
 //!
 //! ## Mutex Holding Strategy
 //!
@@ -38,6 +43,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::DagConfig;
 use crate::error::{ConfigError, Result, WaferError};
@@ -51,6 +57,7 @@ use crate::queue::{BoundedQueue, QueueReceiver, QueueSender, RuntimeEnvelope};
 /// - Node instance registration and lifecycle management
 /// - Queue wiring for inter-node message passing
 /// - Coordinated async execution of all nodes with proper shutdown
+/// - Graceful shutdown via cancellation token
 pub struct DagOrchestrator {
     graph: DiGraph<String, ()>,
     node_indices: HashMap<String, NodeIndex>,
@@ -62,6 +69,8 @@ pub struct DagOrchestrator {
     queue_senders: HashMap<(String, String), QueueSender<RuntimeEnvelope>>,
     /// Queue receivers for each edge (from_node, to_node)
     queue_receivers: HashMap<(String, String), QueueReceiver<RuntimeEnvelope>>,
+    /// Cancellation token for graceful shutdown
+    cancel_token: CancellationToken,
 }
 
 impl fmt::Debug for DagOrchestrator {
@@ -121,6 +130,7 @@ impl DagOrchestrator {
             nodes: HashMap::new(),
             queue_senders: HashMap::new(),
             queue_receivers: HashMap::new(),
+            cancel_token: CancellationToken::new(),
         };
         orchestrator.validate()?;
         Ok(orchestrator)
@@ -181,6 +191,7 @@ impl DagOrchestrator {
         for node_id in &topo_order {
             let node = self.nodes.get(node_id).cloned();
             let node_id_owned = node_id.clone();
+            let cancel_token = self.cancel_token.clone();
 
             // Collect output senders for this node
             let output_senders: Vec<_> = self
@@ -203,8 +214,14 @@ impl DagOrchestrator {
 
             if let Some(node_arc) = node {
                 let handle = tokio::spawn(async move {
-                    Self::run_node_loop(node_id_owned, node_arc, input_receivers, output_senders)
-                        .await;
+                    Self::run_node_loop(
+                        node_id_owned,
+                        node_arc,
+                        input_receivers,
+                        output_senders,
+                        cancel_token,
+                    )
+                    .await;
                 });
                 handles.push(handle);
             }
@@ -247,13 +264,15 @@ impl DagOrchestrator {
         node: Arc<Mutex<AnyNode>>,
         input_receivers: Vec<QueueReceiver<RuntimeEnvelope>>,
         output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
+        cancel_token: CancellationToken,
     ) {
         // Hold lock for entire loop duration - see module docs for rationale
         let mut locked = node.lock().await;
 
         match &mut *locked {
             AnyNode::Source(source) => {
-                Self::run_source_loop(&node_id, source.as_mut(), &output_senders).await;
+                Self::run_source_loop(&node_id, source.as_mut(), &output_senders, &cancel_token)
+                    .await;
             }
             AnyNode::Transform(transform) => {
                 if let Some(receiver) = input_receivers.into_iter().next() {
@@ -262,13 +281,14 @@ impl DagOrchestrator {
                         transform.as_mut(),
                         receiver,
                         &output_senders,
+                        &cancel_token,
                     )
                     .await;
                 }
             }
             AnyNode::Sink(sink) => {
                 if let Some(receiver) = input_receivers.into_iter().next() {
-                    Self::run_sink_loop(&node_id, sink.as_mut(), receiver).await;
+                    Self::run_sink_loop(&node_id, sink.as_mut(), receiver, &cancel_token).await;
                 }
             }
         }
@@ -278,33 +298,51 @@ impl DagOrchestrator {
         node_id: &str,
         source: &mut dyn Source,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        cancel_token: &CancellationToken,
     ) {
         loop {
-            match source.poll().await {
-                Ok(Some(envelope)) => {
-                    // Optimization: avoid clone for single downstream
-                    if output_senders.len() == 1 {
-                        if let Err(e) = output_senders[0].1.send(envelope).await {
-                            tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                        }
-                    } else {
-                        // Clone for all downstream senders
-                        // Note: We clone for all senders since we're iterating. Future optimization
-                        // could use ownership tracking to avoid the final clone.
-                        for (_, sender) in output_senders {
-                            if let Err(e) = sender.send(envelope.clone()).await {
-                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+            // Check for cancellation before each poll
+            if cancel_token.is_cancelled() {
+                tracing::debug!(node = %node_id, "Source cancelled");
+                break;
+            }
+
+            tokio::select! {
+                biased;
+
+                () = cancel_token.cancelled() => {
+                    tracing::debug!(node = %node_id, "Source cancelled");
+                    break;
+                }
+
+                result = source.poll() => {
+                    match result {
+                        Ok(Some(envelope)) => {
+                            // Optimization: avoid clone for single downstream
+                            if output_senders.len() == 1 {
+                                if let Err(e) = output_senders[0].1.send(envelope).await {
+                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                }
+                            } else {
+                                // Clone for all downstream senders
+                                // Note: We clone for all senders since we're iterating. Future optimization
+                                // could use ownership tracking to avoid the final clone.
+                                for (_, sender) in output_senders {
+                                    if let Err(e) = sender.send(envelope.clone()).await {
+                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                    }
+                                }
                             }
                         }
+                        Ok(None) => {
+                            tracing::debug!(node = %node_id, "Source reached EOF");
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::error!(node = %node_id, error = %e, "Source poll error");
+                            break;
+                        }
                     }
-                }
-                Ok(None) => {
-                    tracing::debug!(node = %node_id, "Source reached EOF");
-                    break;
-                }
-                Err(e) => {
-                    tracing::error!(node = %node_id, error = %e, "Source poll error");
-                    break;
                 }
             }
         }
@@ -315,53 +353,83 @@ impl DagOrchestrator {
         transform: &mut dyn Transform,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        cancel_token: &CancellationToken,
     ) {
-        // Async receive - properly yields to tokio runtime
-        while let Some(envelope) = receiver.recv().await {
-            match transform.process(envelope).await {
-                Ok(ProcessResult::Emit(output)) => {
-                    // Optimization: avoid clone for single downstream
-                    if output_senders.len() == 1 {
-                        if let Err(e) = output_senders[0].1.send(output).await {
-                            tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                        }
-                    } else {
-                        for (_, sender) in output_senders {
-                            if let Err(e) = sender.send(output.clone()).await {
-                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+        loop {
+            tokio::select! {
+                biased;
+
+                () = cancel_token.cancelled() => {
+                    tracing::debug!(node = %node_id, "Transform cancelled");
+                    break;
+                }
+
+                maybe_envelope = receiver.recv() => {
+                    if let Some(envelope) = maybe_envelope {
+                        match transform.process(envelope).await {
+                            Ok(ProcessResult::Emit(output)) => {
+                                // Optimization: avoid clone for single downstream
+                                if output_senders.len() == 1 {
+                                    if let Err(e) = output_senders[0].1.send(output).await {
+                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                    }
+                                } else {
+                                    for (_, sender) in output_senders {
+                                        if let Err(e) = sender.send(output.clone()).await {
+                                            tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(ProcessResult::Filter) => {}
+                            Ok(ProcessResult::Error(e)) => {
+                                tracing::warn!(
+                                    node = %node_id,
+                                    code = %e.code,
+                                    message = %e.message,
+                                    "Transform error - continuing"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::error!(node = %node_id, error = %e, "Transform process failed");
                             }
                         }
+                    } else {
+                        tracing::debug!(node = %node_id, "Input queue closed");
+                        break;
                     }
-                }
-                Ok(ProcessResult::Filter) => {}
-                Ok(ProcessResult::Error(e)) => {
-                    tracing::warn!(
-                        node = %node_id,
-                        code = %e.code,
-                        message = %e.message,
-                        "Transform error - continuing"
-                    );
-                }
-                Err(e) => {
-                    tracing::error!(node = %node_id, error = %e, "Transform process failed");
                 }
             }
         }
-        tracing::debug!(node = %node_id, "Input queue closed");
     }
 
     async fn run_sink_loop(
         node_id: &str,
         sink: &mut dyn Sink,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
+        cancel_token: &CancellationToken,
     ) {
-        // Async receive - properly yields to tokio runtime
-        while let Some(envelope) = receiver.recv().await {
-            if let Err(e) = sink.collect(envelope).await {
-                tracing::error!(node = %node_id, error = %e, "Sink collect failed");
+        loop {
+            tokio::select! {
+                biased;
+
+                () = cancel_token.cancelled() => {
+                    tracing::debug!(node = %node_id, "Sink cancelled");
+                    break;
+                }
+
+                maybe_envelope = receiver.recv() => {
+                    if let Some(envelope) = maybe_envelope {
+                        if let Err(e) = sink.collect(envelope).await {
+                            tracing::error!(node = %node_id, error = %e, "Sink collect failed");
+                        }
+                    } else {
+                        tracing::debug!(node = %node_id, "Input queue closed");
+                        break;
+                    }
+                }
             }
         }
-        tracing::debug!(node = %node_id, "Input queue closed");
     }
 
     fn validate_nodes_registered(&self) -> Result<()> {
@@ -493,6 +561,44 @@ impl DagOrchestrator {
     /// Get the number of edges in the DAG.
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
+    }
+
+    /// Get a clone of the cancellation token for external shutdown triggering.
+    ///
+    /// This token can be used to trigger graceful shutdown from signal handlers
+    /// or other external sources.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use wafer_poc::dag::DagOrchestrator;
+    ///
+    /// # async fn example(mut orchestrator: DagOrchestrator) {
+    /// let cancel_token = orchestrator.cancel_token();
+    ///
+    /// // In a signal handler or another task:
+    /// tokio::spawn(async move {
+    ///     tokio::signal::ctrl_c().await.ok();
+    ///     cancel_token.cancel();
+    /// });
+    ///
+    /// // Run the pipeline - will stop when cancelled
+    /// orchestrator.run().await.ok();
+    /// # }
+    /// ```
+    #[must_use]
+    pub fn cancel_token(&self) -> CancellationToken {
+        self.cancel_token.clone()
+    }
+
+    /// Request graceful shutdown of all running nodes.
+    ///
+    /// This will signal all node loops to stop processing at their next
+    /// cancellation check point. Nodes will complete their current operation
+    /// before stopping.
+    pub fn shutdown(&self) {
+        tracing::info!("Shutdown requested");
+        self.cancel_token.cancel();
     }
 }
 
