@@ -8,6 +8,7 @@ mod host;
 mod instance;
 mod loader;
 
+pub use host::Capabilities;
 pub use instance::TransformInstance;
 pub use loader::WaferEngine;
 
