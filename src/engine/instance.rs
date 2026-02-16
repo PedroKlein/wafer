@@ -1,6 +1,6 @@
 //! Transform component instance wrapper.
 
-use super::host::WaferState;
+use super::host::{Capabilities, WaferState};
 use super::loader::WaferEngine;
 use crate::error::{Result, WaferError};
 use wasmtime::component::Component;
@@ -30,7 +30,7 @@ impl TransformInstance {
     /// - Initial fuel cannot be set
     /// - The linker fails to instantiate the component
     pub async fn new(engine: &WaferEngine, component: &Component) -> Result<Self> {
-        let mut store = Store::new(engine.inner(), WaferState::new());
+        let mut store = Store::new(engine.inner(), WaferState::with_capabilities(Capabilities::full()));
 
         // Set initial fuel
         store

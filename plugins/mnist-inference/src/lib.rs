@@ -4,7 +4,7 @@
 //! Output: 40 bytes (10 F32 logits, little-endian) for result-format
 
 wit_bindgen::generate!({
-    path: "wit",
+    path: "../../wit",
     world: "inference-node",
     generate_all,
 });
@@ -32,12 +32,12 @@ static EXECUTION_CONTEXT: ContextHolder = ContextHolder(UnsafeCell::new(None));
 
 struct MnistInference;
 
-impl exports::pipeline::inference::lifecycle::Guest for MnistInference {
-    fn validate(_config: exports::pipeline::inference::lifecycle::NodeConfig) -> Option<String> {
+impl exports::pipeline::transform::lifecycle::Guest for MnistInference {
+    fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
         None
     }
 
-    fn init(_config: exports::pipeline::inference::lifecycle::NodeConfig) -> Result<(), String> {
+    fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
         let graph = graph::load(
             &[MODEL_BYTES.to_vec()],
             GraphEncoding::Onnx,
@@ -63,11 +63,11 @@ impl exports::pipeline::inference::lifecycle::Guest for MnistInference {
     }
 }
 
-impl exports::pipeline::inference::transform::Guest for MnistInference {
+impl exports::pipeline::transform::transform::Guest for MnistInference {
     fn process(
-        input: pipeline::inference::types::Envelope,
-    ) -> pipeline::inference::types::ProcessResult {
-        use pipeline::inference::types::{Envelope, Payload, ProcessError, ProcessResult};
+        input: pipeline::transform::types::Envelope,
+    ) -> pipeline::transform::types::ProcessResult {
+        use pipeline::transform::types::{Envelope, Payload, ProcessError, ProcessResult};
 
         let Payload::Raw(bytes) = input.payload;
 
