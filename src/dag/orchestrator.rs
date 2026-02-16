@@ -92,6 +92,7 @@ impl DagOrchestrator {
     /// - Exactly one source (no incoming edges)
     /// - Exactly one sink (no outgoing edges)
     /// - No orphan nodes (all connected to main graph)
+    #[must_use = "creating an orchestrator without using it is likely a bug"]
     pub fn from_config(config: DagConfig) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut node_indices = HashMap::new();

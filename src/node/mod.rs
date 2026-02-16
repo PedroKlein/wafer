@@ -60,18 +60,26 @@ impl fmt::Debug for AnyNode {
 }
 
 impl AnyNode {
+    /// Wrap a transform node in the `AnyNode` enum.
+    #[must_use]
     pub fn from_transform(t: impl Transform + 'static) -> Self {
         AnyNode::Transform(Box::new(t))
     }
 
+    /// Wrap a source node in the `AnyNode` enum.
+    #[must_use]
     pub fn from_source(s: impl Source + 'static) -> Self {
         AnyNode::Source(Box::new(s))
     }
 
+    /// Wrap a sink node in the `AnyNode` enum.
+    #[must_use]
     pub fn from_sink(s: impl Sink + 'static) -> Self {
         AnyNode::Sink(Box::new(s))
     }
 
+    /// Get the node's unique identifier.
+    #[must_use]
     pub fn id(&self) -> &str {
         match self {
             AnyNode::Transform(t) => t.id(),
@@ -80,6 +88,11 @@ impl AnyNode {
         }
     }
 
+    /// Validate the node's configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the node's configuration is invalid.
     pub fn validate(&self) -> Result<()> {
         match self {
             AnyNode::Transform(t) => t.validate(),
@@ -88,6 +101,11 @@ impl AnyNode {
         }
     }
 
+    /// Initialize the node for execution.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if initialization fails.
     pub async fn init(&mut self) -> Result<()> {
         match self {
             AnyNode::Transform(t) => t.init().await,
@@ -96,6 +114,11 @@ impl AnyNode {
         }
     }
 
+    /// Gracefully close the node and release resources.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if cleanup fails.
     pub async fn close(&mut self) -> Result<()> {
         match self {
             AnyNode::Transform(t) => t.close().await,

@@ -2,6 +2,14 @@
 name = "wafer-poc"
 version = "0.1.0"
 edition = "2021"
+authors = ["Pedro Klein <pedroklein1@hotmail.com>"]
+description = "WAFER - WebAssembly Flow Execution Runtime: A DAG pipeline runtime for WebAssembly plugins"
+repository = "https://github.com/PedroKlein/wafer-poc"
+license = "MIT OR Apache-2.0"
+keywords = ["wasm", "webassembly", "pipeline", "dag", "runtime"]
+categories = ["wasm", "data-structures"]
+readme = "README.md"
+rust-version = "1.75"
 
 [workspace]
 members = ["."]
