@@ -711,6 +711,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
+name = "fixedbitset"
+version = "0.5.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d674e81391d1e1ab681a28d99df07927c6d4aa5b027d7da16ba32d1d21ecd99"
+
+[[package]]
 name = "flate2"
 version = "1.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1555,8 +1561,20 @@ version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4c5cc86750666a3ed20bdaf5ca2a0344f9c67674cae0515bec2da16fbaa47db"
 dependencies = [
- "fixedbitset",
+ "fixedbitset 0.4.2",
  "indexmap",
+]
+
+[[package]]
+name = "petgraph"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8701b58ea97060d5e5b155d383a69952a60943f0e6dfe30b04c287beb0b27455"
+dependencies = [
+ "fixedbitset 0.5.7",
+ "hashbrown 0.15.5",
+ "indexmap",
+ "serde",
 ]
 
 [[package]]
@@ -2251,7 +2269,22 @@ dependencies = [
  "indexmap",
  "serde_core",
  "serde_spanned",
- "toml_datetime",
+ "toml_datetime 0.7.5+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml"
+version = "1.0.1+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbe30f93627849fa362d4a602212d41bb237dc2bd0f8ba0b2ce785012e124220"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime 1.0.0+spec-1.1.0",
  "toml_parser",
  "toml_writer",
  "winnow",
@@ -2262,6 +2295,15 @@ name = "toml_datetime"
 version = "0.7.5+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92e1cfed4a3038bc5a127e35a2d360f145e1f4b971b551a2ba5fd7aedf7e1347"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.0.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32c2555c699578a4f59f0cc68e5116c8d7cabbd45e1409b989d4be085b53f13e"
 dependencies = [
  "serde_core",
 ]
@@ -2468,13 +2510,13 @@ dependencies = [
  "anyhow",
  "clap",
  "ort",
- "petgraph",
+ "petgraph 0.8.3",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "toml",
+ "toml 1.0.1+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -2573,7 +2615,7 @@ dependencies = [
  "im-rc",
  "indexmap",
  "log",
- "petgraph",
+ "petgraph 0.6.5",
  "serde",
  "serde_derive",
  "serde_yaml",
@@ -2767,7 +2809,7 @@ dependencies = [
  "serde",
  "serde_derive",
  "sha2",
- "toml",
+ "toml 0.9.12+spec-1.1.0",
  "wasmtime-environ",
  "windows-sys 0.61.2",
  "zstd",
