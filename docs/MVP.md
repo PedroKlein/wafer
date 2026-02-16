@@ -3,7 +3,7 @@
 > Current state of the WebAssembly Flow Execution Runtime proof-of-concept
 
 **Version:** 0.3.0  
-**Tech Stack:** Rust 1.88+, wasmtime 41.0.3, wit-bindgen 0.53.1, WASI Preview 2, petgraph
+**Tech Stack:** Rust 1.93, wasmtime (git), wit-bindgen 0.53.1, WASI Preview 2, petgraph 0.8
 
 ---
 
@@ -61,6 +61,7 @@ src/
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
 ├── error.rs          # WaferError enum, ConfigError, Result type
+├── factory.rs        # FactoryContext: node creation from config definitions
 ├── lib.rs
 └── main.rs           # CLI: --config flag, DAG-only execution
 ```
@@ -248,13 +249,15 @@ wit/
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Rust | 1.88.0 | Pinned in `rust-toolchain.toml` |
-| wasmtime | 41.0.3 | Host runtime |
-| wasmtime-wasi | 41.0.3 | WASI P2 bindings |
+| Rust | 1.93 | Pinned in `rust-toolchain.toml` (min 1.75) |
+| wasmtime | git rev | Post-41.0.3 with ONNX fix (see Cargo.toml) |
+| wasmtime-wasi | git rev | WASI P2 bindings |
+| wasmtime-wasi-nn | git rev | ONNX backend for ML inference |
 | wit-bindgen | 0.53.1 | Guest code generation |
 | Target | `wasm32-wasip2` | WASI Preview 2 |
-| tokio | 1.x | Async runtime (with `sync`, `time` features) |
-| petgraph | 0.6 | DAG topology management |
+| tokio | 1.x | Async runtime (with `sync`, `time`, `signal` features) |
+| petgraph | 0.8 | DAG topology management |
+| tokio-util | 0.7 | CancellationToken for graceful shutdown |
 
 ---
 
