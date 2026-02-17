@@ -98,8 +98,8 @@ install-wkg:
 # Usage: just registry-login <username> <token>
 registry-login username token:
     @echo "Logging into ghcr.io..."
-    @echo "{​{token}}" | docker login ghcr.io -u {​{username}} --password-stdin
-    @echo "✓ Logged in to ghcr.io as {​{username}}"
+    @echo "{{token}}" | docker login ghcr.io -u {{username}} --password-stdin
+    @echo "✓ Logged in to ghcr.io as {{username}}"
     @echo "Credentials stored in ~/.docker/config.json (used by wkg)"
 
 # Show current registry auth status
@@ -127,19 +127,19 @@ publish-plugin name version:
         ["mnist-inference"]="mnist_inference.wasm"
     )
     
-    wasm_file="${wasm_files[{​{name}}]:-{​{name}}_transform.wasm}"
-    wasm_path="plugins/{​{name}}/target/wasm32-wasip2/release/$wasm_file"
+    wasm_file="${wasm_files[{{name}}]:-{{name}}_transform.wasm}"
+    wasm_path="plugins/{{name}}/target/wasm32-wasip2/release/$wasm_file"
     
     if [ ! -f "$wasm_path" ]; then
         echo "Error: WASM not found at $wasm_path"
-        echo "Run 'just build-plugin {​{name}}' first"
+        echo "Run 'just build-plugin {{name}}' first"
         exit 1
     fi
     
     # Convert plugin name to package name (e.g., pass-through -> pass_through)
-    pkg_name=$(echo "{​{name}}" | tr '-' '_')
+    pkg_name=$(echo "{{name}}" | tr '-' '_')
     # OCI reference format: registry/namespace/repo:tag
-    ref="{​{registry}}/wafer-${pkg_name}:{​{version}}"
+    ref="{{registry}}/wafer-${pkg_name}:{{version}}"
     
     echo "Publishing $wasm_path to $ref"
     wkg oci push "$ref" "$wasm_path"
@@ -162,20 +162,20 @@ publish-plugin-auth username token name version:
         ["mnist-inference"]="mnist_inference.wasm"
     )
     
-    wasm_file="${wasm_files[{​{name}}]:-{​{name}}_transform.wasm}"
-    wasm_path="plugins/{​{name}}/target/wasm32-wasip2/release/$wasm_file"
+    wasm_file="${wasm_files[{{name}}]:-{{name}}_transform.wasm}"
+    wasm_path="plugins/{{name}}/target/wasm32-wasip2/release/$wasm_file"
     
     if [ ! -f "$wasm_path" ]; then
         echo "Error: WASM not found at $wasm_path"
-        echo "Run 'just build-plugin {​{name}}' first"
+        echo "Run 'just build-plugin {{name}}' first"
         exit 1
     fi
     
-    pkg_name=$(echo "{​{name}}" | tr '-' '_')
-    ref="{​{registry}}/wafer-${pkg_name}:{​{version}}"
+    pkg_name=$(echo "{{name}}" | tr '-' '_')
+    ref="{{registry}}/wafer-${pkg_name}:{{version}}"
     
     echo "Publishing $wasm_path to $ref"
-    wkg oci push -u "{​{username}}" -p "{​{token}}" "$ref" "$wasm_path"
+    wkg oci push -u "{{username}}" -p "{{token}}" "$ref" "$wasm_path"
     echo "✓ Published $ref"
 
 # Publish all plugins to OCI registry
@@ -190,23 +190,23 @@ publish-all version:
         wasm_dir="plugins/$name/target/wasm32-wasip2/release"
         if [ -d "$wasm_dir" ] && ls "$wasm_dir"/*.wasm &>/dev/null; then
             echo "Publishing $name..."
-            just publish-plugin "$name" "{​{version}}"
+            just publish-plugin "$name" "{{version}}"
         else
             echo "Skipping $name (not built)"
         fi
     done
     
     echo ""
-    echo "✓ All plugins published to {​{registry}}"
+    echo "✓ All plugins published to {{registry}}"
 
 # Pull a plugin from registry
 # Usage: just pull-plugin uppercase 1.0.0
 pull-plugin name version:
     #!/usr/bin/env bash
     set -euo pipefail
-    pkg_name=$(echo "{​{name}}" | tr '-' '_')
-    ref="{​{registry}}/wafer-${pkg_name}:{​{version}}"
-    output="downloads/${pkg_name}-{​{version}}.wasm"
+    pkg_name=$(echo "{{name}}" | tr '-' '_')
+    ref="{{registry}}/wafer-${pkg_name}:{{version}}"
+    output="downloads/${pkg_name}-{{version}}.wasm"
     mkdir -p downloads
     echo "Pulling $ref to $output..."
     wkg oci pull "$ref" -o "$output"
@@ -217,12 +217,12 @@ pull-plugin name version:
 pull-plugin-auth username token name version:
     #!/usr/bin/env bash
     set -euo pipefail
-    pkg_name=$(echo "{​{name}}" | tr '-' '_')
-    ref="{​{registry}}/wafer-${pkg_name}:{​{version}}"
-    output="downloads/${pkg_name}-{​{version}}.wasm"
+    pkg_name=$(echo "{{name}}" | tr '-' '_')
+    ref="{{registry}}/wafer-${pkg_name}:{{version}}"
+    output="downloads/${pkg_name}-{{version}}.wasm"
     mkdir -p downloads
     echo "Pulling $ref to $output..."
-    wkg oci pull -u "{​{username}}" -p "{​{token}}" "$ref" -o "$output"
+    wkg oci pull -u "{{username}}" -p "{{token}}" "$ref" -o "$output"
     echo "✓ Downloaded to $output"
 
 # =============================================================================
