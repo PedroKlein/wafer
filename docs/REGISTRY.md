@@ -34,15 +34,27 @@ just build-plugin uppercase
 
 ### 2. Configure registry authentication
 
-```bash
-# Set your GitHub PAT
-export GITHUB_TOKEN="ghp_your_token_here"
+There are three ways to authenticate with the OCI registry:
 
-# Configure wkg authentication
-just registry-login $GITHUB_TOKEN
+**Option 1: Docker login (recommended)**
+```bash
+# Login via Docker - wkg reads from ~/.docker/config.json
+just registry-login YOUR_USERNAME ghp_your_token_here
 
 # Or manually:
-wkg config set-registry ghcr.io/your-namespace --auth "Bearer $GITHUB_TOKEN"
+docker login ghcr.io -u YOUR_USERNAME -p ghp_your_token_here
+```
+
+**Option 2: Environment variables (good for CI)**
+```bash
+export WKG_OCI_USERNAME=your-username
+export WKG_OCI_PASSWORD=ghp_your_token_here
+```
+
+**Option 3: Inline credentials (per-command)**
+```bash
+# Pass credentials directly to publish/pull commands
+just publish-plugin-auth YOUR_USERNAME ghp_token uppercase 1.0.0
 ```
 
 ### 3. Publish plugins
@@ -165,29 +177,31 @@ version = "^1.0"
 | `just build-plugin <name>` | Build a specific plugin |
 | `just list-plugins` | List all built plugins with sizes |
 | `just install-wkg` | Install wkg CLI tool |
-| `just registry-login <token>` | Configure registry authentication |
-| `just publish-plugin <name> <version>` | Publish a plugin to registry |
+| `just registry-login <user> <token>` | Login to ghcr.io via Docker |
+| `just registry-status` | Show current registry auth status |
+| `just publish-plugin <name> <version>` | Publish a plugin (uses Docker creds) |
+| `just publish-plugin-auth <user> <token> <name> <version>` | Publish with inline credentials |
 | `just publish-all <version>` | Publish all built plugins |
 | `just pull-plugin <name> <version>` | Pull a plugin from registry |
-| `just registry-info <name>` | Show registry info for a plugin |
+| `just pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials |
 | `just run-local` | Run example with local plugins |
 | `just run-remote` | Run example with remote plugins |
 | `just run-remote-nocache` | Run example bypassing cache |
 
 ## Package Naming Convention
 
-Plugins are published with the following naming scheme:
+Plugins are published as standard OCI images with the following naming scheme:
 
 ```
-<registry>/<namespace>/wafer:<plugin_name>@<version>
+<registry>/wafer-<plugin_name>:<version>
 ```
 
 Examples:
-- `ghcr.io/pedroklein/wafer:uppercase@1.0.0`
-- `ghcr.io/pedroklein/wafer:filter@1.0.0`
-- `ghcr.io/pedroklein/wafer:json_parse@1.0.0`
+- `ghcr.io/pedroklein/wafer-uppercase:1.0.0`
+- `ghcr.io/pedroklein/wafer-filter:1.0.0`
+- `ghcr.io/pedroklein/wafer-json_parse:1.0.0`
 
-**Note**: Hyphens in plugin names are converted to underscores in package names (e.g., `json-parse` → `json_parse`).
+**Note**: Hyphens in plugin names are converted to underscores in the OCI reference (e.g., `json-parse` → `wafer-json_parse`).
 
 ## Cache Management
 
@@ -217,24 +231,22 @@ rm -rf ~/.cache/wafer/packages
 
 ### "Package not found"
 
-1. Verify the package is published:
+1. Verify the package is published - check in the GitHub Container Registry UI or use:
    ```bash
-   just registry-info uppercase
+   # Try pulling the package (will fail with clear error if not found)
+   just pull-plugin uppercase 1.0.0
    ```
 
-2. Check authentication:
+2. Check authentication status:
    ```bash
-   wkg config get-registry ghcr.io/your-namespace
+   just registry-status
    ```
 
 3. Verify the package name matches (check for hyphen/underscore differences)
 
 ### "Version not found"
 
-1. List available versions:
-   ```bash
-   wkg info ghcr.io/your-namespace/wafer:uppercase
-   ```
+1. Check available tags in GitHub Container Registry UI
 
 2. Use an exact version instead of a range:
    ```toml
