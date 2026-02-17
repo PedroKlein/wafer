@@ -47,6 +47,7 @@ impl WaferRegistry {
     }
 
     /// Resolve a local plugin source.
+    #[allow(clippy::unused_self)]
     fn resolve_local(&self, path: &PathBuf) -> Result<ResolvedPlugin, RegistryError> {
         if !path.exists() {
             return Err(RegistryError::FetchFailed {
