@@ -141,7 +141,7 @@ The specification will note where such trade-offs may be made.
 | NG4 | Multi-tenant quotas        | Single-tenant for thesis scope                                                                                          |
 | NG5 | Event-time semantics       | Processing-time only; if needed later, integrate Timely Dataflow                                                        |
 | NG6 | Schema registry            | Schema is static per pipeline configuration                                                                             |
-| NG7 | OCI packaging/distribution | Future work but we could integrate if not too hard, maybe use [wkg](https://github.com/bytecodealliance/wasm-pkg-tools) |
+| NG7 | ~~OCI packaging/distribution~~ | **IMPLEMENTED** - See [ADR-0005](adr/0005-registry-package-support.md) for registry support via `wasm-pkg-client` |
 | NG8 | Watermarks and windows     | Complex streaming semantics deferred                                                                                    |
 
 ### 2.3 Conditional Scope
@@ -220,6 +220,7 @@ These features are desirable but may be simplified or deferred based on implemen
 | **Metrics**       | prometheus crate            | Standard format, wide tooling support                         |
 | **Logging**       | tracing crate               | Structured logging, spans for tracing                         |
 | **Queues**        | crossbeam-channel or custom | Lock-free, bounded SPSC                                       |
+| **Registry**      | wasm-pkg-client             | OCI registry access for remote WASM components                |
 
 ### 3.3 Execution Model
 
@@ -889,6 +890,17 @@ version: "0.1"
 pipeline:
   name: "sensor-telemetry"
   description: "Process sensor data from MQTT and publish alerts"
+
+# ============================================================================
+# Registry Configuration (for remote WASM packages)
+# ============================================================================
+registry:
+  # Default OCI registry for packages without explicit registry
+  default_registry: "ghcr.io/wafer-plugins"
+  # Cache TTL in hours (default: 24)
+  cache_ttl_hours: 24
+  # Optional custom cache directory (default: ~/.cache/wafer/packages)
+  # cache_dir: "/custom/cache/path"
   
 # ============================================================================
 # Node Definitions
@@ -903,11 +915,20 @@ nodes:
       qos: 1
       client_id: "pipeline-source"
     
-  # Transform: Parse JSON payload
+  # Transform: Parse JSON payload (local WASM file)
   - id: json-parser
     type: transform/json-parse
     config:
+      plugin_path: "plugins/json-parse.wasm"  # Local path
       strict: true
+      
+  # Transform: Using remote package from registry
+  - id: uppercase
+    type: transform/uppercase
+    config:
+      package: "wafer:uppercase"    # namespace:name format
+      version: "^1.0"               # semver requirement (^, =, >=, etc.)
+      # registry: "custom.io"       # optional per-package registry override
       
   # Transform: Filter by temperature threshold
   - id: temp-filter
