@@ -10,14 +10,28 @@
 //! - Validates: exactly one source, one sink, no cycles, no orphans
 //! - Stores topological order for execution scheduling
 //!
+//! # Module Organization
+//!
+//! - [`orchestrator`]: Core struct, `run()`, and public API
+//! - [`builder`]: Construction from config (`from_config`) and validation
+//! - [`runner`]: Node execution loops (source, transform, sink)
+//!
 //! # Example
 //!
 //! ```ignore
 //! let config = DagConfig { nodes: vec![...], edges: vec![...], ... };
-//! let orchestrator = DagOrchestrator::from_config(config)?;
-//! let order = orchestrator.topo_order(); // ["source", "transform", "sink"]
+//! let mut orchestrator = DagOrchestrator::from_config(config)?;
+//!
+//! // Register nodes and wire queues
+//! orchestrator.register_node("source", source)?;
+//! orchestrator.wire_queues()?;
+//!
+//! // Run the pipeline
+//! orchestrator.run().await?;
 //! ```
 
+mod builder;
 mod orchestrator;
+mod runner;
 
 pub use orchestrator::DagOrchestrator;

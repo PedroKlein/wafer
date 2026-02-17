@@ -1,42 +1,44 @@
-//! Source node trait and implementations for pipeline entry points.
+//! File-based source node implementation.
 //!
-//! Source nodes generate messages for the pipeline, typically from
-//! external data sources like files, network connections, or timers.
+//! Reads lines from a file, producing one [`RuntimeEnvelope`] per line.
 
 use std::fs::File;
 use std::future::Future;
-use std::io::{BufRead, BufReader, Read, Stdin};
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::pin::Pin;
 
 use crate::error::{ConfigError, Result, WaferError};
+use crate::node::Lifecycle;
 use crate::queue::RuntimeEnvelope;
 
-use super::Lifecycle;
-
-/// Source node trait - generates messages for the pipeline.
-///
-/// Source nodes are pipeline entry points that produce messages from
-/// external data sources. They implement poll-based message generation
-/// to support async I/O and backpressure.
-///
-/// Examples: File reader, Kafka consumer, HTTP receiver, timer.
-pub trait Source: Lifecycle {
-    /// Poll for the next message.
-    ///
-    /// Returns:
-    /// - `Ok(Some(envelope))`: A message is available
-    /// - `Ok(None)`: Source is exhausted (EOF)
-    /// - `Err(e)`: An error occurred
-    fn poll(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>>;
-}
+use super::Source;
 
 /// A file-based source node that reads lines from a file.
 ///
 /// Each call to `poll()` returns one line from the file as a `RuntimeEnvelope`.
 /// Returns `None` when EOF is reached.
+///
+/// # Binary File Support
+///
+/// Files with a `.bin` extension are treated as binary and read in a single
+/// `poll()` call, returning the entire file contents as one envelope.
+///
+/// # Example
+///
+/// ```ignore
+/// use wafer_poc::node::{FileSource, Lifecycle, Source};
+///
+/// let mut source = FileSource::new("my-source", "data/input.txt");
+/// source.validate()?;
+/// source.init().await?;
+///
+/// while let Some(envelope) = source.poll().await? {
+///     println!("Got line: {:?}", envelope.payload);
+/// }
+///
+/// source.close().await?;
+/// ```
 pub struct FileSource {
     /// Node identifier
     id: String,
@@ -59,6 +61,12 @@ impl FileSource {
             reader: None,
             binary_sent: false,
         }
+    }
+
+    /// Get the file path this source reads from.
+    #[must_use]
+    pub fn path(&self) -> &PathBuf {
+        &self.path
     }
 }
 
@@ -110,10 +118,8 @@ impl Source for FileSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let reader = self.reader.as_mut().ok_or_else(|| {
-                WaferError::PluginInit {
-                    message: "FileSource not initialized - call init() first".into(),
-                }
+            let reader = self.reader.as_mut().ok_or_else(|| WaferError::PluginInit {
+                message: "FileSource not initialized - call init() first".into(),
             })?;
 
             if self.path.extension().is_some_and(|ext| ext == "bin") {
@@ -125,87 +131,6 @@ impl Source for FileSource {
                 self.binary_sent = true;
                 return Ok(Some(RuntimeEnvelope::new(&self.id, bytes)));
             }
-
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => Ok(None), // EOF
-                Ok(_) => {
-                    // Strip trailing newline(s)
-                    let payload = line
-                        .trim_end_matches('\n')
-                        .trim_end_matches('\r')
-                        .as_bytes()
-                        .to_vec();
-                    Ok(Some(RuntimeEnvelope::new(&self.id, payload)))
-                }
-                Err(e) => Err(WaferError::Io(e)),
-            }
-        })
-    }
-}
-
-/// A stdin-based source node that reads lines from standard input.
-///
-/// Each call to `poll()` returns one line from stdin as a `RuntimeEnvelope`.
-/// Returns `None` when EOF is reached (Ctrl+D on Unix, Ctrl+Z on Windows).
-pub struct StdinSource {
-    /// Node identifier
-    id: String,
-    /// Buffered reader, initialized in init()
-    reader: Option<BufReader<Stdin>>,
-}
-
-impl StdinSource {
-    /// Create a new StdinSource.
-    ///
-    /// The stdin reader is not created until `init()` is called.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            reader: None,
-        }
-    }
-}
-
-impl Lifecycle for StdinSource {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn node_type(&self) -> &'static str {
-        "source/stdin"
-    }
-
-    fn validate(&self) -> Result<()> {
-        // stdin is always available, no validation needed
-        Ok(())
-    }
-
-    fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            self.reader = Some(BufReader::new(std::io::stdin()));
-            Ok(())
-        })
-    }
-
-    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            self.reader = None;
-            Ok(())
-        })
-    }
-}
-
-impl Source for StdinSource {
-    fn poll(
-        &mut self,
-    ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
-        Box::pin(async move {
-            let reader = self.reader.as_mut().ok_or_else(|| {
-                WaferError::PluginInit {
-                    message: "StdinSource not initialized - call init() first".into(),
-                }
-            })?;
 
             let mut line = String::new();
             match reader.read_line(&mut line) {
