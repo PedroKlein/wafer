@@ -254,13 +254,12 @@ async fn resolve_and_load_plugin(
             tracing::debug!("Loading local plugin for '{}' from {:?}", node_id, path);
             engine.load_component(path)?
         }
-        PluginSource::Remote { package, version } => {
-            // For remote packages, load from cached/fetched bytes
+        PluginSource::Oci(oci_ref) => {
+            // For OCI images, load from cached/fetched bytes
             tracing::info!(
-                "Loading remote plugin for '{}': {} v{} from {:?}",
+                "Loading OCI plugin for '{}': {} from {:?}",
                 node_id,
-                package,
-                version,
+                oci_ref,
                 resolved.wasm_path
             );
             let bytes = std::fs::read(&resolved.wasm_path).map_err(|e| {
@@ -268,7 +267,7 @@ async fn resolve_and_load_plugin(
                     "failed to read cached plugin for '{node_id}': {e}"
                 )))
             })?;
-            engine.load_component_from_bytes(&bytes, &format!("{package}:{version}"))?
+            engine.load_component_from_bytes(&bytes, oci_ref.as_str())?
         }
     };
 
