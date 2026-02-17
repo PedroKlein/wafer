@@ -23,22 +23,14 @@
 //! # }
 //! ```
 //!
-//! # MVP Limitations
+//! # Module Organization
 //!
-//! ## Mutex Holding Strategy
-//!
-//! Node loops acquire the mutex at the start and hold it for the entire loop
-//! duration. This is intentional for the MVP to ensure single-threaded access
-//! to each node (WASM stores are not thread-safe). The tradeoff is that node
-//! state cannot be inspected while the loop is running.
-//!
-//! For production use, consider:
-//! - Message passing instead of shared mutable state
-//! - Releasing the lock between operations for better observability
+//! The orchestrator implementation is split across multiple files:
+//! - `orchestrator.rs` (this file): Core struct, run(), and public API
+//! - `builder.rs`: Construction from config and validation
+//! - `runner.rs`: Node execution loops (source, transform, sink)
 
-use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::Direction;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -46,9 +38,9 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::DagConfig;
-use crate::error::{ConfigError, Result, WaferError};
-use crate::node::{AnyNode, ProcessResult, Sink, Source, Transform};
-use crate::queue::{BoundedQueue, QueueReceiver, QueueSender, RuntimeEnvelope};
+use crate::error::Result;
+use crate::node::AnyNode;
+use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
 /// DAG orchestrator that manages graph topology, node execution, and inter-node communication.
 ///
@@ -58,19 +50,38 @@ use crate::queue::{BoundedQueue, QueueReceiver, QueueSender, RuntimeEnvelope};
 /// - Queue wiring for inter-node message passing
 /// - Coordinated async execution of all nodes with proper shutdown
 /// - Graceful shutdown via cancellation token
+///
+/// # Example
+///
+/// ```ignore
+/// use wafer_poc::dag::DagOrchestrator;
+/// use wafer_poc::config::DagConfig;
+///
+/// let config = DagConfig { /* ... */ };
+/// let mut orchestrator = DagOrchestrator::from_config(config)?;
+///
+/// // Register node instances
+/// orchestrator.register_node("source", source_node)?;
+/// orchestrator.register_node("transform", transform_node)?;
+/// orchestrator.register_node("sink", sink_node)?;
+///
+/// // Wire queues and run
+/// orchestrator.wire_queues()?;
+/// orchestrator.run().await?;
+/// ```
 pub struct DagOrchestrator {
-    graph: DiGraph<String, ()>,
-    node_indices: HashMap<String, NodeIndex>,
-    config: DagConfig,
-    topo_order: Vec<String>,
+    pub(super) graph: DiGraph<String, ()>,
+    pub(super) node_indices: HashMap<String, NodeIndex>,
+    pub(super) config: DagConfig,
+    pub(super) topo_order: Vec<String>,
     /// Node instances keyed by node ID
-    nodes: HashMap<String, Arc<Mutex<AnyNode>>>,
+    pub(super) nodes: HashMap<String, Arc<Mutex<AnyNode>>>,
     /// Queue senders for each edge (from_node, to_node)
-    queue_senders: HashMap<(String, String), QueueSender<RuntimeEnvelope>>,
+    pub(super) queue_senders: HashMap<(String, String), QueueSender<RuntimeEnvelope>>,
     /// Queue receivers for each edge (from_node, to_node)
-    queue_receivers: HashMap<(String, String), QueueReceiver<RuntimeEnvelope>>,
+    pub(super) queue_receivers: HashMap<(String, String), QueueReceiver<RuntimeEnvelope>>,
     /// Cancellation token for graceful shutdown
-    cancel_token: CancellationToken,
+    pub(super) cancel_token: CancellationToken,
 }
 
 impl fmt::Debug for DagOrchestrator {
@@ -85,85 +96,6 @@ impl fmt::Debug for DagOrchestrator {
 }
 
 impl DagOrchestrator {
-    /// Build a DAG orchestrator from configuration.
-    ///
-    /// Validates the topology at construction time:
-    /// - No cycles (would fail topological sort)
-    /// - Exactly one source (no incoming edges)
-    /// - Exactly one sink (no outgoing edges)
-    /// - No orphan nodes (all connected to main graph)
-    #[must_use = "creating an orchestrator without using it is likely a bug"]
-    pub fn from_config(config: DagConfig) -> Result<Self> {
-        let mut graph = DiGraph::new();
-        let mut node_indices = HashMap::new();
-
-        for node_def in &config.nodes {
-            let idx = graph.add_node(node_def.id.clone());
-            node_indices.insert(node_def.id.clone(), idx);
-        }
-
-        for edge_def in &config.edges {
-            let from_idx = node_indices.get(&edge_def.from).ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "Unknown source node in edge: {}",
-                    edge_def.from
-                )))
-            })?;
-            let to_idx = node_indices.get(&edge_def.to).ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "Unknown destination node in edge: {}",
-                    edge_def.to
-                )))
-            })?;
-            graph.add_edge(*from_idx, *to_idx, ());
-        }
-
-        let topo_indices = toposort(&graph, None).map_err(|_| {
-            WaferError::Config(ConfigError::Message("Cycle detected in DAG".into()))
-        })?;
-        let topo_order: Vec<String> = topo_indices.iter().map(|idx| graph[*idx].clone()).collect();
-
-        let orchestrator = Self {
-            graph,
-            node_indices,
-            config,
-            topo_order,
-            nodes: HashMap::new(),
-            queue_senders: HashMap::new(),
-            queue_receivers: HashMap::new(),
-            cancel_token: CancellationToken::new(),
-        };
-        orchestrator.validate()?;
-        Ok(orchestrator)
-    }
-
-    /// Register a node instance for execution.
-    pub fn register_node(&mut self, id: &str, node: AnyNode) -> Result<()> {
-        if !self.node_indices.contains_key(id) {
-            return Err(WaferError::Config(ConfigError::Message(format!(
-                "Unknown node ID: {id}"
-            ))));
-        }
-        self.nodes
-            .insert(id.to_string(), Arc::new(Mutex::new(node)));
-        Ok(())
-    }
-
-    /// Create queues for each edge in the DAG.
-    pub fn wire_queues(&mut self) -> Result<()> {
-        for edge in &self.config.edges {
-            let capacity = edge
-                .queue_capacity
-                .unwrap_or(self.config.default_queue_capacity);
-            let queue = BoundedQueue::new(capacity);
-            let (sender, receiver) = queue.split();
-            let key = (edge.from.clone(), edge.to.clone());
-            self.queue_senders.insert(key.clone(), sender);
-            self.queue_receivers.insert(key, receiver);
-        }
-        Ok(())
-    }
-
     /// Run the DAG pipeline.
     ///
     /// This method:
@@ -171,6 +103,12 @@ impl DagOrchestrator {
     /// 2. Spawns async tasks for each node
     /// 3. Waits for all tasks to complete
     /// 4. Closes all nodes in reverse topological order
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Not all nodes are registered
+    /// - Node initialization fails
     pub async fn run(&mut self) -> Result<()> {
         self.validate_nodes_registered()?;
 
@@ -252,314 +190,26 @@ impl DagOrchestrator {
         Ok(())
     }
 
-    /// Run the main loop for a node.
-    ///
-    /// # Mutex Strategy
-    ///
-    /// The mutex is acquired at the start and held for the entire loop.
-    /// This ensures single-threaded access to the node (required because WASM
-    /// stores are not thread-safe). See module-level docs for discussion of
-    /// tradeoffs and potential improvements.
-    async fn run_node_loop(
-        node_id: String,
-        node: Arc<Mutex<AnyNode>>,
-        input_receivers: Vec<QueueReceiver<RuntimeEnvelope>>,
-        output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
-        cancel_token: CancellationToken,
-    ) {
-        // Hold lock for entire loop duration - see module docs for rationale
-        let mut locked = node.lock().await;
-
-        match &mut *locked {
-            AnyNode::Source(source) => {
-                Self::run_source_loop(&node_id, source.as_mut(), &output_senders, &cancel_token)
-                    .await;
-            }
-            AnyNode::Transform(transform) => {
-                if let Some(receiver) = input_receivers.into_iter().next() {
-                    Self::run_transform_loop(
-                        &node_id,
-                        transform.as_mut(),
-                        receiver,
-                        &output_senders,
-                        &cancel_token,
-                    )
-                    .await;
-                }
-            }
-            AnyNode::Sink(sink) => {
-                if let Some(receiver) = input_receivers.into_iter().next() {
-                    Self::run_sink_loop(&node_id, sink.as_mut(), receiver, &cancel_token).await;
-                }
-            }
-        }
-    }
-
-    async fn run_source_loop(
-        node_id: &str,
-        source: &mut dyn Source,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
-        cancel_token: &CancellationToken,
-    ) {
-        loop {
-            // Check for cancellation before each poll
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Source cancelled");
-                break;
-            }
-
-            tokio::select! {
-                biased;
-
-                () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Source cancelled");
-                    break;
-                }
-
-                result = source.poll() => {
-                    match result {
-                        Ok(Some(envelope)) => {
-                            // Optimization: avoid clone for single downstream
-                            if output_senders.len() == 1 {
-                                if let Err(e) = output_senders[0].1.send(envelope).await {
-                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                }
-                            } else {
-                                // Clone for all downstream senders
-                                // Note: We clone for all senders since we're iterating. Future optimization
-                                // could use ownership tracking to avoid the final clone.
-                                for (_, sender) in output_senders {
-                                    if let Err(e) = sender.send(envelope.clone()).await {
-                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                    }
-                                }
-                            }
-                        }
-                        Ok(None) => {
-                            tracing::debug!(node = %node_id, "Source reached EOF");
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::error!(node = %node_id, error = %e, "Source poll error");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    async fn run_transform_loop(
-        node_id: &str,
-        transform: &mut dyn Transform,
-        mut receiver: QueueReceiver<RuntimeEnvelope>,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
-        cancel_token: &CancellationToken,
-    ) {
-        loop {
-            tokio::select! {
-                biased;
-
-                () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Transform cancelled");
-                    break;
-                }
-
-                maybe_envelope = receiver.recv() => {
-                    if let Some(envelope) = maybe_envelope {
-                        match transform.process(envelope).await {
-                            Ok(ProcessResult::Emit(output)) => {
-                                // Optimization: avoid clone for single downstream
-                                if output_senders.len() == 1 {
-                                    if let Err(e) = output_senders[0].1.send(output).await {
-                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                    }
-                                } else {
-                                    for (_, sender) in output_senders {
-                                        if let Err(e) = sender.send(output.clone()).await {
-                                            tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(ProcessResult::Filter) => {}
-                            Ok(ProcessResult::Error(e)) => {
-                                tracing::warn!(
-                                    node = %node_id,
-                                    code = %e.code,
-                                    message = %e.message,
-                                    "Transform error - continuing"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(node = %node_id, error = %e, "Transform process failed");
-                            }
-                        }
-                    } else {
-                        tracing::debug!(node = %node_id, "Input queue closed");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    async fn run_sink_loop(
-        node_id: &str,
-        sink: &mut dyn Sink,
-        mut receiver: QueueReceiver<RuntimeEnvelope>,
-        cancel_token: &CancellationToken,
-    ) {
-        loop {
-            tokio::select! {
-                biased;
-
-                () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Sink cancelled");
-                    break;
-                }
-
-                maybe_envelope = receiver.recv() => {
-                    if let Some(envelope) = maybe_envelope {
-                        if let Err(e) = sink.collect(envelope).await {
-                            tracing::error!(node = %node_id, error = %e, "Sink collect failed");
-                        }
-                    } else {
-                        tracing::debug!(node = %node_id, "Input queue closed");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    fn validate_nodes_registered(&self) -> Result<()> {
-        let missing: Vec<_> = self
-            .node_indices
-            .keys()
-            .filter(|id| !self.nodes.contains_key(*id))
-            .collect();
-
-        if !missing.is_empty() {
-            return Err(WaferError::Config(ConfigError::Message(format!(
-                "Missing node registrations: {missing:?}"
-            ))));
-        }
-        Ok(())
-    }
-
-    fn validate(&self) -> Result<()> {
-        self.validate_not_empty()?;
-        self.validate_single_source()?;
-        self.validate_single_sink()?;
-        self.validate_no_orphans()?;
-        Ok(())
-    }
-
-    fn validate_not_empty(&self) -> Result<()> {
-        if self.node_indices.is_empty() {
-            return Err(WaferError::Config(ConfigError::Message(
-                "DAG has no nodes".into(),
-            )));
-        }
-        Ok(())
-    }
-
-    fn validate_single_source(&self) -> Result<()> {
-        let sources: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                self.graph
-                    .neighbors_directed(**idx, Direction::Incoming)
-                    .count()
-                    == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        match sources.len() {
-            0 => Err(WaferError::Config(ConfigError::Message(
-                "No source node found (node with no incoming edges)".into(),
-            ))),
-            1 => Ok(()),
-            _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple source nodes found (expected 1): {sources:?}"
-            )))),
-        }
-    }
-
-    fn validate_single_sink(&self) -> Result<()> {
-        let sinks: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                self.graph
-                    .neighbors_directed(**idx, Direction::Outgoing)
-                    .count()
-                    == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        match sinks.len() {
-            0 => Err(WaferError::Config(ConfigError::Message(
-                "No sink node found (node with no outgoing edges)".into(),
-            ))),
-            1 => Ok(()),
-            _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple sink nodes found (expected 1): {sinks:?}"
-            )))),
-        }
-    }
-
-    fn validate_no_orphans(&self) -> Result<()> {
-        if self.node_indices.len() == 1 {
-            return Ok(());
-        }
-
-        let orphans: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                let incoming = self
-                    .graph
-                    .neighbors_directed(**idx, Direction::Incoming)
-                    .count();
-                let outgoing = self
-                    .graph
-                    .neighbors_directed(**idx, Direction::Outgoing)
-                    .count();
-                incoming == 0 && outgoing == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        if orphans.is_empty() {
-            Ok(())
-        } else {
-            Err(WaferError::Config(ConfigError::Message(format!(
-                "Orphan nodes found (no connections): {orphans:?}"
-            ))))
-        }
-    }
-
     /// Get the topological order of nodes.
+    #[must_use]
     pub fn topo_order(&self) -> &[String] {
         &self.topo_order
     }
 
     /// Get the DAG configuration.
+    #[must_use]
     pub fn config(&self) -> &DagConfig {
         &self.config
     }
 
     /// Get the number of nodes in the DAG.
+    #[must_use]
     pub fn node_count(&self) -> usize {
         self.node_indices.len()
     }
 
     /// Get the number of edges in the DAG.
+    #[must_use]
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
     }
@@ -600,256 +250,5 @@ impl DagOrchestrator {
     pub fn shutdown(&self) {
         tracing::info!("Shutdown requested");
         self.cancel_token.cancel();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::config::{EdgeDefinition, NodeDefinition, NodeType};
-
-    fn make_node(id: &str, node_type: NodeType) -> NodeDefinition {
-        NodeDefinition {
-            id: id.to_string(),
-            node_type,
-            source_type: None,
-            sink_type: None,
-            config: toml::Value::Table(toml::map::Map::new()),
-        }
-    }
-
-    fn make_edge(from: &str, to: &str) -> EdgeDefinition {
-        EdgeDefinition {
-            from: from.to_string(),
-            to: to.to_string(),
-            queue_capacity: None,
-        }
-    }
-
-    #[test]
-    fn test_dag_valid_linear() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("transform", NodeType::Transform),
-                make_node("sink", NodeType::Sink),
-            ],
-            edges: vec![
-                make_edge("source", "transform"),
-                make_edge("transform", "sink"),
-            ],
-            default_queue_capacity: 1024,
-        };
-
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
-        assert_eq!(orchestrator.topo_order(), &["source", "transform", "sink"]);
-        assert_eq!(orchestrator.node_count(), 3);
-        assert_eq!(orchestrator.edge_count(), 2);
-    }
-
-    #[test]
-    fn test_dag_cycle_rejected() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("a", NodeType::Transform),
-                make_node("b", NodeType::Transform),
-                make_node("c", NodeType::Transform),
-            ],
-            edges: vec![
-                make_edge("a", "b"),
-                make_edge("b", "c"),
-                make_edge("c", "a"),
-            ],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Cycle"));
-    }
-
-    #[test]
-    fn test_dag_no_source() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("transform", NodeType::Transform),
-                make_node("sink", NodeType::Sink),
-            ],
-            edges: vec![
-                make_edge("sink", "transform"),
-                make_edge("transform", "sink"),
-            ],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_dag_multiple_sources() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source1", NodeType::Source),
-                make_node("source2", NodeType::Source),
-                make_node("sink", NodeType::Sink),
-            ],
-            edges: vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Multiple source"));
-    }
-
-    #[test]
-    fn test_dag_orphan_node() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("sink", NodeType::Sink),
-                make_node("orphan", NodeType::Transform),
-            ],
-            edges: vec![make_edge("source", "sink")],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Orphan") || err.contains("Multiple source"));
-    }
-
-    #[test]
-    fn test_dag_unknown_node_in_edge() {
-        let config = DagConfig {
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![make_edge("source", "nonexistent")],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unknown"));
-    }
-
-    #[test]
-    fn test_dag_single_node() {
-        let config = DagConfig {
-            nodes: vec![make_node("single", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
-
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
-        assert_eq!(orchestrator.topo_order(), &["single"]);
-    }
-
-    #[test]
-    fn test_dag_empty_rejected() {
-        let config = DagConfig {
-            nodes: vec![],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("no nodes"));
-    }
-
-    #[test]
-    fn test_dag_multiple_sinks() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("sink1", NodeType::Sink),
-                make_node("sink2", NodeType::Sink),
-            ],
-            edges: vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
-            default_queue_capacity: 1024,
-        };
-
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Multiple sink"));
-    }
-
-    #[test]
-    fn test_wire_queues_creates_correct_count() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("transform", NodeType::Transform),
-                make_node("sink", NodeType::Sink),
-            ],
-            edges: vec![
-                make_edge("source", "transform"),
-                make_edge("transform", "sink"),
-            ],
-            default_queue_capacity: 1024,
-        };
-
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        orchestrator.wire_queues().unwrap();
-
-        assert_eq!(orchestrator.queue_senders.len(), 2);
-        assert_eq!(orchestrator.queue_receivers.len(), 2);
-        assert!(orchestrator
-            .queue_senders
-            .contains_key(&("source".to_string(), "transform".to_string())));
-        assert!(orchestrator
-            .queue_senders
-            .contains_key(&("transform".to_string(), "sink".to_string())));
-    }
-
-    #[test]
-    fn test_wire_queues_uses_custom_capacity() {
-        let config = DagConfig {
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("sink", NodeType::Sink),
-            ],
-            edges: vec![EdgeDefinition {
-                from: "source".to_string(),
-                to: "sink".to_string(),
-                queue_capacity: Some(42),
-            }],
-            default_queue_capacity: 1024,
-        };
-
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        orchestrator.wire_queues().unwrap();
-
-        let receiver = orchestrator
-            .queue_receivers
-            .get(&("source".to_string(), "sink".to_string()))
-            .unwrap();
-        assert_eq!(receiver.capacity(), 42);
-    }
-
-    #[test]
-    fn test_register_node_unknown_id_fails() {
-        use crate::node::FileSource;
-
-        let config = DagConfig {
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
-
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        let node = AnyNode::from_source(FileSource::new("wrong-id", "/tmp/test.txt"));
-        let result = orchestrator.register_node("unknown", node);
-
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Unknown node ID"));
     }
 }

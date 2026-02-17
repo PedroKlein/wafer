@@ -1,4 +1,4 @@
-//! Host state and WASI implementation.
+//! Host state and WASI implementation for WASM component execution.
 
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
@@ -6,116 +6,16 @@ use wasmtime_wasi_nn::backend::onnx::OnnxBackend;
 use wasmtime_wasi_nn::wit::WasiNnCtx;
 use wasmtime_wasi_nn::InMemoryRegistry;
 
-/// Capability configuration for WASM plugins.
-///
-/// Controls what system resources a plugin can access.
-/// By default, plugins get minimal capabilities (sandbox mode).
-///
-/// # MVP Limitations
-///
-/// Currently only `inherit_stdio` and `inherit_env` are functional.
-/// The `allow_network` and `allow_filesystem` fields are **placeholders**
-/// for future capability-based security and have no effect in this MVP.
-///
-/// Future versions will support:
-/// - Fine-grained filesystem access (allowlist of paths)
-/// - Network access control (allowlist of hosts/ports)
-/// - Resource limits (memory, CPU time)
-#[derive(Debug, Clone, Default)]
-pub struct Capabilities {
-    /// Allow inheriting stdin/stdout/stderr from the host process.
-    pub inherit_stdio: bool,
-    /// Allow access to environment variables.
-    pub inherit_env: bool,
-    /// Allow network access.
-    ///
-    /// **MVP: Placeholder only - has no effect.**
-    /// Future: will support specific hosts/ports allowlist.
-    pub allow_network: bool,
-    /// Allow filesystem access.
-    ///
-    /// **MVP: Placeholder only - has no effect.**
-    /// Future: will support specific paths allowlist.
-    pub allow_filesystem: bool,
-    /// Allow machine learning inference via wasi-nn.
-    pub allow_inference: bool,
-}
-
-impl Capabilities {
-    /// Create default capabilities (minimal sandbox).
-    #[must_use]
-    pub fn sandbox() -> Self {
-        Self::default()
-    }
-
-    /// Create capabilities that inherit stdio (for debugging).
-    #[must_use]
-    pub fn with_stdio() -> Self {
-        Self {
-            inherit_stdio: true,
-            ..Default::default()
-        }
-    }
-
-    /// Create full capabilities (for trusted plugins).
-    #[must_use]
-    pub fn full() -> Self {
-        Self {
-            inherit_stdio: true,
-            inherit_env: true,
-            allow_network: true,
-            allow_filesystem: true,
-            allow_inference: true,
-        }
-    }
-
-    /// Enable stdio inheritance (builder pattern).
-    #[must_use]
-    pub fn stdio(mut self, enabled: bool) -> Self {
-        self.inherit_stdio = enabled;
-        self
-    }
-
-    /// Enable environment variable access (builder pattern).
-    #[must_use]
-    pub fn env(mut self, enabled: bool) -> Self {
-        self.inherit_env = enabled;
-        self
-    }
-
-    /// Enable network access (builder pattern).
-    ///
-    /// **MVP: Placeholder only - has no effect.**
-    #[must_use]
-    pub fn network(mut self, enabled: bool) -> Self {
-        self.allow_network = enabled;
-        self
-    }
-
-    /// Enable filesystem access (builder pattern).
-    ///
-    /// **MVP: Placeholder only - has no effect.**
-    #[must_use]
-    pub fn filesystem(mut self, enabled: bool) -> Self {
-        self.allow_filesystem = enabled;
-        self
-    }
-
-    /// Enable machine learning inference via wasi-nn (builder pattern).
-    #[must_use]
-    pub fn inference(mut self, enabled: bool) -> Self {
-        self.allow_inference = enabled;
-        self
-    }
-}
+use super::Capabilities;
 
 /// Host state for WASM component execution.
-/// Implements WasiView to provide WASI capabilities.
+///
+/// Implements `WasiView` to provide WASI capabilities to guest components.
+/// Each `TransformInstance` gets its own `WaferState` with configured capabilities.
 pub struct WaferState {
     ctx: WasiCtx,
     table: ResourceTable,
     /// Retained for future capability inspection/auditing.
-    /// Currently unused but will be used for runtime capability queries.
     #[allow(dead_code)]
     capabilities: Capabilities,
     nn_ctx: Option<WasiNnCtx>,
@@ -123,11 +23,13 @@ pub struct WaferState {
 
 impl WaferState {
     /// Create a new host state with default capabilities (inherit stdio).
+    #[must_use]
     pub fn new() -> Self {
         Self::with_capabilities(Capabilities::with_stdio())
     }
 
     /// Create a new host state with specific capabilities.
+    #[must_use]
     pub fn with_capabilities(capabilities: Capabilities) -> Self {
         let mut builder = WasiCtxBuilder::new();
 
@@ -163,10 +65,16 @@ impl WaferState {
     }
 
     /// Create a sandboxed state with no host access.
+    #[must_use]
     pub fn sandboxed() -> Self {
         Self::with_capabilities(Capabilities::sandbox())
     }
 
+    /// Get a view into the wasi-nn context for the linker.
+    ///
+    /// # Panics
+    ///
+    /// Panics if inference capability was not enabled.
     pub fn nn_view(&mut self) -> wasmtime_wasi_nn::wit::WasiNnView<'_> {
         let nn_ctx = self.nn_ctx.as_mut().expect("inference not enabled");
         wasmtime_wasi_nn::wit::WasiNnView::new(&mut self.table, nn_ctx)
@@ -185,5 +93,30 @@ impl WasiView for WaferState {
             ctx: &mut self.ctx,
             table: &mut self.table,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_state_has_stdio() {
+        let state = WaferState::new();
+        // Can't easily inspect WasiCtx, but we can verify it doesn't panic
+        assert!(state.nn_ctx.is_none());
+    }
+
+    #[test]
+    fn test_sandboxed_state() {
+        let state = WaferState::sandboxed();
+        assert!(state.nn_ctx.is_none());
+    }
+
+    #[test]
+    fn test_with_inference() {
+        let caps = Capabilities::sandbox().inference(true);
+        let state = WaferState::with_capabilities(caps);
+        assert!(state.nn_ctx.is_some());
     }
 }

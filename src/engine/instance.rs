@@ -18,8 +18,8 @@
 //! to ensure consistent metering. This means each message gets a fresh fuel
 //! budget regardless of previous processing.
 
-use super::host::{Capabilities, WaferState};
 use super::loader::WaferEngine;
+use super::{Capabilities, WaferState};
 use crate::error::{Result, WaferError};
 use wasmtime::component::Component;
 use wasmtime::Store;
@@ -210,7 +210,10 @@ mod tests {
             .join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
     }
 
-    fn make_config(id: &str, node_type: &str) -> exports::pipeline::transform::lifecycle::NodeConfig {
+    fn make_config(
+        id: &str,
+        node_type: &str,
+    ) -> exports::pipeline::transform::lifecycle::NodeConfig {
         exports::pipeline::transform::lifecycle::NodeConfig {
             id: id.to_string(),
             node_type: node_type.to_string(),
@@ -238,12 +241,14 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let instance = TransformInstance::new(&engine, &component, Capabilities::default())
             .await
             .expect("Failed to create instance");
-        
+
         // Should have full fuel after creation
         let fuel = instance.remaining_fuel().expect("Failed to get fuel");
         assert_eq!(fuel, engine.fuel_limit());
@@ -258,14 +263,16 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         // Test with stdio capabilities
         let caps = Capabilities::with_stdio();
         let instance = TransformInstance::new(&engine, &component, caps)
             .await
             .expect("Failed to create instance");
-        
+
         assert!(instance.remaining_fuel().is_ok());
     }
 
@@ -278,18 +285,26 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let mut instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
             .await
             .expect("Failed to create instance");
-        
+
         let config = make_config("test-node", "transform/passthrough");
-        
+
         // Validate should succeed
-        let validation = instance.call_validate(&config).await.expect("Failed to validate");
-        assert!(validation.is_none(), "Passthrough should have no validation errors");
-        
+        let validation = instance
+            .call_validate(&config)
+            .await
+            .expect("Failed to validate");
+        assert!(
+            validation.is_none(),
+            "Passthrough should have no validation errors"
+        );
+
         // Init should succeed
         instance.call_init(&config).await.expect("Failed to init");
     }
@@ -303,27 +318,30 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let mut instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
             .await
             .expect("Failed to create instance");
-        
+
         let config = make_config("test", "transform/passthrough");
         instance.call_init(&config).await.expect("Failed to init");
-        
+
         let envelope = make_envelope("msg-1", b"hello world");
-        
-        let result = instance.call_process(&envelope).await.expect("Failed to process");
-        
+
+        let result = instance
+            .call_process(&envelope)
+            .await
+            .expect("Failed to process");
+
         match result {
-            pipeline::transform::types::ProcessResult::Emit(output) => {
-                match output.payload {
-                    pipeline::transform::types::Payload::Raw(data) => {
-                        assert_eq!(data, b"hello world");
-                    }
+            pipeline::transform::types::ProcessResult::Emit(output) => match output.payload {
+                pipeline::transform::types::Payload::Raw(data) => {
+                    assert_eq!(data, b"hello world");
                 }
-            }
+            },
             other => panic!("Expected Emit result, got {:?}", other),
         }
     }
@@ -337,22 +355,30 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let mut instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
             .await
             .expect("Failed to create instance");
-        
+
         let config = make_config("test", "transform/passthrough");
         instance.call_init(&config).await.expect("Failed to init");
-        
+
         let envelope = make_envelope("msg-1", b"test");
-        
-        let _ = instance.call_process(&envelope).await.expect("Failed to process");
-        
+
+        let _ = instance
+            .call_process(&envelope)
+            .await
+            .expect("Failed to process");
+
         // Fuel should be consumed (less than max but reset for each call)
         let fuel = instance.remaining_fuel().expect("Failed to get fuel");
-        assert!(fuel < engine.fuel_limit(), "Fuel should be consumed after processing");
+        assert!(
+            fuel < engine.fuel_limit(),
+            "Fuel should be consumed after processing"
+        );
     }
 
     #[tokio::test]
@@ -364,15 +390,17 @@ mod tests {
         }
 
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let mut instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
             .await
             .expect("Failed to create instance");
-        
+
         let config = make_config("test", "transform/passthrough");
         instance.call_init(&config).await.expect("Failed to init");
-        
+
         // Close should succeed
         instance.call_close().await.expect("Failed to close");
     }
@@ -387,12 +415,14 @@ mod tests {
 
         let custom_fuel = 500_000u64;
         let engine = WaferEngine::with_fuel_limit(custom_fuel).expect("Failed to create engine");
-        let component = engine.load_component(&plugin_path).expect("Failed to load component");
-        
+        let component = engine
+            .load_component(&plugin_path)
+            .expect("Failed to load component");
+
         let instance = TransformInstance::new(&engine, &component, Capabilities::default())
             .await
             .expect("Failed to create instance");
-        
+
         let fuel = instance.remaining_fuel().expect("Failed to get fuel");
         assert_eq!(fuel, custom_fuel);
     }
