@@ -41,7 +41,8 @@ async fn main() -> Result<()> {
     let mut orchestrator = DagOrchestrator::from_config(config.clone())
         .context("failed to build DAG orchestrator from config")?;
 
-    let mut factory_ctx = FactoryContext::new();
+    let mut factory_ctx = FactoryContext::new(config.registry.clone())
+        .context("failed to initialize factory context")?;
 
     for node_def in &config.nodes {
         let any_node = create_node(node_def, &mut factory_ctx)
