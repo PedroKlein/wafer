@@ -1,15 +1,13 @@
-# Example DAG configuration using a remote package from an OCI registry
+# Example DAG configuration using a remote plugin from an OCI registry
 # 
 # Usage:
 #   wafer --config examples/dag-remote.toml
 #   wafer --config examples/dag-remote.toml --no-cache  # bypass cache
 #
-# Note: This example requires the remote packages to be published to the registry.
+# Note: This example requires the plugin to be published to the registry.
 # For local development, use dag-passthrough.toml or dag-uppercase.toml instead.
 
 [registry]
-# Default registry for packages without explicit registry
-default_registry = "ghcr.io/wafer-plugins"
 # Cache TTL in hours (default: 24)
 cache_ttl_hours = 24
 
@@ -19,13 +17,12 @@ id = "source"
 node_type = "source"
 source_type = "stdin"
 
-# Transform using a remote package
+# Transform using a plugin from OCI registry
 [[nodes]]
 id = "uppercase"
 node_type = "transform"
 [nodes.config]
-package = "wafer:uppercase"
-version = "^1.0"
+oci = "ghcr.io/pedroklein/wafer-uppercase:0.0.1"
 
 # Sink node writes to stdout
 [[nodes]]

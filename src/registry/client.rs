@@ -2,15 +2,15 @@
 
 use crate::error::RegistryError;
 use crate::registry::cache::{compute_hash, PackageCache};
-use crate::registry::types::{PackageRef, PluginSource, RegistryConfig, ResolvedPlugin};
-use futures_util::TryStreamExt;
-use semver::{Version, VersionReq};
+use crate::registry::types::{OciReference, PluginSource, RegistryConfig, ResolvedPlugin};
+use docker_credential::{CredentialRetrievalError, DockerCredential};
+use oci_client::secrets::RegistryAuth;
+use oci_client::{Client, Reference};
 use std::path::PathBuf;
-use wasm_pkg_client::{Client, Config as WkgConfig, PackageRef as WkgPackageRef};
 
 /// Client for fetching WASM components from OCI registries.
 pub struct WaferRegistry {
-    /// wasm-pkg-client instance.
+    /// OCI client instance.
     client: Client,
     /// Package cache.
     cache: PackageCache,
@@ -21,8 +21,8 @@ pub struct WaferRegistry {
 impl WaferRegistry {
     /// Create a new registry client.
     pub fn new(config: RegistryConfig) -> Result<Self, RegistryError> {
-        let wkg_config = WkgConfig::default();
-        let client = Client::new(wkg_config);
+        // Create OCI client with default config
+        let client = Client::default();
 
         let cache = PackageCache::new(config.cache_directory(), config.cache_ttl());
 
@@ -33,16 +33,45 @@ impl WaferRegistry {
         })
     }
 
+    /// Get authentication for a registry using docker_credential.
+    ///
+    /// This supports:
+    /// - Credentials stored directly in ~/.docker/config.json
+    /// - Credential helpers (e.g., docker-credential-osxkeychain)
+    /// - Credential stores (credStore)
+    fn get_auth_for_registry(registry: &str) -> RegistryAuth {
+        match docker_credential::get_credential(registry) {
+            Ok(DockerCredential::UsernamePassword(username, password)) => {
+                tracing::debug!("Using Docker credentials for {registry}");
+                RegistryAuth::Basic(username, password)
+            }
+            Ok(DockerCredential::IdentityToken(token)) => {
+                tracing::debug!("Using Docker identity token for {registry}");
+                RegistryAuth::Bearer(token)
+            }
+            Err(CredentialRetrievalError::ConfigNotFound) => {
+                tracing::debug!("No Docker config found, using anonymous auth");
+                RegistryAuth::Anonymous
+            }
+            Err(CredentialRetrievalError::NoCredentialConfigured) => {
+                tracing::debug!("No credentials configured for {registry}, using anonymous auth");
+                RegistryAuth::Anonymous
+            }
+            Err(e) => {
+                tracing::debug!("Failed to get credentials for {registry}: {e}");
+                RegistryAuth::Anonymous
+            }
+        }
+    }
+
     /// Resolve a plugin source to a concrete WASM file.
     ///
     /// For local sources, validates the path exists.
-    /// For remote sources, fetches from registry (using cache if available).
+    /// For OCI sources, fetches from registry (using cache if available).
     pub async fn resolve(&self, source: &PluginSource) -> Result<ResolvedPlugin, RegistryError> {
         match source {
             PluginSource::Local(path) => self.resolve_local(path),
-            PluginSource::Remote { package, version } => {
-                self.resolve_remote(package, version).await
-            }
+            PluginSource::Oci(oci_ref) => self.resolve_oci(oci_ref).await,
         }
     }
 
@@ -65,30 +94,23 @@ impl WaferRegistry {
 
         Ok(ResolvedPlugin::new(
             PluginSource::Local(path.clone()),
-            None,
             content_hash,
             path.clone(),
         ))
     }
 
-    /// Resolve a remote plugin source.
-    async fn resolve_remote(
-        &self,
-        package: &PackageRef,
-        version_req: &VersionReq,
-    ) -> Result<ResolvedPlugin, RegistryError> {
-        // First, resolve the version requirement to a concrete version
-        let resolved_version = self.resolve_version(package, version_req).await?;
-        let version_str = resolved_version.to_string();
+    /// Resolve an OCI plugin source.
+    async fn resolve_oci(&self, oci_ref: &OciReference) -> Result<ResolvedPlugin, RegistryError> {
+        // Use tag as cache key
+        let cache_key = oci_ref.tag.clone();
 
         // Check cache first (unless no_cache is set)
         if !self.config.no_cache {
-            if let Some(entry) = self.cache.get(&package.namespace, &package.name, &version_str) {
+            if let Some(entry) = self.cache.get(&oci_ref.registry, &oci_ref.repository, &cache_key)
+            {
                 tracing::info!(
-                    "Using cached {}:{} v{} (age: {:?})",
-                    package.namespace,
-                    package.name,
-                    version_str,
+                    "Using cached {} (age: {:?})",
+                    oci_ref.as_str(),
                     entry.age
                 );
 
@@ -97,8 +119,7 @@ impl WaferRegistry {
                 })?;
 
                 return Ok(ResolvedPlugin::new(
-                    PluginSource::remote_req(package.clone(), version_req.clone()),
-                    Some(resolved_version),
+                    PluginSource::Oci(oci_ref.clone()),
                     compute_hash(&content),
                     entry.path,
                 ));
@@ -106,113 +127,64 @@ impl WaferRegistry {
         }
 
         // Fetch from registry
-        let content = self.fetch_package(package, &resolved_version).await?;
+        let content = self.fetch_oci(oci_ref).await?;
         let content_hash = compute_hash(&content);
 
         // Store in cache
-        let cache_path = self
-            .cache
-            .put(&package.namespace, &package.name, &version_str, &content)?;
+        let cache_path =
+            self.cache
+                .put(&oci_ref.registry, &oci_ref.repository, &cache_key, &content)?;
 
         Ok(ResolvedPlugin::new(
-            PluginSource::remote_req(package.clone(), version_req.clone()),
-            Some(resolved_version),
+            PluginSource::Oci(oci_ref.clone()),
             content_hash,
             cache_path,
         ))
     }
 
-    /// Resolve a version requirement to a concrete version.
-    async fn resolve_version(
-        &self,
-        package: &PackageRef,
-        version_req: &VersionReq,
-    ) -> Result<Version, RegistryError> {
-        let wkg_ref = Self::to_wkg_ref(package)?;
+    /// Fetch an OCI image and extract the WASM content.
+    async fn fetch_oci(&self, oci_ref: &OciReference) -> Result<Vec<u8>, RegistryError> {
+        tracing::info!("Fetching {}", oci_ref.as_str());
 
-        // List all available versions
-        let version_infos = self
+        // Parse the OCI reference
+        let reference: Reference = oci_ref.as_str().parse().map_err(|e| {
+            RegistryError::InvalidPackageRef(format!("invalid OCI reference '{}': {e}", oci_ref))
+        })?;
+
+        // Get authentication for this registry
+        let auth = Self::get_auth_for_registry(&oci_ref.registry);
+
+        // Pull the image data
+        let image_data = self
             .client
-            .list_all_versions(&wkg_ref)
+            .pull(
+                &reference,
+                &auth,
+                vec![
+                    // WASM media types
+                    "application/wasm",
+                    "application/vnd.wasm.content.layer.v1+wasm",
+                    // Generic fallback
+                    "application/octet-stream",
+                ],
+            )
             .await
             .map_err(|e| RegistryError::FetchFailed {
-                package: package.to_string(),
-                message: format!("failed to list versions: {e}"),
+                package: oci_ref.to_string(),
+                message: format!("failed to pull image: {e}"),
             })?;
 
-        // Find the best matching version (excluding yanked versions)
-        let matching: Vec<_> = version_infos
-            .iter()
-            .filter(|info| !info.yanked && version_req.matches(&info.version))
-            .collect();
+        // Find the WASM layer
+        // For WASM components, there's typically one layer with the WASM content
+        if image_data.layers.is_empty() {
+            return Err(RegistryError::FetchFailed {
+                package: oci_ref.to_string(),
+                message: "image has no layers".to_string(),
+            });
+        }
 
-        matching
-            .into_iter()
-            .max_by(|a, b| a.version.cmp(&b.version))
-            .map(|info| info.version.clone())
-            .ok_or_else(|| RegistryError::VersionNotFound {
-                package: package.to_string(),
-                requirement: version_req.to_string(),
-            })
-    }
-
-    /// Fetch a package at a specific version from the registry.
-    async fn fetch_package(
-        &self,
-        package: &PackageRef,
-        version: &Version,
-    ) -> Result<Vec<u8>, RegistryError> {
-        let wkg_ref = Self::to_wkg_ref(package)?;
-
-        tracing::info!(
-            "Fetching {}:{} v{}",
-            package.namespace,
-            package.name,
-            version
-        );
-
-        let release = self
-            .client
-            .get_release(&wkg_ref, version)
-            .await
-            .map_err(|e| RegistryError::FetchFailed {
-                package: package.to_string(),
-                message: format!("failed to get release: {e}"),
-            })?;
-
-        let content = self
-            .client
-            .stream_content(&wkg_ref, &release)
-            .await
-            .map_err(|e| RegistryError::FetchFailed {
-                package: package.to_string(),
-                message: format!("failed to stream content: {e}"),
-            })?;
-
-        // Collect the stream into bytes
-        let bytes: Vec<u8> = content
-            .try_fold(Vec::new(), |mut acc, chunk| async move {
-                acc.extend_from_slice(&chunk);
-                Ok(acc)
-            })
-            .await
-            .map_err(|e| RegistryError::FetchFailed {
-                package: package.to_string(),
-                message: format!("failed to read content stream: {e}"),
-            })?;
-
-        Ok(bytes)
-    }
-
-    /// Convert our `PackageRef` to wasm-pkg-client's `PackageRef`.
-    fn to_wkg_ref(package: &PackageRef) -> Result<WkgPackageRef, RegistryError> {
-        // wasm-pkg-client PackageRef format is "namespace:name"
-        // Registry is configured separately in the wasm-pkg-client Config
-        let ref_str = format!("{}:{}", package.namespace, package.name);
-
-        ref_str
-            .parse()
-            .map_err(|e| RegistryError::InvalidPackageRef(format!("invalid package reference '{ref_str}': {e}")))
+        // Return the first layer's data (WASM content)
+        Ok(image_data.layers[0].data.to_vec())
     }
 
     /// Clear expired cache entries.
@@ -248,7 +220,6 @@ mod tests {
         let source = PluginSource::local("Cargo.toml");
         let resolved = registry.resolve(&source).await.unwrap();
 
-        assert!(resolved.resolved_version.is_none());
         assert!(!resolved.content_hash.is_empty());
     }
 

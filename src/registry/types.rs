@@ -1,66 +1,72 @@
 //! Core types for registry operations.
 
-use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// Reference to a package in a registry.
+/// OCI image reference (e.g., "ghcr.io/pedroklein/wafer-uppercase:0.0.1").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct PackageRef {
-    /// Package namespace (e.g., "wafer")
-    pub namespace: String,
-    /// Package name (e.g., "uppercase")
-    pub name: String,
-    /// Optional registry override (e.g., "ghcr.io/custom")
-    pub registry: Option<String>,
+pub struct OciReference {
+    /// Full OCI reference string.
+    reference: String,
+    /// Parsed registry (e.g., "ghcr.io").
+    pub registry: String,
+    /// Parsed repository (e.g., "pedroklein/wafer-uppercase").
+    pub repository: String,
+    /// Parsed tag (e.g., "0.0.1").
+    pub tag: String,
 }
 
-impl PackageRef {
-    /// Create a new package reference.
-    pub fn new(namespace: impl Into<String>, name: impl Into<String>) -> Self {
-        Self {
-            namespace: namespace.into(),
-            name: name.into(),
-            registry: None,
-        }
-    }
-
-    /// Set the registry for this package reference.
-    #[must_use]
-    pub fn with_registry(mut self, registry: impl Into<String>) -> Self {
-        self.registry = Some(registry.into());
-        self
-    }
-
-    /// Parse a package reference from a string like "namespace:name".
+impl OciReference {
+    /// Parse an OCI reference from a string like "ghcr.io/user/repo:tag".
     pub fn parse(s: &str) -> Option<Self> {
-        let (namespace, name) = s.split_once(':')?;
-        if namespace.is_empty() || name.is_empty() {
+        // Split off the tag
+        let (repo_part, tag) = s.rsplit_once(':')?;
+        if tag.is_empty() {
             return None;
         }
-        Some(Self::new(namespace, name))
+
+        // Split registry from repository
+        // Format: registry/repo or registry/namespace/repo
+        let parts: Vec<&str> = repo_part.splitn(2, '/').collect();
+        if parts.len() < 2 {
+            return None;
+        }
+
+        let registry = parts[0].to_string();
+        let repository = parts[1].to_string();
+
+        if registry.is_empty() || repository.is_empty() {
+            return None;
+        }
+
+        Some(Self {
+            reference: s.to_string(),
+            registry,
+            repository,
+            tag: tag.to_string(),
+        })
+    }
+
+    /// Get the full reference string.
+    pub fn as_str(&self) -> &str {
+        &self.reference
     }
 }
 
-impl std::fmt::Display for PackageRef {
+impl std::fmt::Display for OciReference {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}:{}", self.namespace, self.name)
+        write!(f, "{}", self.reference)
     }
 }
 
-/// Source specification for a plugin - either local path or remote package.
+/// Source specification for a plugin - either local path or OCI registry.
 #[derive(Debug, Clone)]
 pub enum PluginSource {
     /// Local filesystem path to a .wasm file.
     Local(PathBuf),
-    /// Remote package from an OCI registry.
-    Remote {
-        /// Package reference (namespace:name).
-        package: PackageRef,
-        /// Version requirement (e.g., "^1.0", "=2.1.0").
-        version: VersionReq,
-    },
+    /// Remote OCI image reference.
+    Oci(OciReference),
 }
 
 impl PluginSource {
@@ -69,22 +75,9 @@ impl PluginSource {
         Self::Local(path.into())
     }
 
-    /// Create a remote plugin source with exact version.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the version cannot be converted to a valid version requirement.
-    /// This should never happen for valid `Version` values.
-    pub fn remote(package: PackageRef, version: &Version) -> Self {
-        Self::Remote {
-            package,
-            version: VersionReq::parse(&format!("={version}")).expect("exact version is valid"),
-        }
-    }
-
-    /// Create a remote plugin source with version requirement.
-    pub fn remote_req(package: PackageRef, version: VersionReq) -> Self {
-        Self::Remote { package, version }
+    /// Create an OCI plugin source.
+    pub fn oci(reference: OciReference) -> Self {
+        Self::Oci(reference)
     }
 
     /// Check if this is a local source.
@@ -92,9 +85,9 @@ impl PluginSource {
         matches!(self, Self::Local(_))
     }
 
-    /// Check if this is a remote source.
-    pub fn is_remote(&self) -> bool {
-        matches!(self, Self::Remote { .. })
+    /// Check if this is a remote OCI source.
+    pub fn is_oci(&self) -> bool {
+        matches!(self, Self::Oci(_))
     }
 }
 
@@ -103,8 +96,6 @@ impl PluginSource {
 pub struct ResolvedPlugin {
     /// Original source specification.
     pub source: PluginSource,
-    /// Resolved version (for remote plugins).
-    pub resolved_version: Option<Version>,
     /// SHA-256 hash of the WASM content.
     pub content_hash: String,
     /// Path to the WASM file (local path or cache path).
@@ -113,15 +104,9 @@ pub struct ResolvedPlugin {
 
 impl ResolvedPlugin {
     /// Create a new resolved plugin.
-    pub fn new(
-        source: PluginSource,
-        resolved_version: Option<Version>,
-        content_hash: String,
-        wasm_path: PathBuf,
-    ) -> Self {
+    pub fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
         Self {
             source,
-            resolved_version,
             content_hash,
             wasm_path,
         }
@@ -132,11 +117,9 @@ impl ResolvedPlugin {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RegistryConfig {
-    /// Default registry URL (e.g., "ghcr.io/wafer-plugins").
-    pub default_registry: Option<String>,
     /// Cache time-to-live in hours.
     pub cache_ttl_hours: u64,
-    /// Custom cache directory (defaults to ~/.cache/wafer/packages).
+    /// Custom cache directory (defaults to ~/.cache/wafer/plugins).
     pub cache_dir: Option<PathBuf>,
     /// Whether to skip cache and always fetch from registry.
     #[serde(skip)]
@@ -146,7 +129,6 @@ pub struct RegistryConfig {
 impl Default for RegistryConfig {
     fn default() -> Self {
         Self {
-            default_registry: None,
             cache_ttl_hours: 24,
             cache_dir: None,
             no_cache: false,
@@ -166,7 +148,7 @@ impl RegistryConfig {
             dirs::cache_dir()
                 .unwrap_or_else(|| PathBuf::from(".cache"))
                 .join("wafer")
-                .join("packages")
+                .join("plugins")
         })
     }
 }
@@ -176,42 +158,48 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_package_ref_parse() {
-        let pkg = PackageRef::parse("wafer:uppercase").unwrap();
-        assert_eq!(pkg.namespace, "wafer");
-        assert_eq!(pkg.name, "uppercase");
-        assert_eq!(pkg.registry, None);
+    fn test_oci_reference_parse() {
+        let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:0.0.1").unwrap();
+        assert_eq!(oci.registry, "ghcr.io");
+        assert_eq!(oci.repository, "pedroklein/wafer-uppercase");
+        assert_eq!(oci.tag, "0.0.1");
+        assert_eq!(oci.as_str(), "ghcr.io/pedroklein/wafer-uppercase:0.0.1");
 
-        assert!(PackageRef::parse("invalid").is_none());
-        assert!(PackageRef::parse(":name").is_none());
-        assert!(PackageRef::parse("namespace:").is_none());
+        // Docker Hub style
+        let docker = OciReference::parse("docker.io/library/nginx:latest").unwrap();
+        assert_eq!(docker.registry, "docker.io");
+        assert_eq!(docker.repository, "library/nginx");
+        assert_eq!(docker.tag, "latest");
+
+        // Invalid cases
+        assert!(OciReference::parse("invalid").is_none());
+        assert!(OciReference::parse("ghcr.io/repo").is_none()); // no tag
+        assert!(OciReference::parse("ghcr.io/repo:").is_none()); // empty tag
+        assert!(OciReference::parse("/repo:tag").is_none()); // empty registry
     }
 
     #[test]
-    fn test_package_ref_display() {
-        let pkg = PackageRef::new("wafer", "uppercase");
-        assert_eq!(pkg.to_string(), "wafer:uppercase");
+    fn test_oci_reference_display() {
+        let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:1.0.0").unwrap();
+        assert_eq!(oci.to_string(), "ghcr.io/pedroklein/wafer-uppercase:1.0.0");
     }
 
     #[test]
     fn test_plugin_source_variants() {
         let local = PluginSource::local("/path/to/plugin.wasm");
         assert!(local.is_local());
-        assert!(!local.is_remote());
+        assert!(!local.is_oci());
 
-        let remote = PluginSource::remote(
-            PackageRef::new("wafer", "uppercase"),
-            &Version::new(1, 0, 0),
-        );
+        let oci_ref = OciReference::parse("ghcr.io/user/repo:1.0.0").unwrap();
+        let remote = PluginSource::oci(oci_ref);
         assert!(!remote.is_local());
-        assert!(remote.is_remote());
+        assert!(remote.is_oci());
     }
 
     #[test]
     fn test_registry_config_defaults() {
         let config = RegistryConfig::default();
         assert_eq!(config.cache_ttl_hours, 24);
-        assert!(config.default_registry.is_none());
         assert!(!config.no_cache);
     }
 

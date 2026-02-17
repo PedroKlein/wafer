@@ -6,7 +6,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 
 use wafer_poc::config::NodeConfig;
-use wafer_poc::registry::{PackageCache, PackageRef, PluginSource, RegistryConfig, WaferRegistry};
+use wafer_poc::registry::{OciReference, PackageCache, PluginSource, RegistryConfig, WaferRegistry};
 
 fn project_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,14 +30,14 @@ fn test_cache_ttl_expiry() {
     // Use a very short TTL for testing
     let cache = PackageCache::new(temp.path().to_path_buf(), Duration::from_millis(1));
 
-    cache.put("test", "pkg", "1.0.0", b"content").unwrap();
+    cache.put("ghcr.io", "user/plugin", "1.0.0", b"content").unwrap();
 
     // Wait for TTL to expire
     std::thread::sleep(Duration::from_millis(50));
 
     // Cache should return None (expired)
     assert!(
-        cache.get("test", "pkg", "1.0.0").is_none(),
+        cache.get("ghcr.io", "user/plugin", "1.0.0").is_none(),
         "Expected cache entry to be expired"
     );
 }
@@ -48,11 +48,11 @@ fn test_cache_fresh_entry() {
     // Use a long TTL
     let cache = PackageCache::new(temp.path().to_path_buf(), Duration::from_secs(3600));
 
-    cache.put("test", "pkg", "1.0.0", b"content").unwrap();
+    cache.put("ghcr.io", "user/plugin", "1.0.0", b"content").unwrap();
 
     // Cache should return the entry (fresh)
     let entry = cache
-        .get("test", "pkg", "1.0.0")
+        .get("ghcr.io", "user/plugin", "1.0.0")
         .expect("Expected cache entry to exist");
     assert_eq!(entry.size, 7); // "content" is 7 bytes
 }
@@ -61,13 +61,14 @@ fn test_cache_fresh_entry() {
 fn test_cache_clear_expired() {
     let temp = TempDir::new().unwrap();
     // Use a very short TTL
-    let cache = PackageCache::new(temp.path().to_path_buf(), Duration::from_millis(1));
+    let cache = PackageCache::new(temp.path().to_path_buf(), Duration::from_millis(10));
 
+    // Use flat namespace/name structure that matches the cache's 3-level iteration
     cache.put("ns1", "pkg1", "1.0.0", b"content1").unwrap();
     cache.put("ns2", "pkg2", "2.0.0", b"content2").unwrap();
 
-    // Wait for TTL to expire
-    std::thread::sleep(Duration::from_millis(50));
+    // Wait for TTL to expire (longer wait for CI reliability)
+    std::thread::sleep(Duration::from_millis(100));
 
     // Clear expired entries
     let removed = cache.clear_expired().unwrap();
@@ -82,9 +83,7 @@ fn test_cache_clear_expired() {
 fn test_config_validation_both_specified() {
     let config = NodeConfig {
         plugin_path: Some("path.wasm".into()),
-        package: Some("wafer:test".to_string()),
-        version: Some("1.0.0".to_string()),
-        registry: None,
+        oci: Some("ghcr.io/user/plugin:1.0.0".to_string()),
         fuel_limit: None,
     };
 
@@ -100,9 +99,7 @@ fn test_config_validation_both_specified() {
 fn test_config_validation_neither_specified() {
     let config = NodeConfig {
         plugin_path: None,
-        package: None,
-        version: None,
-        registry: None,
+        oci: None,
         fuel_limit: None,
     };
 
@@ -115,19 +112,17 @@ fn test_config_validation_neither_specified() {
 }
 
 #[test]
-fn test_config_validation_package_without_version() {
+fn test_config_validation_invalid_oci_ref() {
     let config = NodeConfig {
         plugin_path: None,
-        package: Some("wafer:test".to_string()),
-        version: None,
-        registry: None,
+        oci: Some("invalid-no-tag".to_string()),
         fuel_limit: None,
     };
 
     let err = config.validate().unwrap_err();
     assert!(
-        err.to_string().contains("version"),
-        "Expected error about missing version, got: {}",
+        err.to_string().contains("invalid OCI reference"),
+        "Expected error about invalid OCI reference, got: {}",
         err
     );
 }
@@ -136,52 +131,29 @@ fn test_config_validation_package_without_version() {
 fn test_config_validation_local_valid() {
     let config = NodeConfig {
         plugin_path: Some("path.wasm".into()),
-        package: None,
-        version: None,
-        registry: None,
+        oci: None,
         fuel_limit: None,
     };
 
     assert!(config.validate().is_ok(), "Expected local config to be valid");
     assert!(config.is_local());
-    assert!(!config.is_remote());
+    assert!(!config.is_oci());
 }
 
 #[test]
-fn test_config_validation_remote_valid() {
+fn test_config_validation_oci_valid() {
     let config = NodeConfig {
         plugin_path: None,
-        package: Some("wafer:test".to_string()),
-        version: Some("^1.0".to_string()),
-        registry: None,
+        oci: Some("ghcr.io/pedroklein/wafer-uppercase:0.0.1".to_string()),
         fuel_limit: None,
     };
 
     assert!(
         config.validate().is_ok(),
-        "Expected remote config to be valid"
+        "Expected OCI config to be valid"
     );
     assert!(!config.is_local());
-    assert!(config.is_remote());
-}
-
-#[test]
-fn test_config_validation_remote_with_registry_override() {
-    let config = NodeConfig {
-        plugin_path: None,
-        package: Some("wafer:test".to_string()),
-        version: Some("=2.0.0".to_string()),
-        registry: Some("custom.registry.io".to_string()),
-        fuel_limit: None,
-    };
-
-    assert!(config.validate().is_ok());
-    let source = config.plugin_source().unwrap();
-    if let PluginSource::Remote { package, version: _ } = source {
-        assert_eq!(package.registry.as_deref(), Some("custom.registry.io"));
-    } else {
-        panic!("Expected remote source");
-    }
+    assert!(config.is_oci());
 }
 
 // ============================================================================
@@ -193,7 +165,6 @@ fn test_registry_config_defaults() {
     let config = RegistryConfig::default();
 
     assert_eq!(config.cache_ttl_hours, 24);
-    assert!(config.default_registry.is_none());
     assert!(!config.no_cache);
 }
 
@@ -229,7 +200,7 @@ fn test_registry_creation() {
     // Just verify it creates successfully
     assert!(
         registry.cache_dir().to_string_lossy().contains("wafer")
-            || registry.cache_dir().to_string_lossy().contains("packages")
+            || registry.cache_dir().to_string_lossy().contains("plugins")
     );
 }
 
@@ -266,7 +237,6 @@ async fn test_resolve_local_existing() {
     let source = PluginSource::local("Cargo.toml");
     let resolved = registry.resolve(&source).await.unwrap();
 
-    assert!(resolved.resolved_version.is_none());
     assert!(!resolved.content_hash.is_empty());
 }
 
@@ -288,37 +258,38 @@ async fn test_resolve_local_missing() {
 }
 
 // ============================================================================
-// PackageRef Tests
+// OciReference Tests
 // ============================================================================
 
 #[test]
-fn test_package_ref_parse_valid() {
-    let pkg = PackageRef::parse("wafer:uppercase").unwrap();
-    assert_eq!(pkg.namespace, "wafer");
-    assert_eq!(pkg.name, "uppercase");
-    assert!(pkg.registry.is_none());
+fn test_oci_reference_parse_valid() {
+    let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:0.0.1").unwrap();
+    assert_eq!(oci.registry, "ghcr.io");
+    assert_eq!(oci.repository, "pedroklein/wafer-uppercase");
+    assert_eq!(oci.tag, "0.0.1");
+    assert_eq!(oci.as_str(), "ghcr.io/pedroklein/wafer-uppercase:0.0.1");
 }
 
 #[test]
-fn test_package_ref_parse_invalid() {
-    assert!(PackageRef::parse("invalid").is_none());
-    assert!(PackageRef::parse(":name").is_none());
-    assert!(PackageRef::parse("namespace:").is_none());
-    assert!(PackageRef::parse("").is_none());
+fn test_oci_reference_parse_docker_hub() {
+    let docker = OciReference::parse("docker.io/library/nginx:latest").unwrap();
+    assert_eq!(docker.registry, "docker.io");
+    assert_eq!(docker.repository, "library/nginx");
+    assert_eq!(docker.tag, "latest");
 }
 
 #[test]
-fn test_package_ref_with_registry() {
-    let pkg = PackageRef::new("wafer", "uppercase").with_registry("ghcr.io/custom");
-    assert_eq!(pkg.namespace, "wafer");
-    assert_eq!(pkg.name, "uppercase");
-    assert_eq!(pkg.registry.as_deref(), Some("ghcr.io/custom"));
+fn test_oci_reference_parse_invalid() {
+    assert!(OciReference::parse("invalid").is_none());
+    assert!(OciReference::parse("ghcr.io/repo").is_none()); // no tag
+    assert!(OciReference::parse("ghcr.io/repo:").is_none()); // empty tag
+    assert!(OciReference::parse("/repo:tag").is_none()); // empty registry
 }
 
 #[test]
-fn test_package_ref_display() {
-    let pkg = PackageRef::new("wafer", "uppercase");
-    assert_eq!(pkg.to_string(), "wafer:uppercase");
+fn test_oci_reference_display() {
+    let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:1.0.0").unwrap();
+    assert_eq!(oci.to_string(), "ghcr.io/pedroklein/wafer-uppercase:1.0.0");
 }
 
 // ============================================================================
@@ -329,26 +300,15 @@ fn test_package_ref_display() {
 fn test_plugin_source_local() {
     let source = PluginSource::local("/path/to/plugin.wasm");
     assert!(source.is_local());
-    assert!(!source.is_remote());
+    assert!(!source.is_oci());
 }
 
 #[test]
-fn test_plugin_source_remote() {
-    use semver::Version;
-    let pkg = PackageRef::new("wafer", "uppercase");
-    let source = PluginSource::remote(pkg, &Version::new(1, 0, 0));
+fn test_plugin_source_oci() {
+    let oci_ref = OciReference::parse("ghcr.io/user/plugin:1.0.0").unwrap();
+    let source = PluginSource::oci(oci_ref);
     assert!(!source.is_local());
-    assert!(source.is_remote());
-}
-
-#[test]
-fn test_plugin_source_remote_req() {
-    use semver::VersionReq;
-    let pkg = PackageRef::new("wafer", "uppercase");
-    let version = VersionReq::parse("^1.0").unwrap();
-    let source = PluginSource::remote_req(pkg, version);
-    assert!(!source.is_local());
-    assert!(source.is_remote());
+    assert!(source.is_oci());
 }
 
 // ============================================================================
@@ -398,10 +358,6 @@ fn test_dag_remote_config_parses() {
         std::fs::read_to_string(project_root().join("examples/dag-remote.toml")).unwrap();
     let config: wafer_poc::config::DagConfig = toml::from_str(&config_content).unwrap();
 
-    assert_eq!(
-        config.registry.default_registry.as_deref(),
-        Some("ghcr.io/wafer-plugins")
-    );
     assert_eq!(config.registry.cache_ttl_hours, 24);
     assert_eq!(config.nodes.len(), 3);
     assert_eq!(config.edges.len(), 2);
