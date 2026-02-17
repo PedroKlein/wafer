@@ -34,11 +34,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
-wasm-pkg-client = "0.9"
+wasm-pkg-client = "0.15"
 semver = "1"
 sha2 = "0.10"
 hex = "0.4"
-dirs = "5"
+dirs = "6"
 futures-util = "0.3"
 
 [dependencies]
