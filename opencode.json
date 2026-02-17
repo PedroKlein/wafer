@@ -17,6 +17,11 @@
         "ZOTERO_LOCAL": "true"
       },
       "enabled": true
+    },
+    "gh_grep": {
+      "type": "remote",
+      "url": "https://mcp.grep.app",
+      "enabled": true
     }
   },
 
@@ -31,5 +36,22 @@
       "cargo publish*": "ask"
     },
     "external_directory": "ask"
+  },
+
+  "agent": {
+    "teach": {
+      "tools": {
+        "context7_*": true,
+        "zotero_*": true,
+        "gh_grep_*": true
+      }
+    },
+    "ask": {
+      "tools": {
+        "context7_*": true,
+        "zotero_*": true,
+        "gh_grep_*": true
+      }
+    }
   }
 }
