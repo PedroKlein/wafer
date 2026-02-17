@@ -56,7 +56,12 @@ src/
 │   └── mod.rs
 ├── config/
 │   ├── loader.rs     # DAG config loading with validation
-│   ├── schema.rs     # DagConfig, NodeDefinition, EdgeDefinition
+│   ├── schema.rs     # DagConfig, NodeDefinition, EdgeDefinition, NodeConfig
+│   └── mod.rs
+├── registry/
+│   ├── cache.rs      # PackageCache: file-based cache with TTL
+│   ├── client.rs     # WaferRegistry: OCI client via wasm-pkg-client
+│   ├── types.rs      # PluginSource, PackageRef, ResolvedPlugin, RegistryConfig
 │   └── mod.rs
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
@@ -111,6 +116,16 @@ wit/
 - [x] Epoch interruption for cooperative scheduling
 - [x] Cached Linker in `WaferEngine` via `OnceLock`
 - [x] Component loading from `.wasm` files
+- [x] Component loading from bytes (`load_component_from_bytes`)
+
+### Registry Support (OCI)
+- [x] `WaferRegistry` client for fetching packages from OCI registries
+- [x] File-based cache with TTL-based invalidation (`~/.cache/wafer/packages/`)
+- [x] Semver version resolution (supports `^1.0`, `=2.0.0`, `>=1.0,<2.0`)
+- [x] Package references: `namespace:name` format (e.g., `wafer:uppercase`)
+- [x] `--no-cache` CLI flag to bypass cache
+- [x] Fallback to cached version on network error (with warning)
+- [x] `RegistryConfig` for default registry, TTL, and cache directory
 
 ### WIT Contract (`transform-node` world)
 - [x] `types` interface: `Envelope`, `Payload`, `ProcessResult`, `ProcessError`, `Metadata`
@@ -195,7 +210,8 @@ wit/
 - [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
 
 ### Dynamic Features
-- [ ] Hot-swap (drain-and-flip)
+- [x] ~~OCI registry package fetching~~ - Implemented via `WaferRegistry`
+- [ ] Hot-swap (drain-and-flip) - **Foundation ready** (ResolvedPlugin tracking)
 - [ ] Dynamic topology (add/remove nodes)
 - [ ] Config file watching
 - [ ] REST API for topology changes
@@ -314,6 +330,40 @@ to = "sink"
 ```
 
 See `examples/` directory for complete examples.
+
+### Remote Package Configuration
+
+Transforms can be loaded from OCI registries instead of local files:
+
+```toml
+# Registry configuration (optional - has defaults)
+[registry]
+default_registry = "ghcr.io/wafer-plugins"
+cache_ttl_hours = 24
+# cache_dir = "/custom/cache/path"  # optional
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+[nodes.config]
+package = "wafer:uppercase"   # namespace:name format
+version = "^1.0"              # semver requirement
+# registry = "custom.io"      # optional per-package override
+```
+
+**CLI flags:**
+```bash
+# Normal operation (uses cache)
+cargo run -- --config examples/dag-remote.toml
+
+# Bypass cache (always fetch from registry)
+cargo run -- --config examples/dag-remote.toml --no-cache
+```
+
+**Cache behavior:**
+- Packages cached at `~/.cache/wafer/packages/{namespace}/{name}/{version}.wasm`
+- TTL-based invalidation (default: 24 hours)
+- On network error: falls back to cached version with warning log
 
 ---
 
