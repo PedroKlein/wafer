@@ -208,7 +208,8 @@ use wafer_poc::engine::{Capabilities, TransformInstance, WaferEngine};
 use wafer_poc::node::{AnyNode, FileSink, FileSource, Lifecycle, NodeConfig, WasmTransform};
 
 fn plugin_path() -> PathBuf {
-    project_root().join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
+    project_root()
+        .join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
 }
 
 fn uppercase_plugin_path() -> PathBuf {
@@ -352,7 +353,8 @@ async fn test_dag_source_transform_sink() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_wasm_transform("transform").await;
@@ -434,7 +436,8 @@ async fn test_dag_two_transforms() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform1 = create_wasm_transform("transform-1").await;
@@ -508,7 +511,8 @@ async fn test_dag_empty_input() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_wasm_transform("transform").await;
@@ -525,7 +529,10 @@ async fn test_dag_empty_input() {
         .expect("Failed to register sink");
 
     orchestrator.wire_queues().expect("Failed to wire queues");
-    orchestrator.run().await.expect("Failed to run DAG with empty input");
+    orchestrator
+        .run()
+        .await
+        .expect("Failed to run DAG with empty input");
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
     assert_eq!(output, "");
@@ -580,7 +587,8 @@ async fn test_dag_large_file() {
         default_queue_capacity: 2048,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_wasm_transform("transform").await;
@@ -597,7 +605,10 @@ async fn test_dag_large_file() {
         .expect("Failed to register sink");
 
     orchestrator.wire_queues().expect("Failed to wire queues");
-    orchestrator.run().await.expect("Failed to run DAG with large file");
+    orchestrator
+        .run()
+        .await
+        .expect("Failed to run DAG with large file");
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
     let output_lines: Vec<&str> = output.lines().collect();
@@ -653,7 +664,8 @@ async fn test_dag_uppercase_transform() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_uppercase_transform("transform").await;
@@ -723,7 +735,8 @@ async fn test_dag_json_parse_transform() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_json_parse_transform("transform").await;
@@ -743,9 +756,21 @@ async fn test_dag_json_parse_transform() {
     orchestrator.run().await.expect("Failed to run DAG");
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
-    assert!(output.contains("\"key\""), "Expected key in output: {}", output);
-    assert!(output.contains("\"value\""), "Expected value in output: {}", output);
-    assert!(output.contains(": ") || output.contains(":\n"), "Expected pretty-printed JSON: {}", output);
+    assert!(
+        output.contains("\"key\""),
+        "Expected key in output: {}",
+        output
+    );
+    assert!(
+        output.contains("\"value\""),
+        "Expected value in output: {}",
+        output
+    );
+    assert!(
+        output.contains(": ") || output.contains(":\n"),
+        "Expected pretty-printed JSON: {}",
+        output
+    );
 }
 
 #[tokio::test]
@@ -754,8 +779,11 @@ async fn test_dag_filter_transform() {
     let input_path = dir.path().join("input.txt");
     let output_path = dir.path().join("output.txt");
 
-    std::fs::write(&input_path, "info: startup\ndebug: trace\ninfo: ready\ndebug: data\n")
-        .expect("Failed to write input");
+    std::fs::write(
+        &input_path,
+        "info: startup\ndebug: trace\ninfo: ready\ndebug: data\n",
+    )
+    .expect("Failed to write input");
 
     let config = DagConfig {
         nodes: vec![
@@ -796,7 +824,8 @@ async fn test_dag_filter_transform() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_filter_transform("transform", "debug").await;
@@ -816,9 +845,21 @@ async fn test_dag_filter_transform() {
     orchestrator.run().await.expect("Failed to run DAG");
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
-    assert!(!output.contains("debug"), "Expected debug lines to be filtered out: {}", output);
-    assert!(output.contains("info: startup"), "Expected info lines to remain: {}", output);
-    assert!(output.contains("info: ready"), "Expected info lines to remain: {}", output);
+    assert!(
+        !output.contains("debug"),
+        "Expected debug lines to be filtered out: {}",
+        output
+    );
+    assert!(
+        output.contains("info: startup"),
+        "Expected info lines to remain: {}",
+        output
+    );
+    assert!(
+        output.contains("info: ready"),
+        "Expected info lines to remain: {}",
+        output
+    );
 }
 
 #[tokio::test]
@@ -869,7 +910,8 @@ async fn test_dag_filter_no_match() {
         default_queue_capacity: 1024,
     };
 
-    let mut orchestrator = DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
 
     let source = FileSource::new("source", &input_path);
     let transform = create_filter_transform("transform", "ERROR").await;
@@ -889,7 +931,10 @@ async fn test_dag_filter_no_match() {
     orchestrator.run().await.expect("Failed to run DAG");
 
     let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
-    assert_eq!(output, "info: startup\nwarn: caution\ninfo: ready\n", "No lines should be filtered when pattern doesn't match");
+    assert_eq!(
+        output, "info: startup\nwarn: caution\ninfo: ready\n",
+        "No lines should be filtered when pattern doesn't match"
+    );
 }
 
 // ============================================================================
@@ -905,11 +950,18 @@ async fn test_dag_tensor_prep_transform() {
     transform.init().await.expect("Failed to init transform");
 
     let input_255 = RuntimeEnvelope::new("test", vec![255u8; 784]);
-    let result = transform.process(input_255).await.expect("Failed to process");
+    let result = transform
+        .process(input_255)
+        .await
+        .expect("Failed to process");
 
     match result {
         wafer_poc::node::ProcessResult::Emit(envelope) => {
-            assert_eq!(envelope.payload.len(), 3136, "Expected 3136 bytes (784 F32 values × 4 bytes)");
+            assert_eq!(
+                envelope.payload.len(),
+                3136,
+                "Expected 3136 bytes (784 F32 values × 4 bytes)"
+            );
             let first_f32 = f32::from_le_bytes([
                 envelope.payload[0],
                 envelope.payload[1],
@@ -926,7 +978,10 @@ async fn test_dag_tensor_prep_transform() {
     }
 
     let input_0 = RuntimeEnvelope::new("test", vec![0u8; 784]);
-    let result_0 = transform.process(input_0).await.expect("Failed to process zeros");
+    let result_0 = transform
+        .process(input_0)
+        .await
+        .expect("Failed to process zeros");
 
     match result_0 {
         wafer_poc::node::ProcessResult::Emit(envelope) => {
@@ -954,12 +1009,17 @@ async fn test_dag_result_format_transform() {
     let mut transform = create_result_format_transform("result-format").await;
     transform.init().await.expect("Failed to init transform");
 
-    let logits_with_digit_7_highest: [f32; 10] = [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.95, 0.01, 0.01];
+    let logits_with_digit_7_highest: [f32; 10] =
+        [0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.95, 0.01, 0.01];
     let mut input_bytes = Vec::with_capacity(40);
     for &val in &logits_with_digit_7_highest {
         input_bytes.extend_from_slice(&val.to_le_bytes());
     }
-    assert_eq!(input_bytes.len(), 40, "Input should be 40 bytes (10 F32 values)");
+    assert_eq!(
+        input_bytes.len(),
+        40,
+        "Input should be 40 bytes (10 F32 values)"
+    );
 
     let input = RuntimeEnvelope::new("test", input_bytes);
     let result = transform.process(input).await.expect("Failed to process");
@@ -967,13 +1027,25 @@ async fn test_dag_result_format_transform() {
     match result {
         wafer_poc::node::ProcessResult::Emit(envelope) => {
             let output = String::from_utf8_lossy(&envelope.payload);
-            
-            assert!(output.contains("\"digit\""), "Expected 'digit' field in JSON: {}", output);
-            assert!(output.contains("\"confidence\""), "Expected 'confidence' field in JSON: {}", output);
-            assert!(output.contains("\"all_scores\""), "Expected 'all_scores' field in JSON: {}", output);
-            
-            let json: serde_json::Value = serde_json::from_str(&output)
-                .expect("Output should be valid JSON");
+
+            assert!(
+                output.contains("\"digit\""),
+                "Expected 'digit' field in JSON: {}",
+                output
+            );
+            assert!(
+                output.contains("\"confidence\""),
+                "Expected 'confidence' field in JSON: {}",
+                output
+            );
+            assert!(
+                output.contains("\"all_scores\""),
+                "Expected 'all_scores' field in JSON: {}",
+                output
+            );
+
+            let json: serde_json::Value =
+                serde_json::from_str(&output).expect("Output should be valid JSON");
             assert_eq!(json["digit"], 7, "Expected digit to be 7");
         }
         other => panic!("Expected Emit result, got {:?}", other),
@@ -992,8 +1064,8 @@ fn test_dag_mnist_inference_pipeline() {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let wasi_nn_or_plugin_not_ready = stderr.contains("wasi") 
-            || stderr.contains("nn") 
+        let wasi_nn_or_plugin_not_ready = stderr.contains("wasi")
+            || stderr.contains("nn")
             || stderr.contains("model")
             || stderr.contains("PluginInit")
             || stderr.contains("no exported instance");
@@ -1010,7 +1082,7 @@ fn test_dag_mnist_inference_pipeline() {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    
+
     assert!(
         stdout.contains("\"digit\""),
         "Expected 'digit' field in output: {}",

@@ -36,7 +36,9 @@ use tokio::task::JoinHandle;
 use crate::config::{NodeDefinition, NodeType};
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
-use crate::node::{AnyNode, FileSink, FileSource, NodeConfig, StdinSource, StdoutSink, WasmTransform};
+use crate::node::{
+    AnyNode, FileSink, FileSource, NodeConfig, StdinSource, StdoutSink, WasmTransform,
+};
 use crate::Result;
 
 /// Context for node creation that tracks resources needing cleanup.
@@ -126,10 +128,7 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
 }
 
 /// Create a transform node from configuration.
-async fn create_transform(
-    node_def: &NodeDefinition,
-    ctx: &mut FactoryContext,
-) -> Result<AnyNode> {
+async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     let plugin_path = node_def
         .config
         .get("plugin_path")

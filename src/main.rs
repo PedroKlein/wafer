@@ -30,24 +30,24 @@ async fn main() -> Result<()> {
 
     let toml_str = std::fs::read_to_string(&args.config)
         .with_context(|| format!("failed to read config file: {}", args.config.display()))?;
-    
+
     let config: DagConfig = toml::from_str(&toml_str)
         .with_context(|| format!("failed to parse TOML config: {}", args.config.display()))?;
-    
+
     config
         .validate()
         .with_context(|| format!("config validation failed: {}", args.config.display()))?;
 
     let mut orchestrator = DagOrchestrator::from_config(config.clone())
         .context("failed to build DAG orchestrator from config")?;
-    
+
     let mut factory_ctx = FactoryContext::new();
 
     for node_def in &config.nodes {
         let any_node = create_node(node_def, &mut factory_ctx)
             .await
             .with_context(|| format!("failed to create node '{}'", node_def.id))?;
-        
+
         orchestrator
             .register_node(&node_def.id, any_node)
             .with_context(|| format!("failed to register node '{}'", node_def.id))?;
