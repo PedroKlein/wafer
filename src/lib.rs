@@ -30,5 +30,6 @@ pub mod factory;
 pub mod metrics;
 pub mod node;
 pub mod queue;
+pub mod registry;
 
-pub use error::{Result, WaferError};
+pub use error::{RegistryError, Result, WaferError};
