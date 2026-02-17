@@ -15,6 +15,10 @@ struct Args {
     /// Path to pipeline configuration file
     #[arg(short, long)]
     config: std::path::PathBuf,
+
+    /// Skip registry cache and always fetch from remote
+    #[arg(long)]
+    no_cache: bool,
 }
 
 #[tokio::main]
@@ -41,7 +45,13 @@ async fn main() -> Result<()> {
     let mut orchestrator = DagOrchestrator::from_config(config.clone())
         .context("failed to build DAG orchestrator from config")?;
 
-    let mut factory_ctx = FactoryContext::new(config.registry.clone())
+    // Apply CLI overrides to registry config
+    let mut registry_config = config.registry.clone();
+    if args.no_cache {
+        registry_config.no_cache = true;
+    }
+
+    let mut factory_ctx = FactoryContext::new(registry_config)
         .context("failed to initialize factory context")?;
 
     for node_def in &config.nodes {
