@@ -203,6 +203,7 @@ fn test_missing_config_flag() {
 
 use tempfile::tempdir;
 use wafer_poc::config::{DagConfig, EdgeDefinition, NodeDefinition, NodeType};
+use wafer_poc::registry::RegistryConfig;
 use wafer_poc::dag::DagOrchestrator;
 use wafer_poc::engine::{Capabilities, TransformInstance, WaferEngine};
 use wafer_poc::node::{AnyNode, FileSink, FileSource, Lifecycle, NodeConfig, WasmTransform};
@@ -351,6 +352,7 @@ async fn test_dag_source_transform_sink() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -434,6 +436,7 @@ async fn test_dag_two_transforms() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -509,6 +512,7 @@ async fn test_dag_empty_input() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -584,7 +588,8 @@ async fn test_dag_large_file() {
                 queue_capacity: None,
             },
         ],
-        default_queue_capacity: 2048,
+        default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -662,6 +667,7 @@ async fn test_dag_uppercase_transform() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -733,6 +739,7 @@ async fn test_dag_json_parse_transform() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -822,6 +829,7 @@ async fn test_dag_filter_transform() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =
@@ -908,6 +916,7 @@ async fn test_dag_filter_no_match() {
             },
         ],
         default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
     };
 
     let mut orchestrator =

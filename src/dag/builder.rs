@@ -223,6 +223,7 @@ mod tests {
     use super::*;
     use crate::config::{EdgeDefinition, NodeDefinition, NodeType};
     use crate::node::FileSource;
+    use crate::registry::RegistryConfig;
 
     fn make_node(id: &str, node_type: NodeType) -> NodeDefinition {
         NodeDefinition {
@@ -242,20 +243,28 @@ mod tests {
         }
     }
 
+    fn make_dag_config(nodes: Vec<NodeDefinition>, edges: Vec<EdgeDefinition>) -> DagConfig {
+        DagConfig {
+            nodes,
+            edges,
+            default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
+        }
+    }
+
     #[test]
     fn test_dag_valid_linear() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("source", NodeType::Source),
                 make_node("transform", NodeType::Transform),
                 make_node("sink", NodeType::Sink),
             ],
-            edges: vec![
+            vec![
                 make_edge("source", "transform"),
                 make_edge("transform", "sink"),
             ],
-            default_queue_capacity: 1024,
-        };
+        );
 
         let orchestrator = DagOrchestrator::from_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["source", "transform", "sink"]);
@@ -265,19 +274,18 @@ mod tests {
 
     #[test]
     fn test_dag_cycle_rejected() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("a", NodeType::Transform),
                 make_node("b", NodeType::Transform),
                 make_node("c", NodeType::Transform),
             ],
-            edges: vec![
+            vec![
                 make_edge("a", "b"),
                 make_edge("b", "c"),
                 make_edge("c", "a"),
             ],
-            default_queue_capacity: 1024,
-        };
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -287,17 +295,16 @@ mod tests {
 
     #[test]
     fn test_dag_no_source() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("transform", NodeType::Transform),
                 make_node("sink", NodeType::Sink),
             ],
-            edges: vec![
+            vec![
                 make_edge("sink", "transform"),
                 make_edge("transform", "sink"),
             ],
-            default_queue_capacity: 1024,
-        };
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -305,15 +312,14 @@ mod tests {
 
     #[test]
     fn test_dag_multiple_sources() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("source1", NodeType::Source),
                 make_node("source2", NodeType::Source),
                 make_node("sink", NodeType::Sink),
             ],
-            edges: vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
-            default_queue_capacity: 1024,
-        };
+            vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -323,15 +329,14 @@ mod tests {
 
     #[test]
     fn test_dag_orphan_node() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("source", NodeType::Source),
                 make_node("sink", NodeType::Sink),
                 make_node("orphan", NodeType::Transform),
             ],
-            edges: vec![make_edge("source", "sink")],
-            default_queue_capacity: 1024,
-        };
+            vec![make_edge("source", "sink")],
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -341,11 +346,10 @@ mod tests {
 
     #[test]
     fn test_dag_unknown_node_in_edge() {
-        let config = DagConfig {
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![make_edge("source", "nonexistent")],
-            default_queue_capacity: 1024,
-        };
+        let config = make_dag_config(
+            vec![make_node("source", NodeType::Source)],
+            vec![make_edge("source", "nonexistent")],
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -355,11 +359,7 @@ mod tests {
 
     #[test]
     fn test_dag_single_node() {
-        let config = DagConfig {
-            nodes: vec![make_node("single", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
+        let config = make_dag_config(vec![make_node("single", NodeType::Source)], vec![]);
 
         let orchestrator = DagOrchestrator::from_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["single"]);
@@ -367,11 +367,7 @@ mod tests {
 
     #[test]
     fn test_dag_empty_rejected() {
-        let config = DagConfig {
-            nodes: vec![],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
+        let config = make_dag_config(vec![], vec![]);
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -381,15 +377,14 @@ mod tests {
 
     #[test]
     fn test_dag_multiple_sinks() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("source", NodeType::Source),
                 make_node("sink1", NodeType::Sink),
                 make_node("sink2", NodeType::Sink),
             ],
-            edges: vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
-            default_queue_capacity: 1024,
-        };
+            vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
+        );
 
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
@@ -399,18 +394,17 @@ mod tests {
 
     #[test]
     fn test_wire_queues_creates_correct_count() {
-        let config = DagConfig {
-            nodes: vec![
+        let config = make_dag_config(
+            vec![
                 make_node("source", NodeType::Source),
                 make_node("transform", NodeType::Transform),
                 make_node("sink", NodeType::Sink),
             ],
-            edges: vec![
+            vec![
                 make_edge("source", "transform"),
                 make_edge("transform", "sink"),
             ],
-            default_queue_capacity: 1024,
-        };
+        );
 
         let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
         orchestrator.wire_queues().unwrap();
@@ -438,6 +432,7 @@ mod tests {
                 queue_capacity: Some(42),
             }],
             default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
         };
 
         let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
@@ -452,11 +447,7 @@ mod tests {
 
     #[test]
     fn test_register_node_unknown_id_fails() {
-        let config = DagConfig {
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-        };
+        let config = make_dag_config(vec![make_node("source", NodeType::Source)], vec![]);
 
         let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
         let node = AnyNode::from_source(FileSource::new("wrong-id", "/tmp/test.txt"));
