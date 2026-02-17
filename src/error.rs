@@ -3,6 +3,37 @@
 use std::path::PathBuf;
 use thiserror::Error;
 
+/// Registry-related errors.
+///
+/// This enum is marked `#[non_exhaustive]` to allow adding new variants
+/// in future versions without breaking semver compatibility.
+#[derive(Error, Debug)]
+#[non_exhaustive]
+pub enum RegistryError {
+    /// Failed to fetch package from registry.
+    #[error("failed to fetch package {package}: {message}")]
+    FetchFailed { package: String, message: String },
+
+    /// No version matching the requirement was found.
+    #[error("no version matching {requirement} found for {package}")]
+    VersionNotFound {
+        package: String,
+        requirement: String,
+    },
+
+    /// Cache operation failed.
+    #[error("cache error: {0}")]
+    Cache(String),
+
+    /// Invalid package reference format.
+    #[error("invalid package reference: {0}")]
+    InvalidPackageRef(String),
+
+    /// Network error during registry operation.
+    #[error("network error: {0}")]
+    Network(String),
+}
+
 /// Main error type for WAFER operations.
 ///
 /// This enum is marked `#[non_exhaustive]` to allow adding new variants
@@ -48,6 +79,10 @@ pub enum WaferError {
     /// I/O operation failed (file, stdin/stdout, etc.).
     #[error(transparent)]
     Io(#[from] std::io::Error),
+
+    /// Registry operation failed (fetch, cache, version resolution).
+    #[error("registry error: {0}")]
+    Registry(#[from] RegistryError),
 }
 
 /// Configuration-specific errors.
