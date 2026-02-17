@@ -263,13 +263,15 @@ The WIT contracts define the boundary between host and nodes. Key design princip
 ```
 pipeline:types@0.1.0      # Common data types (envelope, tensor, etc.)
 pipeline:node@0.1.0       # Base node interface (lifecycle)
-pipeline:source@0.1.0     # Source node extension
-pipeline:transform@0.1.0  # Transform node extension
-pipeline:router@0.1.0     # Router node extension (1→N)
-pipeline:joiner@0.1.0     # Joiner node extension (N→1)
-pipeline:sink@0.1.0       # Sink node extension
+pipeline:source@0.1.0     # Source node extension (reference only - see ADR-0004)
+pipeline:transform@0.1.0  # Transform node extension (WASM components)
+pipeline:router@0.1.0     # Router node extension (1→N) (WASM components)
+pipeline:joiner@0.1.0     # Joiner node extension (N→1) (WASM components)
+pipeline:sink@0.1.0       # Sink node extension (reference only - see ADR-0004)
 pipeline:inference@0.1.0  # ML inference capability (wasi-nn compatible)
 ```
+
+> **Note:** Source and sink WIT packages are retained for documentation but not implemented as WASM components. Sources and sinks are native Rust code. See [ADR-0004](adr/0004-native-sources-sinks.md).
 
 ### 4.3 Draft WIT: Common Types (`pipeline:types`)
 
@@ -490,7 +492,25 @@ interface lifecycle {
 }
 ```
 
-### 4.5 Draft WIT: Source Node Interface (`pipeline:source`)
+### 4.5 Source Node Interface
+
+> **Implementation Note:** Sources are implemented as native Rust code in the host runtime, not as WASM components. The WIT interface below is **retained for documentation purposes** and potential future use, but the current implementation uses Rust traits directly. See [ADR-0004](adr/0004-native-sources-sinks.md) for rationale.
+
+**Rust trait (actual implementation):**
+
+```rust
+/// Source trait - native Rust implementation
+#[async_trait]
+pub trait Source: Lifecycle + Send {
+    /// Poll for next message from external system (non-blocking)
+    async fn poll(&mut self) -> Result<Option<RuntimeEnvelope>>;
+    
+    /// Acknowledge successful processing of a message
+    async fn ack(&mut self, id: &str) -> Result<()>;
+}
+```
+
+**WIT interface (reference only):**
 
 ```wit
 /// pipeline:source - Interface for source nodes that ingest external data
@@ -656,7 +676,25 @@ world joiner-node {
 }
 ```
 
-### 4.9 Draft WIT: Sink Node Interface (`pipeline:sink`)
+### 4.9 Sink Node Interface
+
+> **Implementation Note:** Sinks are implemented as native Rust code in the host runtime, not as WASM components. The WIT interface below is **retained for documentation purposes** and potential future use, but the current implementation uses Rust traits directly. See [ADR-0004](adr/0004-native-sources-sinks.md) for rationale.
+
+**Rust trait (actual implementation):**
+
+```rust
+/// Sink trait - native Rust implementation
+#[async_trait]
+pub trait Sink: Lifecycle + Send {
+    /// Collect a message for output (may buffer internally)
+    async fn collect(&mut self, envelope: RuntimeEnvelope) -> Result<()>;
+    
+    /// Flush any buffered messages to the external system
+    async fn flush(&mut self) -> Result<()>;
+}
+```
+
+**WIT interface (reference only):**
 
 ```wit
 /// pipeline:sink - Interface for sink nodes that emit to external systems
@@ -719,13 +757,15 @@ for each edge (upstream, downstream) in DAG:
 
 ### 5.1 Category Overview
 
-| Category      | Inputs       | Outputs      | Purpose                              | Example                |
-| ------------- | ------------ | ------------ | ------------------------------------ | ---------------------- |
-| **Source**    | 0 (external) | 1            | Ingest data from external systems    | MQTT subscriber        |
-| **Transform** | 1            | 1            | Process/transform messages           | JSON parser, filter    |
-| **Router**    | 1            | N            | Route messages to different paths    | Content-based router   |
-| **Joiner**    | N            | 1            | Combine messages from multiple paths | Merge, priority select |
-| **Sink**      | 1            | 0 (external) | Emit data to external systems        | MQTT publisher         |
+| Category      | Inputs       | Outputs      | Purpose                              | Example                | Implementation |
+| ------------- | ------------ | ------------ | ------------------------------------ | ---------------------- | -------------- |
+| **Source**    | 0 (external) | 1            | Ingest data from external systems    | MQTT subscriber        | **Native Rust** |
+| **Transform** | 1            | 1            | Process/transform messages           | JSON parser, filter    | WASM component |
+| **Router**    | 1            | N            | Route messages to different paths    | Content-based router   | WASM component |
+| **Joiner**    | N            | 1            | Combine messages from multiple paths | Merge, priority select | WASM component |
+| **Sink**      | 1            | 0 (external) | Emit data to external systems        | MQTT publisher         | **Native Rust** |
+
+> **Note:** Sources and sinks are implemented as native Rust code in the host runtime, not as WASM components. See [ADR-0004](adr/0004-native-sources-sinks.md) for rationale.
 
 ### 5.2 Shared Base Interface
 
@@ -1846,6 +1886,8 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 - [ ] **Clock synchronization:** How to measure accurate end-to-end latency? **Decision:** Use monotonic clock on single host, document limitations.
 
 ### 18.4 Scope Decisions (During Implementation)
+
+- [x] **Sources/Sinks as WASM:** Should sources and sinks be WASM components? **Decision:** No - implement as native Rust. WASM lacks async I/O, networking, and would require complex host proxying. See [ADR-0004](adr/0004-native-sources-sinks.md). (Resolved 2026-02-17)
 
 - [ ] **Node state:** Implement host capability or stay stateless? **Decision:** Start stateless, add if needed for evaluation.
 

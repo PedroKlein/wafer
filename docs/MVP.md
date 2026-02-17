@@ -174,11 +174,11 @@ wit/
 ## What's NOT Implemented
 
 ### Node Types (SPEC §5)
-- [x] ~~Source nodes~~ - FileSource + StdinSource implemented (host-only)
-- [x] ~~Sink nodes~~ - FileSink + StdoutSink implemented (host-only)
+- [x] ~~Source nodes~~ - FileSource + StdinSource implemented (native Rust)
+- [x] ~~Sink nodes~~ - FileSink + StdoutSink implemented (native Rust)
 - [ ] Router nodes (1→N routing)
 - [ ] Joiner nodes (N→1 merge)
-- [ ] WASM-based Source/Sink (currently host-only Rust implementations)
+- [x] ~~WASM-based Source/Sink~~ - **Decision: Not implementing** - Sources/sinks remain native Rust (see [ADR-0004](adr/0004-native-sources-sinks.md))
 
 ### Sink Features (SPEC §4.9)
 - [ ] Sink batching: `batch_size` configuration (SPEC §4.9)
@@ -229,19 +229,19 @@ wit/
 
 ## Known Limitations
 
-| Area | Limitation |
-|------|------------|
-| **Pipeline** | Linear chains only (no fan-out/fan-in) |
-| **I/O** | stdin/stdout or file-based (no network sources) |
-| **Source/Sink** | Host-only Rust implementations (no WASM) |
-| **WIT** | Only `raw(list<u8>)` payload supported |
-| **State** | Stateless transforms only |
-| **Metrics** | In-memory only (no Prometheus export) |
-| **Logging** | Text format only (no JSON export) |
-| **Error handling** | No DLQ, errors logged only |
-| **Capabilities** | Network/filesystem flags are placeholders |
-| **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` |
-| **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) |
+| Area | Limitation | Notes |
+|------|------------|-------|
+| **Pipeline** | Linear chains only (no fan-out/fan-in) | Router/Joiner pending |
+| **I/O** | stdin/stdout or file-based (no network sources) | MQTT planned |
+| **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
+| **WIT** | Only `raw(list<u8>)` payload supported | |
+| **State** | Stateless transforms only | |
+| **Metrics** | In-memory only (no Prometheus export) | |
+| **Logging** | Text format only (no JSON export) | |
+| **Error handling** | No DLQ, errors logged only | |
+| **Capabilities** | Network/filesystem flags are placeholders | |
+| **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` | |
+| **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) | |
 
 ---
 
@@ -403,7 +403,7 @@ WaferState::with_capabilities(Capabilities::full())
 | **Capabilities** | Full network/filesystem scoping | `allow_network`/`allow_filesystem` are placeholders only |
 | **Epoch ticker** | Automatic interruption | Requires explicit `engine.start_epoch_ticker()` call |
 | **Queue impl** | Unspecified | `tokio::sync::mpsc` async channels |
-| **Source/Sink** | WASM components | Host-only Rust implementations |
+| **Source/Sink** | Native Rust (ADR-0004) | Native Rust (aligned) |
 | **Router/Joiner** | Full support | Not implemented |
 | **Hot-swap** | Drain-and-flip | Not implemented |
 | **Payload types** | Multiple variants | Only `raw(list<u8>)` |

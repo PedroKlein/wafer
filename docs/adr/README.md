@@ -88,11 +88,12 @@ bd query "label=decision AND status=open"
 
 ## Index
 
-| ADR  | Title                           | Status   | Date       | SPEC Reference |
-| ---- | ------------------------------- | -------- | ---------- | -------------- |
-| 0001 | Use Wasmtime as WASM Runtime    | Accepted | 2026-02-14 | Section 3.2    |
-| 0002 | SPSC Bounded Queues             | Accepted | 2026-02-14 | Section 8.1    |
-| 0003 | Drain-and-Flip Hot-Swap         | Accepted | 2026-02-14 | Section 10.1   |
+| ADR  | Title                           | Status   | Date       | SPEC Reference      |
+| ---- | ------------------------------- | -------- | ---------- | ------------------- |
+| 0001 | Use Wasmtime as WASM Runtime    | Accepted | 2026-02-14 | Section 3.2         |
+| 0002 | SPSC Bounded Queues             | Accepted | 2026-02-14 | Section 8.1         |
+| 0003 | Drain-and-Flip Hot-Swap         | Accepted | 2026-02-14 | Section 10.1        |
+| 0004 | Native Rust Sources and Sinks   | Accepted | 2026-02-17 | Section 4.5, 4.9, 5.1 |
 
 ## Naming Convention
 
