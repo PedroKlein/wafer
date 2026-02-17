@@ -134,6 +134,27 @@ impl WaferEngine {
         })
     }
 
+    /// Load a WASM component from raw bytes.
+    ///
+    /// This is useful for loading components fetched from OCI registries
+    /// or cached in memory.
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - The raw WASM component bytes
+    /// * `name` - A human-readable name for error messages (e.g., registry reference)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WaferError::ComponentLoad`] if the bytes are not a valid WASM component.
+    #[must_use = "loading a component without using it is expensive"]
+    pub fn load_component_from_bytes(&self, bytes: &[u8], name: &str) -> Result<Component> {
+        Component::from_binary(&self.engine, bytes).map_err(|source| WaferError::ComponentLoad {
+            path: std::path::PathBuf::from(format!("<bytes:{name}>")),
+            source,
+        })
+    }
+
     /// Get or create the cached Linker.
     ///
     /// The linker is expensive to create because it requires setting up
@@ -372,5 +393,32 @@ mod tests {
         // Maximum u64 should still work
         let engine = WaferEngine::with_fuel_limit(u64::MAX).expect("Failed to create engine");
         assert_eq!(engine.fuel_limit(), u64::MAX);
+    }
+
+    #[test]
+    fn test_load_component_from_bytes_invalid() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let invalid_bytes = b"not a valid wasm component";
+        let result = engine.load_component_from_bytes(invalid_bytes, "test-component");
+
+        assert!(result.is_err());
+        let err = result.err().expect("Expected error");
+        match err {
+            WaferError::ComponentLoad { path, .. } => {
+                assert_eq!(path.to_string_lossy(), "<bytes:test-component>");
+            }
+            other => panic!("Expected ComponentLoad error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_load_component_from_bytes_empty() {
+        let engine = WaferEngine::new().expect("Failed to create engine");
+        let empty_bytes: &[u8] = &[];
+        let result = engine.load_component_from_bytes(empty_bytes, "empty");
+
+        assert!(result.is_err());
+        let err = result.err().expect("Expected error");
+        assert!(matches!(err, WaferError::ComponentLoad { .. }));
     }
 }
