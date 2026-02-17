@@ -114,20 +114,20 @@ registry-status:
 # Usage: just publish-plugin uppercase 1.0.0
 publish-plugin name version:
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -eo pipefail
     
     # Map plugin name to WASM filename
-    declare -A wasm_files=(
-        ["pass-through"]="pass_through_transform.wasm"
-        ["uppercase"]="uppercase_transform.wasm"
-        ["filter"]="filter_transform.wasm"
-        ["json-parse"]="json_parse_transform.wasm"
-        ["tensor-prep"]="tensor_prep.wasm"
-        ["result-format"]="result_format.wasm"
-        ["mnist-inference"]="mnist_inference.wasm"
-    )
+    case "{{name}}" in
+        pass-through)   wasm_file="pass_through_transform.wasm" ;;
+        uppercase)      wasm_file="uppercase_transform.wasm" ;;
+        filter)         wasm_file="filter_transform.wasm" ;;
+        json-parse)     wasm_file="json_parse_transform.wasm" ;;
+        tensor-prep)    wasm_file="tensor_prep.wasm" ;;
+        result-format)  wasm_file="result_format.wasm" ;;
+        mnist-inference) wasm_file="mnist_inference.wasm" ;;
+        *)              wasm_file="{{name}}_transform.wasm" ;;
+    esac
     
-    wasm_file="${wasm_files[{{name}}]:-{{name}}_transform.wasm}"
     wasm_path="plugins/{{name}}/target/wasm32-wasip2/release/$wasm_file"
     
     if [ ! -f "$wasm_path" ]; then
@@ -149,20 +149,20 @@ publish-plugin name version:
 # Usage: just publish-plugin-auth <username> <token> <name> <version>
 publish-plugin-auth username token name version:
     #!/usr/bin/env bash
-    set -euo pipefail
+    set -eo pipefail
     
     # Map plugin name to WASM filename
-    declare -A wasm_files=(
-        ["pass-through"]="pass_through_transform.wasm"
-        ["uppercase"]="uppercase_transform.wasm"
-        ["filter"]="filter_transform.wasm"
-        ["json-parse"]="json_parse_transform.wasm"
-        ["tensor-prep"]="tensor_prep.wasm"
-        ["result-format"]="result_format.wasm"
-        ["mnist-inference"]="mnist_inference.wasm"
-    )
+    case "{{name}}" in
+        pass-through)   wasm_file="pass_through_transform.wasm" ;;
+        uppercase)      wasm_file="uppercase_transform.wasm" ;;
+        filter)         wasm_file="filter_transform.wasm" ;;
+        json-parse)     wasm_file="json_parse_transform.wasm" ;;
+        tensor-prep)    wasm_file="tensor_prep.wasm" ;;
+        result-format)  wasm_file="result_format.wasm" ;;
+        mnist-inference) wasm_file="mnist_inference.wasm" ;;
+        *)              wasm_file="{{name}}_transform.wasm" ;;
+    esac
     
-    wasm_file="${wasm_files[{{name}}]:-{{name}}_transform.wasm}"
     wasm_path="plugins/{{name}}/target/wasm32-wasip2/release/$wasm_file"
     
     if [ ! -f "$wasm_path" ]; then
