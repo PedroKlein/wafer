@@ -107,10 +107,8 @@ impl Sink for FileSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let writer = self.writer.as_mut().ok_or_else(|| {
-                WaferError::PluginInit {
-                    message: "FileSink not initialized - call init() first".to_string(),
-                }
+            let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
+                message: "FileSink not initialized - call init() first".to_string(),
             })?;
             writer.write_all(&envelope.payload)?;
             writer.write_all(b"\n")?;
@@ -181,10 +179,8 @@ impl Sink for StdoutSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let writer = self.writer.as_mut().ok_or_else(|| {
-                WaferError::PluginInit {
-                    message: "StdoutSink not initialized - call init() first".to_string(),
-                }
+            let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
+                message: "StdoutSink not initialized - call init() first".to_string(),
             })?;
             writer.write_all(&envelope.payload)?;
             writer.write_all(b"\n")?;

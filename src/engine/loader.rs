@@ -155,9 +155,10 @@ impl WaferEngine {
         add_to_linker_async(&mut linker).map_err(|e| WaferError::PluginInit {
             message: e.to_string(),
         })?;
-        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view())
-        .map_err(|e| WaferError::PluginInit {
-            message: e.to_string(),
+        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view()).map_err(|e| {
+            WaferError::PluginInit {
+                message: e.to_string(),
+            }
         })?;
 
         // Ignore the result of set - if another thread already set it, that's fine
@@ -281,11 +282,14 @@ mod tests {
         let engine = WaferEngine::new().expect("Failed to create engine");
         let result = engine.load_component("/nonexistent/path/to/component.wasm");
         assert!(result.is_err());
-        
+
         let err = result.err().expect("Expected error");
         match err {
             WaferError::ComponentLoad { path, .. } => {
-                assert_eq!(path.to_string_lossy(), "/nonexistent/path/to/component.wasm");
+                assert_eq!(
+                    path.to_string_lossy(),
+                    "/nonexistent/path/to/component.wasm"
+                );
             }
             other => panic!("Expected ComponentLoad error, got {:?}", other),
         }
@@ -294,21 +298,22 @@ mod tests {
     #[test]
     fn test_load_component_invalid_file() {
         use std::io::Write;
-        
+
         let temp_dir = std::env::temp_dir();
         let invalid_wasm = temp_dir.join("invalid_test.wasm");
-        
+
         // Write invalid data to the file
         let mut file = std::fs::File::create(&invalid_wasm).expect("Failed to create temp file");
-        file.write_all(b"not a valid wasm file").expect("Failed to write");
+        file.write_all(b"not a valid wasm file")
+            .expect("Failed to write");
         drop(file);
-        
+
         let engine = WaferEngine::new().expect("Failed to create engine");
         let result = engine.load_component(&invalid_wasm);
-        
+
         // Clean up
         let _ = std::fs::remove_file(&invalid_wasm);
-        
+
         assert!(result.is_err());
         let err = result.err().expect("Expected error");
         assert!(matches!(err, WaferError::ComponentLoad { .. }));
@@ -317,13 +322,13 @@ mod tests {
     #[test]
     fn test_linker_is_cached() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        
+
         // First call initializes the linker
         let linker1 = engine.linker().expect("Failed to get linker");
-        
+
         // Second call should return the same cached linker
         let linker2 = engine.linker().expect("Failed to get linker");
-        
+
         // Both should be the same reference (pointer comparison)
         assert!(std::ptr::eq(linker1, linker2), "Linker should be cached");
     }
@@ -332,13 +337,13 @@ mod tests {
     async fn test_epoch_ticker_starts() {
         let engine = WaferEngine::new().expect("Failed to create engine");
         let handle = engine.start_epoch_ticker();
-        
+
         // Give it a moment to start
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         // It should still be running (not finished)
         assert!(!handle.is_finished());
-        
+
         // Clean up
         handle.abort();
     }
@@ -347,11 +352,11 @@ mod tests {
     async fn test_epoch_ticker_custom_interval() {
         let engine = WaferEngine::new().expect("Failed to create engine");
         let handle = engine.start_epoch_ticker_with_interval(Duration::from_millis(5));
-        
+
         tokio::time::sleep(Duration::from_millis(50)).await;
-        
+
         assert!(!handle.is_finished());
-        
+
         handle.abort();
     }
 
