@@ -126,8 +126,16 @@ fn spawn_eventloop_task(
     source_id: String,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut is_connected = false;
+
         loop {
             match eventloop.poll().await {
+                Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                    if !is_connected {
+                        tracing::info!(source_id = %source_id, "MQTT connected");
+                        is_connected = true;
+                    }
+                }
                 Ok(Event::Incoming(Packet::Publish(publish))) => {
                     if tx.send(publish).await.is_err() {
                         break;
@@ -135,11 +143,14 @@ fn spawn_eventloop_task(
                 }
                 Ok(_) => {}
                 Err(e) => {
-                    tracing::warn!(
-                        source_id = %source_id,
-                        error = %e,
-                        "MQTT connection error, will retry"
-                    );
+                    if is_connected {
+                        tracing::warn!(
+                            source_id = %source_id,
+                            error = %e,
+                            "MQTT disconnected, will retry"
+                        );
+                        is_connected = false;
+                    }
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             }

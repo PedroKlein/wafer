@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use rumqttc::{AsyncClient, EventLoop, MqttOptions, QoS};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use tokio::task::JoinHandle;
 
 use crate::error::{ConfigError, Result, WaferError};
@@ -89,7 +89,7 @@ impl Lifecycle for MqttSink {
 
             let (client, eventloop) = AsyncClient::new(mqtt_options, 10);
 
-            let handle = spawn_eventloop_task(eventloop);
+            let handle = spawn_eventloop_task(eventloop, self.id.clone());
 
             self.client = Some(client);
             self.eventloop_handle = Some(handle);
@@ -110,11 +110,30 @@ impl Lifecycle for MqttSink {
     }
 }
 
-fn spawn_eventloop_task(mut eventloop: EventLoop) -> JoinHandle<()> {
+fn spawn_eventloop_task(mut eventloop: EventLoop, sink_id: String) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut is_connected = false;
+
         loop {
-            if eventloop.poll().await.is_err() {
-                tokio::time::sleep(Duration::from_millis(100)).await;
+            match eventloop.poll().await {
+                Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                    if !is_connected {
+                        tracing::info!(sink_id = %sink_id, "MQTT connected");
+                        is_connected = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    if is_connected {
+                        tracing::warn!(
+                            sink_id = %sink_id,
+                            error = %e,
+                            "MQTT disconnected, will retry"
+                        );
+                        is_connected = false;
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
             }
         }
     })
