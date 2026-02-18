@@ -27,8 +27,8 @@ pub use traits::{
     ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
     Router, Transform,
 };
-pub use joiner::WasmJoiner;
-pub use router::WasmRouter;
+pub use joiner::{JoinerInstance, WasmJoiner};
+pub use router::{RouterInstance, WasmRouter};
 pub use transform::WasmTransform;
 
 use crate::error::Result;
