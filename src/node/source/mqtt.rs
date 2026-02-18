@@ -4,8 +4,11 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::time::Duration;
 
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, Publish, QoS};
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 
 use crate::error::{ConfigError, Result, WaferError};
 use crate::node::Lifecycle;
@@ -55,8 +58,10 @@ pub struct MqttSource {
     client_id: String,
     /// MQTT client, initialized in init()
     client: Option<AsyncClient>,
-    /// Event loop for polling messages
-    eventloop: Option<EventLoop>,
+    /// Handle to the background eventloop task
+    eventloop_handle: Option<JoinHandle<()>>,
+    /// Channel receiver for incoming Publish messages
+    message_rx: Option<mpsc::Receiver<Publish>>,
 }
 
 impl MqttSource {
@@ -88,7 +93,8 @@ impl MqttSource {
             qos,
             client_id: client_id.into(),
             client: None,
-            eventloop: None,
+            eventloop_handle: None,
+            message_rx: None,
         }
     }
 
@@ -112,6 +118,33 @@ impl MqttSource {
             _ => QoS::ExactlyOnce,
         }
     }
+}
+
+fn spawn_eventloop_task(
+    mut eventloop: EventLoop,
+    tx: mpsc::Sender<Publish>,
+    source_id: String,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        loop {
+            match eventloop.poll().await {
+                Ok(Event::Incoming(Packet::Publish(publish))) => {
+                    if tx.send(publish).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!(
+                        source_id = %source_id,
+                        error = %e,
+                        "MQTT connection error, will retry"
+                    );
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+    })
 }
 
 impl Lifecycle for MqttSource {
@@ -144,7 +177,6 @@ impl Lifecycle for MqttSource {
 
             let (client, eventloop) = AsyncClient::new(options, 10);
 
-            // Subscribe to the topic
             let qos = Self::map_qos(self.qos);
             client.subscribe(&self.topic, qos).await.map_err(|e| {
                 WaferError::PluginInit {
@@ -152,8 +184,12 @@ impl Lifecycle for MqttSource {
                 }
             })?;
 
+            let (tx, rx) = mpsc::channel(100);
+            let handle = spawn_eventloop_task(eventloop, tx, self.id.clone());
+
             self.client = Some(client);
-            self.eventloop = Some(eventloop);
+            self.eventloop_handle = Some(handle);
+            self.message_rx = Some(rx);
 
             Ok(())
         })
@@ -161,11 +197,13 @@ impl Lifecycle for MqttSource {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
+            if let Some(handle) = self.eventloop_handle.take() {
+                handle.abort();
+            }
+            self.message_rx = None;
             if let Some(client) = self.client.take() {
-                // Attempt to disconnect gracefully, but don't fail if it errors
                 let _ = client.disconnect().await;
             }
-            self.eventloop = None;
             Ok(())
         })
     }
@@ -176,34 +214,17 @@ impl Source for MqttSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let eventloop = self.eventloop.as_mut().ok_or_else(|| WaferError::PluginInit {
+            let rx = self.message_rx.as_mut().ok_or_else(|| WaferError::PluginInit {
                 message: "MqttSource not initialized - call init() first".into(),
             })?;
 
-            loop {
-                match eventloop.poll().await {
-                    Ok(Event::Incoming(Packet::Publish(publish))) => {
-                        // Got a message - convert to RuntimeEnvelope
-                        let envelope = RuntimeEnvelope::new(&self.id, publish.payload.to_vec())
-                            .with_metadata("source_route", publish.topic.as_str());
-                        return Ok(Some(envelope));
-                    }
-                    Ok(_) => {
-                        // Other events (ConnAck, SubAck, PingResp, etc.) - continue polling
-                        continue;
-                    }
-                    Err(e) => {
-                        // Connection error - log warning and continue (rumqttc auto-reconnects)
-                        tracing::warn!(
-                            source_id = %self.id,
-                            error = %e,
-                            "MQTT connection error, will retry"
-                        );
-                        // Small delay before retrying to avoid tight loop on persistent errors
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                        continue;
-                    }
+            match rx.recv().await {
+                Some(publish) => {
+                    let envelope = RuntimeEnvelope::new(&self.id, publish.payload.to_vec())
+                        .with_metadata("source_route", publish.topic.as_str());
+                    Ok(Some(envelope))
                 }
+                None => Ok(None),
             }
         })
     }
