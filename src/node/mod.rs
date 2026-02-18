@@ -21,7 +21,10 @@ mod transform;
 
 pub use sink::{FileSink, MqttSink, Sink, StdoutSink};
 pub use source::{FileSource, MqttSource, Source, StdinSource};
-pub use traits::{ConfigParseError, Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
+pub use traits::{
+    ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
+    Router, Transform,
+};
 pub use transform::WasmTransform;
 
 use crate::error::Result;
@@ -35,6 +38,8 @@ pub enum AnyNode {
     Transform(Box<dyn Transform>),
     Source(Box<dyn Source>),
     Sink(Box<dyn Sink>),
+    Router(Box<dyn Router>),
+    Joiner(Box<dyn Joiner>),
 }
 
 impl fmt::Debug for AnyNode {
@@ -54,6 +59,16 @@ impl fmt::Debug for AnyNode {
                 .debug_struct("AnyNode::Sink")
                 .field("id", &s.id())
                 .field("node_type", &s.node_type())
+                .finish(),
+            AnyNode::Router(r) => f
+                .debug_struct("AnyNode::Router")
+                .field("id", &r.id())
+                .field("node_type", &r.node_type())
+                .finish(),
+            AnyNode::Joiner(j) => f
+                .debug_struct("AnyNode::Joiner")
+                .field("id", &j.id())
+                .field("node_type", &j.node_type())
                 .finish(),
         }
     }
@@ -78,6 +93,18 @@ impl AnyNode {
         AnyNode::Sink(Box::new(s))
     }
 
+    /// Wrap a router node in the `AnyNode` enum.
+    #[must_use]
+    pub fn from_router(r: impl Router + 'static) -> Self {
+        AnyNode::Router(Box::new(r))
+    }
+
+    /// Wrap a joiner node in the `AnyNode` enum.
+    #[must_use]
+    pub fn from_joiner(j: impl Joiner + 'static) -> Self {
+        AnyNode::Joiner(Box::new(j))
+    }
+
     /// Get the node's unique identifier.
     #[must_use]
     pub fn id(&self) -> &str {
@@ -85,6 +112,8 @@ impl AnyNode {
             AnyNode::Transform(t) => t.id(),
             AnyNode::Source(s) => s.id(),
             AnyNode::Sink(s) => s.id(),
+            AnyNode::Router(r) => r.id(),
+            AnyNode::Joiner(j) => j.id(),
         }
     }
 
@@ -98,6 +127,8 @@ impl AnyNode {
             AnyNode::Transform(t) => t.validate(),
             AnyNode::Source(s) => s.validate(),
             AnyNode::Sink(s) => s.validate(),
+            AnyNode::Router(r) => r.validate(),
+            AnyNode::Joiner(j) => j.validate(),
         }
     }
 
@@ -111,6 +142,8 @@ impl AnyNode {
             AnyNode::Transform(t) => t.init().await,
             AnyNode::Source(s) => s.init().await,
             AnyNode::Sink(s) => s.init().await,
+            AnyNode::Router(r) => r.init().await,
+            AnyNode::Joiner(j) => j.init().await,
         }
     }
 
@@ -124,6 +157,8 @@ impl AnyNode {
             AnyNode::Transform(t) => t.close().await,
             AnyNode::Source(s) => s.close().await,
             AnyNode::Sink(s) => s.close().await,
+            AnyNode::Router(r) => r.close().await,
+            AnyNode::Joiner(j) => j.close().await,
         }
     }
 }
