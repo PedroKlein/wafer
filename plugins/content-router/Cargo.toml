@@ -1,0 +1,17 @@
+[package]
+name = "content-router"
+version = "0.1.0"
+edition = "2021"
+description = "Content-based router plugin for WAFER pipeline - routes messages based on JSON 'route' field"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true

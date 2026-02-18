@@ -1,0 +1,83 @@
+# WAFER DAG Configuration: Diamond Pattern
+# Pipeline: stdin -> router -> [transform-a, transform-b] -> joiner -> stdout
+#
+# Diamond Pattern Structure:
+#   source --> router --+--> port-a --> transform-a --+--> input-a --> joiner --> sink
+#                       |                             |
+#                       +--> port-b --> transform-b --+--> input-b
+#
+# Tests scatter-gather pattern with content-based routing:
+# - Router splits input to multiple branches based on content
+# - Each branch applies a different transform
+# - Joiner merges results from all branches
+#
+# Usage:
+#   echo "test message" | cargo run -- dag examples/dag-diamond.toml
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "router"
+node_type = "router"
+[nodes.config]
+plugin_path = "plugins/content-router/target/wasm32-wasip1/release/content_router.wasm"
+
+[[nodes]]
+id = "transform-a"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"
+
+[[nodes]]
+id = "transform-b"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through.wasm"
+
+[[nodes]]
+id = "joiner"
+node_type = "joiner"
+[nodes.config]
+plugin_path = "plugins/merge-joiner/target/wasm32-wasip1/release/merge_joiner.wasm"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+# Edges with port specifications for router/joiner connections
+
+[[edges]]
+from = "source"
+to = "router"
+
+# Router output edges (from_port specifies which router output)
+[[edges]]
+from = "router"
+to = "transform-a"
+from_port = "port-a"
+
+[[edges]]
+from = "router"
+to = "transform-b"
+from_port = "port-b"
+
+# Joiner input edges (to_port specifies which joiner input)
+[[edges]]
+from = "transform-a"
+to = "joiner"
+to_port = "input-a"
+
+[[edges]]
+from = "transform-b"
+to = "joiner"
+to_port = "input-b"
+
+[[edges]]
+from = "joiner"
+to = "sink"
