@@ -1,0 +1,17 @@
+[package]
+name = "merge-joiner"
+version = "0.1.0"
+edition = "2021"
+description = "Merge joiner plugin for WAFER pipeline - stateless passthrough from multiple inputs"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true

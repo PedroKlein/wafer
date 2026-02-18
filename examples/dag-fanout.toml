@@ -1,0 +1,59 @@
+# WAFER DAG Configuration: Fan-out Pattern
+# Pipeline: stdin -> router -> [sink-a, sink-b]
+#
+# Tests content-based routing to multiple outputs.
+# The router plugin inspects message content and routes to different ports.
+# Messages with {"route": "a"} go to /tmp/fanout-a.txt
+# Messages with {"route": "b"} go to /tmp/fanout-b.txt
+#
+# Usage:
+#   echo '{"route": "a", "data": "hello"}' | cargo run -- dag examples/dag-fanout.toml
+#   cat /tmp/fanout-a.txt /tmp/fanout-b.txt
+
+default_queue_capacity = 1024
+
+# Source node: reads from stdin
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+# Router node: routes messages to different output ports based on content
+[[nodes]]
+id = "router"
+node_type = "router"
+[nodes.config]
+plugin_path = "plugins/content-router/target/wasm32-wasip1/release/content_router.wasm"
+
+# Sink A: receives messages routed to port-a
+[[nodes]]
+id = "sink-a"
+node_type = "sink"
+sink_type = "file"
+[nodes.config]
+path = "/tmp/fanout-a.txt"
+
+# Sink B: receives messages routed to port-b
+[[nodes]]
+id = "sink-b"
+node_type = "sink"
+sink_type = "file"
+[nodes.config]
+path = "/tmp/fanout-b.txt"
+
+# Edge: source -> router
+[[edges]]
+from = "source"
+to = "router"
+
+# Edge: router (port-a) -> sink-a
+[[edges]]
+from = "router"
+to = "sink-a"
+from_port = "port-a"
+
+# Edge: router (port-b) -> sink-b
+[[edges]]
+from = "router"
+to = "sink-b"
+from_port = "port-b"
