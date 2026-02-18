@@ -14,6 +14,8 @@
 //! Source, etc.). This enables flexible DAG orchestration where nodes can be
 //! treated uniformly for lifecycle but specifically for processing.
 
+mod joiner;
+mod router;
 mod sink;
 mod source;
 mod traits;
@@ -25,6 +27,8 @@ pub use traits::{
     ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
     Router, Transform,
 };
+pub use joiner::WasmJoiner;
+pub use router::WasmRouter;
 pub use transform::WasmTransform;
 
 use crate::error::Result;
