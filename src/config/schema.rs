@@ -44,6 +44,8 @@ pub struct NodeDefinition {
 pub enum NodeType {
     Source,
     Transform,
+    Router,
+    Joiner,
     Sink,
 }
 
@@ -51,6 +53,10 @@ pub enum NodeType {
 pub struct EdgeDefinition {
     pub from: String,
     pub to: String,
+    #[serde(default)]
+    pub from_port: Option<String>,
+    #[serde(default)]
+    pub to_port: Option<String>,
     #[serde(default)]
     pub queue_capacity: Option<usize>,
 }

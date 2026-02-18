@@ -122,6 +122,19 @@ pub enum ProcessResult {
     Error(ProcessError),
 }
 
+/// Result of routing a message.
+///
+/// Router nodes use this to indicate which output port(s) to send a message to.
+#[derive(Debug)]
+pub enum RouteResult {
+    /// Route envelope to a specific output port.
+    Route(String, RuntimeEnvelope),
+    /// Message filtered out, do not route.
+    Filter,
+    /// Routing error, route to error handling.
+    Error(ProcessError),
+}
+
 /// Lifecycle management trait for all node types.
 ///
 /// All nodes implement this trait for consistent lifecycle management.
@@ -180,5 +193,36 @@ pub trait Transform: Lifecycle {
     fn process(
         &mut self,
         input: RuntimeEnvelope,
+    ) -> Pin<Box<dyn Future<Output = Result<ProcessResult>> + Send + '_>>;
+}
+
+/// Router node trait for 1→N content-based routing.
+///
+/// Routers examine message content and route to one of multiple output ports.
+/// Examples: content-based router, error splitter, partition by field.
+pub trait Router: Lifecycle {
+    /// Get the list of output port names this router can route to.
+    fn output_ports(&self) -> Vec<String>;
+
+    /// Route a message to an output port.
+    fn route(
+        &mut self,
+        envelope: RuntimeEnvelope,
+    ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>>;
+}
+
+/// Joiner node trait for N→1 merge operations.
+///
+/// Joiners receive messages from multiple input ports and merge them.
+/// Examples: aggregator, merge, correlation.
+pub trait Joiner: Lifecycle {
+    /// Get the list of input port names this joiner accepts.
+    fn input_ports(&self) -> Vec<String>;
+
+    /// Process a message arriving on a specific port.
+    fn process(
+        &mut self,
+        port: &str,
+        envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<ProcessResult>> + Send + '_>>;
 }
