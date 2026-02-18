@@ -41,7 +41,8 @@ use crate::config::{NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
-    AnyNode, FileSink, FileSource, NodeConfig, StdinSource, StdoutSink, WasmTransform,
+    AnyNode, FileSink, FileSource, MqttSink, MqttSource, NodeConfig, StdinSource, StdoutSink,
+    WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 use crate::Result;
@@ -153,6 +154,48 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
     let source_type = node_def.source_type.as_deref().unwrap_or("file");
     if source_type == "stdin" {
         Ok(AnyNode::from_source(StdinSource::new(&node_def.id)))
+    } else if source_type == "mqtt" {
+        let broker = node_def
+            .config
+            .get("broker")
+            .and_then(|v| v.as_str())
+            .unwrap_or("localhost");
+        let port = node_def
+            .config
+            .get("port")
+            .and_then(|v| v.as_integer())
+            .map(|v| v as u16)
+            .unwrap_or(1883);
+        let topic = node_def
+            .config
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "mqtt source '{}' requires 'topic' in config",
+                    node_def.id
+                )))
+            })?;
+        let qos = node_def
+            .config
+            .get("qos")
+            .and_then(|v| v.as_integer())
+            .map(|v| v as u8)
+            .unwrap_or(0);
+        let client_id = node_def
+            .config
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("wafer-{}", node_def.id));
+        Ok(AnyNode::from_source(MqttSource::new(
+            &node_def.id,
+            broker,
+            port,
+            topic,
+            qos,
+            client_id,
+        )))
     } else {
         // Default to file source
         let path = node_def
@@ -282,6 +325,48 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
     let sink_type = node_def.sink_type.as_deref().unwrap_or("file");
     if sink_type == "stdout" {
         Ok(AnyNode::from_sink(StdoutSink::new(&node_def.id)))
+    } else if sink_type == "mqtt" {
+        let broker = node_def
+            .config
+            .get("broker")
+            .and_then(|v| v.as_str())
+            .unwrap_or("localhost");
+        let port = node_def
+            .config
+            .get("port")
+            .and_then(|v| v.as_integer())
+            .map(|v| v as u16)
+            .unwrap_or(1883);
+        let topic = node_def
+            .config
+            .get("topic")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "mqtt sink '{}' requires 'topic' in config",
+                    node_def.id
+                )))
+            })?;
+        let qos = node_def
+            .config
+            .get("qos")
+            .and_then(|v| v.as_integer())
+            .map(|v| v as u8)
+            .unwrap_or(0);
+        let client_id = node_def
+            .config
+            .get("client_id")
+            .and_then(|v| v.as_str())
+            .map(String::from)
+            .unwrap_or_else(|| format!("wafer-{}", node_def.id));
+        Ok(AnyNode::from_sink(MqttSink::new(
+            &node_def.id,
+            broker,
+            port,
+            topic,
+            qos,
+            client_id,
+        )))
     } else {
         // Default to file sink
         let path = node_def

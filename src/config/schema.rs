@@ -144,8 +144,8 @@ impl NodeConfig {
     }
 }
 
-const VALID_SOURCE_TYPES: &[&str] = &["stdin", "file"];
-const VALID_SINK_TYPES: &[&str] = &["stdout", "file"];
+const VALID_SOURCE_TYPES: &[&str] = &["stdin", "file", "mqtt"];
+const VALID_SINK_TYPES: &[&str] = &["stdout", "file", "mqtt"];
 
 impl DagConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {

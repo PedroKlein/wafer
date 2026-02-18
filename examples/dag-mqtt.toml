@@ -1,0 +1,49 @@
+# WAFER DAG Configuration: MQTT Pipeline
+# 
+# This example demonstrates an MQTT-based pipeline:
+# - Subscribes to "input/messages" topic
+# - Passes messages through a transform
+# - Publishes to "output/processed" topic
+#
+# Prerequisites:
+# - Run local Mosquitto broker: docker run -d -p 1883:1883 -v $(pwd)/mosquitto.conf:/mosquitto/config/mosquitto.conf eclipse-mosquitto:2
+# - Test with: mosquitto_pub -t "input/messages" -m '{"test": "data"}'
+# - Subscribe to output: mosquitto_sub -t "output/processed"
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "mqtt-source"
+node_type = "source"
+source_type = "mqtt"
+[nodes.config]
+broker = "localhost"
+port = 1883
+topic = "input/messages"
+qos = 1
+client_id = "wafer-source"
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+[[nodes]]
+id = "mqtt-sink"
+node_type = "sink"
+sink_type = "mqtt"
+[nodes.config]
+broker = "localhost"
+port = 1883
+topic = "output/processed"
+qos = 1
+client_id = "wafer-sink"
+
+[[edges]]
+from = "mqtt-source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "mqtt-sink"

@@ -37,9 +37,11 @@
 //! ```
 
 mod file;
+mod mqtt;
 mod stdin;
 
 pub use file::FileSource;
+pub use mqtt::MqttSource;
 pub use stdin::StdinSource;
 
 use std::future::Future;
