@@ -178,6 +178,16 @@ impl TransformInstance {
     ///
     /// Returns [`WaferError::PluginInit`] if the close call fails.
     pub async fn call_close(&mut self) -> Result<()> {
+        // Reset fuel before close for consistent execution budget
+        self.store
+            .set_fuel(self.fuel_limit)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("failed to set fuel: {}", e),
+            })?;
+
+        // Reset epoch deadline before close (prevents accumulated epochs from interrupting)
+        self.store.set_epoch_deadline(self.epoch_deadline);
+
         self.bindings
             .pipeline_transform_lifecycle()
             .call_close(&mut self.store)
