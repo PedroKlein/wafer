@@ -32,7 +32,9 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{AnyNode, ProcessResult, Sink, Source, Transform};
+use futures_util::stream::StreamExt;
+
+use crate::node::{AnyNode, Joiner, ProcessResult, RouteResult, Router, Sink, Source, Transform};
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
 use super::DagOrchestrator;
@@ -49,11 +51,10 @@ impl DagOrchestrator {
     pub(super) async fn run_node_loop(
         node_id: String,
         node: Arc<Mutex<AnyNode>>,
-        input_receivers: Vec<QueueReceiver<RuntimeEnvelope>>,
+        input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
         output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
         cancel_token: CancellationToken,
     ) {
-        // Hold lock for entire loop duration - see module docs for rationale
         let mut locked = node.lock().await;
 
         match &mut *locked {
@@ -62,7 +63,7 @@ impl DagOrchestrator {
                     .await;
             }
             AnyNode::Transform(transform) => {
-                if let Some(receiver) = input_receivers.into_iter().next() {
+                if let Some((_, receiver)) = input_receivers.into_iter().next() {
                     Self::run_transform_loop(
                         &node_id,
                         transform.as_mut(),
@@ -74,12 +75,31 @@ impl DagOrchestrator {
                 }
             }
             AnyNode::Sink(sink) => {
-                if let Some(receiver) = input_receivers.into_iter().next() {
+                if let Some((_, receiver)) = input_receivers.into_iter().next() {
                     Self::run_sink_loop(&node_id, sink.as_mut(), receiver, &cancel_token).await;
                 }
             }
-            AnyNode::Router(_) | AnyNode::Joiner(_) => {
-                todo!("Router and Joiner node loops not yet implemented")
+            AnyNode::Router(router) => {
+                if let Some((_, receiver)) = input_receivers.into_iter().next() {
+                    Self::run_router_loop(
+                        &node_id,
+                        router.as_mut(),
+                        receiver,
+                        &output_senders,
+                        &cancel_token,
+                    )
+                    .await;
+                }
+            }
+            AnyNode::Joiner(joiner) => {
+                Self::run_joiner_loop(
+                    &node_id,
+                    joiner.as_mut(),
+                    input_receivers,
+                    &output_senders,
+                    &cancel_token,
+                )
+                .await;
             }
         }
     }
@@ -280,5 +300,198 @@ impl DagOrchestrator {
             }
         }
         tracing::info!(node = %node_id, "Sink loop stopped");
+    }
+
+    /// Run the router node loop.
+    ///
+    /// Receives messages from the input queue, routes them based on content,
+    /// and sends to the appropriate output port. Supports cancellation.
+    ///
+    /// # Cancel Safety
+    ///
+    /// Router calls are processed OUTSIDE `tokio::select!` to ensure they run to
+    /// completion. See module-level docs for rationale.
+    pub(super) async fn run_router_loop(
+        node_id: &str,
+        router: &mut dyn Router,
+        mut receiver: QueueReceiver<RuntimeEnvelope>,
+        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        cancel_token: &CancellationToken,
+    ) {
+        tracing::info!(node = %node_id, "Router loop started");
+        loop {
+            if cancel_token.is_cancelled() {
+                tracing::debug!(node = %node_id, "Router cancelled");
+                break;
+            }
+
+            // ONLY recv() inside select - NO WASM calls here!
+            let maybe_envelope = tokio::select! {
+                biased;
+                () = cancel_token.cancelled() => None,
+                envelope = receiver.recv() => envelope,
+            };
+
+            if let Some(envelope) = maybe_envelope {
+                let input_id = envelope.id.clone();
+                let start = Instant::now();
+
+                // WASM call OUTSIDE select - cancel safe
+                match router.route(envelope).await {
+                    Ok(RouteResult::Route(port, output)) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            port = %port,
+                            output_id = %output.id,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Router routed"
+                        );
+                        // Find sender for this port
+                        if let Some((_, sender)) = output_senders.iter().find(|(p, _)| p == &port) {
+                            if let Err(e) = sender.send(output).await {
+                                tracing::warn!(node = %node_id, port = %port, error = %e, "Failed to send to port");
+                            }
+                        } else {
+                            tracing::warn!(node = %node_id, port = %port, "Unknown output port, dropping message");
+                        }
+                    }
+                    Ok(RouteResult::Filter) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Router filtered"
+                        );
+                    }
+                    Ok(RouteResult::Error(e)) => {
+                        tracing::warn!(
+                            node = %node_id,
+                            code = %e.code,
+                            message = %e.message,
+                            "Router error - continuing"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(node = %node_id, error = %e, "Router route failed");
+                    }
+                }
+            } else {
+                if !cancel_token.is_cancelled() {
+                    tracing::debug!(node = %node_id, "Input queue closed");
+                }
+                break;
+            }
+        }
+        tracing::info!(node = %node_id, "Router loop stopped");
+    }
+
+    /// Run the joiner node loop.
+    ///
+    /// Receives messages from multiple input queues (one per input port), merges them,
+    /// and processes each through the joiner. Supports cancellation.
+    ///
+    /// # Cancel Safety
+    ///
+    /// WASM calls are processed OUTSIDE `tokio::select!` to ensure they run to
+    /// completion. See module-level docs for rationale.
+    pub(super) async fn run_joiner_loop(
+        node_id: &str,
+        joiner: &mut dyn Joiner,
+        input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
+        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        cancel_token: &CancellationToken,
+    ) {
+        use std::pin::Pin;
+        tracing::info!(node = %node_id, inputs = input_receivers.len(), "Joiner loop started");
+
+        let streams: Vec<Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>> = input_receivers
+            .into_iter()
+            .map(|(port_name, receiver)| {
+                let stream = futures_util::stream::unfold(
+                    (port_name, receiver),
+                    |(port_name, mut rx)| async move {
+                        rx.recv()
+                            .await
+                            .map(|env| ((port_name.clone(), env), (port_name, rx)))
+                    },
+                );
+                Box::pin(stream) as Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>
+            })
+            .collect();
+
+        let mut merged = futures_util::stream::select_all(streams);
+
+        loop {
+            if cancel_token.is_cancelled() {
+                tracing::debug!(node = %node_id, "Joiner cancelled");
+                break;
+            }
+
+            // ONLY stream.next() inside select - NO WASM calls here!
+            let maybe_item = tokio::select! {
+                biased;
+                () = cancel_token.cancelled() => None,
+                item = merged.next() => item,
+            };
+
+            if let Some((port_name, envelope)) = maybe_item {
+                let input_id = envelope.id.clone();
+                let start = Instant::now();
+
+                // WASM call OUTSIDE select - cancel safe
+                match joiner.process(&port_name, envelope).await {
+                    Ok(ProcessResult::Emit(output)) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            port = %port_name,
+                            output_id = %output.id,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Joiner emitted"
+                        );
+                        // Send to output (joiner has single output)
+                        if output_senders.len() == 1 {
+                            if let Err(e) = output_senders[0].1.send(output).await {
+                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                            }
+                        } else {
+                            for (_, sender) in output_senders {
+                                if let Err(e) = sender.send(output.clone()).await {
+                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                }
+                            }
+                        }
+                    }
+                    Ok(ProcessResult::Filter) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            port = %port_name,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Joiner filtered"
+                        );
+                    }
+                    Ok(ProcessResult::Error(e)) => {
+                        tracing::warn!(
+                            node = %node_id,
+                            port = %port_name,
+                            code = %e.code,
+                            message = %e.message,
+                            "Joiner error - continuing"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(node = %node_id, port = %port_name, error = %e, "Joiner process failed");
+                    }
+                }
+            } else {
+                if !cancel_token.is_cancelled() {
+                    tracing::debug!(node = %node_id, "All input queues closed");
+                }
+                break;
+            }
+        }
+        tracing::info!(node = %node_id, "Joiner loop stopped");
     }
 }
