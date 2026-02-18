@@ -129,7 +129,7 @@ impl Source for FileSource {
                 let mut bytes = Vec::new();
                 reader.read_to_end(&mut bytes)?;
                 self.binary_sent = true;
-                return Ok(Some(RuntimeEnvelope::new(&self.id, bytes)));
+                return Ok(Some(RuntimeEnvelope::new(&self.id, bytes).with_metadata("source_route", self.path.display().to_string())));
             }
 
             let mut line = String::new();
@@ -142,7 +142,7 @@ impl Source for FileSource {
                         .trim_end_matches('\r')
                         .as_bytes()
                         .to_vec();
-                    Ok(Some(RuntimeEnvelope::new(&self.id, payload)))
+                    Ok(Some(RuntimeEnvelope::new(&self.id, payload).with_metadata("source_route", self.path.display().to_string())))
                 }
                 Err(e) => Err(WaferError::Io(e)),
             }

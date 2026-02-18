@@ -105,7 +105,7 @@ impl Source for StdinSource {
                         .trim_end_matches('\r')
                         .as_bytes()
                         .to_vec();
-                    Ok(Some(RuntimeEnvelope::new(&self.id, payload)))
+                    Ok(Some(RuntimeEnvelope::new(&self.id, payload).with_metadata("source_route", "stdin")))
                 }
                 Err(e) => Err(WaferError::Io(e)),
             }
