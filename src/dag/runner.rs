@@ -3,6 +3,19 @@
 //! This module contains the async execution loops for source, transform, and sink nodes.
 //! Each loop handles cancellation, message passing, and error handling.
 //!
+//! # WASM Cancel Safety (CRITICAL)
+//!
+//! Transform and sink loops that invoke WASM components MUST NOT place `call_async`
+//! futures inside `tokio::select!` branches. When `select!` cancels a WASM call
+//! mid-execution, the component instance enters a permanently poisoned state and
+//! cannot be re-entered (wasmtime issue #10088, #10995).
+//!
+//! **Correct pattern**: Use `select!` only for channel receives (which are cancel-safe),
+//! then process WASM calls outside the select block to ensure they run to completion.
+//!
+//! **Incorrect pattern**: Placing `transform.process().await` inside a `select!` branch
+//! allows cancellation to poison the WASM instance.
+//!
 //! # Mutex Holding Strategy
 //!
 //! Node loops acquire the mutex at the start and hold it for the entire loop
@@ -129,6 +142,11 @@ impl DagOrchestrator {
     ///
     /// Receives messages from the input queue, processes them through the transform,
     /// and sends results to all downstream nodes. Supports cancellation.
+    ///
+    /// # Cancel Safety
+    ///
+    /// WASM calls are processed OUTSIDE `tokio::select!` to ensure they run to
+    /// completion. See module-level docs for rationale.
     pub(super) async fn run_transform_loop(
         node_id: &str,
         transform: &mut dyn Transform,
@@ -137,49 +155,50 @@ impl DagOrchestrator {
         cancel_token: &CancellationToken,
     ) {
         loop {
-            tokio::select! {
+            if cancel_token.is_cancelled() {
+                tracing::debug!(node = %node_id, "Transform cancelled");
+                break;
+            }
+
+            let maybe_envelope = tokio::select! {
                 biased;
+                () = cancel_token.cancelled() => None,
+                envelope = receiver.recv() => envelope,
+            };
 
-                () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Transform cancelled");
-                    break;
-                }
-
-                maybe_envelope = receiver.recv() => {
-                    if let Some(envelope) = maybe_envelope {
-                        match transform.process(envelope).await {
-                            Ok(ProcessResult::Emit(output)) => {
-                                // Optimization: avoid clone for single downstream
-                                if output_senders.len() == 1 {
-                                    if let Err(e) = output_senders[0].1.send(output).await {
-                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                    }
-                                } else {
-                                    for (_, sender) in output_senders {
-                                        if let Err(e) = sender.send(output.clone()).await {
-                                            tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
-                                        }
-                                    }
+            if let Some(envelope) = maybe_envelope {
+                match transform.process(envelope).await {
+                    Ok(ProcessResult::Emit(output)) => {
+                        if output_senders.len() == 1 {
+                            if let Err(e) = output_senders[0].1.send(output).await {
+                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                            }
+                        } else {
+                            for (_, sender) in output_senders {
+                                if let Err(e) = sender.send(output.clone()).await {
+                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
                                 }
                             }
-                            Ok(ProcessResult::Filter) => {}
-                            Ok(ProcessResult::Error(e)) => {
-                                tracing::warn!(
-                                    node = %node_id,
-                                    code = %e.code,
-                                    message = %e.message,
-                                    "Transform error - continuing"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::error!(node = %node_id, error = %e, "Transform process failed");
-                            }
                         }
-                    } else {
-                        tracing::debug!(node = %node_id, "Input queue closed");
-                        break;
+                    }
+                    Ok(ProcessResult::Filter) => {}
+                    Ok(ProcessResult::Error(e)) => {
+                        tracing::warn!(
+                            node = %node_id,
+                            code = %e.code,
+                            message = %e.message,
+                            "Transform error - continuing"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(node = %node_id, error = %e, "Transform process failed");
                     }
                 }
+            } else {
+                if !cancel_token.is_cancelled() {
+                    tracing::debug!(node = %node_id, "Input queue closed");
+                }
+                break;
             }
         }
     }
@@ -188,6 +207,11 @@ impl DagOrchestrator {
     ///
     /// Receives messages from the input queue and collects them via the sink.
     /// Supports cancellation.
+    ///
+    /// # Cancel Safety
+    ///
+    /// Sink calls are processed OUTSIDE `tokio::select!` to ensure they run to
+    /// completion. See module-level docs for rationale.
     pub(super) async fn run_sink_loop(
         node_id: &str,
         sink: &mut dyn Sink,
@@ -195,24 +219,26 @@ impl DagOrchestrator {
         cancel_token: &CancellationToken,
     ) {
         loop {
-            tokio::select! {
+            if cancel_token.is_cancelled() {
+                tracing::debug!(node = %node_id, "Sink cancelled");
+                break;
+            }
+
+            let maybe_envelope = tokio::select! {
                 biased;
+                () = cancel_token.cancelled() => None,
+                envelope = receiver.recv() => envelope,
+            };
 
-                () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Sink cancelled");
-                    break;
+            if let Some(envelope) = maybe_envelope {
+                if let Err(e) = sink.collect(envelope).await {
+                    tracing::error!(node = %node_id, error = %e, "Sink collect failed");
                 }
-
-                maybe_envelope = receiver.recv() => {
-                    if let Some(envelope) = maybe_envelope {
-                        if let Err(e) = sink.collect(envelope).await {
-                            tracing::error!(node = %node_id, error = %e, "Sink collect failed");
-                        }
-                    } else {
-                        tracing::debug!(node = %node_id, "Input queue closed");
-                        break;
-                    }
+            } else {
+                if !cancel_token.is_cancelled() {
+                    tracing::debug!(node = %node_id, "Input queue closed");
                 }
+                break;
             }
         }
     }
