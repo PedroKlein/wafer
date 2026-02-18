@@ -10,7 +10,7 @@
 ## Current State
 
 The MVP implements **DAG-only pipelines** with:
-- Linear chain execution: `StdinSource/FileSource → Transform(s) → StdoutSink/FileSink`
+- Linear chain execution: `StdinSource/FileSource/MqttSource → Transform(s) → StdoutSink/FileSink/MqttSink`
 - WASI Preview 2 component loading via wasmtime
 - WIT-based type contracts (`transform-node` world)
 - Fuel-based execution metering with per-call reset
@@ -37,18 +37,29 @@ cargo run -- --config examples/dag-file-io.toml
 ```
 src/
 ├── engine/
-│   ├── host.rs       # WaferState: WasiView impl, Capabilities for scoping
-│   ├── instance.rs   # TransformInstance: bindgen!, component instantiation
-│   ├── loader.rs     # WaferEngine: wasmtime config, cached Linker, component loading
+│   ├── host.rs         # WaferState: WasiView impl, Capabilities for scoping
+│   ├── instance.rs     # TransformInstance: bindgen!, component instantiation
+│   ├── loader.rs       # WaferEngine: wasmtime config, cached Linker, component loading
+│   ├── capabilities.rs # Capabilities struct for security boundaries
 │   └── mod.rs
 ├── node/
 │   ├── traits.rs     # Lifecycle and Transform traits
 │   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
-│   ├── source.rs     # Source trait + FileSource + StdinSource
-│   ├── sink.rs       # Sink trait + FileSink + StdoutSink
+│   ├── source/       # Source trait and implementations
+│   │   ├── mod.rs    # Source trait definition + re-exports
+│   │   ├── file.rs   # FileSource implementation
+│   │   ├── stdin.rs  # StdinSource implementation
+│   │   └── mqtt.rs   # MqttSource implementation (rumqttc)
+│   ├── sink/         # Sink trait and implementations
+│   │   ├── mod.rs    # Sink trait definition + re-exports
+│   │   ├── file.rs   # FileSink implementation
+│   │   ├── stdout.rs # StdoutSink implementation
+│   │   └── mqtt.rs   # MqttSink implementation (rumqttc)
 │   └── mod.rs        # AnyNode enum (Transform, Source, Sink variants)
 ├── dag/
-│   ├── orchestrator.rs # DagOrchestrator: petgraph topology, queue wiring, async execution
+│   ├── orchestrator.rs # DagOrchestrator: core struct, run(), topology management
+│   ├── builder.rs      # from_config(), validation, wire_queues()
+│   ├── runner.rs       # Node execution loops (source, transform, sink)
 │   └── mod.rs
 ├── queue/
 │   ├── bounded.rs    # BoundedQueue<T>: SPSC with tokio::sync::mpsc
@@ -103,6 +114,9 @@ wit/
 | `examples/dag-chain.toml` | stdin → uppercase → filter → stdout |
 | `examples/dag-file-io.toml` | file → passthrough → file |
 | `examples/dag-mnist-inference.toml` | file → tensor-prep → mnist-inference → result-format → stdout |
+| `examples/dag-mqtt.toml` | mqtt → passthrough → mqtt |
+| `examples/dag-mqtt-simple.toml` | mqtt → mqtt (no transform) |
+| `examples/dag-remote.toml` | stdin → OCI plugin → stdout |
 
 ---
 
@@ -144,6 +158,8 @@ wit/
 - [x] `FileSink` struct implementing Lifecycle + Sink (line-based file writing)
 - [x] `StdinSource` struct implementing Lifecycle + Source (stdin line reading)
 - [x] `StdoutSink` struct implementing Lifecycle + Sink (stdout line writing)
+- [x] `MqttSource` struct implementing Lifecycle + Source (MQTT subscription via rumqttc)
+- [x] `MqttSink` struct implementing Lifecycle + Sink (MQTT publishing via rumqttc)
 - [x] `AnyNode` enum with `Transform`, `Source`, `Sink` variants
 - [x] Traits are `Send` but not `Sync` (WASM stores aren't thread-safe)
 
@@ -158,8 +174,8 @@ wit/
 - [x] Graceful shutdown in reverse topological order
 - [x] Error handling: log and continue (non-fatal)
 - [x] CLI `--config` flag for DAG TOML files
-- [x] `source_type` discriminator: `stdin` or `file`
-- [x] `sink_type` discriminator: `stdout` or `file`
+- [x] `source_type` discriminator: `stdin`, `file`, or `mqtt`
+- [x] `sink_type` discriminator: `stdout`, `file`, or `mqtt`
 
 ### Capability Scoping
 - [x] `Capabilities` struct for security boundaries
@@ -221,8 +237,9 @@ wit/
 - [ ] Overflow policy: `dead-letter` (SPEC §8.2)
 
 ### External Integration
-- [ ] MQTT source/sink
-- [ ] Other external connectors
+- [x] ~~MQTT source/sink~~ - Implemented via rumqttc (see [mqtt-setup.md](mqtt-setup.md))
+- [ ] HTTP source/sink
+- [ ] Kafka source/sink
 
 ### Advanced WIT Types
 - [ ] `json-value` payload variant
@@ -248,7 +265,7 @@ wit/
 | Area | Limitation | Notes |
 |------|------------|-------|
 | **Pipeline** | Linear chains only (no fan-out/fan-in) | Router/Joiner pending |
-| **I/O** | stdin/stdout or file-based (no network sources) | MQTT planned |
+| **I/O** | stdin/stdout, file, or MQTT | HTTP/Kafka planned |
 | **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
 | **WIT** | Only `raw(list<u8>)` payload supported | |
 | **State** | Stateless transforms only | |
