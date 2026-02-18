@@ -60,8 +60,8 @@ src/
 │   └── mod.rs
 ├── registry/
 │   ├── cache.rs      # PackageCache: file-based cache with TTL
-│   ├── client.rs     # WaferRegistry: OCI client via wasm-pkg-client
-│   ├── types.rs      # PluginSource, PackageRef, ResolvedPlugin, RegistryConfig
+│   ├── client.rs     # WaferRegistry: OCI client via oci-client + docker_credential
+│   ├── types.rs      # PluginSource, OciReference, ResolvedPlugin, RegistryConfig
 │   └── mod.rs
 ├── metrics/
 │   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
@@ -119,13 +119,13 @@ wit/
 - [x] Component loading from bytes (`load_component_from_bytes`)
 
 ### Registry Support (OCI)
-- [x] `WaferRegistry` client for fetching packages from OCI registries
-- [x] File-based cache with TTL-based invalidation (`~/.cache/wafer/packages/`)
-- [x] Semver version resolution (supports `^1.0`, `=2.0.0`, `>=1.0,<2.0`)
-- [x] Package references: `namespace:name` format (e.g., `wafer:uppercase`)
+- [x] `WaferRegistry` client for fetching plugins from OCI registries
+- [x] Direct OCI image references (e.g., `ghcr.io/pedroklein/wafer-uppercase:0.0.1`)
+- [x] File-based cache with TTL-based invalidation (`~/.cache/wafer/plugins/`)
+- [x] Docker credential support via `docker_credential` crate (config.json + helpers)
 - [x] `--no-cache` CLI flag to bypass cache
 - [x] Fallback to cached version on network error (with warning)
-- [x] `RegistryConfig` for default registry, TTL, and cache directory
+- [x] `RegistryConfig` for TTL and cache directory
 
 ### WIT Contract (`transform-node` world)
 - [x] `types` interface: `Envelope`, `Payload`, `ProcessResult`, `ProcessError`, `Metadata`
@@ -331,14 +331,13 @@ to = "sink"
 
 See `examples/` directory for complete examples.
 
-### Remote Package Configuration
+### Remote Plugin Configuration (OCI)
 
-Transforms can be loaded from OCI registries instead of local files:
+Transforms can be loaded from OCI registries instead of local files using direct image references:
 
 ```toml
 # Registry configuration (optional - has defaults)
 [registry]
-default_registry = "ghcr.io/wafer-plugins"
 cache_ttl_hours = 24
 # cache_dir = "/custom/cache/path"  # optional
 
@@ -346,9 +345,7 @@ cache_ttl_hours = 24
 id = "transform"
 node_type = "transform"
 [nodes.config]
-package = "wafer:uppercase"   # namespace:name format
-version = "^1.0"              # semver requirement
-# registry = "custom.io"      # optional per-package override
+oci = "ghcr.io/pedroklein/wafer-uppercase:0.0.1"  # direct OCI reference
 ```
 
 **CLI flags:**
@@ -360,8 +357,13 @@ cargo run -- --config examples/dag-remote.toml
 cargo run -- --config examples/dag-remote.toml --no-cache
 ```
 
+**Authentication:**
+- Reads credentials from `~/.docker/config.json` automatically
+- Supports credential helpers (e.g., `docker-credential-osxkeychain`)
+- Falls back to anonymous access if no credentials found
+
 **Cache behavior:**
-- Packages cached at `~/.cache/wafer/packages/{namespace}/{name}/{version}.wasm`
+- Plugins cached at `~/.cache/wafer/plugins/{registry}/{repository}/{tag}.wasm`
 - TTL-based invalidation (default: 24 hours)
 - On network error: falls back to cached version with warning log
 

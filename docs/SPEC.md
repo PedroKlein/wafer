@@ -220,7 +220,7 @@ These features are desirable but may be simplified or deferred based on implemen
 | **Metrics**       | prometheus crate            | Standard format, wide tooling support                         |
 | **Logging**       | tracing crate               | Structured logging, spans for tracing                         |
 | **Queues**        | crossbeam-channel or custom | Lock-free, bounded SPSC                                       |
-| **Registry**      | wasm-pkg-client             | OCI registry access for remote WASM components                |
+| **Registry**      | oci-client + docker_credential | Direct OCI registry access with Docker credential support  |
 
 ### 3.3 Execution Model
 
@@ -892,14 +892,12 @@ pipeline:
   description: "Process sensor data from MQTT and publish alerts"
 
 # ============================================================================
-# Registry Configuration (for remote WASM packages)
+# Registry Configuration (for remote WASM plugins)
 # ============================================================================
 registry:
-  # Default OCI registry for packages without explicit registry
-  default_registry: "ghcr.io/wafer-plugins"
   # Cache TTL in hours (default: 24)
   cache_ttl_hours: 24
-  # Optional custom cache directory (default: ~/.cache/wafer/packages)
+  # Optional custom cache directory (default: ~/.cache/wafer/plugins)
   # cache_dir: "/custom/cache/path"
   
 # ============================================================================
@@ -922,13 +920,11 @@ nodes:
       plugin_path: "plugins/json-parse.wasm"  # Local path
       strict: true
       
-  # Transform: Using remote package from registry
+  # Transform: Using remote plugin from OCI registry
   - id: uppercase
     type: transform/uppercase
     config:
-      package: "wafer:uppercase"    # namespace:name format
-      version: "^1.0"               # semver requirement (^, =, >=, etc.)
-      # registry: "custom.io"       # optional per-package registry override
+      oci: "ghcr.io/wafer-plugins/uppercase:1.0.0"  # direct OCI image reference
       
   # Transform: Filter by temperature threshold
   - id: temp-filter
