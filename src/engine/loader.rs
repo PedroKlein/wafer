@@ -98,9 +98,6 @@ impl WaferEngine {
         // Fuel metering for instruction counting
         config.consume_fuel(true);
 
-        // Async support for async component calls
-        config.async_support(true);
-
         // WASM component model support
         config.wasm_component_model(true);
 
