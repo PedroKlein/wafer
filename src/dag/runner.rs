@@ -78,6 +78,9 @@ impl DagOrchestrator {
                     Self::run_sink_loop(&node_id, sink.as_mut(), receiver, &cancel_token).await;
                 }
             }
+            AnyNode::Router(_) | AnyNode::Joiner(_) => {
+                todo!("Router and Joiner node loops not yet implemented")
+            }
         }
     }
 

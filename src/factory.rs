@@ -146,6 +146,7 @@ pub async fn create_node(node_def: &NodeDefinition, ctx: &mut FactoryContext) ->
         NodeType::Source => create_source(node_def),
         NodeType::Transform => create_transform(node_def, ctx).await,
         NodeType::Sink => create_sink(node_def),
+        NodeType::Router | NodeType::Joiner => todo!("Router and Joiner node creation not yet implemented"),
     }
 }
 
