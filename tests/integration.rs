@@ -206,7 +206,10 @@ use wafer_poc::config::{DagConfig, EdgeDefinition, NodeDefinition, NodeType};
 use wafer_poc::registry::RegistryConfig;
 use wafer_poc::dag::DagOrchestrator;
 use wafer_poc::engine::{Capabilities, TransformInstance, WaferEngine};
-use wafer_poc::node::{AnyNode, FileSink, FileSource, Lifecycle, NodeConfig, WasmTransform};
+use wafer_poc::node::{
+    AnyNode, FileSink, FileSource, JoinerInstance, Lifecycle, NodeConfig, RouterInstance,
+    WasmJoiner, WasmRouter, WasmTransform,
+};
 
 fn plugin_path() -> PathBuf {
     project_root()
@@ -231,6 +234,14 @@ fn tensor_prep_plugin_path() -> PathBuf {
 
 fn result_format_plugin_path() -> PathBuf {
     project_root().join("plugins/result-format/target/wasm32-wasip2/release/result_format.wasm")
+}
+
+fn content_router_plugin_path() -> PathBuf {
+    project_root().join("plugins/content-router/target/wasm32-wasip2/release/content_router.wasm")
+}
+
+fn merge_joiner_plugin_path() -> PathBuf {
+    project_root().join("plugins/merge-joiner/target/wasm32-wasip2/release/merge_joiner.wasm")
 }
 
 async fn create_wasm_transform(id: &str) -> WasmTransform {
@@ -305,6 +316,30 @@ async fn create_result_format_transform(id: &str) -> WasmTransform {
         .expect("Failed to create result-format instance");
     let config = NodeConfig::new(id, "transform/result-format");
     WasmTransform::new(engine, instance, config)
+}
+
+async fn create_wasm_router(id: &str) -> WasmRouter {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(content_router_plugin_path())
+        .expect("Failed to load router plugin");
+    let instance = RouterInstance::new(&engine, &component, Capabilities::with_stdio())
+        .await
+        .expect("Failed to create router instance");
+    let config = NodeConfig::new(id, "router/content-router");
+    WasmRouter::new(engine, instance, config)
+}
+
+async fn create_wasm_joiner(id: &str) -> WasmJoiner {
+    let engine = WaferEngine::new().expect("Failed to create engine");
+    let component = engine
+        .load_component(merge_joiner_plugin_path())
+        .expect("Failed to load joiner plugin");
+    let instance = JoinerInstance::new(&engine, &component, Capabilities::with_stdio())
+        .await
+        .expect("Failed to create joiner instance");
+    let config = NodeConfig::new(id, "joiner/merge-joiner");
+    WasmJoiner::new(engine, instance, config)
 }
 
 #[tokio::test]
@@ -1135,5 +1170,348 @@ fn test_dag_mnist_inference_pipeline() {
         stdout.contains("\"confidence\""),
         "Expected 'confidence' field in output: {}",
         stdout
+    );
+}
+
+// ============================================================================
+// Router/Joiner integration tests (Diamond pattern)
+// ============================================================================
+
+#[tokio::test]
+async fn test_diamond_pattern() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_path = dir.path().join("output.txt");
+
+    // Write test input: JSON messages with routing keys
+    // The content-router routes based on JSON "route" field
+    std::fs::write(
+        &input_path,
+        r#"{"route": "a", "data": "test-a"}
+{"route": "b", "data": "test-b"}
+"#,
+    )
+    .expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "router".to_string(),
+                node_type: NodeType::Router,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform-a".to_string(),
+                node_type: NodeType::Transform,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "transform-b".to_string(),
+                node_type: NodeType::Transform,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "joiner".to_string(),
+                node_type: NodeType::Joiner,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            // source → router
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "router".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+            },
+            // router → transform-a (port-a)
+            EdgeDefinition {
+                from: "router".to_string(),
+                to: "transform-a".to_string(),
+                from_port: Some("port-a".to_string()),
+                to_port: None,
+                queue_capacity: None,
+            },
+            // router → transform-b (port-b)
+            EdgeDefinition {
+                from: "router".to_string(),
+                to: "transform-b".to_string(),
+                from_port: Some("port-b".to_string()),
+                to_port: None,
+                queue_capacity: None,
+            },
+            // transform-a → joiner (input-a)
+            EdgeDefinition {
+                from: "transform-a".to_string(),
+                to: "joiner".to_string(),
+                from_port: None,
+                to_port: Some("input-a".to_string()),
+                queue_capacity: None,
+            },
+            // transform-b → joiner (input-b)
+            EdgeDefinition {
+                from: "transform-b".to_string(),
+                to: "joiner".to_string(),
+                from_port: None,
+                to_port: Some("input-b".to_string()),
+                queue_capacity: None,
+            },
+            // joiner → sink
+            EdgeDefinition {
+                from: "joiner".to_string(),
+                to: "sink".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
+    };
+
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    // Create nodes
+    let source = FileSource::new("source", &input_path);
+    let router = create_wasm_router("router").await;
+    let transform_a = create_uppercase_transform("transform-a").await;
+    let transform_b = create_wasm_transform("transform-b").await; // passthrough
+    let joiner = create_wasm_joiner("joiner").await;
+    let sink = FileSink::new("sink", output_path.clone());
+
+    // Register all nodes
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("router", AnyNode::from_router(router))
+        .expect("Failed to register router");
+    orchestrator
+        .register_node("transform-a", AnyNode::from_transform(transform_a))
+        .expect("Failed to register transform-a");
+    orchestrator
+        .register_node("transform-b", AnyNode::from_transform(transform_b))
+        .expect("Failed to register transform-b");
+    orchestrator
+        .register_node("joiner", AnyNode::from_joiner(joiner))
+        .expect("Failed to register joiner");
+    orchestrator
+        .register_node("sink", AnyNode::from_sink(sink))
+        .expect("Failed to register sink");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    let output = std::fs::read_to_string(&output_path).expect("Failed to read output");
+
+    // Verify that both messages were processed (order may vary)
+    // Messages routed through port-a go to uppercase transform
+    // Messages routed through port-b go to passthrough transform
+    assert!(
+        output.contains("test-a") || output.contains("TEST-A"),
+        "Expected output to contain test-a data: {}",
+        output
+    );
+    assert!(
+        output.contains("test-b"),
+        "Expected output to contain test-b data: {}",
+        output
+    );
+}
+
+// ============================================================================
+// Fan-out pattern test (Router only, no Joiner)
+// ============================================================================
+
+/// Test fan-out routing pattern: Source → Router → [Sink-A, Sink-B]
+///
+/// This test verifies content-based routing where messages are routed to
+/// different sinks based on their JSON "route" field, without using a joiner.
+#[tokio::test]
+async fn test_fanout_pattern() {
+    let dir = tempdir().expect("Failed to create temp dir");
+    let input_path = dir.path().join("input.txt");
+    let output_a_path = dir.path().join("output-a.txt");
+    let output_b_path = dir.path().join("output-b.txt");
+
+    // Write test input: JSON messages with routing keys
+    // {"route": "a"} → port-a → sink-a
+    // {"route": "b"} → port-b → sink-b
+    std::fs::write(
+        &input_path,
+        r#"{"route": "a", "data": "for-a"}
+{"route": "b", "data": "for-b"}
+{"route": "a", "data": "also-for-a"}
+"#,
+    )
+    .expect("Failed to write input");
+
+    let config = DagConfig {
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "router".to_string(),
+                node_type: NodeType::Router,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink-a".to_string(),
+                node_type: NodeType::Sink,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+            NodeDefinition {
+                id: "sink-b".to_string(),
+                node_type: NodeType::Sink,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+            },
+        ],
+        edges: vec![
+            // source → router (no port)
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "router".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+            },
+            // router → sink-a (from_port: "port-a")
+            EdgeDefinition {
+                from: "router".to_string(),
+                to: "sink-a".to_string(),
+                from_port: Some("port-a".to_string()),
+                to_port: None,
+                queue_capacity: None,
+            },
+            // router → sink-b (from_port: "port-b")
+            EdgeDefinition {
+                from: "router".to_string(),
+                to: "sink-b".to_string(),
+                from_port: Some("port-b".to_string()),
+                to_port: None,
+                queue_capacity: None,
+            },
+        ],
+        default_queue_capacity: 1024,
+        registry: RegistryConfig::default(),
+    };
+
+    let mut orchestrator =
+        DagOrchestrator::from_config(config).expect("Failed to create orchestrator");
+
+    // Create nodes
+    let source = FileSource::new("source", &input_path);
+    let router = create_wasm_router("router").await;
+    let sink_a = FileSink::new("sink-a", output_a_path.clone());
+    let sink_b = FileSink::new("sink-b", output_b_path.clone());
+
+    // Register all nodes
+    orchestrator
+        .register_node("source", AnyNode::from_source(source))
+        .expect("Failed to register source");
+    orchestrator
+        .register_node("router", AnyNode::from_router(router))
+        .expect("Failed to register router");
+    orchestrator
+        .register_node("sink-a", AnyNode::from_sink(sink_a))
+        .expect("Failed to register sink-a");
+    orchestrator
+        .register_node("sink-b", AnyNode::from_sink(sink_b))
+        .expect("Failed to register sink-b");
+
+    orchestrator.wire_queues().expect("Failed to wire queues");
+    orchestrator.run().await.expect("Failed to run DAG");
+
+    // Read output files
+    let output_a = std::fs::read_to_string(&output_a_path).expect("Failed to read output-a");
+    let output_b = std::fs::read_to_string(&output_b_path).expect("Failed to read output-b");
+
+    // Verify routing: messages with "route": "a" should go to sink-a
+    // Don't assume ordering - check content
+    assert!(
+        output_a.contains("for-a"),
+        "Expected sink-a to contain 'for-a': {}",
+        output_a
+    );
+    assert!(
+        output_a.contains("also-for-a"),
+        "Expected sink-a to contain 'also-for-a': {}",
+        output_a
+    );
+    assert!(
+        !output_a.contains("for-b"),
+        "Expected sink-a to NOT contain 'for-b': {}",
+        output_a
+    );
+
+    // Verify routing: messages with "route": "b" should go to sink-b
+    assert!(
+        output_b.contains("for-b"),
+        "Expected sink-b to contain 'for-b': {}",
+        output_b
+    );
+    assert!(
+        !output_b.contains("for-a"),
+        "Expected sink-b to NOT contain 'for-a': {}",
+        output_b
+    );
+    assert!(
+        !output_b.contains("also-for-a"),
+        "Expected sink-b to NOT contain 'also-for-a': {}",
+        output_b
+    );
+
+    // Count lines to verify correct message counts
+    let output_a_lines: Vec<&str> = output_a.lines().filter(|l| !l.is_empty()).collect();
+    let output_b_lines: Vec<&str> = output_b.lines().filter(|l| !l.is_empty()).collect();
+
+    assert_eq!(
+        output_a_lines.len(),
+        2,
+        "Expected 2 messages in sink-a, got {}: {:?}",
+        output_a_lines.len(),
+        output_a_lines
+    );
+    assert_eq!(
+        output_b_lines.len(),
+        1,
+        "Expected 1 message in sink-b, got {}: {:?}",
+        output_b_lines.len(),
+        output_b_lines
     );
 }
