@@ -90,6 +90,10 @@ impl DagOrchestrator {
     ///
     /// Each edge gets a bounded queue with capacity from the edge config
     /// or the default queue capacity.
+    ///
+    /// Queue keys include port information for router/joiner support:
+    /// - Key format: `("from_node:from_port", "to_node:to_port")`
+    /// - Default port is "default" when not specified
     pub fn wire_queues(&mut self) -> Result<()> {
         for edge in &self.config.edges {
             let capacity = edge
@@ -97,7 +101,13 @@ impl DagOrchestrator {
                 .unwrap_or(self.config.default_queue_capacity);
             let queue = BoundedQueue::new(capacity);
             let (sender, receiver) = queue.split();
-            let key = (edge.from.clone(), edge.to.clone());
+
+            let from_port = edge.from_port.as_deref().unwrap_or("default");
+            let to_port = edge.to_port.as_deref().unwrap_or("default");
+            let key = (
+                format!("{}:{}", edge.from, from_port),
+                format!("{}:{}", edge.to, to_port),
+            );
             self.queue_senders.insert(key.clone(), sender);
             self.queue_receivers.insert(key, receiver);
         }
@@ -409,12 +419,13 @@ mod tests {
 
         assert_eq!(orchestrator.queue_senders.len(), 2);
         assert_eq!(orchestrator.queue_receivers.len(), 2);
+        assert!(orchestrator.queue_senders.contains_key(&(
+            "source:default".to_string(),
+            "transform:default".to_string()
+        )));
         assert!(orchestrator
             .queue_senders
-            .contains_key(&("source".to_string(), "transform".to_string())));
-        assert!(orchestrator
-            .queue_senders
-            .contains_key(&("transform".to_string(), "sink".to_string())));
+            .contains_key(&("transform:default".to_string(), "sink:default".to_string())));
     }
 
     #[test]
@@ -440,7 +451,7 @@ mod tests {
 
         let receiver = orchestrator
             .queue_receivers
-            .get(&("source".to_string(), "sink".to_string()))
+            .get(&("source:default".to_string(), "sink:default".to_string()))
             .unwrap();
         assert_eq!(receiver.capacity(), 42);
     }

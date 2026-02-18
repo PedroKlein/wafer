@@ -96,6 +96,10 @@ impl fmt::Debug for DagOrchestrator {
 }
 
 impl DagOrchestrator {
+    fn parse_node_port(key: &str) -> (&str, &str) {
+        key.split_once(':').unwrap_or((key, "default"))
+    }
+
     /// Run the DAG pipeline.
     ///
     /// This method:
@@ -132,23 +136,37 @@ impl DagOrchestrator {
             let node_id_owned = node_id.clone();
             let cancel_token = self.cancel_token.clone();
 
-            // Collect output senders for this node
             let output_senders: Vec<_> = self
                 .queue_senders
                 .iter()
-                .filter(|((from, _), _)| from == node_id)
-                .map(|((_, to), sender)| (to.clone(), sender.clone()))
+                .filter_map(|((from_key, _to_key), sender)| {
+                    let (from_node, from_port) = Self::parse_node_port(from_key);
+                    if from_node == node_id {
+                        Some((from_port.to_string(), sender.clone()))
+                    } else {
+                        None
+                    }
+                })
                 .collect();
 
-            // Take ownership of input receivers for this node
-            let input_receivers: Vec<_> = self
+            let input_keys_with_ports: Vec<_> = self
                 .queue_receivers
                 .keys()
-                .filter(|(_, to)| to == node_id)
-                .cloned()
-                .collect::<Vec<_>>()
+                .filter_map(|(from_key, to_key)| {
+                    let (to_node, to_port) = Self::parse_node_port(to_key);
+                    if to_node == node_id {
+                        Some(((from_key.clone(), to_key.clone()), to_port.to_string()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let input_receivers: Vec<(String, _)> = input_keys_with_ports
                 .into_iter()
-                .filter_map(|key| self.queue_receivers.remove(&key))
+                .filter_map(|(key, port)| {
+                    self.queue_receivers.remove(&key).map(|rx| (port, rx))
+                })
                 .collect();
 
             if let Some(node_arc) = node {
