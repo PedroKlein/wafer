@@ -1,54 +1,28 @@
-//! Sink node trait and implementations for pipeline endpoints.
-//!
-//! Sink nodes consume messages from the pipeline, typically writing to
-//! external destinations like files, databases, or network connections.
+//! File-based sink implementation.
 
 use std::fs::File;
 use std::future::Future;
-use std::io::{BufWriter, Stdout, Write};
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::pin::Pin;
 
 use crate::error::{ConfigError, Result, WaferError};
+use crate::node::Lifecycle;
 use crate::queue::RuntimeEnvelope;
 
-use super::Lifecycle;
-
-/// Sink node trait - consumes messages from the pipeline.
-///
-/// Sink nodes are pipeline endpoints that receive and persist messages
-/// to external destinations.
-///
-/// Examples: File writer, Kafka producer, HTTP sender, database inserter.
-pub trait Sink: Lifecycle {
-    /// Collect a message from the pipeline.
-    ///
-    /// Returns:
-    /// - `Ok(())`: Message successfully collected
-    /// - `Err(e)`: An error occurred
-    fn collect(
-        &mut self,
-        envelope: RuntimeEnvelope,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
-}
+use super::Sink;
 
 /// A file-based sink node that writes messages to a file.
 ///
 /// Each message payload is written followed by a newline character.
 /// The file is truncated on initialization (overwrite mode).
 pub struct FileSink {
-    /// Node identifier
     id: String,
-    /// Path to the output file
     path: PathBuf,
-    /// Buffered writer (None until init() is called)
     writer: Option<BufWriter<File>>,
 }
 
 impl FileSink {
-    /// Create a new FileSink.
-    ///
-    /// The file is not opened until `init()` is called.
     #[must_use]
     pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
         Self {
@@ -69,7 +43,6 @@ impl Lifecycle for FileSink {
     }
 
     fn validate(&self) -> Result<()> {
-        // Check that parent directory exists
         if let Some(parent) = self.path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
                 return Err(WaferError::Config(ConfigError::Message(format!(
@@ -83,7 +56,6 @@ impl Lifecycle for FileSink {
 
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // File::create truncates existing files
             let file = File::create(&self.path)?;
             self.writer = Some(BufWriter::new(file));
             Ok(())
@@ -117,78 +89,6 @@ impl Sink for FileSink {
     }
 }
 
-/// A stdout-based sink node that writes messages to standard output.
-///
-/// Each message payload is written followed by a newline character.
-/// Uses buffered writing for efficiency.
-pub struct StdoutSink {
-    /// Node identifier
-    id: String,
-    /// Buffered writer (None until init() is called)
-    writer: Option<BufWriter<Stdout>>,
-}
-
-impl StdoutSink {
-    /// Create a new StdoutSink.
-    ///
-    /// The writer is not created until `init()` is called.
-    #[must_use]
-    pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            writer: None,
-        }
-    }
-}
-
-impl Lifecycle for StdoutSink {
-    fn id(&self) -> &str {
-        &self.id
-    }
-
-    fn node_type(&self) -> &'static str {
-        "sink/stdout"
-    }
-
-    fn validate(&self) -> Result<()> {
-        // Stdout always exists, nothing to validate
-        Ok(())
-    }
-
-    fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            self.writer = Some(BufWriter::new(std::io::stdout()));
-            Ok(())
-        })
-    }
-
-    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            if let Some(ref mut writer) = self.writer {
-                writer.flush()?;
-            }
-            self.writer = None;
-            Ok(())
-        })
-    }
-}
-
-impl Sink for StdoutSink {
-    fn collect(
-        &mut self,
-        envelope: RuntimeEnvelope,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        Box::pin(async move {
-            let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
-                message: "StdoutSink not initialized - call init() first".to_string(),
-            })?;
-            writer.write_all(&envelope.payload)?;
-            writer.write_all(b"\n")?;
-            Ok(())
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,21 +101,17 @@ mod tests {
 
         let mut sink = FileSink::new("test-sink", path.clone());
 
-        // Validate and init
         sink.validate().unwrap();
         sink.init().await.unwrap();
 
-        // Write some messages
         let env1 = RuntimeEnvelope::from_string("test", "hello world");
         let env2 = RuntimeEnvelope::from_string("test", "second line");
 
         sink.collect(env1).await.unwrap();
         sink.collect(env2).await.unwrap();
 
-        // Close to flush
         sink.close().await.unwrap();
 
-        // Verify file contents
         let contents = std::fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "hello world\nsecond line\n");
     }
@@ -225,7 +121,6 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("output.txt");
 
-        // Write initial content
         std::fs::write(&path, "existing content\n").unwrap();
 
         let mut sink = FileSink::new("test-sink", path.clone());
@@ -236,7 +131,6 @@ mod tests {
         sink.collect(env).await.unwrap();
         sink.close().await.unwrap();
 
-        // Verify file was truncated (old content gone)
         let contents = std::fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "new content\n");
     }
