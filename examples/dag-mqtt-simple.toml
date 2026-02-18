@@ -1,0 +1,30 @@
+# WAFER DAG Configuration: MQTT Simple (no transform)
+# Tests MQTT source → sink directly without WASM transform
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "mqtt-source"
+node_type = "source"
+source_type = "mqtt"
+[nodes.config]
+broker = "localhost"
+port = 1883
+topic = "input/messages"
+qos = 1
+client_id = "wafer-source"
+
+[[nodes]]
+id = "mqtt-sink"
+node_type = "sink"
+sink_type = "mqtt"
+[nodes.config]
+broker = "localhost"
+port = 1883
+topic = "output/processed"
+qos = 1
+client_id = "wafer-sink"
+
+[[edges]]
+from = "mqtt-source"
+to = "mqtt-sink"
