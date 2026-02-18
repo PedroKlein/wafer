@@ -35,6 +35,7 @@ pub struct TransformInstance {
     store: Store<WaferState>,
     bindings: TransformNode,
     fuel_limit: u64,
+    epoch_deadline: u64,
     /// Security capabilities for this instance.
     /// Retained for future capability inspection/auditing APIs.
     #[allow(dead_code)]
@@ -91,6 +92,7 @@ impl TransformInstance {
             store,
             bindings,
             fuel_limit: engine.fuel_limit(),
+            epoch_deadline: engine.epoch_deadline(),
             capabilities,
         })
     }
@@ -136,6 +138,9 @@ impl TransformInstance {
                 code: "FUEL_ERROR".to_string(),
                 message: e.to_string(),
             })?;
+
+        // Reset epoch deadline before each call (prevents accumulated epochs from interrupting)
+        self.store.set_epoch_deadline(self.epoch_deadline);
 
         self.bindings
             .pipeline_transform_transform()
