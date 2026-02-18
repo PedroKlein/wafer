@@ -28,6 +28,7 @@
 //! - Releasing the lock between operations for better observability
 
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -90,6 +91,7 @@ impl DagOrchestrator {
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
     ) {
+        tracing::info!(node = %node_id, "Source loop started");
         loop {
             // Check for cancellation before each poll
             if cancel_token.is_cancelled() {
@@ -108,6 +110,12 @@ impl DagOrchestrator {
                 result = source.poll() => {
                     match result {
                         Ok(Some(envelope)) => {
+                            tracing::debug!(
+                                node = %node_id,
+                                envelope_id = %envelope.id,
+                                payload_size = envelope.payload.len(),
+                                "Source received message"
+                            );
                             // Optimization: avoid clone for single downstream
                             if output_senders.len() == 1 {
                                 if let Err(e) = output_senders[0].1.send(envelope).await {
@@ -136,6 +144,7 @@ impl DagOrchestrator {
                 }
             }
         }
+        tracing::info!(node = %node_id, "Source loop stopped");
     }
 
     /// Run the transform node loop.
@@ -154,6 +163,7 @@ impl DagOrchestrator {
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
     ) {
+        tracing::info!(node = %node_id, "Transform loop started");
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Transform cancelled");
@@ -167,8 +177,17 @@ impl DagOrchestrator {
             };
 
             if let Some(envelope) = maybe_envelope {
+                let input_id = envelope.id.clone();
+                let start = Instant::now();
                 match transform.process(envelope).await {
                     Ok(ProcessResult::Emit(output)) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            output_id = %output.id,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Transform emitted"
+                        );
                         if output_senders.len() == 1 {
                             if let Err(e) = output_senders[0].1.send(output).await {
                                 tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
@@ -181,7 +200,14 @@ impl DagOrchestrator {
                             }
                         }
                     }
-                    Ok(ProcessResult::Filter) => {}
+                    Ok(ProcessResult::Filter) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            input_id = %input_id,
+                            elapsed_ms = %start.elapsed().as_millis(),
+                            "Transform filtered"
+                        );
+                    }
                     Ok(ProcessResult::Error(e)) => {
                         tracing::warn!(
                             node = %node_id,
@@ -201,6 +227,7 @@ impl DagOrchestrator {
                 break;
             }
         }
+        tracing::info!(node = %node_id, "Transform loop stopped");
     }
 
     /// Run the sink node loop.
@@ -218,6 +245,7 @@ impl DagOrchestrator {
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         cancel_token: &CancellationToken,
     ) {
+        tracing::info!(node = %node_id, "Sink loop started");
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Sink cancelled");
@@ -231,8 +259,15 @@ impl DagOrchestrator {
             };
 
             if let Some(envelope) = maybe_envelope {
+                let envelope_id = envelope.id.clone();
                 if let Err(e) = sink.collect(envelope).await {
                     tracing::error!(node = %node_id, error = %e, "Sink collect failed");
+                } else {
+                    tracing::debug!(
+                        node = %node_id,
+                        envelope_id = %envelope_id,
+                        "Sink delivered"
+                    );
                 }
             } else {
                 if !cancel_token.is_cancelled() {
@@ -241,5 +276,6 @@ impl DagOrchestrator {
                 break;
             }
         }
+        tracing::info!(node = %node_id, "Sink loop stopped");
     }
 }
