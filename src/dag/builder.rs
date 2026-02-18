@@ -123,8 +123,6 @@ impl DagOrchestrator {
     /// Validate the DAG topology.
     fn validate(&self) -> Result<()> {
         self.validate_not_empty()?;
-        self.validate_single_source()?;
-        self.validate_single_sink()?;
         self.validate_no_orphans()?;
         Ok(())
     }
@@ -239,6 +237,8 @@ mod tests {
         EdgeDefinition {
             from: from.to_string(),
             to: to.to_string(),
+            from_port: None,
+            to_port: None,
             queue_capacity: None,
         }
     }
@@ -321,10 +321,9 @@ mod tests {
             vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
         );
 
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Multiple source"));
+        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        assert_eq!(orchestrator.node_count(), 3);
+        assert_eq!(orchestrator.edge_count(), 2);
     }
 
     #[test]
@@ -341,7 +340,7 @@ mod tests {
         let result = DagOrchestrator::from_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Orphan") || err.contains("Multiple source"));
+        assert!(err.contains("Orphan"));
     }
 
     #[test]
@@ -386,10 +385,9 @@ mod tests {
             vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
         );
 
-        let result = DagOrchestrator::from_config(config);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("Multiple sink"));
+        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        assert_eq!(orchestrator.node_count(), 3);
+        assert_eq!(orchestrator.edge_count(), 2);
     }
 
     #[test]
@@ -429,6 +427,8 @@ mod tests {
             edges: vec![EdgeDefinition {
                 from: "source".to_string(),
                 to: "sink".to_string(),
+                from_port: None,
+                to_port: None,
                 queue_capacity: Some(42),
             }],
             default_queue_capacity: 1024,
