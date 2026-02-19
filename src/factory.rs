@@ -41,8 +41,8 @@ use crate::config::{NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
-    AnyNode, FileSink, FileSource, MqttSink, MqttSource, NodeConfig, StdinSource, StdoutSink,
-    WasmTransform,
+    AnyNode, FileSink, FileSource, JoinerInstance, MqttSink, MqttSource, NodeConfig,
+    RouterInstance, StdinSource, StdoutSink, WasmJoiner, WasmRouter, WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 use crate::Result;
@@ -146,7 +146,8 @@ pub async fn create_node(node_def: &NodeDefinition, ctx: &mut FactoryContext) ->
         NodeType::Source => create_source(node_def),
         NodeType::Transform => create_transform(node_def, ctx).await,
         NodeType::Sink => create_sink(node_def),
-        NodeType::Router | NodeType::Joiner => todo!("Router and Joiner node creation not yet implemented"),
+        NodeType::Router => create_router(node_def, ctx).await,
+        NodeType::Joiner => create_joiner(node_def, ctx).await,
     }
 }
 
@@ -250,6 +251,76 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -
 
     let transform = WasmTransform::new(engine, instance, node_config);
     Ok(AnyNode::from_transform(transform))
+}
+
+/// Create a router node from configuration.
+///
+/// This function supports both local plugin paths and remote registry packages.
+/// Follows the same pattern as `create_transform`.
+async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+    // Parse the node config to get plugin source specification
+    let plugin_config: PluginNodeConfig =
+        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
+            WaferError::Config(ConfigError::Message(format!(
+                "failed to parse router '{}' config: {}",
+                node_def.id, e
+            )))
+        })?;
+
+    // Create the WASM engine
+    let engine = WaferEngine::new()?;
+    // Start epoch ticker for cooperative interruption
+    ctx.epoch_tickers.push(engine.start_epoch_ticker());
+
+    // Resolve and load the plugin component
+    let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
+
+    // Use stdio + inference capabilities for MVP
+    let capabilities = Capabilities::with_stdio().inference(true);
+    let instance = RouterInstance::new(&engine, &component, capabilities).await?;
+
+    let config_str = toml::to_string(&node_def.config)
+        .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
+    let node_config =
+        NodeConfig::new(&node_def.id, "router").with_config_bytes(config_str.into_bytes());
+
+    let router = WasmRouter::new(engine, instance, node_config);
+    Ok(AnyNode::from_router(router))
+}
+
+/// Create a joiner node from configuration.
+///
+/// This function supports both local plugin paths and remote registry packages.
+/// Follows the same pattern as `create_transform`.
+async fn create_joiner(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+    // Parse the node config to get plugin source specification
+    let plugin_config: PluginNodeConfig =
+        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
+            WaferError::Config(ConfigError::Message(format!(
+                "failed to parse joiner '{}' config: {}",
+                node_def.id, e
+            )))
+        })?;
+
+    // Create the WASM engine
+    let engine = WaferEngine::new()?;
+    // Start epoch ticker for cooperative interruption
+    ctx.epoch_tickers.push(engine.start_epoch_ticker());
+
+    // Resolve and load the plugin component
+    let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
+
+    // Use stdio + inference capabilities for MVP
+    let capabilities = Capabilities::with_stdio().inference(true);
+    let instance = JoinerInstance::new(&engine, &component, capabilities).await?;
+
+    let config_str = toml::to_string(&node_def.config)
+        .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
+    let node_config =
+        NodeConfig::new(&node_def.id, "joiner").with_config_bytes(config_str.into_bytes());
+
+    let joiner = WasmJoiner::new(engine, instance, node_config);
+    Ok(AnyNode::from_joiner(joiner))
 }
 
 /// Resolve and load a plugin component from either local path or remote registry.
