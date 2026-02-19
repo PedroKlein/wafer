@@ -146,54 +146,6 @@ impl DagOrchestrator {
         Ok(())
     }
 
-    fn validate_single_source(&self) -> Result<()> {
-        let sources: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                self.graph
-                    .neighbors_directed(**idx, Direction::Incoming)
-                    .count()
-                    == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        match sources.len() {
-            0 => Err(WaferError::Config(ConfigError::Message(
-                "No source node found (node with no incoming edges)".into(),
-            ))),
-            1 => Ok(()),
-            _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple source nodes found (expected 1): {sources:?}"
-            )))),
-        }
-    }
-
-    fn validate_single_sink(&self) -> Result<()> {
-        let sinks: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                self.graph
-                    .neighbors_directed(**idx, Direction::Outgoing)
-                    .count()
-                    == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        match sinks.len() {
-            0 => Err(WaferError::Config(ConfigError::Message(
-                "No sink node found (node with no outgoing edges)".into(),
-            ))),
-            1 => Ok(()),
-            _ => Err(WaferError::Config(ConfigError::Message(format!(
-                "Multiple sink nodes found (expected 1): {sinks:?}"
-            )))),
-        }
-    }
-
     fn validate_no_orphans(&self) -> Result<()> {
         if self.node_indices.len() == 1 {
             return Ok(());
