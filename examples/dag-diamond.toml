@@ -11,8 +11,29 @@
 # - Each branch applies a different transform
 # - Joiner merges results from all branches
 #
-# Usage:
+# Content-Based Routing:
+# The content-router parses JSON and routes based on the "route" field:
+#   - {"route": "a", ...} → port-a → transform-a (uppercase)
+#   - {"route": "b", ...} → port-b → transform-b (pass-through)
+#   - Non-JSON or missing "route" field defaults to port-a
+#
+# Usage Examples:
+#
+#   # Route to branch A (uppercase transform):
+#   echo '{"route": "a", "data": "hello"}' | cargo run -- --config examples/dag-diamond.toml
+#   # Output: {"route": "a", "data": "hello"} (uppercased: {"ROUTE": "A", "DATA": "HELLO"})
+#
+#   # Route to branch B (pass-through transform):
+#   echo '{"route": "b", "data": "hello"}' | cargo run -- --config examples/dag-diamond.toml
+#   # Output: {"route": "b", "data": "hello"} (unchanged)
+#
+#   # Plain text defaults to branch A (uppercase):
 #   echo "test message" | cargo run -- --config examples/dag-diamond.toml
+#   # Output: TEST MESSAGE
+#
+#   # To see BOTH branches in action, send two separate messages:
+#   echo '{"route": "a", "msg": "first"}' | cargo run -- --config examples/dag-diamond.toml
+#   echo '{"route": "b", "msg": "second"}' | cargo run -- --config examples/dag-diamond.toml
 
 default_queue_capacity = 1024
 

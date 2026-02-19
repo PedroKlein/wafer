@@ -288,7 +288,7 @@ async fn create_filter_transform(id: &str, pattern: &str) -> WasmTransform {
     let instance = TransformInstance::new(&engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create filter instance");
-    let config_toml = format!("pattern = \"{}\"", pattern);
+    let config_toml = format!("pattern = \"{}\"\nmode = \"drop\"", pattern);
     let config =
         NodeConfig::new(id, "transform/filter").with_config_bytes(config_toml.into_bytes());
     WasmTransform::new(engine, instance, config)

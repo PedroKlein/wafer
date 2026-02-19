@@ -1,11 +1,13 @@
 //! Filter transform plugin for WAFER pipeline.
 //!
-//! This plugin drops messages that contain a specified pattern (case-sensitive substring match).
-//! Messages that do NOT contain the pattern are passed through unchanged.
+//! Filters messages based on a pattern match with configurable mode:
+//! - `mode = "keep"` (default): EMIT messages containing pattern, FILTER non-matching
+//! - `mode = "drop"`: FILTER messages containing pattern, EMIT non-matching
 //!
 //! Config format (TOML):
 //! ```toml
-//! pattern = "debug"
+//! pattern = "KEEP"
+//! mode = "keep"  # optional, defaults to "keep"
 //! ```
 
 use toml::Value;
@@ -20,6 +22,11 @@ struct Filter;
 /// Static storage for the filter pattern.
 /// Safe to use static mut in WASM since it's single-threaded.
 static mut PATTERN: Option<String> = None;
+
+/// Static storage for the filter mode ("keep" or "drop").
+/// - "keep": emit messages containing pattern, filter (drop) non-matching
+/// - "drop": filter (drop) messages containing pattern, emit non-matching
+static mut MODE: Option<String> = None;
 
 impl exports::pipeline::transform::lifecycle::Guest for Filter {
     /// Validate configuration - requires non-empty config with `pattern` key.
@@ -47,6 +54,15 @@ impl exports::pipeline::transform::lifecycle::Guest for Filter {
             return Some("'pattern' must be a string value".to_string());
         }
 
+        // Validate mode if provided (optional, defaults to "keep")
+        if let Some(mode_value) = parsed.get("mode") {
+            match mode_value.as_str() {
+                Some("keep") | Some("drop") => {}
+                Some(_) => return Some("'mode' must be \"keep\" or \"drop\"".to_string()),
+                None => return Some("'mode' must be a string value".to_string()),
+            }
+        }
+
         None // validation passed
     }
 
@@ -65,9 +81,16 @@ impl exports::pipeline::transform::lifecycle::Guest for Filter {
             .ok_or("pattern must be a string")?
             .to_string();
 
+        let mode = parsed
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("keep")
+            .to_string();
+
         // SAFETY: WASM is single-threaded, no data races possible
         unsafe {
             PATTERN = Some(pattern);
+            MODE = Some(mode);
         }
 
         Ok(())
@@ -75,9 +98,9 @@ impl exports::pipeline::transform::lifecycle::Guest for Filter {
 
     /// Graceful shutdown - no resources to clean up.
     fn close() {
-        // Clear the pattern on close
         unsafe {
             PATTERN = None;
+            MODE = None;
         }
     }
 }
@@ -89,26 +112,31 @@ impl exports::pipeline::transform::transform::Guest for Filter {
         // SAFETY: WASM is single-threaded, init() must be called before process()
         let pattern = unsafe { (*std::ptr::addr_of!(PATTERN)).as_ref() }
             .expect("init() must be called before process()");
+        let mode = unsafe { (*std::ptr::addr_of!(MODE)).as_ref() }
+            .expect("init() must be called before process()");
 
-        // Extract payload bytes
         let bytes = match &input.payload {
             pipeline::transform::types::Payload::Raw(b) => b.clone(),
         };
 
-        // Try to convert to string for pattern matching
         let text = match String::from_utf8(bytes) {
             Ok(s) => s,
             Err(_) => {
-                // Non-UTF8 data: pass through (can't match pattern)
                 return pipeline::transform::types::ProcessResult::Emit(input);
             }
         };
 
-        // Case-sensitive substring match: if pattern found, drop the message
-        if text.contains(pattern) {
-            pipeline::transform::types::ProcessResult::Filter
+        let contains_pattern = text.contains(pattern);
+        let should_emit = if mode == "keep" {
+            contains_pattern
         } else {
+            !contains_pattern
+        };
+
+        if should_emit {
             pipeline::transform::types::ProcessResult::Emit(input)
+        } else {
+            pipeline::transform::types::ProcessResult::Filter
         }
     }
 }
