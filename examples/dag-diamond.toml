@@ -12,7 +12,7 @@
 # - Joiner merges results from all branches
 #
 # Usage:
-#   echo "test message" | cargo run -- dag examples/dag-diamond.toml
+#   echo "test message" | cargo run -- --config examples/dag-diamond.toml
 
 default_queue_capacity = 1024
 
@@ -25,7 +25,7 @@ source_type = "stdin"
 id = "router"
 node_type = "router"
 [nodes.config]
-plugin_path = "plugins/content-router/target/wasm32-wasip1/release/content_router.wasm"
+plugin_path = "plugins/content-router/target/wasm32-wasip2/release/content_router.wasm"
 
 [[nodes]]
 id = "transform-a"
@@ -37,13 +37,13 @@ plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transfor
 id = "transform-b"
 node_type = "transform"
 [nodes.config]
-plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through.wasm"
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
 [[nodes]]
 id = "joiner"
 node_type = "joiner"
 [nodes.config]
-plugin_path = "plugins/merge-joiner/target/wasm32-wasip1/release/merge_joiner.wasm"
+plugin_path = "plugins/merge-joiner/target/wasm32-wasip2/release/merge_joiner.wasm"
 
 [[nodes]]
 id = "sink"

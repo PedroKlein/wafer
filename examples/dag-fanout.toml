@@ -7,7 +7,7 @@
 # Messages with {"route": "b"} go to /tmp/fanout-b.txt
 #
 # Usage:
-#   echo '{"route": "a", "data": "hello"}' | cargo run -- dag examples/dag-fanout.toml
+#   echo '{"route": "a", "data": "hello"}' | cargo run -- --config examples/dag-fanout.toml
 #   cat /tmp/fanout-a.txt /tmp/fanout-b.txt
 
 default_queue_capacity = 1024
@@ -23,7 +23,7 @@ source_type = "stdin"
 id = "router"
 node_type = "router"
 [nodes.config]
-plugin_path = "plugins/content-router/target/wasm32-wasip1/release/content_router.wasm"
+plugin_path = "plugins/content-router/target/wasm32-wasip2/release/content_router.wasm"
 
 # Sink A: receives messages routed to port-a
 [[nodes]]
