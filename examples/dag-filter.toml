@@ -2,8 +2,10 @@
 # Pipeline: stdin → filter (only lines containing "DEBUG") → stdout
 #
 # Usage:
-#   printf "INFO: starting\nDEBUG: value=42\nERROR: failed" | cargo run -- dag examples/dag-filter.toml
-# Output: DEBUG: value=42
+#   printf "INFO: starting\nDEBUG: value=42\nERROR: failed" | cargo run -- --config examples/dag-filter.toml
+#
+# Expected Output:
+#   DEBUG: value=42
 
 default_queue_capacity = 1024
 
