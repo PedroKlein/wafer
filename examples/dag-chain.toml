@@ -2,8 +2,9 @@
 # Pipeline: stdin → uppercase → filter (only lines containing "KEEP") → stdout
 #
 # Usage:
-#   printf "keep this line\ndrop this one\nKEEP this too" | cargo run -- dag examples/dag-chain.toml
-# Output:
+#   printf "keep this line\ndrop this one\nKEEP this too" | cargo run -- --config examples/dag-chain.toml
+#
+# Expected Output:
 #   KEEP THIS LINE
 #   KEEP THIS TOO
 

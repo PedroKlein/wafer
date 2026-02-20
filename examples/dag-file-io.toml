@@ -3,8 +3,11 @@
 #
 # Usage:
 #   echo "test data" > /tmp/input.txt
-#   cargo run -- dag examples/dag-file-io.toml
+#   cargo run -- --config examples/dag-file-io.toml
 #   cat /tmp/output.txt
+#
+# Expected Output (in /tmp/output.txt):
+#   test data
 
 default_queue_capacity = 1024
 

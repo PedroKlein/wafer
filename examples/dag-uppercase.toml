@@ -2,8 +2,10 @@
 # Pipeline: stdin → uppercase transform → stdout
 #
 # Usage:
-#   echo "hello world" | cargo run -- dag examples/dag-uppercase.toml
-# Output: HELLO WORLD
+#   echo "hello world" | cargo run -- --config examples/dag-uppercase.toml
+#
+# Expected Output:
+#   HELLO WORLD
 
 default_queue_capacity = 1024
 

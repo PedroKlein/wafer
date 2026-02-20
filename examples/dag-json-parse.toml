@@ -2,7 +2,10 @@
 # Pipeline: stdin → json-parse transform → stdout
 #
 # Usage:
-#   echo '{"name": "wafer", "version": 1}' | cargo run -- dag examples/dag-json-parse.toml
+#   echo '{"name": "wafer", "version": 1}' | cargo run -- --config examples/dag-json-parse.toml
+#
+# Expected Output:
+#   {"name":"wafer","version":1}
 
 default_queue_capacity = 1024
 

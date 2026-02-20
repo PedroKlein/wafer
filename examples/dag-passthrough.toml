@@ -2,7 +2,10 @@
 # Simple pipeline: stdin → passthrough transform → stdout
 #
 # Usage:
-#   echo "Hello World" | cargo run -- dag examples/dag-passthrough.toml
+#   echo "Hello World" | cargo run -- --config examples/dag-passthrough.toml
+#
+# Expected Output:
+#   Hello World
 
 default_queue_capacity = 1024
 
