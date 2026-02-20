@@ -9,10 +9,13 @@
 
 ## Current State
 
-The MVP implements **DAG-only pipelines** with:
+The MVP implements **DAG pipelines with fan-out/fan-in support** with:
 - Linear chain execution: `StdinSource/FileSource/MqttSource → Transform(s) → StdoutSink/FileSink/MqttSink`
+- **Router nodes (1→N)**: Content-based routing via `WasmRouter` and `router-node` WIT world
+- **Joiner nodes (N→1)**: Merge support via `WasmJoiner` and `joiner-node` WIT world
+- **Fan-out/Fan-in topologies**: Diamond patterns, scatter-gather workflows
 - WASI Preview 2 component loading via wasmtime
-- WIT-based type contracts (`transform-node` world)
+- WIT-based type contracts (`transform-node`, `router-node`, `joiner-node` worlds)
 - Fuel-based execution metering with per-call reset
 - Epoch interruption for cooperative scheduling
 - Capability-scoped WASI contexts
@@ -43,8 +46,10 @@ src/
 │   ├── capabilities.rs # Capabilities struct for security boundaries
 │   └── mod.rs
 ├── node/
-│   ├── traits.rs     # Lifecycle and Transform traits
+│   ├── traits.rs     # Lifecycle, Transform, Router, and Joiner traits
 │   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
+│   ├── router.rs     # WasmRouter: 1→N content-based routing
+│   ├── joiner.rs     # WasmJoiner: N→1 merge operations
 │   ├── source/       # Source trait and implementations
 │   │   ├── mod.rs    # Source trait definition + re-exports
 │   │   ├── file.rs   # FileSource implementation
@@ -55,7 +60,7 @@ src/
 │   │   ├── file.rs   # FileSink implementation
 │   │   ├── stdout.rs # StdoutSink implementation
 │   │   └── mqtt.rs   # MqttSink implementation (rumqttc)
-│   └── mod.rs        # AnyNode enum (Transform, Source, Sink variants)
+│   └── mod.rs        # AnyNode enum (Transform, Source, Sink, Router, Joiner variants)
 ├── dag/
 │   ├── orchestrator.rs # DagOrchestrator: core struct, run(), topology management
 │   ├── builder.rs      # from_config(), validation, wire_queues()
@@ -88,20 +93,24 @@ src/
 wit/
 ├── types.wit         # Shared types: envelope, payload, process-result, metadata
 ├── lifecycle.wit     # Lifecycle interface: validate, init, close
-└── transform.wit     # Transform interface and transform-node world
+├── transform.wit     # Transform interface and transform-node world
+├── router.wit        # Router interface and router-node world (1→N routing)
+└── joiner.wit        # Joiner interface and joiner-node world (N→1 merge)
 ```
 
 ### Plugins
 
-| Plugin | Purpose |
-|--------|---------|
-| `plugins/pass-through/` | No-op transform (emits input unchanged) |
-| `plugins/uppercase/` | ASCII uppercase transform |
-| `plugins/json-parse/` | JSON validation and pretty-print |
-| `plugins/filter/` | Pattern-based message filtering |
-| `plugins/tensor-prep/` | Image normalization (784 bytes → 3136 bytes F32) |
-| `plugins/mnist-inference/` | MNIST digit recognition via wasi-nn |
-| `plugins/result-format/` | Inference output formatting (logits → JSON) |
+| Plugin | Type | Purpose |
+|--------|------|---------|
+| `plugins/pass-through/` | Transform | No-op transform (emits input unchanged) |
+| `plugins/uppercase/` | Transform | ASCII uppercase transform |
+| `plugins/json-parse/` | Transform | JSON validation and pretty-print |
+| `plugins/filter/` | Transform | Pattern-based message filtering |
+| `plugins/tensor-prep/` | Transform | Image normalization (784 bytes → 3136 bytes F32) |
+| `plugins/mnist-inference/` | Transform | MNIST digit recognition via wasi-nn |
+| `plugins/result-format/` | Transform | Inference output formatting (logits → JSON) |
+| `plugins/content-router/` | Router | Content-based 1→N routing (routes by JSON `route` field) |
+| `plugins/merge-joiner/` | Joiner | Stateless N→1 merge (passes through all inputs) |
 
 ### Example Configs
 
@@ -117,6 +126,8 @@ wit/
 | `examples/dag-mqtt.toml` | mqtt → passthrough → mqtt |
 | `examples/dag-mqtt-simple.toml` | mqtt → mqtt (no transform) |
 | `examples/dag-remote.toml` | stdin → OCI plugin → stdout |
+| `examples/dag-diamond.toml` | Diamond/scatter-gather: source → router → transforms → joiner → sink |
+| `examples/dag-fanout.toml` | Fan-out: source → router → multiple sinks |
 
 ---
 
@@ -141,10 +152,15 @@ wit/
 - [x] Fallback to cached version on network error (with warning)
 - [x] `RegistryConfig` for TTL and cache directory
 
-### WIT Contract (`transform-node` world)
+### WIT Contracts
 - [x] `types` interface: `Envelope`, `Payload`, `ProcessResult`, `ProcessError`, `Metadata`
 - [x] `lifecycle` interface: `validate(NodeConfig)`, `init(NodeConfig)`, `close()`
 - [x] `transform` interface: `process(Envelope) -> ProcessResult`
+- [x] `router` interface: `output-ports() -> list<string>`, `route(Envelope) -> RouteResult`
+- [x] `joiner` interface: `input-ports() -> list<string>`, `join(port, Envelope) -> ProcessResult`
+- [x] `transform-node` world for transform plugins
+- [x] `router-node` world for router plugins (1→N routing)
+- [x] `joiner-node` world for joiner plugins (N→1 merge)
 - [x] Payload variant: `raw(list<u8>)` only
 - [x] Metadata as `list<tuple<string, string>>` (no external deps)
 
@@ -160,7 +176,11 @@ wit/
 - [x] `StdoutSink` struct implementing Lifecycle + Sink (stdout line writing)
 - [x] `MqttSource` struct implementing Lifecycle + Source (MQTT subscription via rumqttc)
 - [x] `MqttSink` struct implementing Lifecycle + Sink (MQTT publishing via rumqttc)
-- [x] `AnyNode` enum with `Transform`, `Source`, `Sink` variants
+- [x] `Router` trait: `output_ports`, `route` async methods
+- [x] `Joiner` trait: `input_ports`, `process` async methods
+- [x] `WasmRouter` struct implementing Lifecycle + Router
+- [x] `WasmJoiner` struct implementing Lifecycle + Joiner
+- [x] `AnyNode` enum with `Transform`, `Source`, `Sink`, `Router`, `Joiner` variants
 - [x] Traits are `Send` but not `Sync` (WASM stores aren't thread-safe)
 
 ### DAG Orchestration (CLI)
@@ -205,10 +225,10 @@ wit/
 ## What's NOT Implemented
 
 ### Node Types (SPEC §5)
-- [x] ~~Source nodes~~ - FileSource + StdinSource implemented (native Rust)
-- [x] ~~Sink nodes~~ - FileSink + StdoutSink implemented (native Rust)
-- [ ] Router nodes (1→N routing)
-- [ ] Joiner nodes (N→1 merge)
+- [x] ~~Source nodes~~ - FileSource + StdinSource + MqttSource implemented (native Rust)
+- [x] ~~Sink nodes~~ - FileSink + StdoutSink + MqttSink implemented (native Rust)
+- [x] ~~Router nodes (1→N routing)~~ - WasmRouter implemented with `router-node` WIT world
+- [x] ~~Joiner nodes (N→1 merge)~~ - WasmJoiner implemented with `joiner-node` WIT world
 - [x] ~~WASM-based Source/Sink~~ - **Decision: Not implementing** - Sources/sinks remain native Rust (see [ADR-0004](adr/0004-native-sources-sinks.md))
 
 ### Sink Features (SPEC §4.9)
@@ -222,7 +242,7 @@ wit/
 - [x] ~~Queue integration for inter-node communication~~ - Done
 - [x] ~~Backpressure propagation~~ - Blocking queues implemented
 - [x] ~~CLI integration~~ - `--config` flag for DAG TOML files
-- [ ] Fan-out/fan-in topologies (Router/Joiner)
+- [x] ~~Fan-out/fan-in topologies~~ - Router/Joiner implemented (diamond, scatter-gather patterns)
 - [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
 
 ### Dynamic Features
@@ -258,13 +278,21 @@ wit/
 - [ ] Health endpoints: `/health`, `/ready`, `/live` (SPEC §12.5)
 - [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
 
+
+### Plugin Ideas
+- [x] ~~`broadcast` transform~~ - Implemented as `content-router` (Router node type)
+- [x] ~~`merge` transform~~ - Implemented as `merge-joiner` (Joiner node type)
+
+
+### Other Ideas
+- [ ] Support multiple sources/sinks per DAG (currently single source/sink)
+
 ---
 
 ## Known Limitations
 
 | Area | Limitation | Notes |
 |------|------------|-------|
-| **Pipeline** | Linear chains only (no fan-out/fan-in) | Router/Joiner pending |
 | **I/O** | stdin/stdout, file, or MQTT | HTTP/Kafka planned |
 | **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
 | **WIT** | Only `raw(list<u8>)` payload supported | |
@@ -473,7 +501,7 @@ WaferState::with_capabilities(Capabilities::full())
 | **Epoch ticker** | Automatic interruption | Requires explicit `engine.start_epoch_ticker()` call |
 | **Queue impl** | Unspecified | `tokio::sync::mpsc` async channels |
 | **Source/Sink** | Native Rust (ADR-0004) | Native Rust (aligned) |
-| **Router/Joiner** | Full support | Not implemented |
+| **Router/Joiner** | Full support | Implemented (content-router, merge-joiner) |
 | **Hot-swap** | Drain-and-flip | Not implemented |
 | **Payload types** | Multiple variants | Only `raw(list<u8>)` |
 

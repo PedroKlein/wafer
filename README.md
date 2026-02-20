@@ -2,7 +2,7 @@
 
 **WAFER** - WebAssembly Flow Execution Runtime
 
-A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmtime, with support for bounded queues and fuel-based execution metering.
+A Rust-based DAG pipeline runtime that executes WebAssembly plugins using wasmtime, with support for bounded queues, fuel-based execution metering, and fan-out/fan-in topologies.
 
 ## Documentation
 
@@ -56,6 +56,12 @@ echo "keep this" | cargo run -- --config examples/dag-chain.toml
 
 # File-based I/O
 cargo run -- --config examples/dag-file-io.toml
+
+# Diamond pattern (fan-out/fan-in with router and joiner)
+cargo run -- --config examples/dag-diamond.toml
+
+# Fan-out pattern (router to multiple sinks)
+cargo run -- --config examples/dag-fanout.toml
 ```
 
 ## Project Structure
@@ -69,11 +75,13 @@ wafer-poc/
 │   ├── queue/             # Bounded SPSC queues
 │   └── config/            # TOML configuration loading
 ├── wit/                    # WIT interface definitions
-├── plugins/                # WASM transform plugins
-│   ├── pass-through/      # No-op passthrough
-│   ├── uppercase/         # ASCII uppercase
-│   ├── json-parse/        # JSON validation/pretty-print
-│   └── filter/            # Pattern-based filtering
+├── plugins/                # WASM plugins
+│   ├── pass-through/      # No-op passthrough (transform)
+│   ├── uppercase/         # ASCII uppercase (transform)
+│   ├── json-parse/        # JSON validation/pretty-print (transform)
+│   ├── filter/            # Pattern-based filtering (transform)
+│   ├── content-router/    # Content-based 1→N routing (router)
+│   └── merge-joiner/      # Stateless N→1 merge (joiner)
 ├── tests/
 │   ├── integration.rs     # DAG pipeline integration tests
 │   └── fixtures/          # Test TOML configs
@@ -94,13 +102,16 @@ wafer-poc/
 ## Key Features
 
 - **DAG-only architecture** - All pipelines defined as directed acyclic graphs
+- **Fan-out/Fan-in topologies** - Router (1→N) and Joiner (N→1) nodes for complex workflows
 - **StdinSource/StdoutSink** - First-class stdin/stdout I/O for CLI usage
 - **FileSource/FileSink** - File-based I/O for batch processing
+- **MqttSource/MqttSink** - MQTT pub/sub integration
 - **Wasmtime 41.x** runtime with async support
 - **SPSC bounded queues** for inter-node communication with backpressure
 - **petgraph-based topology** for DAG management
 - **Fuel-based metering** for execution limits
 - **WASI Preview 2** for plugin capabilities
+- **OCI Registry support** - Load plugins from container registries
 - **Graceful shutdown** in reverse topological order
 
 ## DAG Configuration Format
