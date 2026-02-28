@@ -17,7 +17,7 @@
 - [x] 1.6 Create `crates/wafer-types/` skeleton (shared types)
 - [x] 1.7 Create `crates/waferctl/` skeleton (CLI binary)
 - [x] 1.8 Update all import paths and verify `cargo build` succeeds
-- [ ] 1.9 Update CI scripts for workspace structure
+- [x] 1.9 Update CI scripts for workspace structure [n/a: no CI workflows exist yet]
 - [x] 1.10 Update justfile commands for new structure
 
 ## 2. Shared Types (wafer-types)
@@ -137,8 +137,8 @@
 
 ## 11. End-to-End Testing
 
-- [ ] 11.1 Write E2E test: waferctl status against running runtime
-- [ ] 11.2 Write E2E test: waferctl hot-swap triggers actual swap
-- [ ] 11.3 Write E2E test: waferctl reload detects config changes
-- [ ] 11.4 Write E2E test: Prometheus scrape of /metrics endpoint
-- [ ] 11.5 Test multi-endpoint config with multiple runtimes
+- [ ] 11.1 Write E2E test: waferctl status against running runtime [deferred: requires long-running pipeline fixture]
+- [ ] 11.2 Write E2E test: waferctl hot-swap triggers actual swap [deferred: depends on hot-swap-mechanism]
+- [ ] 11.3 Write E2E test: waferctl reload detects config changes [deferred: depends on hot-swap-mechanism]
+- [ ] 11.4 Write E2E test: Prometheus scrape of /metrics endpoint [deferred: requires long-running pipeline fixture]
+- [ ] 11.5 Test multi-endpoint config with multiple runtimes [deferred: requires long-running pipeline fixture]
