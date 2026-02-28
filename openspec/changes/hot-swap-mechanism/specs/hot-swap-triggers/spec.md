@@ -1,67 +1,30 @@
 # Hot-Swap Triggers
 
-Mechanisms that initiate hot-swap operations, starting with config file watching.
+> **Note:** This spec has been superseded by the `control-plane` OpenSpec change.
+> Hot-swap triggers (REST API endpoints, `waferctl` CLI) are now defined there.
+> This spec is retained for reference only.
 
-**SPEC Reference:** Section 7.3, 9.2
+The hot-swap coordinator exposes a `hot_swap()` method that triggers call. The actual trigger mechanisms are:
 
-## ADDED Requirements
+1. **REST API**: `POST /api/v1/nodes/:id/hot-swap` - Direct swap for a specific node
+2. **REST API**: `POST /api/v1/pipeline/resync` - Reload config, detect changes, swap affected nodes
+3. **CLI**: `waferctl hot-swap <node-id> --wasm <path>` - User-initiated direct swap
+4. **CLI**: `waferctl resync` - User-initiated config reload and swap
 
-### Requirement: Config file watch trigger
+See `openspec/changes/control-plane/specs/rest-api/spec.md` for detailed requirements.
 
-The runtime SHALL watch the pipeline configuration file for changes and trigger hot-swap when a node's WASM path changes.
+## Integration Point
 
-#### Scenario: WASM path change detected
-- **WHEN** the pipeline config file is modified
-- **WHEN** a node's `wasm` path changes from `v1.wasm` to `v2.wasm`
-- **THEN** hot-swap is triggered for that node with the new WASM component
+The `DagOrchestrator` exposes:
 
-#### Scenario: Non-WASM config change
-- **WHEN** the pipeline config file is modified
-- **WHEN** only non-WASM fields change (e.g., queue capacity)
-- **THEN** no hot-swap is triggered
-- **THEN** a warning is logged that config reload requires restart
+```rust
+impl DagOrchestrator {
+    /// Perform hot-swap for a single node
+    pub async fn hot_swap(&mut self, node_id: &str, new_wasm: &Path) -> Result<SwapMetrics>;
+    
+    /// Reload config and swap all changed nodes
+    pub async fn resync(&mut self) -> Result<ResyncResult>;
+}
+```
 
-### Requirement: File watch debouncing
-
-The file watcher SHALL debounce rapid changes to prevent spurious hot-swap triggers.
-
-#### Scenario: Multiple rapid file saves
-- **WHEN** the config file is saved multiple times within 500ms
-- **THEN** only one hot-swap is triggered after the debounce window
-
-#### Scenario: Changes after debounce window
-- **WHEN** the config file is saved
-- **WHEN** 500ms passes
-- **WHEN** the config file is saved again
-- **THEN** two separate hot-swaps are triggered
-
-### Requirement: Config validation before swap
-
-The runtime SHALL validate the new configuration before triggering any hot-swaps.
-
-#### Scenario: Valid config change
-- **WHEN** the config file changes to a valid configuration
-- **THEN** config is parsed and validated
-- **THEN** hot-swap proceeds for changed nodes
-
-#### Scenario: Invalid config syntax
-- **WHEN** the config file changes to invalid TOML syntax
-- **THEN** no hot-swap is triggered
-- **THEN** an error is logged with parse failure details
-- **THEN** the pipeline continues with the previous configuration
-
-#### Scenario: Invalid config semantics
-- **WHEN** the config file has valid syntax but invalid semantics (e.g., missing required field)
-- **THEN** no hot-swap is triggered
-- **THEN** an error is logged with validation failure details
-- **THEN** the pipeline continues with the previous configuration
-
-### Requirement: Swap-in-progress lock
-
-The runtime SHALL prevent concurrent hot-swap operations on the same node.
-
-#### Scenario: Hot-swap already in progress
-- **WHEN** hot-swap is triggered for a node
-- **WHEN** another hot-swap is requested for the same node before the first completes
-- **THEN** the second request is rejected
-- **THEN** a warning is logged indicating swap already in progress
+These methods are called by the REST API handlers defined in the control-plane change.

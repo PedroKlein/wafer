@@ -1,8 +1,11 @@
 # Hot-Swap Implementation Tasks
 
+> **Dependencies:** This change depends on `control-plane` for REST API triggers.
+> Implement core hot-swap logic here; triggers are wired in control-plane.
+
 ## 1. Node State Machine
 
-- [ ] 1.1 Add `NodeState` enum to `src/node/mod.rs` (Starting, Running, Draining, Retired)
+- [ ] 1.1 Add `NodeState` enum to `crates/wafer-runtime/src/node/mod.rs` (Starting, Running, Draining, Retired)
 - [ ] 1.2 Add state field and accessor to `AnyNode` enum
 - [ ] 1.3 Add `processing` AtomicBool flag to WASM transform wrapper
 - [ ] 1.4 Update node execution loop to set processing flag around `process()` calls
@@ -34,14 +37,16 @@
 - [ ] 4.4 Log dropped message count at WARN level
 - [ ] 4.5 Write test: simulate slow drain, verify timeout behavior
 
-## 5. Config File Watch
+## 5. Config Diff & Resync
 
-- [ ] 5.1 Add `notify` crate dependency to Cargo.toml
-- [ ] 5.2 Create `src/config/watcher.rs` with ConfigWatcher struct
-- [ ] 5.3 Implement file system watcher with 500ms debounce
-- [ ] 5.4 Implement config diff detection (compare old vs new, find WASM path changes)
-- [ ] 5.5 Wire watcher into main.rs / orchestrator startup
-- [ ] 5.6 Write integration test: modify config file, verify hot-swap triggered
+> **Note:** Trigger mechanisms (REST API, CLI) are in the `control-plane` change.
+> This section covers the config diffing logic that resync uses.
+
+- [ ] 5.1 Create `src/config/diff.rs` with ConfigDiff struct
+- [ ] 5.2 Implement config comparison (detect WASM path changes)
+- [ ] 5.3 Add `resync()` method to DagOrchestrator that diffs and swaps
+- [ ] 5.4 Write unit test: config diff detects WASM path change
+- [ ] 5.5 Write integration test: resync triggers hot-swap for changed node
 
 ## 6. Swap Validation & Safety
 

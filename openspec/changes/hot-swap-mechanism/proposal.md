@@ -9,33 +9,35 @@ The design is already specified in SPEC.md §10 and ADR-0003, but implementation
 - **New hot-swap coordinator** in the DAG orchestrator that manages the drain-and-flip algorithm
 - **Node state machine** to track node lifecycle states: `running`, `draining`, `retired`
 - **Message routing control** to pause/resume routing to specific nodes during swap
-- **Swap trigger API** - initially via config file change, later REST API
 - **Metrics collection** for swap timing (prepare, drain, flip, retire phases)
 - **Timeout handling** for drain phase with configurable `drain_timeout_ms`
+
+> **Note:** Hot-swap triggers (REST API, `waferctl resync`) are defined in the separate `control-plane` OpenSpec change.
 
 ## Capabilities
 
 ### New Capabilities
 - `hot-swap-coordinator`: Core drain-and-flip algorithm implementation, node state machine, message routing control during swap
-- `hot-swap-triggers`: Mechanisms to trigger hot-swap (config file watch, future REST API)
 - `hot-swap-metrics`: Timing metrics for swap phases per SPEC §10.2
 
 ### Modified Capabilities
 *(none - this is a new feature addition, no existing specs to modify)*
 
+### Related Changes
+- `control-plane`: Provides REST API endpoints that trigger hot-swap (`/api/v1/pipeline/resync`, `/api/v1/nodes/:id/hot-swap`)
+
 ## Impact
 
 **Code:**
-- `src/dag/orchestrator.rs` - Add hot-swap coordination logic
-- `src/dag/runner.rs` - Modify node execution loops to respect draining state
-- `src/node/mod.rs` - Add node state enum (Running, Draining, Retired)
-- `src/config/` - Add config file watch for swap triggers
-- `src/metrics/` - Add swap timing metrics
+- `crates/wafer-runtime/src/dag/orchestrator.rs` - Add hot-swap coordination logic
+- `crates/wafer-runtime/src/dag/runner.rs` - Modify node execution loops to respect draining state
+- `crates/wafer-runtime/src/node/mod.rs` - Add node state enum (Running, Draining, Retired)
+- `crates/wafer-runtime/src/metrics/` - Add swap timing metrics
 
 **WIT:** No changes required - lifecycle interface already has `validate()`, `init()`, `close()`
 
 **Config:** Uses existing `drain_timeout_ms` field in pipeline config
 
-**Dependencies:** May need `notify` crate for file watching
+**Dependencies:** None (triggers come from control-plane change)
 
 **SPEC Reference:** Section 10 (Hot-Swap Mechanism), ADR-0003
