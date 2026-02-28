@@ -18,7 +18,7 @@
 - [x] 1.7 Create `crates/waferctl/` skeleton (CLI binary)
 - [x] 1.8 Update all import paths and verify `cargo build` succeeds
 - [ ] 1.9 Update CI scripts for workspace structure
-- [ ] 1.10 Update justfile commands for new structure
+- [x] 1.10 Update justfile commands for new structure
 
 ## 2. Shared Types (wafer-types)
 
@@ -32,7 +32,7 @@
 - [x] 2.8 Define `PipelineEvent` enum (HotSwapStarted, HotSwapCompleted, etc.)
 - [x] 2.9 Define API request/response DTOs (ErrorResponse, etc.)
 - [x] 2.10 Add serde Serialize/Deserialize for all types
-- [ ] 2.11 Write unit tests for serialization round-trips
+- [x] 2.11 Write unit tests for serialization round-trips
 
 ## 3. PipelineControl Trait (wafer-core)
 
@@ -128,10 +128,10 @@
 
 ## 10. Documentation
 
-- [ ] 10.1 Update MVP.md with control plane status
-- [ ] 10.2 Create waferctl README with usage examples
-- [ ] 10.3 Add API endpoint documentation to SPEC.md or separate API.md
-- [ ] 10.4 Add example config with [api] and [metrics] sections
+- [x] 10.1 Update MVP.md with control plane status
+- [x] 10.2 Create waferctl README with usage examples
+- [x] 10.3 Add API endpoint documentation to SPEC.md or separate API.md
+- [x] 10.4 Add example config with [api] and [metrics] sections
 - [ ] 10.5 Update SPEC.md milestone checkboxes
 - [ ] 10.6 Create ADR for runtime architecture split decision
 
