@@ -122,6 +122,38 @@ See `openspec/changes/runtime-control-plane/design.md` D4 for metrics port confi
 - Simpler, no additional infrastructure needed
 - Push can be added later via OTLP exporter
 
+## Implementation Notes
+
+### Final Architecture
+
+The implementation followed the design with these refinements:
+
+1. **MetricsRegistry** - Implemented in `crates/wafer-core/src/metrics/registry.rs`:
+   - Wraps existing `PipelineMetrics` atomic counters
+   - Adds pipeline, node, queue, system, and hot-swap metrics
+   - `encode()` method produces Prometheus text format on-demand (lazy collection)
+   - Thread-safe via `Arc<MetricsRegistry>` shared across handlers
+
+2. **Hot-swap metrics** - Added 9 metrics for swap operation tracking:
+   - `wafer_hotswap_total`, `wafer_hotswap_success_total`, `wafer_hotswap_failure_total`
+   - Phase timing: `prepare_time_ns`, `drain_time_ns`, `flip_time_ns`, `retire_time_ns`
+   - `wafer_hotswap_drain_timeout_total`, `wafer_hotswap_messages_drained_total`
+
+3. **System metrics** - Via `sysinfo` crate (refreshed each scrape):
+   - `wafer_host_cpu_percent`, `wafer_host_memory_rss_bytes`, `wafer_host_threads`
+
+4. **Structured logging** - Via `tracing-subscriber` with JSON formatter:
+   - CLI flag: `--log-format json` (default: `text`)
+   - Matches SPEC §12.4 structure with span context
+
+### Local Development Stack
+
+Added `examples/observability/` with Docker Compose (Prometheus + Grafana):
+- Pre-configured scrape config for WAFER at `host.docker.internal:8080/metrics`
+- Pre-built Grafana dashboard with pipeline, node, queue, and hot-swap panels
+- Load testing script: `scripts/load-test-metrics.sh`
+- Criterion benchmarks: `crates/wafer-core/benches/metrics.rs`
+
 ## Open Questions
 
 - [x] **Q1:** Should metrics server run on a separate port or share with future REST API?

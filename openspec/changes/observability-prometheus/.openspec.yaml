@@ -1,2 +1,9 @@
 schema: spec-driven
 created: 2026-02-28
+status: complete
+completed: 2026-02-28
+summary: |
+  Implemented full Prometheus metrics, structured JSON logging, and local observability stack.
+  All 41 tasks completed. Features include MetricsRegistry with ~30 Prometheus metrics,
+  hot-swap metrics, system metrics via sysinfo, JSON log output via --log-format flag,
+  and Docker Compose stack with Prometheus + Grafana.
