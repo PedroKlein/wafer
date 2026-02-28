@@ -2,13 +2,14 @@
 
 mod client;
 mod config;
+mod error;
 mod output;
 
-use anyhow::Result;
 use clap::{Parser, Subcommand};
 
 use client::WaferClient;
 use config::CtlConfig;
+use error::{exit_code, CliError, ResultExt};
 
 /// waferctl - Manage WAFER pipeline instances
 #[derive(Parser)]
@@ -98,20 +99,29 @@ enum ConfigAction {
 }
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let cli = Cli::parse();
 
+    let result = run(cli).await;
+
+    match result {
+        Ok(()) => std::process::exit(exit_code::SUCCESS),
+        Err(err) => err.exit(Cli::parse().json),
+    }
+}
+
+async fn run(cli: Cli) -> error::Result<()> {
     // Handle config commands first (don't need a client)
     if let Commands::Config { action } = &cli.command {
         return handle_config_command(action, cli.json);
     }
 
     // Resolve endpoint URL
-    let config = CtlConfig::load()?;
+    let config = CtlConfig::load().user_err()?;
     let endpoint_url = resolve_endpoint(&cli.endpoint, &config)?;
 
     // Create client
-    let client = WaferClient::new(&endpoint_url)?;
+    let client = WaferClient::new(&endpoint_url).user_err()?;
 
     // Execute command
     match cli.command {
@@ -128,54 +138,67 @@ async fn main() -> Result<()> {
     }
 }
 
-fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> Result<String> {
+fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> error::Result<String> {
     match endpoint_arg {
         Some(ep) => {
             // Check if it's a URL or an endpoint name
             if ep.starts_with("http://") || ep.starts_with("https://") {
                 Ok(ep.clone())
             } else {
-                config
-                    .get_endpoint(ep)
-                    .ok_or_else(|| anyhow::anyhow!("Endpoint '{}' not found in config", ep))
+                config.get_endpoint(ep).ok_or_else(|| {
+                    CliError::user(anyhow::anyhow!("Endpoint '{}' not found in config", ep))
+                        .with_hint("Run 'waferctl config list' to see available endpoints.")
+                })
             }
         }
-        None => {
-            config
-                .get_default_endpoint()
-                .ok_or_else(|| anyhow::anyhow!("No default endpoint configured. Use --endpoint or run 'waferctl config set-endpoint'"))
-        }
+        None => config.get_default_endpoint().ok_or_else(|| {
+            CliError::user(anyhow::anyhow!("No default endpoint configured"))
+                .with_hint("Use --endpoint <url> or run 'waferctl config set-endpoint <name> <url>'")
+        }),
     }
 }
 
-fn handle_config_command(action: &ConfigAction, json: bool) -> Result<()> {
-    let mut config = CtlConfig::load()?;
+fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()> {
+    let mut config = CtlConfig::load().user_err()?;
 
     match action {
         ConfigAction::SetEndpoint { name, url } => {
             config.set_endpoint(name, url);
-            config.save()?;
+            config.save().user_err()?;
             if json {
-                println!(r#"{{"ok": true, "message": "Endpoint '{}' set to '{}'"}}"#, name, url);
+                println!(
+                    r#"{{"ok": true, "message": "Endpoint '{}' set to '{}'"}}"#,
+                    name, url
+                );
             } else {
                 println!("✓ Endpoint '{}' set to '{}'", name, url);
             }
         }
         ConfigAction::Use { name } => {
             if !config.has_endpoint(name) {
-                anyhow::bail!("Endpoint '{}' not found", name);
+                return Err(CliError::user(anyhow::anyhow!(
+                    "Endpoint '{}' not found",
+                    name
+                ))
+                .with_hint("Run 'waferctl config list' to see available endpoints."));
             }
             config.set_default(name);
-            config.save()?;
+            config.save().user_err()?;
             if json {
-                println!(r#"{{"ok": true, "message": "Default endpoint set to '{}'"}}"#, name);
+                println!(
+                    r#"{{"ok": true, "message": "Default endpoint set to '{}'"}}"#,
+                    name
+                );
             } else {
                 println!("✓ Default endpoint set to '{}'", name);
             }
         }
         ConfigAction::List => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&config)?);
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&config).user_err()?
+                );
             } else {
                 output::print_config(&config);
             }
@@ -185,94 +208,83 @@ fn handle_config_command(action: &ConfigAction, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_health(client: &WaferClient, json: bool) -> Result<()> {
-    match client.health().await {
-        Ok(response) => {
-            if json {
-                println!("{}", serde_json::to_string(&response)?);
-            } else {
-                println!("✓ Healthy");
-            }
-            Ok(())
-        }
-        Err(e) => {
-            if json {
-                println!(r#"{{"error": "{}"}}"#, e);
-            } else {
-                eprintln!("✗ Unhealthy: {}", e);
-            }
-            std::process::exit(3);
-        }
+async fn cmd_health(client: &WaferClient, json: bool) -> error::Result<()> {
+    let response = client.health().await.classify()?;
+    if json {
+        println!("{}", serde_json::to_string(&response).user_err()?);
+    } else {
+        println!("✓ Healthy");
     }
+    Ok(())
 }
 
-async fn cmd_status(client: &WaferClient, json: bool) -> Result<()> {
-    let status = client.status().await?;
+async fn cmd_status(client: &WaferClient, json: bool) -> error::Result<()> {
+    let status = client.status().await.classify()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&status)?);
+        println!("{}", serde_json::to_string_pretty(&status).user_err()?);
     } else {
         output::print_status(&status);
     }
     Ok(())
 }
 
-async fn cmd_nodes(client: &WaferClient, json: bool, wide: bool) -> Result<()> {
-    let nodes = client.nodes().await?;
+async fn cmd_nodes(client: &WaferClient, json: bool, wide: bool) -> error::Result<()> {
+    let nodes = client.nodes().await.classify()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&nodes)?);
+        println!("{}", serde_json::to_string_pretty(&nodes).user_err()?);
     } else {
         output::print_nodes(&nodes, wide);
     }
     Ok(())
 }
 
-async fn cmd_node(client: &WaferClient, id: &str, json: bool) -> Result<()> {
-    let node = client.node(id).await?;
+async fn cmd_node(client: &WaferClient, id: &str, json: bool) -> error::Result<()> {
+    let node = client.node(id).await.classify()?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&node)?);
+        println!("{}", serde_json::to_string_pretty(&node).user_err()?);
     } else {
         output::print_node_detail(&node);
     }
     Ok(())
 }
 
-async fn cmd_hot_swap(client: &WaferClient, node_id: &str, json: bool) -> Result<()> {
+async fn cmd_hot_swap(client: &WaferClient, node_id: &str, json: bool) -> error::Result<()> {
     if !json {
-        println!("Triggering hot-swap for node '{}'...", node_id);
+        println!("Triggering hot-swap for node '{node_id}'...");
     }
-    
-    let result = client.hot_swap(node_id).await?;
-    
+
+    let result = client.hot_swap(node_id).await.classify()?;
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(&result).user_err()?);
     } else {
         output::print_hot_swap_result(&result);
     }
     Ok(())
 }
 
-async fn cmd_reload(client: &WaferClient, json: bool) -> Result<()> {
+async fn cmd_reload(client: &WaferClient, json: bool) -> error::Result<()> {
     if !json {
         println!("Reloading configuration...");
     }
-    
-    let result = client.reload().await?;
-    
+
+    let result = client.reload().await.classify()?;
+
     if json {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+        println!("{}", serde_json::to_string_pretty(&result).user_err()?);
     } else {
         output::print_reload_result(&result);
     }
     Ok(())
 }
 
-async fn cmd_drain(client: &WaferClient, json: bool) -> Result<()> {
+async fn cmd_drain(client: &WaferClient, json: bool) -> error::Result<()> {
     if !json {
         println!("Draining pipeline...");
     }
-    
-    client.drain().await?;
-    
+
+    client.drain().await.classify()?;
+
     if json {
         println!(r#"{{"ok": true, "message": "Pipeline drained"}}"#);
     } else {
@@ -281,13 +293,13 @@ async fn cmd_drain(client: &WaferClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_shutdown(client: &WaferClient, json: bool) -> Result<()> {
+async fn cmd_shutdown(client: &WaferClient, json: bool) -> error::Result<()> {
     if !json {
         println!("Shutting down pipeline...");
     }
-    
-    client.shutdown().await?;
-    
+
+    client.shutdown().await.classify()?;
+
     if json {
         println!(r#"{{"ok": true, "message": "Pipeline shut down"}}"#);
     } else {
@@ -296,14 +308,14 @@ async fn cmd_shutdown(client: &WaferClient, json: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_metrics(client: &WaferClient, json: bool, raw: bool) -> Result<()> {
+async fn cmd_metrics(client: &WaferClient, json: bool, raw: bool) -> error::Result<()> {
     if raw {
-        let metrics = client.metrics_raw().await?;
-        println!("{}", metrics);
+        let metrics = client.metrics_raw().await.classify()?;
+        println!("{metrics}");
     } else {
-        let metrics = client.metrics().await?;
+        let metrics = client.metrics().await.classify()?;
         if json {
-            println!("{}", serde_json::to_string_pretty(&metrics)?);
+            println!("{}", serde_json::to_string_pretty(&metrics).user_err()?);
         } else {
             output::print_metrics(&metrics);
         }
