@@ -1,0 +1,60 @@
+# WAFER DAG Configuration: Passthrough with Control Plane
+# Simple pipeline with HTTP API and metrics enabled.
+#
+# Usage:
+#   cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+#
+# API endpoints:
+#   curl http://localhost:9090/health
+#   curl http://localhost:9090/api/v1/pipeline
+#   curl http://localhost:9090/api/v1/nodes
+#   curl http://localhost:9091/metrics
+#
+# Or use waferctl:
+#   waferctl -e http://localhost:9090 status
+#   waferctl -e http://localhost:9090 nodes
+
+[pipeline]
+name = "passthrough-demo"
+description = "Demo pipeline with control plane enabled"
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[metrics]
+enabled = true
+# Separate metrics server (optional - defaults to same as api.bind)
+bind = "127.0.0.1:9091"
+path = "/metrics"
+
+default_queue_capacity = 1024
+
+# Source node: reads from stdin
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+# Transform node: passes data through unchanged
+[[nodes]]
+id = "passthrough"
+node_type = "transform"
+swappable = true
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+# Sink node: writes to stdout
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+# Edge definitions: source -> passthrough -> sink
+[[edges]]
+from = "source"
+to = "passthrough"
+
+[[edges]]
+from = "passthrough"
+to = "sink"

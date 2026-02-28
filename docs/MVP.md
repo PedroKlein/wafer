@@ -38,53 +38,66 @@ cargo run -- --config examples/dag-file-io.toml
 ## Module Structure
 
 ```
-src/
-├── engine/
-│   ├── host.rs         # WaferState: WasiView impl, Capabilities for scoping
-│   ├── instance.rs     # TransformInstance: bindgen!, component instantiation
-│   ├── loader.rs       # WaferEngine: wasmtime config, cached Linker, component loading
-│   ├── capabilities.rs # Capabilities struct for security boundaries
-│   └── mod.rs
-├── node/
-│   ├── traits.rs     # Lifecycle, Transform, Router, and Joiner traits
-│   ├── transform.rs  # WasmTransform: trait impl wrapping TransformInstance
-│   ├── router.rs     # WasmRouter: 1→N content-based routing
-│   ├── joiner.rs     # WasmJoiner: N→1 merge operations
-│   ├── source/       # Source trait and implementations
-│   │   ├── mod.rs    # Source trait definition + re-exports
-│   │   ├── file.rs   # FileSource implementation
-│   │   ├── stdin.rs  # StdinSource implementation
-│   │   └── mqtt.rs   # MqttSource implementation (rumqttc)
-│   ├── sink/         # Sink trait and implementations
-│   │   ├── mod.rs    # Sink trait definition + re-exports
-│   │   ├── file.rs   # FileSink implementation
-│   │   ├── stdout.rs # StdoutSink implementation
-│   │   └── mqtt.rs   # MqttSink implementation (rumqttc)
-│   └── mod.rs        # AnyNode enum (Transform, Source, Sink, Router, Joiner variants)
-├── dag/
-│   ├── orchestrator.rs # DagOrchestrator: core struct, run(), topology management
-│   ├── builder.rs      # from_config(), validation, wire_queues()
-│   ├── runner.rs       # Node execution loops (source, transform, sink)
-│   └── mod.rs
-├── queue/
-│   ├── bounded.rs    # BoundedQueue<T>: SPSC with tokio::sync::mpsc
-│   ├── envelope.rs   # RuntimeEnvelope: host-side message wrapper
-│   └── mod.rs
-├── config/
-│   ├── loader.rs     # DAG config loading with validation
-│   ├── schema.rs     # DagConfig, NodeDefinition, EdgeDefinition, NodeConfig
-│   └── mod.rs
-├── registry/
-│   ├── cache.rs      # PackageCache: file-based cache with TTL
-│   ├── client.rs     # WaferRegistry: OCI client via oci-client + docker_credential
-│   ├── types.rs      # PluginSource, OciReference, ResolvedPlugin, RegistryConfig
-│   └── mod.rs
-├── metrics/
-│   └── counters.rs   # PipelineMetrics: atomic counters, ProcessTimer
-├── error.rs          # WaferError enum, ConfigError, Result type
-├── factory.rs        # FactoryContext: node creation from config definitions
-├── lib.rs
-└── main.rs           # CLI: --config flag, DAG-only execution
+crates/
+├── wafer-core/           # Core runtime library
+│   └── src/
+│       ├── api/          # HTTP API (feature-gated)
+│       │   ├── server.rs   # Axum router and handlers
+│       │   └── mod.rs
+│       ├── control/      # Pipeline control interface
+│       │   ├── traits.rs   # PipelineControl trait
+│       │   └── mod.rs
+│       ├── engine/
+│       │   ├── host.rs         # WaferState: WasiView impl, Capabilities
+│       │   ├── instance.rs     # TransformInstance: bindgen!, instantiation
+│       │   ├── loader.rs       # WaferEngine: wasmtime config, linker
+│       │   ├── capabilities.rs # Capabilities struct for security
+│       │   └── mod.rs
+│       ├── node/
+│       │   ├── traits.rs     # Lifecycle, Transform, Router, Joiner traits
+│       │   ├── transform.rs  # WasmTransform
+│       │   ├── router.rs     # WasmRouter: 1→N routing
+│       │   ├── joiner.rs     # WasmJoiner: N→1 merge
+│       │   ├── source/       # Source implementations
+│       │   ├── sink/         # Sink implementations
+│       │   └── mod.rs
+│       ├── dag/
+│       │   ├── orchestrator.rs # DagOrchestrator: run(), topology
+│       │   ├── builder.rs      # from_config(), validation
+│       │   ├── runner.rs       # Node execution loops
+│       │   └── mod.rs
+│       ├── queue/
+│       │   ├── bounded.rs    # BoundedQueue<T>: SPSC
+│       │   ├── envelope.rs   # RuntimeEnvelope
+│       │   └── mod.rs
+│       ├── config/
+│       │   ├── loader.rs     # DAG config loading
+│       │   ├── schema.rs     # DagConfig, NodeDefinition
+│       │   └── mod.rs
+│       ├── registry/
+│       │   ├── cache.rs      # PackageCache: TTL-based
+│       │   ├── client.rs     # WaferRegistry: OCI client
+│       │   ├── types.rs      # PluginSource, OciReference
+│       │   └── mod.rs
+│       ├── metrics/
+│       │   └── counters.rs   # PipelineMetrics
+│       ├── error.rs
+│       ├── factory.rs
+│       └── lib.rs
+├── wafer-types/          # Shared API types
+│   └── src/
+│       ├── control.rs      # PipelineStatus, NodeInfo, ControlError, etc.
+│       └── lib.rs
+├── wafer-runtime/        # Runtime binary
+│   └── src/
+│       └── main.rs         # CLI with --config, --api-bind, --no-api
+└── waferctl/             # CLI management tool
+    └── src/
+        ├── main.rs         # Command handlers
+        ├── client.rs       # WaferClient HTTP client
+        ├── config.rs       # Endpoint configuration
+        ├── error.rs        # Exit codes, error formatting
+        └── output.rs       # Table formatting
 ```
 
 ### WIT Files
@@ -128,6 +141,7 @@ wit/
 | `examples/dag-remote.toml` | stdin → OCI plugin → stdout |
 | `examples/dag-diamond.toml` | Diamond/scatter-gather: source → router → transforms → joiner → sink |
 | `examples/dag-fanout.toml` | Fan-out: source → router → multiple sinks |
+| `examples/dag-passthrough-with-api.toml` | Passthrough with [api] and [metrics] config |
 
 ---
 
@@ -273,9 +287,17 @@ wit/
 - [ ] Network capability enforcement (currently placeholder)
 - [ ] Filesystem capability enforcement (currently placeholder)
 
+### Control Plane (runtime-control-plane change)
+- [x] Workspace restructure: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl`
+- [x] HTTP API server (Axum) with health, pipeline, and node endpoints
+- [x] `waferctl` CLI with commands: status, nodes, hot-swap, reload, drain, shutdown
+- [x] PipelineControl trait for runtime management
+- [ ] Full API server integration (HTTP API scaffolded but not yet wired)
+- [ ] Hot-swap implementation (stubs return NotImplemented)
+
 ### Observability (SPEC §12)
-- [ ] Prometheus `/metrics` endpoint (SPEC §12.3) - metrics are in-memory only
-- [ ] Health endpoints: `/health`, `/ready`, `/live` (SPEC §12.5)
+- [x] Prometheus `/metrics` endpoint (SPEC §12.3) - HTTP handler implemented
+- [x] Health endpoints: `/health`, `/ready` (SPEC §12.5)
 - [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
 
 
@@ -325,24 +347,46 @@ wit/
 ## Running the MVP
 
 ```bash
-# Build host runtime
-cargo build
+# Build entire workspace
+just build
+# Or: cargo build --workspace
 
 # Build all plugins
 just plugin
 
 # Run DAG pipeline with stdin/stdout
-echo "hello world" | cargo run -- --config examples/dag-passthrough.toml
+echo \"hello world\" | just run examples/dag-passthrough.toml
+# Or: cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 
 # Run with uppercase transform
-echo "hello" | cargo run -- --config examples/dag-uppercase.toml
+echo \"hello\" | just run examples/dag-uppercase.toml
 # Output: HELLO
 
-# Run tests
-cargo test
+# Run all tests
+just test
+# Or: cargo test --workspace
 
 # Run integration tests specifically
-cargo test --test integration
+cargo test --test integration -p wafer-core
+```
+
+### Using waferctl
+
+```bash
+# Build waferctl
+just build-ctl
+
+# Check runtime health (default: localhost:8080)
+just ctl health
+
+# Use a specific endpoint
+just ctl -e http://localhost:9090 status
+
+# List all nodes
+just ctl nodes
+
+# Trigger hot-swap on a node
+just ctl hot-swap transform-1
 ```
 
 ### DAG Configuration
