@@ -16,7 +16,7 @@
 - [x] 1.5 Create `crates/wafer-runtime/` skeleton (binary crate)
 - [x] 1.6 Create `crates/wafer-types/` skeleton (shared types)
 - [x] 1.7 Create `crates/waferctl/` skeleton (CLI binary)
-- [ ] 1.8 Update all import paths and verify `cargo build` succeeds *(blocked by Xcode license)*
+- [x] 1.8 Update all import paths and verify `cargo build` succeeds
 - [ ] 1.9 Update CI scripts for workspace structure
 - [ ] 1.10 Update justfile commands for new structure
 
@@ -121,10 +121,10 @@
 
 ## 9. Error Handling
 
-- [ ] 9.1 Define exit codes (0=success, 1=user error, 2=API error, 3=connection)
-- [ ] 9.2 Implement error formatting for human output
-- [ ] 9.3 Implement error formatting for JSON output
-- [ ] 9.4 Write tests for error scenarios
+- [x] 9.1 Define exit codes (0=success, 1=user error, 2=API error, 3=connection)
+- [x] 9.2 Implement error formatting for human output
+- [x] 9.3 Implement error formatting for JSON output
+- [x] 9.4 Write tests for error scenarios
 
 ## 10. Documentation
 
