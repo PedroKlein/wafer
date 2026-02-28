@@ -1857,13 +1857,14 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Goal:** Full dynamic topology, production-ready observability
 
 **Deliverables:**
-- [ ] REST API for topology changes
+- [x] REST API for topology changes (HTTP API scaffolded, control endpoints implemented)
 - [ ] Config file watch
 - [x] Router node category (plugins/content-router)
 - [x] Joiner node category (plugins/merge-joiner)
-- [ ] Prometheus metrics endpoint
+- [x] Prometheus metrics endpoint (/metrics handler implemented)
 - [ ] Structured JSON logs
 - [ ] Security test scenarios (S1-S6)
+- [x] waferctl CLI for runtime management
 
 **Acceptance criteria:**
 - Add/remove nodes at runtime via API

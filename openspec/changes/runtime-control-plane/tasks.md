@@ -132,8 +132,8 @@
 - [x] 10.2 Create waferctl README with usage examples
 - [x] 10.3 Add API endpoint documentation to SPEC.md or separate API.md
 - [x] 10.4 Add example config with [api] and [metrics] sections
-- [ ] 10.5 Update SPEC.md milestone checkboxes
-- [ ] 10.6 Create ADR for runtime architecture split decision
+- [x] 10.5 Update SPEC.md milestone checkboxes
+- [x] 10.6 Create ADR for runtime architecture split decision
 
 ## 11. End-to-End Testing
 
