@@ -200,15 +200,15 @@ impl<T> ResultExt<T> for std::result::Result<T, serde_json::Error> {
     }
 
     fn user_err(self) -> Result<T> {
-        self.map_err(|e| CliError::user(e))
+        self.map_err(CliError::user)
     }
 
     fn api_err(self) -> Result<T> {
-        self.map_err(|e| CliError::api(e))
+        self.map_err(CliError::api)
     }
 
     fn conn_err(self) -> Result<T> {
-        self.map_err(|e| CliError::connection(e))
+        self.map_err(CliError::connection)
     }
 }
 
@@ -218,15 +218,15 @@ impl<T> ResultExt<T> for std::result::Result<T, std::io::Error> {
     }
 
     fn user_err(self) -> Result<T> {
-        self.map_err(|e| CliError::user(e))
+        self.map_err(CliError::user)
     }
 
     fn api_err(self) -> Result<T> {
-        self.map_err(|e| CliError::api(e))
+        self.map_err(CliError::api)
     }
 
     fn conn_err(self) -> Result<T> {
-        self.map_err(|e| CliError::connection(e))
+        self.map_err(CliError::connection)
     }
 }
 

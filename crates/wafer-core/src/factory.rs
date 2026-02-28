@@ -1,3 +1,7 @@
+// Allow casts in config parsing - TOML integers are validated at config level
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+
 //! Node factory for creating pipeline nodes from configuration.
 //!
 //! This module handles the instantiation of source, transform, and sink nodes
@@ -25,6 +29,8 @@
 //! ## Sources
 //! - `stdin` - Reads lines from standard input
 //! - `file` (default) - Reads lines from a file (requires `path` in config)
+//! - `mqtt` - Subscribes to an MQTT topic (requires `topic` in config)
+//! - `http` - Receives POST requests on a configurable endpoint (optional `bind`, `path` in config)
 //!
 //! ## Transforms
 //! - WASM components loaded from `plugin_path` in config (local path)
@@ -33,6 +39,8 @@
 //! ## Sinks
 //! - `stdout` - Writes to standard output
 //! - `file` (default) - Writes to a file (requires `path` in config)
+//! - `mqtt` - Publishes to an MQTT topic (requires `topic` in config)
+//! - `http` - POSTs messages to an HTTP endpoint (requires `url` in config)
 
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
@@ -41,8 +49,9 @@ use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefini
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
-    AnyNode, FileSink, FileSource, JoinerInstance, MqttSink, MqttSource, NodeConfig,
-    RouterInstance, Sink, StdinSource, StdoutSink, WasmJoiner, WasmRouter, WasmTransform,
+    AnyNode, FileSink, FileSource, HttpSink, HttpSource, JoinerInstance, MqttSink, MqttSource,
+    NodeConfig, RouterInstance, Sink, StdinSource, StdoutSink, WasmJoiner, WasmRouter,
+    WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 use crate::Result;
@@ -160,18 +169,17 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
         let broker = node_def
             .config
             .get("broker")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .unwrap_or("localhost");
         let port = node_def
             .config
             .get("port")
-            .and_then(|v| v.as_integer())
-            .map(|v| v as u16)
-            .unwrap_or(1883);
+            .and_then(toml::Value::as_integer)
+            .map_or(1883, |v| v as u16);
         let topic = node_def
             .config
             .get("topic")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "mqtt source '{}' requires 'topic' in config",
@@ -181,15 +189,13 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
         let qos = node_def
             .config
             .get("qos")
-            .and_then(|v| v.as_integer())
-            .map(|v| v as u8)
-            .unwrap_or(0);
+            .and_then(toml::Value::as_integer)
+            .map_or(0, |v| v as u8);
         let client_id = node_def
             .config
             .get("client_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("wafer-{}", node_def.id));
+            .and_then(toml::Value::as_str)
+            .map_or_else(|| format!("wafer-{}", node_def.id), String::from);
         Ok(AnyNode::from_source(MqttSource::new(
             &node_def.id,
             broker,
@@ -198,12 +204,31 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
             qos,
             client_id,
         )))
+    } else if source_type == "http" {
+        let bind = node_def
+            .config
+            .get("bind")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("127.0.0.1:8081");
+        let path = node_def
+            .config
+            .get("path")
+            .and_then(toml::Value::as_str)
+            .unwrap_or("/ingest");
+        let buffer_size = node_def
+            .config
+            .get("buffer_size")
+            .and_then(toml::Value::as_integer)
+            .map_or(1000, |v| v as usize);
+        Ok(AnyNode::from_source(
+            HttpSource::new(&node_def.id, bind, path).with_buffer_size(buffer_size),
+        ))
     } else {
         // Default to file source
         let path = node_def
             .config
             .get("path")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "source '{}' requires 'path' in config",
@@ -430,18 +455,17 @@ pub fn create_dlq_sink(config: &DeadLetterConfig) -> Result<Box<dyn Sink + Send>
             let broker = config
                 .config
                 .get("broker")
-                .and_then(|v| v.as_str())
+                .and_then(toml::Value::as_str)
                 .unwrap_or("localhost");
             let port = config
                 .config
                 .get("port")
-                .and_then(|v| v.as_integer())
-                .map(|v| v as u16)
-                .unwrap_or(1883);
+                .and_then(toml::Value::as_integer)
+                .map_or(1883, |v| v as u16);
             let topic = config
                 .config
                 .get("topic")
-                .and_then(|v| v.as_str())
+                .and_then(toml::Value::as_str)
                 .ok_or_else(|| {
                     WaferError::Config(ConfigError::Message(
                         "dead_letter mqtt sink requires 'topic' in config".to_string(),
@@ -450,27 +474,40 @@ pub fn create_dlq_sink(config: &DeadLetterConfig) -> Result<Box<dyn Sink + Send>
             let qos = config
                 .config
                 .get("qos")
-                .and_then(|v| v.as_integer())
-                .map(|v| v as u8)
-                .unwrap_or(0);
+                .and_then(toml::Value::as_integer)
+                .map_or(0, |v| v as u8);
             let client_id = config
                 .config
                 .get("client_id")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .unwrap_or_else(|| "wafer-dlq".to_string());
+                .and_then(toml::Value::as_str)
+                .map_or_else(|| "wafer-dlq".to_string(), String::from);
             Ok(Box::new(MqttSink::new(
                 "dlq", broker, port, topic, qos, client_id,
             )))
         }
+        "http" => {
+            let url = config
+                .config
+                .get("url")
+                .and_then(toml::Value::as_str)
+                .ok_or_else(|| {
+                    WaferError::Config(ConfigError::Message(
+                        "dead_letter http sink requires 'url' in config".to_string(),
+                    ))
+                })?;
+            Ok(Box::new(HttpSink::new("dlq", url)))
+        }
         _ => Err(WaferError::Config(ConfigError::Message(format!(
-            "unknown dead_letter sink_type '{sink_type}', expected 'file', 'mqtt', or 'stdout'"
+            "unknown dead_letter sink_type '{sink_type}', expected 'file', 'http', 'mqtt', or 'stdout'"
         )))),
     }
 }
 
 /// Create a sink node from configuration.
 fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
+    use crate::node::HttpSinkBatchConfig;
+    use std::time::Duration;
+
     let sink_type = node_def.sink_type.as_deref().unwrap_or("file");
     if sink_type == "stdout" {
         Ok(AnyNode::from_sink(StdoutSink::new(&node_def.id)))
@@ -478,18 +515,17 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
         let broker = node_def
             .config
             .get("broker")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .unwrap_or("localhost");
         let port = node_def
             .config
             .get("port")
-            .and_then(|v| v.as_integer())
-            .map(|v| v as u16)
-            .unwrap_or(1883);
+            .and_then(toml::Value::as_integer)
+            .map_or(1883, |v| v as u16);
         let topic = node_def
             .config
             .get("topic")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "mqtt sink '{}' requires 'topic' in config",
@@ -499,15 +535,13 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
         let qos = node_def
             .config
             .get("qos")
-            .and_then(|v| v.as_integer())
-            .map(|v| v as u8)
-            .unwrap_or(0);
+            .and_then(toml::Value::as_integer)
+            .map_or(0, |v| v as u8);
         let client_id = node_def
             .config
             .get("client_id")
-            .and_then(|v| v.as_str())
-            .map(String::from)
-            .unwrap_or_else(|| format!("wafer-{}", node_def.id));
+            .and_then(toml::Value::as_str)
+            .map_or_else(|| format!("wafer-{}", node_def.id), String::from);
         Ok(AnyNode::from_sink(MqttSink::new(
             &node_def.id,
             broker,
@@ -516,12 +550,48 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
             qos,
             client_id,
         )))
+    } else if sink_type == "http" {
+        let url = node_def
+            .config
+            .get("url")
+            .and_then(toml::Value::as_str)
+            .ok_or_else(|| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "http sink '{}' requires 'url' in config",
+                    node_def.id
+                )))
+            })?;
+        let batch_size = node_def
+            .config
+            .get("batch_size")
+            .and_then(toml::Value::as_integer)
+            .map(|v| v as usize);
+        let batch_timeout_ms = node_def
+            .config
+            .get("batch_timeout_ms")
+            .and_then(toml::Value::as_integer)
+            .map(|v| v as u64);
+        let timeout_secs = node_def
+            .config
+            .get("timeout_secs")
+            .and_then(toml::Value::as_integer)
+            .map_or(30, |v| v as u64);
+
+        let batch_config = HttpSinkBatchConfig {
+            batch_size,
+            batch_timeout_ms,
+        };
+
+        let sink = HttpSink::with_batching(&node_def.id, url, batch_config)
+            .with_timeout(Duration::from_secs(timeout_secs));
+
+        Ok(AnyNode::from_sink(sink))
     } else {
         // Default to file sink
         let path = node_def
             .config
             .get("path")
-            .and_then(|v| v.as_str())
+            .and_then(toml::Value::as_str)
             .ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "sink '{}' requires 'path' in config",

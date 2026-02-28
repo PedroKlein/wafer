@@ -106,22 +106,18 @@ pub enum SwapError {
 impl std::fmt::Display for SwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SwapError::NodeNotFound(id) => write!(f, "node '{}' not found", id),
+            SwapError::NodeNotFound(id) => write!(f, "node '{id}' not found"),
             SwapError::NotSwappable(id) => {
-                write!(f, "node '{}' does not support hot-swap", id)
+                write!(f, "node '{id}' does not support hot-swap")
             }
             SwapError::SwapInProgress(id) => {
-                write!(f, "swap already in progress for node '{}'", id)
+                write!(f, "swap already in progress for node '{id}'")
             }
-            SwapError::PrepareError(msg) => write!(f, "prepare failed: {}", msg),
+            SwapError::PrepareError(msg) => write!(f, "prepare failed: {msg}"),
             SwapError::DrainTimeout { node_id, timeout_ms } => {
-                write!(
-                    f,
-                    "drain timed out for node '{}' after {}ms",
-                    node_id, timeout_ms
-                )
+                write!(f, "drain timed out for node '{node_id}' after {timeout_ms}ms")
             }
-            SwapError::Internal(msg) => write!(f, "internal error: {}", msg),
+            SwapError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
     }
 }
@@ -316,26 +312,23 @@ impl HotSwapCoordinator {
 
         self.metrics.drain_duration = start.elapsed();
 
-        match drain_result {
-            Ok(poll_count) => {
-                self.metrics.messages_drained = poll_count;
-                tracing::info!(
-                    node = %self.node_id,
-                    duration_ms = %self.metrics.drain_duration.as_millis(),
-                    poll_count = poll_count,
-                    "DRAIN: Complete"
-                );
-                Ok(false) // Not timed out
-            }
-            Err(_) => {
-                self.metrics.drain_timed_out = true;
-                tracing::warn!(
-                    node = %self.node_id,
-                    duration_ms = %self.metrics.drain_duration.as_millis(),
-                    "DRAIN: Timed out, proceeding with swap"
-                );
-                Ok(true) // Timed out
-            }
+        if let Ok(poll_count) = drain_result {
+            self.metrics.messages_drained = poll_count;
+            tracing::info!(
+                node = %self.node_id,
+                duration_ms = %self.metrics.drain_duration.as_millis(),
+                poll_count = poll_count,
+                "DRAIN: Complete"
+            );
+            Ok(false) // Not timed out
+        } else {
+            self.metrics.drain_timed_out = true;
+            tracing::warn!(
+                node = %self.node_id,
+                duration_ms = %self.metrics.drain_duration.as_millis(),
+                "DRAIN: Timed out, proceeding with swap"
+            );
+            Ok(true) // Timed out
         }
     }
 

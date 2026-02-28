@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 pub struct BatchBuffer<T> {
     buffer: Vec<T>,
     batch_size: usize,
+    #[allow(dead_code)] // Used for timeout-based flushing in sinks
     timeout: Duration,
     last_flush: Instant,
 }
@@ -81,11 +82,13 @@ impl<T> BatchBuffer<T> {
     /// Returns `true` if:
     /// - The buffer is not empty AND
     /// - The time since last flush exceeds the timeout
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn should_flush(&self) -> bool {
         !self.buffer.is_empty() && self.last_flush.elapsed() >= self.timeout
     }
 
     /// Returns `true` if the buffer contains no items.
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
@@ -96,21 +99,25 @@ impl<T> BatchBuffer<T> {
     }
 
     /// Returns the configured batch size.
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
 
     /// Returns the configured timeout duration.
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
     /// Returns the time elapsed since the last flush.
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn elapsed_since_flush(&self) -> Duration {
         self.last_flush.elapsed()
     }
 
     /// Returns the time remaining until the timeout, or zero if already past.
+    #[allow(dead_code)] // Public API for sink implementations
     pub fn time_until_timeout(&self) -> Duration {
         self.timeout.saturating_sub(self.last_flush.elapsed())
     }

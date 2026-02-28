@@ -70,6 +70,7 @@ fn default_api_bind() -> SocketAddr {
 }
 
 /// Default bind address for metrics endpoint (when served separately from API).
+#[allow(dead_code)] // Reserved for future standalone metrics server
 fn default_metrics_bind() -> SocketAddr {
     DEFAULT_METRICS_BIND.parse().unwrap()
 }
@@ -312,8 +313,7 @@ impl NodeConfig {
                 // Validate the OCI reference format
                 OciReference::parse(oci_str).ok_or_else(|| {
                     ConfigError::Message(format!(
-                        "invalid OCI reference '{}': expected format 'registry/repo:tag'",
-                        oci_str
+                        "invalid OCI reference '{oci_str}': expected format 'registry/repo:tag'"
                     ))
                 })?;
                 Ok(())
@@ -329,6 +329,11 @@ impl NodeConfig {
     /// Returns an error if:
     /// - Validation fails (see [`validate`](Self::validate))
     /// - The OCI reference is invalid
+    ///
+    /// # Panics
+    ///
+    /// Panics if called when neither `plugin_path` nor `oci` is set,
+    /// which should be caught by `validate()`.
     pub fn plugin_source(&self) -> Result<PluginSource, ConfigError> {
         self.validate()?;
 
@@ -341,8 +346,7 @@ impl NodeConfig {
 
         let oci_ref = OciReference::parse(oci_str).ok_or_else(|| {
             ConfigError::Message(format!(
-                "invalid OCI reference '{}': expected format 'registry/repo:tag'",
-                oci_str
+                "invalid OCI reference '{oci_str}': expected format 'registry/repo:tag'"
             ))
         })?;
 
@@ -464,6 +468,7 @@ mod tests {
         }
     }
 
+    #[allow(dead_code)] // Test utility function
     fn make_edge(from: &str, to: &str) -> EdgeDefinition {
         EdgeDefinition {
             from: from.to_string(),

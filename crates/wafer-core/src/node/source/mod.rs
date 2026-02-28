@@ -37,10 +37,12 @@
 //! ```
 
 mod file;
+mod http;
 mod mqtt;
 mod stdin;
 
 pub use file::FileSource;
+pub use http::HttpSource;
 pub use mqtt::MqttSource;
 pub use stdin::StdinSource;
 

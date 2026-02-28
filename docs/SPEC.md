@@ -1820,7 +1820,7 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Deliverables:**
 - [x] JSON parse transform node
 - [x] Threshold filter transform node
-- [ ] Backpressure policies (slow, drop) — slow implemented, drop pending
+- [x] Backpressure policies (slow, drop, dead-letter) — all overflow policies implemented
 - [x] Drain-and-flip hot-swap (full implementation via HotSwapCoordinator)
 - [ ] Native Rust baseline (same logic)
 - [ ] Out-of-process baseline (IPC)

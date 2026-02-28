@@ -507,7 +507,7 @@ from = "transform"
 to = "sink"
 ```
 
-See `examples/` directory for complete examples (13 configurations).
+See `examples/` directory for complete examples (15 configurations).
 
 ### Remote Plugin Configuration (OCI)
 

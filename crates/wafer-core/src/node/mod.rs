@@ -22,8 +22,8 @@ mod state;
 mod traits;
 mod transform;
 
-pub use sink::{FileSink, MqttSink, Sink, StdoutSink};
-pub use source::{FileSource, MqttSource, Source, StdinSource};
+pub use sink::{FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
+pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use state::NodeStateTracker;
 pub use traits::{
     ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,

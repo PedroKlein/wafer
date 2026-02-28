@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{Config, DagConfig};
 use crate::error::{ConfigError, Result, WaferError};
 use crate::factory::{create_dlq_sink, create_node, FactoryContext};
-use crate::node::{AnyNode, Lifecycle};
+use crate::node::AnyNode;
 use crate::queue::{BoundedQueue, RuntimeEnvelope};
 
 use super::orchestrator::{ControlState, RunState};
@@ -741,8 +741,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("unknown") && err.contains("sink"),
-            "Error should mention unknown sink type: {}",
-            err
+            "Error should mention unknown sink type: {err}"
         );
     }
 
@@ -774,8 +773,7 @@ mod tests {
         let err = result.unwrap_err().to_string();
         assert!(
             err.contains("path"),
-            "Error should mention missing path: {}",
-            err
+            "Error should mention missing path: {err}"
         );
     }
 }

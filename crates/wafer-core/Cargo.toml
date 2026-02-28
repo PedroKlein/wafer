@@ -59,6 +59,12 @@ docker_credential = "1.3.2"
 rumqttc = "0.25"
 base64 = "0.22.1"
 
+# HTTP source/sink
+hyper = { version = "1.0", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
 [dev-dependencies]
 tempfile = { workspace = true }
 serde_json = { workspace = true }
@@ -76,3 +82,7 @@ harness = false
 name = "metrics"
 harness = false
 required-features = ["http-api"]
+
+[[bench]]
+name = "throughput"
+harness = false
