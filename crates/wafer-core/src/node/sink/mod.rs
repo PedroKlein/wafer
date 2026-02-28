@@ -8,6 +8,7 @@
 //! - [`FileSink`] - Writes messages to a file
 //! - [`StdoutSink`] - Writes messages to standard output
 //! - [`MqttSink`] - Publishes messages to an MQTT broker
+//! - [`HttpSink`] - Sends messages to an HTTP endpoint via POST
 //!
 //! # Implementing Custom Sinks
 //!
@@ -39,13 +40,14 @@
 
 mod batch;
 mod file;
+mod http;
 mod mqtt;
 mod stdout;
 
-pub use batch::BatchBuffer;
-pub use file::{FileSink, FileSinkBatchConfig};
-pub use mqtt::{MqttSink, MqttSinkBatchConfig};
-pub use stdout::{StdoutSink, StdoutSinkBatchConfig};
+pub use file::FileSink;
+pub use http::{HttpSink, HttpSinkBatchConfig};
+pub use mqtt::MqttSink;
+pub use stdout::StdoutSink;
 
 use std::future::Future;
 use std::pin::Pin;

@@ -1,3 +1,6 @@
+// Duration nanosecond casts: 2^64 ns = ~585 years, truncation is acceptable
+#![allow(clippy::cast_possible_truncation)]
+
 //! Node execution loops for the DAG orchestrator.
 //!
 //! This module contains the async execution loops for source, transform, and sink nodes.

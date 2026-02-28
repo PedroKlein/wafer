@@ -1,3 +1,6 @@
+// Duration nanosecond casts: 2^64 ns = ~585 years, truncation is acceptable
+#![allow(clippy::cast_possible_truncation)]
+
 //! DAG orchestrator for multi-node pipeline execution.
 //!
 //! Manages graph topology, node lifecycle, queue wiring, and coordinated
@@ -139,6 +142,7 @@ impl ControlState {
 
     /// Create new control state with global labels for metrics.
     #[cfg(feature = "http-api")]
+    #[allow(dead_code)] // API for pipeline configuration with labels
     pub fn with_labels(name: String, labels: HashMap<String, String>) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
@@ -350,7 +354,7 @@ impl DagOrchestrator {
                     if from_node == node_id {
                         // Look up overflow policy from edge config
                         let overflow_policy = self.find_edge_overflow_policy(from_key, to_key);
-                        let edge_name = format!("{}->{}", from_key, to_key);
+                        let edge_name = format!("{from_key}->{to_key}");
                         Some(EdgeSendInfo {
                             port: from_port.to_string(),
                             sender: sender.clone(),

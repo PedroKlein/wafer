@@ -147,6 +147,11 @@ impl DlqEnvelope {
 /// # Returns
 ///
 /// A new `RuntimeEnvelope` with source "dlq" and the serialized `DlqEnvelope` as payload.
+///
+/// # Panics
+///
+/// Panics if `DlqEnvelope` serialization fails, which should never happen
+/// for valid envelope data.
 pub fn wrap_for_dlq(
     envelope: RuntimeEnvelope,
     failed_edge: impl Into<String>,

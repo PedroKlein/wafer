@@ -1,0 +1,51 @@
+# WAFER DAG Configuration: HTTP Pipeline
+# 
+# This example demonstrates an HTTP-based pipeline:
+# - Receives POST requests at http://localhost:8081/ingest
+# - Passes messages through a transform
+# - Forwards to an HTTP endpoint (webhook-style)
+#
+# Usage:
+# 1. Start the pipeline: cargo run -- run examples/dag-http.toml
+# 2. Send data: curl -X POST http://localhost:8081/ingest -d '{"test": "data"}'
+# 3. The transformed message will be POSTed to the configured URL
+#
+# For testing without a real endpoint, you can use a tool like:
+# - https://webhook.site for a free temporary endpoint
+# - A local echo server: python -m http.server 8082
+
+default_queue_capacity = 1024
+
+[[nodes]]
+id = "http-source"
+node_type = "source"
+source_type = "http"
+[nodes.config]
+bind = "127.0.0.1:8081"
+path = "/ingest"
+buffer_size = 1000
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+[[nodes]]
+id = "http-sink"
+node_type = "sink"
+sink_type = "http"
+[nodes.config]
+url = "http://localhost:8082/webhook"
+timeout_secs = 30
+# Optional batching configuration (uncomment to enable):
+# batch_size = 10
+# batch_timeout_ms = 1000
+
+[[edges]]
+from = "http-source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "http-sink"
