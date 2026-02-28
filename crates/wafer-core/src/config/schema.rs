@@ -3,10 +3,13 @@
 use crate::error::ConfigError;
 use crate::registry::{OciReference, PluginSource, RegistryConfig};
 use serde::Deserialize;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
 pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
+pub const DEFAULT_API_BIND: &str = "127.0.0.1:9090";
+pub const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9091";
 
 fn default_queue_capacity() -> usize {
     DEFAULT_QUEUE_CAPACITY
@@ -16,8 +19,155 @@ fn default_config() -> toml::Value {
     toml::Value::Table(toml::map::Map::new())
 }
 
+fn default_true() -> bool {
+    true
+}
+
+fn default_api_bind() -> SocketAddr {
+    DEFAULT_API_BIND.parse().unwrap()
+}
+
+fn default_metrics_bind() -> SocketAddr {
+    DEFAULT_METRICS_BIND.parse().unwrap()
+}
+
+fn default_metrics_path() -> String {
+    "/metrics".to_string()
+}
+
+fn default_pipeline_name() -> String {
+    "wafer-pipeline".to_string()
+}
+
+/// Top-level configuration for a WAFER pipeline.
+///
+/// This struct represents the full configuration file with sections for:
+/// - `[pipeline]` - Pipeline metadata
+/// - `[api]` - HTTP API server configuration
+/// - `[metrics]` - Prometheus metrics configuration
+/// - `[registry]` - OCI registry configuration
+/// - `[[nodes]]` - Node definitions
+/// - `[[edges]]` - Edge definitions
+#[derive(Debug, Clone, Deserialize)]
+pub struct Config {
+    /// Pipeline metadata
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
+
+    /// HTTP API server configuration
+    #[serde(default)]
+    pub api: ApiServerConfig,
+
+    /// Prometheus metrics configuration
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+
+    /// Node definitions
+    pub nodes: Vec<NodeDefinition>,
+
+    /// Edge definitions
+    pub edges: Vec<EdgeDefinition>,
+
+    /// Default queue capacity for edges
+    #[serde(default = "default_queue_capacity")]
+    pub default_queue_capacity: usize,
+
+    /// Registry configuration for remote plugin loading.
+    #[serde(default)]
+    pub registry: RegistryConfig,
+}
+
+/// Pipeline metadata configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PipelineConfig {
+    /// Name of the pipeline (used in metrics and logging)
+    #[serde(default = "default_pipeline_name")]
+    pub name: String,
+
+    /// Optional description
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+impl Default for PipelineConfig {
+    fn default() -> Self {
+        Self {
+            name: default_pipeline_name(),
+            description: None,
+        }
+    }
+}
+
+/// HTTP API server configuration (from TOML config file).
+///
+/// This is the TOML-parsed configuration. See `wafer_core::api::ApiConfig`
+/// for the runtime server configuration struct.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ApiServerConfig {
+    /// Whether the API server is enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Address to bind the API server to
+    #[serde(default = "default_api_bind")]
+    pub bind: SocketAddr,
+}
+
+impl Default for ApiServerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: default_api_bind(),
+        }
+    }
+}
+
+/// Prometheus metrics configuration.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MetricsConfig {
+    /// Whether metrics are enabled
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+
+    /// Address to bind the metrics server to (if different from API)
+    /// When None, metrics are served on the same server as the API.
+    #[serde(default)]
+    pub bind: Option<SocketAddr>,
+
+    /// Path for metrics endpoint
+    #[serde(default = "default_metrics_path")]
+    pub path: String,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            bind: None,
+            path: default_metrics_path(),
+        }
+    }
+}
+
+impl Config {
+    /// Convert to the older DagConfig format for compatibility.
+    #[must_use]
+    pub fn to_dag_config(&self) -> DagConfig {
+        DagConfig {
+            pipeline: self.pipeline.clone(),
+            nodes: self.nodes.clone(),
+            edges: self.edges.clone(),
+            default_queue_capacity: self.default_queue_capacity,
+            registry: self.registry.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct DagConfig {
+    /// Pipeline metadata
+    #[serde(default)]
+    pub pipeline: PipelineConfig,
     pub nodes: Vec<NodeDefinition>,
     pub edges: Vec<EdgeDefinition>,
     #[serde(default = "default_queue_capacity")]

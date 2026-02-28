@@ -39,6 +39,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::DagConfig;
 use crate::error::Result;
+use crate::factory::FactoryContext;
 use crate::node::AnyNode;
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
@@ -82,6 +83,8 @@ pub struct DagOrchestrator {
     pub(super) queue_receivers: HashMap<(String, String), QueueReceiver<RuntimeEnvelope>>,
     /// Cancellation token for graceful shutdown
     pub(super) cancel_token: CancellationToken,
+    /// Factory context for cleanup (epoch tickers, etc.)
+    pub(super) factory_ctx: Option<FactoryContext>,
 }
 
 impl fmt::Debug for DagOrchestrator {
@@ -203,6 +206,11 @@ impl DagOrchestrator {
                 }
                 tracing::debug!(node = %node_id, "Node closed");
             }
+        }
+
+        // Clean up epoch tickers from factory context
+        if let Some(ref ctx) = self.factory_ctx {
+            ctx.abort_tickers();
         }
 
         Ok(())

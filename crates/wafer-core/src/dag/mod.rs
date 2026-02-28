@@ -31,7 +31,11 @@
 //! ```
 
 mod builder;
+mod control;
 mod orchestrator;
 mod runner;
 
 pub use orchestrator::DagOrchestrator;
+
+/// Type alias for `DagOrchestrator` - the core pipeline controller.
+pub type PipelineOrchestrator = DagOrchestrator;
