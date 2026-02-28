@@ -1,0 +1,24 @@
+meta {
+  name: Reload Configuration
+  type: http
+  seq: 2
+}
+
+post {
+  url: {{baseUrl}}/api/v1/pipeline/reload
+  body: none
+  auth: none
+}
+
+docs {
+  Reloads the pipeline configuration and triggers hot-swap for any nodes
+  whose WASM module has changed.
+  
+  **Note:** This operation is not yet implemented and will return 501.
+  
+  On success, returns a list of nodes that were hot-swapped.
+}
+
+assert {
+  res.status: in [200, 400, 409, 501]
+}

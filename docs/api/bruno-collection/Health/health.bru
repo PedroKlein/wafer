@@ -1,0 +1,23 @@
+meta {
+  name: Health Check
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/health
+  body: none
+  auth: none
+}
+
+docs {
+  Liveness check endpoint.
+  
+  Returns OK if the server is running. Use this for Kubernetes liveness probes.
+  This endpoint always returns 200 if the server is up, regardless of pipeline state.
+}
+
+assert {
+  res.status: eq 200
+  res.body.status: eq ok
+}

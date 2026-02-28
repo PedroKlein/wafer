@@ -1,0 +1,39 @@
+meta {
+  name: Hot-Swap Node
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/nodes/transform/hot-swap
+  body: none
+  auth: none
+}
+
+vars:pre-request {
+  nodeId: transform
+}
+
+docs {
+  Triggers a hot-swap operation for the specified node.
+  The node must be a swappable transform node (WASM plugin).
+  
+  The operation:
+  1. Loads the new WASM module
+  2. Drains the old instance (finishes in-flight messages)
+  3. Swaps in the new instance
+  4. Retires the old instance
+  
+  **Note:** This operation is not yet fully implemented and will return 501.
+  
+  Response codes:
+  - 200: Hot-swap completed successfully
+  - 400: Node does not support hot-swap (not_swappable)
+  - 404: Node not found
+  - 409: Another hot-swap is in progress (swap_in_progress)
+  - 501: Not implemented
+}
+
+assert {
+  res.status: in [200, 400, 404, 409, 501]
+}

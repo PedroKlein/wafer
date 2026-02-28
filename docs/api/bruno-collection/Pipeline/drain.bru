@@ -1,0 +1,24 @@
+meta {
+  name: Drain Pipeline
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/api/v1/pipeline/drain
+  body: none
+  auth: none
+}
+
+docs {
+  Initiates graceful shutdown by stopping new message ingestion and
+  allowing in-flight messages to complete processing.
+  
+  After draining completes, the pipeline will be in "stopped" state.
+  
+  Returns 409 if the pipeline is in an invalid state for draining.
+}
+
+assert {
+  res.status: in [200, 409]
+}

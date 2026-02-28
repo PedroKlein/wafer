@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "WAFER Control Plane API",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

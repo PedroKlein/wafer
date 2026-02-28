@@ -1,0 +1,29 @@
+meta {
+  name: Readiness Check
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/ready
+  body: none
+  auth: none
+}
+
+docs {
+  Readiness check endpoint.
+  
+  Returns OK if the pipeline is ready to process messages.
+  Use this for Kubernetes readiness probes.
+  
+  Returns 503 Service Unavailable when:
+  - Pipeline is starting up
+  - Pipeline is draining
+  - Pipeline has stopped
+  - Pipeline is in error state
+}
+
+assert {
+  res.status: in [200, 503]
+  res.body.ready: isDefined
+}
