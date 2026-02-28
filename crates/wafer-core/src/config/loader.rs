@@ -236,4 +236,197 @@ to = "sink"
         assert_eq!(config.api.bind, "127.0.0.1:9090".parse().unwrap());
         assert!(config.metrics.enabled);
     }
+
+    #[tokio::test]
+    async fn test_load_config_api_disabled() {
+        let config_str = r#"
+[api]
+enabled = false
+
+[[nodes]]
+id = "source"
+node_type = "source"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+
+[[edges]]
+from = "source"
+to = "sink"
+"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_config(file.path()).await.unwrap();
+        assert!(!config.api.enabled);
+    }
+
+    #[tokio::test]
+    async fn test_load_config_separate_metrics_bind() {
+        let config_str = r#"
+[api]
+bind = "127.0.0.1:8080"
+
+[metrics]
+bind = "127.0.0.1:9091"
+path = "/prom/metrics"
+
+[[nodes]]
+id = "source"
+node_type = "source"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+
+[[edges]]
+from = "source"
+to = "sink"
+"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_config(file.path()).await.unwrap();
+        assert_eq!(config.api.bind, "127.0.0.1:8080".parse().unwrap());
+        assert_eq!(config.metrics.bind, Some("127.0.0.1:9091".parse().unwrap()));
+        assert_eq!(config.metrics.path, "/prom/metrics");
+    }
+
+    #[tokio::test]
+    async fn test_load_config_invalid_toml() {
+        let config_str = "this is not valid toml {{{";
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let result = load_config(file.path()).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed to parse TOML"));
+    }
+
+    #[tokio::test]
+    async fn test_load_config_missing_file() {
+        let result = load_config("/nonexistent/path/config.toml").await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed to read config"));
+    }
+
+    #[tokio::test]
+    async fn test_load_config_validation_failure() {
+        // Invalid: multiple stdin sources
+        let config_str = r#"
+[[nodes]]
+id = "source1"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "source2"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+
+[[edges]]
+from = "source1"
+to = "sink"
+
+[[edges]]
+from = "source2"
+to = "sink"
+"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let result = load_config(file.path()).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("at most one source can have source_type = 'stdin'"));
+    }
+
+    #[test]
+    fn test_load_dag_config_missing_file() {
+        let result = load_dag_config("/nonexistent/path/config.toml");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed to read config"));
+    }
+
+    #[test]
+    fn test_load_dag_config_invalid_toml() {
+        let config_str = "not valid } toml";
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let result = load_dag_config(file.path());
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("failed to parse TOML"));
+    }
+
+    #[test]
+    fn test_load_dag_config_with_registry() {
+        let config_str = r#"
+[registry]
+cache_ttl_hours = 48
+
+[[nodes]]
+id = "source"
+node_type = "source"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+
+[[edges]]
+from = "source"
+to = "sink"
+"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_dag_config(file.path()).unwrap();
+        assert_eq!(config.registry.cache_ttl_hours, 48);
+    }
+
+    #[test]
+    fn test_load_dag_config_with_transform_plugin() {
+        let config_str = r#"
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "stdin"
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+config = { plugin_path = "plugins/uppercase.wasm" }
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+"#;
+        let mut file = NamedTempFile::new().unwrap();
+        file.write_all(config_str.as_bytes()).unwrap();
+
+        let config = load_dag_config(file.path()).unwrap();
+        assert_eq!(config.nodes.len(), 3);
+        
+        let transform = config.nodes.iter().find(|n| n.id == "transform").unwrap();
+        let plugin_path = transform.config.get("plugin_path").unwrap();
+        assert_eq!(plugin_path.as_str(), Some("plugins/uppercase.wasm"));
+    }
 }
