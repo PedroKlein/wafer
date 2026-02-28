@@ -1,7 +1,14 @@
 # waferctl Specification
 
 ## Purpose
-TBD - created by archiving change control-plane. Update Purpose after archive.
+
+Defines the `waferctl` command-line tool for managing WAFER runtime instances. Provides human-friendly and scriptable interfaces for health checks, status monitoring, hot-swap triggering, and pipeline control.
+
+**Status:** ✅ Implemented (v0.4.0)
+- All commands implemented with table and JSON output formats
+- Endpoint configuration with named profiles
+- Exit codes follow specification (0=success, 1=user error, 2=API error, 3=connection)
+- Hot-swap command returns NotImplemented until hot-swap-mechanism is complete
 ## Requirements
 ### Requirement: Connection configuration
 

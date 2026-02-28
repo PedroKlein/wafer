@@ -90,7 +90,7 @@ WAFER (wasm-dag-runtime) is a general-purpose runtime for executing Directed Acy
 | Joiner | N | 1 | WASM component | Merge multiple streams |
 | Sink | 1 | 0 (external) | Native Rust | Output data (MQTT, file, stdout) |
 
-## Current State (MVP v0.3.0)
+## Current State (MVP v0.4.0)
 
 See [docs/MVP.md](../docs/MVP.md) for full implementation status.
 
@@ -103,12 +103,16 @@ See [docs/MVP.md](../docs/MVP.md) for full implementation status.
 - MQTT, file, stdin/stdout sources/sinks
 - OCI registry support for remote plugins
 - wasi-nn inference (MNIST demo)
+- **Workspace restructure**: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl` crates
+- **HTTP API server** (Axum) with health, pipeline, and node endpoints
+- **waferctl CLI** for runtime management
+- **PipelineControl trait** for unified control interface
 
 **Not Yet Implemented:**
-- Hot-swap (drain-and-flip)
+- Hot-swap (drain-and-flip) - endpoints return 501 NotImplemented
 - Dynamic topology (add/remove nodes at runtime)
-- Prometheus metrics endpoint
-- REST API for topology changes
+- Full Prometheus metrics registry (endpoint scaffolded)
+- Structured JSON logging
 
 ## Key Documentation
 
@@ -116,9 +120,20 @@ See [docs/MVP.md](../docs/MVP.md) for full implementation status.
 |----------|---------|
 | [SPEC.md](../docs/SPEC.md) | Full specification (authoritative) |
 | [MVP.md](../docs/MVP.md) | Current implementation status |
+| [api.md](../docs/api.md) | HTTP API reference |
 | [AI_WORKFLOW.md](../docs/AI_WORKFLOW.md) | Development workflow with agents |
 | [REGISTRY.md](../docs/REGISTRY.md) | OCI registry guide |
 | [ADRs](../docs/adr/) | Architecture Decision Records |
+
+## OpenSpec Changes (Implementation Roadmap)
+
+| Change | Status | Description |
+|--------|--------|-------------|
+| `runtime-control-plane` | ✅ Complete | Workspace restructure, HTTP API, waferctl CLI |
+| `observability-prometheus` | 🔲 Not Started | Full Prometheus metrics, structured logging |
+| `hot-swap-mechanism` | 🔲 Not Started | Drain-and-flip hot-swap implementation |
+
+See `openspec/changes/` for detailed task breakdowns and specs.
 
 ## Technology Stack
 

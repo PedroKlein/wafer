@@ -1,7 +1,13 @@
 # rest-api Specification
 
 ## Purpose
-TBD - created by archiving change control-plane. Update Purpose after archive.
+
+Defines the HTTP REST API exposed by the WAFER runtime for monitoring and controlling pipeline execution. This API enables external tools (waferctl, Prometheus, orchestration systems) to interact with running pipelines.
+
+**Status:** ✅ Mostly Implemented (v0.4.0)
+- Endpoints implemented and handlers wired to PipelineControl trait
+- Hot-swap and reload endpoints return 501 NotImplemented (pending hot-swap-mechanism)
+- Metrics endpoint scaffolded (full Prometheus registry pending observability-prometheus)
 ## Requirements
 ### Requirement: Health and probe endpoints
 

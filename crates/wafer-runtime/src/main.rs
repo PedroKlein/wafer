@@ -67,8 +67,9 @@ async fn main() -> Result<()> {
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
     // Create the pipeline orchestrator wrapped in Arc for sharing with API server
+    // Pass the config path to enable reload_config() functionality
     let orchestrator = Arc::new(
-        PipelineOrchestrator::from_config(config, !args.no_cache)
+        PipelineOrchestrator::from_config_with_path(config, !args.no_cache, Some(&args.config))
             .await
             .context("Failed to create pipeline orchestrator")?,
     );

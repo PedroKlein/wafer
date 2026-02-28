@@ -1989,4 +1989,5 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 *End of Specification*
 
 **Document History:**
+- 2026-02-28: Updated milestone status for v0.4.0 (control plane implemented)
 - 2026-02-14: Initial draft based on discussion

@@ -5,7 +5,7 @@
 
 ## 1. Dependencies & Setup
 
-- [ ] 1.1 Add `prometheus-client` dependency to `crates/wafer-core/Cargo.toml`
+- [x] 1.1 Add `prometheus-client` dependency to `crates/wafer-core/Cargo.toml` (already added, feature-gated under `http-api`)
 - [ ] 1.2 Add `tracing-subscriber` with `json` feature
 - [ ] 1.3 Add `sysinfo` crate for system metrics (CPU, memory)
 

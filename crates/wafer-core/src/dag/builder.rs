@@ -6,6 +6,7 @@ use petgraph::algo::toposort;
 use petgraph::graph::DiGraph;
 use petgraph::Direction;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -39,8 +40,36 @@ impl DagOrchestrator {
     /// - Node creation fails
     /// - Queue wiring fails
     pub async fn from_config(config: Config, use_cache: bool) -> Result<Self> {
+        Self::from_config_with_path(config, use_cache, None::<PathBuf>).await
+    }
+
+    /// Build a fully-configured DAG orchestrator from a Config with an optional config path.
+    ///
+    /// Same as [`from_config`](Self::from_config), but stores the config file path for
+    /// later use by [`reload_config`](crate::control::PipelineControl::reload_config).
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Full pipeline configuration
+    /// * `use_cache` - Whether to use OCI registry cache for remote plugins
+    /// * `config_path` - Optional path to the config file (for reload support)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Topology validation fails
+    /// - Node creation fails
+    /// - Queue wiring fails
+    pub async fn from_config_with_path(
+        config: Config,
+        use_cache: bool,
+        config_path: Option<impl AsRef<Path>>,
+    ) -> Result<Self> {
         let dag_config = config.to_dag_config();
-        let orchestrator = Self::from_dag_config(dag_config.clone())?;
+        let mut orchestrator = Self::from_dag_config(dag_config.clone())?;
+
+        // Store the config path for reload_config
+        orchestrator.config_path = config_path.map(|p| p.as_ref().to_path_buf());
 
         // Apply cache setting
         let mut registry_config = dag_config.registry.clone();
@@ -115,6 +144,7 @@ impl DagOrchestrator {
             node_indices,
             config,
             topo_order,
+            config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(Some(RunState {
                 queue_senders: HashMap::new(),

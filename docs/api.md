@@ -1,18 +1,37 @@
 # WAFER HTTP API Reference
 
+> **Version:** 0.4.0  
+> **Last Updated:** 2026-02-28
+
 The WAFER runtime exposes an HTTP API for monitoring and controlling pipeline execution.
 
 ## Base URL
 
-Default: `http://localhost:9090`
+Default: `http://localhost:8080`
 
 Configure via:
-- Config file: `[api] bind = "127.0.0.1:9090"`
-- CLI flag: `--api-bind 0.0.0.0:9090`
+- Config file: `[api] enabled = true` and `bind = "0.0.0.0:8080"`
+- CLI flag: `--api-bind 0.0.0.0:8080`
+- Disable API: `--no-api` flag
 
 ## Authentication
 
 Currently no authentication. Run behind a reverse proxy for production deployments.
+
+## Implementation Status
+
+| Endpoint | Status | Notes |
+|----------|--------|-------|
+| `GET /health` | ✅ Implemented | Always available |
+| `GET /ready` | ✅ Implemented | Returns pipeline state |
+| `GET /api/v1/pipeline` | ✅ Implemented | Returns PipelineStatus |
+| `GET /api/v1/nodes` | ✅ Implemented | Returns all NodeInfo |
+| `GET /api/v1/nodes/:id` | ✅ Implemented | Returns single NodeInfo |
+| `POST /api/v1/nodes/:id/hot-swap` | 🔲 Stub | Returns 501 NotImplemented |
+| `POST /api/v1/pipeline/reload` | 🔲 Stub | Returns 501 NotImplemented |
+| `POST /api/v1/pipeline/drain` | ✅ Implemented | Triggers pipeline drain |
+| `POST /api/v1/pipeline/shutdown` | ✅ Implemented | Triggers graceful shutdown |
+| `GET /metrics` | ⚠️ Partial | Scaffold exists, full registry pending |
 
 ---
 
@@ -301,31 +320,31 @@ All error responses follow this format:
 
 ```bash
 # Health check
-curl http://localhost:9090/health
+curl http://localhost:8080/health
 
 # Get pipeline status
-curl http://localhost:9090/api/v1/pipeline
+curl http://localhost:8080/api/v1/pipeline
 
 # List nodes
-curl http://localhost:9090/api/v1/nodes
+curl http://localhost:8080/api/v1/nodes
 
 # Get specific node
-curl http://localhost:9090/api/v1/nodes/transform-1
+curl http://localhost:8080/api/v1/nodes/transform-1
 
-# Trigger hot-swap
-curl -X POST http://localhost:9090/api/v1/nodes/transform-1/hot-swap
+# Trigger hot-swap (returns 501 until hot-swap-mechanism is implemented)
+curl -X POST http://localhost:8080/api/v1/nodes/transform-1/hot-swap
 
-# Reload config
-curl -X POST http://localhost:9090/api/v1/pipeline/reload
+# Reload config (returns 501 until hot-swap-mechanism is implemented)
+curl -X POST http://localhost:8080/api/v1/pipeline/reload
 
 # Drain pipeline
-curl -X POST http://localhost:9090/api/v1/pipeline/drain
+curl -X POST http://localhost:8080/api/v1/pipeline/drain
 
 # Shutdown
-curl -X POST http://localhost:9090/api/v1/pipeline/shutdown
+curl -X POST http://localhost:8080/api/v1/pipeline/shutdown
 
 # Get metrics
-curl http://localhost:9090/metrics
+curl http://localhost:8080/metrics
 ```
 
 ---
@@ -335,8 +354,8 @@ curl http://localhost:9090/metrics
 The `waferctl` CLI provides a more user-friendly interface:
 
 ```bash
-# Set up endpoint
-waferctl config set-endpoint local http://localhost:9090
+# Set up endpoint (default is localhost:8080)
+waferctl config set-endpoint local http://localhost:8080
 waferctl config use local
 
 # Check health
@@ -351,10 +370,25 @@ waferctl nodes
 # JSON output
 waferctl --json status
 
-# Trigger hot-swap
+# Trigger hot-swap (returns NotImplemented until hot-swap-mechanism)
 waferctl hot-swap transform-1
+
+# Get metrics (human-readable)
+waferctl metrics
+
+# Get raw Prometheus format
+waferctl metrics --raw
 
 # See waferctl --help for all commands
 ```
 
 See [crates/waferctl/README.md](../crates/waferctl/README.md) for complete CLI documentation.
+
+---
+
+## See Also
+
+- [MVP.md](MVP.md) - Current implementation status
+- [SPEC.md](SPEC.md) - Full specification
+- [openspec/specs/rest-api/spec.md](../openspec/specs/rest-api/spec.md) - API specification
+- [openspec/specs/waferctl/spec.md](../openspec/specs/waferctl/spec.md) - CLI specification

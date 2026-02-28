@@ -2,14 +2,17 @@
 
 > Current state of the WebAssembly Flow Execution Runtime proof-of-concept
 
-**Version:** 0.3.0  
-**Tech Stack:** Rust 1.93, wasmtime (git), wit-bindgen 0.53.1, WASI Preview 2, petgraph 0.8
+**Version:** 0.4.0  
+**Tech Stack:** Rust 1.93.1, wasmtime (git main branch), wit-bindgen 0.53.1, WASI Preview 2, petgraph 0.8  
+**Last Updated:** 2026-02-28
 
 ---
 
 ## Current State
 
-The MVP implements **DAG pipelines with fan-out/fan-in support** with:
+The MVP implements **DAG pipelines with fan-out/fan-in support** plus a **runtime control plane**:
+
+### Core Pipeline Features
 - Linear chain execution: `StdinSource/FileSource/MqttSource → Transform(s) → StdoutSink/FileSink/MqttSink`
 - **Router nodes (1→N)**: Content-based routing via `WasmRouter` and `router-node` WIT world
 - **Joiner nodes (N→1)**: Merge support via `WasmJoiner` and `joiner-node` WIT world
@@ -23,14 +26,29 @@ The MVP implements **DAG pipelines with fan-out/fan-in support** with:
 - **petgraph-based DAG topology management**
 - **CLI with DAG config loading**
 
+### Control Plane (NEW in 0.4.0)
+- **Workspace restructure**: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl` crates
+- **HTTP API server** (Axum): Health, pipeline status, node info, and control endpoints
+- **`waferctl` CLI**: Management tool for interacting with running runtimes
+- **Prometheus metrics endpoint**: `/metrics` with pipeline and node counters
+- **PipelineControl trait**: Unified interface for runtime management
+
 **What works:**
 ```bash
 # stdin/stdout pipeline
-echo "hello" | cargo run -- --config examples/dag-uppercase.toml
+echo "hello" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
 # Output: HELLO
 
 # File-based pipeline
-cargo run -- --config examples/dag-file-io.toml
+cargo run -p wafer-runtime -- --config examples/dag-file-io.toml
+
+# Start runtime with HTTP API (default port 8080)
+cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+
+# Use waferctl to check status
+waferctl health
+waferctl status
+waferctl nodes
 ```
 
 ---
@@ -41,63 +59,71 @@ cargo run -- --config examples/dag-file-io.toml
 crates/
 ├── wafer-core/           # Core runtime library
 │   └── src/
-│       ├── api/          # HTTP API (feature-gated)
-│       │   ├── server.rs   # Axum router and handlers
-│       │   └── mod.rs
+│       ├── api/          # HTTP API (feature-gated with `http-api`)
+│       │   ├── mod.rs
+│       │   ├── server.rs   # Axum router and middleware
+│       │   ├── handlers.rs # Endpoint implementations
+│       │   └── metrics.rs  # Prometheus metrics handler
 │       ├── control/      # Pipeline control interface
-│       │   ├── traits.rs   # PipelineControl trait
-│       │   └── mod.rs
+│       │   ├── mod.rs
+│       │   └── traits.rs   # PipelineControl trait definition
 │       ├── engine/
+│       │   ├── mod.rs
 │       │   ├── host.rs         # WaferState: WasiView impl, Capabilities
 │       │   ├── instance.rs     # TransformInstance: bindgen!, instantiation
 │       │   ├── loader.rs       # WaferEngine: wasmtime config, linker
-│       │   ├── capabilities.rs # Capabilities struct for security
-│       │   └── mod.rs
+│       │   └── capabilities.rs # Capabilities struct for security
 │       ├── node/
+│       │   ├── mod.rs
 │       │   ├── traits.rs     # Lifecycle, Transform, Router, Joiner traits
 │       │   ├── transform.rs  # WasmTransform
 │       │   ├── router.rs     # WasmRouter: 1→N routing
 │       │   ├── joiner.rs     # WasmJoiner: N→1 merge
-│       │   ├── source/       # Source implementations
-│       │   ├── sink/         # Sink implementations
-│       │   └── mod.rs
+│       │   ├── source/       # Source implementations (stdin, file, mqtt)
+│       │   └── sink/         # Sink implementations (stdout, file, mqtt)
 │       ├── dag/
+│       │   ├── mod.rs
 │       │   ├── orchestrator.rs # DagOrchestrator: run(), topology
 │       │   ├── builder.rs      # from_config(), validation
 │       │   ├── runner.rs       # Node execution loops
-│       │   └── mod.rs
+│       │   └── control.rs      # PipelineControl implementation
 │       ├── queue/
-│       │   ├── bounded.rs    # BoundedQueue<T>: SPSC
-│       │   ├── envelope.rs   # RuntimeEnvelope
-│       │   └── mod.rs
+│       │   ├── mod.rs
+│       │   ├── bounded.rs    # BoundedQueue<T>: SPSC via tokio::sync::mpsc
+│       │   └── envelope.rs   # RuntimeEnvelope
 │       ├── config/
+│       │   ├── mod.rs
 │       │   ├── loader.rs     # DAG config loading
-│       │   ├── schema.rs     # DagConfig, NodeDefinition
-│       │   └── mod.rs
+│       │   └── schema.rs     # DagConfig, NodeDefinition, ApiConfig, MetricsConfig
 │       ├── registry/
+│       │   ├── mod.rs
 │       │   ├── cache.rs      # PackageCache: TTL-based
 │       │   ├── client.rs     # WaferRegistry: OCI client
-│       │   ├── types.rs      # PluginSource, OciReference
-│       │   └── mod.rs
+│       │   └── types.rs      # PluginSource, OciReference
 │       ├── metrics/
+│       │   ├── mod.rs
 │       │   └── counters.rs   # PipelineMetrics
 │       ├── error.rs
 │       ├── factory.rs
 │       └── lib.rs
-├── wafer-types/          # Shared API types
+├── wafer-types/          # Shared API types (dependency-free)
 │   └── src/
-│       ├── control.rs      # PipelineStatus, NodeInfo, ControlError, etc.
-│       └── lib.rs
+│       ├── lib.rs
+│       ├── control.rs      # PipelineStatus, NodeInfo, ControlError, HotSwapResult, etc.
+│       ├── events.rs       # PipelineEvent enum for event streaming
+│       └── metrics.rs      # MetricsSnapshot for API responses
 ├── wafer-runtime/        # Runtime binary
 │   └── src/
-│       └── main.rs         # CLI with --config, --api-bind, --no-api
+│       └── main.rs         # CLI with --config, --api-bind, --no-api flags
+│   └── tests/
+│       └── integration.rs  # API integration tests
 └── waferctl/             # CLI management tool
     └── src/
-        ├── main.rs         # Command handlers
-        ├── client.rs       # WaferClient HTTP client
-        ├── config.rs       # Endpoint configuration
+        ├── main.rs         # Command handlers (clap-based)
+        ├── client.rs       # WaferClient HTTP client (reqwest)
+        ├── config.rs       # Endpoint configuration (~/.config/waferctl/)
         ├── error.rs        # Exit codes, error formatting
-        └── output.rs       # Table formatting
+        └── output.rs       # Table formatting (tabled crate)
 ```
 
 ### WIT Files
@@ -111,21 +137,21 @@ wit/
 └── joiner.wit        # Joiner interface and joiner-node world (N→1 merge)
 ```
 
-### Plugins
+### Plugins (9 total)
 
-| Plugin | Type | Purpose |
-|--------|------|---------|
-| `plugins/pass-through/` | Transform | No-op transform (emits input unchanged) |
-| `plugins/uppercase/` | Transform | ASCII uppercase transform |
-| `plugins/json-parse/` | Transform | JSON validation and pretty-print |
-| `plugins/filter/` | Transform | Pattern-based message filtering |
-| `plugins/tensor-prep/` | Transform | Image normalization (784 bytes → 3136 bytes F32) |
-| `plugins/mnist-inference/` | Transform | MNIST digit recognition via wasi-nn |
-| `plugins/result-format/` | Transform | Inference output formatting (logits → JSON) |
-| `plugins/content-router/` | Router | Content-based 1→N routing (routes by JSON `route` field) |
-| `plugins/merge-joiner/` | Joiner | Stateless N→1 merge (passes through all inputs) |
+| Plugin | Type | Purpose | Target |
+|--------|------|---------|--------|
+| `plugins/pass-through/` | Transform | No-op transform (emits input unchanged) | wasm32-wasip2 |
+| `plugins/uppercase/` | Transform | ASCII uppercase transform | wasm32-wasip2 |
+| `plugins/json-parse/` | Transform | JSON validation and pretty-print | wasm32-wasip2 |
+| `plugins/filter/` | Transform | Pattern-based message filtering | wasm32-wasip2 |
+| `plugins/tensor-prep/` | Transform | Image normalization (784 bytes → 3136 bytes F32) | wasm32-wasip2 |
+| `plugins/mnist-inference/` | Transform | MNIST digit recognition via wasi-nn | wasm32-wasip2 |
+| `plugins/result-format/` | Transform | Inference output formatting (logits → JSON) | wasm32-wasip2 |
+| `plugins/content-router/` | Router | Content-based 1→N routing (routes by JSON `route` field) | wasm32-wasip2 |
+| `plugins/merge-joiner/` | Joiner | Stateless N→1 merge (passes through all inputs) | wasm32-wasip2 |
 
-### Example Configs
+### Example Configs (13 total)
 
 | Config | Description |
 |--------|-------------|
@@ -141,7 +167,7 @@ wit/
 | `examples/dag-remote.toml` | stdin → OCI plugin → stdout |
 | `examples/dag-diamond.toml` | Diamond/scatter-gather: source → router → transforms → joiner → sink |
 | `examples/dag-fanout.toml` | Fan-out: source → router → multiple sinks |
-| `examples/dag-passthrough-with-api.toml` | Passthrough with [api] and [metrics] config |
+| `examples/dag-passthrough-with-api.toml` | Passthrough with `[api]` and `[metrics]` config sections |
 
 ---
 
@@ -236,9 +262,9 @@ wit/
 
 ---
 
-## What's NOT Implemented
+## What's NOT Implemented (Roadmap)
 
-### Node Types (SPEC §5)
+### Node Types (SPEC §5) - ✅ COMPLETE
 - [x] ~~Source nodes~~ - FileSource + StdinSource + MqttSource implemented (native Rust)
 - [x] ~~Sink nodes~~ - FileSink + StdoutSink + MqttSink implemented (native Rust)
 - [x] ~~Router nodes (1→N routing)~~ - WasmRouter implemented with `router-node` WIT world
@@ -246,11 +272,11 @@ wit/
 - [x] ~~WASM-based Source/Sink~~ - **Decision: Not implementing** - Sources/sinks remain native Rust (see [ADR-0004](adr/0004-native-sources-sinks.md))
 
 ### Sink Features (SPEC §4.9)
-- [ ] Sink batching: `batch_size` configuration (SPEC §4.9)
-- [ ] Sink batching: `batch_timeout` configuration (SPEC §4.9)
-- [ ] Sink `flush()` interface for buffered output (SPEC §4.9)
+- [ ] Sink batching: `batch_size` configuration
+- [ ] Sink batching: `batch_timeout` configuration
+- [ ] Sink `flush()` interface for buffered output
 
-### DAG Orchestration
+### DAG Orchestration - ✅ COMPLETE
 - [x] ~~Multi-node pipelines~~ - Linear chain implemented
 - [x] ~~Edge wiring between nodes~~ - BoundedQueue integration complete
 - [x] ~~Queue integration for inter-node communication~~ - Done
@@ -259,16 +285,41 @@ wit/
 - [x] ~~Fan-out/fan-in topologies~~ - Router/Joiner implemented (diamond, scatter-gather patterns)
 - [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
 
+### Control Plane (runtime-control-plane change) - ✅ MOSTLY COMPLETE
+- [x] Workspace restructure: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl`
+- [x] HTTP API server (Axum) with health, pipeline, and node endpoints
+- [x] `waferctl` CLI with commands: status, nodes, hot-swap, reload, drain, shutdown
+- [x] PipelineControl trait for runtime management
+- [x] API endpoint implementations (handlers wired to PipelineControl)
+- [ ] Hot-swap implementation (stubs return `NotImplemented` - see hot-swap-mechanism)
+- [ ] E2E tests with long-running fixtures (deferred)
+
+### Hot-Swap Mechanism (hot-swap-mechanism change) - ✅ COMPLETE
+- [x] Node state machine (Starting, Running, Draining, Retired) - `NodeStateTracker` with atomic state transitions
+- [x] Message routing control (pause/resume) - `RoutingController` with buffering
+- [x] HotSwapCoordinator (prepare, drain, flip, retire phases) - Full drain-and-flip algorithm
+- [x] Drain timeout handling - Configurable timeout with forced swap fallback
+- [x] Config diff & resync - `ConfigDiff` struct, `diff_configs()`, `resync()` method
+- [x] Swap validation & safety - Per-node swap locks, component validation before drain
+
+### Observability (observability-prometheus change) - 🔲 NOT STARTED
+- [x] Prometheus `/metrics` endpoint scaffold (HTTP handler exists)
+- [x] Health endpoints: `/health`, `/ready` (SPEC §12.5)
+- [ ] MetricsRegistry with prometheus-client crate
+- [ ] System metrics (CPU, memory, threads via sysinfo)
+- [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
+- [ ] Full metrics wiring (node/queue metrics to Prometheus registry)
+
 ### Dynamic Features
 - [x] ~~OCI registry package fetching~~ - Implemented via `WaferRegistry`
-- [ ] Hot-swap (drain-and-flip) - **Foundation ready** (ResolvedPlugin tracking)
-- [ ] Dynamic topology (add/remove nodes)
-- [ ] Config file watching
+- [ ] Hot-swap (drain-and-flip) - **See hot-swap-mechanism change**
+- [ ] Dynamic topology (add/remove nodes at runtime)
+- [ ] Config file watching (inotify/kqueue)
 - [ ] REST API for topology changes
 
 ### Queue Features (SPEC §8)
-- [ ] Overflow policy: `drop` (SPEC §8.2) - only `slow`/blocking exists
-- [ ] Overflow policy: `dead-letter` (SPEC §8.2)
+- [ ] Overflow policy: `drop` - only `slow`/blocking exists
+- [ ] Overflow policy: `dead-letter`
 
 ### External Integration
 - [x] ~~MQTT source/sink~~ - Implemented via rumqttc (see [mqtt-setup.md](mqtt-setup.md))
@@ -287,27 +338,10 @@ wit/
 - [ ] Network capability enforcement (currently placeholder)
 - [ ] Filesystem capability enforcement (currently placeholder)
 
-### Control Plane (runtime-control-plane change)
-- [x] Workspace restructure: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl`
-- [x] HTTP API server (Axum) with health, pipeline, and node endpoints
-- [x] `waferctl` CLI with commands: status, nodes, hot-swap, reload, drain, shutdown
-- [x] PipelineControl trait for runtime management
-- [ ] Full API server integration (HTTP API scaffolded but not yet wired)
-- [ ] Hot-swap implementation (stubs return NotImplemented)
-
-### Observability (SPEC §12)
-- [x] Prometheus `/metrics` endpoint (SPEC §12.3) - HTTP handler implemented
-- [x] Health endpoints: `/health`, `/ready` (SPEC §12.5)
-- [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
-
-
-### Plugin Ideas
-- [x] ~~`broadcast` transform~~ - Implemented as `content-router` (Router node type)
-- [x] ~~`merge` transform~~ - Implemented as `merge-joiner` (Joiner node type)
-
-
-### Other Ideas
+### Future Ideas
 - [ ] Support multiple sources/sinks per DAG (currently single source/sink)
+- [ ] Plugin hot-reload from OCI registry (watch for new versions)
+- [ ] Distributed runtime (multiple wafer-runtime instances)
 
 ---
 
@@ -317,14 +351,15 @@ wit/
 |------|------------|-------|
 | **I/O** | stdin/stdout, file, or MQTT | HTTP/Kafka planned |
 | **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
-| **WIT** | Only `raw(list<u8>)` payload supported | |
-| **State** | Stateless transforms only | |
-| **Metrics** | In-memory only (no Prometheus export) | |
-| **Logging** | Text format only (no JSON export) | |
-| **Error handling** | No DLQ, errors logged only | |
-| **Capabilities** | Network/filesystem flags are placeholders | |
-| **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` | |
-| **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) | |
+| **WIT** | Only `raw(list<u8>)` payload supported | Additional variants planned |
+| **State** | Stateless transforms only | Host-managed state planned |
+| **Metrics** | Prometheus endpoint scaffolded | Full registry not yet wired |
+| **Logging** | Text format only (no JSON export) | Structured logging planned |
+| **Error handling** | No DLQ, errors logged only | DLQ routing planned |
+| **Hot-swap** | Stubs only (returns NotImplemented) | Full mechanism planned |
+| **Capabilities** | Network/filesystem flags are placeholders | Enforcement not implemented |
+| **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` | By design |
+| **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) | Hardware backends planned |
 
 ---
 
@@ -332,15 +367,20 @@ wit/
 
 | Component | Version | Notes |
 |-----------|---------|-------|
-| Rust | 1.93 | Pinned in `rust-toolchain.toml` (min 1.75) |
-| wasmtime | git rev | Post-41.0.3 with ONNX fix (see Cargo.toml) |
-| wasmtime-wasi | git rev | WASI P2 bindings |
-| wasmtime-wasi-nn | git rev | ONNX backend for ML inference |
+| Rust | 1.93.1 | Pinned in `rust-toolchain.toml` (min 1.75) |
+| wasmtime | git main | Post-41.0.3 with ONNX fix and PR #12379 async fix |
+| wasmtime-wasi | git main | WASI P2 bindings |
+| wasmtime-wasi-nn | git main | ONNX backend for ML inference |
 | wit-bindgen | 0.53.1 | Guest code generation |
 | Target | `wasm32-wasip2` | WASI Preview 2 |
 | tokio | 1.x | Async runtime (with `sync`, `time`, `signal` features) |
 | petgraph | 0.8 | DAG topology management |
 | tokio-util | 0.7 | CancellationToken for graceful shutdown |
+| axum | 0.8 | HTTP API server (feature-gated) |
+| prometheus-client | 0.23 | Metrics formatting (feature-gated) |
+| reqwest | 0.12 | HTTP client for waferctl |
+| clap | 4.x | CLI argument parsing |
+| tabled | 0.18 | Table output formatting |
 
 ---
 
@@ -355,19 +395,23 @@ just build
 just plugin
 
 # Run DAG pipeline with stdin/stdout
-echo \"hello world\" | just run examples/dag-passthrough.toml
+echo "hello world" | just run examples/dag-passthrough.toml
 # Or: cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
 
 # Run with uppercase transform
-echo \"hello\" | just run examples/dag-uppercase.toml
+echo "hello" | just run examples/dag-uppercase.toml
 # Output: HELLO
+
+# Run with HTTP API enabled
+cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+# API available at http://localhost:8080
 
 # Run all tests
 just test
 # Or: cargo test --workspace
 
 # Run integration tests specifically
-cargo test --test integration -p wafer-core
+cargo test --test integration -p wafer-runtime
 ```
 
 ### Using waferctl
@@ -375,18 +419,43 @@ cargo test --test integration -p wafer-core
 ```bash
 # Build waferctl
 just build-ctl
+# Or: cargo build -p waferctl
 
 # Check runtime health (default: localhost:8080)
-just ctl health
+waferctl health
+# Or: just ctl health
 
 # Use a specific endpoint
-just ctl -e http://localhost:9090 status
+waferctl -e http://localhost:9090 status
 
 # List all nodes
-just ctl nodes
+waferctl nodes
 
-# Trigger hot-swap on a node
-just ctl hot-swap transform-1
+# Get pipeline status
+waferctl status
+
+# Trigger hot-swap on a node (returns NotImplemented until hot-swap-mechanism)
+waferctl hot-swap transform-1
+
+# Get metrics (human-readable)
+waferctl metrics
+
+# Get metrics (raw Prometheus format)
+waferctl metrics --raw
+```
+
+### waferctl Configuration
+
+```bash
+# Set a named endpoint
+waferctl config set-endpoint prod http://prod-wafer:8080
+
+# List configured endpoints
+waferctl config list
+
+# Use a named endpoint
+waferctl config use prod
+waferctl status  # Now uses prod endpoint
 ```
 
 ### DAG Configuration
@@ -394,10 +463,21 @@ just ctl hot-swap transform-1
 DAG pipelines are configured via TOML files:
 
 ```toml
+# Optional: API server configuration
+[api]
+enabled = true
+bind = "0.0.0.0:8080"
+
+# Optional: Separate metrics server (if different from API)
+[metrics]
+enabled = true
+bind = "0.0.0.0:9090"
+path = "/metrics"
+
 [[nodes]]
 id = "source"
 node_type = "source"
-source_type = "stdin"  # or "file" with config.path
+source_type = "stdin"  # or "file" with config.path, or "mqtt"
 
 [[nodes]]
 id = "transform"
@@ -407,7 +487,7 @@ config = { plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/upperca
 [[nodes]]
 id = "sink"
 node_type = "sink"
-sink_type = "stdout"  # or "file" with config.path
+sink_type = "stdout"  # or "file" with config.path, or "mqtt"
 
 [[edges]]
 from = "source"
@@ -418,7 +498,7 @@ from = "transform"
 to = "sink"
 ```
 
-See `examples/` directory for complete examples.
+See `examples/` directory for complete examples (13 configurations).
 
 ### Remote Plugin Configuration (OCI)
 
@@ -539,20 +619,41 @@ WaferState::with_capabilities(Capabilities::full())
 ## MVP Simplifications vs SPEC
 
 | Area | SPEC | MVP Simplification |
-|------|------|--------------------
+|------|------|--------------------|
 | **Error codes** | String-based (e.g., "PARSE_FAILED") | String-based (aligned) |
 | **Capabilities** | Full network/filesystem scoping | `allow_network`/`allow_filesystem` are placeholders only |
 | **Epoch ticker** | Automatic interruption | Requires explicit `engine.start_epoch_ticker()` call |
 | **Queue impl** | Unspecified | `tokio::sync::mpsc` async channels |
 | **Source/Sink** | Native Rust (ADR-0004) | Native Rust (aligned) |
 | **Router/Joiner** | Full support | Implemented (content-router, merge-joiner) |
-| **Hot-swap** | Drain-and-flip | Not implemented |
+| **Hot-swap** | Drain-and-flip | Stubs only (returns NotImplemented) |
 | **Payload types** | Multiple variants | Only `raw(list<u8>)` |
+| **Control API** | Full REST API | Endpoints implemented, some return NotImplemented |
+| **Metrics** | Full Prometheus registry | Endpoint exists, registry not fully wired |
 
 ---
 
 ## See Also
 
 - [SPEC.md](SPEC.md) - Full specification (target design)
+- [api.md](api.md) - HTTP API documentation
+- [REGISTRY.md](REGISTRY.md) - OCI registry plugin support
+- [mqtt-setup.md](mqtt-setup.md) - MQTT source/sink setup
 - [AI_WORKFLOW.md](AI_WORKFLOW.md) - Development workflow
-- [ADRs](adr/) - Architecture Decision Records
+- [ADRs](adr/) - Architecture Decision Records:
+  - [ADR-0001](adr/0001-wasmtime-runtime.md) - Wasmtime runtime selection
+  - [ADR-0002](adr/0002-spsc-bounded-queues.md) - SPSC bounded queue design
+  - [ADR-0003](adr/0003-drain-and-flip-hotswap.md) - Drain-and-flip hot-swap strategy
+  - [ADR-0004](adr/0004-native-sources-sinks.md) - Native sources/sinks decision
+  - [ADR-0005](adr/0005-registry-package-support.md) - OCI registry support
+  - [ADR-0006](adr/0006-workspace-architecture.md) - Workspace architecture split
+
+## OpenSpec Changes (Implementation Roadmap)
+
+| Change | Status | Description |
+|--------|--------|-------------|
+| `runtime-control-plane` | ✅ Complete | Workspace restructure, HTTP API, waferctl CLI |
+| `observability-prometheus` | 🔲 Not Started | Full Prometheus metrics, structured logging |
+| `hot-swap-mechanism` | 🔲 Not Started | Drain-and-flip hot-swap implementation |
+
+See `openspec/changes/` for detailed task breakdowns.
