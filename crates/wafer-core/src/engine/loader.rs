@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use wafer_poc::engine::WaferEngine;
+//! use wafer_core::engine::WaferEngine;
 //!
 //! let engine = WaferEngine::new()?;
 //! let component = engine.load_component("path/to/component.wasm")?;
@@ -18,7 +18,7 @@
 //! // Use the component...
 //!
 //! ticker.abort(); // Stop epoch ticker when done
-//! # Ok::<(), wafer_poc::error::WaferError>(())
+//! # Ok::<(), wafer_core::error::WaferError>(())
 //! ```
 //!
 //! # Fuel Metering
@@ -218,9 +218,9 @@ impl WaferEngine {
     /// # Example
     ///
     /// ```no_run
-    /// use wafer_poc::engine::WaferEngine;
+    /// use wafer_core::engine::WaferEngine;
     ///
-    /// # async fn example() -> wafer_poc::error::Result<()> {
+    /// # async fn example() -> wafer_core::error::Result<()> {
     /// let engine = WaferEngine::new()?;
     /// let ticker_handle = engine.start_epoch_ticker();
     ///

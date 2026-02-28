@@ -12,7 +12,7 @@ pub struct WaferClient {
     base_url: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, serde::Serialize)]
 pub struct HealthResponse {
     pub status: String,
 }

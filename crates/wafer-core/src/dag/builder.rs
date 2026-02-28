@@ -16,6 +16,7 @@ use crate::factory::{create_node, FactoryContext};
 use crate::node::AnyNode;
 use crate::queue::BoundedQueue;
 
+use super::orchestrator::{ControlState, RunState};
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
@@ -39,7 +40,7 @@ impl DagOrchestrator {
     /// - Queue wiring fails
     pub async fn from_config(config: Config, use_cache: bool) -> Result<Self> {
         let dag_config = config.to_dag_config();
-        let mut orchestrator = Self::from_dag_config(dag_config.clone())?;
+        let orchestrator = Self::from_dag_config(dag_config.clone())?;
 
         // Apply cache setting
         let mut registry_config = dag_config.registry.clone();
@@ -51,13 +52,16 @@ impl DagOrchestrator {
 
         for node_def in &dag_config.nodes {
             let any_node = create_node(node_def, &mut factory_ctx).await?;
-            orchestrator.register_node(&node_def.id, any_node)?;
+            orchestrator.register_node(&node_def.id, any_node).await?;
         }
 
-        orchestrator.wire_queues()?;
+        orchestrator.wire_queues().await?;
 
         // Store factory context for epoch ticker cleanup
-        orchestrator.factory_ctx = Some(factory_ctx);
+        {
+            let mut ctx_guard = orchestrator.factory_ctx.lock().await;
+            *ctx_guard = Some(factory_ctx);
+        }
 
         Ok(orchestrator)
     }
@@ -105,16 +109,20 @@ impl DagOrchestrator {
         })?;
         let topo_order: Vec<String> = topo_indices.iter().map(|idx| graph[*idx].clone()).collect();
 
+        let pipeline_name = config.pipeline.name.clone();
         let orchestrator = Self {
             graph,
             node_indices,
             config,
             topo_order,
-            nodes: HashMap::new(),
-            queue_senders: HashMap::new(),
-            queue_receivers: HashMap::new(),
+            nodes: Mutex::new(HashMap::new()),
+            run_state: Mutex::new(Some(RunState {
+                queue_senders: HashMap::new(),
+                queue_receivers: HashMap::new(),
+            })),
             cancel_token: CancellationToken::new(),
-            factory_ctx: None,
+            control_state: Arc::new(ControlState::new(pipeline_name)),
+            factory_ctx: Mutex::new(None),
         };
         orchestrator.validate()?;
         Ok(orchestrator)
@@ -125,14 +133,14 @@ impl DagOrchestrator {
     /// # Errors
     ///
     /// Returns an error if the node ID is not defined in the DAG configuration.
-    pub fn register_node(&mut self, id: &str, node: AnyNode) -> Result<()> {
+    pub async fn register_node(&self, id: &str, node: AnyNode) -> Result<()> {
         if !self.node_indices.contains_key(id) {
             return Err(WaferError::Config(ConfigError::Message(format!(
                 "Unknown node ID: {id}"
             ))));
         }
-        self.nodes
-            .insert(id.to_string(), Arc::new(Mutex::new(node)));
+        let mut nodes = self.nodes.lock().await;
+        nodes.insert(id.to_string(), Arc::new(Mutex::new(node)));
         Ok(())
     }
 
@@ -142,9 +150,19 @@ impl DagOrchestrator {
     /// or the default queue capacity.
     ///
     /// Queue keys include port information for router/joiner support:
-    /// - Key format: `("from_node:from_port", "to_node:to_port")`
-    /// - Default port is "default" when not specified
-    pub fn wire_queues(&mut self) -> Result<()> {
+    /// - Key format: `(\"from_node:from_port\", \"to_node:to_port\")`
+    /// - Default port is \"default\" when not specified
+    ///
+    /// # Note
+    ///
+    /// This method is async because the run_state is protected by a Mutex.
+    /// It must be called before `run()`.
+    pub async fn wire_queues(&self) -> Result<()> {
+        let mut run_state_guard = self.run_state.lock().await;
+        let run_state = run_state_guard.as_mut().ok_or_else(|| {
+            WaferError::Runtime("Cannot wire queues: run state already consumed".into())
+        })?;
+
         for edge in &self.config.edges {
             let capacity = edge
                 .queue_capacity
@@ -158,18 +176,19 @@ impl DagOrchestrator {
                 format!("{}:{}", edge.from, from_port),
                 format!("{}:{}", edge.to, to_port),
             );
-            self.queue_senders.insert(key.clone(), sender);
-            self.queue_receivers.insert(key, receiver);
+            run_state.queue_senders.insert(key.clone(), sender);
+            run_state.queue_receivers.insert(key, receiver);
         }
         Ok(())
     }
 
     /// Validate that all nodes defined in config are registered.
-    pub(super) fn validate_nodes_registered(&self) -> Result<()> {
+    pub(super) async fn validate_nodes_registered(&self) -> Result<()> {
+        let nodes = self.nodes.lock().await;
         let missing: Vec<_> = self
             .node_indices
             .keys()
-            .filter(|id| !self.nodes.contains_key(*id))
+            .filter(|id| !nodes.contains_key(*id))
             .collect();
 
         if !missing.is_empty() {
@@ -231,7 +250,7 @@ impl DagOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EdgeDefinition, NodeDefinition, NodeType};
+    use crate::config::{EdgeDefinition, NodeDefinition, NodeType, PipelineConfig};
     use crate::node::FileSource;
     use crate::registry::RegistryConfig;
 
@@ -257,6 +276,7 @@ mod tests {
 
     fn make_dag_config(nodes: Vec<NodeDefinition>, edges: Vec<EdgeDefinition>) -> DagConfig {
         DagConfig {
+            pipeline: PipelineConfig::default(),
             nodes,
             edges,
             default_queue_capacity: 1024,
@@ -402,8 +422,8 @@ mod tests {
         assert_eq!(orchestrator.edge_count(), 2);
     }
 
-    #[test]
-    fn test_wire_queues_creates_correct_count() {
+    #[tokio::test]
+    async fn test_wire_queues_creates_correct_count() {
         let config = make_dag_config(
             vec![
                 make_node("source", NodeType::Source),
@@ -416,23 +436,26 @@ mod tests {
             ],
         );
 
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        orchestrator.wire_queues().unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        orchestrator.wire_queues().await.unwrap();
 
-        assert_eq!(orchestrator.queue_senders.len(), 2);
-        assert_eq!(orchestrator.queue_receivers.len(), 2);
-        assert!(orchestrator.queue_senders.contains_key(&(
+        let run_state = orchestrator.run_state.lock().await;
+        let run_state = run_state.as_ref().unwrap();
+        assert_eq!(run_state.queue_senders.len(), 2);
+        assert_eq!(run_state.queue_receivers.len(), 2);
+        assert!(run_state.queue_senders.contains_key(&(
             "source:default".to_string(),
             "transform:default".to_string()
         )));
-        assert!(orchestrator
+        assert!(run_state
             .queue_senders
             .contains_key(&("transform:default".to_string(), "sink:default".to_string())));
     }
 
-    #[test]
-    fn test_wire_queues_uses_custom_capacity() {
+    #[tokio::test]
+    async fn test_wire_queues_uses_custom_capacity() {
         let config = DagConfig {
+            pipeline: PipelineConfig::default(),
             nodes: vec![
                 make_node("source", NodeType::Source),
                 make_node("sink", NodeType::Sink),
@@ -448,23 +471,25 @@ mod tests {
             registry: RegistryConfig::default(),
         };
 
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
-        orchestrator.wire_queues().unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        orchestrator.wire_queues().await.unwrap();
 
-        let receiver = orchestrator
+        let run_state = orchestrator.run_state.lock().await;
+        let run_state = run_state.as_ref().unwrap();
+        let receiver = run_state
             .queue_receivers
             .get(&("source:default".to_string(), "sink:default".to_string()))
             .unwrap();
         assert_eq!(receiver.capacity(), 42);
     }
 
-    #[test]
-    fn test_register_node_unknown_id_fails() {
+    #[tokio::test]
+    async fn test_register_node_unknown_id_fails() {
         let config = make_dag_config(vec![make_node("source", NodeType::Source)], vec![]);
 
-        let mut orchestrator = DagOrchestrator::from_config(config).unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
         let node = AnyNode::from_source(FileSource::new("wrong-id", "/tmp/test.txt"));
-        let result = orchestrator.register_node("unknown", node);
+        let result = orchestrator.register_node("unknown", node).await;
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();

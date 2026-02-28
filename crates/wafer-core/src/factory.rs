@@ -6,9 +6,9 @@
 //! # Usage
 //!
 //! ```no_run
-//! use wafer_poc::config::NodeDefinition;
-//! use wafer_poc::factory::{create_node, FactoryContext};
-//! use wafer_poc::registry::RegistryConfig;
+//! use wafer_core::config::NodeDefinition;
+//! use wafer_core::factory::{create_node, FactoryContext};
+//! use wafer_core::registry::RegistryConfig;
 //!
 //! async fn example(node_def: &NodeDefinition) {
 //!     let registry_config = RegistryConfig::default();
@@ -65,8 +65,8 @@ use crate::Result;
 /// # Example
 ///
 /// ```no_run
-/// use wafer_poc::factory::FactoryContext;
-/// use wafer_poc::registry::RegistryConfig;
+/// use wafer_core::factory::FactoryContext;
+/// use wafer_core::registry::RegistryConfig;
 ///
 /// let config = RegistryConfig::default();
 /// let mut ctx = FactoryContext::new(config).expect("Failed to create context");

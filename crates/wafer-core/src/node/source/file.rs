@@ -27,7 +27,7 @@ use super::Source;
 /// # Example
 ///
 /// ```ignore
-/// use wafer_poc::node::{FileSource, Lifecycle, Source};
+/// use wafer_core::node::{FileSource, Lifecycle, Source};
 ///
 /// let mut source = FileSource::new("my-source", "data/input.txt");
 /// source.validate()?;

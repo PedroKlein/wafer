@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use wafer_poc::queue::{BoundedQueue, RuntimeEnvelope};
+//! use wafer_core::queue::{BoundedQueue, RuntimeEnvelope};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let queue: BoundedQueue<RuntimeEnvelope> = BoundedQueue::new(100);

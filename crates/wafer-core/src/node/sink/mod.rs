@@ -14,9 +14,9 @@
 //! To create a custom sink, implement both [`Lifecycle`] and [`Sink`]:
 //!
 //! ```ignore
-//! use wafer_poc::node::{Lifecycle, Sink};
-//! use wafer_poc::queue::RuntimeEnvelope;
-//! use wafer_poc::error::Result;
+//! use wafer_core::node::{Lifecycle, Sink};
+//! use wafer_core::queue::RuntimeEnvelope;
+//! use wafer_core::error::Result;
 //!
 //! struct MySink { /* ... */ }
 //!

@@ -161,7 +161,7 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {
-                    println!("    {​{​{}}} {}", labels.join(", "), value.value);
+                    println!("    {{{}}} {}", labels.join(", "), value.value);
                 }
             }
         }
@@ -181,7 +181,7 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {
-                    println!("    {​{​{}}} {}", labels.join(", "), value.value);
+                    println!("    {{{}}} {}", labels.join(", "), value.value);
                 }
             }
         }

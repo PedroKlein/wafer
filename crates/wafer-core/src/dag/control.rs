@@ -1,48 +1,16 @@
 //! PipelineControl trait implementation for DagOrchestrator.
+//!
+//! This module implements the `PipelineControl` trait for `DagOrchestrator`,
+//! using the shared `ControlState` defined in `orchestrator.rs`.
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::time::Instant;
-use tokio::sync::broadcast;
+use std::sync::atomic::Ordering;
 use wafer_types::{
-    ControlError, HotSwapResult, MetricsSnapshot, NodeInfo, NodeState, NodeType, PipelineEvent,
-    PipelineState, PipelineStatus, ReloadResult,
+    ControlError, HotSwapResult, MetricsSnapshot, NodeInfo, NodeState, NodeType, PipelineState,
+    PipelineStatus, ReloadResult,
 };
 
 use super::DagOrchestrator;
 use crate::control::{EventReceiver, PipelineControl};
-
-/// Internal state for PipelineControl implementation.
-pub(super) struct ControlState {
-    /// Pipeline name
-    pub name: String,
-    /// When the pipeline started
-    pub start_time: Instant,
-    /// Current pipeline state
-    pub state: PipelineState,
-    /// Whether a hot-swap is in progress
-    pub swap_in_progress: AtomicBool,
-    /// Total messages processed (approximate)
-    pub messages_processed: AtomicU64,
-    /// Total messages failed (approximate)
-    pub messages_failed: AtomicU64,
-    /// Event broadcaster
-    pub event_tx: broadcast::Sender<PipelineEvent>,
-}
-
-impl ControlState {
-    pub fn new(name: String) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
-        Self {
-            name,
-            start_time: Instant::now(),
-            state: PipelineState::Starting,
-            swap_in_progress: AtomicBool::new(false),
-            messages_processed: AtomicU64::new(0),
-            messages_failed: AtomicU64::new(0),
-            event_tx,
-        }
-    }
-}
 
 impl PipelineControl for DagOrchestrator {
     async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
@@ -56,8 +24,7 @@ impl PipelineControl for DagOrchestrator {
         // Check if node is swappable (only transforms are swappable)
         let node_config = self.config.nodes.iter().find(|n| n.id == node_id);
         let is_transform = node_config
-            .map(|n| matches!(n.node_type, crate::config::NodeType::Transform))
-            .unwrap_or(false);
+            .is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
 
         if !is_transform {
             return Err(ControlError::NotSwappable {
@@ -93,18 +60,24 @@ impl PipelineControl for DagOrchestrator {
     }
 
     fn status(&self) -> PipelineStatus {
+        // Use control_state for actual metrics
         let state = if self.cancel_token.is_cancelled() {
             PipelineState::Draining
         } else {
-            PipelineState::Running
+            // Note: Can't await in sync fn, so we use try_lock
+            self.control_state
+                .state
+                .try_lock()
+                .map(|guard| *guard)
+                .unwrap_or(PipelineState::Running)
         };
 
         PipelineStatus {
-            name: self.config.pipeline.name.clone(),
+            name: self.control_state.name.clone(),
             state,
-            uptime_secs: 0, // Would need start_time tracking
-            messages_processed: 0, // Would need metrics integration
-            messages_failed: 0,
+            uptime_secs: self.control_state.uptime_secs(),
+            messages_processed: self.control_state.messages_processed.load(Ordering::Relaxed),
+            messages_failed: self.control_state.messages_failed.load(Ordering::Relaxed),
             node_count: self.node_indices.len(),
             swap_in_progress: false,
         }
@@ -145,10 +118,7 @@ impl PipelineControl for DagOrchestrator {
     }
 
     fn subscribe(&self) -> EventReceiver {
-        // Create a new broadcast channel for events
-        let (tx, rx) = broadcast::channel(256);
-        // Drop the sender - in a real implementation, we'd store this
-        drop(tx);
-        rx
+        // Subscribe to the shared event broadcaster
+        self.control_state.event_tx.subscribe()
     }
 }

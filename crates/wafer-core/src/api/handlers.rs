@@ -15,7 +15,7 @@ use crate::control::PipelineControl;
 
 /// Health check response.
 #[derive(Serialize)]
-struct HealthResponse {
+pub struct HealthResponse {
     status: &'static str,
 }
 

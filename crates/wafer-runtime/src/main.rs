@@ -4,7 +4,6 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -12,10 +11,8 @@ use tokio::signal;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
-use wafer_core::api::{start_api_server, ApiConfig};
 use wafer_core::config::loader::load_config;
 use wafer_core::dag::PipelineOrchestrator;
-use wafer_core::PipelineControl;
 
 /// WAFER Runtime - WebAssembly Flow Execution Runtime
 #[derive(Parser, Debug)]
@@ -64,76 +61,39 @@ async fn main() -> Result<()> {
     let pipeline_name = config.pipeline.name.clone();
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
-    // Create the pipeline orchestrator
-    let orchestrator = Arc::new(
+    // Create the pipeline orchestrator wrapped in Arc for sharing with API server
+    let orchestrator = std::sync::Arc::new(
         PipelineOrchestrator::from_config(config, !args.no_cache)
             .await
             .context("Failed to create pipeline orchestrator")?,
     );
 
-    // Start the API server if enabled
-    let api_server = if !args.no_api {
-        let api_config = ApiConfig {
-            bind: args.api_bind.unwrap_or_else(|| "127.0.0.1:9090".parse().unwrap()),
-            serve_metrics: args.metrics_bind.is_none(),
-        };
-
-        let server = start_api_server(api_config.clone(), orchestrator.clone())
-            .await
-            .context("Failed to start API server")?;
-
-        let addr = server.local_addr()?;
-        info!(address = %addr, "API server listening");
-
-        Some(server)
-    } else {
-        warn!("API server disabled");
-        None
-    };
-
-    // Start separate metrics server if configured
-    let metrics_server = if let Some(metrics_bind) = args.metrics_bind {
-        let metrics_config = ApiConfig {
-            bind: metrics_bind,
-            serve_metrics: true,
-        };
-
-        let server = start_api_server(metrics_config, orchestrator.clone())
-            .await
-            .context("Failed to start metrics server")?;
-
-        let addr = server.local_addr()?;
-        info!(address = %addr, "Metrics server listening");
-
-        Some(server)
-    } else {
-        None
-    };
-
-    // Run pipeline and servers until shutdown
-    let shutdown = shutdown_signal();
-
-    tokio::select! {
-        result = orchestrator.run() => {
-            result.context("Pipeline execution failed")?;
-        }
-        _ = async {
-            if let Some(server) = api_server {
-                let _ = server.run().await;
-            }
-        } => {}
-        _ = async {
-            if let Some(server) = metrics_server {
-                let _ = server.run().await;
-            }
-        } => {}
-        _ = shutdown => {
-            info!("Shutdown signal received, draining pipeline...");
-            if let Err(e) = orchestrator.shutdown().await {
-                warn!(error = %e, "Error during shutdown");
-            }
-        }
+    // TODO: HTTP API server integration
+    // Now that run() takes &self (using internal mutability), we can share the
+    // orchestrator via Arc with the API server. Full integration in follow-up change.
+    if !args.no_api {
+        let bind = args.api_bind.unwrap_or_else(|| "127.0.0.1:9090".parse().unwrap());
+        warn!(address = %bind, "API server not yet integrated (coming in follow-up)");
+        // Future: tokio::spawn(api_server::run(Arc::clone(&orchestrator), bind));
     }
+
+    if args.metrics_bind.is_some() {
+        warn!("Metrics server not yet integrated");
+    }
+
+    // Get cancel token for shutdown handling
+    let cancel_token = orchestrator.cancel_token();
+
+    // Spawn shutdown signal handler
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        info!("Shutdown signal received, cancelling pipeline...");
+        cancel_token.cancel();
+    });
+
+    // Run pipeline until completion or cancellation
+    // Note: run() now takes &self (not &mut self) thanks to internal mutability
+    orchestrator.run().await.context("Pipeline execution failed")?;
 
     info!("WAFER Runtime stopped");
     Ok(())
