@@ -12,9 +12,9 @@ A high-performance, Rust-based DAG pipeline runtime that executes WebAssembly pl
 - **DAG-based pipelines** — Define data flows as directed acyclic graphs with TOML configuration
 - **WebAssembly plugins** — Write transforms in any language that compiles to WASM (Rust, Go, C/C++, etc.)
 - **Hot-swappable transforms** — Update WASM plugins at runtime without pipeline restart
-- **Bounded queues** — SPSC queues with configurable capacity and backpressure
+- **Bounded queues** — SPSC queues with configurable capacity, overflow policies (`slow`, `drop`, `dead-letter`), and DLQ support
 - **Fan-out/Fan-in** — Router (1→N) and Joiner (N→1) nodes for complex topologies
-- **Multiple I/O types** — stdin/stdout, files, MQTT pub/sub
+- **Multiple I/O types** — stdin/stdout, files, MQTT pub/sub (all with optional batching)
 - **HTTP Control Plane** — REST API for monitoring and management
 - **Prometheus Metrics** — Built-in metrics export for observability
 - **OCI Registry Support** — Load plugins from container registries (ghcr.io, Docker Hub)
@@ -386,14 +386,26 @@ id = "sink"
 node_type = "sink"
 sink_type = "stdout"  # stdout, file, mqtt
 
-# Edges define data flow
+# Edges define data flow (with optional overflow policy)
 [[edges]]
 from = "source"
 to = "transform"
+[edges.queue]
+capacity = 1000
+overflow = "slow"  # slow (default), drop, or dead-letter
 
 [[edges]]
 from = "transform"
 to = "sink"
+[edges.queue]
+overflow = "drop"  # Drop messages when queue is full
+
+# Dead Letter Queue (optional - required if any edge uses dead-letter policy)
+[dead_letter]
+enabled = true
+sink_type = "file"
+[dead_letter.config]
+path = "/var/log/wafer/dlq.jsonl"
 ```
 
 ### Node Types
@@ -404,7 +416,15 @@ to = "sink"
 | `transform` | WASM plugin processing | `plugin_path` or `plugin_ref` |
 | `router` | Fan-out (1→N) | `plugin_path` + multiple outgoing edges |
 | `joiner` | Fan-in (N→1) | `plugin_path` + multiple incoming edges |
-| `sink` | Data output | `sink_type`: stdout, file, mqtt |
+| `sink` | Data output | `sink_type`: stdout, file, mqtt; optional `batch_size`, `batch_timeout_ms` |
+
+### Overflow Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `slow` | Block sender until space available (default, backpressure) |
+| `drop` | Discard newest message when queue is full |
+| `dead-letter` | Route dropped messages to DLQ for later inspection |
 
 ### Environment Variables
 

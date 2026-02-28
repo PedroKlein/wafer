@@ -501,6 +501,17 @@ All metrics follow SPEC §12.2. See the `/metrics` endpoint for current values.
 - `wafer_queue_depth` - Current queue depth
 - `wafer_queue_capacity` - Queue capacity
 - `wafer_queue_enqueue_total` - Messages enqueued
+- `wafer_queue_drop_total` - Messages dropped (overflow policy: drop)
+- `wafer_queue_dlq_total` - Messages sent to DLQ (overflow policy: dead-letter)
+
+**DLQ metrics:**
+- `wafer_dlq_messages_total` - Total messages routed to DLQ
+- `wafer_dlq_sink_error_total` - Errors writing to DLQ sink
+
+**Sink metrics (labeled by `sink_id`):**
+- `wafer_sink_batch_flush_total` - Total batch flushes
+- `wafer_sink_batch_size` - Messages in last batch
+- `wafer_sink_buffer_size` - Current buffer size
 
 **System metrics:**
 - `wafer_host_cpu_percent` - Process CPU usage
