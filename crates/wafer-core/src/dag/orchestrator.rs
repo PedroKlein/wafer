@@ -557,6 +557,8 @@ impl DagOrchestrator {
                 // Put factory context back
                 *self.factory_ctx.lock().await = Some(ctx);
                 tracing::error!(node = %node_id, error = %e, "Hot-swap prepare failed");
+                #[cfg(feature = "http-api")]
+                self.control_state.metrics_registry.record_hotswap_failure();
                 return Err(e);
             }
         };
@@ -568,6 +570,8 @@ impl DagOrchestrator {
                 // Put factory context back and abort
                 *self.factory_ctx.lock().await = Some(ctx);
                 tracing::error!(node = %node_id, error = %e, "Hot-swap drain failed");
+                #[cfg(feature = "http-api")]
+                self.control_state.metrics_registry.record_hotswap_failure();
                 // Coordinator drop will release the lock
                 return Err(e);
             }
@@ -599,6 +603,17 @@ impl DagOrchestrator {
             retire_ms = %metrics.retire_duration.as_millis(),
             drain_timed_out = %metrics.drain_timed_out,
             "Hot-swap complete"
+        );
+
+        // Record hot-swap metrics
+        #[cfg(feature = "http-api")]
+        self.control_state.metrics_registry.record_hotswap_success(
+            metrics.prepare_duration.as_nanos() as u64,
+            metrics.drain_duration.as_nanos() as u64,
+            metrics.flip_duration.as_nanos() as u64,
+            metrics.retire_duration.as_nanos() as u64,
+            metrics.messages_drained,
+            metrics.drain_timed_out,
         );
 
         Ok(metrics)
