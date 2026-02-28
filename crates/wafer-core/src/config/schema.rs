@@ -27,9 +27,7 @@ fn default_api_bind() -> SocketAddr {
     DEFAULT_API_BIND.parse().unwrap()
 }
 
-/// Default bind address for metrics endpoint.
-/// TODO: Used when separate metrics server is implemented (task 5.6).
-#[allow(dead_code)]
+/// Default bind address for metrics endpoint (when served separately from API).
 fn default_metrics_bind() -> SocketAddr {
     DEFAULT_METRICS_BIND.parse().unwrap()
 }

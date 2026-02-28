@@ -4,13 +4,16 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 use tokio::signal;
-use tracing::{info, warn};
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::config::loader::load_config;
 use wafer_core::dag::PipelineOrchestrator;
 
@@ -59,41 +62,93 @@ async fn main() -> Result<()> {
         .context("Failed to load configuration")?;
 
     let pipeline_name = config.pipeline.name.clone();
+    let api_config = config.api.clone();
+    let metrics_config = config.metrics.clone();
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
     // Create the pipeline orchestrator wrapped in Arc for sharing with API server
-    let orchestrator = std::sync::Arc::new(
+    let orchestrator = Arc::new(
         PipelineOrchestrator::from_config(config, !args.no_cache)
             .await
             .context("Failed to create pipeline orchestrator")?,
     );
 
-    // TODO: HTTP API server integration
-    // Now that run() takes &self (using internal mutability), we can share the
-    // orchestrator via Arc with the API server. Full integration in follow-up change.
-    if !args.no_api {
-        let bind = args.api_bind.unwrap_or_else(|| "127.0.0.1:9090".parse().unwrap());
-        warn!(address = %bind, "API server not yet integrated (coming in follow-up)");
-        // Future: tokio::spawn(api_server::run(Arc::clone(&orchestrator), bind));
-    }
-
-    if args.metrics_bind.is_some() {
-        warn!("Metrics server not yet integrated");
-    }
-
     // Get cancel token for shutdown handling
-    let cancel_token = orchestrator.cancel_token();
+    let pipeline_cancel_token = orchestrator.cancel_token();
+    
+    // Create a separate cancellation token for graceful server shutdown
+    let server_shutdown = CancellationToken::new();
+
+    // Determine if we need a separate metrics server
+    let metrics_bind = args.metrics_bind.or(metrics_config.bind);
+    let serve_metrics_on_api = metrics_bind.is_none() && metrics_config.enabled;
+
+    // Start API server if enabled
+    if !args.no_api && api_config.enabled {
+        let api_bind = args.api_bind.unwrap_or(api_config.bind);
+        let api_server_config = ApiConfig {
+            bind: api_bind,
+            serve_metrics: serve_metrics_on_api,
+        };
+
+        let api_server = ApiServer::new(api_server_config, Arc::clone(&orchestrator))
+            .await
+            .context("Failed to create API server")?;
+
+        let addr = api_server.local_addr()?;
+        info!(address = %addr, "API server started");
+
+        let shutdown_signal = server_shutdown.clone().cancelled_owned();
+        tokio::spawn(async move {
+            if let Err(e) = api_server.run_with_shutdown(shutdown_signal).await {
+                error!(error = %e, "API server error");
+            }
+        });
+    }
+
+    // Start separate metrics server if configured
+    if metrics_config.enabled {
+        if let Some(bind) = metrics_bind {
+            let metrics_server_config = MetricsServerConfig {
+                bind,
+                path: metrics_config.path.clone(),
+            };
+
+            let metrics_server =
+                MetricsServer::new(metrics_server_config, Arc::clone(&orchestrator))
+                    .await
+                    .context("Failed to create metrics server")?;
+
+            let addr = metrics_server.local_addr()?;
+            info!(address = %addr, path = %metrics_config.path, "Metrics server started");
+
+            let shutdown_signal = server_shutdown.clone().cancelled_owned();
+            tokio::spawn(async move {
+                if let Err(e) = metrics_server.run_with_shutdown(shutdown_signal).await {
+                    error!(error = %e, "Metrics server error");
+                }
+            });
+        }
+    }
 
     // Spawn shutdown signal handler
+    let pipeline_cancel = pipeline_cancel_token.clone();
+    let server_cancel = server_shutdown.clone();
     tokio::spawn(async move {
         shutdown_signal().await;
-        info!("Shutdown signal received, cancelling pipeline...");
-        cancel_token.cancel();
+        info!("Shutdown signal received, initiating graceful shutdown...");
+        // Cancel the pipeline first
+        pipeline_cancel.cancel();
+        // Then signal servers to shutdown
+        server_cancel.cancel();
     });
 
     // Run pipeline until completion or cancellation
     // Note: run() now takes &self (not &mut self) thanks to internal mutability
     orchestrator.run().await.context("Pipeline execution failed")?;
+
+    // Signal server shutdown after pipeline stops
+    server_shutdown.cancel();
 
     info!("WAFER Runtime stopped");
     Ok(())
