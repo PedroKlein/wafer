@@ -63,3 +63,8 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 hyper = { version = "1.0", features = ["client"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+
+[[bench]]
+name = "hot_swap"
+harness = false
