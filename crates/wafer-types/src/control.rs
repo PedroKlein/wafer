@@ -302,4 +302,192 @@ mod tests {
         assert_eq!(parsed.node_id, "filter");
         assert_eq!(parsed.messages_drained, 42);
     }
+
+    // === Additional round-trip tests for Task 2.11 ===
+
+    #[test]
+    fn test_node_info_serialization_roundtrip() {
+        let node = NodeInfo {
+            id: "transform-1".to_string(),
+            node_type: NodeType::Transform,
+            state: NodeState::Running,
+            swappable: true,
+            messages_processed: 5000,
+            messages_failed: 10,
+            avg_process_us: 150,
+            queue_depth: Some(42),
+        };
+
+        let json = serde_json::to_string(&node).unwrap();
+        let parsed: NodeInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, node.id);
+        assert_eq!(parsed.node_type, node.node_type);
+        assert_eq!(parsed.state, node.state);
+        assert_eq!(parsed.swappable, node.swappable);
+        assert_eq!(parsed.messages_processed, node.messages_processed);
+        assert_eq!(parsed.messages_failed, node.messages_failed);
+        assert_eq!(parsed.avg_process_us, node.avg_process_us);
+        assert_eq!(parsed.queue_depth, node.queue_depth);
+    }
+
+    #[test]
+    fn test_node_info_with_none_queue_depth() {
+        let node = NodeInfo {
+            id: "sink-1".to_string(),
+            node_type: NodeType::Sink,
+            state: NodeState::Running,
+            swappable: false,
+            messages_processed: 1000,
+            messages_failed: 0,
+            avg_process_us: 50,
+            queue_depth: None,
+        };
+
+        let json = serde_json::to_string(&node).unwrap();
+        let parsed: NodeInfo = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.queue_depth, None);
+    }
+
+    #[test]
+    fn test_reload_result_serialization_roundtrip() {
+        let result = ReloadResult {
+            swapped_nodes: vec!["filter-1".to_string(), "transform-2".to_string()],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ReloadResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.swapped_nodes, result.swapped_nodes);
+    }
+
+    #[test]
+    fn test_reload_result_empty() {
+        let result = ReloadResult {
+            swapped_nodes: vec![],
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ReloadResult = serde_json::from_str(&json).unwrap();
+
+        assert!(parsed.swapped_nodes.is_empty());
+    }
+
+    #[test]
+    fn test_all_pipeline_states_roundtrip() {
+        let states = vec![
+            PipelineState::Starting,
+            PipelineState::Running,
+            PipelineState::Draining,
+            PipelineState::Stopped,
+            PipelineState::Error,
+        ];
+
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let parsed: PipelineState = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn test_all_node_states_roundtrip() {
+        let states = vec![
+            NodeState::Running,
+            NodeState::Draining,
+            NodeState::Retired,
+            NodeState::Error,
+        ];
+
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let parsed: NodeState = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, state);
+        }
+    }
+
+    #[test]
+    fn test_all_node_types_roundtrip() {
+        let types = vec![
+            NodeType::Source,
+            NodeType::Transform,
+            NodeType::Router,
+            NodeType::Joiner,
+            NodeType::Sink,
+        ];
+
+        for node_type in types {
+            let json = serde_json::to_string(&node_type).unwrap();
+            let parsed: NodeType = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, node_type);
+        }
+    }
+
+    #[test]
+    fn test_all_control_errors_roundtrip() {
+        let errors = vec![
+            ControlError::NodeNotFound {
+                node_id: "test".to_string(),
+            },
+            ControlError::SwapInProgress,
+            ControlError::NotSwappable {
+                node_id: "source".to_string(),
+            },
+            ControlError::NotImplemented {
+                operation: "hot_swap".to_string(),
+            },
+            ControlError::ConfigError {
+                message: "invalid toml".to_string(),
+            },
+            ControlError::InvalidState {
+                expected: "running".to_string(),
+                actual: "stopped".to_string(),
+            },
+            ControlError::Internal {
+                message: "unexpected".to_string(),
+            },
+        ];
+
+        for err in errors {
+            let json = serde_json::to_string(&err).unwrap();
+            let parsed: ControlError = serde_json::from_str(&json).unwrap();
+            assert_eq!(err.code(), parsed.code());
+        }
+    }
+
+    #[test]
+    fn test_error_response_with_details() {
+        let err = ControlError::InvalidState {
+            expected: "running".to_string(),
+            actual: "stopped".to_string(),
+        };
+        let response: ErrorResponse = err.into();
+
+        let json = serde_json::to_string(&response).unwrap();
+        let parsed: ErrorResponse = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.error.code, "invalid_state");
+        let details = parsed.error.details.unwrap();
+        assert_eq!(details.get("expected").unwrap(), "running");
+        assert_eq!(details.get("actual").unwrap(), "stopped");
+    }
+
+    #[test]
+    fn test_hot_swap_result_durations_roundtrip() {
+        let result = HotSwapResult {
+            node_id: "test".to_string(),
+            drain_duration: Duration::from_secs(1) + Duration::from_nanos(123456789),
+            load_duration: Duration::from_millis(500),
+            total_duration: Duration::from_secs(2),
+            messages_drained: 100,
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: HotSwapResult = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.drain_duration, result.drain_duration);
+        assert_eq!(parsed.load_duration, result.load_duration);
+        assert_eq!(parsed.total_duration, result.total_duration);
+    }
 }
