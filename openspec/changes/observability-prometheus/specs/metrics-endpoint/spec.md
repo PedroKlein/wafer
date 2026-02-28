@@ -79,6 +79,28 @@ The metrics endpoint SHALL expose host system metrics.
 - **THEN** `host_memory_rss_bytes` gauge shows resident set size
 - **THEN** `host_threads` gauge shows thread count
 
+### Requirement: Hot-swap metrics
+
+The metrics endpoint SHALL expose metrics for hot-swap operations.
+
+#### Scenario: Hot-swap operation counters
+- **WHEN** `/metrics` is scraped after hot-swap operations
+- **THEN** `hotswap_total` counter shows total operations attempted
+- **THEN** `hotswap_success_total` counter shows successful operations
+- **THEN** `hotswap_failure_total` counter shows failed operations
+- **THEN** `hotswap_drain_timeout_total` counter shows drain timeouts
+
+#### Scenario: Hot-swap phase timing metrics
+- **WHEN** `/metrics` is scraped after hot-swap operations
+- **THEN** `hotswap_prepare_time_ns_total` counter shows cumulative prepare time
+- **THEN** `hotswap_drain_time_ns_total` counter shows cumulative drain time
+- **THEN** `hotswap_flip_time_ns_total` counter shows cumulative flip time
+- **THEN** `hotswap_retire_time_ns_total` counter shows cumulative retire time
+
+#### Scenario: Hot-swap message metrics
+- **WHEN** `/metrics` is scraped after hot-swap operations
+- **THEN** `hotswap_messages_drained_total` counter shows messages processed during drain
+
 ### Requirement: Metrics server configuration
 
 The metrics server SHALL be configurable via pipeline configuration.

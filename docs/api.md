@@ -507,6 +507,40 @@ All metrics follow SPEC §12.2. See the `/metrics` endpoint for current values.
 - `wafer_host_memory_rss_bytes` - Resident set size
 - `wafer_host_threads` - Thread count
 
+**Hot-swap metrics:**
+- `wafer_hotswap_total` - Total hot-swap operations attempted
+- `wafer_hotswap_success_total` - Total successful hot-swap operations
+- `wafer_hotswap_failure_total` - Total failed hot-swap operations
+- `wafer_hotswap_drain_timeout_total` - Hot-swaps where drain phase timed out
+- `wafer_hotswap_prepare_time_ns_total` - Cumulative time in prepare phase
+- `wafer_hotswap_drain_time_ns_total` - Cumulative time in drain phase
+- `wafer_hotswap_flip_time_ns_total` - Cumulative time in flip phase
+- `wafer_hotswap_retire_time_ns_total` - Cumulative time in retire phase
+- `wafer_hotswap_messages_drained_total` - Total messages drained during swaps
+
+---
+
+## Local Development Stack
+
+For local development and testing, a Docker Compose stack is available with Prometheus and Grafana pre-configured:
+
+```bash
+cd examples/observability
+
+# Start Prometheus + Grafana
+docker-compose up -d
+
+# Grafana: http://localhost:3000 (admin/admin)
+# Prometheus: http://localhost:9090
+```
+
+The stack includes:
+- **Prometheus** scraping WAFER at `host.docker.internal:8080/metrics`
+- **Grafana** with a pre-built "WAFER Overview" dashboard
+- Dashboard panels for pipeline, node, queue, and hot-swap metrics
+
+See `examples/observability/README.md` for full documentation.
+
 ---
 
 ## See Also
