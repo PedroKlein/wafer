@@ -11,7 +11,7 @@ WAFER (wasm-dag-runtime) is a general-purpose runtime for executing Directed Acy
 | Value | Description |
 |-------|-------------|
 | **Type-safe boundaries** | WIT-defined contracts between host and nodes; validated at DAG load time |
-| **Zero-copy data flow** | Borrow semantics minimize copies as data moves through the DAG |
+| **Minimal-copy data flow** | Efficient data passing through the DAG; true zero-copy is future work |
 | **Strong isolation** | WASI capability grants + Wasm sandboxing + fuel/epoch limits |
 | **Cross-architecture portability** | Same `.wasm` binary runs on ARM (Pi, Jetson, Mac M3) and x86 |
 | **Per-node hot-swap** | Upgrade individual nodes without stopping the pipeline |
@@ -29,10 +29,10 @@ WAFER (wasm-dag-runtime) is a general-purpose runtime for executing Directed Acy
 | ID | Goal | Priority |
 |----|------|----------|
 | G1 | Type-safe DAG execution via WIT contracts | Must |
-| G2 | Zero-copy data passing between nodes | Must |
+| G2 | Minimal-copy data passing between nodes | Must |
 | G3 | Bounded queues with backpressure | Must |
-| G4 | Per-node hot-swap (drain-and-flip) | Must |
-| G5 | Dynamic topology at runtime | Should |
+| G4 | Per-node hot-swap (drain-and-flip) | Must (**primary thesis target**) |
+| G5 | Dynamic topology at runtime | Should (stretch goal) |
 | G6 | WASI capability isolation | Must |
 | G7 | wasi-nn compatible inference | Must |
 | G8 | Cross-architecture portability | Must |
