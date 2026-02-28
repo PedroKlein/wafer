@@ -48,7 +48,7 @@ anyhow = "1"
 
 # Logging/tracing
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
@@ -60,6 +60,9 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 # Metrics
 prometheus-client = "0.23"
+
+# System metrics
+sysinfo = "0.34"
 
 # CLI output
 tabled = "0.18"

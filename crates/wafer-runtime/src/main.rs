@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
@@ -16,6 +16,16 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::config::loader::load_config;
 use wafer_core::dag::PipelineOrchestrator;
+
+/// Log output format.
+#[derive(Debug, Clone, Copy, Default, ValueEnum)]
+enum LogFormat {
+    /// Pretty-printed text format (default)
+    #[default]
+    Pretty,
+    /// JSON structured logging
+    Json,
+}
 
 /// WAFER Runtime - WebAssembly Flow Execution Runtime
 #[derive(Parser, Debug)]
@@ -41,17 +51,33 @@ struct Args {
     /// Skip OCI registry cache for remote plugins
     #[arg(long)]
     no_cache: bool,
+
+    /// Log output format
+    #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
+    log_format: LogFormat,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(fmt::layer())
-        .with(EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into()))
-        .init();
-
     let args = Args::parse();
+
+    // Initialize tracing with selected format
+    let env_filter = EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
+
+    match args.log_format {
+        LogFormat::Pretty => {
+            tracing_subscriber::registry()
+                .with(fmt::layer())
+                .with(env_filter)
+                .init();
+        }
+        LogFormat::Json => {
+            tracing_subscriber::registry()
+                .with(fmt::layer().json())
+                .with(env_filter)
+                .init();
+        }
+    }
 
     info!("WAFER Runtime starting...");
     info!(config = %args.config.display(), "Loading configuration");

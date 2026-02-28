@@ -138,6 +138,10 @@ pub struct MetricsConfig {
     /// Path for metrics endpoint
     #[serde(default = "default_metrics_path")]
     pub path: String,
+
+    /// Global labels to add to all metrics (e.g., environment, cluster)
+    #[serde(default)]
+    pub labels: std::collections::HashMap<String, String>,
 }
 
 impl Default for MetricsConfig {
@@ -146,6 +150,7 @@ impl Default for MetricsConfig {
             enabled: true,
             bind: None,
             path: default_metrics_path(),
+            labels: std::collections::HashMap::new(),
         }
     }
 }

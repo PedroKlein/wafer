@@ -1,0 +1,66 @@
+# Prometheus scrape configuration for WAFER runtime
+#
+# Usage:
+#   1. Start WAFER with metrics enabled:
+#      cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+#
+#   2. Start Prometheus with this config:
+#      prometheus --config.file=examples/prometheus.yml
+#
+#   3. View metrics at http://localhost:9092/targets
+#
+# For Docker:
+#   docker run -d --name prometheus \
+#     -p 9092:9090 \
+#     -v $(pwd)/examples/prometheus.yml:/etc/prometheus/prometheus.yml \
+#     --network host \
+#     prom/prometheus
+#
+# Or with docker-compose (see examples/docker-compose.yml)
+
+global:
+  scrape_interval: 15s          # How often to scrape targets
+  evaluation_interval: 15s      # How often to evaluate rules
+  external_labels:
+    monitor: 'wafer-monitor'    # Label added to any time series
+
+# Scrape configurations
+scrape_configs:
+  # WAFER runtime metrics
+  - job_name: 'wafer'
+    static_configs:
+      - targets: ['localhost:9091']
+        labels:
+          instance: 'wafer-local'
+    
+    # Optional: increase timeout for slow systems
+    scrape_timeout: 10s
+    
+    # Metrics path (default is /metrics)
+    metrics_path: /metrics
+    
+    # Honor labels from the target (e.g., environment, cluster)
+    honor_labels: true
+
+  # Multiple WAFER instances (example for production)
+  # - job_name: 'wafer-cluster'
+  #   static_configs:
+  #     - targets:
+  #       - 'wafer-node-1:9091'
+  #       - 'wafer-node-2:9091'
+  #       - 'wafer-node-3:9091'
+  #   relabel_configs:
+  #     - source_labels: [__address__]
+  #       target_label: instance
+  #       regex: '(.+):9091'
+  #       replacement: '${1}'
+
+# Alerting rules (optional - uncomment to enable)
+# alerting:
+#   alertmanagers:
+#     - static_configs:
+#         - targets: ['localhost:9093']
+
+# Rule files for recording rules and alerts (optional)
+# rule_files:
+#   - 'rules/*.yml'

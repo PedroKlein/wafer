@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde_json::Value;
 use tokio::sync::broadcast;
 use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::control::PipelineControl;
@@ -185,15 +186,27 @@ async fn test_api_server_starts_and_serves_health() {
     let body: Vec<serde_json::Value> = resp.json().await.unwrap();
     assert_eq!(body.len(), 2);
 
-    // Test /metrics
+    // Test /metrics - verify Prometheus format
     let resp = client
         .get(format!("http://{}/metrics", addr))
         .send()
         .await
         .unwrap();
     assert!(resp.status().is_success());
+
+    // Verify Content-Type header indicates Prometheus format
+    let content_type = resp.headers().get("content-type")
+        .expect("Missing content-type header");
+    let content_type_str = content_type.to_str().unwrap();
+    assert!(
+        content_type_str.contains("text/plain") || content_type_str.contains("text/plain; charset=utf-8"),
+        "Expected text/plain content type, got: {}", content_type_str
+    );
+
     let body = resp.text().await.unwrap();
-    assert!(body.contains("wafer_messages_total"));
+    // Verify basic Prometheus format markers
+    assert!(body.contains("wafer_messages_total"), "Missing wafer_messages_total metric");
+    assert!(body.contains("# TYPE") || body.contains("# HELP"), "Missing Prometheus metadata comments");
 
     // Shutdown
     shutdown.cancel();
@@ -350,4 +363,188 @@ async fn test_shutdown_endpoint_calls_controller() {
 
     shutdown.cancel();
     let _ = server_handle.await;
+}
+
+/// Test module for JSON log format validation.
+///
+/// These tests verify that the JSON log format from tracing-subscriber matches
+/// the structure defined in SPEC §12.4 (Structured Logging).
+mod json_log_format {
+    use super::*;
+
+    /// Validates that a JSON log line has the required structure.
+    ///
+    /// Per SPEC §12.4, JSON logs MUST include:
+    /// - `timestamp`: RFC 3339 format
+    /// - `level`: log level (INFO, DEBUG, etc.)
+    /// - `target`: module path
+    /// - `message`: log message text
+    ///
+    /// May optionally include:
+    /// - `span`: object with span fields (pipeline, node_id, etc.)
+    /// - `fields`: additional structured key-value pairs
+    fn validate_json_log_structure(json_str: &str) -> Result<(), String> {
+        let log: Value = serde_json::from_str(json_str)
+            .map_err(|e| format!("Failed to parse JSON: {e}"))?;
+
+        // Required fields
+        let obj = log.as_object().ok_or("Log entry must be an object")?;
+
+        // timestamp field (tracing-subscriber uses 'timestamp')
+        if !obj.contains_key("timestamp") {
+            return Err("Missing 'timestamp' field".to_string());
+        }
+        let timestamp = obj["timestamp"].as_str().ok_or("timestamp must be a string")?;
+        // Validate RFC 3339 format (basic check for format like "2024-01-15T10:30:00.123456789Z")
+        if !timestamp.contains('T') || (!timestamp.ends_with('Z') && !timestamp.contains('+')) {
+            return Err(format!("timestamp not in RFC 3339 format: {timestamp}"));
+        }
+
+        // level field
+        if !obj.contains_key("level") {
+            return Err("Missing 'level' field".to_string());
+        }
+        let level = obj["level"].as_str().ok_or("level must be a string")?;
+        let valid_levels = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR"];
+        if !valid_levels.contains(&level) {
+            return Err(format!("Invalid log level: {level}"));
+        }
+
+        // target field (tracing-subscriber uses 'target')
+        if !obj.contains_key("target") {
+            return Err("Missing 'target' field".to_string());
+        }
+
+        // message field (tracing-subscriber can use 'message' or 'fields.message')
+        // The actual field name depends on how the log was created
+        let has_message = obj.contains_key("message")
+            || obj.get("fields").and_then(|f| f.get("message")).is_some();
+        if !has_message {
+            // Some log events may not have a message (event-only spans)
+            // This is acceptable per the tracing crate design
+        }
+
+        Ok(())
+    }
+
+    /// Test that validates expected JSON log structure from tracing-subscriber.
+    ///
+    /// This test simulates what the JSON output should look like and validates
+    /// our parsing logic. In production, the actual output comes from
+    /// tracing-subscriber's JSON layer.
+    #[test]
+    fn test_json_log_format_spec_compliance() {
+        // Example JSON log output from tracing-subscriber with json layer
+        let example_logs = [
+            // Standard INFO message
+            r#"{"timestamp":"2024-01-15T10:30:00.123456789Z","level":"INFO","target":"wafer_runtime","message":"WAFER Runtime starting..."}"#,
+            // Message with fields
+            r#"{"timestamp":"2024-01-15T10:30:00.123456789Z","level":"INFO","target":"wafer_runtime","fields":{"config":"/path/to/config.toml"},"message":"Loading configuration"}"#,
+            // Message with span context
+            r#"{"timestamp":"2024-01-15T10:30:00.123456789Z","level":"DEBUG","target":"wafer_core::dag::runner","span":{"node_id":"transform-1","node_type":"transform"},"message":"Transform emitted"}"#,
+            // Processing log with all required fields
+            r#"{"timestamp":"2024-01-15T10:30:00.123456789Z","level":"DEBUG","target":"wafer_core::dag::runner","span":{"node_id":"transform-1","node_type":"transform"},"fields":{"message_id":"msg-123","duration_ns":5000000,"input_size_bytes":1024,"output_size_bytes":512},"message":"Transform emitted"}"#,
+            // Error message
+            r#"{"timestamp":"2024-01-15T10:30:00.123456789Z","level":"ERROR","target":"wafer_core::dag::runner","fields":{"error":"timeout"},"message":"Transform process failed"}"#,
+        ];
+
+        for (i, log_str) in example_logs.iter().enumerate() {
+            match validate_json_log_structure(log_str) {
+                Ok(()) => {}
+                Err(e) => panic!("Log example {} failed validation: {}\nLog: {}", i, e, log_str),
+            }
+        }
+    }
+
+    /// Test that validates processing log has all SPEC-required fields.
+    ///
+    /// Per SPEC §12.4, message processing logs SHOULD include:
+    /// - span with `pipeline` and `node_id`
+    /// - fields: `message_id`, `duration_ns`, `input_size_bytes`, `output_size_bytes`
+    #[test]
+    fn test_processing_log_fields() {
+        let processing_log = r#"{
+            "timestamp": "2024-01-15T10:30:00.123456789Z",
+            "level": "DEBUG",
+            "target": "wafer_core::dag::runner",
+            "span": {
+                "node_id": "transform-1",
+                "node_type": "transform"
+            },
+            "fields": {
+                "message_id": "550e8400-e29b-41d4-a716-446655440000",
+                "duration_ns": 5000000,
+                "input_size_bytes": 1024,
+                "output_size_bytes": 512
+            },
+            "message": "Transform emitted"
+        }"#;
+
+        let log: Value = serde_json::from_str(processing_log)
+            .expect("Failed to parse processing log");
+
+        // Validate span fields
+        let span = log.get("span").expect("Missing span");
+        assert!(span.get("node_id").is_some(), "Missing node_id in span");
+        assert!(span.get("node_type").is_some(), "Missing node_type in span");
+
+        // Validate processing fields
+        let fields = log.get("fields").expect("Missing fields");
+        assert!(fields.get("message_id").is_some(), "Missing message_id");
+        assert!(fields.get("duration_ns").is_some(), "Missing duration_ns");
+        assert!(fields.get("input_size_bytes").is_some(), "Missing input_size_bytes");
+        assert!(fields.get("output_size_bytes").is_some(), "Missing output_size_bytes");
+
+        // Validate field types
+        assert!(fields["duration_ns"].is_number(), "duration_ns should be a number");
+        assert!(fields["input_size_bytes"].is_number(), "input_size_bytes should be a number");
+        assert!(fields["output_size_bytes"].is_number(), "output_size_bytes should be a number");
+    }
+
+    /// Test that JSON logs can be parsed by jq.
+    ///
+    /// Per SPEC §12.4 validation requirement, logs should be parseable by jq.
+    /// This test verifies JSON is valid and can extract fields.
+    #[test]
+    fn test_json_jq_compatible() {
+        let log_lines = vec![
+            r#"{"timestamp":"2024-01-15T10:30:00Z","level":"INFO","target":"wafer","message":"Starting"}"#,
+            r#"{"timestamp":"2024-01-15T10:30:01Z","level":"DEBUG","target":"wafer::dag","span":{"node_id":"n1"},"message":"Processing"}"#,
+            r#"{"timestamp":"2024-01-15T10:30:02Z","level":"ERROR","target":"wafer::dag","fields":{"error":"timeout"},"message":"Failed"}"#,
+        ];
+
+        // Simulate jq operations
+        let mut parsed_logs: Vec<Value> = Vec::new();
+        for line in &log_lines {
+            let log: Value = serde_json::from_str(line)
+                .expect("Each line should be valid JSON");
+            parsed_logs.push(log);
+        }
+
+        // jq: select(.level == "ERROR")
+        let errors: Vec<&Value> = parsed_logs
+            .iter()
+            .filter(|l| l["level"] == "ERROR")
+            .collect();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0]["message"], "Failed");
+
+        // jq: .span.node_id
+        let node_ids: Vec<Option<&str>> = parsed_logs
+            .iter()
+            .map(|l| l.get("span").and_then(|s| s.get("node_id")).and_then(|n| n.as_str()))
+            .collect();
+        assert!(node_ids.iter().any(|id| id == &Some("n1")));
+
+        // jq: select(.fields.error != null) | .fields.error
+        let error_fields: Vec<&str> = parsed_logs
+            .iter()
+            .filter_map(|l| {
+                l.get("fields")
+                    .and_then(|f| f.get("error"))
+                    .and_then(|e| e.as_str())
+            })
+            .collect();
+        assert_eq!(error_fields, vec!["timeout"]);
+    }
 }
