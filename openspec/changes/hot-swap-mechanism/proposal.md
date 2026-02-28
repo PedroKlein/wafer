@@ -12,7 +12,7 @@ The design is already specified in SPEC.md §10 and ADR-0003, but implementation
 - **Metrics collection** for swap timing (prepare, drain, flip, retire phases)
 - **Timeout handling** for drain phase with configurable `drain_timeout_ms`
 
-> **Note:** Hot-swap triggers (REST API, `waferctl resync`) are defined in the separate `control-plane` OpenSpec change.
+> **Note:** Hot-swap triggers (REST API, `waferctl reload`) are defined in the `runtime-control-plane` OpenSpec change.
 
 ## Capabilities
 
@@ -24,20 +24,23 @@ The design is already specified in SPEC.md §10 and ADR-0003, but implementation
 *(none - this is a new feature addition, no existing specs to modify)*
 
 ### Related Changes
-- `control-plane`: Provides REST API endpoints that trigger hot-swap (`/api/v1/pipeline/resync`, `/api/v1/nodes/:id/hot-swap`)
+- `runtime-control-plane`: Provides PipelineControl trait and REST API endpoints that trigger hot-swap (`/api/v1/pipeline/reload`, `/api/v1/nodes/:id/hot-swap`)
+- `observability-prometheus`: Provides MetricsRegistry for exporting swap timing metrics
 
 ## Impact
 
 **Code:**
-- `crates/wafer-runtime/src/dag/orchestrator.rs` - Add hot-swap coordination logic
-- `crates/wafer-runtime/src/dag/runner.rs` - Modify node execution loops to respect draining state
-- `crates/wafer-runtime/src/node/mod.rs` - Add node state enum (Running, Draining, Retired)
-- `crates/wafer-runtime/src/metrics/` - Add swap timing metrics
+- `crates/wafer-core/src/dag/orchestrator.rs` - Add hot-swap coordination logic
+- `crates/wafer-core/src/dag/runner.rs` - Modify node execution loops to respect draining state
+- `crates/wafer-core/src/node/mod.rs` - Add node state enum (Running, Draining, Retired)
+- `crates/wafer-core/src/metrics/` - Add swap timing metrics (values; export via observability-prometheus)
 
 **WIT:** No changes required - lifecycle interface already has `validate()`, `init()`, `close()`
 
 **Config:** Uses existing `drain_timeout_ms` field in pipeline config
 
-**Dependencies:** None (triggers come from control-plane change)
+**Dependencies:**
+- `runtime-control-plane`: Crate structure, PipelineControl trait that wraps hot-swap methods
+- `observability-prometheus`: MetricsRegistry for Prometheus export of swap metrics
 
 **SPEC Reference:** Section 10 (Hot-Swap Mechanism), ADR-0003

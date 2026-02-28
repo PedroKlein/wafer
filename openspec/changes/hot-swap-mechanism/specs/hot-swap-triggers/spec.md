@@ -1,6 +1,6 @@
 # Hot-Swap Triggers
 
-> **Note:** This spec has been superseded by the `control-plane` OpenSpec change.
+> **Note:** This spec has been superseded by the `runtime-control-plane` OpenSpec change.
 > Hot-swap triggers (REST API endpoints, `waferctl` CLI) are now defined there.
 > This spec is retained for reference only.
 
@@ -11,7 +11,7 @@ The hot-swap coordinator exposes a `hot_swap()` method that triggers call. The a
 3. **CLI**: `waferctl hot-swap <node-id> --wasm <path>` - User-initiated direct swap
 4. **CLI**: `waferctl resync` - User-initiated config reload and swap
 
-See `openspec/changes/control-plane/specs/rest-api/spec.md` for detailed requirements.
+See `openspec/changes/runtime-control-plane/specs/control-api/spec.md` for detailed requirements.
 
 ## Integration Point
 
@@ -27,4 +27,4 @@ impl DagOrchestrator {
 }
 ```
 
-These methods are called by the REST API handlers defined in the control-plane change.
+These methods are called by the REST API handlers defined in the runtime-control-plane change.

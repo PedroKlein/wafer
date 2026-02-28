@@ -6,46 +6,55 @@ The WAFER runtime collects metrics internally (via `PipelineMetrics` struct) but
 2. **Production monitoring**: Grafana dashboards, alerting, capacity planning
 3. **Hot-swap validation**: Measure swap timing metrics per SPEC §10.2
 
-The infrastructure for metrics collection already exists (`src/metrics/counters.rs`). This change adds the HTTP endpoint and Prometheus formatting.
+The infrastructure for metrics collection already exists (`src/metrics/counters.rs`). This change adds the **MetricsRegistry**, Prometheus formatting, and system metrics collection. The HTTP transport (`/metrics` endpoint) is provided by the `runtime-control-plane` change.
 
 **SPEC Reference:** Section 12.2-12.5 (Observability)
 
+**Related Changes:**
+- `runtime-control-plane`: Provides HTTP server and `/metrics` endpoint transport
+- `hot-swap-mechanism`: Produces swap timing metrics consumed by this registry
+
 ## What Changes
 
-- **New HTTP server** for metrics and health endpoints
+- **MetricsRegistry** struct that bridges internal counters to Prometheus format
 - **Prometheus text format** exporter for all metrics categories (pipeline, node, queue, system)
-- **Health endpoints** (`/health`, `/ready`, `/live`) for orchestration compatibility
-- **Configuration** for metrics server bind address and port
+- **System metrics collection** via `sysinfo` crate (CPU, memory, threads)
 - **Structured JSON logging** via `tracing-subscriber` with JSON formatter
+
+> **Note:** HTTP server, `/metrics` endpoint, and health endpoints are provided by the 
+> `runtime-control-plane` change. This change provides the registry and formatting that
+> the endpoint handler calls.
 
 ## Capabilities
 
 ### New Capabilities
-- `metrics-endpoint`: HTTP server exposing `/metrics` in Prometheus format, with all pipeline/node/queue/system metrics
-- `health-endpoints`: HTTP endpoints for health, readiness, and liveness checks
+- `metrics-registry`: Central registry that collects pipeline/node/queue/system metrics and formats them for Prometheus
+- `system-metrics`: Host-level metrics (CPU, memory, threads) via sysinfo crate
 - `structured-logging`: JSON-formatted log output via tracing
 
 ### Modified Capabilities
 *(none - builds on existing internal metrics, no spec changes)*
 
+### Capabilities from Other Changes
+- `metrics-endpoint`: HTTP `/metrics` endpoint (from `runtime-control-plane`)
+- `health-endpoints`: HTTP health/ready/live endpoints (from `runtime-control-plane`)
+
 ## Impact
 
 **Code:**
-- `src/metrics/` - Add Prometheus formatter, HTTP server
-- `src/config/schema.rs` - Add metrics server config fields
-- `src/main.rs` - Start metrics server alongside pipeline
-- Cargo.toml - Add `axum` (HTTP), `prometheus-client` (formatting), `tracing-subscriber` with JSON
+- `crates/wafer-core/src/metrics/registry.rs` - MetricsRegistry struct
+- `crates/wafer-core/src/metrics/prometheus.rs` - Prometheus text format encoding
+- `crates/wafer-core/src/metrics/system.rs` - System metrics via sysinfo
+- `crates/wafer-core/Cargo.toml` - Add `prometheus-client`, `sysinfo`, `tracing-subscriber` with JSON
 
 **Dependencies:**
-- `axum` - Lightweight HTTP server (already async/Tokio-native)
 - `prometheus-client` - Official Prometheus Rust client for text format
+- `sysinfo` - System metrics collection (CPU, memory, threads)
 - `tracing-subscriber` with `json` feature
 
-**Config:** New optional section:
-```toml
-[metrics]
-enabled = true
-bind = "0.0.0.0:9090"
-```
+**Integration with runtime-control-plane:**
+The HTTP server and `/metrics` endpoint are defined in `runtime-control-plane`. This change provides:
+- `MetricsRegistry::encode()` method that returns Prometheus text format
+- Registry is passed to HTTP handlers via shared state
 
 **SPEC Reference:** Section 12.2-12.5

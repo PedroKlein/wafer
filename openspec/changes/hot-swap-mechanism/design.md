@@ -98,7 +98,7 @@ struct ConfigDiff {
 
 For MVP, only detect WASM path changes for existing nodes. Topology changes are out of scope.
 
-> **Note:** The resync trigger mechanism (REST API via `waferctl resync`) is defined in the `control-plane` change. This change focuses on the `hot_swap()` implementation that triggers call.
+> **Note:** The trigger mechanisms (REST API via `waferctl reload`, `hot-swap`) are defined in the `runtime-control-plane` change. This change focuses on the core `hot_swap()` algorithm that `PipelineControl` delegates to.
 
 ## Risks / Trade-offs
 

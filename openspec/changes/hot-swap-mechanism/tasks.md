@@ -1,11 +1,11 @@
 # Hot-Swap Implementation Tasks
 
-> **Dependencies:** This change depends on `control-plane` for REST API triggers.
-> Implement core hot-swap logic here; triggers are wired in control-plane.
+> **Dependencies:** This change depends on `runtime-control-plane` for REST API triggers.
+> Implement core hot-swap logic here; triggers are wired in runtime-control-plane.
 
 ## 1. Node State Machine
 
-- [ ] 1.1 Add `NodeState` enum to `crates/wafer-runtime/src/node/mod.rs` (Starting, Running, Draining, Retired)
+- [ ] 1.1 Add `NodeState` enum to `crates/wafer-core/src/node/mod.rs` (Starting, Running, Draining, Retired)
 - [ ] 1.2 Add state field and accessor to `AnyNode` enum
 - [ ] 1.3 Add `processing` AtomicBool flag to WASM transform wrapper
 - [ ] 1.4 Update node execution loop to set processing flag around `process()` calls
@@ -39,7 +39,7 @@
 
 ## 5. Config Diff & Resync
 
-> **Note:** Trigger mechanisms (REST API, CLI) are in the `control-plane` change.
+> **Note:** Trigger mechanisms (REST API, CLI) are in the `runtime-control-plane` change.
 > This section covers the config diffing logic that resync uses.
 
 - [ ] 5.1 Create `src/config/diff.rs` with ConfigDiff struct

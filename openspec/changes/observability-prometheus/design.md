@@ -30,22 +30,20 @@ SPEC §12 defines the metrics schema and endpoints. This design implements that 
 
 ## Decisions
 
-### D1: HTTP Framework - Axum
+### D1: HTTP Server - Delegated to runtime-control-plane
 
-Use `axum` for the HTTP server:
+> **Note:** The HTTP server and endpoints are now owned by the `runtime-control-plane` change.
+> This change provides the `MetricsRegistry` and Prometheus encoding that the endpoint calls.
+
+The `/metrics` endpoint handler (in runtime-control-plane) calls:
 
 ```rust
-let app = Router::new()
-    .route("/metrics", get(metrics_handler))
-    .route("/health", get(health_handler))
-    .route("/ready", get(ready_handler))
-    .route("/live", get(live_handler));
+async fn metrics_handler(State(registry): State<Arc<MetricsRegistry>>) -> String {
+    registry.encode() // Returns Prometheus text format
+}
 ```
 
-**Rationale:** Axum is async-native (Tokio), lightweight, and well-maintained by the Tokio team. Alternatives considered:
-- `warp`: Similar capability but more complex API
-- `actix-web`: Different async runtime, adds complexity
-- `hyper` raw: Too low-level for our needs
+See `openspec/changes/runtime-control-plane/specs/control-api/spec.md` for HTTP server details.
 
 ### D2: Prometheus Client Library
 
@@ -103,17 +101,12 @@ tracing_subscriber::fmt()
 
 **Rationale:** Matches SPEC §12.4 log structure. JSON is easily parseable by log aggregation systems.
 
-### D6: Optional Metrics Server
+### D6: Metrics Configuration - Delegated to runtime-control-plane
 
-Metrics server is opt-in via config:
+> **Note:** Metrics server configuration is now in `runtime-control-plane` as part of the 
+> HTTP server config. Metrics are always collected internally; the HTTP exposure is optional.
 
-```toml
-[metrics]
-enabled = true
-bind = "127.0.0.1:9090"
-```
-
-**Rationale:** Not all deployments need metrics exposure. Default to disabled to minimize attack surface.
+See `openspec/changes/runtime-control-plane/design.md` D4 for metrics port configuration.
 
 ## Risks / Trade-offs
 
@@ -131,6 +124,5 @@ bind = "127.0.0.1:9090"
 
 ## Open Questions
 
-- [ ] **Q1:** Should metrics server run on a separate port or share with future REST API?
-  - Current design: separate port (9090 default)
-  - Alternative: shared port with path routing (/api/*, /metrics)
+- [x] **Q1:** Should metrics server run on a separate port or share with future REST API?
+  - **Resolved:** See `runtime-control-plane` D4 - optionally separate metrics port, default shares with API
