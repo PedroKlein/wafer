@@ -3,7 +3,7 @@
 > A typed DAG pipeline runtime using WebAssembly components
 
 **Version:** 0.1.0-draft  
-**Last Updated:** 2026-02-14
+**Last Updated:** 2026-02-28
 
 ---
 
@@ -305,7 +305,9 @@ type port-id = string;
 // Tensor Types (for ML workloads)
 // ============================================================================
 
-/// Tensor data types (wasi-nn compatible)
+/// Tensor data types
+/// Note: When using wasi-nn for inference, tensor types come from the wasi-nn spec.
+/// These types are for pipeline data representation and may need conversion at inference boundaries.
 enum tensor-dtype {
     f16,
     f32,
@@ -437,8 +439,6 @@ record process-error {
     message: string,
     /// Whether this error is retriable
     retriable: bool,
-    /// Optional: original envelope that caused error
-    original: option<envelope>,
 }
 ```
 
@@ -893,7 +893,7 @@ The runtime supports multiple formats (auto-detected by extension):
 | `.yaml`, `.yml` | YAML   |
 | `.json`         | JSON   |
 
-**Fallback:** If complexity requires, support only TOML initially.
+**Implementation Status:** Currently only TOML is supported. YAML/JSON support may be added if trivial.
 
 ### 7.2 Configuration Schema
 
@@ -1798,14 +1798,14 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Goal:** Minimal end-to-end pipeline working
 
 **Deliverables:**
-- [ ] WIT contracts v0 (types, lifecycle, source, transform, sink)
-- [ ] Wasmtime host skeleton with component loading
-- [ ] SPSC queue implementation with bounded capacity
-- [ ] MQTT source node (reference implementation)
-- [ ] MQTT sink node (reference implementation)
-- [ ] Pass-through transform node (for testing)
-- [ ] Basic metrics collection (queue depth, throughput)
-- [ ] Pipeline configuration loader (TOML)
+- [x] WIT contracts v0 (types, lifecycle, source, transform, sink)
+- [x] Wasmtime host skeleton with component loading
+- [x] SPSC queue implementation with bounded capacity
+- [x] MQTT source node (reference implementation)
+- [x] MQTT sink node (reference implementation)
+- [x] Pass-through transform node (for testing)
+- [x] Basic metrics collection (queue depth, throughput)
+- [x] Pipeline configuration loader (TOML)
 
 **Acceptance criteria:**
 - Compile and run single pipeline locally
@@ -1818,9 +1818,9 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Goal:** Scenario A working with baselines
 
 **Deliverables:**
-- [ ] JSON parse transform node
-- [ ] Threshold filter transform node
-- [ ] Backpressure policies (slow, drop)
+- [x] JSON parse transform node
+- [x] Threshold filter transform node
+- [ ] Backpressure policies (slow, drop) — slow implemented, drop pending
 - [ ] Drain-and-flip hot-swap
 - [ ] Native Rust baseline (same logic)
 - [ ] Out-of-process baseline (IPC)
@@ -1839,8 +1839,8 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 
 **Deliverables:**
 - [x] wasi-nn integration via `inference-node` world
-- [ ] Tensor type and preprocessing node
-- [ ] Postprocessing node (detection output to JSON)
+- [x] Tensor type and preprocessing node (plugins/tensor-prep)
+- [x] Postprocessing node (plugins/result-format)
 - [ ] TensorRT backend for Jetson
 - [ ] ONNX Runtime backend for CPU fallback
 - [ ] Inference metrics collection (GPU util, copy times)
@@ -1859,8 +1859,8 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Deliverables:**
 - [ ] REST API for topology changes
 - [ ] Config file watch
-- [ ] Router node category
-- [ ] Joiner node category
+- [x] Router node category (plugins/content-router)
+- [x] Joiner node category (plugins/merge-joiner)
 - [ ] Prometheus metrics endpoint
 - [ ] Structured JSON logs
 - [ ] Security test scenarios (S1-S6)
