@@ -1,0 +1,22 @@
+meta {
+  name: Shutdown Pipeline
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/pipeline/shutdown
+  body: none
+  auth: none
+}
+
+docs {
+  Immediately shuts down the pipeline. In-flight messages may be lost.
+  Use /api/v1/pipeline/drain for graceful shutdown instead.
+  
+  This is a hard shutdown - use only when you need to stop immediately.
+}
+
+assert {
+  res.status: in [200, 500]
+}

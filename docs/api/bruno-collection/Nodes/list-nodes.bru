@@ -1,0 +1,30 @@
+meta {
+  name: List All Nodes
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/nodes
+  body: none
+  auth: none
+}
+
+docs {
+  Returns information about all nodes in the pipeline.
+  
+  Each node includes:
+  - id: Node identifier
+  - node_type: Type of node (source, transform, router, joiner, sink)
+  - state: Current state (running, draining, retired, error)
+  - swappable: Whether this node supports hot-swap
+  - messages_processed: Messages processed by this node
+  - messages_failed: Messages that failed in this node
+  - avg_process_us: Average processing time in microseconds
+  - queue_depth: Current input queue depth (null if not applicable)
+}
+
+assert {
+  res.status: eq 200
+  res.body: isArray
+}

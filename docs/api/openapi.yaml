@@ -1,0 +1,616 @@
+openapi: 3.1.0
+info:
+  title: WAFER Control Plane API
+  description: |
+    HTTP API for managing WAFER (WebAssembly Flow Execution Runtime) pipelines.
+    
+    This API provides endpoints for:
+    - Health and readiness checks
+    - Pipeline status and control
+    - Node inspection and hot-swap operations
+    - Prometheus metrics export
+  version: 0.1.0
+  contact:
+    name: WAFER Project
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0
+
+servers:
+  - url: http://localhost:9090
+    description: Local development API server
+  - url: http://localhost:9091
+    description: Local development metrics server (when separate)
+
+tags:
+  - name: Health
+    description: Health and readiness endpoints
+  - name: Pipeline
+    description: Pipeline status and control operations
+  - name: Nodes
+    description: Node inspection and hot-swap operations
+  - name: Metrics
+    description: Prometheus metrics export
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Liveness check
+      description: |
+        Returns OK if the server is running. Use this for Kubernetes liveness probes.
+        This endpoint always returns 200 if the server is up, regardless of pipeline state.
+      operationId: health
+      responses:
+        '200':
+          description: Server is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: "ok"
+
+  /ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness check
+      description: |
+        Returns OK if the pipeline is ready to process messages.
+        Use this for Kubernetes readiness probes.
+        
+        Returns 503 Service Unavailable when:
+        - Pipeline is starting up
+        - Pipeline is draining
+        - Pipeline has stopped
+        - Pipeline is in error state
+      operationId: ready
+      responses:
+        '200':
+          description: Pipeline is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+              example:
+                ready: true
+        '503':
+          description: Pipeline is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadyResponse'
+              examples:
+                starting:
+                  summary: Pipeline starting
+                  value:
+                    ready: false
+                    reason: "starting"
+                draining:
+                  summary: Pipeline draining
+                  value:
+                    ready: false
+                    reason: "draining"
+
+  /api/v1/pipeline:
+    get:
+      tags:
+        - Pipeline
+      summary: Get pipeline status
+      description: Returns current status and summary metrics for the pipeline.
+      operationId: getPipeline
+      responses:
+        '200':
+          description: Pipeline status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PipelineStatus'
+              example:
+                name: "my-pipeline"
+                state: "running"
+                uptime_secs: 3600
+                messages_processed: 10000
+                messages_failed: 5
+                node_count: 3
+                swap_in_progress: false
+
+  /api/v1/pipeline/reload:
+    post:
+      tags:
+        - Pipeline
+      summary: Reload configuration
+      description: |
+        Reloads the pipeline configuration and triggers hot-swap for any nodes
+        whose WASM module has changed.
+        
+        **Note:** This operation is not yet implemented and will return 501.
+      operationId: reloadConfig
+      responses:
+        '200':
+          description: Configuration reloaded successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReloadResult'
+              example:
+                swapped_nodes: ["transform-1", "transform-2"]
+        '400':
+          description: Configuration error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Another operation is in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '501':
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/pipeline/drain:
+    post:
+      tags:
+        - Pipeline
+      summary: Drain pipeline
+      description: |
+        Initiates graceful shutdown by stopping new message ingestion and
+        allowing in-flight messages to complete processing.
+        
+        After draining completes, the pipeline will be in "stopped" state.
+      operationId: drain
+      responses:
+        '200':
+          description: Drain initiated
+        '409':
+          description: Pipeline in invalid state for drain
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/pipeline/shutdown:
+    post:
+      tags:
+        - Pipeline
+      summary: Shutdown pipeline
+      description: |
+        Immediately shuts down the pipeline. In-flight messages may be lost.
+        Use `/api/v1/pipeline/drain` for graceful shutdown.
+      operationId: shutdown
+      responses:
+        '200':
+          description: Shutdown initiated
+        '500':
+          description: Internal error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/v1/nodes:
+    get:
+      tags:
+        - Nodes
+      summary: List all nodes
+      description: Returns information about all nodes in the pipeline.
+      operationId: listNodes
+      responses:
+        '200':
+          description: List of nodes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/NodeInfo'
+              example:
+                - id: "source"
+                  node_type: "source"
+                  state: "running"
+                  swappable: false
+                  messages_processed: 1000
+                  messages_failed: 0
+                  avg_process_us: 50
+                  queue_depth: null
+                - id: "transform"
+                  node_type: "transform"
+                  state: "running"
+                  swappable: true
+                  messages_processed: 1000
+                  messages_failed: 2
+                  avg_process_us: 150
+                  queue_depth: 10
+                - id: "sink"
+                  node_type: "sink"
+                  state: "running"
+                  swappable: false
+                  messages_processed: 998
+                  messages_failed: 0
+                  avg_process_us: 30
+                  queue_depth: null
+
+  /api/v1/nodes/{id}:
+    get:
+      tags:
+        - Nodes
+      summary: Get node details
+      description: Returns detailed information about a specific node.
+      operationId: getNode
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier
+          schema:
+            type: string
+          example: "transform"
+      responses:
+        '200':
+          description: Node information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeInfo'
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "node_not_found"
+                  message: "node not found: unknown-node"
+                  details:
+                    node_id: "unknown-node"
+
+  /api/v1/nodes/{id}/hot-swap:
+    post:
+      tags:
+        - Nodes
+      summary: Hot-swap node
+      description: |
+        Triggers a hot-swap operation for the specified node. The node must be
+        a swappable transform node (WASM plugin).
+        
+        The operation:
+        1. Loads the new WASM module
+        2. Drains the old instance (finishes in-flight messages)
+        3. Swaps in the new instance
+        4. Retires the old instance
+        
+        **Note:** This operation is not yet fully implemented and will return 501.
+      operationId: hotSwap
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier to hot-swap
+          schema:
+            type: string
+          example: "transform"
+      responses:
+        '200':
+          description: Hot-swap completed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HotSwapResult'
+              example:
+                node_id: "transform"
+                drain_duration:
+                  secs: 0
+                  nanos: 50000000
+                load_duration:
+                  secs: 0
+                  nanos: 100000000
+                total_duration:
+                  secs: 0
+                  nanos: 150000000
+                messages_drained: 10
+        '400':
+          description: Node does not support hot-swap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "not_swappable"
+                  message: "node 'source' does not support hot-swap"
+                  details:
+                    node_id: "source"
+        '404':
+          description: Node not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Another hot-swap is in progress
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: "swap_in_progress"
+                  message: "another hot-swap is already in progress"
+        '501':
+          description: Not implemented
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /metrics:
+    get:
+      tags:
+        - Metrics
+      summary: Prometheus metrics
+      description: |
+        Returns metrics in Prometheus text format for scraping.
+        
+        Metrics include:
+        - `wafer_messages_total` - Total messages processed (counter)
+        - `wafer_messages_failed_total` - Total failed messages (counter)
+        - `wafer_process_time_us` - Processing time histogram
+        - `wafer_queue_depth` - Current queue depth (gauge)
+        
+        **Note:** When `metrics.bind` is configured separately from `api.bind`,
+        this endpoint is served on the metrics server only.
+      operationId: metrics
+      responses:
+        '200':
+          description: Prometheus metrics
+          content:
+            text/plain:
+              schema:
+                type: string
+              example: |
+                # HELP wafer_messages_total Total messages processed
+                # TYPE wafer_messages_total counter
+                wafer_messages_total{node="source"} 1000
+                wafer_messages_total{node="transform"} 1000
+                wafer_messages_total{node="sink"} 998
+
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          description: Health status
+          example: "ok"
+
+    ReadyResponse:
+      type: object
+      required:
+        - ready
+      properties:
+        ready:
+          type: boolean
+          description: Whether the pipeline is ready
+        reason:
+          type: string
+          description: Reason for not being ready (when ready=false)
+          example: "starting"
+
+    PipelineState:
+      type: string
+      enum:
+        - starting
+        - running
+        - draining
+        - stopped
+        - error
+      description: Current state of the pipeline
+
+    PipelineStatus:
+      type: object
+      required:
+        - name
+        - state
+        - uptime_secs
+        - messages_processed
+        - messages_failed
+        - node_count
+        - swap_in_progress
+      properties:
+        name:
+          type: string
+          description: Pipeline name from configuration
+          example: "my-pipeline"
+        state:
+          $ref: '#/components/schemas/PipelineState'
+        uptime_secs:
+          type: integer
+          format: int64
+          description: Pipeline uptime in seconds
+          example: 3600
+        messages_processed:
+          type: integer
+          format: int64
+          description: Total messages processed
+          example: 10000
+        messages_failed:
+          type: integer
+          format: int64
+          description: Total messages that failed
+          example: 5
+        node_count:
+          type: integer
+          description: Number of nodes in the pipeline
+          example: 3
+        swap_in_progress:
+          type: boolean
+          description: Whether a hot-swap operation is in progress
+          example: false
+
+    NodeState:
+      type: string
+      enum:
+        - running
+        - draining
+        - retired
+        - error
+      description: Current state of a node
+
+    NodeType:
+      type: string
+      enum:
+        - source
+        - transform
+        - router
+        - joiner
+        - sink
+      description: Type of node
+
+    NodeInfo:
+      type: object
+      required:
+        - id
+        - node_type
+        - state
+        - swappable
+        - messages_processed
+        - messages_failed
+        - avg_process_us
+      properties:
+        id:
+          type: string
+          description: Node identifier
+          example: "transform"
+        node_type:
+          $ref: '#/components/schemas/NodeType'
+        state:
+          $ref: '#/components/schemas/NodeState'
+        swappable:
+          type: boolean
+          description: Whether this node supports hot-swap
+          example: true
+        messages_processed:
+          type: integer
+          format: int64
+          description: Messages processed by this node
+          example: 1000
+        messages_failed:
+          type: integer
+          format: int64
+          description: Messages that failed in this node
+          example: 2
+        avg_process_us:
+          type: integer
+          format: int64
+          description: Average processing time in microseconds
+          example: 150
+        queue_depth:
+          type: integer
+          format: int32
+          nullable: true
+          description: Current input queue depth (null if not applicable)
+          example: 10
+
+    HotSwapResult:
+      type: object
+      required:
+        - node_id
+        - drain_duration
+        - load_duration
+        - total_duration
+        - messages_drained
+      properties:
+        node_id:
+          type: string
+          description: ID of the node that was swapped
+          example: "transform"
+        drain_duration:
+          $ref: '#/components/schemas/Duration'
+        load_duration:
+          $ref: '#/components/schemas/Duration'
+        total_duration:
+          $ref: '#/components/schemas/Duration'
+        messages_drained:
+          type: integer
+          format: int64
+          description: Number of messages drained before swap
+          example: 10
+
+    Duration:
+      type: object
+      required:
+        - secs
+        - nanos
+      properties:
+        secs:
+          type: integer
+          format: int64
+          description: Whole seconds
+          example: 0
+        nanos:
+          type: integer
+          format: int32
+          description: Additional nanoseconds
+          example: 50000000
+
+    ReloadResult:
+      type: object
+      required:
+        - swapped_nodes
+      properties:
+        swapped_nodes:
+          type: array
+          items:
+            type: string
+          description: List of nodes that were hot-swapped
+          example: ["transform-1", "transform-2"]
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+
+    ErrorDetail:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          description: Error code
+          enum:
+            - node_not_found
+            - swap_in_progress
+            - not_swappable
+            - not_implemented
+            - config_error
+            - invalid_state
+            - internal_error
+          example: "node_not_found"
+        message:
+          type: string
+          description: Human-readable error message
+          example: "node not found: unknown-node"
+        details:
+          type: object
+          additionalProperties:
+            type: string
+          description: Additional error details
+          example:
+            node_id: "unknown-node"

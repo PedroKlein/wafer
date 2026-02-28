@@ -1,0 +1,31 @@
+meta {
+  name: Get Pipeline Status
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/api/v1/pipeline
+  body: none
+  auth: none
+}
+
+docs {
+  Returns current status and summary metrics for the pipeline.
+  
+  Response includes:
+  - name: Pipeline name from configuration
+  - state: Current state (starting, running, draining, stopped, error)
+  - uptime_secs: Pipeline uptime in seconds
+  - messages_processed: Total messages processed
+  - messages_failed: Total messages that failed
+  - node_count: Number of nodes in the pipeline
+  - swap_in_progress: Whether a hot-swap operation is in progress
+}
+
+assert {
+  res.status: eq 200
+  res.body.name: isDefined
+  res.body.state: isDefined
+  res.body.node_count: isNumber
+}

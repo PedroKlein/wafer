@@ -1,0 +1,29 @@
+meta {
+  name: Get Prometheus Metrics
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{metricsUrl}}/metrics
+  body: none
+  auth: none
+}
+
+docs {
+  Returns metrics in Prometheus text format for scraping.
+  
+  Metrics include:
+  - wafer_messages_total: Total messages processed (counter)
+  - wafer_messages_failed_total: Total failed messages (counter)
+  - wafer_process_time_us: Processing time histogram
+  - wafer_queue_depth: Current queue depth (gauge)
+  
+  **Note:** When metrics.bind is configured separately from api.bind,
+  this endpoint is served on the metrics server (default: localhost:9091).
+  When they share the same bind address, use baseUrl instead.
+}
+
+assert {
+  res.status: eq 200
+}

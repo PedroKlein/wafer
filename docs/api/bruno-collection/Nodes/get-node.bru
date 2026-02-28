@@ -1,0 +1,28 @@
+meta {
+  name: Get Node Details
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/api/v1/nodes/transform
+  body: none
+  auth: none
+}
+
+vars:pre-request {
+  nodeId: transform
+}
+
+docs {
+  Returns detailed information about a specific node.
+  
+  Change the nodeId variable or URL path to query different nodes.
+  Common node IDs: source, transform, sink
+  
+  Returns 404 if the node is not found.
+}
+
+assert {
+  res.status: in [200, 404]
+}
