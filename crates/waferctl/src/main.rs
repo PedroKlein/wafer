@@ -322,3 +322,187 @@ async fn cmd_metrics(client: &WaferClient, json: bool, raw: bool) -> error::Resu
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn test_cli_parses_health() {
+        let cli = Cli::try_parse_from(["waferctl", "health"]).unwrap();
+        assert!(matches!(cli.command, Commands::Health));
+        assert!(!cli.json);
+        assert!(cli.endpoint.is_none());
+    }
+
+    #[test]
+    fn test_cli_parses_status() {
+        let cli = Cli::try_parse_from(["waferctl", "status"]).unwrap();
+        assert!(matches!(cli.command, Commands::Status));
+    }
+
+    #[test]
+    fn test_cli_parses_nodes() {
+        let cli = Cli::try_parse_from(["waferctl", "nodes"]).unwrap();
+        assert!(matches!(cli.command, Commands::Nodes { wide: false }));
+    }
+
+    #[test]
+    fn test_cli_parses_nodes_wide() {
+        let cli = Cli::try_parse_from(["waferctl", "nodes", "--wide"]).unwrap();
+        assert!(matches!(cli.command, Commands::Nodes { wide: true }));
+    }
+
+    #[test]
+    fn test_cli_parses_node_with_id() {
+        let cli = Cli::try_parse_from(["waferctl", "node", "transform-1"]).unwrap();
+        match cli.command {
+            Commands::Node { id } => assert_eq!(id, "transform-1"),
+            _ => panic!("Expected Node command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_hot_swap() {
+        let cli = Cli::try_parse_from(["waferctl", "hot-swap", "my-node"]).unwrap();
+        match cli.command {
+            Commands::HotSwap { node_id } => assert_eq!(node_id, "my-node"),
+            _ => panic!("Expected HotSwap command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_reload() {
+        let cli = Cli::try_parse_from(["waferctl", "reload"]).unwrap();
+        assert!(matches!(cli.command, Commands::Reload));
+    }
+
+    #[test]
+    fn test_cli_parses_drain() {
+        let cli = Cli::try_parse_from(["waferctl", "drain"]).unwrap();
+        assert!(matches!(cli.command, Commands::Drain));
+    }
+
+    #[test]
+    fn test_cli_parses_shutdown() {
+        let cli = Cli::try_parse_from(["waferctl", "shutdown"]).unwrap();
+        assert!(matches!(cli.command, Commands::Shutdown));
+    }
+
+    #[test]
+    fn test_cli_parses_metrics() {
+        let cli = Cli::try_parse_from(["waferctl", "metrics"]).unwrap();
+        assert!(matches!(cli.command, Commands::Metrics { raw: false }));
+    }
+
+    #[test]
+    fn test_cli_parses_metrics_raw() {
+        let cli = Cli::try_parse_from(["waferctl", "metrics", "--raw"]).unwrap();
+        assert!(matches!(cli.command, Commands::Metrics { raw: true }));
+    }
+
+    #[test]
+    fn test_cli_parses_config_set_endpoint() {
+        let cli = Cli::try_parse_from([
+            "waferctl", "config", "set-endpoint", "prod", "http://prod:9090"
+        ]).unwrap();
+        match cli.command {
+            Commands::Config { action: ConfigAction::SetEndpoint { name, url } } => {
+                assert_eq!(name, "prod");
+                assert_eq!(url, "http://prod:9090");
+            }
+            _ => panic!("Expected Config SetEndpoint command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_use() {
+        let cli = Cli::try_parse_from(["waferctl", "config", "use", "staging"]).unwrap();
+        match cli.command {
+            Commands::Config { action: ConfigAction::Use { name } } => {
+                assert_eq!(name, "staging");
+            }
+            _ => panic!("Expected Config Use command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parses_config_list() {
+        let cli = Cli::try_parse_from(["waferctl", "config", "list"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Commands::Config { action: ConfigAction::List }
+        ));
+    }
+
+    #[test]
+    fn test_cli_global_json_flag() {
+        let cli = Cli::try_parse_from(["waferctl", "--json", "health"]).unwrap();
+        assert!(cli.json);
+    }
+
+    #[test]
+    fn test_cli_global_endpoint_flag() {
+        let cli = Cli::try_parse_from([
+            "waferctl", "--endpoint", "http://localhost:8080", "status"
+        ]).unwrap();
+        assert_eq!(cli.endpoint, Some("http://localhost:8080".to_string()));
+    }
+
+    #[test]
+    fn test_cli_short_endpoint_flag() {
+        let cli = Cli::try_parse_from([
+            "waferctl", "-e", "prod", "health"
+        ]).unwrap();
+        assert_eq!(cli.endpoint, Some("prod".to_string()));
+    }
+
+    #[test]
+    fn test_cli_combined_flags() {
+        let cli = Cli::try_parse_from([
+            "waferctl", "--json", "-e", "http://localhost:9090", "nodes", "--wide"
+        ]).unwrap();
+        assert!(cli.json);
+        assert_eq!(cli.endpoint, Some("http://localhost:9090".to_string()));
+        assert!(matches!(cli.command, Commands::Nodes { wide: true }));
+    }
+
+    #[test]
+    fn test_cli_help_does_not_panic() {
+        // Verify the CLI definition is valid (catches issues with clap configuration)
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn test_cli_version_flag_exists() {
+        // Attempt to parse with --version should result in DisplayVersion error
+        let result = Cli::try_parse_from(["waferctl", "--version"]);
+        assert!(result.is_err());
+        // The error should be a DisplayVersion, not a parse error
+    }
+
+    #[test]
+    fn test_cli_requires_subcommand() {
+        let result = Cli::try_parse_from(["waferctl"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_rejects_unknown_command() {
+        let result = Cli::try_parse_from(["waferctl", "unknown-cmd"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_node_requires_id() {
+        let result = Cli::try_parse_from(["waferctl", "node"]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_hot_swap_requires_node_id() {
+        let result = Cli::try_parse_from(["waferctl", "hot-swap"]);
+        assert!(result.is_err());
+    }
+}

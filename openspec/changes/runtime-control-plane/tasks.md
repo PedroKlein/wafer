@@ -49,9 +49,9 @@
 - [x] 3.8 Implement `metrics()` method (sync, returns MetricsSnapshot)
 - [x] 3.9 Implement `nodes()` method (sync, returns Vec<NodeInfo>)
 - [x] 3.10 Implement `subscribe()` method (returns EventReceiver)
-- [ ] 3.11 Add swap-in-progress lock (reject concurrent swaps)
-- [ ] 3.12 Wire event broadcast to hot-swap coordinator
-- [ ] 3.13 Write unit tests for PipelineControl methods
+- [ ] 3.11 Add swap-in-progress lock (reject concurrent swaps) [deferred: hot-swap-mechanism]
+- [ ] 3.12 Wire event broadcast to hot-swap coordinator [deferred: hot-swap-mechanism]
+- [x] 3.13 Write unit tests for PipelineControl methods
 
 ## 4. HTTP API Server (wafer-core, feature-gated)
 
@@ -80,7 +80,7 @@
 - [x] 5.4 Add `[metrics]` section parsing to config loader
 - [x] 5.5 Add `--api-bind` and `--no-api` CLI flags to wafer-runtime
 - [ ] 5.6 Implement separate metrics server spawn when `metrics.bind != api.bind`
-- [ ] 5.7 Write tests for config parsing
+- [x] 5.7 Write tests for config parsing
 
 ## 6. wafer-runtime Binary
 
@@ -117,7 +117,7 @@
 - [x] 8.11 Implement `shutdown` command
 - [x] 8.12 Implement `metrics` command (human-readable and --raw)
 - [x] 8.13 Add --help for all commands
-- [ ] 8.14 Write tests for command parsing
+- [x] 8.14 Write tests for command parsing
 
 ## 9. Error Handling
 
