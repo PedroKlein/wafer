@@ -87,8 +87,8 @@ fn create_router<C: PipelineControl + 'static>(
         .route("/api/v1/pipeline/shutdown", post(handlers::shutdown::<C>))
         // Node endpoints
         .route("/api/v1/nodes", get(handlers::list_nodes::<C>))
-        .route("/api/v1/nodes/:id", get(handlers::get_node::<C>))
-        .route("/api/v1/nodes/:id/hot-swap", post(handlers::hot_swap::<C>));
+        .route("/api/v1/nodes/{id}", get(handlers::get_node::<C>))
+        .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap::<C>));
 
     if serve_metrics {
         router = router.route("/metrics", get(handlers::metrics::<C>));
