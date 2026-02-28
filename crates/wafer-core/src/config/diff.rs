@@ -198,7 +198,7 @@ fn edges_differ(old: &[super::EdgeDefinition], new: &[super::EdgeDefinition]) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EdgeDefinition, NodeDefinition, NodeType, PipelineConfig};
+    use crate::config::{EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy, PipelineConfig};
     use crate::registry::RegistryConfig;
 
     fn make_dag_config(nodes: Vec<NodeDefinition>, edges: Vec<EdgeDefinition>) -> DagConfig {
@@ -208,6 +208,7 @@ mod tests {
             edges,
             default_queue_capacity: 1024,
             registry: RegistryConfig::default(),
+            dead_letter: None,
         }
     }
 
@@ -244,6 +245,7 @@ mod tests {
             from_port: None,
             to_port: None,
             queue_capacity: None,
+            overflow: OverflowPolicy::default(),
         }
     }
 

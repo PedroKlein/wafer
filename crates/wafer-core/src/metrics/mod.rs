@@ -13,4 +13,4 @@ mod registry;
 
 pub use counters::{MetricsReport, PipelineMetrics, ProcessTimer};
 #[cfg(feature = "http-api")]
-pub use registry::{MetricsHandle, MetricsRegistry, NodeMetrics, QueueMetrics};
+pub use registry::{MetricsHandle, MetricsRegistry, NodeMetrics, QueueMetrics, SinkMetrics};

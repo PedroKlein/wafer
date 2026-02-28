@@ -32,11 +32,21 @@ pub struct MetricsRegistry {
     pipeline_errors_total: AtomicU64,
     pipeline_process_time_ns: AtomicU64,
 
+    /// Total messages dropped due to overflow (all queues combined)
+    overflow_drop_total: AtomicU64,
+    /// Total messages sent to DLQ due to overflow (all queues combined)
+    overflow_dlq_total: AtomicU64,
+    /// Total errors from DLQ sink itself
+    dlq_sink_error_total: AtomicU64,
+
     /// Node-level metrics (RwLock for dynamic node registration)
     node_metrics: RwLock<HashMap<String, NodeMetrics>>,
 
     /// Queue-level metrics (RwLock for dynamic queue registration)
     queue_metrics: RwLock<HashMap<String, QueueMetrics>>,
+
+    /// Sink-level batching metrics (RwLock for dynamic sink registration)
+    sink_metrics: RwLock<HashMap<String, SinkMetrics>>,
 
     /// Hot-swap metrics (aggregated)
     hotswap_metrics: HotSwapMetrics,
@@ -93,8 +103,35 @@ pub struct QueueMetrics {
     pub depth: AtomicU64,
     /// Total messages enqueued
     pub enqueue_total: AtomicU64,
-    /// Total messages dropped
+    /// Total messages dropped (due to overflow with drop policy)
     pub drop_total: AtomicU64,
+    /// Total messages sent to DLQ (due to overflow with dead-letter policy)
+    pub dlq_total: AtomicU64,
+}
+
+/// Per-sink batching metrics.
+#[derive(Debug)]
+pub struct SinkMetrics {
+    /// Sink node ID
+    pub sink_id: String,
+    /// Total batch flushes performed
+    pub flush_total: AtomicU64,
+    /// Last batch size flushed (for monitoring batch efficiency)
+    pub last_batch_size: AtomicU64,
+    /// Current buffer size (number of messages waiting)
+    pub buffer_size: AtomicU64,
+}
+
+impl SinkMetrics {
+    /// Creates new sink metrics.
+    pub fn new(sink_id: impl Into<String>) -> Self {
+        Self {
+            sink_id: sink_id.into(),
+            flush_total: AtomicU64::new(0),
+            last_batch_size: AtomicU64::new(0),
+            buffer_size: AtomicU64::new(0),
+        }
+    }
 }
 
 /// Hot-swap metrics (aggregated across all swaps).
@@ -130,6 +167,7 @@ impl QueueMetrics {
             depth: AtomicU64::new(0),
             enqueue_total: AtomicU64::new(0),
             drop_total: AtomicU64::new(0),
+            dlq_total: AtomicU64::new(0),
         }
     }
 }
@@ -147,8 +185,12 @@ impl MetricsRegistry {
             pipeline_messages_total: AtomicU64::new(0),
             pipeline_errors_total: AtomicU64::new(0),
             pipeline_process_time_ns: AtomicU64::new(0),
+            overflow_drop_total: AtomicU64::new(0),
+            overflow_dlq_total: AtomicU64::new(0),
+            dlq_sink_error_total: AtomicU64::new(0),
             node_metrics: RwLock::new(HashMap::new()),
             queue_metrics: RwLock::new(HashMap::new()),
+            sink_metrics: RwLock::new(HashMap::new()),
             hotswap_metrics: HotSwapMetrics::default(),
             #[cfg(feature = "http-api")]
             system: RwLock::new(System::new()),
@@ -189,6 +231,36 @@ impl MetricsRegistry {
     /// Returns uptime in seconds.
     pub fn uptime_secs(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
+    }
+
+    /// Records a message dropped due to overflow (pipeline-level aggregate).
+    pub fn record_overflow_drop(&self) {
+        self.overflow_drop_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a message sent to DLQ due to overflow (pipeline-level aggregate).
+    pub fn record_overflow_dlq(&self) {
+        self.overflow_dlq_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records an error from the DLQ sink itself.
+    pub fn record_dlq_sink_error(&self) {
+        self.dlq_sink_error_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Returns total messages dropped due to overflow.
+    pub fn overflow_drop_total(&self) -> u64 {
+        self.overflow_drop_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns total messages sent to DLQ due to overflow.
+    pub fn overflow_dlq_total(&self) -> u64 {
+        self.overflow_dlq_total.load(Ordering::Relaxed)
+    }
+
+    /// Returns total DLQ sink errors.
+    pub fn dlq_sink_error_total(&self) -> u64 {
+        self.dlq_sink_error_total.load(Ordering::Relaxed)
     }
 
     // ============================================================
@@ -258,11 +330,19 @@ impl MetricsRegistry {
         }
     }
 
-    /// Records a message dropped.
+    /// Records a message dropped (overflow with drop policy).
     pub fn record_drop(&self, from_node: &str, to_node: &str) {
         let queue_id = format!("{}_{}", from_node, to_node);
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.drop_total.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records a message sent to DLQ (overflow with dead-letter policy).
+    pub fn record_dlq(&self, from_node: &str, to_node: &str) {
+        let queue_id = format!("{}_{}", from_node, to_node);
+        if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
+            metrics.dlq_total.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -271,6 +351,37 @@ impl MetricsRegistry {
         let queue_id = format!("{}_{}", from_node, to_node);
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.depth.store(depth, Ordering::Relaxed);
+        }
+    }
+
+    // ============================================================
+    // Sink batching metrics
+    // ============================================================
+
+    /// Registers a sink for batching metrics collection.
+    pub fn register_sink(&self, sink_id: impl Into<String>) {
+        let id = sink_id.into();
+        let mut sinks = self.sink_metrics.write().unwrap();
+        sinks.insert(id.clone(), SinkMetrics::new(id));
+    }
+
+    /// Records a batch flush operation for a sink.
+    ///
+    /// # Arguments
+    ///
+    /// * `sink_id` - The sink node ID
+    /// * `batch_size` - Number of messages in the flushed batch
+    pub fn record_sink_batch_flush(&self, sink_id: &str, batch_size: u64) {
+        if let Some(metrics) = self.sink_metrics.read().unwrap().get(sink_id) {
+            metrics.flush_total.fetch_add(1, Ordering::Relaxed);
+            metrics.last_batch_size.store(batch_size, Ordering::Relaxed);
+        }
+    }
+
+    /// Updates the current buffer size for a sink.
+    pub fn set_sink_buffer_size(&self, sink_id: &str, size: u64) {
+        if let Some(metrics) = self.sink_metrics.read().unwrap().get(sink_id) {
+            metrics.buffer_size.store(size, Ordering::Relaxed);
         }
     }
 
@@ -484,11 +595,68 @@ impl MetricsRegistry {
 
             snapshot.add_counter(
                 "wafer_queue_drop_total",
-                "Total messages dropped",
+                "Total messages dropped due to overflow (drop policy)",
                 labels.clone(),
                 metrics.drop_total.load(Ordering::Relaxed),
             );
+
+            snapshot.add_counter(
+                "wafer_queue_dlq_total",
+                "Total messages sent to DLQ due to overflow (dead-letter policy)",
+                labels.clone(),
+                metrics.dlq_total.load(Ordering::Relaxed),
+            );
         }
+
+        // Sink batching metrics
+        let sinks = self.sink_metrics.read().unwrap();
+        for (_sink_id, metrics) in sinks.iter() {
+            let mut labels = base_labels.clone();
+            labels.insert("sink".to_string(), metrics.sink_id.clone());
+
+            snapshot.add_counter(
+                "wafer_sink_batch_flush_total",
+                "Total batch flushes performed by this sink",
+                labels.clone(),
+                metrics.flush_total.load(Ordering::Relaxed),
+            );
+
+            snapshot.add_gauge(
+                "wafer_sink_batch_size",
+                "Size of last batch flushed by this sink",
+                labels.clone(),
+                metrics.last_batch_size.load(Ordering::Relaxed) as f64,
+            );
+
+            snapshot.add_gauge(
+                "wafer_sink_batch_buffer_size",
+                "Current number of messages buffered in this sink",
+                labels.clone(),
+                metrics.buffer_size.load(Ordering::Relaxed) as f64,
+            );
+        }
+
+        // Pipeline-level overflow metrics
+        snapshot.add_counter(
+            "wafer_overflow_drop_total",
+            "Total messages dropped due to overflow (all queues)",
+            base_labels.clone(),
+            self.overflow_drop_total.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_overflow_dlq_total",
+            "Total messages sent to DLQ due to overflow (all queues)",
+            base_labels.clone(),
+            self.overflow_dlq_total.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_dlq_sink_error_total",
+            "Total errors from DLQ sink",
+            base_labels.clone(),
+            self.dlq_sink_error_total.load(Ordering::Relaxed),
+        );
 
         // Hot-swap metrics
         snapshot.add_counter(
@@ -666,6 +834,124 @@ mod tests {
         assert_eq!(metrics.enqueue_total.load(Ordering::Relaxed), 2);
         assert_eq!(metrics.drop_total.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.depth.load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn test_queue_dlq_metrics() {
+        let registry = MetricsRegistry::new();
+
+        registry.register_queue("source", "transform", 1000);
+        registry.record_dlq("source", "transform");
+        registry.record_dlq("source", "transform");
+        registry.record_dlq("source", "transform");
+
+        let queues = registry.queue_metrics.read().unwrap();
+        let metrics = queues.get("source_transform").unwrap();
+        assert_eq!(metrics.dlq_total.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
+    fn test_overflow_metrics() {
+        let registry = MetricsRegistry::new();
+
+        // Record overflow drops
+        registry.record_overflow_drop();
+        registry.record_overflow_drop();
+        assert_eq!(registry.overflow_drop_total(), 2);
+
+        // Record overflow DLQ sends
+        registry.record_overflow_dlq();
+        registry.record_overflow_dlq();
+        registry.record_overflow_dlq();
+        assert_eq!(registry.overflow_dlq_total(), 3);
+
+        // Record DLQ sink errors
+        registry.record_dlq_sink_error();
+        assert_eq!(registry.dlq_sink_error_total(), 1);
+    }
+
+    #[test]
+    fn test_overflow_metrics_in_prometheus_output() {
+        let registry = MetricsRegistry::new();
+
+        registry.register_queue("source", "transform", 100);
+        registry.record_overflow_drop();
+        registry.record_overflow_dlq();
+        registry.record_dlq_sink_error();
+        registry.record_dlq("source", "transform");
+
+        let output = registry.encode();
+
+        // Check for overflow metric names in Prometheus output
+        assert!(output.contains("wafer_overflow_drop_total"));
+        assert!(output.contains("wafer_overflow_dlq_total"));
+        assert!(output.contains("wafer_dlq_sink_error_total"));
+        assert!(output.contains("wafer_queue_dlq_total"));
+    }
+
+    #[test]
+    fn test_sink_batching_metrics() {
+        let registry = MetricsRegistry::new();
+
+        // Register a sink
+        registry.register_sink("file-sink-1");
+
+        // Record some batch flushes
+        registry.record_sink_batch_flush("file-sink-1", 10);
+        registry.record_sink_batch_flush("file-sink-1", 15);
+        registry.record_sink_batch_flush("file-sink-1", 8);
+
+        // Update buffer size
+        registry.set_sink_buffer_size("file-sink-1", 5);
+
+        // Verify internal state
+        let sinks = registry.sink_metrics.read().unwrap();
+        let metrics = sinks.get("file-sink-1").unwrap();
+        assert_eq!(metrics.flush_total.load(Ordering::Relaxed), 3);
+        assert_eq!(metrics.last_batch_size.load(Ordering::Relaxed), 8); // Last recorded size
+        assert_eq!(metrics.buffer_size.load(Ordering::Relaxed), 5);
+    }
+
+    #[test]
+    fn test_sink_batching_metrics_in_prometheus_output() {
+        let registry = MetricsRegistry::new();
+
+        // Register sinks
+        registry.register_sink("file-sink");
+        registry.register_sink("mqtt-sink");
+
+        // Record metrics for both sinks
+        registry.record_sink_batch_flush("file-sink", 50);
+        registry.set_sink_buffer_size("file-sink", 25);
+
+        registry.record_sink_batch_flush("mqtt-sink", 100);
+        registry.set_sink_buffer_size("mqtt-sink", 30);
+
+        let output = registry.encode();
+
+        // Check for sink batching metric names in Prometheus output
+        assert!(
+            output.contains("wafer_sink_batch_flush_total"),
+            "Missing wafer_sink_batch_flush_total metric"
+        );
+        assert!(
+            output.contains("wafer_sink_batch_size"),
+            "Missing wafer_sink_batch_size metric"
+        );
+        assert!(
+            output.contains("wafer_sink_batch_buffer_size"),
+            "Missing wafer_sink_batch_buffer_size metric"
+        );
+
+        // Check for sink labels
+        assert!(
+            output.contains("sink=\"file-sink\""),
+            "Missing file-sink label"
+        );
+        assert!(
+            output.contains("sink=\"mqtt-sink\""),
+            "Missing mqtt-sink label"
+        );
     }
 
     #[test]

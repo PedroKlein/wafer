@@ -1,0 +1,134 @@
+# WAFER DAG Configuration: Overflow Policies, DLQ, and Sink Batching Demo
+#
+# This example demonstrates:
+# - Queue overflow policies: slow, drop, dead-letter
+# - Dead Letter Queue (DLQ) for failed/dropped messages
+# - Sink batching with batch_size and batch_timeout_ms
+#
+# Usage:
+#   cargo run -p wafer-runtime --features http-api -- \
+#     --config examples/dag-overflow-dlq-demo.toml
+#
+# To test overflow behavior:
+#   1. Start the pipeline
+#   2. Send data faster than the sink can process
+#   3. Observe dropped messages going to DLQ file
+#
+# API endpoints:
+#   curl http://localhost:9090/health
+#   curl http://localhost:9090/api/v1/pipeline
+#   curl http://localhost:9090/metrics  # Check overflow/dlq counters
+
+[pipeline]
+name = "overflow-dlq-demo"
+description = "Demo pipeline showcasing overflow policies, DLQ, and sink batching"
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[metrics]
+enabled = true
+bind = "127.0.0.1:9091"
+path = "/metrics"
+
+# ==============================================================================
+# Dead Letter Queue Configuration
+# ==============================================================================
+# Messages routed to DLQ when:
+# - Overflow policy is "dead-letter" and queue is full
+# - Transform processing returns an error
+#
+# The DLQ sink receives DlqEnvelope with:
+# - original_id: Message ID from the original envelope
+# - reason: Why the message was dead-lettered (e.g., "overflow", "process_error")
+# - source_node: Node ID where the drop/error occurred
+# - target_node: Downstream node (for overflow) or empty (for process errors)
+# - timestamp: When the message was dead-lettered
+# - original_payload: The original message bytes
+[dead_letter]
+enabled = true
+sink_type = "file"
+queue_capacity = 5000  # Internal DLQ buffer (default: 10000)
+
+[dead_letter.config]
+path = "/tmp/wafer-dlq.jsonl"
+# DLQ file sink writes one JSON line per message with full envelope metadata
+
+# ==============================================================================
+# Nodes
+# ==============================================================================
+
+# Source: reads from file (simulates high-throughput input)
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "file"
+[nodes.config]
+path = "test-data/input.txt"
+
+# First transform: uppercase (fast)
+[[nodes]]
+id = "fast-transform"
+node_type = "transform"
+swappable = true
+[nodes.config]
+plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"
+
+# Second transform: simulates slow processing
+[[nodes]]
+id = "slow-transform"
+node_type = "transform"
+swappable = true
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+# Sink with batching: writes in batches for efficiency
+[[nodes]]
+id = "batched-sink"
+node_type = "sink"
+sink_type = "file"
+[nodes.config]
+path = "/tmp/wafer-output.txt"
+# Batching configuration (optional - defaults shown):
+batch_size = 100         # Flush after 100 messages (default: 1)
+batch_timeout_ms = 500   # Flush after 500ms even if batch not full (default: none)
+
+# ==============================================================================
+# Edges with Different Overflow Policies
+# ==============================================================================
+
+# Edge 1: source -> fast-transform
+# Policy: slow (default) - backpressure propagates to source
+[[edges]]
+from = "source"
+to = "fast-transform"
+[edges.queue]
+capacity = 1000
+overflow = "slow"  # Block sender when full (default behavior)
+
+# Edge 2: fast-transform -> slow-transform
+# Policy: drop - discard messages when queue fills up
+# Good for non-critical data where throughput matters more than completeness
+[[edges]]
+from = "fast-transform"
+to = "slow-transform"
+[edges.queue]
+capacity = 50        # Small capacity to demonstrate overflow
+overflow = "drop"    # Silently drop newest messages when full
+
+# Edge 3: slow-transform -> batched-sink  
+# Policy: dead-letter - route dropped messages to DLQ
+# Good for critical data that must not be lost
+[[edges]]
+from = "slow-transform"
+to = "batched-sink"
+[edges.queue]
+capacity = 100
+overflow = "dead-letter"  # Send dropped messages to DLQ for later recovery
+
+# ==============================================================================
+# Default Queue Capacity
+# ==============================================================================
+# Applied to edges that don't specify a capacity
+default_queue_capacity = 512

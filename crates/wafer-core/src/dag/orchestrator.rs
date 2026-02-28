@@ -52,13 +52,29 @@ use wafer_types::{PipelineEvent, PipelineState};
 #[cfg(feature = "http-api")]
 use crate::metrics::MetricsRegistry;
 
-use crate::config::DagConfig;
+use crate::config::{DagConfig, OverflowPolicy};
 use crate::error::{Result, WaferError};
 use crate::factory::FactoryContext;
 use crate::node::AnyNode;
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
 use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
+
+/// Information about an output edge for sending messages.
+///
+/// Bundles the sender, overflow policy, and edge name for use in node loops
+/// when handling queue overflow scenarios.
+#[derive(Clone)]
+pub struct EdgeSendInfo {
+    /// Output port name (e.g., "default", "high", "low")
+    pub port: String,
+    /// Queue sender for this edge
+    pub sender: QueueSender<RuntimeEnvelope>,
+    /// Overflow policy for this edge
+    pub overflow_policy: OverflowPolicy,
+    /// Edge identifier for DLQ metadata (format: "from_node:port->to_node:port")
+    pub edge_name: String,
+}
 
 /// State consumed during `run()` - can only be used once.
 ///
@@ -89,6 +105,10 @@ pub struct ControlState {
     pub messages_failed: AtomicU64,
     /// Event broadcaster for subscribers
     pub event_tx: broadcast::Sender<PipelineEvent>,
+    /// Dead Letter Queue sender (if DLQ is enabled).
+    /// Messages wrapped as RuntimeEnvelope with JSON-serialized DlqEnvelope payload.
+    /// Uses Mutex to allow late initialization after orchestrator construction.
+    pub dlq_sender: Mutex<Option<QueueSender<RuntimeEnvelope>>>,
     /// Prometheus metrics registry (only with http-api feature)
     #[cfg(feature = "http-api")]
     pub metrics_registry: MetricsRegistry,
@@ -105,9 +125,16 @@ impl ControlState {
             messages_processed: AtomicU64::new(0),
             messages_failed: AtomicU64::new(0),
             event_tx,
+            dlq_sender: Mutex::new(None),
             #[cfg(feature = "http-api")]
             metrics_registry: MetricsRegistry::new(),
         }
+    }
+
+    /// Set the DLQ sender for routing failed messages.
+    pub async fn set_dlq_sender(&self, sender: QueueSender<RuntimeEnvelope>) {
+        let mut dlq = self.dlq_sender.lock().await;
+        *dlq = Some(sender);
     }
 
     /// Create new control state with global labels for metrics.
@@ -121,6 +148,7 @@ impl ControlState {
             messages_processed: AtomicU64::new(0),
             messages_failed: AtomicU64::new(0),
             event_tx,
+            dlq_sender: Mutex::new(None),
             metrics_registry: MetricsRegistry::with_labels(labels),
         }
     }
@@ -217,6 +245,33 @@ impl DagOrchestrator {
         key.split_once(':').unwrap_or((key, "default"))
     }
 
+    /// Find the overflow policy for an edge given its from and to keys.
+    ///
+    /// Keys are in the format "node_id:port" or just "node_id" (default port).
+    /// Looks up the edge in the config to get the overflow policy.
+    /// Returns `OverflowPolicy::Slow` (default) if the edge is not found.
+    fn find_edge_overflow_policy(&self, from_key: &str, to_key: &str) -> OverflowPolicy {
+        let (from_node, from_port) = Self::parse_node_port(from_key);
+        let (to_node, to_port) = Self::parse_node_port(to_key);
+
+        // Find matching edge in config
+        for edge in &self.config.edges {
+            let edge_from_port = edge.from_port.as_deref().unwrap_or("default");
+            let edge_to_port = edge.to_port.as_deref().unwrap_or("default");
+
+            if edge.from == from_node
+                && edge.to == to_node
+                && edge_from_port == from_port
+                && edge_to_port == to_port
+            {
+                return edge.overflow;
+            }
+        }
+
+        // Default if not found (shouldn't happen in a valid config)
+        OverflowPolicy::Slow
+    }
+
     /// Run the DAG pipeline.
     ///
     /// This method:
@@ -287,13 +342,21 @@ impl DagOrchestrator {
             let node_id_owned = node_id.clone();
             let cancel_token = self.cancel_token.clone();
 
-            let output_senders: Vec<_> = run_state
+            let output_senders: Vec<EdgeSendInfo> = run_state
                 .queue_senders
                 .iter()
-                .filter_map(|((from_key, _to_key), sender)| {
+                .filter_map(|((from_key, to_key), sender)| {
                     let (from_node, from_port) = Self::parse_node_port(from_key);
                     if from_node == node_id {
-                        Some((from_port.to_string(), sender.clone()))
+                        // Look up overflow policy from edge config
+                        let overflow_policy = self.find_edge_overflow_policy(from_key, to_key);
+                        let edge_name = format!("{}->{}", from_key, to_key);
+                        Some(EdgeSendInfo {
+                            port: from_port.to_string(),
+                            sender: sender.clone(),
+                            overflow_policy,
+                            edge_name,
+                        })
                     } else {
                         None
                     }

@@ -8,8 +8,50 @@ use std::path::PathBuf;
 
 pub const DEFAULT_FUEL_LIMIT: u64 = 1_000_000;
 pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
+pub const DEFAULT_DLQ_QUEUE_CAPACITY: usize = 10_000;
 pub const DEFAULT_API_BIND: &str = "127.0.0.1:9090";
 pub const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9091";
+
+/// Queue overflow policy for edge backpressure handling.
+///
+/// Determines what happens when a queue is full and a new message arrives.
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OverflowPolicy {
+    /// Block the sender until space is available (default).
+    #[default]
+    Slow,
+    /// Drop the newest message when queue is full.
+    Drop,
+    /// Route dropped messages to the Dead Letter Queue.
+    DeadLetter,
+}
+
+fn default_dlq_queue_capacity() -> usize {
+    DEFAULT_DLQ_QUEUE_CAPACITY
+}
+
+/// Dead Letter Queue configuration.
+///
+/// When enabled, messages that fail processing or are dropped due to
+/// overflow policies are routed to this sink for later inspection.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeadLetterConfig {
+    /// Whether the DLQ is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Type of sink to use for the DLQ (e.g., "file", "mqtt").
+    pub sink_type: String,
+
+    /// Sink-specific configuration (e.g., file path, MQTT topic).
+    #[serde(default = "default_config")]
+    pub config: toml::Value,
+
+    /// Queue capacity for the internal DLQ buffer.
+    #[serde(default = "default_dlq_queue_capacity")]
+    pub queue_capacity: usize,
+}
 
 fn default_queue_capacity() -> usize {
     DEFAULT_QUEUE_CAPACITY
@@ -76,6 +118,10 @@ pub struct Config {
     /// Registry configuration for remote plugin loading.
     #[serde(default)]
     pub registry: RegistryConfig,
+
+    /// Dead Letter Queue configuration.
+    #[serde(default)]
+    pub dead_letter: Option<DeadLetterConfig>,
 }
 
 /// Pipeline metadata configuration.
@@ -165,6 +211,7 @@ impl Config {
             edges: self.edges.clone(),
             default_queue_capacity: self.default_queue_capacity,
             registry: self.registry.clone(),
+            dead_letter: self.dead_letter.clone(),
         }
     }
 }
@@ -181,6 +228,9 @@ pub struct DagConfig {
     /// Registry configuration for remote plugin loading.
     #[serde(default)]
     pub registry: RegistryConfig,
+    /// Dead Letter Queue configuration.
+    #[serde(default)]
+    pub dead_letter: Option<DeadLetterConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +265,10 @@ pub struct EdgeDefinition {
     pub to_port: Option<String>,
     #[serde(default)]
     pub queue_capacity: Option<usize>,
+    /// Overflow policy for this edge's queue.
+    /// Defaults to `Slow` (blocking backpressure).
+    #[serde(default)]
+    pub overflow: OverflowPolicy,
 }
 
 /// Configuration for a node's plugin source.
@@ -352,6 +406,30 @@ impl DagConfig {
             )));
         }
 
+        // Validate DLQ configuration: if any edge uses dead-letter policy,
+        // the DLQ must be configured and enabled.
+        let has_dead_letter_edge = self
+            .edges
+            .iter()
+            .any(|e| e.overflow == OverflowPolicy::DeadLetter);
+
+        if has_dead_letter_edge {
+            match &self.dead_letter {
+                None => {
+                    return Err(ConfigError::Message(
+                        "edge uses 'dead-letter' overflow policy but no [dead_letter] section is configured".to_string(),
+                    ));
+                }
+                Some(dlq) if !dlq.enabled => {
+                    return Err(ConfigError::Message(
+                        "edge uses 'dead-letter' overflow policy but dead_letter.enabled = false"
+                            .to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
         Ok(())
     }
 }
@@ -382,6 +460,38 @@ mod tests {
             edges: vec![],
             default_queue_capacity: 1024,
             registry: RegistryConfig::default(),
+            dead_letter: None,
+        }
+    }
+
+    fn make_edge(from: &str, to: &str) -> EdgeDefinition {
+        EdgeDefinition {
+            from: from.to_string(),
+            to: to.to_string(),
+            from_port: None,
+            to_port: None,
+            queue_capacity: None,
+            overflow: OverflowPolicy::default(),
+        }
+    }
+
+    fn make_edge_with_overflow(from: &str, to: &str, overflow: OverflowPolicy) -> EdgeDefinition {
+        EdgeDefinition {
+            from: from.to_string(),
+            to: to.to_string(),
+            from_port: None,
+            to_port: None,
+            queue_capacity: None,
+            overflow,
+        }
+    }
+
+    fn make_dlq_config(enabled: bool) -> DeadLetterConfig {
+        DeadLetterConfig {
+            enabled,
+            sink_type: "file".to_string(),
+            config: toml::Value::Table(toml::map::Map::new()),
+            queue_capacity: DEFAULT_DLQ_QUEUE_CAPACITY,
         }
     }
 
@@ -580,5 +690,216 @@ mod tests {
 
         let config: DagConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.registry.cache_ttl_hours, 24); // default
+    }
+
+    // OverflowPolicy tests
+
+    #[test]
+    fn overflow_policy_default_is_slow() {
+        assert_eq!(OverflowPolicy::default(), OverflowPolicy::Slow);
+    }
+
+    #[test]
+    fn overflow_policy_parses_kebab_case() {
+        let toml_str = r#"
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[nodes]]
+            id = "sink"
+            node_type = "sink"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+            overflow = "slow"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+            overflow = "drop"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+            overflow = "dead-letter"
+        "#;
+
+        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.edges[0].overflow, OverflowPolicy::Slow);
+        assert_eq!(config.edges[1].overflow, OverflowPolicy::Drop);
+        assert_eq!(config.edges[2].overflow, OverflowPolicy::DeadLetter);
+    }
+
+    #[test]
+    fn overflow_policy_defaults_when_omitted() {
+        let toml_str = r#"
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[nodes]]
+            id = "sink"
+            node_type = "sink"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+        "#;
+
+        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.edges[0].overflow, OverflowPolicy::Slow);
+    }
+
+    #[test]
+    fn invalid_overflow_policy_rejected() {
+        let toml_str = r#"
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+            overflow = "invalid"
+        "#;
+
+        let result: Result<DagConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("unknown variant"));
+    }
+
+    // DeadLetterConfig tests
+
+    #[test]
+    fn dead_letter_config_parses() {
+        let toml_str = r#"
+            [dead_letter]
+            enabled = true
+            sink_type = "file"
+            queue_capacity = 5000
+
+            [dead_letter.config]
+            path = "/var/log/dlq.jsonl"
+
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[nodes]]
+            id = "sink"
+            node_type = "sink"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+        "#;
+
+        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        let dlq = config.dead_letter.unwrap();
+        assert!(dlq.enabled);
+        assert_eq!(dlq.sink_type, "file");
+        assert_eq!(dlq.queue_capacity, 5000);
+    }
+
+    #[test]
+    fn dead_letter_config_defaults_queue_capacity() {
+        let toml_str = r#"
+            [dead_letter]
+            enabled = true
+            sink_type = "file"
+
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+        "#;
+
+        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        let dlq = config.dead_letter.unwrap();
+        assert_eq!(dlq.queue_capacity, DEFAULT_DLQ_QUEUE_CAPACITY);
+    }
+
+    // DLQ validation tests
+
+    #[test]
+    fn dead_letter_policy_requires_dlq_config() {
+        let mut config = make_config(vec![
+            make_node("src", NodeType::Source, None, None),
+            make_node("sink", NodeType::Sink, None, None),
+        ]);
+        config.edges = vec![make_edge_with_overflow(
+            "src",
+            "sink",
+            OverflowPolicy::DeadLetter,
+        )];
+        config.dead_letter = None;
+
+        let err = config.validate().unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("no [dead_letter] section is configured"));
+    }
+
+    #[test]
+    fn dead_letter_policy_requires_dlq_enabled() {
+        let mut config = make_config(vec![
+            make_node("src", NodeType::Source, None, None),
+            make_node("sink", NodeType::Sink, None, None),
+        ]);
+        config.edges = vec![make_edge_with_overflow(
+            "src",
+            "sink",
+            OverflowPolicy::DeadLetter,
+        )];
+        config.dead_letter = Some(make_dlq_config(false)); // disabled
+
+        let err = config.validate().unwrap_err();
+        assert!(err.to_string().contains("dead_letter.enabled = false"));
+    }
+
+    #[test]
+    fn dead_letter_policy_valid_with_dlq_enabled() {
+        let mut config = make_config(vec![
+            make_node("src", NodeType::Source, None, None),
+            make_node("sink", NodeType::Sink, None, None),
+        ]);
+        config.edges = vec![make_edge_with_overflow(
+            "src",
+            "sink",
+            OverflowPolicy::DeadLetter,
+        )];
+        config.dead_letter = Some(make_dlq_config(true));
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn drop_policy_does_not_require_dlq() {
+        let mut config = make_config(vec![
+            make_node("src", NodeType::Source, None, None),
+            make_node("sink", NodeType::Sink, None, None),
+        ]);
+        config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::Drop)];
+        config.dead_letter = None;
+
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn slow_policy_does_not_require_dlq() {
+        let mut config = make_config(vec![
+            make_node("src", NodeType::Source, None, None),
+            make_node("sink", NodeType::Sink, None, None),
+        ]);
+        config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::Slow)];
+        config.dead_letter = None;
+
+        assert!(config.validate().is_ok());
     }
 }
