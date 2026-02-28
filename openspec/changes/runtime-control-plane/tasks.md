@@ -70,7 +70,7 @@
 - [x] 4.13 Implement `GET /metrics` handler (Prometheus format)
 - [x] 4.14 Add error handling middleware for consistent error responses
 - [x] 4.15 Add request tracing middleware (tower-http)
-- [ ] 4.16 Write integration tests for all endpoints
+- [x] 4.16 Write integration tests for all endpoints
 
 ## 5. Configuration
 
@@ -79,7 +79,7 @@
 - [x] 5.3 Add `[api]` section parsing to config loader
 - [x] 5.4 Add `[metrics]` section parsing to config loader
 - [x] 5.5 Add `--api-bind` and `--no-api` CLI flags to wafer-runtime
-- [ ] 5.6 Implement separate metrics server spawn when `metrics.bind != api.bind`
+- [x] 5.6 Implement separate metrics server spawn when `metrics.bind != api.bind`
 - [x] 5.7 Write tests for config parsing
 
 ## 6. wafer-runtime Binary
@@ -90,7 +90,7 @@
 - [x] 6.4 Start separate metrics server if configured
 - [x] 6.5 Wire up signal handlers (SIGTERM, SIGINT) to shutdown
 - [x] 6.6 Add graceful shutdown for API server
-- [ ] 6.7 Write integration test: start runtime, hit health endpoint
+- [x] 6.7 Write integration test: start runtime, hit health endpoint
 
 ## 7. waferctl CLI Structure
 
