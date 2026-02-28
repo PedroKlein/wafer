@@ -60,9 +60,9 @@ A single-process Rust runtime that executes typed DAGs of WebAssembly components
 | **Efficient data flow**            | Minimal-copy semantics as data moves through the DAG; true zero-copy is future work (see §18.1) |
 | **Strong isolation**               | WASI capability grants + Wasm sandboxing + fuel/epoch limits                                |
 | **Cross-architecture portability** | Same `.wasm` binary runs on ARM (Pi, Jetson, Mac M3) and x86                                |
-| **Per-node hot-swap**              | Upgrade individual nodes without stopping the pipeline                                      |
+| **Per-node hot-swap**              | Upgrade individual nodes without stopping the pipeline (**primary thesis target**)          |
 | **Low latency**                    | In-process execution avoids IPC/network overhead                                            |
-| **Dynamic topology**               | Add/remove nodes and edges at runtime                                                       |
+| **Dynamic topology**               | Add/remove nodes and edges at runtime (stretch goal)                                        |
 
 ### 1.4 Target Domains
 
@@ -120,16 +120,17 @@ The specification will note where such trade-offs may be made.
 | ID  | Goal                               | Description                                                                                | Priority |
 | --- | ---------------------------------- | ------------------------------------------------------------------------------------------ | -------- |
 | G1  | Type-safe DAG execution            | WIT contracts define node interfaces; host validates type compatibility at connection time | Must     |
-| G2  | Zero-copy data passing             | Borrow semantics between nodes; minimize allocations in hot path                           | Must     |
+| G2  | Efficient data passing             | Minimal-copy semantics; true zero-copy via WIT resources is future work (see §18.1)        | Must     |
 | G3  | Bounded queues with backpressure   | All inter-node channels are bounded; explicit policies for overflow                        | Must     |
-| G4  | Per-node hot-swap                  | Drain-and-flip upgrade path; measure pause and loss empirically                            | Must     |
-| G5  | Full dynamic topology              | Add/remove nodes and edges at runtime via API or config watch                              | Should   |
+| G4  | Per-node hot-swap                  | **Primary thesis deliverable.** Drain-and-flip upgrade path; measure pause and loss empirically | Must     |
+| G5  | Full dynamic topology              | Add/remove nodes and edges at runtime. **Stretch goal** - hot-swap (G4) takes priority    | Should   |
 | G6  | WASI capability isolation          | Nodes receive only explicitly granted capabilities                                         | Must     |
 | G7  | wasi-nn compatible inference       | Leverage emerging standard for ML inference capability                                     | Must     |
 | G8  | Cross-architecture portability     | Same component binary on ARM and x86 with consistent behavior                              | Must     |
 | G9  | Processing-time semantics          | No event-time, watermarks, or out-of-order handling                                        | Must     |
 | G10 | Declarative pipeline configuration | TOML/YAML/JSON configuration for DAGs, policies, and node configs                          | Should   |
 | G11 | Generic runtime design             | Applicable beyond edge IoT (proxy filters, observability, etc.)                            | Should   |
+| G12 | Registry/OCI packaging             | Load WASM components from OCI registries via `wasm-pkg-client` (see [ADR-0005](adr/0005-registry-package-support.md)) | Should   |
 
 ### 2.2 Non-Goals (Out of Scope)
 
@@ -140,9 +141,8 @@ The specification will note where such trade-offs may be made.
 | NG3 | Kubernetes operator/CRDs   | Future work after core runtime is stable                                                                                |
 | NG4 | Multi-tenant quotas        | Single-tenant for thesis scope                                                                                          |
 | NG5 | Event-time semantics       | Processing-time only; if needed later, integrate Timely Dataflow                                                        |
-| NG6 | Schema registry            | Schema is static per pipeline configuration                                                                             |
-| NG7 | ~~OCI packaging/distribution~~ | **IMPLEMENTED** - See [ADR-0005](adr/0005-registry-package-support.md) for registry support via `wasm-pkg-client` |
-| NG8 | Watermarks and windows     | Complex streaming semantics deferred                                                                                    |
+| NG6 | Schema registry            | Schema is static per pipeline configuration                                                             |
+| NG7 | Watermarks and windows     | Complex streaming semantics deferred                                                                    |
 
 ### 2.3 Conditional Scope
 
@@ -488,6 +488,9 @@ interface lifecycle {
     /// 
     /// Called once after successful validation. Node should parse config
     /// and prepare for processing.
+    /// 
+    /// > **Implementation Note:** Current WIT uses `result<_, string>` for simplicity.
+    /// > Future versions may migrate to `process-error` for structured error handling.
     init: func(config: node-config) -> result<_, process-error>;
     
     /// Graceful shutdown
@@ -502,17 +505,23 @@ interface lifecycle {
 
 > **Implementation Note:** Sources are implemented as native Rust code in the host runtime, not as WASM components. The WIT interface below is **retained for documentation purposes** and potential future use, but the current implementation uses Rust traits directly. See [ADR-0004](adr/0004-native-sources-sinks.md) for rationale.
 
-**Rust trait (actual implementation):**
+**Rust trait (target design):**
 
 ```rust
 /// Source trait - native Rust implementation
-#[async_trait]
-pub trait Source: Lifecycle + Send {
+pub trait Source: Lifecycle {
     /// Poll for next message from external system (non-blocking)
-    async fn poll(&mut self) -> Result<Option<RuntimeEnvelope>>;
+    /// Status: ✅ Implemented
+    fn poll(&mut self) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>>;
     
     /// Acknowledge successful processing of a message
-    async fn ack(&mut self, id: &str) -> Result<()>;
+    /// Enables at-least-once delivery with external systems (MQTT QoS 1/2, Kafka commits)
+    /// Status: 🔲 Planned
+    fn ack(&mut self, id: &str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
+    
+    /// Negative acknowledge - reject message for requeue/dead-letter
+    /// Status: 🔲 Planned
+    fn nack(&mut self, id: &str) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 ```
 
@@ -686,17 +695,19 @@ world joiner-node {
 
 > **Implementation Note:** Sinks are implemented as native Rust code in the host runtime, not as WASM components. The WIT interface below is **retained for documentation purposes** and potential future use, but the current implementation uses Rust traits directly. See [ADR-0004](adr/0004-native-sources-sinks.md) for rationale.
 
-**Rust trait (actual implementation):**
+**Rust trait (target design):**
 
 ```rust
 /// Sink trait - native Rust implementation
-#[async_trait]
-pub trait Sink: Lifecycle + Send {
+pub trait Sink: Lifecycle {
     /// Collect a message for output (may buffer internally)
-    async fn collect(&mut self, envelope: RuntimeEnvelope) -> Result<()>;
+    /// Status: ✅ Implemented
+    fn collect(&mut self, envelope: RuntimeEnvelope) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
     
     /// Flush any buffered messages to the external system
-    async fn flush(&mut self) -> Result<()>;
+    /// Called periodically by host and always before close()
+    /// Status: 🔲 Planned
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 ```
 
@@ -1090,11 +1101,11 @@ limits:
 
 ### 8.2 Overflow Policies
 
-| Policy        | Behavior                           | Use Case                               |
-| ------------- | ---------------------------------- | -------------------------------------- |
-| `slow`        | Block sender until space available | Critical data, propagate backpressure  |
-| `drop`        | Discard newest message, continue   | Non-critical data, maintain throughput |
-| `dead-letter` | Route dropped message to DLQ       | Preserve data for debugging/recovery   |
+| Policy        | Behavior                           | Use Case                               | Status           |
+| ------------- | ---------------------------------- | -------------------------------------- | ---------------- |
+| `slow`        | Block sender until space available | Critical data, propagate backpressure  | ✅ Implemented   |
+| `drop`        | Discard newest message, continue   | Non-critical data, maintain throughput | 🔲 Planned       |
+| `dead-letter` | Route dropped message to DLQ       | Preserve data for debugging/recovery   | 🔲 Planned       |
 
 ### 8.3 Backpressure Propagation
 
@@ -1222,16 +1233,6 @@ If full dynamic topology proves too complex, the fallback is:
 | v2 init fails         | `init()` returns error     | Abort swap, keep v1 running, report error       |
 | Drain timeout         | Timer expires              | Force swap, log dropped message count           |
 | v2 crashes after swap | Wasm trap                  | No automatic rollback (future work), restart v2 |
-
-### 10.4 Future Work: Snapshot/Restore
-
-For stateful nodes, future versions may support:
-
-1. `snapshot()` on v1 to capture state
-2. `restore(state)` on v2 to load state
-3. More seamless state migration during hot-swap
-
-This is out of scope for the thesis (stateless nodes only).
 
 ---
 
