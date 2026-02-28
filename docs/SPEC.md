@@ -219,7 +219,7 @@ These features are desirable but may be simplified or deferred based on implemen
 | **Serialization** | serde                       | JSON, TOML, YAML, MessagePack, CBOR support                   |
 | **Metrics**       | prometheus crate            | Standard format, wide tooling support                         |
 | **Logging**       | tracing crate               | Structured logging, spans for tracing                         |
-| **Queues**        | crossbeam-channel or custom | Lock-free, bounded SPSC                                       |
+| **Queues**        | tokio::sync::mpsc           | Async-native, bounded, SPSC usage pattern                     |
 | **Registry**      | oci-client + docker_credential | Direct OCI registry access with Docker credential support  |
 
 ### 3.3 Execution Model
@@ -262,15 +262,19 @@ The WIT contracts define the boundary between host and nodes. Key design princip
 ### 4.2 Package Structure
 
 ```
-pipeline:types@0.1.0      # Common data types (envelope, tensor, etc.)
-pipeline:node@0.1.0       # Base node interface (lifecycle)
-pipeline:source@0.1.0     # Source node extension (reference only - see ADR-0004)
-pipeline:transform@0.1.0  # Transform node extension (WASM components)
-pipeline:router@0.1.0     # Router node extension (1→N) (WASM components)
-pipeline:joiner@0.1.0     # Joiner node extension (N→1) (WASM components)
-pipeline:sink@0.1.0       # Sink node extension (reference only - see ADR-0004)
-pipeline:inference@0.1.0  # ML inference capability (wasi-nn compatible)
+pipeline:transform@0.1.0  # Single package containing all interfaces and worlds
+├── types                 # Common data types (envelope, process-result, etc.)
+├── lifecycle             # Base lifecycle interface (validate, init, close)
+├── transform             # Transform interface (process)
+├── router                # Router interface (output-ports, route)
+├── joiner                # Joiner interface (input-ports, process)
+├── transform-node        # World for transform plugins
+├── router-node           # World for router plugins
+├── joiner-node           # World for joiner plugins
+└── inference-node        # World for ML inference (imports wasi:nn)
 ```
+
+> **Note:** All interfaces are in a single WIT package (`pipeline:transform@0.1.0`). Source and sink are native Rust, not WASM components (see [ADR-0004](adr/0004-native-sources-sinks.md)). ML inference uses standard `wasi:nn` imports rather than a custom interface.
 
 > **Note:** Source and sink WIT packages are retained for documentation but not implemented as WASM components. Sources and sinks are native Rust code. See [ADR-0004](adr/0004-native-sources-sinks.md).
 
@@ -1071,10 +1075,17 @@ limits:
 
 ### 8.1 Queue Implementation
 
-- **Type:** Bounded SPSC (single-producer single-consumer)
-- **Rationale:** SPSC is simpler and faster than MPSC; fan-in uses explicit Joiner nodes
-- **Library:** `crossbeam-channel` or custom ring buffer
+- **Type:** Bounded async channels with SPSC semantics
+- **Rationale:** SPSC design is simpler and faster; fan-in uses explicit Joiner nodes
+- **Library:** `tokio::sync::mpsc` with single-sender pattern
 - **Capacity:** Configurable per-edge, with pipeline-level default
+
+> **Implementation Note:** We use `tokio::sync::mpsc` rather than `crossbeam-channel` because:
+> 1. Native async support - no executor blocking
+> 2. Seamless Tokio integration for the async runtime
+> 3. Built-in backpressure via bounded capacity
+> 
+> The channel is used in SPSC mode (one sender per edge), though the underlying implementation is MPSC-capable.
 
 ### 8.2 Overflow Policies
 
