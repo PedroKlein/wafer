@@ -20,7 +20,7 @@ use super::Source;
 /// # Example
 ///
 /// ```ignore
-/// use wafer_poc::node::{StdinSource, Lifecycle, Source};
+/// use wafer_core::node::{StdinSource, Lifecycle, Source};
 ///
 /// let mut source = StdinSource::new("stdin-source");
 /// source.init().await?;

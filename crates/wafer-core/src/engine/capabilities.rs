@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```
-//! use wafer_poc::engine::Capabilities;
+//! use wafer_core::engine::Capabilities;
 //!
 //! // Minimal sandbox (default)
 //! let caps = Capabilities::sandbox();

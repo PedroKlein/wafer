@@ -24,7 +24,7 @@ use super::Source;
 /// # Example
 ///
 /// ```ignore
-/// use wafer_poc::node::{MqttSource, Lifecycle, Source};
+/// use wafer_core::node::{MqttSource, Lifecycle, Source};
 ///
 /// let mut source = MqttSource::new(
 ///     "mqtt-source",

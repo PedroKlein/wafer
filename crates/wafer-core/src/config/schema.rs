@@ -27,6 +27,9 @@ fn default_api_bind() -> SocketAddr {
     DEFAULT_API_BIND.parse().unwrap()
 }
 
+/// Default bind address for metrics endpoint.
+/// TODO: Used when separate metrics server is implemented (task 5.6).
+#[allow(dead_code)]
 fn default_metrics_bind() -> SocketAddr {
     DEFAULT_METRICS_BIND.parse().unwrap()
 }
@@ -371,6 +374,7 @@ mod tests {
 
     fn make_config(nodes: Vec<NodeDefinition>) -> DagConfig {
         DagConfig {
+            pipeline: PipelineConfig::default(),
             nodes,
             edges: vec![],
             default_queue_capacity: 1024,

@@ -83,6 +83,13 @@ pub enum WaferError {
     /// Registry operation failed (fetch, cache, version resolution).
     #[error("registry error: {0}")]
     Registry(#[from] RegistryError),
+
+    /// Runtime error during pipeline execution.
+    ///
+    /// Used for errors that occur during pipeline orchestration, such as
+    /// attempting to run a pipeline that has already been executed.
+    #[error("runtime error: {0}")]
+    Runtime(String),
 }
 
 /// Configuration-specific errors.

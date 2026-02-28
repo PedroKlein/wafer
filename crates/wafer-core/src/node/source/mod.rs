@@ -13,9 +13,9 @@
 //! To create a custom source, implement both [`Lifecycle`] and [`Source`]:
 //!
 //! ```ignore
-//! use wafer_poc::node::{Lifecycle, Source};
-//! use wafer_poc::queue::RuntimeEnvelope;
-//! use wafer_poc::error::Result;
+//! use wafer_core::node::{Lifecycle, Source};
+//! use wafer_core::queue::RuntimeEnvelope;
+//! use wafer_core::error::Result;
 //!
 //! struct MySource { /* ... */ }
 //!

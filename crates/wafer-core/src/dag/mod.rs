@@ -19,14 +19,16 @@
 //! # Example
 //!
 //! ```ignore
+//! use std::sync::Arc;
+//!
 //! let config = DagConfig { nodes: vec![...], edges: vec![...], ... };
-//! let mut orchestrator = DagOrchestrator::from_config(config)?;
+//! let orchestrator = Arc::new(DagOrchestrator::from_config(config).await?);
 //!
-//! // Register nodes and wire queues
-//! orchestrator.register_node("source", source)?;
-//! orchestrator.wire_queues()?;
+//! // Register nodes and wire queues (async with interior mutability)
+//! orchestrator.register_node("source", source).await?;
+//! orchestrator.wire_queues().await?;
 //!
-//! // Run the pipeline
+//! // Run the pipeline (takes &self, can be shared via Arc)
 //! orchestrator.run().await?;
 //! ```
 
