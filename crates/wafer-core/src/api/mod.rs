@@ -1,0 +1,9 @@
+//! HTTP API server for pipeline control.
+//!
+//! This module provides a REST API wrapping the `PipelineControl` trait.
+//! It is feature-gated behind the `http-api` feature.
+
+mod handlers;
+mod server;
+
+pub use server::{start_api_server, ApiConfig, ApiServer};

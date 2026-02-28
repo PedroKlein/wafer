@@ -10,6 +10,7 @@
 //! - [`queue`] - SPSC bounded queues
 //! - [`config`] - TOML configuration
 //! - [`metrics`] - Runtime metrics
+//! - [`control`] - Pipeline control interface
 
 // Enable pedantic lints for high code quality, with sensible exceptions
 #![warn(clippy::pedantic)]
@@ -24,6 +25,7 @@
 pub mod error;
 
 pub mod config;
+pub mod control;
 pub mod dag;
 pub mod engine;
 pub mod factory;
@@ -32,4 +34,11 @@ pub mod node;
 pub mod queue;
 pub mod registry;
 
+#[cfg(feature = "http-api")]
+pub mod api;
+
 pub use error::{RegistryError, Result, WaferError};
+
+// Re-export control types for convenience
+pub use control::PipelineControl;
+pub use wafer_types::*;

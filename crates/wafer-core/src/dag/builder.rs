@@ -10,15 +10,64 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::config::DagConfig;
+use crate::config::{Config, DagConfig};
 use crate::error::{ConfigError, Result, WaferError};
+use crate::factory::{create_node, FactoryContext};
 use crate::node::AnyNode;
 use crate::queue::BoundedQueue;
 
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
-    /// Build a DAG orchestrator from configuration.
+    /// Build a fully-configured DAG orchestrator from a Config.
+    ///
+    /// This is the high-level constructor that:
+    /// 1. Validates the topology
+    /// 2. Creates all nodes using the factory
+    /// 3. Wires queues between nodes
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Full pipeline configuration
+    /// * `use_cache` - Whether to use OCI registry cache for remote plugins
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Topology validation fails
+    /// - Node creation fails
+    /// - Queue wiring fails
+    pub async fn from_config(config: Config, use_cache: bool) -> Result<Self> {
+        let dag_config = config.to_dag_config();
+        let mut orchestrator = Self::from_dag_config(dag_config.clone())?;
+
+        // Apply cache setting
+        let mut registry_config = dag_config.registry.clone();
+        if !use_cache {
+            registry_config.no_cache = true;
+        }
+
+        let mut factory_ctx = FactoryContext::new(registry_config)?;
+
+        for node_def in &dag_config.nodes {
+            let any_node = create_node(node_def, &mut factory_ctx).await?;
+            orchestrator.register_node(&node_def.id, any_node)?;
+        }
+
+        orchestrator.wire_queues()?;
+
+        // Store factory context for epoch ticker cleanup
+        orchestrator.factory_ctx = Some(factory_ctx);
+
+        Ok(orchestrator)
+    }
+
+    /// Build a DAG orchestrator from DagConfig (low-level).
+    ///
+    /// This creates the orchestrator without creating nodes. You must call
+    /// `register_node` for each node and then `wire_queues` before running.
+    ///
+    /// For most use cases, prefer `from_config` which handles all setup.
     ///
     /// Validates the topology at construction time:
     /// - No cycles (would fail topological sort)
@@ -26,7 +75,7 @@ impl DagOrchestrator {
     /// - Exactly one sink (no outgoing edges)
     /// - No orphan nodes (all connected to main graph)
     #[must_use = "creating an orchestrator without using it is likely a bug"]
-    pub fn from_config(config: DagConfig) -> Result<Self> {
+    pub fn from_dag_config(config: DagConfig) -> Result<Self> {
         let mut graph = DiGraph::new();
         let mut node_indices = HashMap::new();
 
@@ -65,6 +114,7 @@ impl DagOrchestrator {
             queue_senders: HashMap::new(),
             queue_receivers: HashMap::new(),
             cancel_token: CancellationToken::new(),
+            factory_ctx: None,
         };
         orchestrator.validate()?;
         Ok(orchestrator)
@@ -228,7 +278,7 @@ mod tests {
             ],
         );
 
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["source", "transform", "sink"]);
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
@@ -249,7 +299,7 @@ mod tests {
             ],
         );
 
-        let result = DagOrchestrator::from_config(config);
+        let result = DagOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Cycle"));
@@ -268,7 +318,7 @@ mod tests {
             ],
         );
 
-        let result = DagOrchestrator::from_config(config);
+        let result = DagOrchestrator::from_dag_config(config);
         assert!(result.is_err());
     }
 
@@ -283,7 +333,7 @@ mod tests {
             vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
         );
 
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
     }
@@ -299,7 +349,7 @@ mod tests {
             vec![make_edge("source", "sink")],
         );
 
-        let result = DagOrchestrator::from_config(config);
+        let result = DagOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Orphan"));
@@ -312,7 +362,7 @@ mod tests {
             vec![make_edge("source", "nonexistent")],
         );
 
-        let result = DagOrchestrator::from_config(config);
+        let result = DagOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown"));
@@ -322,7 +372,7 @@ mod tests {
     fn test_dag_single_node() {
         let config = make_dag_config(vec![make_node("single", NodeType::Source)], vec![]);
 
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["single"]);
     }
 
@@ -330,7 +380,7 @@ mod tests {
     fn test_dag_empty_rejected() {
         let config = make_dag_config(vec![], vec![]);
 
-        let result = DagOrchestrator::from_config(config);
+        let result = DagOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no nodes"));
@@ -347,7 +397,7 @@ mod tests {
             vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
         );
 
-        let orchestrator = DagOrchestrator::from_config(config).unwrap();
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
     }
