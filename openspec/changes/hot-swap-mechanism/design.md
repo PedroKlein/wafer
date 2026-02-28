@@ -17,14 +17,14 @@ The WAFER runtime currently executes DAG pipelines with WASM transform nodes, bu
 - Support hot-swap for WASM Transform nodes (primary use case)
 - Measure swap timing (< 100ms target under normal load)
 - Handle timeout gracefully (force swap, log dropped count)
-- Trigger swap via config file change (MVP)
+- Expose `hot_swap()` method on orchestrator for triggers to call
 
 **Non-Goals:**
 - Stateful hot-swap (state migration between v1 and v2) - future work
 - Hot-swap for native Source/Sink nodes - native code, use process restart
 - Automatic rollback if v2 fails after swap - future work
-- REST API trigger - phase 2, after config watch works
 - Hot-swap for Router/Joiner nodes - same mechanism, test separately
+- Trigger mechanisms (REST API, CLI) - see `control-plane` change
 
 ## Decisions
 
@@ -85,24 +85,7 @@ impl DagOrchestrator {
 
 **Rationale:** Orchestrator already owns node references and queue topology. Adding swap logic here keeps related code together. Alternative (separate SwapManager) adds indirection without benefit.
 
-### D5: Config File Watch with Debouncing
-
-Use `notify` crate for file system events, with 500ms debounce:
-
-```rust
-// Pseudocode
-let mut watcher = notify::recommended_watcher(|res| {
-    match res {
-        Ok(event) => debounced_channel.send(event),
-        Err(e) => log::error!("watch error: {:?}", e),
-    }
-})?;
-watcher.watch(config_path, RecursiveMode::NonRecursive)?;
-```
-
-**Debouncing rationale:** Editors often create multiple events (write, rename, chmod). 500ms window prevents spurious reloads.
-
-### D6: Swap Trigger Detection
+### D5: Config Diff Detection
 
 Compare old and new config to detect what changed:
 
@@ -115,18 +98,20 @@ struct ConfigDiff {
 
 For MVP, only detect WASM path changes for existing nodes. Topology changes are out of scope.
 
+> **Note:** The resync trigger mechanism (REST API via `waferctl resync`) is defined in the `control-plane` change. This change focuses on the `hot_swap()` implementation that triggers call.
+
 ## Risks / Trade-offs
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
 | Drain timeout under high load | Messages dropped | Log count, make timeout configurable, recommend lowering load before swap |
 | v2 fails init | Swap aborted, user confused | Clear error message, keep v1 running unchanged |
-| Config file watch races | Duplicate swaps | Debounce + swap-in-progress lock |
+| Concurrent swap requests | Race conditions | Swap-in-progress lock per node |
 | Memory spike (v1 + v2 both loaded) | OOM on constrained devices | Documented limit, swap one node at a time |
 
 **Trade-off: Simplicity vs Features**
 - Chose stateless-only swap over stateful (simpler, covers 90% of use cases)
-- Chose config watch over REST API first (simpler to test, no HTTP server needed)
+- Chose explicit trigger (REST API) over automatic (file watch) for user control
 - Chose single-node swap over batch (simpler coordination)
 
 ## Open Questions
