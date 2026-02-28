@@ -37,7 +37,15 @@ Use **Single-Producer Single-Consumer (SPSC) bounded queues** for all inter-node
 
 ### Queue Implementation
 
-Start with `crossbeam-channel` bounded channels. If profiling shows overhead, consider custom lock-free ring buffer.
+Use `tokio::sync::mpsc` bounded channels with SPSC usage pattern.
+
+**Rationale for tokio over crossbeam:**
+- Native async support - no blocking on the executor
+- Seamless integration with the Tokio async runtime
+- Built-in backpressure via bounded capacity
+- Simpler code - no need to spawn blocking tasks
+
+The channel is technically MPSC-capable, but we use it in SPSC mode (one sender per edge). Fan-in still requires explicit Joiner nodes.
 
 ### Overflow Policies
 

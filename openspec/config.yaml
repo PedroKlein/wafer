@@ -1,0 +1,53 @@
+schema: spec-driven
+
+# Project context
+context: |
+  ## WAFER: WebAssembly Flow Execution Runtime
+  
+  A typed DAG pipeline runtime using WebAssembly components for edge IoT gateways,
+  with a focus on zero-copy data flow, per-node hot-swap, and wasi-nn inference.
+  
+  ### Tech Stack
+  - Language: Rust 1.93+
+  - WASM Runtime: Wasmtime (Component Model, WASI P2)
+  - Async: Tokio
+  - WIT: wit-bindgen 0.53.1
+  - Target: wasm32-wasip2
+  - DAG: petgraph 0.8
+  - MQTT: rumqttc
+  
+  ### Key Architecture Decisions (ADRs)
+  - ADR-0001: Wasmtime as WASM runtime (full Component Model support)
+  - ADR-0002: SPSC bounded queues with explicit Joiner nodes for fan-in
+  - ADR-0003: Drain-and-flip hot-swap mechanism
+  - ADR-0004: Native Rust sources/sinks (not WASM due to I/O needs)
+  - ADR-0005: OCI registry support for remote plugins
+  
+  ### Node Types
+  - Source: Native Rust (stdin, file, MQTT)
+  - Transform: WASM component (process envelope)
+  - Router: WASM component (1→N content-based routing)
+  - Joiner: WASM component (N→1 merge)
+  - Sink: Native Rust (stdout, file, MQTT)
+  
+  ### Existing Documentation
+  - docs/SPEC.md: Full specification (~2000 lines)
+  - docs/MVP.md: Current implementation status
+  - docs/AI_WORKFLOW.md: Agent workflow guide
+  - docs/REGISTRY.md: OCI registry guide
+  - docs/adr/: Architecture Decision Records
+
+# Per-artifact rules
+rules:
+  proposal:
+    - Reference relevant SPEC.md sections
+    - Check against existing ADRs for conflicts
+    - Include WASM/WIT implications if applicable
+  tasks:
+    - Break into max 2-hour chunks
+    - Include test verification steps
+    - Reference relevant spec sections
+  spec:
+    - Follow WIT naming conventions (kebab-case)
+    - Include Mermaid diagrams for data flows
+    - Reference SPEC.md sections for consistency

@@ -31,10 +31,11 @@ Wasmtime is developed by the Bytecode Alliance and has the most complete support
 
 ### Specific Version
 
-- wasmtime 40.0.1
-- wasmtime-wasi 40.0.1
+- wasmtime (git main branch, post-41.0.3)
+- wasmtime-wasi (git main branch)
+- wasmtime-wasi-nn (git main branch, with `onnx` feature)
 
-These versions are aligned and provide stable Component Model support.
+**Note**: We use git main instead of crates.io releases because wasmtime-wasi-nn 41.0.3 on crates.io has a bug with the ort (ONNX Runtime) crate API. We will switch back to crates.io when wasmtime 42.x releases with the fix.
 
 ### Key Features Used
 
