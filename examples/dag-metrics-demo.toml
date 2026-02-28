@@ -1,0 +1,66 @@
+# WAFER DAG Configuration: Metrics Demo
+# Pipeline with file source for easy traffic generation with observability stack.
+#
+# Usage:
+#   1. Create input file with test data:
+#      for i in {1..1000}; do echo "message $i"; done > /tmp/wafer-input.txt
+#
+#   2. Start WAFER:
+#      cargo run -p wafer-runtime --features http-api -- --config examples/dag-metrics-demo.toml
+#
+#   3. View metrics:
+#      curl http://localhost:9091/metrics
+#      # Or open Grafana at http://localhost:3000
+#
+#   4. To generate more traffic, append to the input file:
+#      for i in {1..100}; do echo "more data $i" >> /tmp/wafer-input.txt; sleep 0.05; done
+#
+# For continuous traffic generation, use the helper script:
+#   ./scripts/generate-traffic.sh
+
+[pipeline]
+name = "metrics-demo"
+description = "Demo pipeline for observability testing"
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[metrics]
+enabled = true
+bind = "127.0.0.1:9091"
+path = "/metrics"
+[metrics.labels]
+environment = "demo"
+pipeline = "metrics-demo"
+
+# Source node: reads from file (watches for new content)
+[[nodes]]
+id = "source"
+node_type = "source"
+[nodes.config]
+path = "/tmp/wafer-input.txt"
+
+# Transform node: passes data through unchanged
+[[nodes]]
+id = "passthrough"
+node_type = "transform"
+swappable = true
+[nodes.config]
+plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+# Sink node: writes to file
+[[nodes]]
+id = "sink"
+node_type = "sink"
+[nodes.config]
+path = "/tmp/wafer-output.txt"
+
+# Edge definitions: source -> passthrough -> sink
+[[edges]]
+from = "source"
+to = "passthrough"
+
+[[edges]]
+from = "passthrough"
+to = "sink"
