@@ -1,0 +1,83 @@
+# WAFER Observability Stack
+#
+# A complete local observability setup for WAFER development and demos.
+#
+# Services:
+#   - prometheus: Metrics collection and storage (port 9092)
+#   - grafana: Dashboards and visualization (port 3000)
+#
+# Usage:
+#   1. Start the stack:
+#      cd examples/observability
+#      docker-compose up -d
+#
+#   2. Start WAFER with metrics enabled (in project root):
+#      cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+#
+#   3. Access dashboards:
+#      - Prometheus: http://localhost:9092
+#      - Grafana:    http://localhost:3000 (admin/admin)
+#
+#   4. Stop the stack:
+#      docker-compose down
+#
+# For load testing, see scripts/load-test-metrics.sh
+
+version: '3.8'
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.50.1
+    container_name: wafer-prometheus
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    # Use host network to reach WAFER running on localhost
+    # On Linux, use network_mode: host instead
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.3.3
+    container_name: wafer-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  prometheus_data:
+    name: wafer_prometheus_data
+  grafana_data:
+    name: wafer_grafana_data

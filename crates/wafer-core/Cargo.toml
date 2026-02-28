@@ -69,3 +69,8 @@ criterion = { version = "0.5", features = ["async_tokio"] }
 [[bench]]
 name = "hot_swap"
 harness = false
+
+[[bench]]
+name = "metrics"
+harness = false
+required-features = ["http-api"]
