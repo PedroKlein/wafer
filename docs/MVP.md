@@ -312,7 +312,7 @@ wit/
 
 ### Dynamic Features
 - [x] ~~OCI registry package fetching~~ - Implemented via `WaferRegistry`
-- [ ] Hot-swap (drain-and-flip) - **See hot-swap-mechanism change**
+- [x] ~~Hot-swap (drain-and-flip)~~ - Implemented via `HotSwapCoordinator` (see ADR-0003)
 - [ ] Dynamic topology (add/remove nodes at runtime)
 - [ ] Config file watching (inotify/kqueue)
 - [ ] REST API for topology changes
@@ -356,7 +356,7 @@ wit/
 | **Metrics** | Prometheus endpoint scaffolded | Full registry not yet wired |
 | **Logging** | Text format only (no JSON export) | Structured logging planned |
 | **Error handling** | No DLQ, errors logged only | DLQ routing planned |
-| **Hot-swap** | Stubs only (returns NotImplemented) | Full mechanism planned |
+| **Hot-swap** | Transform nodes only (sources/sinks not swappable) | By design - see ADR-0003 |
 | **Capabilities** | Network/filesystem flags are placeholders | Enforcement not implemented |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` | By design |
 | **WASI-NN** | ONNX backend only, CPU-only (no GPU acceleration) | Hardware backends planned |
@@ -434,8 +434,11 @@ waferctl nodes
 # Get pipeline status
 waferctl status
 
-# Trigger hot-swap on a node (returns NotImplemented until hot-swap-mechanism)
+# Trigger hot-swap on a node (reloads config and swaps to new WASM)
 waferctl hot-swap transform-1
+
+# Hot-swap with explicit WASM path
+waferctl hot-swap transform-1 --path plugins/uppercase/v2.wasm
 
 # Get metrics (human-readable)
 waferctl metrics
@@ -654,6 +657,6 @@ WaferState::with_capabilities(Capabilities::full())
 |--------|--------|-------------|
 | `runtime-control-plane` | ✅ Complete | Workspace restructure, HTTP API, waferctl CLI |
 | `observability-prometheus` | 🔲 Not Started | Full Prometheus metrics, structured logging |
-| `hot-swap-mechanism` | 🔲 Not Started | Drain-and-flip hot-swap implementation |
+| `hot-swap-mechanism` | ✅ Complete | Drain-and-flip hot-swap implementation |
 
 See `openspec/changes/` for detailed task breakdowns.
