@@ -1,0 +1,15 @@
+# Grafana dashboard provisioning
+# Automatically loads dashboards from /var/lib/grafana/dashboards
+
+apiVersion: 1
+
+providers:
+  - name: 'WAFER Dashboards'
+    orgId: 1
+    folder: 'WAFER'
+    folderUid: 'wafer'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
