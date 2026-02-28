@@ -16,12 +16,12 @@ The control plane provides:
 | `/health` | GET | Liveness probe (always 200 if server up) |
 | `/ready` | GET | Readiness probe (200 when pipeline running) |
 | `/api/v1/pipeline` | GET | Get pipeline status and metrics |
-| `/api/v1/pipeline/reload` | POST | Reload configuration (not yet implemented) |
+| `/api/v1/pipeline/reload` | POST | Reload configuration and hot-swap changed nodes |
 | `/api/v1/pipeline/drain` | POST | Graceful shutdown |
 | `/api/v1/pipeline/shutdown` | POST | Immediate shutdown |
 | `/api/v1/nodes` | GET | List all nodes |
 | `/api/v1/nodes/{id}` | GET | Get node details |
-| `/api/v1/nodes/{id}/hot-swap` | POST | Hot-swap a node (not yet implemented) |
+| `/api/v1/nodes/{id}/hot-swap` | POST | Hot-swap a node (drain-and-flip) |
 | `/metrics` | GET | Prometheus metrics |
 
 ## Default Ports
