@@ -50,14 +50,14 @@ By implementing nodes as WebAssembly components with WIT-defined interfaces, the
 
 ### 1.2 One-Liner
 
-A single-process Rust runtime that executes typed DAGs of WebAssembly components with capability-scoped isolation, bounded queues, zero-copy data passing, and per-node hot-swap.
+A single-process Rust runtime that executes typed DAGs of WebAssembly components with capability-scoped isolation, bounded queues, efficient data passing, and per-node hot-swap.
 
 ### 1.3 Core Value Propositions
 
 | Value                              | Description                                                                                 |
 | ---------------------------------- | ------------------------------------------------------------------------------------------- |
 | **Type-safe boundaries**           | WIT-defined contracts between host and nodes; type compatibility validated at DAG load time |
-| **Zero-copy data flow**            | Borrow semantics minimize copies as data moves through the DAG                              |
+| **Efficient data flow**            | Minimal-copy semantics as data moves through the DAG; true zero-copy is future work (see §18.1) |
 | **Strong isolation**               | WASI capability grants + Wasm sandboxing + fuel/epoch limits                                |
 | **Cross-architecture portability** | Same `.wasm` binary runs on ARM (Pi, Jetson, Mac M3) and x86                                |
 | **Per-node hot-swap**              | Upgrade individual nodes without stopping the pipeline                                      |
@@ -226,10 +226,11 @@ These features are desirable but may be simplified or deferred based on implemen
 
 1. **Single process:** All nodes run in one OS process for minimal overhead
 2. **Async scheduling:** Tokio runtime schedules node execution
-3. **Per-node workers:** Each node can have configurable worker count (default: 1) (THIS IS OPEN TO DISCUSSION IF WE WANT THIS LEVEL OF COMPLEXITY IN TG2)
+3. **One instance per node:** Each node has exactly one WASM instance (WASM stores are `Send` but not `Sync`)
 4. **SPSC queues:** Single-producer-single-consumer channels between nodes
 5. **Fan-in via Joiner:** Multiple producers require explicit Joiner node
 6. **Cooperative scheduling:** Nodes yield after processing; fuel limits prevent runaway execution
+7. **DAG-level parallelism:** Independent nodes in the DAG run concurrently on separate Tokio tasks
 
 ### 3.4 Cross-Architecture Support
 
@@ -444,7 +445,7 @@ record process-error {
 **Design Notes:**
 
 - **Payload variants:** The `payload` variant is extensible. Users building domain-specific pipelines can create their own types package that adds variants.
-- **Envelope as record:** Using a record (not resource) means data is copied across the boundary. For zero-copy, we'd need resources with host-owned memory. This is a trade-off between simplicity and performance—measure and optimize if needed.
+- **Envelope as record:** Using a record (not resource) means data is copied across the WASM boundary on each `process()` call. This is a fundamental WIT limitation—records are value types that must be serialized/deserialized. For true zero-copy, we'd need WIT resources with host-owned memory, which adds significant complexity. This is tracked as future work (see §18.1).
 - **Processing-time only:** The `timestamp` field represents when the message entered the pipeline (processing time), not when the event occurred (event time).
 
 ### 4.4 Draft WIT: Base Node Interface (`pipeline:node`)
@@ -1238,95 +1239,61 @@ This is out of scope for the thesis (stateless nodes only).
 
 ### 11.1 Design Approach
 
-The inference capability follows the emerging **wasi-nn** standard to ensure future compatibility. Integration is dual:
+The inference capability uses the standard **wasi-nn** interfaces directly—no custom wrapper. This ensures compatibility with the evolving WASI ecosystem and allows plugins to use any wasi-nn-compatible tooling.
 
-1. **Inference node category:** Dedicated `inference` transform node for simple ML pipelines
-2. **Capability import:** Any transform node can import inference capability for custom logic
+**Architecture:**
 
-### 11.2 wasi-nn Interface (Draft)
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  WASM Component (e.g., mnist-inference)                         │
+│                                                                 │
+│  Exports:                          Imports:                     │
+│  ├─ pipeline:transform/lifecycle   ├─ wasi:nn/tensor            │
+│  └─ pipeline:transform/transform   ├─ wasi:nn/graph             │
+│                                    ├─ wasi:nn/inference         │
+│                                    └─ wasi:nn/errors            │
+└─────────────────────────────────────────────────────────────────┘
+                    │                         ▲
+                    │ exports                 │ imports (host provides)
+                    ▼                         │
+┌─────────────────────────────────────────────────────────────────┐
+│  Host Runtime (wasmtime + wasmtime-wasi-nn)                     │
+│                                                                 │
+│  - Calls lifecycle.init(), transform.process()                  │
+│  - Provides wasi-nn implementation backed by:                   │
+│    ONNX Runtime, TensorRT, Core ML, etc.                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### 11.2 The `inference-node` World
+
+Inference nodes use a dedicated WIT world that extends `transform-node` with wasi-nn imports:
 
 ```wit
-/// pipeline:inference - ML inference capability (wasi-nn compatible)
-package pipeline:inference@0.1.0;
+/// Inference node world - extends transform-node with wasi-nn imports
+///
+/// This world has all the same exports as transform-node but also imports
+/// wasi:nn interfaces for ML inference capabilities.
+world inference-node {
+    /// Export lifecycle (validate, init, close)
+    export lifecycle;
 
-use pipeline:types@0.1.0.{tensor, tensor-dtype};
+    /// Export transform-specific interface
+    export transform;
 
-/// Graph (model) handle - opaque identifier
-type graph = u32;
-
-/// Execution context handle
-type context = u32;
-
-/// Error type for inference operations
-variant inference-error {
-    /// Model not found or invalid
-    invalid-model(string),
-    /// Input tensor shape/type mismatch
-    invalid-input(string),
-    /// Backend execution error
-    execution-error(string),
-    /// Resource exhausted
-    resource-exhausted(string),
-}
-
-/// Inference capability interface
-/// 
-/// Design notes:
-/// - Follows wasi-nn structure for compatibility
-/// - Host implements backend mapping (TensorRT, ONNX, etc.)
-/// - Stateless from component perspective (host manages models)
-interface inference {
-    /// Load a model graph from bytes
-    /// 
-    /// The host determines the appropriate backend based on model format
-    /// and available hardware (GPU, CPU, etc.)
-    load: func(
-        name: string,
-        model-bytes: list<u8>,
-        target: execution-target
-    ) -> result<graph, inference-error>;
-    
-    /// Create an execution context for a graph
-    /// 
-    /// Context holds intermediate buffers for inference.
-    /// Multiple contexts can share one graph for concurrent inference.
-    init-context: func(graph: graph) -> result<context, inference-error>;
-    
-    /// Set input tensor for inference
-    set-input: func(
-        ctx: context,
-        index: u32,
-        tensor: tensor
-    ) -> result<_, inference-error>;
-    
-    /// Execute inference
-    compute: func(ctx: context) -> result<_, inference-error>;
-    
-    /// Get output tensor after inference
-    get-output: func(
-        ctx: context,
-        index: u32
-    ) -> result<tensor, inference-error>;
-    
-    /// Unload a model graph
-    unload: func(graph: graph);
-    
-    /// Destroy an execution context
-    destroy-context: func(ctx: context);
-}
-
-/// Execution target hint
-enum execution-target {
-    /// Use CPU
-    cpu,
-    /// Use GPU if available, fallback to CPU
-    gpu,
-    /// Use TPU/NPU if available
-    tpu,
-    /// Let host decide based on availability
-    auto,
+    /// Import standard wasi-nn interfaces for ML inference
+    import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+    import wasi:nn/graph@0.2.0-rc-2024-10-28;
+    import wasi:nn/inference@0.2.0-rc-2024-10-28;
+    import wasi:nn/errors@0.2.0-rc-2024-10-28;
 }
 ```
+
+**Key points:**
+
+- **Same exports as regular transforms:** `lifecycle` and `transform` interfaces
+- **Standard wasi-nn imports:** No custom wrapper, direct use of `wasi:nn@0.2.0-rc-2024-10-28`
+- **Host provides wasi-nn:** The runtime links wasi-nn imports to the appropriate backend
 
 ### 11.3 Host Backend Mapping
 
@@ -1354,20 +1321,58 @@ enum execution-target {
 | `gpu_memory_used_bytes`       | Gauge     | GPU memory usage (Jetson)            |
 | `thermal_throttle_events`     | Counter   | Thermal throttling occurrences       |
 
-### 11.5 Reference: Inference Node
+### 11.5 Example: MNIST Inference Plugin
 
-The `inference` transform node wraps the inference capability:
+A complete inference plugin that loads an ONNX model and runs inference:
 
-```yaml
-# Example inference node config
-- id: object-detector
-  type: transform/inference
-  config:
-    model_path: "/models/yolov5s.onnx"
-    execution_target: gpu
-    batch_size: 1
-    input_name: "images"
-    output_name: "output"
+```rust
+// plugins/mnist-inference/src/lib.rs (simplified)
+use wasi::nn::{
+    graph::{self, ExecutionTarget, GraphEncoding},
+    inference::GraphExecutionContext,
+    tensor::{Tensor, TensorType},
+};
+
+static MODEL_BYTES: &[u8] = include_bytes!("../../../models/mnist-8.onnx");
+
+impl exports::pipeline::transform::lifecycle::Guest for MnistInference {
+    fn init(_config: NodeConfig) -> Result<(), String> {
+        // Load model using standard wasi-nn
+        let graph = graph::load(
+            &[MODEL_BYTES.to_vec()],
+            GraphEncoding::Onnx,
+            ExecutionTarget::Cpu,
+        ).map_err(|e| format!("Failed to load model: {:?}", e))?;
+
+        // Create execution context
+        let context = graph.init_execution_context()
+            .map_err(|e| format!("Failed to create context: {:?}", e))?;
+        
+        // Store context for use in process()
+        // ...
+        Ok(())
+    }
+}
+
+impl exports::pipeline::transform::transform::Guest for MnistInference {
+    fn process(input: Envelope) -> ProcessResult {
+        // Set input tensor, compute, get output using wasi-nn
+        // ...
+    }
+}
+```
+
+**Configuration example:**
+
+```toml
+[[nodes]]
+id = "mnist"
+wasm_path = "plugins/mnist-inference.wasm"
+node_type = "transform"
+
+[nodes.config]
+# Model is embedded in the WASM component
+# No additional config needed for this example
 ```
 
 ---
@@ -1483,7 +1488,7 @@ Nodes must explicitly import capabilities. The host grants only what's configure
 | `wasi:clocks/wall`      | Wall clock access        | Default: granted        |
 | `wasi:random`           | Random number generation | Default: granted        |
 | `wasi:io/streams`       | Basic I/O streams        | Default: granted        |
-| `pipeline:inference`    | ML inference             | Explicit grant required |
+| `wasi:nn/*`             | ML inference (wasi-nn)   | Explicit grant required |
 | `wasi:http/client`      | HTTP client (future)     | Explicit grant required |
 | `wasi:filesystem`       | File access (future)     | Explicit grant required |
 | `wasi:sockets`          | Network sockets (future) | Explicit grant required |
@@ -1832,7 +1837,7 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 **Goal:** Scenario B working on Jetson
 
 **Deliverables:**
-- [ ] wasi-nn compatible inference interface
+- [x] wasi-nn integration via `inference-node` world
 - [ ] Tensor type and preprocessing node
 - [ ] Postprocessing node (detection output to JSON)
 - [ ] TensorRT backend for Jetson
@@ -1891,7 +1896,11 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 
 ### 18.1 WIT Design
 
-- [ ] **Records vs Resources:** Should `envelope` be a resource (host-owned, zero-copy) or record (copied)? Trade-off: simplicity vs performance. **Decision:** Start with records, migrate to resources if benchmarks show copy overhead.
+- [ ] **Records vs Resources:** Should `envelope` be a resource (host-owned, zero-copy) or record (copied)? 
+  - **Current state:** Records (copied). WIT records are value types—data is serialized when crossing the WASM boundary.
+  - **Trade-off:** Simplicity vs performance. Resources would enable true zero-copy but add complexity (lifetime management, host memory ownership).
+  - **Decision:** Start with records. Migrate to resources if benchmarks show copy overhead is a bottleneck.
+  - **Future work:** Investigate WIT resources for large payloads (images, tensors) where copy overhead matters.
 
 - [ ] **Schema evolution:** How to handle payload type changes? Versioned variants? **Decision:** Defer, use static schemas for thesis.
 
