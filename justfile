@@ -4,17 +4,62 @@
 default:
     @just --list
 
-# Build the host runtime
+# =============================================================================
+# Core Workspace Commands
+# =============================================================================
+
+# Build the entire workspace
 build:
-    cargo build
+    cargo build --workspace
 
 # Build in release mode
 build-release:
-    cargo build --release
+    cargo build --workspace --release
 
-# Run all tests
+# Run all tests across the workspace
 test:
-    cargo test --all
+    cargo test --workspace
+
+# Check code without building
+check:
+    cargo check --workspace
+
+# Clean all build artifacts
+clean:
+    cargo clean
+    for plugin in plugins/*/Cargo.toml; do cargo clean --manifest-path "$plugin" 2>/dev/null || true; done
+
+# Format code
+fmt:
+    cargo fmt --all
+
+# Run clippy lints
+clippy:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# =============================================================================
+# Binary-specific Commands
+# =============================================================================
+
+# Build only wafer-runtime
+build-runtime:
+    cargo build -p wafer-runtime
+
+# Build only waferctl
+build-ctl:
+    cargo build -p waferctl
+
+# Run wafer-runtime with a config
+run config="examples/dag-passthrough.toml":
+    cargo run -p wafer-runtime -- --config {{config}}
+
+# Run waferctl command
+ctl *args:
+    cargo run -p waferctl -- {{args}}
+
+# =============================================================================
+# Plugin Build Commands
+# =============================================================================
 
 # Build the pass-through plugin
 plugin:
@@ -23,19 +68,6 @@ plugin:
 # Validate the plugin WASM component
 validate: plugin
     wasm-tools validate --features component-model plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm
-
-# Run the pipeline with passthrough DAG config
-run:
-    cargo run -- --config examples/dag-passthrough.toml
-
-# Clean all build artifacts
-clean:
-    cargo clean
-    cargo clean --manifest-path plugins/pass-through/Cargo.toml
-
-# Check code without building
-check:
-    cargo check --all
 
 # =============================================================================
 # Plugin Build Commands
