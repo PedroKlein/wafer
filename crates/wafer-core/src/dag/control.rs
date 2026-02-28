@@ -198,7 +198,7 @@ impl PipelineControl for DagOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DagConfig, EdgeDefinition, NodeDefinition, PipelineConfig};
+    use crate::config::{DagConfig, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig};
     use crate::config::NodeType as ConfigNodeType;
     use crate::dag::orchestrator::ControlState;
     use crate::registry::RegistryConfig;
@@ -217,6 +217,7 @@ mod tests {
             },
             default_queue_capacity: 1024,
             registry: RegistryConfig::default(),
+            dead_letter: None,
             nodes: vec![
                 NodeDefinition {
                     id: "source".to_string(),
@@ -251,6 +252,7 @@ mod tests {
                     from_port: None,
                     to_port: None,
                     queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
                 },
                 EdgeDefinition {
                     from: "transform".to_string(),
@@ -258,6 +260,7 @@ mod tests {
                     from_port: None,
                     to_port: None,
                     queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
                 },
             ],
         };

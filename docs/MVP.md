@@ -23,6 +23,9 @@ The MVP implements **DAG pipelines with fan-out/fan-in support** plus a **runtim
 - Epoch interruption for cooperative scheduling
 - Capability-scoped WASI contexts
 - **SPSC bounded queues for inter-node communication**
+- **Queue overflow policies**: `slow` (backpressure), `drop`, `dead-letter`
+- **Dead Letter Queue (DLQ)**: Pipeline-wide sink for failed/dropped messages
+- **Sink batching**: `batch_size`, `batch_timeout_ms`, and `flush()` support
 - **petgraph-based DAG topology management**
 - **CLI with DAG config loading**
 
@@ -151,7 +154,7 @@ wit/
 | `plugins/content-router/` | Router | Content-based 1→N routing (routes by JSON `route` field) | wasm32-wasip2 |
 | `plugins/merge-joiner/` | Joiner | Stateless N→1 merge (passes through all inputs) | wasm32-wasip2 |
 
-### Example Configs (13 total)
+### Example Configs (15 total)
 
 | Config | Description |
 |--------|-------------|
@@ -168,6 +171,7 @@ wit/
 | `examples/dag-diamond.toml` | Diamond/scatter-gather: source → router → transforms → joiner → sink |
 | `examples/dag-fanout.toml` | Fan-out: source → router → multiple sinks |
 | `examples/dag-passthrough-with-api.toml` | Passthrough with `[api]` and `[metrics]` config sections |
+| `examples/dag-overflow-dlq-demo.toml` | Overflow policies (`slow`, `drop`, `dead-letter`), DLQ, and sink batching |
 
 ---
 
@@ -271,10 +275,11 @@ wit/
 - [x] ~~Joiner nodes (N→1 merge)~~ - WasmJoiner implemented with `joiner-node` WIT world
 - [x] ~~WASM-based Source/Sink~~ - **Decision: Not implementing** - Sources/sinks remain native Rust (see [ADR-0004](adr/0004-native-sources-sinks.md))
 
-### Sink Features (SPEC §4.9)
-- [ ] Sink batching: `batch_size` configuration
-- [ ] Sink batching: `batch_timeout` configuration
-- [ ] Sink `flush()` interface for buffered output
+### Sink Features (SPEC §4.9) - ✅ COMPLETE
+- [x] Sink batching: `batch_size` configuration
+- [x] Sink batching: `batch_timeout_ms` configuration  
+- [x] Sink `flush()` interface for buffered output
+- [x] `BatchBuffer<T>` utility for managing batched writes
 
 ### DAG Orchestration - ✅ COMPLETE
 - [x] ~~Multi-node pipelines~~ - Linear chain implemented
@@ -283,7 +288,7 @@ wit/
 - [x] ~~Backpressure propagation~~ - Blocking queues implemented
 - [x] ~~CLI integration~~ - `--config` flag for DAG TOML files
 - [x] ~~Fan-out/fan-in topologies~~ - Router/Joiner implemented (diamond, scatter-gather patterns)
-- [ ] Dead Letter Queue (DLQ) routing (SPEC §7.2)
+- [x] Dead Letter Queue (DLQ) routing (SPEC §7.2) - DlqFileSink with envelope metadata
 
 ### Control Plane (runtime-control-plane change) - ✅ MOSTLY COMPLETE
 - [x] Workspace restructure: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl`
@@ -317,9 +322,10 @@ wit/
 - [ ] Config file watching (inotify/kqueue)
 - [ ] REST API for topology changes
 
-### Queue Features (SPEC §8)
-- [ ] Overflow policy: `drop` - only `slow`/blocking exists
-- [ ] Overflow policy: `dead-letter`
+### Queue Features (SPEC §8) - ✅ COMPLETE
+- [x] Overflow policy: `slow` (blocking/backpressure)
+- [x] Overflow policy: `drop` - discard messages when queue is full
+- [x] Overflow policy: `dead-letter` - route dropped messages to DLQ
 
 ### External Integration
 - [x] ~~MQTT source/sink~~ - Implemented via rumqttc (see [mqtt-setup.md](mqtt-setup.md))
@@ -355,7 +361,7 @@ wit/
 | **State** | Stateless transforms only | Host-managed state planned |
 | **Metrics** | Full Prometheus registry | All SPEC §12.2 metrics available |
 | **Logging** | JSON and text formats via `--log-format` | Structured logging complete |
-| **Error handling** | No DLQ, errors logged only | DLQ routing planned |
+| **Error handling** | DLQ for overflow and process errors | Full DLQ support implemented |
 | **Hot-swap** | Transform nodes only (sources/sinks not swappable) | By design - see ADR-0003 |
 | **Capabilities** | Network/filesystem flags are placeholders | Enforcement not implemented |
 | **Threading** | `WaferEngine` not `Clone` due to `OnceLock<Linker>` | By design |
@@ -658,5 +664,6 @@ WaferState::with_capabilities(Capabilities::full())
 | `runtime-control-plane` | ✅ Complete | Workspace restructure, HTTP API, waferctl CLI |
 | `observability-prometheus` | ✅ Complete | Full Prometheus metrics, structured logging |
 | `hot-swap-mechanism` | ✅ Complete | Drain-and-flip hot-swap implementation |
+| `queue-overflow-and-dlq` | ✅ Complete | Overflow policies (drop, dead-letter), DLQ sink, sink batching |
 
 See `openspec/changes/` for detailed task breakdowns.

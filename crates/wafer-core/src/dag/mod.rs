@@ -42,7 +42,7 @@ mod routing;
 mod runner;
 
 pub use hotswap::{HotSwapCoordinator, SwapError, SwapMetrics, DEFAULT_DRAIN_TIMEOUT_MS};
-pub use orchestrator::DagOrchestrator;
+pub use orchestrator::{DagOrchestrator, EdgeSendInfo};
 pub use routing::{RoutingController, SendError};
 
 /// Type alias for `DagOrchestrator` - the core pipeline controller.

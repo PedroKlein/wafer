@@ -11,8 +11,43 @@ use crate::error::{ConfigError, Result, WaferError};
 use crate::node::Lifecycle;
 use crate::queue::RuntimeEnvelope;
 
-use super::Sink;
+use super::batch::BatchBuffer;
+use super::{BatchStats, Sink};
 
+/// Configuration for MqttSink batching behavior.
+#[derive(Debug, Clone)]
+pub struct MqttSinkBatchConfig {
+    /// Number of messages to buffer before publishing.
+    /// When `None`, messages are published immediately (no batching).
+    pub batch_size: Option<usize>,
+    /// Timeout in milliseconds for batch flush.
+    /// Even if batch_size is not reached, flush after this timeout.
+    /// Only used when `batch_size` is `Some`.
+    pub batch_timeout_ms: Option<u64>,
+}
+
+impl Default for MqttSinkBatchConfig {
+    fn default() -> Self {
+        Self {
+            batch_size: None,
+            batch_timeout_ms: None,
+        }
+    }
+}
+
+/// An MQTT-based sink node that publishes messages to an MQTT broker.
+///
+/// # Batching Support
+///
+/// When `batch_config.batch_size` is set, messages are buffered and published
+/// in batches. Note that MQTT doesn't have a native batch publish mechanism,
+/// so each message in the batch is published individually but without waiting
+/// for acknowledgment between messages (fire-and-forget within the batch).
+///
+/// Messages are flushed when:
+/// - The batch size is reached
+/// - The batch timeout expires
+/// - The sink is closed
 pub struct MqttSink {
     id: String,
     broker: String,
@@ -22,6 +57,10 @@ pub struct MqttSink {
     client_id: String,
     client: Option<AsyncClient>,
     eventloop_handle: Option<JoinHandle<()>>,
+    batch_config: MqttSinkBatchConfig,
+    batch_buffer: Option<BatchBuffer<RuntimeEnvelope>>,
+    /// Batch statistics for metrics reporting.
+    batch_stats: BatchStats,
 }
 
 impl MqttSink {
@@ -49,7 +88,65 @@ impl MqttSink {
             client_id: client_id.into(),
             client: None,
             eventloop_handle: None,
+            batch_config: MqttSinkBatchConfig::default(),
+            batch_buffer: None,
+            batch_stats: BatchStats::default(),
         }
+    }
+
+    /// Create a new MqttSink with custom batching configuration.
+    #[must_use]
+    pub fn with_batching(
+        id: impl Into<String>,
+        broker: impl Into<String>,
+        port: u16,
+        topic: impl Into<String>,
+        qos: u8,
+        client_id: impl Into<String>,
+        batch_config: MqttSinkBatchConfig,
+    ) -> Self {
+        let qos = match qos {
+            0 => QoS::AtMostOnce,
+            1 => QoS::AtLeastOnce,
+            _ => QoS::ExactlyOnce,
+        };
+
+        Self {
+            id: id.into(),
+            broker: broker.into(),
+            port,
+            topic: topic.into(),
+            qos,
+            client_id: client_id.into(),
+            client: None,
+            eventloop_handle: None,
+            batch_config,
+            batch_buffer: None,
+            batch_stats: BatchStats::default(),
+        }
+    }
+
+    /// Publish a batch of messages to the MQTT broker.
+    async fn publish_batch(&mut self, batch: Vec<RuntimeEnvelope>) -> Result<()> {
+        let batch_size = batch.len();
+        let client = self.client.as_ref().ok_or_else(|| WaferError::PluginInit {
+            message: "MqttSink not initialized - call init() first".to_string(),
+        })?;
+
+        for envelope in batch {
+            client
+                .publish(&self.topic, self.qos, false, envelope.payload)
+                .await
+                .map_err(|e| {
+                    WaferError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                })?;
+        }
+
+        // Record batch stats for metrics
+        self.batch_stats.flushes_since_last_check += 1;
+        self.batch_stats.last_flush_size = batch_size as u64;
+
+        Ok(())
     }
 }
 
@@ -78,6 +175,16 @@ impl Lifecycle for MqttSink {
                 "MQTT client_id cannot be empty".to_string(),
             )));
         }
+
+        // Validate batch configuration
+        if let Some(batch_size) = self.batch_config.batch_size {
+            if batch_size == 0 {
+                return Err(WaferError::Config(ConfigError::Message(
+                    "batch_size must be greater than 0".to_string(),
+                )));
+            }
+        }
+
         Ok(())
     }
 
@@ -93,18 +200,36 @@ impl Lifecycle for MqttSink {
 
             self.client = Some(client);
             self.eventloop_handle = Some(handle);
+
+            // Initialize batch buffer if batching is enabled
+            if let Some(batch_size) = self.batch_config.batch_size {
+                let timeout = Duration::from_millis(
+                    self.batch_config.batch_timeout_ms.unwrap_or(1000),
+                );
+                self.batch_buffer = Some(BatchBuffer::new(batch_size, timeout));
+            }
+
             Ok(())
         })
     }
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
+            // Flush any remaining buffered messages
+            if let Some(ref mut buffer) = self.batch_buffer {
+                let remaining = buffer.take();
+                if !remaining.is_empty() {
+                    self.publish_batch(remaining).await?;
+                }
+            }
+
             if let Some(client) = self.client.take() {
                 let _ = client.disconnect().await;
             }
             if let Some(handle) = self.eventloop_handle.take() {
                 handle.abort();
             }
+            self.batch_buffer = None;
             Ok(())
         })
     }
@@ -145,19 +270,69 @@ impl Sink for MqttSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let client = self.client.as_ref().ok_or_else(|| WaferError::PluginInit {
-                message: "MqttSink not initialized - call init() first".to_string(),
-            })?;
-
-            client
-                .publish(&self.topic, self.qos, false, envelope.payload)
-                .await
-                .map_err(|e| {
-                    WaferError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            // Check if batching is enabled
+            if let Some(ref mut buffer) = self.batch_buffer {
+                // Push to buffer; if batch size reached, publish the batch
+                if let Some(batch) = buffer.push(envelope) {
+                    self.publish_batch(batch).await?;
+                }
+                Ok(())
+            } else {
+                // No batching - publish immediately
+                let client = self.client.as_ref().ok_or_else(|| WaferError::PluginInit {
+                    message: "MqttSink not initialized - call init() first".to_string(),
                 })?;
 
+                client
+                    .publish(&self.topic, self.qos, false, envelope.payload)
+                    .await
+                    .map_err(|e| {
+                        WaferError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    })?;
+
+                Ok(())
+            }
+        })
+    }
+
+    fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async move {
+            // Flush any buffered messages
+            if let Some(ref mut buffer) = self.batch_buffer {
+                let batch = buffer.take();
+                if !batch.is_empty() {
+                    self.publish_batch(batch).await?;
+                }
+            }
             Ok(())
         })
+    }
+
+    fn batch_timeout(&self) -> Option<Duration> {
+        // Return the configured timeout if batching is enabled
+        self.batch_config.batch_size.map(|_| {
+            Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000))
+        })
+    }
+
+    fn take_batch_stats(&mut self) -> Option<BatchStats> {
+        // Only return stats if batching is enabled
+        if self.batch_buffer.is_none() {
+            return None;
+        }
+
+        // Update current buffer size
+        self.batch_stats.current_buffer_size = self
+            .batch_buffer
+            .as_ref()
+            .map(|b| b.len() as u64)
+            .unwrap_or(0);
+
+        // Take the stats and reset counters
+        let stats = self.batch_stats.clone();
+        self.batch_stats.flushes_since_last_check = 0;
+
+        Some(stats)
     }
 }
 
@@ -224,5 +399,77 @@ mod tests {
 
         let result = sink.collect(env).await;
         assert!(result.is_err());
+    }
+
+    // Batching tests (unit tests only - no actual broker needed)
+
+    #[test]
+    fn test_mqtt_sink_with_batching_creation() {
+        let sink = MqttSink::with_batching(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+            MqttSinkBatchConfig {
+                batch_size: Some(10),
+                batch_timeout_ms: Some(500),
+            },
+        );
+
+        assert_eq!(sink.batch_config.batch_size, Some(10));
+        assert_eq!(sink.batch_config.batch_timeout_ms, Some(500));
+    }
+
+    #[test]
+    fn test_mqtt_sink_batch_timeout_returns_configured_value() {
+        let sink = MqttSink::with_batching(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+            MqttSinkBatchConfig {
+                batch_size: Some(10),
+                batch_timeout_ms: Some(500),
+            },
+        );
+
+        assert_eq!(sink.batch_timeout(), Some(Duration::from_millis(500)));
+    }
+
+    #[test]
+    fn test_mqtt_sink_batch_timeout_none_without_batching() {
+        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
+        assert_eq!(sink.batch_timeout(), None);
+    }
+
+    #[test]
+    fn test_mqtt_sink_validate_zero_batch_size() {
+        let sink = MqttSink::with_batching(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+            MqttSinkBatchConfig {
+                batch_size: Some(0),
+                batch_timeout_ms: Some(1000),
+            },
+        );
+
+        let result = sink.validate();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("batch_size"));
+    }
+
+    #[test]
+    fn test_mqtt_sink_default_batch_config() {
+        let config = MqttSinkBatchConfig::default();
+        assert_eq!(config.batch_size, None);
+        assert_eq!(config.batch_timeout_ms, None);
     }
 }

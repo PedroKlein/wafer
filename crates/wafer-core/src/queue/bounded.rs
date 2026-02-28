@@ -110,6 +110,18 @@ impl<T> QueueSender<T> {
     pub fn is_closed(&self) -> bool {
         self.sender.is_closed()
     }
+
+    /// Get the current available capacity (number of items that can be sent without blocking).
+    ///
+    /// This is the number of slots available, not the total capacity.
+    pub fn available_capacity(&self) -> usize {
+        self.sender.capacity()
+    }
+
+    /// Get the maximum capacity of the channel.
+    pub fn max_capacity(&self) -> usize {
+        self.sender.max_capacity()
+    }
 }
 
 /// Receiver half of a bounded queue.

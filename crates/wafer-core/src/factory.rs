@@ -37,12 +37,12 @@
 use std::collections::HashMap;
 use tokio::task::JoinHandle;
 
-use crate::config::{NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
+use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
     AnyNode, FileSink, FileSource, JoinerInstance, MqttSink, MqttSource, NodeConfig,
-    RouterInstance, StdinSource, StdoutSink, WasmJoiner, WasmRouter, WasmTransform,
+    RouterInstance, Sink, StdinSource, StdoutSink, WasmJoiner, WasmRouter, WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 use crate::Result;
@@ -390,6 +390,83 @@ async fn resolve_and_load_plugin(
     ctx.resolved_plugins.insert(node_id.to_string(), resolved);
 
     Ok(component)
+}
+
+/// Create a Dead Letter Queue sink from configuration.
+///
+/// This creates a sink instance that will receive failed/dropped messages.
+/// The sink type and configuration are taken from the `[dead_letter]` config section.
+///
+/// # Arguments
+///
+/// * `config` - The dead letter configuration
+///
+/// # Returns
+///
+/// A boxed sink trait object ready to receive DLQ messages.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The sink type is not recognized
+/// - Required sink configuration is missing
+pub fn create_dlq_sink(config: &DeadLetterConfig) -> Result<Box<dyn Sink + Send>> {
+    let sink_type = config.sink_type.as_str();
+    match sink_type {
+        "stdout" => Ok(Box::new(StdoutSink::new("dlq"))),
+        "file" => {
+            let path = config
+                .config
+                .get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    WaferError::Config(ConfigError::Message(
+                        "dead_letter file sink requires 'path' in config".to_string(),
+                    ))
+                })?;
+            Ok(Box::new(FileSink::new("dlq", path)))
+        }
+        "mqtt" => {
+            let broker = config
+                .config
+                .get("broker")
+                .and_then(|v| v.as_str())
+                .unwrap_or("localhost");
+            let port = config
+                .config
+                .get("port")
+                .and_then(|v| v.as_integer())
+                .map(|v| v as u16)
+                .unwrap_or(1883);
+            let topic = config
+                .config
+                .get("topic")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    WaferError::Config(ConfigError::Message(
+                        "dead_letter mqtt sink requires 'topic' in config".to_string(),
+                    ))
+                })?;
+            let qos = config
+                .config
+                .get("qos")
+                .and_then(|v| v.as_integer())
+                .map(|v| v as u8)
+                .unwrap_or(0);
+            let client_id = config
+                .config
+                .get("client_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+                .unwrap_or_else(|| "wafer-dlq".to_string());
+            Ok(Box::new(MqttSink::new(
+                "dlq", broker, port, topic, qos, client_id,
+            )))
+        }
+        _ => Err(WaferError::Config(ConfigError::Message(format!(
+            "unknown dead_letter sink_type '{sink_type}', expected 'file', 'mqtt', or 'stdout'"
+        )))),
+    }
 }
 
 /// Create a sink node from configuration.

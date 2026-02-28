@@ -28,18 +28,22 @@
 //! - Releasing the lock between operations for better observability
 
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::Mutex;
+use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use futures_util::stream::StreamExt;
 
+use crate::config::OverflowPolicy;
+use crate::dlq::{wrap_for_dlq, DlqReason};
 use crate::node::{
     AnyNode, Joiner, NodeStateTracker, ProcessResult, RouteResult, Router, Sink, Source, Transform,
 };
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
-use super::orchestrator::ControlState;
+use super::orchestrator::{ControlState, EdgeSendInfo};
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
@@ -60,7 +64,7 @@ impl DagOrchestrator {
         node_id: String,
         node: Arc<Mutex<AnyNode>>,
         input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
-        output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
+        output_senders: Vec<EdgeSendInfo>,
         cancel_token: CancellationToken,
         control_state: Arc<ControlState>,
     ) {
@@ -137,6 +141,242 @@ impl DagOrchestrator {
         }
     }
 
+    /// Send an envelope to an output edge, respecting the edge's overflow policy.
+    ///
+    /// This helper handles the three overflow policies:
+    /// - `Slow`: Blocks until space is available (current default behavior)
+    /// - `Drop`: Uses `try_send()`, silently drops message if queue is full
+    /// - `DeadLetter`: Uses `try_send()`, routes to DLQ if queue is full
+    ///
+    /// # Returns
+    ///
+    /// `true` if the message was successfully sent or handled (including drop/DLQ),
+    /// `false` if sending failed for other reasons (channel closed).
+    async fn send_with_overflow_policy(
+        edge_info: &EdgeSendInfo,
+        envelope: RuntimeEnvelope,
+        node_id: &str,
+        control_state: &ControlState,
+    ) -> bool {
+        match edge_info.overflow_policy {
+            OverflowPolicy::Slow => {
+                // Blocking send - waits until space is available
+                if let Err(e) = edge_info.sender.send(envelope).await {
+                    tracing::warn!(
+                        node = %node_id,
+                        edge = %edge_info.edge_name,
+                        error = %e,
+                        "Failed to send to downstream (channel closed)"
+                    );
+                    return false;
+                }
+            }
+            OverflowPolicy::Drop => {
+                // Non-blocking send - drop if full
+                match edge_info.sender.try_send(envelope) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            edge = %edge_info.edge_name,
+                            "Queue full, dropping message (drop policy)"
+                        );
+                        // Record drop metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_overflow_drop();
+                        }
+                        // Message is dropped - this is expected behavior
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        tracing::warn!(
+                            node = %node_id,
+                            edge = %edge_info.edge_name,
+                            "Channel closed, cannot send"
+                        );
+                        return false;
+                    }
+                }
+            }
+            OverflowPolicy::DeadLetter => {
+                // Non-blocking send - route to DLQ if full
+                match edge_info.sender.try_send(envelope) {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(rejected)) => {
+                        tracing::debug!(
+                            node = %node_id,
+                            edge = %edge_info.edge_name,
+                            message_id = %rejected.id,
+                            "Queue full, routing to DLQ (dead-letter policy)"
+                        );
+                        // Wrap and send to DLQ
+                        let dlq_envelope =
+                            wrap_for_dlq(rejected, &edge_info.edge_name, DlqReason::QueueFull);
+
+                        // Send to DLQ (blocking - DLQ should not drop messages)
+                        let dlq_guard = control_state.dlq_sender.lock().await;
+                        if let Some(dlq_sender) = dlq_guard.as_ref() {
+                            // Check capacity and warn if filling up
+                            Self::check_dlq_capacity_warning(dlq_sender);
+
+                            // Record DLQ overflow metric
+                            #[cfg(feature = "http-api")]
+                            {
+                                control_state.metrics_registry.record_overflow_dlq();
+                            }
+
+                            if let Err(e) = dlq_sender.send(dlq_envelope).await {
+                                tracing::error!(
+                                    node = %node_id,
+                                    edge = %edge_info.edge_name,
+                                    error = %e,
+                                    "Failed to send to DLQ (channel closed)"
+                                );
+                                // Record DLQ sink error
+                                #[cfg(feature = "http-api")]
+                                {
+                                    control_state.metrics_registry.record_dlq_sink_error();
+                                }
+                            }
+                        } else {
+                            tracing::warn!(
+                                node = %node_id,
+                                edge = %edge_info.edge_name,
+                                "DLQ not configured, dropping message"
+                            );
+                        }
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        tracing::warn!(
+                            node = %node_id,
+                            edge = %edge_info.edge_name,
+                            "Channel closed, cannot send"
+                        );
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    }
+
+    /// Check DLQ queue capacity and log warning if above 80% utilization.
+    ///
+    /// This helps operators notice when the DLQ is filling up, which may indicate
+    /// a systemic problem with the pipeline.
+    fn check_dlq_capacity_warning(dlq_sender: &QueueSender<RuntimeEnvelope>) {
+        let max_capacity = dlq_sender.max_capacity();
+        let available = dlq_sender.available_capacity();
+        let used = max_capacity.saturating_sub(available);
+        let utilization_percent = (used * 100) / max_capacity;
+
+        if utilization_percent >= 80 {
+            tracing::warn!(
+                dlq_used = used,
+                dlq_capacity = max_capacity,
+                dlq_utilization_percent = utilization_percent,
+                "DLQ queue is at {}% capacity - consider investigating error sources",
+                utilization_percent
+            );
+        }
+    }
+
+    /// Send a failed message to the Dead Letter Queue due to a processing error.
+    ///
+    /// This is called when a transform, router, or joiner returns `ProcessResult::Error`
+    /// or `RouteResult::Error`. The original message is wrapped in a DLQ envelope with
+    /// error context and sent to the DLQ sink.
+    ///
+    /// # Arguments
+    ///
+    /// * `envelope` - The original message that failed processing
+    /// * `node_id` - ID of the node that failed
+    /// * `error_code` - Error code from the process result
+    /// * `error_message` - Error message from the process result
+    /// * `control_state` - Control state containing the DLQ sender
+    async fn send_process_error_to_dlq(
+        envelope: RuntimeEnvelope,
+        node_id: &str,
+        error_code: &str,
+        error_message: &str,
+        control_state: &ControlState,
+    ) {
+        let dlq_guard = control_state.dlq_sender.lock().await;
+        if let Some(dlq_sender) = dlq_guard.as_ref() {
+            // Check capacity and warn if filling up
+            Self::check_dlq_capacity_warning(dlq_sender);
+
+            let reason = DlqReason::process_error(error_code, error_message);
+            let dlq_envelope = wrap_for_dlq(envelope, node_id, reason);
+
+            tracing::debug!(
+                node = %node_id,
+                error_code = %error_code,
+                "Routing process error to DLQ"
+            );
+
+            if let Err(e) = dlq_sender.send(dlq_envelope).await {
+                tracing::error!(
+                    node = %node_id,
+                    error = %e,
+                    "Failed to send process error to DLQ (channel closed)"
+                );
+                // Record DLQ sink error
+                #[cfg(feature = "http-api")]
+                {
+                    control_state.metrics_registry.record_dlq_sink_error();
+                }
+            }
+        }
+        // If DLQ is not configured, the error is just logged (already logged by caller)
+    }
+
+    /// Send a failed message to the Dead Letter Queue due to a sink error.
+    ///
+    /// This is called when a sink's `collect()` method returns an error.
+    /// The original message is wrapped in a DLQ envelope with error context.
+    ///
+    /// # Arguments
+    ///
+    /// * `envelope` - The original message that failed to be collected
+    /// * `node_id` - ID of the sink node that failed
+    /// * `error_message` - Error message from the sink
+    /// * `control_state` - Control state containing the DLQ sender
+    async fn send_sink_error_to_dlq(
+        envelope: RuntimeEnvelope,
+        node_id: &str,
+        error_message: &str,
+        control_state: &ControlState,
+    ) {
+        let dlq_guard = control_state.dlq_sender.lock().await;
+        if let Some(dlq_sender) = dlq_guard.as_ref() {
+            // Check capacity and warn if filling up
+            Self::check_dlq_capacity_warning(dlq_sender);
+
+            let reason = DlqReason::sink_error(error_message);
+            let dlq_envelope = wrap_for_dlq(envelope, node_id, reason);
+
+            tracing::debug!(
+                node = %node_id,
+                "Routing sink error to DLQ"
+            );
+
+            if let Err(e) = dlq_sender.send(dlq_envelope).await {
+                tracing::error!(
+                    node = %node_id,
+                    error = %e,
+                    "Failed to send sink error to DLQ (channel closed)"
+                );
+                // Record DLQ sink error
+                #[cfg(feature = "http-api")]
+                {
+                    control_state.metrics_registry.record_dlq_sink_error();
+                }
+            }
+        }
+        // If DLQ is not configured, the error is just logged (already logged by caller)
+    }
+
     /// Run the source node loop.
     ///
     /// Polls the source for messages and sends them to all downstream nodes.
@@ -150,7 +390,7 @@ impl DagOrchestrator {
     pub(super) async fn run_source_loop(
         node_id: &str,
         source: &mut dyn Source,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        output_senders: &[EdgeSendInfo],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
@@ -197,19 +437,28 @@ impl DagOrchestrator {
                             }
                             let _ = control_state; // suppress unused warning when http-api disabled
 
+                            // Send to all downstream edges with overflow policy handling
                             // Optimization: avoid clone for single downstream
                             if output_senders.len() == 1 {
-                                if let Err(e) = output_senders[0].1.send(envelope).await {
-                                    tracing::warn!(error = %e, "Failed to send to downstream");
-                                }
+                                Self::send_with_overflow_policy(
+                                    &output_senders[0],
+                                    envelope,
+                                    node_id,
+                                    control_state,
+                                )
+                                .await;
                             } else {
                                 // Clone for all downstream senders
                                 // Note: We clone for all senders since we're iterating. Future optimization
                                 // could use ownership tracking to avoid the final clone.
-                                for (_, sender) in output_senders {
-                                    if let Err(e) = sender.send(envelope.clone()).await {
-                                        tracing::warn!(error = %e, "Failed to send to downstream");
-                                    }
+                                for edge_info in output_senders {
+                                    Self::send_with_overflow_policy(
+                                        edge_info,
+                                        envelope.clone(),
+                                        node_id,
+                                        control_state,
+                                    )
+                                    .await;
                                 }
                             }
                         }
@@ -256,7 +505,7 @@ impl DagOrchestrator {
         node_id: &str,
         transform: &mut dyn Transform,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        output_senders: &[EdgeSendInfo],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
@@ -278,6 +527,10 @@ impl DagOrchestrator {
                 let message_id = envelope.id.clone();
                 let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
+
+                // Clone envelope for potential DLQ routing on error
+                // This is only used if processing returns an error
+                let envelope_for_dlq = envelope.clone();
 
                 // Mark processing before WASM call
                 state_tracker.set_processing(true);
@@ -303,15 +556,24 @@ impl DagOrchestrator {
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
+                        // Send to all downstream edges with overflow policy handling
                         if output_senders.len() == 1 {
-                            if let Err(e) = output_senders[0].1.send(output).await {
-                                tracing::warn!(error = %e, "Failed to send to downstream");
-                            }
+                            Self::send_with_overflow_policy(
+                                &output_senders[0],
+                                output,
+                                node_id,
+                                control_state,
+                            )
+                            .await;
                         } else {
-                            for (_, sender) in output_senders {
-                                if let Err(e) = sender.send(output.clone()).await {
-                                    tracing::warn!(error = %e, "Failed to send to downstream");
-                                }
+                            for edge_info in output_senders {
+                                Self::send_with_overflow_policy(
+                                    edge_info,
+                                    output.clone(),
+                                    node_id,
+                                    control_state,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -337,7 +599,7 @@ impl DagOrchestrator {
                             message_id = %message_id,
                             error_code = %e.code,
                             error_message = %e.message,
-                            "Transform error - continuing"
+                            "Transform error - routing to DLQ"
                         );
 
                         // Record error metrics
@@ -347,10 +609,20 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route to DLQ if configured
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq.clone(),
+                            node_id,
+                            &e.code,
+                            &e.message,
+                            control_state,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, error = %e, "Transform process failed");
+                        tracing::error!(message_id = %message_id, error = %e, "Transform process failed - routing to DLQ");
 
                         // Record error metrics
                         #[cfg(feature = "http-api")]
@@ -359,6 +631,16 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route runtime errors to DLQ as well
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq,
+                            node_id,
+                            "runtime_error",
+                            &e.to_string(),
+                            control_state,
+                        )
+                        .await;
                     }
                 }
 
@@ -377,12 +659,18 @@ impl DagOrchestrator {
     /// Run the sink node loop.
     ///
     /// Receives messages from the input queue and collects them via the sink.
-    /// Supports cancellation.
+    /// Supports cancellation and batch flushing.
     ///
     /// # Cancel Safety
     ///
     /// Sink calls are processed OUTSIDE `tokio::select!` to ensure they run to
     /// completion. See module-level docs for rationale.
+    ///
+    /// # Batching Support
+    ///
+    /// If the sink returns `Some(Duration)` from `batch_timeout()`, a flush timer
+    /// is included in the select loop to periodically flush buffered messages.
+    /// The `flush()` method is always called before the loop exits.
     ///
     /// # State Tracking
     ///
@@ -397,63 +685,141 @@ impl DagOrchestrator {
         control_state: &ControlState,
     ) {
         tracing::info!("Sink loop started");
+
+        // Register sink for metrics if batching is enabled
+        #[cfg(feature = "http-api")]
+        if sink.batch_timeout().is_some() {
+            control_state.metrics_registry.register_sink(node_id);
+        }
+
+        // Set up batch flush timer if batching is enabled
+        // Use a very long interval (1 year) as "disabled" since we can't conditionally include the arm
+        let flush_interval_duration = sink.batch_timeout().unwrap_or(Duration::from_secs(365 * 24 * 60 * 60));
+        let batching_enabled = sink.batch_timeout().is_some();
+        let mut flush_timer = interval(flush_interval_duration);
+        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        // Skip the first immediate tick
+        flush_timer.tick().await;
+
+        /// Represents the action to take after select
+        enum SinkAction {
+            ProcessMessage(RuntimeEnvelope),
+            FlushBatch,
+            Exit,
+        }
+
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Sink cancelled");
                 break;
             }
 
-            let maybe_envelope = tokio::select! {
+            // Determine what action to take
+            let action = tokio::select! {
                 biased;
-                () = cancel_token.cancelled() => None,
-                envelope = receiver.recv() => envelope,
+                () = cancel_token.cancelled() => SinkAction::Exit,
+                _ = flush_timer.tick(), if batching_enabled => SinkAction::FlushBatch,
+                envelope = receiver.recv() => {
+                    match envelope {
+                        Some(env) => SinkAction::ProcessMessage(env),
+                        None => SinkAction::Exit,
+                    }
+                }
             };
 
-            if let Some(envelope) = maybe_envelope {
-                let message_id = envelope.id.clone();
-                let input_size_bytes = envelope.payload.len();
-                let start = Instant::now();
-
-                state_tracker.set_processing(true);
-
-                if let Err(e) = sink.collect(envelope).await {
-                    let duration_ns = start.elapsed().as_nanos() as u64;
-                    tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
-
-                    // Record error metrics
-                    #[cfg(feature = "http-api")]
-                    {
-                        control_state.metrics_registry.record_error();
-                        control_state.metrics_registry.record_node_error(node_id);
-                        control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+            match action {
+                SinkAction::Exit => {
+                    if !cancel_token.is_cancelled() {
+                        tracing::debug!("Input queue closed");
                     }
-                } else {
-                    let duration_ns = start.elapsed().as_nanos() as u64;
-                    tracing::debug!(
-                        message_id = %message_id,
-                        input_size_bytes,
-                        duration_ns,
-                        "Sink delivered"
-                    );
+                    break;
+                }
+                SinkAction::FlushBatch => {
+                    // Flush buffered messages on timeout
+                    if let Err(e) = sink.flush().await {
+                        tracing::warn!(node = %node_id, error = %e, "Batch flush failed");
+                    } else {
+                        tracing::trace!(node = %node_id, "Batch flush completed");
+                    }
 
-                    // Record success metrics
+                    // Record batch metrics after flush
                     #[cfg(feature = "http-api")]
-                    {
-                        control_state.metrics_registry.record_message();
-                        control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                        control_state.metrics_registry.record_process_time(duration_ns);
+                    if let Some(stats) = sink.take_batch_stats() {
+                        for _ in 0..stats.flushes_since_last_check {
+                            control_state.metrics_registry.record_sink_batch_flush(node_id, stats.last_flush_size);
+                        }
+                        control_state.metrics_registry.set_sink_buffer_size(node_id, stats.current_buffer_size);
                     }
                 }
-                let _ = control_state; // suppress unused warning when http-api disabled
+                SinkAction::ProcessMessage(envelope) => {
+                    let message_id = envelope.id.clone();
+                    let input_size_bytes = envelope.payload.len();
+                    let start = Instant::now();
 
-                state_tracker.set_processing(false);
-            } else {
-                if !cancel_token.is_cancelled() {
-                    tracing::debug!("Input queue closed");
+                    state_tracker.set_processing(true);
+
+                    // Clone envelope before collect() in case we need to send to DLQ on error
+                    let envelope_for_dlq = envelope.clone();
+
+                    if let Err(e) = sink.collect(envelope).await {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
+
+                        // Route failed message to DLQ if configured
+                        Self::send_sink_error_to_dlq(
+                            envelope_for_dlq,
+                            node_id,
+                            &e.to_string(),
+                            control_state,
+                        )
+                        .await;
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
+                    } else {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        tracing::debug!(
+                            message_id = %message_id,
+                            input_size_bytes,
+                            duration_ns,
+                            "Sink delivered"
+                        );
+
+                        // Record success metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_message();
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
+
+                        // Record batch metrics after collect (batch may have flushed)
+                        #[cfg(feature = "http-api")]
+                        if let Some(stats) = sink.take_batch_stats() {
+                            for _ in 0..stats.flushes_since_last_check {
+                                control_state.metrics_registry.record_sink_batch_flush(node_id, stats.last_flush_size);
+                            }
+                            control_state.metrics_registry.set_sink_buffer_size(node_id, stats.current_buffer_size);
+                        }
+                    }
+                    let _ = control_state; // suppress unused warning when http-api disabled
+
+                    state_tracker.set_processing(false);
                 }
-                break;
             }
         }
+
+        // Flush any remaining buffered messages before exiting
+        tracing::debug!(node = %node_id, "Flushing sink before shutdown");
+        if let Err(e) = sink.flush().await {
+            tracing::warn!(node = %node_id, error = %e, "Final flush failed during shutdown");
+        }
+
         tracing::info!("Sink loop stopped");
     }
 
@@ -475,7 +841,7 @@ impl DagOrchestrator {
         node_id: &str,
         router: &mut dyn Router,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        output_senders: &[EdgeSendInfo],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
@@ -498,6 +864,9 @@ impl DagOrchestrator {
                 let message_id = envelope.id.clone();
                 let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
+
+                // Clone envelope for potential DLQ routing on error
+                let envelope_for_dlq = envelope.clone();
 
                 state_tracker.set_processing(true);
 
@@ -524,11 +893,15 @@ impl DagOrchestrator {
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
-                        // Find sender for this port
-                        if let Some((_, sender)) = output_senders.iter().find(|(p, _)| p == &port) {
-                            if let Err(e) = sender.send(output).await {
-                                tracing::warn!(output_port = %port, error = %e, "Failed to send to port");
-                            }
+                        // Find sender for this port and send with overflow policy
+                        if let Some(edge_info) = output_senders.iter().find(|e| e.port == port) {
+                            Self::send_with_overflow_policy(
+                                edge_info,
+                                output,
+                                node_id,
+                                control_state,
+                            )
+                            .await;
                         } else {
                             tracing::warn!(output_port = %port, "Unknown output port, dropping message");
                         }
@@ -555,7 +928,7 @@ impl DagOrchestrator {
                             message_id = %message_id,
                             error_code = %e.code,
                             error_message = %e.message,
-                            "Router error - continuing"
+                            "Router error - routing to DLQ"
                         );
 
                         // Record error metrics
@@ -565,10 +938,20 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route to DLQ if configured
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq.clone(),
+                            node_id,
+                            &e.code,
+                            &e.message,
+                            control_state,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, error = %e, "Router route failed");
+                        tracing::error!(message_id = %message_id, error = %e, "Router route failed - routing to DLQ");
 
                         // Record error metrics
                         #[cfg(feature = "http-api")]
@@ -577,6 +960,16 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route runtime errors to DLQ as well
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq,
+                            node_id,
+                            "runtime_error",
+                            &e.to_string(),
+                            control_state,
+                        )
+                        .await;
                     }
                 }
 
@@ -609,7 +1002,7 @@ impl DagOrchestrator {
         node_id: &str,
         joiner: &mut dyn Joiner,
         input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
-        output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
+        output_senders: &[EdgeSendInfo],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
@@ -652,6 +1045,9 @@ impl DagOrchestrator {
                 let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
 
+                // Clone envelope for potential DLQ routing on error
+                let envelope_for_dlq = envelope.clone();
+
                 state_tracker.set_processing(true);
 
                 // WASM call OUTSIDE select - cancel safe
@@ -677,16 +1073,24 @@ impl DagOrchestrator {
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
-                        // Send to output (joiner has single output)
+                        // Send to output with overflow policy handling (joiner has single output)
                         if output_senders.len() == 1 {
-                            if let Err(e) = output_senders[0].1.send(output).await {
-                                tracing::warn!(error = %e, "Failed to send to downstream");
-                            }
+                            Self::send_with_overflow_policy(
+                                &output_senders[0],
+                                output,
+                                node_id,
+                                control_state,
+                            )
+                            .await;
                         } else {
-                            for (_, sender) in output_senders {
-                                if let Err(e) = sender.send(output.clone()).await {
-                                    tracing::warn!(error = %e, "Failed to send to downstream");
-                                }
+                            for edge_info in output_senders {
+                                Self::send_with_overflow_policy(
+                                    edge_info,
+                                    output.clone(),
+                                    node_id,
+                                    control_state,
+                                )
+                                .await;
                             }
                         }
                     }
@@ -714,7 +1118,7 @@ impl DagOrchestrator {
                             input_port = %port_name,
                             error_code = %e.code,
                             error_message = %e.message,
-                            "Joiner error - continuing"
+                            "Joiner error - routing to DLQ"
                         );
 
                         // Record error metrics
@@ -724,10 +1128,20 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route to DLQ if configured
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq.clone(),
+                            node_id,
+                            &e.code,
+                            &e.message,
+                            control_state,
+                        )
+                        .await;
                     }
                     Err(e) => {
                         let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, input_port = %port_name, error = %e, "Joiner process failed");
+                        tracing::error!(message_id = %message_id, input_port = %port_name, error = %e, "Joiner process failed - routing to DLQ");
 
                         // Record error metrics
                         #[cfg(feature = "http-api")]
@@ -736,6 +1150,16 @@ impl DagOrchestrator {
                             control_state.metrics_registry.record_node_error(node_id);
                             control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
                         }
+
+                        // Route runtime errors to DLQ as well
+                        Self::send_process_error_to_dlq(
+                            envelope_for_dlq,
+                            node_id,
+                            "runtime_error",
+                            &e.to_string(),
+                            control_state,
+                        )
+                        .await;
                     }
                 }
 
@@ -748,5 +1172,514 @@ impl DagOrchestrator {
             }
         }
         tracing::info!("Joiner loop stopped");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dlq::DlqEnvelope;
+    use crate::queue::{BoundedQueue, RuntimeEnvelope};
+
+    /// Create a minimal ControlState for testing.
+    fn test_control_state() -> ControlState {
+        ControlState::new("test".to_string())
+    }
+
+    /// Create an EdgeSendInfo with the given overflow policy and a queue of specified capacity.
+    fn make_edge_with_policy(
+        policy: OverflowPolicy,
+        capacity: usize,
+    ) -> (EdgeSendInfo, QueueReceiver<RuntimeEnvelope>) {
+        let queue = BoundedQueue::new(capacity);
+        let (sender, receiver) = queue.split();
+        let edge_info = EdgeSendInfo {
+            port: "default".to_string(),
+            sender,
+            overflow_policy: policy,
+            edge_name: "test:default->downstream:default".to_string(),
+        };
+        (edge_info, receiver)
+    }
+
+    /// Create a test envelope with the given ID suffix.
+    fn test_envelope(id_suffix: &str) -> RuntimeEnvelope {
+        RuntimeEnvelope::new("test", format!("payload-{}", id_suffix).into_bytes())
+    }
+
+    #[tokio::test]
+    async fn overflow_policy_slow_blocks_until_space() {
+        let (edge_info, mut receiver) = make_edge_with_policy(OverflowPolicy::Slow, 1);
+        let control_state = test_control_state();
+
+        // Fill the queue
+        let env1 = test_envelope("1");
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env1.clone(),
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(result, "First send should succeed");
+
+        // Second send would block, so spawn it and drain the queue
+        let edge_clone = edge_info.clone();
+        let control_clone = Arc::new(test_control_state());
+        let env2 = test_envelope("2");
+
+        let send_handle = tokio::spawn({
+            let control = control_clone.clone();
+            async move {
+                DagOrchestrator::send_with_overflow_policy(&edge_clone, env2, "test-node", &control)
+                    .await
+            }
+        });
+
+        // Give the send a moment to start blocking
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Drain the first message - this should unblock the second send
+        let received = receiver.recv().await;
+        assert!(received.is_some(), "Should receive first message");
+
+        // Wait for the second send to complete
+        let result = tokio::time::timeout(std::time::Duration::from_millis(100), send_handle)
+            .await
+            .expect("Send should complete after draining")
+            .expect("Task should not panic");
+        assert!(result, "Second send should succeed after space available");
+    }
+
+    #[tokio::test]
+    async fn overflow_policy_drop_silently_drops_when_full() {
+        let (edge_info, mut receiver) = make_edge_with_policy(OverflowPolicy::Drop, 1);
+        let control_state = test_control_state();
+
+        // Fill the queue
+        let env1 = test_envelope("1");
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env1.clone(),
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(result, "First send should succeed");
+
+        // Second send should be dropped (not block)
+        let env2 = test_envelope("2");
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env2,
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(result, "Send with drop policy should return true even when dropped");
+
+        // Only the first message should be in the queue
+        let received = receiver.recv().await.expect("Should receive first message");
+        assert_eq!(received.id, env1.id);
+
+        // Queue should now be empty (second message was dropped)
+        let second = tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv())
+            .await;
+        assert!(second.is_err(), "No second message should be in queue (it was dropped)");
+    }
+
+    #[tokio::test]
+    async fn overflow_policy_dead_letter_routes_to_dlq_when_full() {
+        let (edge_info, mut receiver) = make_edge_with_policy(OverflowPolicy::DeadLetter, 1);
+        let control_state = test_control_state();
+
+        // Set up DLQ sender
+        let dlq_queue = BoundedQueue::new(10);
+        let (dlq_sender, mut dlq_receiver) = dlq_queue.split();
+        {
+            let mut guard = control_state.dlq_sender.lock().await;
+            *guard = Some(dlq_sender);
+        }
+
+        // Fill the main queue
+        let env1 = test_envelope("1");
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env1.clone(),
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(result, "First send should succeed");
+
+        // Second send should go to DLQ
+        let env2 = test_envelope("2");
+        let env2_id = env2.id.clone();
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env2,
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(result, "Send with dead-letter policy should return true");
+
+        // First message should be in main queue
+        let received = receiver.recv().await.expect("Should receive first message");
+        assert_eq!(received.id, env1.id);
+
+        // Second message should be in DLQ
+        let dlq_msg: RuntimeEnvelope = dlq_receiver
+            .recv()
+            .await
+            .expect("Should receive DLQ message");
+        assert_eq!(dlq_msg.source, "dlq", "DLQ message should have source 'dlq'");
+
+        // Parse the DLQ envelope from the payload
+        let dlq_envelope: DlqEnvelope =
+            serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
+        assert_eq!(dlq_envelope.original.id, env2_id);
+        assert_eq!(dlq_envelope.reason, crate::dlq::DlqReason::QueueFull);
+        assert_eq!(
+            dlq_envelope.failed_edge,
+            "test:default->downstream:default"
+        );
+    }
+
+    #[tokio::test]
+    async fn overflow_policy_dead_letter_drops_when_dlq_not_configured() {
+        let (edge_info, _receiver) = make_edge_with_policy(OverflowPolicy::DeadLetter, 1);
+        let control_state = test_control_state();
+        // DLQ sender is NOT configured (None)
+
+        // Fill the main queue
+        let env1 = test_envelope("1");
+        DagOrchestrator::send_with_overflow_policy(&edge_info, env1, "test-node", &control_state)
+            .await;
+
+        // Second send should succeed (returns true) but message is dropped since no DLQ
+        let env2 = test_envelope("2");
+        let result = DagOrchestrator::send_with_overflow_policy(
+            &edge_info,
+            env2,
+            "test-node",
+            &control_state,
+        )
+        .await;
+        assert!(
+            result,
+            "Send should return true even when DLQ is not configured"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_error_routes_to_dlq() {
+        let control_state = test_control_state();
+
+        // Set up DLQ sender
+        let dlq_queue = BoundedQueue::new(10);
+        let (dlq_sender, mut dlq_receiver) = dlq_queue.split();
+        {
+            let mut guard = control_state.dlq_sender.lock().await;
+            *guard = Some(dlq_sender);
+        }
+
+        // Create a test envelope representing a failed message
+        let envelope = test_envelope("failed-msg");
+        let original_id = envelope.id.clone();
+
+        // Route it to DLQ as a process error
+        DagOrchestrator::send_process_error_to_dlq(
+            envelope,
+            "transform-node",
+            "VALIDATION_ERROR",
+            "Invalid payload format",
+            &control_state,
+        )
+        .await;
+
+        // Verify message arrived in DLQ
+        let dlq_msg = dlq_receiver
+            .recv()
+            .await
+            .expect("Should receive DLQ message");
+        assert_eq!(dlq_msg.source, "dlq");
+
+        // Parse and verify DLQ envelope contents
+        let dlq_envelope: DlqEnvelope =
+            serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
+        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.failed_edge, "transform-node");
+
+        // Verify reason contains error details
+        match dlq_envelope.reason {
+            crate::dlq::DlqReason::ProcessError { code, message } => {
+                assert_eq!(code, "VALIDATION_ERROR");
+                assert_eq!(message, "Invalid payload format");
+            }
+            _ => panic!("Expected ProcessError reason, got {:?}", dlq_envelope.reason),
+        }
+    }
+
+    #[tokio::test]
+    async fn sink_error_routes_to_dlq() {
+        let control_state = test_control_state();
+
+        // Set up DLQ sender
+        let dlq_queue = BoundedQueue::new(10);
+        let (dlq_sender, mut dlq_receiver) = dlq_queue.split();
+        {
+            let mut guard = control_state.dlq_sender.lock().await;
+            *guard = Some(dlq_sender);
+        }
+
+        // Create a test envelope representing a failed sink write
+        let envelope = test_envelope("sink-failed-msg");
+        let original_id = envelope.id.clone();
+
+        // Route it to DLQ as a sink error
+        DagOrchestrator::send_sink_error_to_dlq(
+            envelope,
+            "file-sink",
+            "disk full: cannot write to /var/log/output.log",
+            &control_state,
+        )
+        .await;
+
+        // Verify message arrived in DLQ
+        let dlq_msg = dlq_receiver
+            .recv()
+            .await
+            .expect("Should receive DLQ message");
+        assert_eq!(dlq_msg.source, "dlq");
+
+        // Parse and verify DLQ envelope contents
+        let dlq_envelope: DlqEnvelope =
+            serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
+        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.failed_edge, "file-sink");
+
+        // Verify reason contains sink error message
+        match dlq_envelope.reason {
+            crate::dlq::DlqReason::SinkError { message } => {
+                assert!(message.contains("disk full"));
+            }
+            _ => panic!("Expected SinkError reason, got {:?}", dlq_envelope.reason),
+        }
+    }
+
+    #[tokio::test]
+    async fn dlq_routing_preserves_original_message() {
+        let control_state = test_control_state();
+
+        // Set up DLQ sender
+        let dlq_queue = BoundedQueue::new(10);
+        let (dlq_sender, mut dlq_receiver) = dlq_queue.split();
+        {
+            let mut guard = control_state.dlq_sender.lock().await;
+            *guard = Some(dlq_sender);
+        }
+
+        // Create envelope with specific payload to verify preservation
+        let original_payload = b"original message content 12345".to_vec();
+        let envelope = RuntimeEnvelope::new("my-source", original_payload.clone());
+        let original_id = envelope.id.clone();
+        let original_source = envelope.source.clone();
+
+        // Route to DLQ
+        DagOrchestrator::send_process_error_to_dlq(
+            envelope,
+            "test-node",
+            "ERROR",
+            "test error",
+            &control_state,
+        )
+        .await;
+
+        // Retrieve and verify original message is preserved
+        let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
+        let dlq_envelope: DlqEnvelope =
+            serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
+
+        // Verify original fields are preserved
+        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.original.source, original_source);
+        assert_eq!(dlq_envelope.original.payload, original_payload);
+    }
+
+    #[tokio::test]
+    async fn dlq_without_sender_does_not_panic() {
+        let control_state = test_control_state();
+        // DLQ sender is NOT configured (None by default)
+
+        // Should not panic when DLQ is not configured
+        let envelope = test_envelope("no-dlq");
+        DagOrchestrator::send_process_error_to_dlq(
+            envelope,
+            "test-node",
+            "ERROR",
+            "test error",
+            &control_state,
+        )
+        .await;
+
+        // Also test sink error path
+        let envelope2 = test_envelope("no-dlq-2");
+        DagOrchestrator::send_sink_error_to_dlq(
+            envelope2,
+            "sink-node",
+            "sink error",
+            &control_state,
+        )
+        .await;
+
+        // If we get here without panic, the test passes
+    }
+
+    // Test for sink batching support (task 8.5)
+    // Note: This is a structural test verifying the sink loop calls flush().
+    // Full integration tests with actual batching sinks are in Group 9-11.
+
+    use crate::error::Result as WaferResult;
+    use crate::node::Lifecycle;
+    use std::pin::Pin;
+    use std::future::Future;
+
+    /// A mock sink that tracks flush calls for testing
+    struct MockBatchingSink {
+        collected: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        flushed: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        batch_timeout_ms: Option<u64>,
+    }
+
+    impl MockBatchingSink {
+        fn new(batch_timeout_ms: Option<u64>) -> Self {
+            Self {
+                collected: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                flushed: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                batch_timeout_ms,
+            }
+        }
+
+        fn was_flushed(&self) -> bool {
+            self.flushed.load(std::sync::atomic::Ordering::SeqCst)
+        }
+    }
+
+    impl Lifecycle for MockBatchingSink {
+        fn id(&self) -> &str {
+            "mock-batching-sink"
+        }
+
+        fn node_type(&self) -> &'static str {
+            "sink/mock"
+        }
+
+        fn validate(&self) -> WaferResult<()> {
+            Ok(())
+        }
+
+        fn init(&mut self) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close(&mut self) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl crate::node::Sink for MockBatchingSink {
+        fn collect(
+            &mut self,
+            _envelope: RuntimeEnvelope,
+        ) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
+            self.collected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn flush(&mut self) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
+            self.flushed.store(true, std::sync::atomic::Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        }
+
+        fn batch_timeout(&self) -> Option<std::time::Duration> {
+            self.batch_timeout_ms.map(std::time::Duration::from_millis)
+        }
+    }
+
+    #[tokio::test]
+    async fn sink_loop_calls_flush_before_shutdown() {
+        use crate::node::NodeStateTracker;
+
+        let mut sink = MockBatchingSink::new(None); // No batching, but flush should still be called
+        let queue = BoundedQueue::new(10);
+        let (sender, receiver) = queue.split();
+        let cancel_token = CancellationToken::new();
+        let state_tracker = NodeStateTracker::new();
+        let control_state = test_control_state();
+
+        // Send a message
+        sender.send(test_envelope("1")).await.unwrap();
+
+        // Drop sender to close the queue
+        drop(sender);
+
+        // Run the sink loop (it will exit when queue is closed)
+        DagOrchestrator::run_sink_loop(
+            "test-sink",
+            &mut sink,
+            receiver,
+            &cancel_token,
+            &state_tracker,
+            &control_state,
+        )
+        .await;
+
+        // Verify flush was called during shutdown
+        assert!(sink.was_flushed(), "Sink should have been flushed before shutdown");
+    }
+
+    #[tokio::test]
+    async fn sink_loop_calls_flush_on_cancellation() {
+        use crate::node::NodeStateTracker;
+
+        let mut sink = MockBatchingSink::new(Some(1000)); // 1 second timeout
+        let queue = BoundedQueue::new(10);
+        let (sender, receiver) = queue.split();
+        let cancel_token = CancellationToken::new();
+        let state_tracker = NodeStateTracker::new();
+        let control_state = test_control_state();
+
+        // Keep sender alive but cancel the token
+        let _sender = sender;
+
+        // Spawn the sink loop
+        let sink_handle = tokio::spawn({
+            let cancel = cancel_token.clone();
+            async move {
+                DagOrchestrator::run_sink_loop(
+                    "test-sink",
+                    &mut sink,
+                    receiver,
+                    &cancel,
+                    &state_tracker,
+                    &control_state,
+                )
+                .await;
+                sink
+            }
+        });
+
+        // Give the loop time to start
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+        // Cancel the loop
+        cancel_token.cancel();
+
+        // Wait for the loop to exit and get the sink back
+        let sink = sink_handle.await.expect("Sink loop should complete");
+
+        // Verify flush was called during shutdown
+        assert!(sink.was_flushed(), "Sink should have been flushed on cancellation");
     }
 }

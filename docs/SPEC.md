@@ -706,7 +706,7 @@ pub trait Sink: Lifecycle {
     
     /// Flush any buffered messages to the external system
     /// Called periodically by host and always before close()
-    /// Status: 🔲 Planned
+    /// Status: ✅ Implemented
     fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>>;
 }
 ```
@@ -1104,8 +1104,8 @@ limits:
 | Policy        | Behavior                           | Use Case                               | Status           |
 | ------------- | ---------------------------------- | -------------------------------------- | ---------------- |
 | `slow`        | Block sender until space available | Critical data, propagate backpressure  | ✅ Implemented   |
-| `drop`        | Discard newest message, continue   | Non-critical data, maintain throughput | 🔲 Planned       |
-| `dead-letter` | Route dropped message to DLQ       | Preserve data for debugging/recovery   | 🔲 Planned       |
+| `drop`        | Discard newest message, continue   | Non-critical data, maintain throughput | ✅ Implemented   |
+| `dead-letter` | Route dropped message to DLQ       | Preserve data for debugging/recovery   | ✅ Implemented   |
 
 ### 8.3 Backpressure Propagation
 

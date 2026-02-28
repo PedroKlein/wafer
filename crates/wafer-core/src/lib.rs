@@ -27,6 +27,7 @@ pub mod error;
 pub mod config;
 pub mod control;
 pub mod dag;
+pub mod dlq;
 pub mod engine;
 pub mod factory;
 pub mod metrics;

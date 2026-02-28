@@ -13,9 +13,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, DagConfig};
 use crate::error::{ConfigError, Result, WaferError};
-use crate::factory::{create_node, FactoryContext};
-use crate::node::AnyNode;
-use crate::queue::BoundedQueue;
+use crate::factory::{create_dlq_sink, create_node, FactoryContext};
+use crate::node::{AnyNode, Lifecycle};
+use crate::queue::{BoundedQueue, RuntimeEnvelope};
 
 use super::orchestrator::{ControlState, RunState};
 use super::DagOrchestrator;
@@ -86,6 +86,13 @@ impl DagOrchestrator {
 
         orchestrator.wire_queues().await?;
 
+        // Initialize DLQ if configured and enabled
+        if let Some(ref dlq_config) = dag_config.dead_letter {
+            if dlq_config.enabled {
+                orchestrator.initialize_dlq(dlq_config).await?;
+            }
+        }
+
         // Store factory context for epoch ticker cleanup
         {
             let mut ctx_guard = orchestrator.factory_ctx.lock().await;
@@ -93,6 +100,63 @@ impl DagOrchestrator {
         }
 
         Ok(orchestrator)
+    }
+
+    /// Initialize the Dead Letter Queue sink and processing task.
+    ///
+    /// This creates a bounded queue for DLQ messages, spawns a background task
+    /// to process them, and stores the sender in the control state.
+    async fn initialize_dlq(&self, dlq_config: &crate::config::DeadLetterConfig) -> Result<()> {
+
+        // Create the DLQ sink
+        let mut dlq_sink = create_dlq_sink(dlq_config)?;
+        dlq_sink.init().await?;
+
+        // Create the DLQ queue
+        let queue: BoundedQueue<RuntimeEnvelope> = BoundedQueue::new(dlq_config.queue_capacity);
+        let (sender, mut receiver) = queue.split();
+
+        // Get the cancel token for graceful shutdown
+        let cancel_token = self.cancel_token.clone();
+
+        // Spawn the DLQ processing task
+        tokio::spawn(async move {
+            tracing::info!("DLQ processing task started");
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    () = cancel_token.cancelled() => {
+                        tracing::info!("DLQ processing task shutting down");
+                        break;
+                    }
+
+                    Some(envelope) = receiver.recv() => {
+                        if let Err(e) = dlq_sink.collect(envelope).await {
+                            tracing::error!(error = %e, "DLQ sink failed to collect message");
+                            // Note: We don't have a "DLQ for the DLQ" - just log and continue
+                        }
+                    }
+                }
+            }
+
+            // Graceful close
+            if let Err(e) = dlq_sink.close().await {
+                tracing::warn!(error = %e, "DLQ sink close failed");
+            }
+        });
+
+        // Store the sender in control state for use by node loops
+        self.control_state.set_dlq_sender(sender).await;
+
+        tracing::info!(
+            capacity = dlq_config.queue_capacity,
+            sink_type = %dlq_config.sink_type,
+            "Dead Letter Queue initialized"
+        );
+
+        Ok(())
     }
 
     /// Build a DAG orchestrator from DagConfig (low-level).
@@ -305,7 +369,7 @@ impl DagOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EdgeDefinition, NodeDefinition, NodeType, PipelineConfig};
+    use crate::config::{EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy, PipelineConfig};
     use crate::node::FileSource;
     use crate::registry::RegistryConfig;
 
@@ -326,6 +390,7 @@ mod tests {
             from_port: None,
             to_port: None,
             queue_capacity: None,
+            overflow: OverflowPolicy::default(),
         }
     }
 
@@ -336,6 +401,7 @@ mod tests {
             edges,
             default_queue_capacity: 1024,
             registry: RegistryConfig::default(),
+            dead_letter: None,
         }
     }
 
@@ -521,9 +587,11 @@ mod tests {
                 from_port: None,
                 to_port: None,
                 queue_capacity: Some(42),
+                overflow: OverflowPolicy::default(),
             }],
             default_queue_capacity: 1024,
             registry: RegistryConfig::default(),
+            dead_letter: None,
         };
 
         let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
@@ -549,5 +617,165 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown node ID"));
+    }
+
+    #[tokio::test]
+    async fn test_dlq_initialization_with_file_sink() {
+        use crate::config::DeadLetterConfig;
+
+        // Create temp directory for DLQ output file
+        let temp_dir = std::env::temp_dir().join("wafer_dlq_test");
+        std::fs::create_dir_all(&temp_dir).expect("Failed to create temp dir");
+        let dlq_path = temp_dir.join("dlq-output.jsonl");
+
+        // Create DLQ config with file sink
+        let mut dlq_config_table = toml::map::Map::new();
+        dlq_config_table.insert(
+            "path".to_string(),
+            toml::Value::String(dlq_path.to_string_lossy().to_string()),
+        );
+
+        let dlq_config = DeadLetterConfig {
+            enabled: true,
+            sink_type: "file".to_string(),
+            config: toml::Value::Table(dlq_config_table),
+            queue_capacity: 100,
+        };
+
+        // Create a minimal DAG config with DLQ enabled
+        let config = DagConfig {
+            pipeline: PipelineConfig::default(),
+            nodes: vec![make_node("source", NodeType::Source)],
+            edges: vec![],
+            default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
+            dead_letter: Some(dlq_config.clone()),
+        };
+
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+
+        // Initialize DLQ
+        orchestrator
+            .initialize_dlq(&dlq_config)
+            .await
+            .expect("Failed to initialize DLQ");
+
+        // Verify DLQ sender was set
+        {
+            let dlq_sender = orchestrator.control_state.dlq_sender.lock().await;
+            assert!(
+                dlq_sender.is_some(),
+                "DLQ sender should be set after initialization"
+            );
+        }
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test]
+    async fn test_dlq_initialization_with_stdout_sink() {
+        use crate::config::DeadLetterConfig;
+
+        // Create DLQ config with stdout sink (no file path needed)
+        let dlq_config = DeadLetterConfig {
+            enabled: true,
+            sink_type: "stdout".to_string(),
+            config: toml::Value::Table(toml::map::Map::new()),
+            queue_capacity: 50,
+        };
+
+        // Create a minimal DAG config
+        let config = DagConfig {
+            pipeline: PipelineConfig::default(),
+            nodes: vec![make_node("source", NodeType::Source)],
+            edges: vec![],
+            default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
+            dead_letter: Some(dlq_config.clone()),
+        };
+
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+
+        // Initialize DLQ
+        orchestrator
+            .initialize_dlq(&dlq_config)
+            .await
+            .expect("Failed to initialize DLQ with stdout sink");
+
+        // Verify DLQ sender was set
+        {
+            let dlq_sender = orchestrator.control_state.dlq_sender.lock().await;
+            assert!(
+                dlq_sender.is_some(),
+                "DLQ sender should be set after initialization"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_dlq_initialization_invalid_sink_type() {
+        use crate::config::DeadLetterConfig;
+
+        let dlq_config = DeadLetterConfig {
+            enabled: true,
+            sink_type: "unknown_sink".to_string(),
+            config: toml::Value::Table(toml::map::Map::new()),
+            queue_capacity: 100,
+        };
+
+        let config = DagConfig {
+            pipeline: PipelineConfig::default(),
+            nodes: vec![make_node("source", NodeType::Source)],
+            edges: vec![],
+            default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
+            dead_letter: Some(dlq_config.clone()),
+        };
+
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+
+        // Initialize DLQ should fail with unknown sink type
+        let result = orchestrator.initialize_dlq(&dlq_config).await;
+        assert!(result.is_err(), "Should fail with unknown sink type");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("unknown") && err.contains("sink"),
+            "Error should mention unknown sink type: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_dlq_file_sink_missing_path() {
+        use crate::config::DeadLetterConfig;
+
+        // File sink without path should fail
+        let dlq_config = DeadLetterConfig {
+            enabled: true,
+            sink_type: "file".to_string(),
+            config: toml::Value::Table(toml::map::Map::new()), // Missing path!
+            queue_capacity: 100,
+        };
+
+        let config = DagConfig {
+            pipeline: PipelineConfig::default(),
+            nodes: vec![make_node("source", NodeType::Source)],
+            edges: vec![],
+            default_queue_capacity: 1024,
+            registry: RegistryConfig::default(),
+            dead_letter: Some(dlq_config.clone()),
+        };
+
+        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+
+        let result = orchestrator.initialize_dlq(&dlq_config).await;
+        assert!(result.is_err(), "Should fail when file sink has no path");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("path"),
+            "Error should mention missing path: {}",
+            err
+        );
     }
 }
