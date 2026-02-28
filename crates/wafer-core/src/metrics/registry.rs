@@ -38,6 +38,9 @@ pub struct MetricsRegistry {
     /// Queue-level metrics (RwLock for dynamic queue registration)
     queue_metrics: RwLock<HashMap<String, QueueMetrics>>,
 
+    /// Hot-swap metrics (aggregated)
+    hotswap_metrics: HotSwapMetrics,
+
     /// System metrics collector
     #[cfg(feature = "http-api")]
     system: RwLock<System>,
@@ -94,6 +97,29 @@ pub struct QueueMetrics {
     pub drop_total: AtomicU64,
 }
 
+/// Hot-swap metrics (aggregated across all swaps).
+#[derive(Debug, Default)]
+pub struct HotSwapMetrics {
+    /// Total hot-swaps performed
+    pub total: AtomicU64,
+    /// Total successful hot-swaps
+    pub success_total: AtomicU64,
+    /// Total failed hot-swaps
+    pub failure_total: AtomicU64,
+    /// Total drain timeouts
+    pub drain_timeout_total: AtomicU64,
+    /// Cumulative prepare time in nanoseconds
+    pub prepare_time_ns: AtomicU64,
+    /// Cumulative drain time in nanoseconds
+    pub drain_time_ns: AtomicU64,
+    /// Cumulative flip time in nanoseconds
+    pub flip_time_ns: AtomicU64,
+    /// Cumulative retire time in nanoseconds
+    pub retire_time_ns: AtomicU64,
+    /// Total messages drained across all swaps
+    pub messages_drained_total: AtomicU64,
+}
+
 impl QueueMetrics {
     /// Creates new queue metrics.
     pub fn new(from_node: impl Into<String>, to_node: impl Into<String>, capacity: u64) -> Self {
@@ -123,6 +149,7 @@ impl MetricsRegistry {
             pipeline_process_time_ns: AtomicU64::new(0),
             node_metrics: RwLock::new(HashMap::new()),
             queue_metrics: RwLock::new(HashMap::new()),
+            hotswap_metrics: HotSwapMetrics::default(),
             #[cfg(feature = "http-api")]
             system: RwLock::new(System::new()),
             global_labels,
@@ -245,6 +272,63 @@ impl MetricsRegistry {
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.depth.store(depth, Ordering::Relaxed);
         }
+    }
+
+    // ============================================================
+    // Hot-swap metrics
+    // ============================================================
+
+    /// Records a successful hot-swap operation.
+    ///
+    /// # Arguments
+    ///
+    /// * `prepare_ns` - Time spent in prepare phase (nanoseconds)
+    /// * `drain_ns` - Time spent in drain phase (nanoseconds)
+    /// * `flip_ns` - Time spent in flip phase (nanoseconds)
+    /// * `retire_ns` - Time spent in retire phase (nanoseconds)
+    /// * `messages_drained` - Number of messages drained during swap
+    /// * `drain_timed_out` - Whether drain timed out
+    pub fn record_hotswap_success(
+        &self,
+        prepare_ns: u64,
+        drain_ns: u64,
+        flip_ns: u64,
+        retire_ns: u64,
+        messages_drained: u64,
+        drain_timed_out: bool,
+    ) {
+        self.hotswap_metrics.total.fetch_add(1, Ordering::Relaxed);
+        self.hotswap_metrics
+            .success_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.hotswap_metrics
+            .prepare_time_ns
+            .fetch_add(prepare_ns, Ordering::Relaxed);
+        self.hotswap_metrics
+            .drain_time_ns
+            .fetch_add(drain_ns, Ordering::Relaxed);
+        self.hotswap_metrics
+            .flip_time_ns
+            .fetch_add(flip_ns, Ordering::Relaxed);
+        self.hotswap_metrics
+            .retire_time_ns
+            .fetch_add(retire_ns, Ordering::Relaxed);
+        self.hotswap_metrics
+            .messages_drained_total
+            .fetch_add(messages_drained, Ordering::Relaxed);
+        if drain_timed_out {
+            self.hotswap_metrics
+                .drain_timeout_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Records a failed hot-swap operation.
+    pub fn record_hotswap_failure(&self) {
+        self.hotswap_metrics.total.fetch_add(1, Ordering::Relaxed);
+        self.hotswap_metrics
+            .failure_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     // ============================================================
@@ -405,6 +489,74 @@ impl MetricsRegistry {
                 metrics.drop_total.load(Ordering::Relaxed),
             );
         }
+
+        // Hot-swap metrics
+        snapshot.add_counter(
+            "wafer_hotswap_total",
+            "Total hot-swap operations attempted",
+            base_labels.clone(),
+            self.hotswap_metrics.total.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_success_total",
+            "Total successful hot-swap operations",
+            base_labels.clone(),
+            self.hotswap_metrics.success_total.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_failure_total",
+            "Total failed hot-swap operations",
+            base_labels.clone(),
+            self.hotswap_metrics.failure_total.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_drain_timeout_total",
+            "Total hot-swaps where drain phase timed out",
+            base_labels.clone(),
+            self.hotswap_metrics
+                .drain_timeout_total
+                .load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_prepare_time_ns_total",
+            "Cumulative time spent in prepare phase (nanoseconds)",
+            base_labels.clone(),
+            self.hotswap_metrics.prepare_time_ns.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_drain_time_ns_total",
+            "Cumulative time spent in drain phase (nanoseconds)",
+            base_labels.clone(),
+            self.hotswap_metrics.drain_time_ns.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_flip_time_ns_total",
+            "Cumulative time spent in flip phase (nanoseconds)",
+            base_labels.clone(),
+            self.hotswap_metrics.flip_time_ns.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_retire_time_ns_total",
+            "Cumulative time spent in retire phase (nanoseconds)",
+            base_labels.clone(),
+            self.hotswap_metrics.retire_time_ns.load(Ordering::Relaxed),
+        );
+
+        snapshot.add_counter(
+            "wafer_hotswap_messages_drained_total",
+            "Total messages drained during hot-swap operations",
+            base_labels.clone(),
+            self.hotswap_metrics
+                .messages_drained_total
+                .load(Ordering::Relaxed),
+        );
 
         // System metrics
         let system = self.collect_system_metrics();
@@ -696,6 +848,16 @@ mod tests {
             "wafer_queue_capacity",
             "wafer_queue_enqueue_total",
             "wafer_queue_drop_total",
+            // Hot-swap metrics
+            "wafer_hotswap_total",
+            "wafer_hotswap_success_total",
+            "wafer_hotswap_failure_total",
+            "wafer_hotswap_drain_timeout_total",
+            "wafer_hotswap_prepare_time_ns_total",
+            "wafer_hotswap_drain_time_ns_total",
+            "wafer_hotswap_flip_time_ns_total",
+            "wafer_hotswap_retire_time_ns_total",
+            "wafer_hotswap_messages_drained_total",
             // System metrics
             "wafer_host_cpu_percent",
             "wafer_host_memory_rss_bytes",
@@ -787,5 +949,186 @@ mod tests {
         let queues = registry.queue_metrics.read().unwrap();
         let queue = queues.get("src_dst").unwrap();
         assert_eq!(queue.enqueue_total.load(Ordering::Relaxed), 1000);
+    }
+
+    #[test]
+    fn test_hotswap_metrics() {
+        let registry = MetricsRegistry::new();
+
+        // Initially all hot-swap counters should be zero
+        assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 0);
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .success_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .failure_total
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        // Record a successful hot-swap
+        registry.record_hotswap_success(
+            1_000_000, // 1ms prepare
+            5_000_000, // 5ms drain
+            100_000,   // 0.1ms flip
+            500_000,   // 0.5ms retire
+            42,        // messages drained
+            false,     // no timeout
+        );
+
+        assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .success_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .failure_total
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .prepare_time_ns
+                .load(Ordering::Relaxed),
+            1_000_000
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .drain_time_ns
+                .load(Ordering::Relaxed),
+            5_000_000
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .flip_time_ns
+                .load(Ordering::Relaxed),
+            100_000
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .retire_time_ns
+                .load(Ordering::Relaxed),
+            500_000
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .messages_drained_total
+                .load(Ordering::Relaxed),
+            42
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .drain_timeout_total
+                .load(Ordering::Relaxed),
+            0
+        );
+
+        // Record a successful hot-swap with timeout
+        registry.record_hotswap_success(
+            2_000_000,  // 2ms prepare
+            10_000_000, // 10ms drain (timeout)
+            200_000,    // 0.2ms flip
+            600_000,    // 0.6ms retire
+            10,         // messages drained
+            true,       // timed out
+        );
+
+        assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 2);
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .success_total
+                .load(Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .drain_timeout_total
+                .load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .messages_drained_total
+                .load(Ordering::Relaxed),
+            52
+        ); // 42 + 10
+
+        // Record a failed hot-swap
+        registry.record_hotswap_failure();
+
+        assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .success_total
+                .load(Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            registry
+                .hotswap_metrics
+                .failure_total
+                .load(Ordering::Relaxed),
+            1
+        );
+
+        // Verify metrics appear in Prometheus output
+        let output = registry.encode();
+        assert!(
+            output.contains("wafer_hotswap_total"),
+            "Missing wafer_hotswap_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_success_total"),
+            "Missing wafer_hotswap_success_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_failure_total"),
+            "Missing wafer_hotswap_failure_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_drain_timeout_total"),
+            "Missing wafer_hotswap_drain_timeout_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_prepare_time_ns_total"),
+            "Missing wafer_hotswap_prepare_time_ns_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_drain_time_ns_total"),
+            "Missing wafer_hotswap_drain_time_ns_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_flip_time_ns_total"),
+            "Missing wafer_hotswap_flip_time_ns_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_retire_time_ns_total"),
+            "Missing wafer_hotswap_retire_time_ns_total metric"
+        );
+        assert!(
+            output.contains("wafer_hotswap_messages_drained_total"),
+            "Missing wafer_hotswap_messages_drained_total metric"
+        );
     }
 }

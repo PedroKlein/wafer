@@ -60,7 +60,7 @@
 - [x] 7.1 Pass `MetricsRegistry` to `PipelineControl` (via ControlState in orchestrator.rs)
 - [x] 7.2 Wire node execution to update metrics (all 5 runner loops now call registry methods)
 - [x] 7.3 Wire queue operations to update metrics (queues registered during wire_queues)
-- [ ] 7.4 Add hot-swap metrics (from hot-swap-mechanism change)
+- [x] 7.4 Add hot-swap metrics (from hot-swap-mechanism change)
 - [x] 7.5 Verify metrics available via `/metrics` endpoint (test_api_server_starts_and_serves_health validates format)
 
 ## 8. Documentation & Examples
