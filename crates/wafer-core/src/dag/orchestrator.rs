@@ -49,6 +49,9 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 use wafer_types::{PipelineEvent, PipelineState};
 
+#[cfg(feature = "http-api")]
+use crate::metrics::MetricsRegistry;
+
 use crate::config::DagConfig;
 use crate::error::{Result, WaferError};
 use crate::factory::FactoryContext;
@@ -86,6 +89,9 @@ pub struct ControlState {
     pub messages_failed: AtomicU64,
     /// Event broadcaster for subscribers
     pub event_tx: broadcast::Sender<PipelineEvent>,
+    /// Prometheus metrics registry (only with http-api feature)
+    #[cfg(feature = "http-api")]
+    pub metrics_registry: MetricsRegistry,
 }
 
 impl ControlState {
@@ -99,6 +105,23 @@ impl ControlState {
             messages_processed: AtomicU64::new(0),
             messages_failed: AtomicU64::new(0),
             event_tx,
+            #[cfg(feature = "http-api")]
+            metrics_registry: MetricsRegistry::new(),
+        }
+    }
+
+    /// Create new control state with global labels for metrics.
+    #[cfg(feature = "http-api")]
+    pub fn with_labels(name: String, labels: HashMap<String, String>) -> Self {
+        let (event_tx, _) = broadcast::channel(256);
+        Self {
+            name,
+            created_at: Instant::now(),
+            state: Mutex::new(PipelineState::Starting),
+            messages_processed: AtomicU64::new(0),
+            messages_failed: AtomicU64::new(0),
+            event_tx,
+            metrics_registry: MetricsRegistry::with_labels(labels),
         }
     }
 
@@ -298,6 +321,7 @@ impl DagOrchestrator {
                 .collect();
 
             if let Some(node_arc) = node {
+                let control_state = Arc::clone(&self.control_state);
                 let handle = tokio::spawn(async move {
                     Self::run_node_loop(
                         node_id_owned,
@@ -305,6 +329,7 @@ impl DagOrchestrator {
                         input_receivers,
                         output_senders,
                         cancel_token,
+                        control_state,
                     )
                     .await;
                 });

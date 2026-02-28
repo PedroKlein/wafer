@@ -170,6 +170,20 @@ impl DagOrchestrator {
                 "Unknown node ID: {id}"
             ))));
         }
+
+        // Register node with metrics registry (http-api feature)
+        #[cfg(feature = "http-api")]
+        {
+            let node_type = match &node {
+                AnyNode::Source(_, _) => "source",
+                AnyNode::Transform(_, _) => "transform",
+                AnyNode::Sink(_, _) => "sink",
+                AnyNode::Router(_, _) => "router",
+                AnyNode::Joiner(_, _) => "joiner",
+            };
+            self.control_state.metrics_registry.register_node(id, node_type);
+        }
+
         let mut nodes = self.nodes.lock().await;
         nodes.insert(id.to_string(), Arc::new(Mutex::new(node)));
         Ok(())
@@ -181,8 +195,8 @@ impl DagOrchestrator {
     /// or the default queue capacity.
     ///
     /// Queue keys include port information for router/joiner support:
-    /// - Key format: `(\"from_node:from_port\", \"to_node:to_port\")`
-    /// - Default port is \"default\" when not specified
+    /// - Key format: `(\\\"from_node:from_port\\\", \\\"to_node:to_port\\\")`
+    /// - Default port is \\\"default\\\" when not specified
     ///
     /// # Note
     ///
@@ -209,6 +223,16 @@ impl DagOrchestrator {
             );
             run_state.queue_senders.insert(key.clone(), sender);
             run_state.queue_receivers.insert(key, receiver);
+
+            // Register queue with metrics registry (http-api feature)
+            #[cfg(feature = "http-api")]
+            {
+                self.control_state.metrics_registry.register_queue(
+                    &edge.from,
+                    &edge.to,
+                    capacity as u64,
+                );
+            }
         }
         Ok(())
     }

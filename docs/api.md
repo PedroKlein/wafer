@@ -27,11 +27,11 @@ Currently no authentication. Run behind a reverse proxy for production deploymen
 | `GET /api/v1/pipeline` | ✅ Implemented | Returns PipelineStatus |
 | `GET /api/v1/nodes` | ✅ Implemented | Returns all NodeInfo |
 | `GET /api/v1/nodes/:id` | ✅ Implemented | Returns single NodeInfo |
-| `POST /api/v1/nodes/:id/hot-swap` | 🔲 Stub | Returns 501 NotImplemented |
-| `POST /api/v1/pipeline/reload` | 🔲 Stub | Returns 501 NotImplemented |
+| `POST /api/v1/nodes/:id/hot-swap` | ✅ Implemented | Full drain-and-flip hot-swap |
+| `POST /api/v1/pipeline/reload` | ✅ Implemented | Config diff & resync |
 | `POST /api/v1/pipeline/drain` | ✅ Implemented | Triggers pipeline drain |
 | `POST /api/v1/pipeline/shutdown` | ✅ Implemented | Triggers graceful shutdown |
-| `GET /metrics` | ⚠️ Partial | Scaffold exists, full registry pending |
+| `GET /metrics` | ✅ Implemented | Full Prometheus registry (SPEC §12.2) |
 
 ---
 
@@ -331,10 +331,15 @@ curl http://localhost:8080/api/v1/nodes
 # Get specific node
 curl http://localhost:8080/api/v1/nodes/transform-1
 
-# Trigger hot-swap (returns 501 until hot-swap-mechanism is implemented)
+# Trigger hot-swap (drains pending messages, swaps to new WASM, resumes)
 curl -X POST http://localhost:8080/api/v1/nodes/transform-1/hot-swap
 
-# Reload config (returns 501 until hot-swap-mechanism is implemented)
+# Hot-swap with explicit WASM path
+curl -X POST http://localhost:8080/api/v1/nodes/transform-1/hot-swap \
+  -H "Content-Type: application/json" \
+  -d '{"wasm_path": "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"}'
+
+# Reload config (detects changes and hot-swaps affected nodes)
 curl -X POST http://localhost:8080/api/v1/pipeline/reload
 
 # Drain pipeline
@@ -370,8 +375,11 @@ waferctl nodes
 # JSON output
 waferctl --json status
 
-# Trigger hot-swap (returns NotImplemented until hot-swap-mechanism)
+# Trigger hot-swap
 waferctl hot-swap transform-1
+
+# Hot-swap with explicit WASM path
+waferctl hot-swap transform-1 --path plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm
 
 # Get metrics (human-readable)
 waferctl metrics
@@ -383,6 +391,121 @@ waferctl metrics --raw
 ```
 
 See [crates/waferctl/README.md](../crates/waferctl/README.md) for complete CLI documentation.
+
+---
+
+## Environment Variables
+
+### RUST_LOG
+
+Controls log verbosity using the `tracing` crate's filter syntax.
+
+**Format:** `RUST_LOG=<target>=<level>,...`
+
+**Levels:** `trace`, `debug`, `info`, `warn`, `error`
+
+**Examples:**
+
+```bash
+# Default level (info)
+cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+
+# Debug logging for all wafer components
+RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+
+# Specific component logging
+RUST_LOG=wafer_core::dag=debug,wafer_core::metrics=trace cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+
+# Quiet mode (warnings and errors only)
+RUST_LOG=warn cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
+```
+
+**Common targets:**
+- `wafer_core` - Core runtime (all modules)
+- `wafer_core::dag` - DAG orchestration and node execution
+- `wafer_core::metrics` - Metrics registry and collection
+- `wafer_core::api` - HTTP API server
+- `wafer_runtime` - Main runtime binary
+
+### Log Format
+
+The runtime supports two log formats via the `--log-format` CLI flag:
+
+```bash
+# Text format (default) - human-readable
+cargo run -p wafer-runtime -- --config config.toml --log-format text
+
+# JSON format - structured for log aggregators (SPEC §12.4)
+cargo run -p wafer-runtime -- --config config.toml --log-format json
+```
+
+**JSON log structure:**
+```json
+{
+  "timestamp": "2026-02-28T10:30:00.123456789Z",
+  "level": "INFO",
+  "target": "wafer_core::dag::runner",
+  "span": {
+    "pipeline": "sensor-telemetry",
+    "node_id": "json-parser"
+  },
+  "message": "Message processed",
+  "fields": {
+    "message_id": "msg-12345",
+    "duration_ns": 1234,
+    "input_size_bytes": 256,
+    "output_size_bytes": 312
+  }
+}
+```
+
+---
+
+## Prometheus Integration
+
+### Scrape Configuration
+
+See [examples/prometheus.yml](../examples/prometheus.yml) for a ready-to-use Prometheus scrape configuration.
+
+**Quick start:**
+```bash
+# Start WAFER with metrics endpoint
+cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+
+# In another terminal, start Prometheus
+prometheus --config.file=examples/prometheus.yml
+
+# Or with Docker
+docker run -d --name prometheus \
+  -p 9092:9090 \
+  -v $(pwd)/examples/prometheus.yml:/etc/prometheus/prometheus.yml \
+  --network host \
+  prom/prometheus
+```
+
+### Available Metrics
+
+All metrics follow SPEC §12.2. See the `/metrics` endpoint for current values.
+
+**Pipeline metrics:**
+- `wafer_pipeline_uptime_seconds` - Time since pipeline started
+- `wafer_pipeline_messages_total` - Total messages processed
+- `wafer_pipeline_errors_total` - Total processing errors
+
+**Node metrics (labeled by `node_id`, `node_type`):**
+- `wafer_node_invocations_total` - Total invocations per node
+- `wafer_node_process_time_ns` - Processing time in nanoseconds
+- `wafer_node_errors_total` - Errors per node
+
+**Queue metrics (labeled by `from`, `to`):**
+- `wafer_queue_depth` - Current queue depth
+- `wafer_queue_capacity` - Queue capacity
+- `wafer_queue_enqueue_total` - Messages enqueued
+
+**System metrics:**
+- `wafer_host_cpu_percent` - Process CPU usage
+- `wafer_host_memory_rss_bytes` - Resident set size
+- `wafer_host_threads` - Thread count
 
 ---
 

@@ -302,13 +302,13 @@ wit/
 - [x] Config diff & resync - `ConfigDiff` struct, `diff_configs()`, `resync()` method
 - [x] Swap validation & safety - Per-node swap locks, component validation before drain
 
-### Observability (observability-prometheus change) - 🔲 NOT STARTED
-- [x] Prometheus `/metrics` endpoint scaffold (HTTP handler exists)
+### Observability (observability-prometheus change) - ✅ COMPLETE
+- [x] Prometheus `/metrics` endpoint with full metrics (SPEC §12.2 compliant)
 - [x] Health endpoints: `/health`, `/ready` (SPEC §12.5)
-- [ ] MetricsRegistry with prometheus-client crate
-- [ ] System metrics (CPU, memory, threads via sysinfo)
-- [ ] Structured JSON log output (SPEC §12.4) - tracing uses text format
-- [ ] Full metrics wiring (node/queue metrics to Prometheus registry)
+- [x] MetricsRegistry with prometheus-client crate (feature-gated under `http-api`)
+- [x] System metrics (CPU, memory, threads via sysinfo crate)
+- [x] Structured JSON log output via `--log-format json` CLI flag (SPEC §12.4)
+- [x] Full metrics wiring (pipeline, node, queue metrics to Prometheus registry)
 
 ### Dynamic Features
 - [x] ~~OCI registry package fetching~~ - Implemented via `WaferRegistry`
@@ -353,8 +353,8 @@ wit/
 | **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
 | **WIT** | Only `raw(list<u8>)` payload supported | Additional variants planned |
 | **State** | Stateless transforms only | Host-managed state planned |
-| **Metrics** | Prometheus endpoint scaffolded | Full registry not yet wired |
-| **Logging** | Text format only (no JSON export) | Structured logging planned |
+| **Metrics** | Full Prometheus registry | All SPEC §12.2 metrics available |
+| **Logging** | JSON and text formats via `--log-format` | Structured logging complete |
 | **Error handling** | No DLQ, errors logged only | DLQ routing planned |
 | **Hot-swap** | Transform nodes only (sources/sinks not swappable) | By design - see ADR-0003 |
 | **Capabilities** | Network/filesystem flags are placeholders | Enforcement not implemented |
@@ -629,10 +629,10 @@ WaferState::with_capabilities(Capabilities::full())
 | **Queue impl** | Unspecified | `tokio::sync::mpsc` async channels |
 | **Source/Sink** | Native Rust (ADR-0004) | Native Rust (aligned) |
 | **Router/Joiner** | Full support | Implemented (content-router, merge-joiner) |
-| **Hot-swap** | Drain-and-flip | Stubs only (returns NotImplemented) |
+| **Hot-swap** | Drain-and-flip | Fully implemented via HotSwapCoordinator |
 | **Payload types** | Multiple variants | Only `raw(list<u8>)` |
-| **Control API** | Full REST API | Endpoints implemented, some return NotImplemented |
-| **Metrics** | Full Prometheus registry | Endpoint exists, registry not fully wired |
+| **Control API** | Full REST API | Fully implemented with PipelineControl |
+| **Metrics** | Full Prometheus registry | Fully implemented (SPEC §12.2 compliant) |
 
 ---
 
@@ -656,7 +656,7 @@ WaferState::with_capabilities(Capabilities::full())
 | Change | Status | Description |
 |--------|--------|-------------|
 | `runtime-control-plane` | ✅ Complete | Workspace restructure, HTTP API, waferctl CLI |
-| `observability-prometheus` | 🔲 Not Started | Full Prometheus metrics, structured logging |
+| `observability-prometheus` | ✅ Complete | Full Prometheus metrics, structured logging |
 | `hot-swap-mechanism` | ✅ Complete | Drain-and-flip hot-swap implementation |
 
 See `openspec/changes/` for detailed task breakdowns.

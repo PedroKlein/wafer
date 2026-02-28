@@ -37,8 +37,9 @@ enabled = true
 # Separate metrics server (optional - defaults to same as api.bind)
 bind = "127.0.0.1:9091"
 path = "/metrics"
-
-default_queue_capacity = 1024
+# Global labels added to all metrics (useful for multi-instance deployments)
+[metrics.labels]
+environment = "development"
 
 # Source node: reads from stdin
 [[nodes]]

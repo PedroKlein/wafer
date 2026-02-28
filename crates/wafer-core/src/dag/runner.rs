@@ -39,6 +39,7 @@ use crate::node::{
 };
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
+use super::orchestrator::ControlState;
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
@@ -61,6 +62,7 @@ impl DagOrchestrator {
         input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
         output_senders: Vec<(String, QueueSender<RuntimeEnvelope>)>,
         cancel_token: CancellationToken,
+        control_state: Arc<ControlState>,
     ) {
         let mut locked = node.lock().await;
 
@@ -75,6 +77,7 @@ impl DagOrchestrator {
                     &output_senders,
                     &cancel_token,
                     &state_tracker,
+                    &control_state,
                 )
                 .await;
             }
@@ -87,6 +90,7 @@ impl DagOrchestrator {
                         &output_senders,
                         &cancel_token,
                         &state_tracker,
+                        &control_state,
                     )
                     .await;
                 }
@@ -99,6 +103,7 @@ impl DagOrchestrator {
                         receiver,
                         &cancel_token,
                         &state_tracker,
+                        &control_state,
                     )
                     .await;
                 }
@@ -112,6 +117,7 @@ impl DagOrchestrator {
                         &output_senders,
                         &cancel_token,
                         &state_tracker,
+                        &control_state,
                     )
                     .await;
                 }
@@ -124,6 +130,7 @@ impl DagOrchestrator {
                     &output_senders,
                     &cancel_token,
                     &state_tracker,
+                    &control_state,
                 )
                 .await;
             }
@@ -139,14 +146,16 @@ impl DagOrchestrator {
     ///
     /// The `processing` flag is set while the source is actively polling.
     /// This allows drain detection to know when the source is idle.
+    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "source"))]
     pub(super) async fn run_source_loop(
         node_id: &str,
         source: &mut dyn Source,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
     ) {
-        tracing::info!(node = %node_id, "Source loop started");
+        tracing::info!("Source loop started");
         loop {
             // Check for cancellation before each poll
             if cancel_token.is_cancelled() {
@@ -164,7 +173,7 @@ impl DagOrchestrator {
                 biased;
 
                 () = cancel_token.cancelled() => {
-                    tracing::debug!(node = %node_id, "Source cancelled");
+                    tracing::debug!("Source cancelled");
                     break;
                 }
 
@@ -172,16 +181,26 @@ impl DagOrchestrator {
                     state_tracker.set_processing(true);
                     match result {
                         Ok(Some(envelope)) => {
+                            let message_id = envelope.id.clone();
+                            let payload_size = envelope.payload.len();
                             tracing::debug!(
-                                node = %node_id,
-                                envelope_id = %envelope.id,
-                                payload_size = envelope.payload.len(),
+                                message_id = %message_id,
+                                payload_size,
                                 "Source received message"
                             );
+
+                            // Record metrics
+                            #[cfg(feature = "http-api")]
+                            {
+                                control_state.metrics_registry.record_message();
+                                control_state.metrics_registry.record_node_invocation(node_id, 0);
+                            }
+                            let _ = control_state; // suppress unused warning when http-api disabled
+
                             // Optimization: avoid clone for single downstream
                             if output_senders.len() == 1 {
                                 if let Err(e) = output_senders[0].1.send(envelope).await {
-                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                    tracing::warn!(error = %e, "Failed to send to downstream");
                                 }
                             } else {
                                 // Clone for all downstream senders
@@ -189,18 +208,24 @@ impl DagOrchestrator {
                                 // could use ownership tracking to avoid the final clone.
                                 for (_, sender) in output_senders {
                                     if let Err(e) = sender.send(envelope.clone()).await {
-                                        tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                        tracing::warn!(error = %e, "Failed to send to downstream");
                                     }
                                 }
                             }
                         }
                         Ok(None) => {
-                            tracing::debug!(node = %node_id, "Source reached EOF");
+                            tracing::debug!("Source reached EOF");
                             state_tracker.set_processing(false);
                             break;
                         }
                         Err(e) => {
-                            tracing::error!(node = %node_id, error = %e, "Source poll error");
+                            tracing::error!(error = %e, "Source poll error");
+                            // Record error metrics
+                            #[cfg(feature = "http-api")]
+                            {
+                                control_state.metrics_registry.record_error();
+                                control_state.metrics_registry.record_node_error(node_id);
+                            }
                             state_tracker.set_processing(false);
                             break;
                         }
@@ -209,7 +234,7 @@ impl DagOrchestrator {
                 }
             }
         }
-        tracing::info!(node = %node_id, "Source loop stopped");
+        tracing::info!("Source loop stopped");
     }
 
     /// Run the transform node loop.
@@ -226,6 +251,7 @@ impl DagOrchestrator {
     ///
     /// The `processing` flag is set around each `process()` call to enable
     /// accurate drain detection during hot-swap operations.
+    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "transform"))]
     pub(super) async fn run_transform_loop(
         node_id: &str,
         transform: &mut dyn Transform,
@@ -233,8 +259,9 @@ impl DagOrchestrator {
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
     ) {
-        tracing::info!(node = %node_id, "Transform loop started");
+        tracing::info!("Transform loop started");
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Transform cancelled");
@@ -248,7 +275,8 @@ impl DagOrchestrator {
             };
 
             if let Some(envelope) = maybe_envelope {
-                let input_id = envelope.id.clone();
+                let message_id = envelope.id.clone();
+                let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
 
                 // Mark processing before WASM call
@@ -256,43 +284,81 @@ impl DagOrchestrator {
 
                 match transform.process(envelope).await {
                     Ok(ProcessResult::Emit(output)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        let output_size_bytes = output.payload.len();
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            output_id = %output.id,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            input_size_bytes,
+                            output_size_bytes,
+                            duration_ns,
                             "Transform emitted"
                         );
+
+                        // Record success metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_message();
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
+                        let _ = control_state; // suppress unused warning when http-api disabled
+
                         if output_senders.len() == 1 {
                             if let Err(e) = output_senders[0].1.send(output).await {
-                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                tracing::warn!(error = %e, "Failed to send to downstream");
                             }
                         } else {
                             for (_, sender) in output_senders {
                                 if let Err(e) = sender.send(output.clone()).await {
-                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                    tracing::warn!(error = %e, "Failed to send to downstream");
                                 }
                             }
                         }
                     }
                     Ok(ProcessResult::Filter) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            input_size_bytes,
+                            duration_ns,
                             "Transform filtered"
                         );
+
+                        // Record invocation for filtered messages too
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
                     }
                     Ok(ProcessResult::Error(e)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::warn!(
-                            node = %node_id,
-                            code = %e.code,
-                            message = %e.message,
+                            message_id = %message_id,
+                            error_code = %e.code,
+                            error_message = %e.message,
                             "Transform error - continuing"
                         );
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                     Err(e) => {
-                        tracing::error!(node = %node_id, error = %e, "Transform process failed");
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        tracing::error!(message_id = %message_id, error = %e, "Transform process failed");
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                 }
 
@@ -300,12 +366,12 @@ impl DagOrchestrator {
                 state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
-                    tracing::debug!(node = %node_id, "Input queue closed");
+                    tracing::debug!("Input queue closed");
                 }
                 break;
             }
         }
-        tracing::info!(node = %node_id, "Transform loop stopped");
+        tracing::info!("Transform loop stopped");
     }
 
     /// Run the sink node loop.
@@ -321,14 +387,16 @@ impl DagOrchestrator {
     /// # State Tracking
     ///
     /// The `processing` flag is set around each `collect()` call.
+    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "sink"))]
     pub(super) async fn run_sink_loop(
         node_id: &str,
         sink: &mut dyn Sink,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
     ) {
-        tracing::info!(node = %node_id, "Sink loop started");
+        tracing::info!("Sink loop started");
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Sink cancelled");
@@ -342,29 +410,51 @@ impl DagOrchestrator {
             };
 
             if let Some(envelope) = maybe_envelope {
-                let envelope_id = envelope.id.clone();
+                let message_id = envelope.id.clone();
+                let input_size_bytes = envelope.payload.len();
+                let start = Instant::now();
 
                 state_tracker.set_processing(true);
 
                 if let Err(e) = sink.collect(envelope).await {
-                    tracing::error!(node = %node_id, error = %e, "Sink collect failed");
+                    let duration_ns = start.elapsed().as_nanos() as u64;
+                    tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
+
+                    // Record error metrics
+                    #[cfg(feature = "http-api")]
+                    {
+                        control_state.metrics_registry.record_error();
+                        control_state.metrics_registry.record_node_error(node_id);
+                        control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                    }
                 } else {
+                    let duration_ns = start.elapsed().as_nanos() as u64;
                     tracing::debug!(
-                        node = %node_id,
-                        envelope_id = %envelope_id,
+                        message_id = %message_id,
+                        input_size_bytes,
+                        duration_ns,
                         "Sink delivered"
                     );
+
+                    // Record success metrics
+                    #[cfg(feature = "http-api")]
+                    {
+                        control_state.metrics_registry.record_message();
+                        control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        control_state.metrics_registry.record_process_time(duration_ns);
+                    }
                 }
+                let _ = control_state; // suppress unused warning when http-api disabled
 
                 state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
-                    tracing::debug!(node = %node_id, "Input queue closed");
+                    tracing::debug!("Input queue closed");
                 }
                 break;
             }
         }
-        tracing::info!(node = %node_id, "Sink loop stopped");
+        tracing::info!("Sink loop stopped");
     }
 
     /// Run the router node loop.
@@ -380,6 +470,7 @@ impl DagOrchestrator {
     /// # State Tracking
     ///
     /// The `processing` flag is set around each `route()` call.
+    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "router"))]
     pub(super) async fn run_router_loop(
         node_id: &str,
         router: &mut dyn Router,
@@ -387,8 +478,9 @@ impl DagOrchestrator {
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
     ) {
-        tracing::info!(node = %node_id, "Router loop started");
+        tracing::info!("Router loop started");
         loop {
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Router cancelled");
@@ -403,7 +495,8 @@ impl DagOrchestrator {
             };
 
             if let Some(envelope) = maybe_envelope {
-                let input_id = envelope.id.clone();
+                let message_id = envelope.id.clone();
+                let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
 
                 state_tracker.set_processing(true);
@@ -411,53 +504,91 @@ impl DagOrchestrator {
                 // WASM call OUTSIDE select - cancel safe
                 match router.route(envelope).await {
                     Ok(RouteResult::Route(port, output)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        let output_size_bytes = output.payload.len();
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            port = %port,
-                            output_id = %output.id,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            output_port = %port,
+                            input_size_bytes,
+                            output_size_bytes,
+                            duration_ns,
                             "Router routed"
                         );
+
+                        // Record success metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_message();
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
+                        let _ = control_state; // suppress unused warning when http-api disabled
+
                         // Find sender for this port
                         if let Some((_, sender)) = output_senders.iter().find(|(p, _)| p == &port) {
                             if let Err(e) = sender.send(output).await {
-                                tracing::warn!(node = %node_id, port = %port, error = %e, "Failed to send to port");
+                                tracing::warn!(output_port = %port, error = %e, "Failed to send to port");
                             }
                         } else {
-                            tracing::warn!(node = %node_id, port = %port, "Unknown output port, dropping message");
+                            tracing::warn!(output_port = %port, "Unknown output port, dropping message");
                         }
                     }
                     Ok(RouteResult::Filter) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            input_size_bytes,
+                            duration_ns,
                             "Router filtered"
                         );
+
+                        // Record invocation for filtered messages
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
                     }
                     Ok(RouteResult::Error(e)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::warn!(
-                            node = %node_id,
-                            code = %e.code,
-                            message = %e.message,
+                            message_id = %message_id,
+                            error_code = %e.code,
+                            error_message = %e.message,
                             "Router error - continuing"
                         );
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                     Err(e) => {
-                        tracing::error!(node = %node_id, error = %e, "Router route failed");
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        tracing::error!(message_id = %message_id, error = %e, "Router route failed");
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                 }
 
                 state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
-                    tracing::debug!(node = %node_id, "Input queue closed");
+                    tracing::debug!("Input queue closed");
                 }
                 break;
             }
         }
-        tracing::info!(node = %node_id, "Router loop stopped");
+        tracing::info!("Router loop stopped");
     }
 
     /// Run the joiner node loop.
@@ -473,6 +604,7 @@ impl DagOrchestrator {
     /// # State Tracking
     ///
     /// The `processing` flag is set around each `process()` call.
+    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "joiner", input_count = input_receivers.len()))]
     pub(super) async fn run_joiner_loop(
         node_id: &str,
         joiner: &mut dyn Joiner,
@@ -480,9 +612,10 @@ impl DagOrchestrator {
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
         state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
     ) {
         use std::pin::Pin;
-        tracing::info!(node = %node_id, inputs = input_receivers.len(), "Joiner loop started");
+        tracing::info!("Joiner loop started");
 
         let streams: Vec<Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>> = input_receivers
             .into_iter()
@@ -515,7 +648,8 @@ impl DagOrchestrator {
             };
 
             if let Some((port_name, envelope)) = maybe_item {
-                let input_id = envelope.id.clone();
+                let message_id = envelope.id.clone();
+                let input_size_bytes = envelope.payload.len();
                 let start = Instant::now();
 
                 state_tracker.set_processing(true);
@@ -523,58 +657,96 @@ impl DagOrchestrator {
                 // WASM call OUTSIDE select - cancel safe
                 match joiner.process(&port_name, envelope).await {
                     Ok(ProcessResult::Emit(output)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        let output_size_bytes = output.payload.len();
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            port = %port_name,
-                            output_id = %output.id,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            input_port = %port_name,
+                            input_size_bytes,
+                            output_size_bytes,
+                            duration_ns,
                             "Joiner emitted"
                         );
+
+                        // Record success metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_message();
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
+                        let _ = control_state; // suppress unused warning when http-api disabled
+
                         // Send to output (joiner has single output)
                         if output_senders.len() == 1 {
                             if let Err(e) = output_senders[0].1.send(output).await {
-                                tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                tracing::warn!(error = %e, "Failed to send to downstream");
                             }
                         } else {
                             for (_, sender) in output_senders {
                                 if let Err(e) = sender.send(output.clone()).await {
-                                    tracing::warn!(node = %node_id, error = %e, "Failed to send to downstream");
+                                    tracing::warn!(error = %e, "Failed to send to downstream");
                                 }
                             }
                         }
                     }
                     Ok(ProcessResult::Filter) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::debug!(
-                            node = %node_id,
-                            input_id = %input_id,
-                            port = %port_name,
-                            elapsed_ms = %start.elapsed().as_millis(),
+                            message_id = %message_id,
+                            input_port = %port_name,
+                            input_size_bytes,
+                            duration_ns,
                             "Joiner filtered"
                         );
+
+                        // Record invocation for filtered messages
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state.metrics_registry.record_process_time(duration_ns);
+                        }
                     }
                     Ok(ProcessResult::Error(e)) => {
+                        let duration_ns = start.elapsed().as_nanos() as u64;
                         tracing::warn!(
-                            node = %node_id,
-                            port = %port_name,
-                            code = %e.code,
-                            message = %e.message,
+                            message_id = %message_id,
+                            input_port = %port_name,
+                            error_code = %e.code,
+                            error_message = %e.message,
                             "Joiner error - continuing"
                         );
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                     Err(e) => {
-                        tracing::error!(node = %node_id, port = %port_name, error = %e, "Joiner process failed");
+                        let duration_ns = start.elapsed().as_nanos() as u64;
+                        tracing::error!(message_id = %message_id, input_port = %port_name, error = %e, "Joiner process failed");
+
+                        // Record error metrics
+                        #[cfg(feature = "http-api")]
+                        {
+                            control_state.metrics_registry.record_error();
+                            control_state.metrics_registry.record_node_error(node_id);
+                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                        }
                     }
                 }
 
                 state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
-                    tracing::debug!(node = %node_id, "All input queues closed");
+                    tracing::debug!("All input queues closed");
                 }
                 break;
             }
         }
-        tracing::info!(node = %node_id, "Joiner loop stopped");
+        tracing::info!("Joiner loop stopped");
     }
 }

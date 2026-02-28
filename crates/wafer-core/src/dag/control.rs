@@ -149,8 +149,15 @@ impl PipelineControl for DagOrchestrator {
     }
 
     fn metrics(&self) -> MetricsSnapshot {
-        // Return basic metrics - will be enhanced by observability-prometheus change
-        MetricsSnapshot::default()
+        // Use the Prometheus metrics registry when http-api feature is enabled
+        #[cfg(feature = "http-api")]
+        {
+            self.control_state.metrics_registry.snapshot()
+        }
+        #[cfg(not(feature = "http-api"))]
+        {
+            MetricsSnapshot::default()
+        }
     }
 
     fn nodes(&self) -> Vec<NodeInfo> {
@@ -335,13 +342,23 @@ mod tests {
     }
 
     #[test]
-    fn test_metrics_returns_default_snapshot() {
+    fn test_metrics_returns_snapshot() {
         let orchestrator = create_test_orchestrator();
         let metrics = orchestrator.metrics();
 
-        // MetricsSnapshot::default() should have empty collections
-        assert!(metrics.counters.is_empty());
-        assert!(metrics.gauges.is_empty());
+        // With http-api feature, MetricsRegistry returns populated metrics
+        // Without http-api feature, MetricsSnapshot::default() has empty collections
+        #[cfg(feature = "http-api")]
+        {
+            // Should have pipeline uptime metric at minimum
+            let prometheus_output = metrics.to_prometheus();
+            assert!(prometheus_output.contains("wafer_pipeline_uptime_seconds"));
+        }
+        #[cfg(not(feature = "http-api"))]
+        {
+            assert!(metrics.counters.is_empty());
+            assert!(metrics.gauges.is_empty());
+        }
     }
 
     #[test]

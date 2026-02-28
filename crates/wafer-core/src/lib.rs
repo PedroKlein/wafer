@@ -42,3 +42,7 @@ pub use error::{RegistryError, Result, WaferError};
 // Re-export control types for convenience
 pub use control::PipelineControl;
 pub use wafer_types::*;
+
+// Re-export metrics registry for API integration
+#[cfg(feature = "http-api")]
+pub use metrics::{MetricsHandle, MetricsRegistry};

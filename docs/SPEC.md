@@ -1861,8 +1861,8 @@ Azure IoT Operations (AIO) is architecturally most similar. Key differences:
 - [ ] Config file watch
 - [x] Router node category (plugins/content-router)
 - [x] Joiner node category (plugins/merge-joiner)
-- [x] Prometheus metrics endpoint (/metrics handler implemented)
-- [ ] Structured JSON logs
+- [x] Prometheus metrics endpoint (full MetricsRegistry with SPEC §12.2 metrics)
+- [x] Structured JSON logs (via `--log-format json` CLI flag)
 - [ ] Security test scenarios (S1-S6)
 - [x] waferctl CLI for runtime management
 
