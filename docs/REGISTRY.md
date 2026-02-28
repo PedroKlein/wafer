@@ -286,8 +286,101 @@ rm -rf ~/.cache/wafer/packages
 └─────────────────────────────────────────────────────────────┘
 ```
 
+## Hot-Swapping to New Plugin Versions
+
+WAFER supports live hot-swapping of WASM plugins without stopping the pipeline. This enables zero-downtime updates when deploying new plugin versions.
+
+### Prerequisites
+
+1. The runtime must have the HTTP API enabled (`[api] enabled = true`)
+2. The node must be a swappable type (`transform`, `router`, or `joiner`)
+3. The new plugin must be compatible with the existing node's WIT world
+
+### Hot-Swap via waferctl
+
+```bash
+# Update a local plugin path
+waferctl hot-swap transform-1 --path plugins/uppercase/v2.wasm
+
+# Reload config and swap nodes with changed WASM paths
+waferctl hot-swap transform-1
+```
+
+### Hot-Swap to New OCI Version
+
+1. **Publish the new version:**
+   ```bash
+   just publish-plugin uppercase 1.1.0
+   ```
+
+2. **Update your pipeline config:**
+   ```toml
+   [[nodes]]
+   id = "transform"
+   node_type = "transform"
+   [nodes.config]
+   oci = "ghcr.io/pedroklein/wafer-uppercase:1.1.0"  # Updated version
+   ```
+
+3. **Trigger the hot-swap:**
+   ```bash
+   # The runtime reloads the config and detects the version change
+   waferctl hot-swap transform
+   ```
+
+### Hot-Swap via REST API
+
+```bash
+# Hot-swap a specific node (reloads config)
+curl -X POST http://localhost:8080/api/v1/nodes/transform/hot-swap
+
+# Hot-swap with explicit WASM path
+curl -X POST http://localhost:8080/api/v1/nodes/transform/hot-swap \
+  -H "Content-Type: application/json" \
+  -d '{"wasm_path": "/path/to/new.wasm"}'
+```
+
+### How It Works
+
+The hot-swap uses a **drain-and-flip** algorithm (see [ADR-0003](adr/0003-drain-and-flip-hotswap.md)):
+
+1. **Prepare**: Load and validate the new WASM component
+2. **Drain**: Pause routing to the node, wait for in-flight messages to complete
+3. **Flip**: Atomically swap the old instance with the new one
+4. **Retire**: Clean up the old instance, resume routing
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Hot-Swap Timeline                         │
+├─────────────────────────────────────────────────────────────┤
+│  t0: Prepare     │ Load new WASM, validate compatibility    │
+│  t1: Drain       │ Pause routing, wait for in-flight msgs   │
+│  t2: Flip        │ Atomically swap old → new instance       │
+│  t3: Retire      │ Cleanup old instance, resume routing     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Monitoring Hot-Swaps
+
+Hot-swap operations emit metrics and can be monitored:
+
+```bash
+# Check node state
+waferctl nodes
+
+# View hot-swap metrics (Prometheus)
+curl http://localhost:9091/metrics | grep hot_swap
+```
+
+### Limitations
+
+- **Source/Sink nodes** cannot be hot-swapped (by design - they manage external connections)
+- **Topology changes** (adding/removing nodes or edges) require a full restart
+- **Concurrent swaps** on the same node are serialized via per-node locks
+
 ## See Also
 
-- [ADR-0005: Registry Package Support](adr/0005-registry-package-support.md) - Design decisions
+- [ADR-0003: Drain-and-Flip Hot-Swap](adr/0003-drain-and-flip-hotswap.md) - Hot-swap design decisions
+- [ADR-0005: Registry Package Support](adr/0005-registry-package-support.md) - OCI registry design
 - [SPEC.md](SPEC.md) - Full runtime specification
 - [MVP.md](MVP.md) - MVP implementation status

@@ -1,5 +1,5 @@
-# WAFER DAG Configuration: Passthrough with Control Plane
-# Simple pipeline with HTTP API and metrics enabled.
+# WAFER DAG Configuration: Passthrough with Control Plane & Hot-Swap
+# Simple pipeline with HTTP API, metrics, and hot-swap enabled.
 #
 # Usage:
 #   cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
@@ -13,6 +13,16 @@
 # Or use waferctl:
 #   waferctl -e http://localhost:9090 status
 #   waferctl -e http://localhost:9090 nodes
+#
+# Hot-Swap Demo:
+#   1. Start the pipeline (in one terminal):
+#      cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
+#
+#   2. In another terminal, hot-swap to uppercase transform:
+#      waferctl -e http://localhost:9090 hot-swap passthrough \
+#        --path plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm
+#
+#   3. Send input - now it's uppercased!
 
 [pipeline]
 name = "passthrough-demo"
