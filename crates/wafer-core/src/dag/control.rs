@@ -220,6 +220,7 @@ mod tests {
             cancel_token: CancellationToken::new(),
             control_state,
             factory_ctx: Mutex::new(None),
+            swap_locks: Mutex::new(HashMap::new()),
         }
     }
 
@@ -287,7 +288,8 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_node_not_found() {
         let orchestrator = create_test_orchestrator();
-        let result = orchestrator.hot_swap("nonexistent").await;
+        // Use UFCS to call the trait method, not the inherent method
+        let result = PipelineControl::hot_swap(&orchestrator, "nonexistent").await;
 
         assert!(matches!(
             result,
@@ -298,7 +300,8 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_source() {
         let orchestrator = create_test_orchestrator();
-        let result = orchestrator.hot_swap("source").await;
+        // Use UFCS to call the trait method, not the inherent method
+        let result = PipelineControl::hot_swap(&orchestrator, "source").await;
 
         assert!(matches!(
             result,
@@ -309,7 +312,8 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_sink() {
         let orchestrator = create_test_orchestrator();
-        let result = orchestrator.hot_swap("sink").await;
+        // Use UFCS to call the trait method, not the inherent method
+        let result = PipelineControl::hot_swap(&orchestrator, "sink").await;
 
         assert!(matches!(
             result,
@@ -320,7 +324,8 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_returns_not_implemented_for_transform() {
         let orchestrator = create_test_orchestrator();
-        let result = orchestrator.hot_swap("transform").await;
+        // Use UFCS to call the trait method, not the inherent method
+        let result = PipelineControl::hot_swap(&orchestrator, "transform").await;
 
         // Transform is swappable but hot-swap is not implemented yet
         assert!(matches!(

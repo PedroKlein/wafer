@@ -15,6 +15,8 @@
 //! - [`orchestrator`]: Core struct, `run()`, and public API
 //! - [`builder`]: Construction from config (`from_config`) and validation
 //! - [`runner`]: Node execution loops (source, transform, sink)
+//! - [`hotswap`]: Hot-swap coordinator for live WASM node replacement
+//! - [`routing`]: Message routing control for hot-swap buffering
 //!
 //! # Example
 //!
@@ -34,10 +36,14 @@
 
 mod builder;
 mod control;
+mod hotswap;
 mod orchestrator;
+mod routing;
 mod runner;
 
+pub use hotswap::{HotSwapCoordinator, SwapError, SwapMetrics, DEFAULT_DRAIN_TIMEOUT_MS};
 pub use orchestrator::DagOrchestrator;
+pub use routing::{RoutingController, SendError};
 
 /// Type alias for `DagOrchestrator` - the core pipeline controller.
 pub type PipelineOrchestrator = DagOrchestrator;
