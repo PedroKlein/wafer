@@ -53,10 +53,19 @@ pub struct PipelineStatus {
 }
 
 /// Current state of a node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// State transitions for hot-swap:
+/// ```text
+/// Starting → Running ⟶ Draining → Retired
+///                    ↘ Error
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeState {
+    /// Node is being initialized (validate, init not yet called)
+    Starting,
     /// Node is running normally
+    #[default]
     Running,
     /// Node is draining (finishing in-flight messages before swap)
     Draining,
@@ -69,11 +78,26 @@ pub enum NodeState {
 impl std::fmt::Display for NodeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            NodeState::Starting => write!(f, "starting"),
             NodeState::Running => write!(f, "running"),
             NodeState::Draining => write!(f, "draining"),
             NodeState::Retired => write!(f, "retired"),
             NodeState::Error => write!(f, "error"),
         }
+    }
+}
+
+impl NodeState {
+    /// Returns true if the node is in a state that accepts new messages.
+    #[must_use]
+    pub fn accepts_messages(&self) -> bool {
+        matches!(self, NodeState::Running)
+    }
+
+    /// Returns true if the node has finished its lifecycle.
+    #[must_use]
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, NodeState::Retired | NodeState::Error)
     }
 }
 
@@ -394,6 +418,7 @@ mod tests {
     #[test]
     fn test_all_node_states_roundtrip() {
         let states = vec![
+            NodeState::Starting,
             NodeState::Running,
             NodeState::Draining,
             NodeState::Retired,
@@ -405,6 +430,29 @@ mod tests {
             let parsed: NodeState = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, state);
         }
+    }
+
+    #[test]
+    fn test_node_state_accepts_messages() {
+        assert!(!NodeState::Starting.accepts_messages());
+        assert!(NodeState::Running.accepts_messages());
+        assert!(!NodeState::Draining.accepts_messages());
+        assert!(!NodeState::Retired.accepts_messages());
+        assert!(!NodeState::Error.accepts_messages());
+    }
+
+    #[test]
+    fn test_node_state_is_terminal() {
+        assert!(!NodeState::Starting.is_terminal());
+        assert!(!NodeState::Running.is_terminal());
+        assert!(!NodeState::Draining.is_terminal());
+        assert!(NodeState::Retired.is_terminal());
+        assert!(NodeState::Error.is_terminal());
+    }
+
+    #[test]
+    fn test_node_state_default() {
+        assert_eq!(NodeState::default(), NodeState::Running);
     }
 
     #[test]

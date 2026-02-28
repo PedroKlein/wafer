@@ -123,6 +123,7 @@ impl DagOrchestrator {
             cancel_token: CancellationToken::new(),
             control_state: Arc::new(ControlState::new(pipeline_name)),
             factory_ctx: Mutex::new(None),
+            swap_locks: Mutex::new(HashMap::new()),
         };
         orchestrator.validate()?;
         Ok(orchestrator)

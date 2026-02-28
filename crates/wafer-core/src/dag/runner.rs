@@ -34,7 +34,9 @@ use tokio_util::sync::CancellationToken;
 
 use futures_util::stream::StreamExt;
 
-use crate::node::{AnyNode, Joiner, ProcessResult, RouteResult, Router, Sink, Source, Transform};
+use crate::node::{
+    AnyNode, Joiner, NodeStateTracker, ProcessResult, RouteResult, Router, Sink, Source, Transform,
+};
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
 use super::DagOrchestrator;
@@ -48,6 +50,11 @@ impl DagOrchestrator {
     /// This ensures single-threaded access to the node (required because WASM
     /// stores are not thread-safe). See module-level docs for discussion of
     /// tradeoffs and potential improvements.
+    ///
+    /// # State Tracking
+    ///
+    /// The node's state tracker is extracted and passed to the loop functions
+    /// to track processing state for hot-swap drain detection.
     pub(super) async fn run_node_loop(
         node_id: String,
         node: Arc<Mutex<AnyNode>>,
@@ -57,12 +64,21 @@ impl DagOrchestrator {
     ) {
         let mut locked = node.lock().await;
 
+        // Extract the state tracker before matching (it's shared across all variants)
+        let state_tracker = locked.state_tracker_clone();
+
         match &mut *locked {
-            AnyNode::Source(source) => {
-                Self::run_source_loop(&node_id, source.as_mut(), &output_senders, &cancel_token)
-                    .await;
+            AnyNode::Source(source, _) => {
+                Self::run_source_loop(
+                    &node_id,
+                    source.as_mut(),
+                    &output_senders,
+                    &cancel_token,
+                    &state_tracker,
+                )
+                .await;
             }
-            AnyNode::Transform(transform) => {
+            AnyNode::Transform(transform, _) => {
                 if let Some((_, receiver)) = input_receivers.into_iter().next() {
                     Self::run_transform_loop(
                         &node_id,
@@ -70,16 +86,24 @@ impl DagOrchestrator {
                         receiver,
                         &output_senders,
                         &cancel_token,
+                        &state_tracker,
                     )
                     .await;
                 }
             }
-            AnyNode::Sink(sink) => {
+            AnyNode::Sink(sink, _) => {
                 if let Some((_, receiver)) = input_receivers.into_iter().next() {
-                    Self::run_sink_loop(&node_id, sink.as_mut(), receiver, &cancel_token).await;
+                    Self::run_sink_loop(
+                        &node_id,
+                        sink.as_mut(),
+                        receiver,
+                        &cancel_token,
+                        &state_tracker,
+                    )
+                    .await;
                 }
             }
-            AnyNode::Router(router) => {
+            AnyNode::Router(router, _) => {
                 if let Some((_, receiver)) = input_receivers.into_iter().next() {
                     Self::run_router_loop(
                         &node_id,
@@ -87,17 +111,19 @@ impl DagOrchestrator {
                         receiver,
                         &output_senders,
                         &cancel_token,
+                        &state_tracker,
                     )
                     .await;
                 }
             }
-            AnyNode::Joiner(joiner) => {
+            AnyNode::Joiner(joiner, _) => {
                 Self::run_joiner_loop(
                     &node_id,
                     joiner.as_mut(),
                     input_receivers,
                     &output_senders,
                     &cancel_token,
+                    &state_tracker,
                 )
                 .await;
             }
@@ -108,17 +134,29 @@ impl DagOrchestrator {
     ///
     /// Polls the source for messages and sends them to all downstream nodes.
     /// Supports cancellation via the provided token.
+    ///
+    /// # State Tracking
+    ///
+    /// The `processing` flag is set while the source is actively polling.
+    /// This allows drain detection to know when the source is idle.
     pub(super) async fn run_source_loop(
         node_id: &str,
         source: &mut dyn Source,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
+        state_tracker: &NodeStateTracker,
     ) {
         tracing::info!(node = %node_id, "Source loop started");
         loop {
             // Check for cancellation before each poll
             if cancel_token.is_cancelled() {
                 tracing::debug!(node = %node_id, "Source cancelled");
+                break;
+            }
+
+            // Check if draining - sources should stop polling when draining
+            if state_tracker.state() == wafer_types::NodeState::Draining {
+                tracing::debug!(node = %node_id, "Source draining, stopping poll");
                 break;
             }
 
@@ -131,6 +169,7 @@ impl DagOrchestrator {
                 }
 
                 result = source.poll() => {
+                    state_tracker.set_processing(true);
                     match result {
                         Ok(Some(envelope)) => {
                             tracing::debug!(
@@ -157,13 +196,16 @@ impl DagOrchestrator {
                         }
                         Ok(None) => {
                             tracing::debug!(node = %node_id, "Source reached EOF");
+                            state_tracker.set_processing(false);
                             break;
                         }
                         Err(e) => {
                             tracing::error!(node = %node_id, error = %e, "Source poll error");
+                            state_tracker.set_processing(false);
                             break;
                         }
                     }
+                    state_tracker.set_processing(false);
                 }
             }
         }
@@ -179,12 +221,18 @@ impl DagOrchestrator {
     ///
     /// WASM calls are processed OUTSIDE `tokio::select!` to ensure they run to
     /// completion. See module-level docs for rationale.
+    ///
+    /// # State Tracking
+    ///
+    /// The `processing` flag is set around each `process()` call to enable
+    /// accurate drain detection during hot-swap operations.
     pub(super) async fn run_transform_loop(
         node_id: &str,
         transform: &mut dyn Transform,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
+        state_tracker: &NodeStateTracker,
     ) {
         tracing::info!(node = %node_id, "Transform loop started");
         loop {
@@ -202,6 +250,10 @@ impl DagOrchestrator {
             if let Some(envelope) = maybe_envelope {
                 let input_id = envelope.id.clone();
                 let start = Instant::now();
+
+                // Mark processing before WASM call
+                state_tracker.set_processing(true);
+
                 match transform.process(envelope).await {
                     Ok(ProcessResult::Emit(output)) => {
                         tracing::debug!(
@@ -243,6 +295,9 @@ impl DagOrchestrator {
                         tracing::error!(node = %node_id, error = %e, "Transform process failed");
                     }
                 }
+
+                // Clear processing flag after WASM call completes
+                state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!(node = %node_id, "Input queue closed");
@@ -262,11 +317,16 @@ impl DagOrchestrator {
     ///
     /// Sink calls are processed OUTSIDE `tokio::select!` to ensure they run to
     /// completion. See module-level docs for rationale.
+    ///
+    /// # State Tracking
+    ///
+    /// The `processing` flag is set around each `collect()` call.
     pub(super) async fn run_sink_loop(
         node_id: &str,
         sink: &mut dyn Sink,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         cancel_token: &CancellationToken,
+        state_tracker: &NodeStateTracker,
     ) {
         tracing::info!(node = %node_id, "Sink loop started");
         loop {
@@ -283,6 +343,9 @@ impl DagOrchestrator {
 
             if let Some(envelope) = maybe_envelope {
                 let envelope_id = envelope.id.clone();
+
+                state_tracker.set_processing(true);
+
                 if let Err(e) = sink.collect(envelope).await {
                     tracing::error!(node = %node_id, error = %e, "Sink collect failed");
                 } else {
@@ -292,6 +355,8 @@ impl DagOrchestrator {
                         "Sink delivered"
                     );
                 }
+
+                state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!(node = %node_id, "Input queue closed");
@@ -311,12 +376,17 @@ impl DagOrchestrator {
     ///
     /// Router calls are processed OUTSIDE `tokio::select!` to ensure they run to
     /// completion. See module-level docs for rationale.
+    ///
+    /// # State Tracking
+    ///
+    /// The `processing` flag is set around each `route()` call.
     pub(super) async fn run_router_loop(
         node_id: &str,
         router: &mut dyn Router,
         mut receiver: QueueReceiver<RuntimeEnvelope>,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
+        state_tracker: &NodeStateTracker,
     ) {
         tracing::info!(node = %node_id, "Router loop started");
         loop {
@@ -335,6 +405,8 @@ impl DagOrchestrator {
             if let Some(envelope) = maybe_envelope {
                 let input_id = envelope.id.clone();
                 let start = Instant::now();
+
+                state_tracker.set_processing(true);
 
                 // WASM call OUTSIDE select - cancel safe
                 match router.route(envelope).await {
@@ -376,6 +448,8 @@ impl DagOrchestrator {
                         tracing::error!(node = %node_id, error = %e, "Router route failed");
                     }
                 }
+
+                state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!(node = %node_id, "Input queue closed");
@@ -395,12 +469,17 @@ impl DagOrchestrator {
     ///
     /// WASM calls are processed OUTSIDE `tokio::select!` to ensure they run to
     /// completion. See module-level docs for rationale.
+    ///
+    /// # State Tracking
+    ///
+    /// The `processing` flag is set around each `process()` call.
     pub(super) async fn run_joiner_loop(
         node_id: &str,
         joiner: &mut dyn Joiner,
         input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
         output_senders: &[(String, QueueSender<RuntimeEnvelope>)],
         cancel_token: &CancellationToken,
+        state_tracker: &NodeStateTracker,
     ) {
         use std::pin::Pin;
         tracing::info!(node = %node_id, inputs = input_receivers.len(), "Joiner loop started");
@@ -438,6 +517,8 @@ impl DagOrchestrator {
             if let Some((port_name, envelope)) = maybe_item {
                 let input_id = envelope.id.clone();
                 let start = Instant::now();
+
+                state_tracker.set_processing(true);
 
                 // WASM call OUTSIDE select - cancel safe
                 match joiner.process(&port_name, envelope).await {
@@ -485,6 +566,8 @@ impl DagOrchestrator {
                         tracing::error!(node = %node_id, port = %port_name, error = %e, "Joiner process failed");
                     }
                 }
+
+                state_tracker.set_processing(false);
             } else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!(node = %node_id, "All input queues closed");

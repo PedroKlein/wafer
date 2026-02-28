@@ -41,9 +41,10 @@
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::atomic::AtomicU64;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::sync::{broadcast, Mutex};
 use tokio_util::sync::CancellationToken;
 use wafer_types::{PipelineEvent, PipelineState};
@@ -53,6 +54,8 @@ use crate::error::{Result, WaferError};
 use crate::factory::FactoryContext;
 use crate::node::AnyNode;
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
+
+use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
 
 /// State consumed during `run()` - can only be used once.
 ///
@@ -164,6 +167,10 @@ pub struct DagOrchestrator {
     /// Factory context for cleanup (epoch tickers, etc.)
     /// Uses Mutex for interior mutability since we set it after construction.
     pub(super) factory_ctx: Mutex<Option<FactoryContext>>,
+
+    /// Per-node swap locks to prevent concurrent swaps on the same node.
+    /// Key is node ID, value is true if swap is in progress.
+    pub(super) swap_locks: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl fmt::Debug for DagOrchestrator {
@@ -404,5 +411,167 @@ impl DagOrchestrator {
     pub fn shutdown(&self) {
         tracing::info!("Shutdown requested");
         self.cancel_token.cancel();
+    }
+
+    /// Hot-swap a WASM node with a new component.
+    ///
+    /// This performs a live replacement of a WASM node without stopping the
+    /// pipeline, using the drain-and-flip algorithm:
+    ///
+    /// 1. **PREPARE**: Load and validate the new WASM component
+    /// 2. **DRAIN**: Disable routing, wait for in-flight messages
+    /// 3. **FLIP**: Atomically swap the node reference
+    /// 4. **RETIRE**: Close the old node
+    ///
+    /// # Arguments
+    ///
+    /// * `node_id` - ID of the node to swap
+    /// * `new_wasm_path` - Path to the new WASM component
+    ///
+    /// # Returns
+    ///
+    /// Returns [`SwapMetrics`] with timing and status information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Node not found
+    /// - Node type does not support hot-swap (Source, Sink)
+    /// - Another swap is already in progress for this node
+    /// - New component fails to load or validate
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let metrics = orchestrator.hot_swap("my-transform", "/path/to/new.wasm").await?;
+    /// println!("Swap completed in {:?}", metrics.total_duration);
+    /// ```
+    pub async fn hot_swap(
+        &self,
+        node_id: &str,
+        new_wasm_path: impl AsRef<Path>,
+    ) -> Result<SwapMetrics> {
+        self.hot_swap_with_timeout(
+            node_id,
+            new_wasm_path,
+            Duration::from_millis(super::hotswap::DEFAULT_DRAIN_TIMEOUT_MS),
+        )
+        .await
+    }
+
+    /// Hot-swap a WASM node with a custom drain timeout.
+    ///
+    /// See [`hot_swap`](Self::hot_swap) for details.
+    pub async fn hot_swap_with_timeout(
+        &self,
+        node_id: &str,
+        new_wasm_path: impl AsRef<Path>,
+        drain_timeout: Duration,
+    ) -> Result<SwapMetrics> {
+        let new_wasm_path = new_wasm_path.as_ref().to_path_buf();
+
+        tracing::info!(
+            node = %node_id,
+            path = %new_wasm_path.display(),
+            timeout_ms = %drain_timeout.as_millis(),
+            "Hot-swap requested"
+        );
+
+        // Validate node exists and is swappable
+        let (old_tracker, swap_lock) = {
+            let nodes = self.nodes.lock().await;
+            let node_arc = nodes.get(node_id).ok_or_else(|| {
+                WaferError::from(SwapError::NodeNotFound(node_id.to_string()))
+            })?;
+
+            let node = node_arc.lock().await;
+            if !node.is_swappable() {
+                return Err(WaferError::from(SwapError::NotSwappable(
+                    node_id.to_string(),
+                )));
+            }
+
+            let tracker = node.state_tracker_clone();
+            drop(node);
+
+            // Get or create the swap lock for this node
+            let mut swap_locks = self.swap_locks.lock().await;
+            let lock = swap_locks
+                .entry(node_id.to_string())
+                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+                .clone();
+
+            (tracker, lock)
+        };
+
+        // Create the coordinator
+        let mut coordinator = HotSwapCoordinator::new(
+            node_id.to_string(),
+            new_wasm_path,
+            old_tracker,
+            swap_lock,
+        )
+        .with_drain_timeout(drain_timeout);
+
+        // Get factory context for creating new node
+        let mut ctx = {
+            let mut factory_ctx_guard = self.factory_ctx.lock().await;
+            factory_ctx_guard.take().ok_or_else(|| {
+                WaferError::Runtime("factory context not available for hot-swap".into())
+            })?
+        };
+
+        // Phase 1: PREPARE
+        let new_node = match coordinator.prepare(&mut ctx).await {
+            Ok(node) => node,
+            Err(e) => {
+                // Put factory context back
+                *self.factory_ctx.lock().await = Some(ctx);
+                tracing::error!(node = %node_id, error = %e, "Hot-swap prepare failed");
+                return Err(e);
+            }
+        };
+
+        // Phase 2: DRAIN
+        let drain_timed_out = match coordinator.drain().await {
+            Ok(timed_out) => timed_out,
+            Err(e) => {
+                // Put factory context back and abort
+                *self.factory_ctx.lock().await = Some(ctx);
+                tracing::error!(node = %node_id, error = %e, "Hot-swap drain failed");
+                // Coordinator drop will release the lock
+                return Err(e);
+            }
+        };
+
+        if drain_timed_out {
+            tracing::warn!(
+                node = %node_id,
+                "Drain timed out, proceeding with forced swap"
+            );
+        }
+
+        // Phase 3: FLIP
+        let old_node = coordinator.flip(&self.nodes, new_node).await?;
+
+        // Phase 4: RETIRE
+        coordinator.retire(old_node).await?;
+
+        // Put factory context back
+        *self.factory_ctx.lock().await = Some(ctx);
+
+        let metrics = coordinator.into_metrics();
+        tracing::info!(
+            node = %node_id,
+            total_ms = %metrics.total_duration.as_millis(),
+            prepare_ms = %metrics.prepare_duration.as_millis(),
+            drain_ms = %metrics.drain_duration.as_millis(),
+            flip_ms = %metrics.flip_duration.as_millis(),
+            retire_ms = %metrics.retire_duration.as_millis(),
+            drain_timed_out = %metrics.drain_timed_out,
+            "Hot-swap complete"
+        );
+
+        Ok(metrics)
     }
 }
