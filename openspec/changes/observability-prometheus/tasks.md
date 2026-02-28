@@ -72,7 +72,7 @@
 
 ## 9. Validation
 
-- [ ] 9.1 Test metrics scrape with Prometheus server (manual - use examples/prometheus.yml)
+- [x] 9.1 Test metrics scrape with Prometheus server (manual - use examples/prometheus.yml)
 - [x] 9.2 Verify all SPEC §12.2 metrics are present (test_prometheus_format_validation validates all metrics)
 - [x] 9.3 Load test metrics endpoint (no performance regression) - scripts/load-test-metrics.sh + criterion benches/metrics.rs
 - [x] 9.4 Verify structured logs parse correctly in jq (validated via CLI test)
