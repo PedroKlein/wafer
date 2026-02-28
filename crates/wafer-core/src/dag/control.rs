@@ -32,19 +32,84 @@ impl PipelineControl for DagOrchestrator {
             });
         }
 
-        // For now, return NotImplemented - actual hot-swap will be implemented
-        // in the hot-swap-mechanism change
-        Err(ControlError::NotImplemented {
-            operation: "hot_swap".to_string(),
+        // The trait method hot_swap(node_id) is for manual triggering of a single node.
+        // To get the WASM path, we need to reload the config file.
+        // This is useful for re-loading a node that was updated in-place (same path).
+        let config_path = self.config_path.as_ref().ok_or_else(|| {
+            ControlError::ConfigError {
+                message: "Cannot hot-swap: no config path stored. Use reload_config() after creating orchestrator with from_config_with_path().".into(),
+            }
+        })?;
+
+        // Reload config to get current path for this node
+        let new_config = crate::config::load_dag_config(config_path).map_err(|e| {
+            ControlError::ConfigError {
+                message: format!("Failed to reload config: {e}"),
+            }
+        })?;
+
+        // Find the node's WASM path in the new config
+        let node_def = new_config
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .ok_or_else(|| ControlError::NodeNotFound {
+                node_id: node_id.to_string(),
+            })?;
+
+        // Extract plugin path from config
+        let node_cfg: crate::config::NodeConfig =
+            node_def.config.clone().try_into().map_err(|e| {
+                ControlError::ConfigError {
+                    message: format!("Invalid node config for {node_id}: {e}"),
+                }
+            })?;
+
+        let wasm_path = node_cfg.plugin_path.ok_or_else(|| ControlError::ConfigError {
+            message: format!("Node {node_id} has no plugin_path configured"),
+        })?;
+
+        // Perform the hot-swap using the inherent method
+        let metrics = DagOrchestrator::hot_swap(self, node_id, &wasm_path)
+            .await
+            .map_err(|e| ControlError::Internal {
+                message: format!("Hot-swap failed: {e}"),
+            })?;
+
+        Ok(HotSwapResult {
+            node_id: node_id.to_string(),
+            drain_duration: metrics.drain_duration,
+            load_duration: metrics.prepare_duration,
+            total_duration: metrics.total_duration,
+            messages_drained: 0, // TODO: track this in SwapMetrics
         })
     }
 
     async fn reload_config(&self) -> Result<ReloadResult, ControlError> {
-        // For now, return NotImplemented - actual reload will be implemented
-        // in the hot-swap-mechanism change
-        Err(ControlError::NotImplemented {
-            operation: "reload_config".to_string(),
-        })
+        // Use resync() which handles config diffing and hot-swapping
+        let swapped_nodes = self.resync().await.map_err(|e| {
+            // Convert WaferError to ControlError
+            match e {
+                crate::error::WaferError::Runtime(msg) if msg.contains("no config path") => {
+                    ControlError::ConfigError {
+                        message: msg,
+                    }
+                }
+                crate::error::WaferError::Runtime(msg) if msg.contains("require restart") => {
+                    ControlError::ConfigError {
+                        message: msg,
+                    }
+                }
+                crate::error::WaferError::Config(cfg_err) => ControlError::ConfigError {
+                    message: cfg_err.to_string(),
+                },
+                other => ControlError::Internal {
+                    message: other.to_string(),
+                },
+            }
+        })?;
+
+        Ok(ReloadResult { swapped_nodes })
     }
 
     async fn drain(&self) -> Result<(), ControlError> {
@@ -215,6 +280,7 @@ mod tests {
             node_indices,
             config,
             topo_order,
+            config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(None),
             cancel_token: CancellationToken::new(),
@@ -322,26 +388,27 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_hot_swap_returns_not_implemented_for_transform() {
+    async fn test_hot_swap_requires_config_path() {
         let orchestrator = create_test_orchestrator();
         // Use UFCS to call the trait method, not the inherent method
         let result = PipelineControl::hot_swap(&orchestrator, "transform").await;
 
-        // Transform is swappable but hot-swap is not implemented yet
+        // Transform is swappable but no config_path set, so returns ConfigError
         assert!(matches!(
             result,
-            Err(ControlError::NotImplemented { operation }) if operation == "hot_swap"
+            Err(ControlError::ConfigError { message }) if message.contains("no config path")
         ));
     }
 
     #[tokio::test]
-    async fn test_reload_config_returns_not_implemented() {
+    async fn test_reload_config_requires_config_path() {
         let orchestrator = create_test_orchestrator();
         let result = orchestrator.reload_config().await;
 
+        // No config_path set, so returns ConfigError
         assert!(matches!(
             result,
-            Err(ControlError::NotImplemented { operation }) if operation == "reload_config"
+            Err(ControlError::ConfigError { message }) if message.contains("no config path")
         ));
     }
 

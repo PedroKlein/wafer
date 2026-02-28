@@ -1,8 +1,10 @@
 //! Config module - TOML configuration parsing for DAG pipelines.
 
+pub mod diff;
 pub mod loader;
 mod schema;
 
+pub use diff::{diff_configs, ConfigDiff};
 pub use loader::{load_config, load_dag_config, load_dag_config_unchecked};
 pub use schema::{
     ApiServerConfig, Config, DagConfig, EdgeDefinition, MetricsConfig, NodeConfig, NodeDefinition,

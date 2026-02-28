@@ -41,7 +41,7 @@
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -149,6 +149,10 @@ pub struct DagOrchestrator {
     pub(super) node_indices: HashMap<String, NodeIndex>,
     pub(super) config: DagConfig,
     pub(super) topo_order: Vec<String>,
+
+    /// Path to the configuration file (for reload_config).
+    /// `None` if constructed programmatically without a file.
+    pub(super) config_path: Option<PathBuf>,
 
     /// Node instances keyed by node ID.
     /// Protected by Mutex for interior mutability during setup.
@@ -573,5 +577,108 @@ impl DagOrchestrator {
         );
 
         Ok(metrics)
+    }
+
+    /// Resync the pipeline with a reloaded configuration file.
+    ///
+    /// This method:
+    /// 1. Reloads the configuration from the stored config path
+    /// 2. Diffs the new config against the current config
+    /// 3. Hot-swaps any nodes with changed WASM paths
+    ///
+    /// # Returns
+    ///
+    /// A list of node IDs that were hot-swapped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - No config path is stored (orchestrator created programmatically)
+    /// - Config file cannot be read or parsed
+    /// - Config changes require restart (node add/remove, topology change)
+    /// - Any hot-swap operation fails
+    pub async fn resync(&self) -> Result<Vec<String>> {
+        use crate::config::{diff_configs, load_dag_config};
+
+        let config_path = self.config_path.as_ref().ok_or_else(|| {
+            WaferError::Runtime(
+                "Cannot resync: no config path stored. Use from_config_with_path() to enable reload."
+                    .into(),
+            )
+        })?;
+
+        tracing::info!(path = %config_path.display(), "Reloading configuration");
+
+        // Load the new config
+        let new_config = load_dag_config(config_path)?;
+
+        // Diff against current config
+        let diff = diff_configs(&self.config, &new_config);
+
+        if !diff.has_changes() {
+            tracing::info!("No configuration changes detected");
+            return Ok(Vec::new());
+        }
+
+        // Check for changes that require restart
+        if diff.requires_restart() {
+            let mut reasons = Vec::new();
+            if !diff.nodes_added.is_empty() {
+                reasons.push(format!("nodes added: {:?}", diff.nodes_added));
+            }
+            if !diff.nodes_removed.is_empty() {
+                reasons.push(format!("nodes removed: {:?}", diff.nodes_removed));
+            }
+            if diff.edges_changed {
+                reasons.push("edges changed".to_string());
+            }
+            return Err(WaferError::Runtime(format!(
+                "Configuration changes require restart: {}",
+                reasons.join(", ")
+            )));
+        }
+
+        // Hot-swap changed nodes
+        let mut swapped = Vec::new();
+        for (node_id, new_path) in &diff.nodes_to_swap {
+            tracing::info!(
+                node = %node_id,
+                new_path = %new_path.display(),
+                "Hot-swapping node due to config change"
+            );
+
+            match self.hot_swap(node_id, new_path).await {
+                Ok(metrics) => {
+                    tracing::info!(
+                        node = %node_id,
+                        duration_ms = %metrics.total_duration.as_millis(),
+                        "Node hot-swapped successfully"
+                    );
+                    swapped.push(node_id.clone());
+                }
+                Err(e) => {
+                    tracing::error!(
+                        node = %node_id,
+                        error = %e,
+                        "Failed to hot-swap node"
+                    );
+                    return Err(e);
+                }
+            }
+        }
+
+        tracing::info!(
+            swapped_count = swapped.len(),
+            nodes = ?swapped,
+            "Configuration resync complete"
+        );
+
+        Ok(swapped)
+    }
+
+    /// Get the config file path if one was provided.
+    #[must_use]
+    pub fn config_path(&self) -> Option<&Path> {
+        self.config_path.as_deref()
     }
 }
