@@ -485,11 +485,25 @@ impl MetricsRegistry {
     /// Creates a snapshot of all current metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let mut snapshot = MetricsSnapshot::new();
-
-        // Add global labels to all metrics
         let base_labels = self.global_labels.clone();
 
-        // Pipeline metrics
+        self.add_pipeline_metrics(&mut snapshot, &base_labels);
+        self.add_node_metrics(&mut snapshot, &base_labels);
+        self.add_queue_metrics(&mut snapshot, &base_labels);
+        self.add_sink_metrics(&mut snapshot, &base_labels);
+        self.add_overflow_metrics(&mut snapshot, &base_labels);
+        self.add_hotswap_metrics(&mut snapshot, &base_labels);
+        self.add_system_metrics(&mut snapshot, &base_labels);
+
+        snapshot
+    }
+
+    /// Add pipeline-level metrics to the snapshot.
+    fn add_pipeline_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         snapshot.add_gauge(
             "wafer_pipeline_uptime_seconds",
             "Seconds since pipeline started",
@@ -521,8 +535,14 @@ impl MetricsRegistry {
             base_labels.clone(),
             mps,
         );
+    }
 
-        // Node metrics
+    /// Add per-node metrics to the snapshot.
+    fn add_node_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         let nodes = self.node_metrics.read().unwrap();
         for (node_id, metrics) in nodes.iter() {
             let mut labels = base_labels.clone();
@@ -564,8 +584,14 @@ impl MetricsRegistry {
                 metrics.memory_bytes.load(Ordering::Relaxed) as f64,
             );
         }
+    }
 
-        // Queue metrics
+    /// Add queue metrics to the snapshot.
+    fn add_queue_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         let queues = self.queue_metrics.read().unwrap();
         for (_queue_id, metrics) in queues.iter() {
             let mut labels = base_labels.clone();
@@ -607,8 +633,14 @@ impl MetricsRegistry {
                 metrics.dlq_total.load(Ordering::Relaxed),
             );
         }
+    }
 
-        // Sink batching metrics
+    /// Add sink batching metrics to the snapshot.
+    fn add_sink_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         let sinks = self.sink_metrics.read().unwrap();
         for (_sink_id, metrics) in sinks.iter() {
             let mut labels = base_labels.clone();
@@ -635,8 +667,14 @@ impl MetricsRegistry {
                 metrics.buffer_size.load(Ordering::Relaxed) as f64,
             );
         }
+    }
 
-        // Pipeline-level overflow metrics
+    /// Add overflow and DLQ metrics to the snapshot.
+    fn add_overflow_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         snapshot.add_counter(
             "wafer_overflow_drop_total",
             "Total messages dropped due to overflow (all queues)",
@@ -657,8 +695,14 @@ impl MetricsRegistry {
             base_labels.clone(),
             self.dlq_sink_error_total.load(Ordering::Relaxed),
         );
+    }
 
-        // Hot-swap metrics
+    /// Add hot-swap metrics to the snapshot.
+    fn add_hotswap_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         snapshot.add_counter(
             "wafer_hotswap_total",
             "Total hot-swap operations attempted",
@@ -725,8 +769,14 @@ impl MetricsRegistry {
                 .messages_drained_total
                 .load(Ordering::Relaxed),
         );
+    }
 
-        // System metrics
+    /// Add system metrics to the snapshot.
+    fn add_system_metrics(
+        &self,
+        snapshot: &mut MetricsSnapshot,
+        base_labels: &HashMap<String, String>,
+    ) {
         let system = self.collect_system_metrics();
         snapshot.add_gauge(
             "wafer_host_cpu_percent",
@@ -745,11 +795,9 @@ impl MetricsRegistry {
         snapshot.add_gauge(
             "wafer_host_threads",
             "Number of threads available",
-            base_labels,
+            base_labels.clone(),
             system.threads as f64,
         );
-
-        snapshot
     }
 
     /// Encodes all metrics in Prometheus text format.
