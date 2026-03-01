@@ -84,11 +84,11 @@ WAFER (wasm-dag-runtime) is a general-purpose runtime for executing Directed Acy
 
 | Category | Inputs | Outputs | Implementation | Purpose |
 |----------|--------|---------|----------------|---------|
-| Source | 0 (external) | 1 | Native Rust | Ingest data (MQTT, file, stdin) |
+| Source | 0 (external) | 1 | Native Rust | Ingest data (MQTT, HTTP, file, stdin) |
 | Transform | 1 | 1 | WASM component | Process/transform messages |
 | Router | 1 | N | WASM component | Content-based routing |
 | Joiner | N | 1 | WASM component | Merge multiple streams |
-| Sink | 1 | 0 (external) | Native Rust | Output data (MQTT, file, stdout) |
+| Sink | 1 | 0 (external) | Native Rust | Output data (MQTT, HTTP, file, stdout) |
 
 ## Current State (MVP v0.4.0)
 
@@ -100,7 +100,7 @@ See [docs/MVP.md](../docs/MVP.md) for full implementation status.
 - WASI Preview 2 component loading
 - Fuel/epoch metering
 - SPSC bounded queues
-- MQTT, file, stdin/stdout sources/sinks
+- MQTT, HTTP, file, stdin/stdout sources/sinks
 - OCI registry support for remote plugins
 - wasi-nn inference (MNIST demo)
 - **Workspace restructure**: `wafer-core`, `wafer-types`, `wafer-runtime`, `waferctl` crates

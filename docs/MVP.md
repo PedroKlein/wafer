@@ -82,8 +82,8 @@ crates/
 │       │   ├── transform.rs  # WasmTransform
 │       │   ├── router.rs     # WasmRouter: 1→N routing
 │       │   ├── joiner.rs     # WasmJoiner: N→1 merge
-│       │   ├── source/       # Source implementations (stdin, file, mqtt)
-│       │   └── sink/         # Sink implementations (stdout, file, mqtt)
+│       │   ├── source/       # Source implementations (stdin, file, mqtt, http)
+│       │   └── sink/         # Sink implementations (stdout, file, mqtt, http)
 │       ├── dag/
 │       │   ├── mod.rs
 │       │   ├── orchestrator.rs # DagOrchestrator: run(), topology
@@ -154,7 +154,7 @@ wit/
 | `plugins/content-router/` | Router | Content-based 1→N routing (routes by JSON `route` field) | wasm32-wasip2 |
 | `plugins/merge-joiner/` | Joiner | Stateless N→1 merge (passes through all inputs) | wasm32-wasip2 |
 
-### Example Configs (15 total)
+### Example Configs (17 total)
 
 | Config | Description |
 |--------|-------------|
@@ -171,7 +171,9 @@ wit/
 | `examples/dag-diamond.toml` | Diamond/scatter-gather: source → router → transforms → joiner → sink |
 | `examples/dag-fanout.toml` | Fan-out: source → router → multiple sinks |
 | `examples/dag-passthrough-with-api.toml` | Passthrough with `[api]` and `[metrics]` config sections |
+| `examples/dag-metrics-demo.toml` | Metrics/observability demo with Prometheus endpoint |
 | `examples/dag-overflow-dlq-demo.toml` | Overflow policies (`slow`, `drop`, `dead-letter`), DLQ, and sink batching |
+| `examples/dag-http.toml` | HTTP webhook source → transform → HTTP POST sink |
 
 ---
 
@@ -220,6 +222,8 @@ wit/
 - [x] `StdoutSink` struct implementing Lifecycle + Sink (stdout line writing)
 - [x] `MqttSource` struct implementing Lifecycle + Source (MQTT subscription via rumqttc)
 - [x] `MqttSink` struct implementing Lifecycle + Sink (MQTT publishing via rumqttc)
+- [x] `HttpSource` struct implementing Lifecycle + Source (HTTP webhook receiver via hyper)
+- [x] `HttpSink` struct implementing Lifecycle + Sink (HTTP POST with batching via reqwest)
 - [x] `Router` trait: `output_ports`, `route` async methods
 - [x] `Joiner` trait: `input_ports`, `process` async methods
 - [x] `WasmRouter` struct implementing Lifecycle + Router
@@ -238,8 +242,8 @@ wit/
 - [x] Graceful shutdown in reverse topological order
 - [x] Error handling: log and continue (non-fatal)
 - [x] CLI `--config` flag for DAG TOML files
-- [x] `source_type` discriminator: `stdin`, `file`, or `mqtt`
-- [x] `sink_type` discriminator: `stdout`, `file`, or `mqtt`
+- [x] `source_type` discriminator: `stdin`, `file`, `mqtt`, or `http`
+- [x] `sink_type` discriminator: `stdout`, `file`, `mqtt`, or `http`
 
 ### Capability Scoping
 - [x] `Capabilities` struct for security boundaries
@@ -355,7 +359,7 @@ wit/
 
 | Area | Limitation | Notes |
 |------|------------|-------|
-| **I/O** | stdin/stdout, file, or MQTT | HTTP/Kafka planned |
+| **I/O** | stdin/stdout, file, MQTT, HTTP | Kafka planned |
 | **Source/Sink** | Native Rust only (by design) | See [ADR-0004](adr/0004-native-sources-sinks.md) |
 | **WIT** | Only `raw(list<u8>)` payload supported | Additional variants planned |
 | **State** | Stateless transforms only | Host-managed state planned |
