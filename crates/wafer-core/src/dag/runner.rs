@@ -33,19 +33,15 @@
 use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::Mutex;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use futures_util::stream::StreamExt;
 
-use crate::config::OverflowPolicy;
-use crate::dlq::{wrap_for_dlq, DlqReason};
 use crate::node::{AnyNode, Joiner, NodeStateTracker, Router, Sink, Source, Transform};
-use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
+use crate::queue::{QueueReceiver, RuntimeEnvelope};
 
-use super::metrics_helper;
 use super::orchestrator::{ControlState, EdgeSendInfo};
 use super::DagOrchestrator;
 
@@ -148,302 +144,6 @@ impl DagOrchestrator {
         }
     }
 
-    /// Send an envelope to an output edge, respecting the edge's overflow policy.
-    ///
-    /// This helper handles the three overflow policies:
-    /// - `Slow`: Blocks until space is available (current default behavior)
-    /// - `Drop`: Uses `try_send()`, silently drops message if queue is full
-    /// - `DeadLetter`: Uses `try_send()`, routes to DLQ if queue is full
-    ///
-    /// # Returns
-    ///
-    /// `true` if the message was successfully sent or handled (including drop/DLQ),
-    /// `false` if sending failed for other reasons (channel closed).
-    pub(super) async fn send_with_overflow_policy(
-        edge_info: &EdgeSendInfo,
-        envelope: RuntimeEnvelope,
-        node_id: &str,
-        control_state: &ControlState,
-    ) -> bool {
-        match edge_info.overflow_policy {
-            OverflowPolicy::Slow => {
-                // Blocking send - waits until space is available
-                if let Err(e) = edge_info.sender.send(envelope).await {
-                    tracing::warn!(
-                        node = %node_id,
-                        edge = %edge_info.edge_name,
-                        error = %e,
-                        "Failed to send to downstream (channel closed)"
-                    );
-                    return false;
-                }
-            }
-            OverflowPolicy::Drop => {
-                // Non-blocking send - drop if full
-                match edge_info.sender.try_send(envelope) {
-                    Ok(()) => {}
-                    Err(TrySendError::Full(_)) => {
-                        tracing::debug!(
-                            node = %node_id,
-                            edge = %edge_info.edge_name,
-                            "Queue full, dropping message (drop policy)"
-                        );
-                        // Record drop metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_overflow_drop();
-                        }
-                        // Message is dropped - this is expected behavior
-                    }
-                    Err(TrySendError::Closed(_)) => {
-                        tracing::warn!(
-                            node = %node_id,
-                            edge = %edge_info.edge_name,
-                            "Channel closed, cannot send"
-                        );
-                        return false;
-                    }
-                }
-            }
-            OverflowPolicy::DeadLetter => {
-                // Non-blocking send - route to DLQ if full
-                match edge_info.sender.try_send(envelope) {
-                    Ok(()) => {}
-                    Err(TrySendError::Full(rejected)) => {
-                        tracing::debug!(
-                            node = %node_id,
-                            edge = %edge_info.edge_name,
-                            message_id = %rejected.id,
-                            "Queue full, routing to DLQ (dead-letter policy)"
-                        );
-                        // Wrap and send to DLQ
-                        let dlq_envelope =
-                            wrap_for_dlq(rejected, &edge_info.edge_name, DlqReason::QueueFull);
-
-                        // Send to DLQ (blocking - DLQ should not drop messages)
-                        let dlq_guard = control_state.dlq_sender.lock().await;
-                        if let Some(dlq_sender) = dlq_guard.as_ref() {
-                            // Check capacity and warn if filling up
-                            Self::check_dlq_capacity_warning(dlq_sender);
-
-                            // Record DLQ overflow metric
-                            #[cfg(feature = "http-api")]
-                            {
-                                control_state.metrics_registry.record_overflow_dlq();
-                            }
-
-                            if let Err(e) = dlq_sender.send(dlq_envelope).await {
-                                tracing::error!(
-                                    node = %node_id,
-                                    edge = %edge_info.edge_name,
-                                    error = %e,
-                                    "Failed to send to DLQ (channel closed)"
-                                );
-                                // Record DLQ sink error
-                                #[cfg(feature = "http-api")]
-                                {
-                                    control_state.metrics_registry.record_dlq_sink_error();
-                                }
-                            }
-                        } else {
-                            tracing::warn!(
-                                node = %node_id,
-                                edge = %edge_info.edge_name,
-                                "DLQ not configured, dropping message"
-                            );
-                        }
-                    }
-                    Err(TrySendError::Closed(_)) => {
-                        tracing::warn!(
-                            node = %node_id,
-                            edge = %edge_info.edge_name,
-                            "Channel closed, cannot send"
-                        );
-                        return false;
-                    }
-                }
-            }
-        }
-        true
-    }
-
-    /// Check DLQ queue capacity and log warning if above 80% utilization.
-    ///
-    /// This helps operators notice when the DLQ is filling up, which may indicate
-    /// a systemic problem with the pipeline.
-    fn check_dlq_capacity_warning(dlq_sender: &QueueSender<RuntimeEnvelope>) {
-        let max_capacity = dlq_sender.max_capacity();
-        let available = dlq_sender.available_capacity();
-        let used = max_capacity.saturating_sub(available);
-        let utilization_percent = (used * 100) / max_capacity;
-
-        if utilization_percent >= 80 {
-            tracing::warn!(
-                dlq_used = used,
-                dlq_capacity = max_capacity,
-                dlq_utilization_percent = utilization_percent,
-                "DLQ queue is at {}% capacity - consider investigating error sources",
-                utilization_percent
-            );
-        }
-    }
-
-    /// Send a failed message to the Dead Letter Queue due to a processing error.
-    ///
-    /// This is called when a transform, router, or joiner returns `ProcessResult::Error`
-    /// or `RouteResult::Error`. The original message is wrapped in a DLQ envelope with
-    /// error context and sent to the DLQ sink.
-    ///
-    /// # Arguments
-    ///
-    /// * `envelope` - The original message that failed processing
-    /// * `node_id` - ID of the node that failed
-    /// * `error_code` - Error code from the process result
-    /// * `error_message` - Error message from the process result
-    /// * `control_state` - Control state containing the DLQ sender
-    pub(super) async fn send_process_error_to_dlq(
-        envelope: RuntimeEnvelope,
-        node_id: &str,
-        error_code: &str,
-        error_message: &str,
-        control_state: &ControlState,
-    ) {
-        let dlq_guard = control_state.dlq_sender.lock().await;
-        if let Some(dlq_sender) = dlq_guard.as_ref() {
-            // Check capacity and warn if filling up
-            Self::check_dlq_capacity_warning(dlq_sender);
-
-            let reason = DlqReason::process_error(error_code, error_message);
-            let dlq_envelope = wrap_for_dlq(envelope, node_id, reason);
-
-            tracing::debug!(
-                node = %node_id,
-                error_code = %error_code,
-                "Routing process error to DLQ"
-            );
-
-            if let Err(e) = dlq_sender.send(dlq_envelope).await {
-                tracing::error!(
-                    node = %node_id,
-                    error = %e,
-                    "Failed to send process error to DLQ (channel closed)"
-                );
-                // Record DLQ sink error
-                #[cfg(feature = "http-api")]
-                {
-                    control_state.metrics_registry.record_dlq_sink_error();
-                }
-            }
-        }
-        // If DLQ is not configured, the error is just logged (already logged by caller)
-    }
-
-    /// Send a failed message to the Dead Letter Queue due to a sink error.
-    ///
-    /// This is called when a sink's `collect()` method returns an error.
-    /// The original message is wrapped in a DLQ envelope with error context.
-    ///
-    /// # Arguments
-    ///
-    /// * `envelope` - The original message that failed to be collected
-    /// * `node_id` - ID of the sink node that failed
-    /// * `error_message` - Error message from the sink
-    /// * `control_state` - Control state containing the DLQ sender
-    async fn send_sink_error_to_dlq(
-        envelope: RuntimeEnvelope,
-        node_id: &str,
-        error_message: &str,
-        control_state: &ControlState,
-    ) {
-        let dlq_guard = control_state.dlq_sender.lock().await;
-        if let Some(dlq_sender) = dlq_guard.as_ref() {
-            // Check capacity and warn if filling up
-            Self::check_dlq_capacity_warning(dlq_sender);
-
-            let reason = DlqReason::sink_error(error_message);
-            let dlq_envelope = wrap_for_dlq(envelope, node_id, reason);
-
-            tracing::debug!(
-                node = %node_id,
-                "Routing sink error to DLQ"
-            );
-
-            if let Err(e) = dlq_sender.send(dlq_envelope).await {
-                tracing::error!(
-                    node = %node_id,
-                    error = %e,
-                    "Failed to send sink error to DLQ (channel closed)"
-                );
-                // Record DLQ sink error
-                #[cfg(feature = "http-api")]
-                {
-                    control_state.metrics_registry.record_dlq_sink_error();
-                }
-            }
-        }
-        // If DLQ is not configured, the error is just logged (already logged by caller)
-    }
-
-    /// Flush the sink batch and record metrics.
-    async fn flush_sink_batch(sink: &mut dyn Sink, node_id: &str, control_state: &ControlState) {
-        if let Err(e) = sink.flush().await {
-            tracing::warn!(node = %node_id, error = %e, "Batch flush failed");
-        } else {
-            tracing::trace!(node = %node_id, "Batch flush completed");
-        }
-
-        // Record batch metrics after flush
-        if let Some(stats) = sink.take_batch_stats() {
-            metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
-        }
-    }
-
-    /// Process a single message through the sink.
-    async fn process_sink_message(
-        sink: &mut dyn Sink,
-        envelope: RuntimeEnvelope,
-        node_id: &str,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        let message_id = envelope.id.clone();
-        let input_size_bytes = envelope.payload.len();
-        let start = Instant::now();
-
-        state_tracker.set_processing(true);
-
-        // Clone envelope before collect() in case we need to send to DLQ on error
-        let envelope_for_dlq = envelope.clone();
-
-        if let Err(e) = sink.collect(envelope).await {
-            let duration_ns = start.elapsed().as_nanos() as u64;
-            tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
-
-            // Route failed message to DLQ if configured
-            Self::send_sink_error_to_dlq(envelope_for_dlq, node_id, &e.to_string(), control_state)
-                .await;
-
-            metrics_helper::record_error_metrics(control_state, node_id, duration_ns);
-        } else {
-            let duration_ns = start.elapsed().as_nanos() as u64;
-            tracing::debug!(
-                message_id = %message_id,
-                input_size_bytes,
-                duration_ns,
-                "Sink delivered"
-            );
-
-            metrics_helper::record_success_metrics(control_state, node_id, duration_ns);
-
-            // Record batch metrics after collect (batch may have flushed)
-            if let Some(stats) = sink.take_batch_stats() {
-                metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
-            }
-        }
-
-        state_tracker.set_processing(false);
-    }
-
     /// Run the source node loop.
     ///
     /// Polls the source for messages and sends them to all downstream nodes.
@@ -523,36 +223,6 @@ impl DagOrchestrator {
             }
         }
         tracing::info!("Source loop stopped");
-    }
-
-    /// Send an envelope to all downstream edges with overflow policy handling.
-    ///
-    /// Optimized to avoid cloning when there's only one downstream edge.
-    async fn send_to_downstream(
-        output_senders: &[EdgeSendInfo],
-        envelope: RuntimeEnvelope,
-        node_id: &str,
-        control_state: &ControlState,
-    ) {
-        if output_senders.len() == 1 {
-            Self::send_with_overflow_policy(
-                &output_senders[0],
-                envelope,
-                node_id,
-                control_state,
-            )
-            .await;
-        } else {
-            for edge_info in output_senders {
-                Self::send_with_overflow_policy(
-                    edge_info,
-                    envelope.clone(),
-                    node_id,
-                    control_state,
-                )
-                .await;
-            }
-        }
     }
 
     /// Run the transform node loop.
@@ -648,6 +318,9 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
+        /// Duration representing "disabled" batching (1 year).
+        const DISABLED_BATCH_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
+
         tracing::info!("Sink loop started");
 
         // Register sink for metrics if batching is enabled
@@ -660,7 +333,7 @@ impl DagOrchestrator {
         // Use a very long interval (1 year) as "disabled" since we can't conditionally include the arm
         let flush_interval_duration = sink
             .batch_timeout()
-            .unwrap_or(Duration::from_secs(365 * 24 * 60 * 60));
+            .unwrap_or(Duration::from_secs(DISABLED_BATCH_INTERVAL_SECS));
         let batching_enabled = sink.batch_timeout().is_some();
         let mut flush_timer = interval(flush_interval_duration);
         flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -880,6 +553,7 @@ impl DagOrchestrator {
 #[allow(clippy::similar_names)] // receiver/received are idiomatic in test code
 mod tests {
     use super::*;
+    use crate::config::OverflowPolicy;
     use crate::dlq::DlqEnvelope;
     use crate::queue::{BoundedQueue, RuntimeEnvelope};
 
@@ -1257,7 +931,6 @@ mod tests {
     use crate::error::Result as WaferResult;
     use crate::node::Lifecycle;
     use std::future::Future;
-    use std::pin::Pin;
 
     /// A mock sink that tracks flush calls for testing
     struct MockBatchingSink {
