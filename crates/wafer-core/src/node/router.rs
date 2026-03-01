@@ -138,7 +138,7 @@ impl RouterInstance {
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WaferError::PluginInit {
-                message: format!("failed to set fuel: {}", e),
+                message: format!("failed to set fuel: {e}"),
             })?;
 
         // Reset epoch deadline before close

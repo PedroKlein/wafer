@@ -11,7 +11,7 @@ use std::time::Instant;
 use wafer_types::MetricsSnapshot;
 
 #[cfg(feature = "http-api")]
-use sysinfo::System;
+use sysinfo::{Process, System};
 
 /// Central metrics registry for WAFER runtime.
 ///
@@ -317,14 +317,14 @@ impl MetricsRegistry {
     ) {
         let from = from_node.into();
         let to = to_node.into();
-        let queue_id = format!("{}_{}", from, to);
+        let queue_id = format!("{from}_{to}");
         let mut queues = self.queue_metrics.write().unwrap();
         queues.insert(queue_id, QueueMetrics::new(from, to, capacity));
     }
 
     /// Records a message enqueued.
     pub fn record_enqueue(&self, from_node: &str, to_node: &str) {
-        let queue_id = format!("{}_{}", from_node, to_node);
+        let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.enqueue_total.fetch_add(1, Ordering::Relaxed);
         }
@@ -332,7 +332,7 @@ impl MetricsRegistry {
 
     /// Records a message dropped (overflow with drop policy).
     pub fn record_drop(&self, from_node: &str, to_node: &str) {
-        let queue_id = format!("{}_{}", from_node, to_node);
+        let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.drop_total.fetch_add(1, Ordering::Relaxed);
         }
@@ -340,7 +340,7 @@ impl MetricsRegistry {
 
     /// Records a message sent to DLQ (overflow with dead-letter policy).
     pub fn record_dlq(&self, from_node: &str, to_node: &str) {
-        let queue_id = format!("{}_{}", from_node, to_node);
+        let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.dlq_total.fetch_add(1, Ordering::Relaxed);
         }
@@ -348,7 +348,7 @@ impl MetricsRegistry {
 
     /// Updates current queue depth.
     pub fn set_queue_depth(&self, from_node: &str, to_node: &str, depth: u64) {
-        let queue_id = format!("{}_{}", from_node, to_node);
+        let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
             metrics.depth.store(depth, Ordering::Relaxed);
         }
@@ -465,8 +465,8 @@ impl MetricsRegistry {
         let process = system.process(pid);
 
         SystemMetrics {
-            cpu_percent: process.map(|p| p.cpu_usage()).unwrap_or(0.0),
-            memory_rss_bytes: process.map(|p| p.memory()).unwrap_or(0),
+            cpu_percent: process.map(Process::cpu_usage).unwrap_or(0.0),
+            memory_rss_bytes: process.map(Process::memory).unwrap_or(0),
             threads: std::thread::available_parallelism()
                 .map(|p| p.get() as u64)
                 .unwrap_or(1),

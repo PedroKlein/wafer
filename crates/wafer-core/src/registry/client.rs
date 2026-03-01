@@ -146,7 +146,7 @@ impl WaferRegistry {
 
         // Parse the OCI reference
         let reference: Reference = oci_ref.as_str().parse().map_err(|e| {
-            RegistryError::InvalidPackageRef(format!("invalid OCI reference '{}': {e}", oci_ref))
+            RegistryError::InvalidPackageRef(format!("invalid OCI reference '{oci_ref}': {e}"))
         })?;
 
         // Get authentication for this registry

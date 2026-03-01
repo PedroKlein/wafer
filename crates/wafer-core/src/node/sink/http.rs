@@ -156,17 +156,14 @@ impl HttpSink {
         }
 
         let response = request.send().await.map_err(|e| {
-            WaferError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("HTTP request failed: {}", e),
-            ))
+            WaferError::Io(std::io::Error::other(format!("HTTP request failed: {e}")))
         })?;
 
         if !response.status().is_success() {
-            return Err(WaferError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("HTTP request failed with status: {}", response.status()),
-            )));
+            let status = response.status();
+            return Err(WaferError::Io(std::io::Error::other(format!(
+                "HTTP request failed with status: {status}"
+            ))));
         }
 
         Ok(())
@@ -186,10 +183,9 @@ impl HttpSink {
             .collect();
 
         let json_body = serde_json::to_vec(&payloads).map_err(|e| {
-            WaferError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("Failed to serialize batch: {}", e),
-            ))
+            WaferError::Io(std::io::Error::other(format!(
+                "Failed to serialize batch: {e}"
+            )))
         })?;
 
         let mut request = client
@@ -203,20 +199,16 @@ impl HttpSink {
         }
 
         let response = request.send().await.map_err(|e| {
-            WaferError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!("HTTP batch request failed: {}", e),
-            ))
+            WaferError::Io(std::io::Error::other(format!(
+                "HTTP batch request failed: {e}"
+            )))
         })?;
 
         if !response.status().is_success() {
-            return Err(WaferError::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "HTTP batch request failed with status: {}",
-                    response.status()
-                ),
-            )));
+            let status = response.status();
+            return Err(WaferError::Io(std::io::Error::other(format!(
+                "HTTP batch request failed with status: {status}"
+            ))));
         }
 
         // Record batch stats for metrics
@@ -268,7 +260,7 @@ impl Lifecycle for HttpSink {
                 .timeout(self.timeout)
                 .build()
                 .map_err(|e| WaferError::PluginInit {
-                    message: format!("Failed to create HTTP client: {}", e),
+                    message: format!("Failed to create HTTP client: {e}"),
                 })?;
 
             self.client = Some(client);
