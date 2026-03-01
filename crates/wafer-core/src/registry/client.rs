@@ -6,7 +6,7 @@ use crate::registry::types::{OciReference, PluginSource, RegistryConfig, Resolve
 use docker_credential::{CredentialRetrievalError, DockerCredential};
 use oci_client::secrets::RegistryAuth;
 use oci_client::{Client, Reference};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Client for fetching WASM components from OCI registries.
 pub struct WaferRegistry {
@@ -77,7 +77,7 @@ impl WaferRegistry {
 
     /// Resolve a local plugin source.
     #[allow(clippy::unused_self)]
-    fn resolve_local(&self, path: &PathBuf) -> Result<ResolvedPlugin, RegistryError> {
+    fn resolve_local(&self, path: &Path) -> Result<ResolvedPlugin, RegistryError> {
         if !path.exists() {
             return Err(RegistryError::FetchFailed {
                 package: path.display().to_string(),
@@ -93,9 +93,9 @@ impl WaferRegistry {
         let content_hash = compute_hash(&content);
 
         Ok(ResolvedPlugin::new(
-            PluginSource::Local(path.clone()),
+            PluginSource::Local(path.to_path_buf()),
             content_hash,
-            path.clone(),
+            path.to_path_buf(),
         ))
     }
 
