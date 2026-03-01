@@ -176,13 +176,14 @@ impl std::error::Error for SendError {}
 mod tests {
     use super::*;
     use crate::queue::BoundedQueue;
+    use std::collections::HashMap;
 
     fn make_envelope(id: &str) -> RuntimeEnvelope {
         RuntimeEnvelope {
             id: id.to_string(),
             timestamp: 0,
             source: "test".to_string(),
-            metadata: Default::default(),
+            metadata: HashMap::default(),
             payload: vec![],
         }
     }

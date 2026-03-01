@@ -877,6 +877,7 @@ impl DagOrchestrator {
 }
 
 #[cfg(test)]
+#[allow(clippy::similar_names)] // receiver/received are idiomatic in test code
 mod tests {
     use super::*;
     use crate::dlq::DlqEnvelope;
@@ -905,7 +906,7 @@ mod tests {
 
     /// Create a test envelope with the given ID suffix.
     fn test_envelope(id_suffix: &str) -> RuntimeEnvelope {
-        RuntimeEnvelope::new("test", format!("payload-{}", id_suffix).into_bytes())
+        RuntimeEnvelope::new("test", format!("payload-{id_suffix}").into_bytes())
     }
 
     #[tokio::test]
@@ -1280,7 +1281,7 @@ mod tests {
     }
 
     impl Lifecycle for MockBatchingSink {
-        fn id(&self) -> &str {
+        fn id(&self) -> &'static str {
             "mock-batching-sink"
         }
 

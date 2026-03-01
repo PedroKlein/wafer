@@ -19,6 +19,7 @@ pub struct OciReference {
 
 impl OciReference {
     /// Parse an OCI reference from a string like "ghcr.io/user/repo:tag".
+    #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         // Split off the tag
         let (repo_part, tag) = s.rsplit_once(':')?;
@@ -49,8 +50,38 @@ impl OciReference {
     }
 
     /// Get the full reference string.
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.reference
+    }
+}
+
+/// Error type for OCI reference parsing failures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OciParseError {
+    /// The invalid input string.
+    pub input: String,
+}
+
+impl std::fmt::Display for OciParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid OCI reference '{}': expected format 'registry/repo:tag'",
+            self.input
+        )
+    }
+}
+
+impl std::error::Error for OciParseError {}
+
+impl std::str::FromStr for OciReference {
+    type Err = OciParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s).ok_or_else(|| OciParseError {
+            input: s.to_string(),
+        })
     }
 }
 
@@ -71,21 +102,27 @@ pub enum PluginSource {
 
 impl PluginSource {
     /// Create a local plugin source.
+    #[must_use]
     pub fn local(path: impl Into<PathBuf>) -> Self {
         Self::Local(path.into())
     }
 
     /// Create an OCI plugin source.
+    #[must_use]
     pub fn oci(reference: OciReference) -> Self {
         Self::Oci(reference)
     }
 
     /// Check if this is a local source.
+    #[inline]
+    #[must_use]
     pub fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
     }
 
     /// Check if this is a remote OCI source.
+    #[inline]
+    #[must_use]
     pub fn is_oci(&self) -> bool {
         matches!(self, Self::Oci(_))
     }
@@ -104,6 +141,7 @@ pub struct ResolvedPlugin {
 
 impl ResolvedPlugin {
     /// Create a new resolved plugin.
+    #[must_use]
     pub fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
         Self {
             source,
@@ -138,11 +176,13 @@ impl Default for RegistryConfig {
 
 impl RegistryConfig {
     /// Get the cache TTL as a Duration.
+    #[must_use]
     pub fn cache_ttl(&self) -> Duration {
         Duration::from_secs(self.cache_ttl_hours * 3600)
     }
 
     /// Get the cache directory, using default if not specified.
+    #[must_use]
     pub fn cache_directory(&self) -> PathBuf {
         self.cache_dir.clone().unwrap_or_else(|| {
             dirs::cache_dir()
@@ -182,6 +222,20 @@ mod tests {
     fn test_oci_reference_display() {
         let oci = OciReference::parse("ghcr.io/pedroklein/wafer-uppercase:1.0.0").unwrap();
         assert_eq!(oci.to_string(), "ghcr.io/pedroklein/wafer-uppercase:1.0.0");
+    }
+
+    #[test]
+    fn test_oci_reference_from_str() {
+        // Valid reference via FromStr
+        let oci: OciReference = "ghcr.io/user/repo:v1.0.0".parse().unwrap();
+        assert_eq!(oci.registry, "ghcr.io");
+        assert_eq!(oci.repository, "user/repo");
+        assert_eq!(oci.tag, "v1.0.0");
+
+        // Invalid reference returns error
+        let err = "invalid".parse::<OciReference>().unwrap_err();
+        assert_eq!(err.input, "invalid");
+        assert!(err.to_string().contains("invalid OCI reference"));
     }
 
     #[test]

@@ -66,13 +66,17 @@ fn default_true() -> bool {
 }
 
 fn default_api_bind() -> SocketAddr {
-    DEFAULT_API_BIND.parse().unwrap()
+    DEFAULT_API_BIND
+        .parse()
+        .expect("DEFAULT_API_BIND is a valid socket address literal")
 }
 
 /// Default bind address for metrics endpoint (when served separately from API).
 #[allow(dead_code)] // Reserved for future standalone metrics server
 fn default_metrics_bind() -> SocketAddr {
-    DEFAULT_METRICS_BIND.parse().unwrap()
+    DEFAULT_METRICS_BIND
+        .parse()
+        .expect("DEFAULT_METRICS_BIND is a valid socket address literal")
 }
 
 fn default_metrics_path() -> String {

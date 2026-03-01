@@ -1118,6 +1118,8 @@ mod tests {
     /// - Properly quoted label values
     /// - Valid numeric values (integers or floats)
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive format validation requires many assertions
+    #[allow(clippy::items_after_statements)] // Helper function defined inline for test clarity
     fn test_prometheus_format_validation() {
         let mut labels = HashMap::new();
         labels.insert("pipeline".to_string(), "test-pipeline".to_string());
@@ -1158,7 +1160,7 @@ mod tests {
             // Metric line format: metric_name{labels} value [timestamp]
             // or: metric_name value [timestamp]
             let parts: Vec<&str> = line.splitn(2, ' ').collect();
-            assert!(parts.len() >= 1, "Invalid metric line (no parts): {line}");
+            assert!(!parts.is_empty(), "Invalid metric line (no parts): {line}");
 
             let metric_and_labels = parts[0];
 
@@ -1341,6 +1343,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // Comprehensive hot-swap validation requires many assertions
     fn test_hotswap_metrics() {
         let registry = MetricsRegistry::new();
 
