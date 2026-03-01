@@ -137,12 +137,7 @@ impl MqttSink {
             client
                 .publish(&self.topic, self.qos, false, envelope.payload)
                 .await
-                .map_err(|e| {
-                    WaferError::Io(std::io::Error::new(
-                        std::io::ErrorKind::Other,
-                        e.to_string(),
-                    ))
-                })?;
+                .map_err(|e| WaferError::Io(std::io::Error::other(e.to_string())))?;
         }
 
         // Record batch stats for metrics
@@ -287,12 +282,7 @@ impl Sink for MqttSink {
                 client
                     .publish(&self.topic, self.qos, false, envelope.payload)
                     .await
-                    .map_err(|e| {
-                        WaferError::Io(std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            e.to_string(),
-                        ))
-                    })?;
+                    .map_err(|e| WaferError::Io(std::io::Error::other(e.to_string())))?;
 
                 Ok(())
             }

@@ -111,39 +111,31 @@ pub async fn hot_swap<C: PipelineControl>(
     State(controller): State<Arc<C>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    controller
-        .hot_swap(&id)
-        .await
-        .map(|result| Json(result))
-        .map_err(|err| {
-            let status = match &err {
-                ControlError::NodeNotFound { .. } => StatusCode::NOT_FOUND,
-                ControlError::SwapInProgress => StatusCode::CONFLICT,
-                ControlError::NotSwappable { .. } => StatusCode::BAD_REQUEST,
-                ControlError::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, Json(err.into()))
-        })
+    controller.hot_swap(&id).await.map(Json).map_err(|err| {
+        let status = match &err {
+            ControlError::NodeNotFound { .. } => StatusCode::NOT_FOUND,
+            ControlError::SwapInProgress => StatusCode::CONFLICT,
+            ControlError::NotSwappable { .. } => StatusCode::BAD_REQUEST,
+            ControlError::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(err.into()))
+    })
 }
 
 /// POST /api/v1/pipeline/reload - Reload configuration
 pub async fn reload_config<C: PipelineControl>(
     State(controller): State<Arc<C>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    controller
-        .reload_config()
-        .await
-        .map(|result| Json(result))
-        .map_err(|err| {
-            let status = match &err {
-                ControlError::ConfigError { .. } => StatusCode::BAD_REQUEST,
-                ControlError::SwapInProgress => StatusCode::CONFLICT,
-                ControlError::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, Json(err.into()))
-        })
+    controller.reload_config().await.map(Json).map_err(|err| {
+        let status = match &err {
+            ControlError::ConfigError { .. } => StatusCode::BAD_REQUEST,
+            ControlError::SwapInProgress => StatusCode::CONFLICT,
+            ControlError::NotImplemented { .. } => StatusCode::NOT_IMPLEMENTED,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(err.into()))
+    })
 }
 
 /// POST /api/v1/pipeline/drain - Drain pipeline
