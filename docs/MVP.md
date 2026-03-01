@@ -86,10 +86,12 @@ crates/
 │       │   └── sink/         # Sink implementations (stdout, file, mqtt, http)
 │       ├── dag/
 │       │   ├── mod.rs
-│       │   ├── orchestrator.rs # DagOrchestrator: run(), topology
-│       │   ├── builder.rs      # from_config(), validation
-│       │   ├── runner.rs       # Node execution loops
-│       │   └── control.rs      # PipelineControl implementation
+│       │   ├── orchestrator.rs   # DagOrchestrator: run(), topology
+│       │   ├── builder.rs        # from_config(), validation
+│       │   ├── runner.rs         # Node execution loops
+│       │   ├── metrics_helper.rs # Metrics recording helpers
+│       │   ├── result_handler.rs # ProcessResult/RouteResult handling
+│       │   └── control.rs        # PipelineControl implementation
 │       ├── queue/
 │       │   ├── mod.rs
 │       │   ├── bounded.rs    # BoundedQueue<T>: SPSC via tokio::sync::mpsc
