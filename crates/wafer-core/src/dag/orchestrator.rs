@@ -119,6 +119,7 @@ pub struct ControlState {
 
 impl ControlState {
     /// Create new control state with the given pipeline name.
+    #[must_use]
     pub fn new(name: String) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
@@ -142,6 +143,7 @@ impl ControlState {
 
     /// Create new control state with global labels for metrics.
     #[cfg(feature = "http-api")]
+    #[must_use]
     #[allow(dead_code)] // API for pipeline configuration with labels
     pub fn with_labels(name: String, labels: HashMap<String, String>) -> Self {
         let (event_tx, _) = broadcast::channel(256);

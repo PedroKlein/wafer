@@ -24,6 +24,7 @@ pub struct RuntimeEnvelope {
 
 impl RuntimeEnvelope {
     /// Create a new envelope with the given payload.
+    #[must_use]
     pub fn new(source: impl Into<String>, payload: Vec<u8>) -> Self {
         // Timestamp in milliseconds since UNIX epoch
         // Saturates at u64::MAX for dates far in the future (~584 million years)
@@ -47,11 +48,13 @@ impl RuntimeEnvelope {
     }
 
     /// Create an envelope with a string payload.
+    #[must_use]
     pub fn from_string(source: impl Into<String>, data: impl Into<String>) -> Self {
         Self::new(source, data.into().into_bytes())
     }
 
-    /// Add metadata entry.
+    /// Add metadata entry (builder pattern).
+    #[must_use]
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self

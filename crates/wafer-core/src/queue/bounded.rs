@@ -21,6 +21,7 @@ pub struct BoundedQueue<T> {
 
 impl<T> BoundedQueue<T> {
     /// Create a new bounded queue with specified capacity.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
         Self {
@@ -31,6 +32,7 @@ impl<T> BoundedQueue<T> {
     }
 
     /// Create a new bounded queue with default capacity.
+    #[must_use]
     pub fn with_default_capacity() -> Self {
         Self::new(DEFAULT_QUEUE_CAPACITY)
     }

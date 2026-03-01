@@ -63,11 +63,13 @@ pub struct MetricsRegistry {
 
 impl MetricsRegistry {
     /// Creates a new metrics registry.
+    #[must_use]
     pub fn new() -> Self {
         Self::with_labels(HashMap::new())
     }
 
     /// Creates a new metrics registry with global labels.
+    #[must_use]
     pub fn with_labels(global_labels: HashMap<String, String>) -> Self {
         Self {
             start_time: Instant::now(),
