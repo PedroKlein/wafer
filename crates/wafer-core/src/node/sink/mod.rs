@@ -83,7 +83,7 @@ pub struct BatchStats {
 /// # Batching Support
 ///
 /// Sinks can optionally implement batching by:
-/// 1. Buffering messages in `collect()` using [`BatchBuffer`]
+/// 1. Buffering messages in `collect()` using `BatchBuffer`
 /// 2. Returning a `Some(Duration)` from `batch_timeout()` to enable periodic flushing
 /// 3. Implementing `flush()` to write all buffered messages
 ///

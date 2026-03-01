@@ -188,7 +188,12 @@ impl RouterInstance {
     pub async fn call_route(
         &mut self,
         envelope: &pipeline::transform::types::Envelope,
-    ) -> Result<std::result::Result<exports::pipeline::transform::router::RouteResult, pipeline::transform::types::ProcessError>> {
+    ) -> Result<
+        std::result::Result<
+            exports::pipeline::transform::router::RouteResult,
+            pipeline::transform::types::ProcessError,
+        >,
+    > {
         // Reset fuel before each call for consistent metering
         self.store
             .set_fuel(self.fuel_limit)
@@ -304,7 +309,10 @@ impl WasmRouter {
 
     /// Convert WIT RouteResult to trait RouteResult
     fn from_wit_route_result(
-        result: std::result::Result<exports::pipeline::transform::router::RouteResult, pipeline::transform::types::ProcessError>,
+        result: std::result::Result<
+            exports::pipeline::transform::router::RouteResult,
+            pipeline::transform::types::ProcessError,
+        >,
     ) -> RouteResult {
         match result {
             Ok(route_result) => RouteResult::Route(

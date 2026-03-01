@@ -576,9 +576,9 @@ impl DagOrchestrator {
         // Validate node exists and is swappable
         let (old_tracker, swap_lock) = {
             let nodes = self.nodes.lock().await;
-            let node_arc = nodes.get(node_id).ok_or_else(|| {
-                WaferError::from(SwapError::NodeNotFound(node_id.to_string()))
-            })?;
+            let node_arc = nodes
+                .get(node_id)
+                .ok_or_else(|| WaferError::from(SwapError::NodeNotFound(node_id.to_string())))?;
 
             let node = node_arc.lock().await;
             if !node.is_swappable() {
@@ -601,13 +601,9 @@ impl DagOrchestrator {
         };
 
         // Create the coordinator
-        let mut coordinator = HotSwapCoordinator::new(
-            node_id.to_string(),
-            new_wasm_path,
-            old_tracker,
-            swap_lock,
-        )
-        .with_drain_timeout(drain_timeout);
+        let mut coordinator =
+            HotSwapCoordinator::new(node_id.to_string(), new_wasm_path, old_tracker, swap_lock)
+                .with_drain_timeout(drain_timeout);
 
         // Get factory context for creating new node
         let mut ctx = {

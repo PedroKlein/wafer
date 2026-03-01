@@ -102,7 +102,7 @@ async fn main() -> Result<()> {
 
     // Get cancel token for shutdown handling
     let pipeline_cancel_token = orchestrator.cancel_token();
-    
+
     // Create a separate cancellation token for graceful server shutdown
     let server_shutdown = CancellationToken::new();
 
@@ -172,7 +172,10 @@ async fn main() -> Result<()> {
 
     // Run pipeline until completion or cancellation
     // Note: run() now takes &self (not &mut self) thanks to internal mutability
-    orchestrator.run().await.context("Pipeline execution failed")?;
+    orchestrator
+        .run()
+        .await
+        .context("Pipeline execution failed")?;
 
     // Signal server shutdown after pipeline stops
     server_shutdown.cancel();

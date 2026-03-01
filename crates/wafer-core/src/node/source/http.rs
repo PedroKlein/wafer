@@ -69,7 +69,11 @@ impl HttpSource {
     /// * `bind_addr` - Address to bind the HTTP server to (e.g., "0.0.0.0:8081")
     /// * `path` - Path to accept POST requests on (e.g., "/ingest")
     #[must_use]
-    pub fn new(id: impl Into<String>, bind_addr: impl Into<String>, path: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        bind_addr: impl Into<String>,
+        path: impl Into<String>,
+    ) -> Self {
         let bind_str = bind_addr.into();
         let bind_addr = bind_str
             .parse()
@@ -184,9 +188,12 @@ impl Source for HttpSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let rx = self.message_rx.as_mut().ok_or_else(|| WaferError::PluginInit {
-                message: "HttpSource not initialized - call init() first".into(),
-            })?;
+            let rx = self
+                .message_rx
+                .as_mut()
+                .ok_or_else(|| WaferError::PluginInit {
+                    message: "HttpSource not initialized - call init() first".into(),
+                })?;
 
             match rx.recv().await {
                 Some(envelope) => Ok(Some(envelope)),
@@ -266,7 +273,10 @@ async fn handle_request(
     expected_path: &str,
     source_id: &str,
     tx: mpsc::Sender<RuntimeEnvelope>,
-) -> std::result::Result<hyper::Response<http_body_util::Full<hyper::body::Bytes>>, std::convert::Infallible> {
+) -> std::result::Result<
+    hyper::Response<http_body_util::Full<hyper::body::Bytes>>,
+    std::convert::Infallible,
+> {
     use http_body_util::{BodyExt, Full};
     use hyper::body::Bytes;
 

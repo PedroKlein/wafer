@@ -81,14 +81,13 @@ fn bench_wasm_loading(c: &mut Criterion) {
 
                     // This is exactly what HotSwapCoordinator::prepare() does
                     let engine = WaferEngine::new().expect("Failed to create engine");
-                    let component = engine.load_component(&passthrough).expect("Failed to load component");
-                    let _instance = TransformInstance::new(
-                        &engine,
-                        &component,
-                        Capabilities::default(),
-                    )
-                    .await
-                    .expect("Failed to instantiate");
+                    let component = engine
+                        .load_component(&passthrough)
+                        .expect("Failed to load component");
+                    let _instance =
+                        TransformInstance::new(&engine, &component, Capabilities::default())
+                            .await
+                            .expect("Failed to instantiate");
 
                     start.elapsed()
                 });
@@ -111,14 +110,13 @@ fn bench_wasm_loading(c: &mut Criterion) {
                 let elapsed = rt.block_on(async {
                     let start = Instant::now();
 
-                    let component = engine.load_component(&passthrough).expect("Failed to load component");
-                    let _instance = TransformInstance::new(
-                        &engine,
-                        &component,
-                        Capabilities::default(),
-                    )
-                    .await
-                    .expect("Failed to instantiate");
+                    let component = engine
+                        .load_component(&passthrough)
+                        .expect("Failed to load component");
+                    let _instance =
+                        TransformInstance::new(&engine, &component, Capabilities::default())
+                            .await
+                            .expect("Failed to instantiate");
 
                     start.elapsed()
                 });
@@ -166,13 +164,10 @@ fn bench_prepare_target(c: &mut Criterion) {
                     let start = Instant::now();
 
                     let component = engine.load_component(&uppercase).expect("Failed to load");
-                    let _instance = TransformInstance::new(
-                        &engine,
-                        &component,
-                        Capabilities::default(),
-                    )
-                    .await
-                    .expect("Failed to instantiate");
+                    let _instance =
+                        TransformInstance::new(&engine, &component, Capabilities::default())
+                            .await
+                            .expect("Failed to instantiate");
 
                     start.elapsed()
                 });
@@ -234,9 +229,5 @@ fn bench_prepare_target(c: &mut Criterion) {
     }
 }
 
-criterion_group!(
-    benches,
-    bench_wasm_loading,
-    bench_prepare_target,
-);
+criterion_group!(benches, bench_wasm_loading, bench_prepare_target,);
 criterion_main!(benches);

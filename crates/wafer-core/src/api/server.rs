@@ -46,7 +46,7 @@ impl ApiServer {
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
         let router = create_router(controller, config.serve_metrics);
-        
+
         Ok(Self { listener, router })
     }
 
@@ -72,17 +72,17 @@ impl ApiServer {
 }
 
 /// Creates the Axum router with all routes.
-fn create_router<C: PipelineControl + 'static>(
-    controller: Arc<C>,
-    serve_metrics: bool,
-) -> Router {
+fn create_router<C: PipelineControl + 'static>(controller: Arc<C>, serve_metrics: bool) -> Router {
     let mut router = Router::new()
         // Health endpoints
         .route("/health", get(handlers::health))
         .route("/ready", get(handlers::ready::<C>))
         // Pipeline endpoints
         .route("/api/v1/pipeline", get(handlers::get_pipeline::<C>))
-        .route("/api/v1/pipeline/reload", post(handlers::reload_config::<C>))
+        .route(
+            "/api/v1/pipeline/reload",
+            post(handlers::reload_config::<C>),
+        )
         .route("/api/v1/pipeline/drain", post(handlers::drain::<C>))
         .route("/api/v1/pipeline/shutdown", post(handlers::shutdown::<C>))
         // Node endpoints

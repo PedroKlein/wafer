@@ -22,6 +22,8 @@ mod state;
 mod traits;
 mod transform;
 
+pub use joiner::{JoinerInstance, WasmJoiner};
+pub use router::{RouterInstance, WasmRouter};
 pub use sink::{FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
 pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use state::NodeStateTracker;
@@ -29,8 +31,6 @@ pub use traits::{
     ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
     Router, Transform,
 };
-pub use joiner::{JoinerInstance, WasmJoiner};
-pub use router::{RouterInstance, WasmRouter};
 pub use transform::WasmTransform;
 
 use crate::error::Result;
