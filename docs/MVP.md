@@ -88,9 +88,14 @@ crates/
 │       │   ├── mod.rs
 │       │   ├── orchestrator.rs   # DagOrchestrator: run(), topology
 │       │   ├── builder.rs        # from_config(), validation
-│       │   ├── runner.rs         # Node execution loops
+│       │   ├── runner.rs         # Node execution loops (source, transform, sink, router, joiner)
+│       │   ├── overflow.rs       # Overflow policy handling (slow, drop, dead-letter)
+│       │   ├── dlq_handlers.rs   # Dead Letter Queue routing helpers
+│       │   ├── sink_helpers.rs   # Sink processing and batch flush helpers
 │       │   ├── metrics_helper.rs # Metrics recording helpers
 │       │   ├── result_handler.rs # ProcessResult/RouteResult handling
+│       │   ├── routing.rs        # Message routing control for hot-swap
+│       │   ├── hotswap.rs        # Hot-swap coordinator (drain-and-flip)
 │       │   └── control.rs        # PipelineControl implementation
 │       ├── queue/
 │       │   ├── mod.rs
@@ -107,7 +112,10 @@ crates/
 │       │   └── types.rs      # PluginSource, OciReference
 │       ├── metrics/
 │       │   ├── mod.rs
-│       │   └── counters.rs   # PipelineMetrics
+│       │   ├── counters.rs        # PipelineMetrics (per-pipeline atomic counters)
+│       │   ├── registry.rs        # MetricsRegistry (Prometheus integration)
+│       │   ├── types.rs           # NodeMetrics, QueueMetrics, SinkMetrics, HotSwapMetrics, SystemMetrics
+│       │   └── snapshot_builder.rs # Prometheus snapshot building helpers
 │       ├── error.rs
 │       ├── factory.rs
 │       └── lib.rs
