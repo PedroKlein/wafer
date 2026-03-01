@@ -15,7 +15,7 @@ use super::batch::BatchBuffer;
 use super::{BatchStats, Sink};
 
 /// Configuration for FileSink batching behavior.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct FileSinkBatchConfig {
     /// Number of messages to buffer before flushing.
     /// When `None`, messages are written immediately (no batching).
@@ -26,14 +26,7 @@ pub struct FileSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-impl Default for FileSinkBatchConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: None,
-            batch_timeout_ms: None,
-        }
-    }
-}
+
 
 /// A file-based sink node that writes messages to a file.
 ///
@@ -250,16 +243,13 @@ impl Sink for FileSink {
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
         // Only return stats if batching is enabled
-        if self.batch_buffer.is_none() {
-            return None;
-        }
+        self.batch_buffer.as_ref()?;
 
         // Update current buffer size
         self.batch_stats.current_buffer_size = self
             .batch_buffer
             .as_ref()
-            .map(|b| b.len() as u64)
-            .unwrap_or(0);
+            .map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();

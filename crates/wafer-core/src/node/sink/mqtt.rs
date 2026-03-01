@@ -15,7 +15,7 @@ use super::batch::BatchBuffer;
 use super::{BatchStats, Sink};
 
 /// Configuration for MqttSink batching behavior.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MqttSinkBatchConfig {
     /// Number of messages to buffer before publishing.
     /// When `None`, messages are published immediately (no batching).
@@ -26,14 +26,7 @@ pub struct MqttSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-impl Default for MqttSinkBatchConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: None,
-            batch_timeout_ms: None,
-        }
-    }
-}
+
 
 /// An MQTT-based sink node that publishes messages to an MQTT broker.
 ///
@@ -311,16 +304,13 @@ impl Sink for MqttSink {
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
         // Only return stats if batching is enabled
-        if self.batch_buffer.is_none() {
-            return None;
-        }
+        self.batch_buffer.as_ref()?;
 
         // Update current buffer size
         self.batch_stats.current_buffer_size = self
             .batch_buffer
             .as_ref()
-            .map(|b| b.len() as u64)
-            .unwrap_or(0);
+            .map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();

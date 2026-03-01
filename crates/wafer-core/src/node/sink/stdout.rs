@@ -13,7 +13,7 @@ use super::batch::BatchBuffer;
 use super::{BatchStats, Sink};
 
 /// Configuration for StdoutSink batching behavior.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StdoutSinkBatchConfig {
     /// Number of messages to buffer before writing.
     /// When `None`, messages are written immediately (no batching).
@@ -24,14 +24,7 @@ pub struct StdoutSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-impl Default for StdoutSinkBatchConfig {
-    fn default() -> Self {
-        Self {
-            batch_size: None,
-            batch_timeout_ms: None,
-        }
-    }
-}
+
 
 /// A stdout-based sink node that writes messages to standard output.
 ///
@@ -210,16 +203,13 @@ impl Sink for StdoutSink {
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
         // Only return stats if batching is enabled
-        if self.batch_buffer.is_none() {
-            return None;
-        }
+        self.batch_buffer.as_ref()?;
 
         // Update current buffer size
         self.batch_stats.current_buffer_size = self
             .batch_buffer
             .as_ref()
-            .map(|b| b.len() as u64)
-            .unwrap_or(0);
+            .map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();

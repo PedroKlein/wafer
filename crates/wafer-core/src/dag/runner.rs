@@ -30,6 +30,7 @@
 //! - Message passing instead of shared mutable state
 //! - Releasing the lock between operations for better observability
 
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::error::TrySendError;
@@ -47,6 +48,10 @@ use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 use super::metrics_helper;
 use super::orchestrator::{ControlState, EdgeSendInfo};
 use super::DagOrchestrator;
+
+/// Type alias for a pinned, boxed stream of (port_name, envelope) pairs.
+type PortedEnvelopeStream =
+    Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>;
 
 impl DagOrchestrator {
     /// Run the main loop for a node.
@@ -808,15 +813,12 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
-        use std::pin::Pin;
         use super::result_handler::ProcessContext;
 
         tracing::info!("Joiner loop started");
 
         // Convert receivers into a merged stream
-        let streams: Vec<
-            Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>,
-        > = input_receivers
+        let streams: Vec<PortedEnvelopeStream> = input_receivers
             .into_iter()
             .map(|(port_name, receiver)| {
                 let stream = futures_util::stream::unfold(
@@ -827,8 +829,7 @@ impl DagOrchestrator {
                             .map(|env| ((port_name.clone(), env), (port_name, rx)))
                     },
                 );
-                Box::pin(stream)
-                    as Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>
+                Box::pin(stream) as PortedEnvelopeStream
             })
             .collect();
 
