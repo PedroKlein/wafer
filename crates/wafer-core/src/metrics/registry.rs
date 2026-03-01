@@ -549,6 +549,7 @@ impl MetricsRegistry {
     }
 
     /// Add pipeline-level metrics to the snapshot.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
     fn add_pipeline_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -588,6 +589,7 @@ impl MetricsRegistry {
     }
 
     /// Add per-node metrics to the snapshot.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
     fn add_node_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -637,6 +639,7 @@ impl MetricsRegistry {
     }
 
     /// Add queue metrics to the snapshot.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
     fn add_queue_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -686,6 +689,7 @@ impl MetricsRegistry {
     }
 
     /// Add sink batching metrics to the snapshot.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
     fn add_sink_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -822,6 +826,7 @@ impl MetricsRegistry {
     }
 
     /// Add system metrics to the snapshot.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
     fn add_system_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
