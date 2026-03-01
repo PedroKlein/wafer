@@ -24,6 +24,7 @@ pub struct NodeMetrics {
 
 impl NodeMetrics {
     /// Creates new node metrics with the given type.
+    #[must_use]
     pub fn new(node_type: impl Into<String>) -> Self {
         Self {
             node_type: node_type.into(),
@@ -57,6 +58,7 @@ pub struct QueueMetrics {
 
 impl QueueMetrics {
     /// Creates new queue metrics.
+    #[must_use]
     pub fn new(from_node: impl Into<String>, to_node: impl Into<String>, capacity: u64) -> Self {
         Self {
             from_node: from_node.into(),
@@ -85,6 +87,7 @@ pub struct SinkMetrics {
 
 impl SinkMetrics {
     /// Creates new sink metrics.
+    #[must_use]
     pub fn new(sink_id: impl Into<String>) -> Self {
         Self {
             sink_id: sink_id.into(),

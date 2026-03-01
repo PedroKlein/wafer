@@ -84,7 +84,7 @@ impl PipelineControl for DagOrchestrator {
             drain_duration: metrics.drain_duration,
             load_duration: metrics.prepare_duration,
             total_duration: metrics.total_duration,
-            messages_drained: 0, // TODO: track this in SwapMetrics
+            messages_drained: metrics.messages_drained,
         })
     }
 
