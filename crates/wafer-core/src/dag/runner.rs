@@ -41,11 +41,10 @@ use futures_util::stream::StreamExt;
 
 use crate::config::OverflowPolicy;
 use crate::dlq::{wrap_for_dlq, DlqReason};
-use crate::node::{
-    AnyNode, Joiner, NodeStateTracker, ProcessResult, RouteResult, Router, Sink, Source, Transform,
-};
+use crate::node::{AnyNode, Joiner, NodeStateTracker, Router, Sink, Source, Transform};
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
+use super::metrics_helper;
 use super::orchestrator::{ControlState, EdgeSendInfo};
 use super::DagOrchestrator;
 
@@ -155,7 +154,7 @@ impl DagOrchestrator {
     ///
     /// `true` if the message was successfully sent or handled (including drop/DLQ),
     /// `false` if sending failed for other reasons (channel closed).
-    async fn send_with_overflow_policy(
+    pub(super) async fn send_with_overflow_policy(
         edge_info: &EdgeSendInfo,
         envelope: RuntimeEnvelope,
         node_id: &str,
@@ -297,7 +296,7 @@ impl DagOrchestrator {
     /// * `error_code` - Error code from the process result
     /// * `error_message` - Error message from the process result
     /// * `control_state` - Control state containing the DLQ sender
-    async fn send_process_error_to_dlq(
+    pub(super) async fn send_process_error_to_dlq(
         envelope: RuntimeEnvelope,
         node_id: &str,
         error_code: &str,
@@ -380,6 +379,66 @@ impl DagOrchestrator {
         // If DLQ is not configured, the error is just logged (already logged by caller)
     }
 
+    /// Flush the sink batch and record metrics.
+    async fn flush_sink_batch(sink: &mut dyn Sink, node_id: &str, control_state: &ControlState) {
+        if let Err(e) = sink.flush().await {
+            tracing::warn!(node = %node_id, error = %e, "Batch flush failed");
+        } else {
+            tracing::trace!(node = %node_id, "Batch flush completed");
+        }
+
+        // Record batch metrics after flush
+        if let Some(stats) = sink.take_batch_stats() {
+            metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
+        }
+    }
+
+    /// Process a single message through the sink.
+    async fn process_sink_message(
+        sink: &mut dyn Sink,
+        envelope: RuntimeEnvelope,
+        node_id: &str,
+        state_tracker: &NodeStateTracker,
+        control_state: &ControlState,
+    ) {
+        let message_id = envelope.id.clone();
+        let input_size_bytes = envelope.payload.len();
+        let start = Instant::now();
+
+        state_tracker.set_processing(true);
+
+        // Clone envelope before collect() in case we need to send to DLQ on error
+        let envelope_for_dlq = envelope.clone();
+
+        if let Err(e) = sink.collect(envelope).await {
+            let duration_ns = start.elapsed().as_nanos() as u64;
+            tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
+
+            // Route failed message to DLQ if configured
+            Self::send_sink_error_to_dlq(envelope_for_dlq, node_id, &e.to_string(), control_state)
+                .await;
+
+            metrics_helper::record_error_metrics(control_state, node_id, duration_ns);
+        } else {
+            let duration_ns = start.elapsed().as_nanos() as u64;
+            tracing::debug!(
+                message_id = %message_id,
+                input_size_bytes,
+                duration_ns,
+                "Sink delivered"
+            );
+
+            metrics_helper::record_success_metrics(control_state, node_id, duration_ns);
+
+            // Record batch metrics after collect (batch may have flushed)
+            if let Some(stats) = sink.take_batch_stats() {
+                metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
+            }
+        }
+
+        state_tracker.set_processing(false);
+    }
+
     /// Run the source node loop.
     ///
     /// Polls the source for messages and sends them to all downstream nodes.
@@ -398,6 +457,8 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
+        use super::metrics_helper;
+
         tracing::info!("Source loop started");
         loop {
             // Check for cancellation before each poll
@@ -424,46 +485,21 @@ impl DagOrchestrator {
                     state_tracker.set_processing(true);
                     match result {
                         Ok(Some(envelope)) => {
-                            let message_id = envelope.id.clone();
-                            let payload_size = envelope.payload.len();
                             tracing::debug!(
-                                message_id = %message_id,
-                                payload_size,
+                                message_id = %envelope.id,
+                                payload_size = envelope.payload.len(),
                                 "Source received message"
                             );
 
-                            // Record metrics
-                            #[cfg(feature = "http-api")]
-                            {
-                                control_state.metrics_registry.record_message();
-                                control_state.metrics_registry.record_node_invocation(node_id, 0);
-                            }
-                            let _ = control_state; // suppress unused warning when http-api disabled
+                            metrics_helper::record_source_message(control_state, node_id);
 
-                            // Send to all downstream edges with overflow policy handling
-                            // Optimization: avoid clone for single downstream
-                            if output_senders.len() == 1 {
-                                Self::send_with_overflow_policy(
-                                    &output_senders[0],
-                                    envelope,
-                                    node_id,
-                                    control_state,
-                                )
-                                .await;
-                            } else {
-                                // Clone for all downstream senders
-                                // Note: We clone for all senders since we're iterating. Future optimization
-                                // could use ownership tracking to avoid the final clone.
-                                for edge_info in output_senders {
-                                    Self::send_with_overflow_policy(
-                                        edge_info,
-                                        envelope.clone(),
-                                        node_id,
-                                        control_state,
-                                    )
-                                    .await;
-                                }
-                            }
+                            // Send to downstream with overflow policy handling
+                            Self::send_to_downstream(
+                                output_senders,
+                                envelope,
+                                node_id,
+                                control_state,
+                            ).await;
                         }
                         Ok(None) => {
                             tracing::debug!("Source reached EOF");
@@ -472,12 +508,7 @@ impl DagOrchestrator {
                         }
                         Err(e) => {
                             tracing::error!(error = %e, "Source poll error");
-                            // Record error metrics
-                            #[cfg(feature = "http-api")]
-                            {
-                                control_state.metrics_registry.record_error();
-                                control_state.metrics_registry.record_node_error(node_id);
-                            }
+                            metrics_helper::record_source_error(control_state, node_id);
                             state_tracker.set_processing(false);
                             break;
                         }
@@ -487,6 +518,36 @@ impl DagOrchestrator {
             }
         }
         tracing::info!("Source loop stopped");
+    }
+
+    /// Send an envelope to all downstream edges with overflow policy handling.
+    ///
+    /// Optimized to avoid cloning when there's only one downstream edge.
+    async fn send_to_downstream(
+        output_senders: &[EdgeSendInfo],
+        envelope: RuntimeEnvelope,
+        node_id: &str,
+        control_state: &ControlState,
+    ) {
+        if output_senders.len() == 1 {
+            Self::send_with_overflow_policy(
+                &output_senders[0],
+                envelope,
+                node_id,
+                control_state,
+            )
+            .await;
+        } else {
+            for edge_info in output_senders {
+                Self::send_with_overflow_policy(
+                    edge_info,
+                    envelope.clone(),
+                    node_id,
+                    control_state,
+                )
+                .await;
+            }
+        }
     }
 
     /// Run the transform node loop.
@@ -513,6 +574,8 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
+        use super::result_handler::ProcessContext;
+
         tracing::info!("Transform loop started");
         loop {
             if cancel_token.is_cancelled() {
@@ -526,147 +589,28 @@ impl DagOrchestrator {
                 envelope = receiver.recv() => envelope,
             };
 
-            if let Some(envelope) = maybe_envelope {
-                let message_id = envelope.id.clone();
-                let input_size_bytes = envelope.payload.len();
-                let start = Instant::now();
-
-                // Clone envelope for potential DLQ routing on error
-                // This is only used if processing returns an error
-                let envelope_for_dlq = envelope.clone();
-
-                // Mark processing before WASM call
-                state_tracker.set_processing(true);
-
-                match transform.process(envelope).await {
-                    Ok(ProcessResult::Emit(output)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        let output_size_bytes = output.payload.len();
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_size_bytes,
-                            output_size_bytes,
-                            duration_ns,
-                            "Transform emitted"
-                        );
-
-                        // Record success metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_message();
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                        let _ = control_state; // suppress unused warning when http-api disabled
-
-                        // Send to all downstream edges with overflow policy handling
-                        if output_senders.len() == 1 {
-                            Self::send_with_overflow_policy(
-                                &output_senders[0],
-                                output,
-                                node_id,
-                                control_state,
-                            )
-                            .await;
-                        } else {
-                            for edge_info in output_senders {
-                                Self::send_with_overflow_policy(
-                                    edge_info,
-                                    output.clone(),
-                                    node_id,
-                                    control_state,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    Ok(ProcessResult::Filter) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_size_bytes,
-                            duration_ns,
-                            "Transform filtered"
-                        );
-
-                        // Record invocation for filtered messages too
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                    }
-                    Ok(ProcessResult::Error(e)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::warn!(
-                            message_id = %message_id,
-                            error_code = %e.code,
-                            error_message = %e.message,
-                            "Transform error - routing to DLQ"
-                        );
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route to DLQ if configured
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq.clone(),
-                            node_id,
-                            &e.code,
-                            &e.message,
-                            control_state,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, error = %e, "Transform process failed - routing to DLQ");
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route runtime errors to DLQ as well
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq,
-                            node_id,
-                            "runtime_error",
-                            &e.to_string(),
-                            control_state,
-                        )
-                        .await;
-                    }
-                }
-
-                // Clear processing flag after WASM call completes
-                state_tracker.set_processing(false);
-            } else {
+            let Some(envelope) = maybe_envelope else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!("Input queue closed");
                 }
                 break;
-            }
+            };
+
+            let ctx = ProcessContext {
+                node_id,
+                message_id: &envelope.id.clone(),
+                input_size_bytes: envelope.payload.len(),
+                start: Instant::now(),
+                envelope_for_dlq: envelope.clone(),
+                output_senders,
+                control_state,
+                input_port: None,
+            };
+
+            state_tracker.set_processing(true);
+            ctx.handle_process_result(transform.process(envelope).await)
+                .await;
+            state_tracker.set_processing(false);
         }
         tracing::info!("Transform loop stopped");
     }
@@ -752,95 +696,17 @@ impl DagOrchestrator {
                     break;
                 }
                 SinkAction::FlushBatch => {
-                    // Flush buffered messages on timeout
-                    if let Err(e) = sink.flush().await {
-                        tracing::warn!(node = %node_id, error = %e, "Batch flush failed");
-                    } else {
-                        tracing::trace!(node = %node_id, "Batch flush completed");
-                    }
-
-                    // Record batch metrics after flush
-                    #[cfg(feature = "http-api")]
-                    if let Some(stats) = sink.take_batch_stats() {
-                        for _ in 0..stats.flushes_since_last_check {
-                            control_state
-                                .metrics_registry
-                                .record_sink_batch_flush(node_id, stats.last_flush_size);
-                        }
-                        control_state
-                            .metrics_registry
-                            .set_sink_buffer_size(node_id, stats.current_buffer_size);
-                    }
+                    Self::flush_sink_batch(sink, node_id, control_state).await;
                 }
                 SinkAction::ProcessMessage(envelope) => {
-                    let message_id = envelope.id.clone();
-                    let input_size_bytes = envelope.payload.len();
-                    let start = Instant::now();
-
-                    state_tracker.set_processing(true);
-
-                    // Clone envelope before collect() in case we need to send to DLQ on error
-                    let envelope_for_dlq = envelope.clone();
-
-                    if let Err(e) = sink.collect(envelope).await {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
-
-                        // Route failed message to DLQ if configured
-                        Self::send_sink_error_to_dlq(
-                            envelope_for_dlq,
-                            node_id,
-                            &e.to_string(),
-                            control_state,
-                        )
-                        .await;
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-                    } else {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_size_bytes,
-                            duration_ns,
-                            "Sink delivered"
-                        );
-
-                        // Record success metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_message();
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-
-                        // Record batch metrics after collect (batch may have flushed)
-                        #[cfg(feature = "http-api")]
-                        if let Some(stats) = sink.take_batch_stats() {
-                            for _ in 0..stats.flushes_since_last_check {
-                                control_state
-                                    .metrics_registry
-                                    .record_sink_batch_flush(node_id, stats.last_flush_size);
-                            }
-                            control_state
-                                .metrics_registry
-                                .set_sink_buffer_size(node_id, stats.current_buffer_size);
-                        }
-                    }
-                    let _ = control_state; // suppress unused warning when http-api disabled
-
-                    state_tracker.set_processing(false);
+                    Self::process_sink_message(
+                        sink,
+                        envelope,
+                        node_id,
+                        state_tracker,
+                        control_state,
+                    )
+                    .await;
                 }
             }
         }
@@ -877,6 +743,8 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
+        use super::result_handler::ProcessContext;
+
         tracing::info!("Router loop started");
         loop {
             if cancel_token.is_cancelled() {
@@ -891,138 +759,28 @@ impl DagOrchestrator {
                 envelope = receiver.recv() => envelope,
             };
 
-            if let Some(envelope) = maybe_envelope {
-                let message_id = envelope.id.clone();
-                let input_size_bytes = envelope.payload.len();
-                let start = Instant::now();
-
-                // Clone envelope for potential DLQ routing on error
-                let envelope_for_dlq = envelope.clone();
-
-                state_tracker.set_processing(true);
-
-                // WASM call OUTSIDE select - cancel safe
-                match router.route(envelope).await {
-                    Ok(RouteResult::Route(port, output)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        let output_size_bytes = output.payload.len();
-                        tracing::debug!(
-                            message_id = %message_id,
-                            output_port = %port,
-                            input_size_bytes,
-                            output_size_bytes,
-                            duration_ns,
-                            "Router routed"
-                        );
-
-                        // Record success metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_message();
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                        let _ = control_state; // suppress unused warning when http-api disabled
-
-                        // Find sender for this port and send with overflow policy
-                        if let Some(edge_info) = output_senders.iter().find(|e| e.port == port) {
-                            Self::send_with_overflow_policy(
-                                edge_info,
-                                output,
-                                node_id,
-                                control_state,
-                            )
-                            .await;
-                        } else {
-                            tracing::warn!(output_port = %port, "Unknown output port, dropping message");
-                        }
-                    }
-                    Ok(RouteResult::Filter) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_size_bytes,
-                            duration_ns,
-                            "Router filtered"
-                        );
-
-                        // Record invocation for filtered messages
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                    }
-                    Ok(RouteResult::Error(e)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::warn!(
-                            message_id = %message_id,
-                            error_code = %e.code,
-                            error_message = %e.message,
-                            "Router error - routing to DLQ"
-                        );
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route to DLQ if configured
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq.clone(),
-                            node_id,
-                            &e.code,
-                            &e.message,
-                            control_state,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, error = %e, "Router route failed - routing to DLQ");
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route runtime errors to DLQ as well
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq,
-                            node_id,
-                            "runtime_error",
-                            &e.to_string(),
-                            control_state,
-                        )
-                        .await;
-                    }
-                }
-
-                state_tracker.set_processing(false);
-            } else {
+            let Some(envelope) = maybe_envelope else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!("Input queue closed");
                 }
                 break;
-            }
+            };
+
+            let ctx = ProcessContext {
+                node_id,
+                message_id: &envelope.id.clone(),
+                input_size_bytes: envelope.payload.len(),
+                start: Instant::now(),
+                envelope_for_dlq: envelope.clone(),
+                output_senders,
+                control_state,
+                input_port: None,
+            };
+
+            state_tracker.set_processing(true);
+            // WASM call OUTSIDE select - cancel safe
+            ctx.handle_route_result(router.route(envelope).await).await;
+            state_tracker.set_processing(false);
         }
         tracing::info!("Router loop stopped");
     }
@@ -1051,8 +809,11 @@ impl DagOrchestrator {
         control_state: &ControlState,
     ) {
         use std::pin::Pin;
+        use super::result_handler::ProcessContext;
+
         tracing::info!("Joiner loop started");
 
+        // Convert receivers into a merged stream
         let streams: Vec<
             Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>,
         > = input_receivers
@@ -1086,148 +847,29 @@ impl DagOrchestrator {
                 item = merged.next() => item,
             };
 
-            if let Some((port_name, envelope)) = maybe_item {
-                let message_id = envelope.id.clone();
-                let input_size_bytes = envelope.payload.len();
-                let start = Instant::now();
-
-                // Clone envelope for potential DLQ routing on error
-                let envelope_for_dlq = envelope.clone();
-
-                state_tracker.set_processing(true);
-
-                // WASM call OUTSIDE select - cancel safe
-                match joiner.process(&port_name, envelope).await {
-                    Ok(ProcessResult::Emit(output)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        let output_size_bytes = output.payload.len();
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_port = %port_name,
-                            input_size_bytes,
-                            output_size_bytes,
-                            duration_ns,
-                            "Joiner emitted"
-                        );
-
-                        // Record success metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_message();
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                        let _ = control_state; // suppress unused warning when http-api disabled
-
-                        // Send to output with overflow policy handling (joiner has single output)
-                        if output_senders.len() == 1 {
-                            Self::send_with_overflow_policy(
-                                &output_senders[0],
-                                output,
-                                node_id,
-                                control_state,
-                            )
-                            .await;
-                        } else {
-                            for edge_info in output_senders {
-                                Self::send_with_overflow_policy(
-                                    edge_info,
-                                    output.clone(),
-                                    node_id,
-                                    control_state,
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                    Ok(ProcessResult::Filter) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::debug!(
-                            message_id = %message_id,
-                            input_port = %port_name,
-                            input_size_bytes,
-                            duration_ns,
-                            "Joiner filtered"
-                        );
-
-                        // Record invocation for filtered messages
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                            control_state
-                                .metrics_registry
-                                .record_process_time(duration_ns);
-                        }
-                    }
-                    Ok(ProcessResult::Error(e)) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::warn!(
-                            message_id = %message_id,
-                            input_port = %port_name,
-                            error_code = %e.code,
-                            error_message = %e.message,
-                            "Joiner error - routing to DLQ"
-                        );
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route to DLQ if configured
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq.clone(),
-                            node_id,
-                            &e.code,
-                            &e.message,
-                            control_state,
-                        )
-                        .await;
-                    }
-                    Err(e) => {
-                        let duration_ns = start.elapsed().as_nanos() as u64;
-                        tracing::error!(message_id = %message_id, input_port = %port_name, error = %e, "Joiner process failed - routing to DLQ");
-
-                        // Record error metrics
-                        #[cfg(feature = "http-api")]
-                        {
-                            control_state.metrics_registry.record_error();
-                            control_state.metrics_registry.record_node_error(node_id);
-                            control_state
-                                .metrics_registry
-                                .record_node_invocation(node_id, duration_ns);
-                        }
-
-                        // Route runtime errors to DLQ as well
-                        Self::send_process_error_to_dlq(
-                            envelope_for_dlq,
-                            node_id,
-                            "runtime_error",
-                            &e.to_string(),
-                            control_state,
-                        )
-                        .await;
-                    }
-                }
-
-                state_tracker.set_processing(false);
-            } else {
+            let Some((port_name, envelope)) = maybe_item else {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!("All input queues closed");
                 }
                 break;
-            }
+            };
+
+            let ctx = ProcessContext {
+                node_id,
+                message_id: &envelope.id.clone(),
+                input_size_bytes: envelope.payload.len(),
+                start: Instant::now(),
+                envelope_for_dlq: envelope.clone(),
+                output_senders,
+                control_state,
+                input_port: Some(&port_name),
+            };
+
+            state_tracker.set_processing(true);
+            // WASM call OUTSIDE select - cancel safe
+            ctx.handle_process_result(joiner.process(&port_name, envelope).await)
+                .await;
+            state_tracker.set_processing(false);
         }
         tracing::info!("Joiner loop stopped");
     }

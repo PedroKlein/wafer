@@ -311,11 +311,7 @@ impl DagOrchestrator {
             })?
         };
 
-        // Update state to Running
-        {
-            let mut state = self.control_state.state.lock().await;
-            *state = PipelineState::Running;
-        }
+        self.set_pipeline_state(PipelineState::Running).await;
 
         // Get a snapshot of nodes for iteration (we need to hold the lock briefly)
         let nodes_snapshot: HashMap<String, Arc<Mutex<AnyNode>>> = {
@@ -324,71 +320,66 @@ impl DagOrchestrator {
         };
 
         // Initialize nodes in topological order
+        self.init_nodes_in_order(&nodes_snapshot).await?;
+
+        // Spawn node tasks and get handles
+        let handles = self.spawn_node_tasks(&nodes_snapshot, &mut run_state);
+
+        // Clear remaining senders so receivers will see channel close
+        run_state.queue_senders.clear();
+        drop(run_state);
+
+        // Wait for all node tasks to complete
+        self.wait_for_tasks(handles).await;
+
+        // Shutdown: close nodes and update state
+        self.shutdown_nodes(&nodes_snapshot).await;
+
+        Ok(())
+    }
+
+    /// Set the pipeline state.
+    async fn set_pipeline_state(&self, new_state: PipelineState) {
+        let mut state = self.control_state.state.lock().await;
+        *state = new_state;
+    }
+
+    /// Initialize nodes in topological order.
+    async fn init_nodes_in_order(
+        &self,
+        nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>,
+    ) -> Result<()> {
         for node_id in &self.topo_order {
             if let Some(node) = nodes_snapshot.get(node_id) {
                 let mut locked = node.lock().await;
                 if let Err(e) = locked.init().await {
                     tracing::error!(node = %node_id, error = %e, "Node init failed");
-                    // Update state to Error
-                    let mut state = self.control_state.state.lock().await;
-                    *state = PipelineState::Error;
+                    self.set_pipeline_state(PipelineState::Error).await;
                     return Err(e);
                 }
                 tracing::debug!(node = %node_id, "Node initialized");
             }
         }
+        Ok(())
+    }
 
-        let topo_order = self.topo_order.clone();
+    /// Spawn node execution tasks and return their handles.
+    fn spawn_node_tasks(
+        &self,
+        nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>,
+        run_state: &mut RunState,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
         let mut handles = Vec::new();
 
-        for node_id in &topo_order {
-            let node = nodes_snapshot.get(node_id).cloned();
-            let node_id_owned = node_id.clone();
-            let cancel_token = self.cancel_token.clone();
+        for node_id in &self.topo_order {
+            let output_senders = self.collect_output_senders(node_id, run_state);
+            let input_receivers = self.collect_input_receivers(node_id, run_state);
 
-            let output_senders: Vec<EdgeSendInfo> = run_state
-                .queue_senders
-                .iter()
-                .filter_map(|((from_key, to_key), sender)| {
-                    let (from_node, from_port) = Self::parse_node_port(from_key);
-                    if from_node == node_id {
-                        // Look up overflow policy from edge config
-                        let overflow_policy = self.find_edge_overflow_policy(from_key, to_key);
-                        let edge_name = format!("{from_key}->{to_key}");
-                        Some(EdgeSendInfo {
-                            port: from_port.to_string(),
-                            sender: sender.clone(),
-                            overflow_policy,
-                            edge_name,
-                        })
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let input_keys_with_ports: Vec<_> = run_state
-                .queue_receivers
-                .keys()
-                .filter_map(|(from_key, to_key)| {
-                    let (to_node, to_port) = Self::parse_node_port(to_key);
-                    if to_node == node_id {
-                        Some(((from_key.clone(), to_key.clone()), to_port.to_string()))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            let input_receivers: Vec<(String, _)> = input_keys_with_ports
-                .into_iter()
-                .filter_map(|(key, port)| {
-                    run_state.queue_receivers.remove(&key).map(|rx| (port, rx))
-                })
-                .collect();
-
-            if let Some(node_arc) = node {
+            if let Some(node_arc) = nodes_snapshot.get(node_id).cloned() {
+                let node_id_owned = node_id.clone();
+                let cancel_token = self.cancel_token.clone();
                 let control_state = Arc::clone(&self.control_state);
+
                 let handle = tokio::spawn(async move {
                     Self::run_node_loop(
                         node_id_owned,
@@ -404,23 +395,69 @@ impl DagOrchestrator {
             }
         }
 
-        // Clear remaining senders so receivers will see channel close
-        run_state.queue_senders.clear();
-        // Drop run_state - we're done with it
-        drop(run_state);
+        handles
+    }
 
-        // Wait for all node tasks to complete
+    /// Collect output senders for a node from the run state.
+    fn collect_output_senders(&self, node_id: &str, run_state: &RunState) -> Vec<EdgeSendInfo> {
+        run_state
+            .queue_senders
+            .iter()
+            .filter_map(|((from_key, to_key), sender)| {
+                let (from_node, from_port) = Self::parse_node_port(from_key);
+                if from_node == node_id {
+                    let overflow_policy = self.find_edge_overflow_policy(from_key, to_key);
+                    let edge_name = format!("{from_key}->{to_key}");
+                    Some(EdgeSendInfo {
+                        port: from_port.to_string(),
+                        sender: sender.clone(),
+                        overflow_policy,
+                        edge_name,
+                    })
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Collect input receivers for a node from the run state.
+    fn collect_input_receivers(
+        &self,
+        node_id: &str,
+        run_state: &mut RunState,
+    ) -> Vec<(String, QueueReceiver<RuntimeEnvelope>)> {
+        let input_keys_with_ports: Vec<_> = run_state
+            .queue_receivers
+            .keys()
+            .filter_map(|(from_key, to_key)| {
+                let (to_node, to_port) = Self::parse_node_port(to_key);
+                if to_node == node_id {
+                    Some(((from_key.clone(), to_key.clone()), to_port.to_string()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        input_keys_with_ports
+            .into_iter()
+            .filter_map(|(key, port)| run_state.queue_receivers.remove(&key).map(|rx| (port, rx)))
+            .collect()
+    }
+
+    /// Wait for all node tasks to complete.
+    async fn wait_for_tasks(&self, handles: Vec<tokio::task::JoinHandle<()>>) {
         for handle in handles {
             if let Err(e) = handle.await {
                 tracing::error!(error = %e, "Node task panicked");
             }
         }
+    }
 
-        // Update state to Draining while closing nodes
-        {
-            let mut state = self.control_state.state.lock().await;
-            *state = PipelineState::Draining;
-        }
+    /// Shutdown nodes: close in reverse order and update state.
+    async fn shutdown_nodes(&self, nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>) {
+        self.set_pipeline_state(PipelineState::Draining).await;
 
         // Close nodes in reverse topological order
         for node_id in self.topo_order.iter().rev() {
@@ -438,13 +475,7 @@ impl DagOrchestrator {
             ctx.abort_tickers();
         }
 
-        // Update state to Stopped
-        {
-            let mut state = self.control_state.state.lock().await;
-            *state = PipelineState::Stopped;
-        }
-
-        Ok(())
+        self.set_pipeline_state(PipelineState::Stopped).await;
     }
 
     /// Get the topological order of nodes.

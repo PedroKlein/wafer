@@ -37,7 +37,9 @@
 mod builder;
 mod control;
 mod hotswap;
+mod metrics_helper;
 mod orchestrator;
+mod result_handler;
 mod routing;
 mod runner;
 

@@ -24,7 +24,7 @@ mod transform;
 
 pub use joiner::{JoinerInstance, WasmJoiner};
 pub use router::{RouterInstance, WasmRouter};
-pub use sink::{FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
+pub use sink::{BatchStats, FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
 pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use state::NodeStateTracker;
 pub use traits::{
