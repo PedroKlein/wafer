@@ -315,7 +315,7 @@ mod tests {
         fn status(&self) -> PipelineStatus {
             PipelineStatus {
                 name: self.name.clone(),
-                state: self.state.clone(),
+                state: self.state,
                 uptime_secs: 3600,
                 messages_processed: 1000,
                 messages_failed: 5,

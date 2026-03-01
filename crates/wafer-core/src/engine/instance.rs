@@ -251,7 +251,7 @@ mod tests {
     async fn test_instance_creation_with_valid_component() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -273,7 +273,7 @@ mod tests {
     async fn test_instance_creation_with_capabilities() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -295,7 +295,7 @@ mod tests {
     async fn test_instance_init_and_validate() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -328,7 +328,7 @@ mod tests {
     async fn test_instance_process_passthrough() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -357,7 +357,7 @@ mod tests {
                     assert_eq!(data, b"hello world");
                 }
             },
-            other => panic!("Expected Emit result, got {:?}", other),
+            other => panic!("Expected Emit result, got {other:?}"),
         }
     }
 
@@ -365,7 +365,7 @@ mod tests {
     async fn test_instance_fuel_consumed_after_process() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -400,7 +400,7 @@ mod tests {
     async fn test_instance_close() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 
@@ -424,7 +424,7 @@ mod tests {
     async fn test_instance_with_custom_fuel_limit() {
         let plugin_path = passthrough_plugin_path();
         if !plugin_path.exists() {
-            eprintln!("Skipping test: plugin not built at {:?}", plugin_path);
+            eprintln!("Skipping test: plugin not built at {plugin_path:?}");
             return;
         }
 

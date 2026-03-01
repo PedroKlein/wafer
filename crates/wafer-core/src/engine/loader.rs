@@ -309,7 +309,7 @@ mod tests {
                     "/nonexistent/path/to/component.wasm"
                 );
             }
-            other => panic!("Expected ComponentLoad error, got {:?}", other),
+            other => panic!("Expected ComponentLoad error, got {other:?}"),
         }
     }
 
@@ -404,7 +404,7 @@ mod tests {
             WaferError::ComponentLoad { path, .. } => {
                 assert_eq!(path.to_string_lossy(), "<bytes:test-component>");
             }
-            other => panic!("Expected ComponentLoad error, got {:?}", other),
+            other => panic!("Expected ComponentLoad error, got {other:?}"),
         }
     }
 
