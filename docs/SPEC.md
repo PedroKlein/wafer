@@ -802,6 +802,8 @@ The runtime should include reference implementations for common use cases:
 | ----------------------- | --------- | -------------------------------- | --------------------------------------------- |
 | `mqtt-source`           | Source    | Subscribe to MQTT topics         | broker, topic, qos, client_id                 |
 | `mqtt-sink`             | Sink      | Publish to MQTT topics           | broker, topic, qos, batch_size, batch_timeout |
+| `http-source`           | Source    | HTTP webhook receiver            | bind, path, buffer_size                       |
+| `http-sink`             | Sink      | HTTP POST to endpoint            | url, method, headers, batch_size, batch_timeout |
 | `json-parse`            | Transform | Parse JSON payload to json-value | strict (bool)                                 |
 | `json-serialize`        | Transform | Serialize payload to JSON bytes  | pretty (bool)                                 |
 | `filter`                | Transform | Filter by JSONPath expression    | expression, drop_non_matching                 |

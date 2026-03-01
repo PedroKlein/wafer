@@ -69,7 +69,7 @@ Rationale:
 
 - `Source` trait: Rust async trait in host runtime
 - `Sink` trait: Rust async trait in host runtime  
-- Reference implementations: `FileSource`, `StdinSource`, `FileSink`, `StdoutSink`, `MqttSource`, `MqttSink`
+- Reference implementations: `FileSource`, `StdinSource`, `FileSink`, `StdoutSink`, `MqttSource`, `MqttSink`, `HttpSource`, `HttpSink`
 - WASM components: Only for `Transform`, `Router`, `Joiner` node types
 
 ## Consequences
@@ -79,7 +79,7 @@ Rationale:
 - **Simpler implementation**: No complex WIT interfaces for network proxying
 - **Better performance**: No boundary crossing overhead for I/O operations
 - **Full async support**: Can use idiomatic Rust async/await with tokio
-- **Mature ecosystem**: Direct access to rumqttc, reqwest, sqlx, etc.
+- **Mature ecosystem**: Direct access to rumqttc, reqwest, hyper, sqlx, etc.
 - **Faster development**: MQTT source/sink can be implemented immediately
 
 ### Negative
