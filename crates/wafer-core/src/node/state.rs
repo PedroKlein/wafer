@@ -85,8 +85,8 @@ impl NodeStateTracker {
             1 => NodeState::Running,
             2 => NodeState::Draining,
             3 => NodeState::Retired,
-            4 => NodeState::Error,
-            _ => NodeState::Error, // Defensive: invalid encoding → Error
+            // 4 or any invalid encoding → Error
+            _ => NodeState::Error,
         }
     }
 

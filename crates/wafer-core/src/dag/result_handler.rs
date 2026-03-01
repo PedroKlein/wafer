@@ -39,7 +39,7 @@ pub struct ProcessContext<'a> {
     pub input_port: Option<&'a str>,
 }
 
-impl<'a> ProcessContext<'a> {
+impl ProcessContext<'_> {
     /// Handle a successful emit result.
     ///
     /// Records success metrics, logs the emit, and sends to downstream edges.

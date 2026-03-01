@@ -465,11 +465,9 @@ impl MetricsRegistry {
         let process = system.process(pid);
 
         SystemMetrics {
-            cpu_percent: process.map(Process::cpu_usage).unwrap_or(0.0),
-            memory_rss_bytes: process.map(Process::memory).unwrap_or(0),
-            threads: std::thread::available_parallelism()
-                .map(|p| p.get() as u64)
-                .unwrap_or(1),
+            cpu_percent: process.map_or(0.0, Process::cpu_usage),
+            memory_rss_bytes: process.map_or(0, Process::memory),
+            threads: std::thread::available_parallelism().map_or(1, |p| p.get() as u64),
         }
     }
 
@@ -782,7 +780,7 @@ impl MetricsRegistry {
             "wafer_host_cpu_percent",
             "Process CPU usage percentage",
             base_labels.clone(),
-            system.cpu_percent as f64,
+            f64::from(system.cpu_percent),
         );
 
         snapshot.add_gauge(

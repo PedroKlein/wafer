@@ -373,7 +373,7 @@ impl DagOrchestrator {
 
         for node_id in &self.topo_order {
             let output_senders = self.collect_output_senders(node_id, run_state);
-            let input_receivers = self.collect_input_receivers(node_id, run_state);
+            let input_receivers = Self::collect_input_receivers(node_id, run_state);
 
             if let Some(node_arc) = nodes_snapshot.get(node_id).cloned() {
                 let node_id_owned = node_id.clone();
@@ -423,7 +423,6 @@ impl DagOrchestrator {
 
     /// Collect input receivers for a node from the run state.
     fn collect_input_receivers(
-        &self,
         node_id: &str,
         run_state: &mut RunState,
     ) -> Vec<(String, QueueReceiver<RuntimeEnvelope>)> {
