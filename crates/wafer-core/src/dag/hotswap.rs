@@ -34,7 +34,6 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-
 use crate::engine::{Capabilities, TransformInstance, WaferEngine};
 use crate::error::WaferError;
 use crate::factory::FactoryContext;
@@ -95,10 +94,7 @@ pub enum SwapError {
     /// Failed to load or validate new component
     PrepareError(String),
     /// Drain timed out (swap proceeded anyway)
-    DrainTimeout {
-        node_id: String,
-        timeout_ms: u64,
-    },
+    DrainTimeout { node_id: String, timeout_ms: u64 },
     /// Internal error during swap
     Internal(String),
 }
@@ -114,8 +110,14 @@ impl std::fmt::Display for SwapError {
                 write!(f, "swap already in progress for node '{id}'")
             }
             SwapError::PrepareError(msg) => write!(f, "prepare failed: {msg}"),
-            SwapError::DrainTimeout { node_id, timeout_ms } => {
-                write!(f, "drain timed out for node '{node_id}' after {timeout_ms}ms")
+            SwapError::DrainTimeout {
+                node_id,
+                timeout_ms,
+            } => {
+                write!(
+                    f,
+                    "drain timed out for node '{node_id}' after {timeout_ms}ms"
+                )
             }
             SwapError::Internal(msg) => write!(f, "internal error: {msg}"),
         }

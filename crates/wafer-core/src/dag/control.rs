@@ -23,8 +23,8 @@ impl PipelineControl for DagOrchestrator {
 
         // Check if node is swappable (only transforms are swappable)
         let node_config = self.config.nodes.iter().find(|n| n.id == node_id);
-        let is_transform = node_config
-            .is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
+        let is_transform =
+            node_config.is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
 
         if !is_transform {
             return Err(ControlError::NotSwappable {
@@ -42,11 +42,10 @@ impl PipelineControl for DagOrchestrator {
         })?;
 
         // Reload config to get current path for this node
-        let new_config = crate::config::load_dag_config(config_path).map_err(|e| {
-            ControlError::ConfigError {
+        let new_config =
+            crate::config::load_dag_config(config_path).map_err(|e| ControlError::ConfigError {
                 message: format!("Failed to reload config: {e}"),
-            }
-        })?;
+            })?;
 
         // Find the node's WASM path in the new config
         let node_def = new_config
@@ -59,15 +58,19 @@ impl PipelineControl for DagOrchestrator {
 
         // Extract plugin path from config
         let node_cfg: crate::config::NodeConfig =
-            node_def.config.clone().try_into().map_err(|e| {
-                ControlError::ConfigError {
+            node_def
+                .config
+                .clone()
+                .try_into()
+                .map_err(|e| ControlError::ConfigError {
                     message: format!("Invalid node config for {node_id}: {e}"),
-                }
-            })?;
+                })?;
 
-        let wasm_path = node_cfg.plugin_path.ok_or_else(|| ControlError::ConfigError {
-            message: format!("Node {node_id} has no plugin_path configured"),
-        })?;
+        let wasm_path = node_cfg
+            .plugin_path
+            .ok_or_else(|| ControlError::ConfigError {
+                message: format!("Node {node_id} has no plugin_path configured"),
+            })?;
 
         // Perform the hot-swap using the inherent method
         let metrics = DagOrchestrator::hot_swap(self, node_id, &wasm_path)
@@ -91,14 +94,10 @@ impl PipelineControl for DagOrchestrator {
             // Convert WaferError to ControlError
             match e {
                 crate::error::WaferError::Runtime(msg) if msg.contains("no config path") => {
-                    ControlError::ConfigError {
-                        message: msg,
-                    }
+                    ControlError::ConfigError { message: msg }
                 }
                 crate::error::WaferError::Runtime(msg) if msg.contains("require restart") => {
-                    ControlError::ConfigError {
-                        message: msg,
-                    }
+                    ControlError::ConfigError { message: msg }
                 }
                 crate::error::WaferError::Config(cfg_err) => ControlError::ConfigError {
                     message: cfg_err.to_string(),
@@ -141,7 +140,10 @@ impl PipelineControl for DagOrchestrator {
             name: self.control_state.name.clone(),
             state,
             uptime_secs: self.control_state.uptime_secs(),
-            messages_processed: self.control_state.messages_processed.load(Ordering::Relaxed),
+            messages_processed: self
+                .control_state
+                .messages_processed
+                .load(Ordering::Relaxed),
             messages_failed: self.control_state.messages_failed.load(Ordering::Relaxed),
             node_count: self.node_indices.len(),
             swap_in_progress: false,
@@ -198,15 +200,17 @@ impl PipelineControl for DagOrchestrator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DagConfig, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig};
     use crate::config::NodeType as ConfigNodeType;
+    use crate::config::{
+        DagConfig, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig,
+    };
     use crate::dag::orchestrator::ControlState;
     use crate::registry::RegistryConfig;
+    use petgraph::graph::DiGraph;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
-    use petgraph::graph::DiGraph;
 
     /// Creates a minimal DagOrchestrator for testing without needing actual nodes.
     fn create_test_orchestrator() -> DagOrchestrator {
@@ -233,7 +237,10 @@ mod tests {
                     sink_type: None,
                     config: toml::Value::Table({
                         let mut map = toml::map::Map::new();
-                        map.insert("plugin_path".to_string(), toml::Value::String("test.wasm".to_string()));
+                        map.insert(
+                            "plugin_path".to_string(),
+                            toml::Value::String("test.wasm".to_string()),
+                        );
                         map
                     }),
                 },
@@ -282,7 +289,11 @@ mod tests {
             }
         }
 
-        let topo_order = vec!["source".to_string(), "transform".to_string(), "sink".to_string()];
+        let topo_order = vec![
+            "source".to_string(),
+            "transform".to_string(),
+            "sink".to_string(),
+        ];
         let control_state = Arc::new(ControlState::new("test-pipeline".to_string()));
 
         DagOrchestrator {
@@ -313,7 +324,7 @@ mod tests {
     #[test]
     fn test_status_shows_draining_when_cancelled() {
         let orchestrator = create_test_orchestrator();
-        
+
         // Initially not draining
         let status = orchestrator.status();
         assert_ne!(status.state, PipelineState::Draining);
@@ -470,10 +481,10 @@ mod tests {
     fn test_uptime_increases() {
         let orchestrator = create_test_orchestrator();
         let status1 = orchestrator.status();
-        
+
         // Sleep briefly to let uptime increase
         std::thread::sleep(std::time::Duration::from_millis(10));
-        
+
         let status2 = orchestrator.status();
         // uptime_secs is in seconds, so may not increase in 10ms
         // but it should at least not decrease
@@ -484,14 +495,14 @@ mod tests {
     fn test_arc_pipeline_control_delegation() {
         // Test that Arc<DagOrchestrator> also implements PipelineControl
         let orchestrator = Arc::new(create_test_orchestrator());
-        
+
         // These should compile and work via the Arc impl
         let status = orchestrator.status();
         assert_eq!(status.name, "test-pipeline");
-        
+
         let nodes = orchestrator.nodes();
         assert_eq!(nodes.len(), 3);
-        
+
         let _receiver = orchestrator.subscribe();
     }
 }

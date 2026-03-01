@@ -12,11 +12,11 @@
 //!
 //! # Module Organization
 //!
-//! - [`orchestrator`]: Core struct, `run()`, and public API
-//! - [`builder`]: Construction from config (`from_config`) and validation
-//! - [`runner`]: Node execution loops (source, transform, sink)
-//! - [`hotswap`]: Hot-swap coordinator for live WASM node replacement
-//! - [`routing`]: Message routing control for hot-swap buffering
+//! - `orchestrator`: Core struct, `run()`, and public API
+//! - `builder`: Construction from config (`from_config`) and validation
+//! - `runner`: Node execution loops (source, transform, sink)
+//! - `hotswap`: Hot-swap coordinator for live WASM node replacement
+//! - `routing`: Message routing control for hot-swap buffering
 //!
 //! # Example
 //!

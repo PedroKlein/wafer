@@ -106,13 +106,11 @@ impl WaferRegistry {
 
         // Check cache first (unless no_cache is set)
         if !self.config.no_cache {
-            if let Some(entry) = self.cache.get(&oci_ref.registry, &oci_ref.repository, &cache_key)
+            if let Some(entry) = self
+                .cache
+                .get(&oci_ref.registry, &oci_ref.repository, &cache_key)
             {
-                tracing::info!(
-                    "Using cached {} (age: {:?})",
-                    oci_ref.as_str(),
-                    entry.age
-                );
+                tracing::info!("Using cached {} (age: {:?})", oci_ref.as_str(), entry.age);
 
                 let content = std::fs::read(&entry.path).map_err(|e| {
                     RegistryError::Cache(format!("failed to read cached file: {e}"))

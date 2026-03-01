@@ -554,8 +554,12 @@ impl DagOrchestrator {
                         #[cfg(feature = "http-api")]
                         {
                             control_state.metrics_registry.record_message();
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
@@ -592,8 +596,12 @@ impl DagOrchestrator {
                         // Record invocation for filtered messages too
                         #[cfg(feature = "http-api")]
                         {
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                     }
                     Ok(ProcessResult::Error(e)) => {
@@ -610,7 +618,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route to DLQ if configured
@@ -632,7 +642,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route runtime errors to DLQ as well
@@ -697,7 +709,9 @@ impl DagOrchestrator {
 
         // Set up batch flush timer if batching is enabled
         // Use a very long interval (1 year) as "disabled" since we can't conditionally include the arm
-        let flush_interval_duration = sink.batch_timeout().unwrap_or(Duration::from_secs(365 * 24 * 60 * 60));
+        let flush_interval_duration = sink
+            .batch_timeout()
+            .unwrap_or(Duration::from_secs(365 * 24 * 60 * 60));
         let batching_enabled = sink.batch_timeout().is_some();
         let mut flush_timer = interval(flush_interval_duration);
         flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -749,9 +763,13 @@ impl DagOrchestrator {
                     #[cfg(feature = "http-api")]
                     if let Some(stats) = sink.take_batch_stats() {
                         for _ in 0..stats.flushes_since_last_check {
-                            control_state.metrics_registry.record_sink_batch_flush(node_id, stats.last_flush_size);
+                            control_state
+                                .metrics_registry
+                                .record_sink_batch_flush(node_id, stats.last_flush_size);
                         }
-                        control_state.metrics_registry.set_sink_buffer_size(node_id, stats.current_buffer_size);
+                        control_state
+                            .metrics_registry
+                            .set_sink_buffer_size(node_id, stats.current_buffer_size);
                     }
                 }
                 SinkAction::ProcessMessage(envelope) => {
@@ -782,7 +800,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
                     } else {
                         let duration_ns = start.elapsed().as_nanos() as u64;
@@ -797,17 +817,25 @@ impl DagOrchestrator {
                         #[cfg(feature = "http-api")]
                         {
                             control_state.metrics_registry.record_message();
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
 
                         // Record batch metrics after collect (batch may have flushed)
                         #[cfg(feature = "http-api")]
                         if let Some(stats) = sink.take_batch_stats() {
                             for _ in 0..stats.flushes_since_last_check {
-                                control_state.metrics_registry.record_sink_batch_flush(node_id, stats.last_flush_size);
+                                control_state
+                                    .metrics_registry
+                                    .record_sink_batch_flush(node_id, stats.last_flush_size);
                             }
-                            control_state.metrics_registry.set_sink_buffer_size(node_id, stats.current_buffer_size);
+                            control_state
+                                .metrics_registry
+                                .set_sink_buffer_size(node_id, stats.current_buffer_size);
                         }
                     }
                     let _ = control_state; // suppress unused warning when http-api disabled
@@ -891,8 +919,12 @@ impl DagOrchestrator {
                         #[cfg(feature = "http-api")]
                         {
                             control_state.metrics_registry.record_message();
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
@@ -921,8 +953,12 @@ impl DagOrchestrator {
                         // Record invocation for filtered messages
                         #[cfg(feature = "http-api")]
                         {
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                     }
                     Ok(RouteResult::Error(e)) => {
@@ -939,7 +975,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route to DLQ if configured
@@ -961,7 +999,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route runtime errors to DLQ as well
@@ -1013,7 +1053,9 @@ impl DagOrchestrator {
         use std::pin::Pin;
         tracing::info!("Joiner loop started");
 
-        let streams: Vec<Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>> = input_receivers
+        let streams: Vec<
+            Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>,
+        > = input_receivers
             .into_iter()
             .map(|(port_name, receiver)| {
                 let stream = futures_util::stream::unfold(
@@ -1024,7 +1066,8 @@ impl DagOrchestrator {
                             .map(|env| ((port_name.clone(), env), (port_name, rx)))
                     },
                 );
-                Box::pin(stream) as Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>
+                Box::pin(stream)
+                    as Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>
             })
             .collect();
 
@@ -1071,8 +1114,12 @@ impl DagOrchestrator {
                         #[cfg(feature = "http-api")]
                         {
                             control_state.metrics_registry.record_message();
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                         let _ = control_state; // suppress unused warning when http-api disabled
 
@@ -1110,8 +1157,12 @@ impl DagOrchestrator {
                         // Record invocation for filtered messages
                         #[cfg(feature = "http-api")]
                         {
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
-                            control_state.metrics_registry.record_process_time(duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_process_time(duration_ns);
                         }
                     }
                     Ok(ProcessResult::Error(e)) => {
@@ -1129,7 +1180,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route to DLQ if configured
@@ -1151,7 +1204,9 @@ impl DagOrchestrator {
                         {
                             control_state.metrics_registry.record_error();
                             control_state.metrics_registry.record_node_error(node_id);
-                            control_state.metrics_registry.record_node_invocation(node_id, duration_ns);
+                            control_state
+                                .metrics_registry
+                                .record_node_invocation(node_id, duration_ns);
                         }
 
                         // Route runtime errors to DLQ as well
@@ -1279,16 +1334,22 @@ mod tests {
             &control_state,
         )
         .await;
-        assert!(result, "Send with drop policy should return true even when dropped");
+        assert!(
+            result,
+            "Send with drop policy should return true even when dropped"
+        );
 
         // Only the first message should be in the queue
         let received = receiver.recv().await.expect("Should receive first message");
         assert_eq!(received.id, env1.id);
 
         // Queue should now be empty (second message was dropped)
-        let second = tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv())
-            .await;
-        assert!(second.is_err(), "No second message should be in queue (it was dropped)");
+        let second =
+            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await;
+        assert!(
+            second.is_err(),
+            "No second message should be in queue (it was dropped)"
+        );
     }
 
     #[tokio::test]
@@ -1336,17 +1397,17 @@ mod tests {
             .recv()
             .await
             .expect("Should receive DLQ message");
-        assert_eq!(dlq_msg.source, "dlq", "DLQ message should have source 'dlq'");
+        assert_eq!(
+            dlq_msg.source, "dlq",
+            "DLQ message should have source 'dlq'"
+        );
 
         // Parse the DLQ envelope from the payload
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
         assert_eq!(dlq_envelope.original.id, env2_id);
         assert_eq!(dlq_envelope.reason, crate::dlq::DlqReason::QueueFull);
-        assert_eq!(
-            dlq_envelope.failed_edge,
-            "test:default->downstream:default"
-        );
+        assert_eq!(dlq_envelope.failed_edge, "test:default->downstream:default");
     }
 
     #[tokio::test]
@@ -1420,7 +1481,10 @@ mod tests {
                 assert_eq!(code, "VALIDATION_ERROR");
                 assert_eq!(message, "Invalid payload format");
             }
-            _ => panic!("Expected ProcessError reason, got {:?}", dlq_envelope.reason),
+            _ => panic!(
+                "Expected ProcessError reason, got {:?}",
+                dlq_envelope.reason
+            ),
         }
     }
 
@@ -1500,7 +1564,10 @@ mod tests {
         .await;
 
         // Retrieve and verify original message is preserved
-        let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
+        let dlq_msg = dlq_receiver
+            .recv()
+            .await
+            .expect("Should receive DLQ message");
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
 
@@ -1545,8 +1612,8 @@ mod tests {
 
     use crate::error::Result as WaferResult;
     use crate::node::Lifecycle;
-    use std::pin::Pin;
     use std::future::Future;
+    use std::pin::Pin;
 
     /// A mock sink that tracks flush calls for testing
     struct MockBatchingSink {
@@ -1596,12 +1663,14 @@ mod tests {
             &mut self,
             _envelope: RuntimeEnvelope,
         ) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
-            self.collected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.collected
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         }
 
         fn flush(&mut self) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
-            self.flushed.store(true, std::sync::atomic::Ordering::SeqCst);
+            self.flushed
+                .store(true, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         }
 
@@ -1639,7 +1708,10 @@ mod tests {
         .await;
 
         // Verify flush was called during shutdown
-        assert!(sink.was_flushed(), "Sink should have been flushed before shutdown");
+        assert!(
+            sink.was_flushed(),
+            "Sink should have been flushed before shutdown"
+        );
     }
 
     #[tokio::test]
@@ -1683,6 +1755,9 @@ mod tests {
         let sink = sink_handle.await.expect("Sink loop should complete");
 
         // Verify flush was called during shutdown
-        assert!(sink.was_flushed(), "Sink should have been flushed on cancellation");
+        assert!(
+            sink.was_flushed(),
+            "Sink should have been flushed on cancellation"
+        );
     }
 }

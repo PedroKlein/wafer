@@ -138,7 +138,10 @@ impl MqttSink {
                 .publish(&self.topic, self.qos, false, envelope.payload)
                 .await
                 .map_err(|e| {
-                    WaferError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                    WaferError::Io(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e.to_string(),
+                    ))
                 })?;
         }
 
@@ -190,8 +193,7 @@ impl Lifecycle for MqttSink {
 
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let mut mqtt_options =
-                MqttOptions::new(&self.client_id, &self.broker, self.port);
+            let mut mqtt_options = MqttOptions::new(&self.client_id, &self.broker, self.port);
             mqtt_options.set_keep_alive(Duration::from_secs(30));
 
             let (client, eventloop) = AsyncClient::new(mqtt_options, 10);
@@ -203,9 +205,8 @@ impl Lifecycle for MqttSink {
 
             // Initialize batch buffer if batching is enabled
             if let Some(batch_size) = self.batch_config.batch_size {
-                let timeout = Duration::from_millis(
-                    self.batch_config.batch_timeout_ms.unwrap_or(1000),
-                );
+                let timeout =
+                    Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000));
                 self.batch_buffer = Some(BatchBuffer::new(batch_size, timeout));
             }
 
@@ -287,7 +288,10 @@ impl Sink for MqttSink {
                     .publish(&self.topic, self.qos, false, envelope.payload)
                     .await
                     .map_err(|e| {
-                        WaferError::Io(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                        WaferError::Io(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            e.to_string(),
+                        ))
                     })?;
 
                 Ok(())
@@ -310,9 +314,9 @@ impl Sink for MqttSink {
 
     fn batch_timeout(&self) -> Option<Duration> {
         // Return the configured timeout if batching is enabled
-        self.batch_config.batch_size.map(|_| {
-            Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000))
-        })
+        self.batch_config
+            .batch_size
+            .map(|_| Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000)))
     }
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
@@ -342,7 +346,14 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_creation() {
-        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
+        let sink = MqttSink::new(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+        );
 
         assert_eq!(sink.id(), "test-sink");
         assert_eq!(sink.node_type(), "sink/mqtt");
@@ -388,13 +399,27 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_validate_success() {
-        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
+        let sink = MqttSink::new(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+        );
         assert!(sink.validate().is_ok());
     }
 
     #[tokio::test]
     async fn test_mqtt_sink_collect_before_init() {
-        let mut sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
+        let mut sink = MqttSink::new(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+        );
         let env = RuntimeEnvelope::from_string("test", "data");
 
         let result = sink.collect(env).await;
@@ -442,7 +467,14 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_batch_timeout_none_without_batching() {
-        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
+        let sink = MqttSink::new(
+            "test-sink",
+            "localhost",
+            1883,
+            "test/topic",
+            1,
+            "test-client",
+        );
         assert_eq!(sink.batch_timeout(), None);
     }
 

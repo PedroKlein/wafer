@@ -205,7 +205,10 @@ to = "sink"
 
         let config = load_config(file.path()).await.unwrap();
         assert_eq!(config.pipeline.name, "test-pipeline");
-        assert_eq!(config.pipeline.description, Some("A test pipeline".to_string()));
+        assert_eq!(
+            config.pipeline.description,
+            Some("A test pipeline".to_string())
+        );
         assert!(config.api.enabled);
         assert_eq!(config.api.bind, "127.0.0.1:8080".parse().unwrap());
         assert!(config.metrics.enabled);
@@ -424,7 +427,7 @@ to = "sink"
 
         let config = load_dag_config(file.path()).unwrap();
         assert_eq!(config.nodes.len(), 3);
-        
+
         let transform = config.nodes.iter().find(|n| n.id == "transform").unwrap();
         let plugin_path = transform.config.get("plugin_path").unwrap();
         assert_eq!(plugin_path.as_str(), Some("plugins/uppercase.wasm"));

@@ -102,8 +102,7 @@ impl FactoryContext {
     ///
     /// Returns `WaferError::Registry` if the registry client fails to initialize.
     pub fn new(registry_config: RegistryConfig) -> Result<Self> {
-        let registry =
-            WaferRegistry::new(registry_config).map_err(WaferError::Registry)?;
+        let registry = WaferRegistry::new(registry_config).map_err(WaferError::Registry)?;
 
         Ok(Self {
             epoch_tickers: Vec::new(),
@@ -249,12 +248,16 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
 async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
-            WaferError::Config(ConfigError::Message(format!(
-                "failed to parse transform '{}' config: {}",
-                node_def.id, e
-            )))
-        })?;
+        node_def
+            .config
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "failed to parse transform '{}' config: {}",
+                    node_def.id, e
+                )))
+            })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -285,12 +288,16 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -
 async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
-            WaferError::Config(ConfigError::Message(format!(
-                "failed to parse router '{}' config: {}",
-                node_def.id, e
-            )))
-        })?;
+        node_def
+            .config
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "failed to parse router '{}' config: {}",
+                    node_def.id, e
+                )))
+            })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -320,12 +327,16 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> R
 async fn create_joiner(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
-            WaferError::Config(ConfigError::Message(format!(
-                "failed to parse joiner '{}' config: {}",
-                node_def.id, e
-            )))
-        })?;
+        node_def
+            .config
+            .clone()
+            .try_into()
+            .map_err(|e: toml::de::Error| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "failed to parse joiner '{}' config: {}",
+                    node_def.id, e
+                )))
+            })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -376,9 +387,7 @@ async fn resolve_and_load_plugin(
     ctx: &mut FactoryContext,
 ) -> Result<wasmtime::component::Component> {
     // Get the plugin source from config
-    let source = plugin_config
-        .plugin_source()
-        .map_err(WaferError::Config)?;
+    let source = plugin_config.plugin_source().map_err(WaferError::Config)?;
 
     // Resolve the plugin (validates local paths, fetches remote packages)
     let resolved = ctx

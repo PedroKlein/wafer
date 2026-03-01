@@ -189,11 +189,12 @@ impl Lifecycle for MqttSource {
             let (client, eventloop) = AsyncClient::new(options, 10);
 
             let qos = Self::map_qos(self.qos);
-            client.subscribe(&self.topic, qos).await.map_err(|e| {
-                WaferError::PluginInit {
+            client
+                .subscribe(&self.topic, qos)
+                .await
+                .map_err(|e| WaferError::PluginInit {
                     message: format!("Failed to subscribe to MQTT topic '{}': {}", self.topic, e),
-                }
-            })?;
+                })?;
 
             let (tx, rx) = mpsc::channel(100);
             let handle = spawn_eventloop_task(eventloop, tx, self.id.clone());
@@ -225,9 +226,12 @@ impl Source for MqttSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let rx = self.message_rx.as_mut().ok_or_else(|| WaferError::PluginInit {
-                message: "MqttSource not initialized - call init() first".into(),
-            })?;
+            let rx = self
+                .message_rx
+                .as_mut()
+                .ok_or_else(|| WaferError::PluginInit {
+                    message: "MqttSource not initialized - call init() first".into(),
+                })?;
 
             match rx.recv().await {
                 Some(publish) => {

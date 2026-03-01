@@ -44,7 +44,10 @@ pub struct RoutingController {
 impl RoutingController {
     /// Create a new routing controller.
     #[must_use]
-    pub fn new(sender: QueueSender<RuntimeEnvelope>, downstream_tracker: Arc<NodeStateTracker>) -> Self {
+    pub fn new(
+        sender: QueueSender<RuntimeEnvelope>,
+        downstream_tracker: Arc<NodeStateTracker>,
+    ) -> Self {
         Self {
             sender,
             downstream_tracker,
@@ -192,7 +195,7 @@ mod tests {
         let controller = RoutingController::new(tx, tracker);
 
         controller.send(make_envelope("1")).await.unwrap();
-        
+
         let received = rx.recv().await.unwrap();
         assert_eq!(received.id, "1");
     }
@@ -203,7 +206,7 @@ mod tests {
         let (tx, _rx) = queue.split();
         let tracker = Arc::new(NodeStateTracker::running());
         tracker.disable_routing();
-        
+
         let controller = RoutingController::new(tx, tracker);
         controller.send(make_envelope("1")).await.unwrap();
         controller.send(make_envelope("2")).await.unwrap();
@@ -217,7 +220,7 @@ mod tests {
         let (tx, mut rx) = queue.split();
         let tracker = Arc::new(NodeStateTracker::running());
         tracker.disable_routing();
-        
+
         let controller = RoutingController::new(tx, tracker.clone());
         controller.send(make_envelope("1")).await.unwrap();
         controller.send(make_envelope("2")).await.unwrap();
@@ -240,12 +243,12 @@ mod tests {
         let (tx, _rx) = queue.split();
         let tracker = Arc::new(NodeStateTracker::running());
         tracker.disable_routing();
-        
+
         let controller = RoutingController::with_capacity(tx, tracker, 2);
-        
+
         controller.send(make_envelope("1")).await.unwrap();
         controller.send(make_envelope("2")).await.unwrap();
-        
+
         // Third message should fail - buffer full
         let result = controller.send(make_envelope("3")).await;
         assert_eq!(result, Err(SendError::BufferFull));
@@ -257,7 +260,7 @@ mod tests {
         let (tx, _rx) = queue.split();
         let tracker = Arc::new(NodeStateTracker::running());
         tracker.disable_routing();
-        
+
         let controller = RoutingController::new(tx, tracker);
         controller.send(make_envelope("1")).await.unwrap();
         controller.send(make_envelope("2")).await.unwrap();
@@ -266,7 +269,7 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].id, "1");
         assert_eq!(messages[1].id, "2");
-        
+
         // Buffer should be empty now
         assert_eq!(controller.buffer_len().await, 0);
     }

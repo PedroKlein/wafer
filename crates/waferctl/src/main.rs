@@ -152,8 +152,9 @@ fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> error:
             }
         }
         None => config.get_default_endpoint().ok_or_else(|| {
-            CliError::user(anyhow::anyhow!("No default endpoint configured"))
-                .with_hint("Use --endpoint <url> or run 'waferctl config set-endpoint <name> <url>'")
+            CliError::user(anyhow::anyhow!("No default endpoint configured")).with_hint(
+                "Use --endpoint <url> or run 'waferctl config set-endpoint <name> <url>'",
+            )
         }),
     }
 }
@@ -176,11 +177,10 @@ fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()>
         }
         ConfigAction::Use { name } => {
             if !config.has_endpoint(name) {
-                return Err(CliError::user(anyhow::anyhow!(
-                    "Endpoint '{}' not found",
-                    name
-                ))
-                .with_hint("Run 'waferctl config list' to see available endpoints."));
+                return Err(
+                    CliError::user(anyhow::anyhow!("Endpoint '{}' not found", name))
+                        .with_hint("Run 'waferctl config list' to see available endpoints."),
+                );
             }
             config.set_default(name);
             config.save().user_err()?;
@@ -195,10 +195,7 @@ fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()>
         }
         ConfigAction::List => {
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&config).user_err()?
-                );
+                println!("{}", serde_json::to_string_pretty(&config).user_err()?);
             } else {
                 output::print_config(&config);
             }
@@ -405,10 +402,17 @@ mod tests {
     #[test]
     fn test_cli_parses_config_set_endpoint() {
         let cli = Cli::try_parse_from([
-            "waferctl", "config", "set-endpoint", "prod", "http://prod:9090"
-        ]).unwrap();
+            "waferctl",
+            "config",
+            "set-endpoint",
+            "prod",
+            "http://prod:9090",
+        ])
+        .unwrap();
         match cli.command {
-            Commands::Config { action: ConfigAction::SetEndpoint { name, url } } => {
+            Commands::Config {
+                action: ConfigAction::SetEndpoint { name, url },
+            } => {
                 assert_eq!(name, "prod");
                 assert_eq!(url, "http://prod:9090");
             }
@@ -420,7 +424,9 @@ mod tests {
     fn test_cli_parses_config_use() {
         let cli = Cli::try_parse_from(["waferctl", "config", "use", "staging"]).unwrap();
         match cli.command {
-            Commands::Config { action: ConfigAction::Use { name } } => {
+            Commands::Config {
+                action: ConfigAction::Use { name },
+            } => {
                 assert_eq!(name, "staging");
             }
             _ => panic!("Expected Config Use command"),
@@ -432,7 +438,9 @@ mod tests {
         let cli = Cli::try_parse_from(["waferctl", "config", "list"]).unwrap();
         assert!(matches!(
             cli.command,
-            Commands::Config { action: ConfigAction::List }
+            Commands::Config {
+                action: ConfigAction::List
+            }
         ));
     }
 
@@ -444,25 +452,29 @@ mod tests {
 
     #[test]
     fn test_cli_global_endpoint_flag() {
-        let cli = Cli::try_parse_from([
-            "waferctl", "--endpoint", "http://localhost:8080", "status"
-        ]).unwrap();
+        let cli =
+            Cli::try_parse_from(["waferctl", "--endpoint", "http://localhost:8080", "status"])
+                .unwrap();
         assert_eq!(cli.endpoint, Some("http://localhost:8080".to_string()));
     }
 
     #[test]
     fn test_cli_short_endpoint_flag() {
-        let cli = Cli::try_parse_from([
-            "waferctl", "-e", "prod", "health"
-        ]).unwrap();
+        let cli = Cli::try_parse_from(["waferctl", "-e", "prod", "health"]).unwrap();
         assert_eq!(cli.endpoint, Some("prod".to_string()));
     }
 
     #[test]
     fn test_cli_combined_flags() {
         let cli = Cli::try_parse_from([
-            "waferctl", "--json", "-e", "http://localhost:9090", "nodes", "--wide"
-        ]).unwrap();
+            "waferctl",
+            "--json",
+            "-e",
+            "http://localhost:9090",
+            "nodes",
+            "--wide",
+        ])
+        .unwrap();
         assert!(cli.json);
         assert_eq!(cli.endpoint, Some("http://localhost:9090".to_string()));
         assert!(matches!(cli.command, Commands::Nodes { wide: true }));

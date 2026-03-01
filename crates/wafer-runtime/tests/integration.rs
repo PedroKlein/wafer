@@ -147,9 +147,8 @@ async fn test_api_server_starts_and_serves_health() {
     // Spawn server in background
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_signal = shutdown.clone().cancelled_owned();
-    let server_handle = tokio::spawn(async move {
-        server.run_with_shutdown(shutdown_signal).await
-    });
+    let server_handle =
+        tokio::spawn(async move { server.run_with_shutdown(shutdown_signal).await });
 
     // Give server time to start
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -195,18 +194,28 @@ async fn test_api_server_starts_and_serves_health() {
     assert!(resp.status().is_success());
 
     // Verify Content-Type header indicates Prometheus format
-    let content_type = resp.headers().get("content-type")
+    let content_type = resp
+        .headers()
+        .get("content-type")
         .expect("Missing content-type header");
     let content_type_str = content_type.to_str().unwrap();
     assert!(
-        content_type_str.contains("text/plain") || content_type_str.contains("text/plain; charset=utf-8"),
-        "Expected text/plain content type, got: {}", content_type_str
+        content_type_str.contains("text/plain")
+            || content_type_str.contains("text/plain; charset=utf-8"),
+        "Expected text/plain content type, got: {}",
+        content_type_str
     );
 
     let body = resp.text().await.unwrap();
     // Verify basic Prometheus format markers
-    assert!(body.contains("wafer_messages_total"), "Missing wafer_messages_total metric");
-    assert!(body.contains("# TYPE") || body.contains("# HELP"), "Missing Prometheus metadata comments");
+    assert!(
+        body.contains("wafer_messages_total"),
+        "Missing wafer_messages_total metric"
+    );
+    assert!(
+        body.contains("# TYPE") || body.contains("# HELP"),
+        "Missing Prometheus metadata comments"
+    );
 
     // Shutdown
     shutdown.cancel();
@@ -247,13 +256,10 @@ async fn test_separate_metrics_server() {
     let shutdown1 = shutdown.clone().cancelled_owned();
     let shutdown2 = shutdown.clone().cancelled_owned();
 
-    let api_handle = tokio::spawn(async move {
-        api_server.run_with_shutdown(shutdown1).await
-    });
+    let api_handle = tokio::spawn(async move { api_server.run_with_shutdown(shutdown1).await });
 
-    let metrics_handle = tokio::spawn(async move {
-        metrics_server.run_with_shutdown(shutdown2).await
-    });
+    let metrics_handle =
+        tokio::spawn(async move { metrics_server.run_with_shutdown(shutdown2).await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -301,9 +307,8 @@ async fn test_drain_endpoint_calls_controller() {
 
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_signal = shutdown.clone().cancelled_owned();
-    let server_handle = tokio::spawn(async move {
-        server.run_with_shutdown(shutdown_signal).await
-    });
+    let server_handle =
+        tokio::spawn(async move { server.run_with_shutdown(shutdown_signal).await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -342,9 +347,8 @@ async fn test_shutdown_endpoint_calls_controller() {
 
     let shutdown = tokio_util::sync::CancellationToken::new();
     let shutdown_signal = shutdown.clone().cancelled_owned();
-    let server_handle = tokio::spawn(async move {
-        server.run_with_shutdown(shutdown_signal).await
-    });
+    let server_handle =
+        tokio::spawn(async move { server.run_with_shutdown(shutdown_signal).await });
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -384,8 +388,8 @@ mod json_log_format {
     /// - `span`: object with span fields (pipeline, node_id, etc.)
     /// - `fields`: additional structured key-value pairs
     fn validate_json_log_structure(json_str: &str) -> Result<(), String> {
-        let log: Value = serde_json::from_str(json_str)
-            .map_err(|e| format!("Failed to parse JSON: {e}"))?;
+        let log: Value =
+            serde_json::from_str(json_str).map_err(|e| format!("Failed to parse JSON: {e}"))?;
 
         // Required fields
         let obj = log.as_object().ok_or("Log entry must be an object")?;
@@ -394,7 +398,9 @@ mod json_log_format {
         if !obj.contains_key("timestamp") {
             return Err("Missing 'timestamp' field".to_string());
         }
-        let timestamp = obj["timestamp"].as_str().ok_or("timestamp must be a string")?;
+        let timestamp = obj["timestamp"]
+            .as_str()
+            .ok_or("timestamp must be a string")?;
         // Validate RFC 3339 format (basic check for format like "2024-01-15T10:30:00.123456789Z")
         if !timestamp.contains('T') || (!timestamp.ends_with('Z') && !timestamp.contains('+')) {
             return Err(format!("timestamp not in RFC 3339 format: {timestamp}"));
@@ -451,7 +457,10 @@ mod json_log_format {
         for (i, log_str) in example_logs.iter().enumerate() {
             match validate_json_log_structure(log_str) {
                 Ok(()) => {}
-                Err(e) => panic!("Log example {} failed validation: {}\nLog: {}", i, e, log_str),
+                Err(e) => panic!(
+                    "Log example {} failed validation: {}\nLog: {}",
+                    i, e, log_str
+                ),
             }
         }
     }
@@ -480,8 +489,8 @@ mod json_log_format {
             "message": "Transform emitted"
         }"#;
 
-        let log: Value = serde_json::from_str(processing_log)
-            .expect("Failed to parse processing log");
+        let log: Value =
+            serde_json::from_str(processing_log).expect("Failed to parse processing log");
 
         // Validate span fields
         let span = log.get("span").expect("Missing span");
@@ -492,13 +501,28 @@ mod json_log_format {
         let fields = log.get("fields").expect("Missing fields");
         assert!(fields.get("message_id").is_some(), "Missing message_id");
         assert!(fields.get("duration_ns").is_some(), "Missing duration_ns");
-        assert!(fields.get("input_size_bytes").is_some(), "Missing input_size_bytes");
-        assert!(fields.get("output_size_bytes").is_some(), "Missing output_size_bytes");
+        assert!(
+            fields.get("input_size_bytes").is_some(),
+            "Missing input_size_bytes"
+        );
+        assert!(
+            fields.get("output_size_bytes").is_some(),
+            "Missing output_size_bytes"
+        );
 
         // Validate field types
-        assert!(fields["duration_ns"].is_number(), "duration_ns should be a number");
-        assert!(fields["input_size_bytes"].is_number(), "input_size_bytes should be a number");
-        assert!(fields["output_size_bytes"].is_number(), "output_size_bytes should be a number");
+        assert!(
+            fields["duration_ns"].is_number(),
+            "duration_ns should be a number"
+        );
+        assert!(
+            fields["input_size_bytes"].is_number(),
+            "input_size_bytes should be a number"
+        );
+        assert!(
+            fields["output_size_bytes"].is_number(),
+            "output_size_bytes should be a number"
+        );
     }
 
     /// Test that JSON logs can be parsed by jq.
@@ -516,8 +540,7 @@ mod json_log_format {
         // Simulate jq operations
         let mut parsed_logs: Vec<Value> = Vec::new();
         for line in &log_lines {
-            let log: Value = serde_json::from_str(line)
-                .expect("Each line should be valid JSON");
+            let log: Value = serde_json::from_str(line).expect("Each line should be valid JSON");
             parsed_logs.push(log);
         }
 
@@ -532,7 +555,11 @@ mod json_log_format {
         // jq: .span.node_id
         let node_ids: Vec<Option<&str>> = parsed_logs
             .iter()
-            .map(|l| l.get("span").and_then(|s| s.get("node_id")).and_then(|n| n.as_str()))
+            .map(|l| {
+                l.get("span")
+                    .and_then(|s| s.get("node_id"))
+                    .and_then(|n| n.as_str())
+            })
             .collect();
         assert!(node_ids.iter().any(|id| id == &Some("n1")));
 

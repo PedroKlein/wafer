@@ -280,45 +280,41 @@ fn bench_transform_throughput(c: &mut Criterion) {
         for count in [100, 1000] {
             group.throughput(Throughput::Elements(count as u64));
 
-            group.bench_with_input(
-                BenchmarkId::new("uppercase", count),
-                &count,
-                |b, &count| {
-                    b.iter_custom(|iters| {
-                        let mut total = Duration::ZERO;
+            group.bench_with_input(BenchmarkId::new("uppercase", count), &count, |b, &count| {
+                b.iter_custom(|iters| {
+                    let mut total = Duration::ZERO;
 
-                        for _ in 0..iters {
-                            let mut instance = rt.block_on(async {
-                                TransformInstance::new(
-                                    &engine,
-                                    &uppercase_component,
-                                    Capabilities::default(),
-                                )
-                                .await
-                                .expect("Failed to instantiate")
-                            });
+                    for _ in 0..iters {
+                        let mut instance = rt.block_on(async {
+                            TransformInstance::new(
+                                &engine,
+                                &uppercase_component,
+                                Capabilities::default(),
+                            )
+                            .await
+                            .expect("Failed to instantiate")
+                        });
 
-                            let envelope = create_test_envelope(256);
-                            let wit_env = to_wit_envelope(&envelope);
+                        let envelope = create_test_envelope(256);
+                        let wit_env = to_wit_envelope(&envelope);
 
-                            let elapsed = rt.block_on(async {
-                                let start = Instant::now();
+                        let elapsed = rt.block_on(async {
+                            let start = Instant::now();
 
-                                for _ in 0..count {
-                                    let result = instance.call_process(&wit_env).await;
-                                    let _ = black_box(result);
-                                }
+                            for _ in 0..count {
+                                let result = instance.call_process(&wit_env).await;
+                                let _ = black_box(result);
+                            }
 
-                                start.elapsed()
-                            });
+                            start.elapsed()
+                        });
 
-                            total += elapsed;
-                        }
+                        total += elapsed;
+                    }
 
-                        total
-                    })
-                },
-            );
+                    total
+                })
+            });
         }
     }
 

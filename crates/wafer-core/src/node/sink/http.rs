@@ -212,7 +212,10 @@ impl HttpSink {
         if !response.status().is_success() {
             return Err(WaferError::Io(std::io::Error::new(
                 std::io::ErrorKind::Other,
-                format!("HTTP batch request failed with status: {}", response.status()),
+                format!(
+                    "HTTP batch request failed with status: {}",
+                    response.status()
+                ),
             )));
         }
 
@@ -272,9 +275,8 @@ impl Lifecycle for HttpSink {
 
             // Initialize batch buffer if batching is enabled
             if let Some(batch_size) = self.batch_config.batch_size {
-                let timeout = Duration::from_millis(
-                    self.batch_config.batch_timeout_ms.unwrap_or(1000),
-                );
+                let timeout =
+                    Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000));
                 self.batch_buffer = Some(BatchBuffer::new(batch_size, timeout));
             }
 
@@ -343,9 +345,9 @@ impl Sink for HttpSink {
 
     fn batch_timeout(&self) -> Option<Duration> {
         // Return the configured timeout if batching is enabled
-        self.batch_config.batch_size.map(|_| {
-            Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000))
-        })
+        self.batch_config
+            .batch_size
+            .map(|_| Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000)))
     }
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
@@ -461,7 +463,10 @@ mod tests {
             .with_header("X-Custom", "value");
 
         assert_eq!(sink.headers.len(), 2);
-        assert_eq!(sink.headers[0], ("Authorization".to_string(), "Bearer token123".to_string()));
+        assert_eq!(
+            sink.headers[0],
+            ("Authorization".to_string(), "Bearer token123".to_string())
+        );
     }
 
     #[test]

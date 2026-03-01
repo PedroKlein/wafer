@@ -70,10 +70,7 @@ impl MetricsServer {
 }
 
 /// Creates a minimal router with just the metrics endpoint.
-fn create_metrics_router<C: PipelineControl + 'static>(
-    controller: Arc<C>,
-    path: &str,
-) -> Router {
+fn create_metrics_router<C: PipelineControl + 'static>(controller: Arc<C>, path: &str) -> Router {
     Router::new()
         .route(path, get(handlers::metrics::<C>))
         .with_state(controller)
@@ -86,10 +83,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = MetricsServerConfig::default();
-        assert_eq!(
-            config.bind,
-            "127.0.0.1:9091".parse::<SocketAddr>().unwrap()
-        );
+        assert_eq!(config.bind, "127.0.0.1:9091".parse::<SocketAddr>().unwrap());
         assert_eq!(config.path, "/metrics");
     }
 

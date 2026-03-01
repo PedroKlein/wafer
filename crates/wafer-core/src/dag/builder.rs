@@ -107,7 +107,6 @@ impl DagOrchestrator {
     /// This creates a bounded queue for DLQ messages, spawns a background task
     /// to process them, and stores the sender in the control state.
     async fn initialize_dlq(&self, dlq_config: &crate::config::DeadLetterConfig) -> Result<()> {
-
         // Create the DLQ sink
         let mut dlq_sink = create_dlq_sink(dlq_config)?;
         dlq_sink.init().await?;
@@ -245,7 +244,9 @@ impl DagOrchestrator {
                 AnyNode::Router(_, _) => "router",
                 AnyNode::Joiner(_, _) => "joiner",
             };
-            self.control_state.metrics_registry.register_node(id, node_type);
+            self.control_state
+                .metrics_registry
+                .register_node(id, node_type);
         }
 
         let mut nodes = self.nodes.lock().await;

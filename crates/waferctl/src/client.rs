@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use wafer_types::{ErrorResponse, HotSwapResult, MetricsSnapshot, NodeInfo, PipelineStatus, ReloadResult};
+use wafer_types::{
+    ErrorResponse, HotSwapResult, MetricsSnapshot, NodeInfo, PipelineStatus, ReloadResult,
+};
 
 /// HTTP client for WAFER runtime.
 pub struct WaferClient {
@@ -53,7 +55,8 @@ impl WaferClient {
 
     /// Trigger hot-swap.
     pub async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult> {
-        self.post(&format!("/api/v1/nodes/{}/hot-swap", node_id)).await
+        self.post(&format!("/api/v1/nodes/{}/hot-swap", node_id))
+            .await
     }
 
     /// Reload configuration.
@@ -82,7 +85,7 @@ impl WaferClient {
     pub async fn metrics_raw(&self) -> Result<String> {
         let url = format!("{}/metrics", self.base_url);
         let response = self.client.get(&url).send().await?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
@@ -95,21 +98,21 @@ impl WaferClient {
     async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let response = self.client.get(&url).send().await?;
-        
+
         Self::handle_response(response).await
     }
 
     async fn post<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let response = self.client.post(&url).send().await?;
-        
+
         Self::handle_response(response).await
     }
 
     async fn post_empty(&self, path: &str) -> Result<()> {
         let url = format!("{}{}", self.base_url, path);
         let response = self.client.post(&url).send().await?;
-        
+
         if !response.status().is_success() {
             let status = response.status();
             if let Ok(err) = response.json::<ErrorResponse>().await {
@@ -123,7 +126,7 @@ impl WaferClient {
 
     async fn handle_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
         let status = response.status();
-        
+
         if !status.is_success() {
             if let Ok(err) = response.json::<ErrorResponse>().await {
                 anyhow::bail!("{}", err.error.message);
