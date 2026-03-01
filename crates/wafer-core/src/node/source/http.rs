@@ -68,6 +68,11 @@ impl HttpSource {
     /// * `id` - Node identifier
     /// * `bind_addr` - Address to bind the HTTP server to (e.g., "0.0.0.0:8081")
     /// * `path` - Path to accept POST requests on (e.g., "/ingest")
+    ///
+    /// # Panics
+    ///
+    /// Panics if the hardcoded fallback address `127.0.0.1:8081` fails to parse
+    /// (this should never happen as it's a valid address literal).
     #[must_use]
     pub fn new(
         id: impl Into<String>,

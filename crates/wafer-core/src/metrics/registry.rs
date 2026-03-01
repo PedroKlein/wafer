@@ -268,12 +268,20 @@ impl MetricsRegistry {
     // ============================================================
 
     /// Registers a node for metrics collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn register_node(&self, node_id: impl Into<String>, node_type: impl Into<String>) {
         let mut nodes = self.node_metrics.write().unwrap();
         nodes.insert(node_id.into(), NodeMetrics::new(node_type));
     }
 
     /// Records a node invocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_node_invocation(&self, node_id: &str, process_time_ns: u64) {
         if let Some(metrics) = self.node_metrics.read().unwrap().get(node_id) {
             metrics.invocations_total.fetch_add(1, Ordering::Relaxed);
@@ -284,6 +292,10 @@ impl MetricsRegistry {
     }
 
     /// Records a node error.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_node_error(&self, node_id: &str) {
         if let Some(metrics) = self.node_metrics.read().unwrap().get(node_id) {
             metrics.errors_total.fetch_add(1, Ordering::Relaxed);
@@ -291,6 +303,10 @@ impl MetricsRegistry {
     }
 
     /// Records fuel consumed by a WASM node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_fuel_consumed(&self, node_id: &str, fuel: u64) {
         if let Some(metrics) = self.node_metrics.read().unwrap().get(node_id) {
             metrics.fuel_consumed.fetch_add(fuel, Ordering::Relaxed);
@@ -298,6 +314,10 @@ impl MetricsRegistry {
     }
 
     /// Updates memory usage for a node.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn set_node_memory(&self, node_id: &str, bytes: u64) {
         if let Some(metrics) = self.node_metrics.read().unwrap().get(node_id) {
             metrics.memory_bytes.store(bytes, Ordering::Relaxed);
@@ -309,6 +329,10 @@ impl MetricsRegistry {
     // ============================================================
 
     /// Registers a queue for metrics collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn register_queue(
         &self,
         from_node: impl Into<String>,
@@ -323,6 +347,10 @@ impl MetricsRegistry {
     }
 
     /// Records a message enqueued.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_enqueue(&self, from_node: &str, to_node: &str) {
         let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
@@ -331,6 +359,10 @@ impl MetricsRegistry {
     }
 
     /// Records a message dropped (overflow with drop policy).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_drop(&self, from_node: &str, to_node: &str) {
         let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
@@ -339,6 +371,10 @@ impl MetricsRegistry {
     }
 
     /// Records a message sent to DLQ (overflow with dead-letter policy).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_dlq(&self, from_node: &str, to_node: &str) {
         let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
@@ -347,6 +383,10 @@ impl MetricsRegistry {
     }
 
     /// Updates current queue depth.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn set_queue_depth(&self, from_node: &str, to_node: &str, depth: u64) {
         let queue_id = format!("{from_node}_{to_node}");
         if let Some(metrics) = self.queue_metrics.read().unwrap().get(&queue_id) {
@@ -359,6 +399,10 @@ impl MetricsRegistry {
     // ============================================================
 
     /// Registers a sink for batching metrics collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn register_sink(&self, sink_id: impl Into<String>) {
         let id = sink_id.into();
         let mut sinks = self.sink_metrics.write().unwrap();
@@ -371,6 +415,10 @@ impl MetricsRegistry {
     ///
     /// * `sink_id` - The sink node ID
     /// * `batch_size` - Number of messages in the flushed batch
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn record_sink_batch_flush(&self, sink_id: &str, batch_size: u64) {
         if let Some(metrics) = self.sink_metrics.read().unwrap().get(sink_id) {
             metrics.flush_total.fetch_add(1, Ordering::Relaxed);
@@ -379,6 +427,10 @@ impl MetricsRegistry {
     }
 
     /// Updates the current buffer size for a sink.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal `RwLock` is poisoned.
     pub fn set_sink_buffer_size(&self, sink_id: &str, size: u64) {
         if let Some(metrics) = self.sink_metrics.read().unwrap().get(sink_id) {
             metrics.buffer_size.store(size, Ordering::Relaxed);
