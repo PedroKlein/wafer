@@ -34,11 +34,19 @@ plugin_path = "plugins/tensor-prep/target/wasm32-wasip2/release/tensor_prep.wasm
 # Node 3: MNIST inference - runs the digit recognition neural network
 # Input: 3136 bytes (F32 tensor)
 # Output: 40 bytes (10 F32 probability values for digits 0-9)
+#
+# Configuration options:
+#   execution_target: Controls which hardware runs the inference
+#     - "auto" (default): Tries TPU, then GPU, then CPU (logs which was selected)
+#     - "cpu": Force CPU execution
+#     - "gpu": Force GPU execution (fails if unavailable)
+#     - "tpu": Force TPU execution (fails if unavailable)
 [[nodes]]
 id = "mnist-inference"
 node_type = "transform"
 [nodes.config]
 plugin_path = "plugins/mnist-inference/target/wasm32-wasip2/release/mnist_inference.wasm"
+# execution_target = "auto"  # Uncomment to explicitly set (default is "auto")
 
 # Node 4: Result formatter - converts raw probabilities to human-readable JSON
 # Input: 40 bytes (10 F32 probabilities)

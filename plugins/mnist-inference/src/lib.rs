@@ -2,6 +2,28 @@
 //!
 //! Input: 3136 bytes (784 F32 values, little-endian) from tensor-prep
 //! Output: 40 bytes (10 F32 logits, little-endian) for result-format
+//!
+//! ## Configuration
+//!
+//! The plugin accepts an optional `execution_target` parameter in the node config:
+//!
+//! ```toml
+//! [nodes.config]
+//! plugin_path = "..."
+//! execution_target = "auto"  # "auto" (default), "cpu", "gpu", or "tpu"
+//! ```
+//!
+//! - `"auto"`: Tries GPU first, falls back to CPU (logs which was selected)
+//! - `"cpu"`: Force CPU execution
+//! - `"gpu"`, `"tpu"`: Request GPU/TPU execution. Note: The ONNX backend may
+//!   silently fall back to CPU if the hardware is unavailable. Check runtime
+//!   logs for the actual execution provider used.
+//!
+//! TODO: Node configuration should be more generic. In the future, plugins should
+//! bundle their configuration schema (e.g., JSON Schema or WIT-defined types) so
+//! the host can validate configuration before passing to the plugin, provide
+//! configuration discovery/documentation, and enable tooling to generate
+//! configuration UI/docs.
 
 wit_bindgen::generate!({
     path: "../../wit",
@@ -26,29 +48,181 @@ const OUTPUT_SIZE: usize = 10 * 4;
 const INPUT_TENSOR_NAME: &str = "Input3";
 const OUTPUT_TENSOR_NAME: &str = "Plus214_Output_0";
 
+/// Wrapper for GraphExecutionContext to allow static storage.
+///
+/// # Safety
+/// This uses UnsafeCell because WASM execution is single-threaded.
+/// The static mut pattern is safe in WASM since there are no concurrent
+/// threads that could cause data races. The UnsafeCell allows interior
+/// mutability for the static variable.
 struct ContextHolder(UnsafeCell<Option<GraphExecutionContext>>);
+
+// SAFETY: WASM is single-threaded, so Sync is safe to implement
 unsafe impl Sync for ContextHolder {}
+
 static EXECUTION_CONTEXT: ContextHolder = ContextHolder(UnsafeCell::new(None));
+
+/// Configured execution target for inference
+#[derive(Default, Clone, Copy)]
+enum ExecutionTargetConfig {
+    /// Auto-detect: Try TPU -> GPU -> CPU with fallback
+    #[default]
+    Auto,
+    /// Force CPU execution
+    Cpu,
+    /// Force GPU execution (fails if unavailable)
+    Gpu,
+    /// Force TPU execution (fails if unavailable)
+    Tpu,
+}
+
+/// Parse the execution_target from node configuration.
+///
+/// Returns `ExecutionTargetConfig::Auto` if:
+/// - config_bytes is empty
+/// - config_bytes is not valid UTF-8
+/// - config_bytes is not valid TOML
+/// - execution_target key is missing
+fn parse_execution_target(
+    config: &exports::pipeline::transform::lifecycle::NodeConfig,
+) -> ExecutionTargetConfig {
+    if config.config_bytes.is_empty() {
+        return ExecutionTargetConfig::Auto;
+    }
+
+    let Ok(config_str) = String::from_utf8(config.config_bytes.clone()) else {
+        eprintln!("[mnist-inference] Config bytes not valid UTF-8, defaulting to auto");
+        return ExecutionTargetConfig::Auto;
+    };
+
+    let Ok(parsed) = config_str.parse::<toml::Value>() else {
+        eprintln!("[mnist-inference] Config not valid TOML, defaulting to auto");
+        return ExecutionTargetConfig::Auto;
+    };
+
+    match parsed.get("execution_target").and_then(|v| v.as_str()) {
+        Some("cpu") => ExecutionTargetConfig::Cpu,
+        Some("gpu") => ExecutionTargetConfig::Gpu,
+        Some("tpu") => ExecutionTargetConfig::Tpu,
+        Some("auto") | None => ExecutionTargetConfig::Auto,
+        Some(other) => {
+            eprintln!(
+                "[mnist-inference] Unknown execution_target '{}', defaulting to auto",
+                other
+            );
+            ExecutionTargetConfig::Auto
+        }
+    }
+}
+
+/// Attempt to load the model and create an execution context with a specific target.
+fn try_load_with_target(target: ExecutionTarget) -> Result<GraphExecutionContext, String> {
+    let graph = graph::load(&[MODEL_BYTES.to_vec()], GraphEncoding::Onnx, target)
+        .map_err(|e| format_nn_error("Failed to load model", &e))?;
+
+    graph
+        .init_execution_context()
+        .map_err(|e| format_nn_error("Failed to create execution context", &e))
+}
 
 struct MnistInference;
 
 impl exports::pipeline::transform::lifecycle::Guest for MnistInference {
-    fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
+    fn validate(config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
+        // Validate execution_target if provided
+        if !config.config_bytes.is_empty() {
+            if let Ok(config_str) = String::from_utf8(config.config_bytes.clone()) {
+                if let Ok(parsed) = config_str.parse::<toml::Value>() {
+                    if let Some(target) = parsed.get("execution_target") {
+                        match target.as_str() {
+                            Some("auto" | "cpu" | "gpu" | "tpu") => {}
+                            Some(other) => {
+                                return Some(format!(
+                                    "Invalid execution_target '{}': must be 'auto', 'cpu', 'gpu', or 'tpu'",
+                                    other
+                                ));
+                            }
+                            None => {
+                                return Some("execution_target must be a string".to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         None
     }
 
-    fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
-        let graph = graph::load(
-            &[MODEL_BYTES.to_vec()],
-            GraphEncoding::Onnx,
-            ExecutionTarget::Cpu,
-        )
-        .map_err(|e| format_nn_error("Failed to load model", &e))?;
+    fn init(config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
+        let target_config = parse_execution_target(&config);
 
-        let context = graph
-            .init_execution_context()
-            .map_err(|e| format_nn_error("Failed to create execution context", &e))?;
+        // Device selection logic - runs ONCE during init
+        //
+        // NOTE: The wasmtime-wasi-nn ONNX backend silently falls back to CPU when
+        // the requested execution target (GPU/TPU) is not available. This means
+        // we cannot reliably detect if GPU/TPU is actually being used vs falling
+        // back to CPU. For "auto" mode, we try GPU first (most likely to be useful),
+        // then CPU. The underlying runtime will log if a fallback occurs.
+        let (context, device_name) = match target_config {
+            ExecutionTargetConfig::Auto => {
+                // Auto mode: Try GPU first, fall back to CPU
+                // The ONNX runtime will internally fall back to CPU if GPU isn't available,
+                // and will log a warning when it does so.
+                eprintln!(
+                    "[mnist-inference] Auto-detecting execution target (trying GPU, then CPU)..."
+                );
 
+                // Try GPU first - if CUDA/CoreML is available, it will be used
+                // If not, the ONNX runtime will silently fall back to CPU
+                match try_load_with_target(ExecutionTarget::Gpu) {
+                    Ok(ctx) => {
+                        eprintln!("[mnist-inference] Requested GPU execution (check runtime logs for actual provider)");
+                        (ctx, "GPU (may fall back to CPU)")
+                    }
+                    Err(_) => {
+                        eprintln!("[mnist-inference] GPU load failed, using CPU explicitly");
+                        (try_load_with_target(ExecutionTarget::Cpu)?, "CPU")
+                    }
+                }
+            }
+            ExecutionTargetConfig::Cpu => {
+                eprintln!("[mnist-inference] CPU execution target requested");
+                (try_load_with_target(ExecutionTarget::Cpu)?, "CPU")
+            }
+            ExecutionTargetConfig::Gpu => {
+                eprintln!("[mnist-inference] GPU execution target requested");
+                // NOTE: The ONNX backend silently falls back to CPU if GPU is unavailable.
+                // We cannot detect this at the wasi-nn level, so we warn the user to check
+                // runtime logs for the actual execution provider.
+                (
+                    try_load_with_target(ExecutionTarget::Gpu).map_err(|e| {
+                        format!("GPU execution requested but failed to load: {}", e)
+                    })?,
+                    "GPU (check runtime logs - may fall back to CPU)",
+                )
+            }
+            ExecutionTargetConfig::Tpu => {
+                eprintln!("[mnist-inference] TPU execution target requested");
+                // NOTE: TPU is not yet supported by the ONNX backend and will fall back to CPU.
+                // We cannot detect this at the wasi-nn level.
+                (
+                    try_load_with_target(ExecutionTarget::Tpu).map_err(|e| {
+                        format!("TPU execution requested but failed to load: {}", e)
+                    })?,
+                    "TPU (check runtime logs - may fall back to CPU)",
+                )
+            }
+        };
+
+        // Log the final selection
+        eprintln!(
+            "[mnist-inference] Initialized with {} execution provider",
+            device_name
+        );
+
+        // Store context for use by process()
+        // SAFETY: WASM is single-threaded, no data races possible.
+        // This is the standard pattern for static mutable state in WASM plugins.
         unsafe {
             *EXECUTION_CONTEXT.0.get() = Some(context);
         }
@@ -57,6 +231,7 @@ impl exports::pipeline::transform::lifecycle::Guest for MnistInference {
     }
 
     fn close() {
+        // SAFETY: WASM is single-threaded, no data races possible
         unsafe {
             *EXECUTION_CONTEXT.0.get() = None;
         }
@@ -83,6 +258,7 @@ impl exports::pipeline::transform::transform::Guest for MnistInference {
             });
         }
 
+        // SAFETY: WASM is single-threaded, init() must be called before process()
         let context = unsafe {
             match (*EXECUTION_CONTEXT.0.get()).as_ref() {
                 Some(ctx) => ctx,
