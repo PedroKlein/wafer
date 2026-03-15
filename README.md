@@ -434,6 +434,142 @@ path = "/var/log/wafer/dlq.jsonl"
 | `WAFER_REGISTRY` | Default OCI registry | `ghcr.io/pedroklein` |
 | `WAFER_CACHE_DIR` | Plugin cache directory | `~/.cache/wafer` |
 
+### GPU Acceleration (CUDA / Jetson)
+
+WAFER supports CUDA-based GPU inference for NVIDIA devices (Jetson, desktop GPUs). The `--features cuda` flag enables the CUDA execution provider in ONNX Runtime for WASI-NN inference.
+
+#### Setup on Jetson (aarch64)
+
+Tested on JetPack 6 (L4T R36.5.0) with CUDA 12.6 and cuDNN 9.3.
+
+> **Why is this needed?** The `ort` crate's prebuilt binaries for `aarch64-unknown-linux-gnu` do not include CUDA support.
+> When `--features cuda` is used, the build silently falls back to CPU-only ONNX Runtime, causing the
+> `CUDA execution provider is not enabled in this build` error at runtime.
+
+##### Option A: Use pre-built ORT (Recommended)
+
+A pre-built ONNX Runtime 1.22.0 with CUDA for Jetson is available as a [GitHub release asset](https://github.com/PedroKlein/wafer-poc/releases/tag/v0.1.0-ort-jetson).
+
+```bash
+# Download and extract the pre-built library
+gh release download v0.1.0-ort-jetson --repo PedroKlein/wafer-poc
+tar xzf onnxruntime-1.22.0-linux-aarch64-gpu-cuda12.6.tgz -C ~/
+
+# Set environment variables
+export ORT_LIB_LOCATION=~/onnxruntime-jetson-gpu/lib
+export ORT_PREFER_DYNAMIC_LINK=1
+export LD_LIBRARY_PATH=$ORT_LIB_LOCATION:$LD_LIBRARY_PATH
+export PATH=/usr/local/cuda/bin:$PATH
+
+# Build WAFER with CUDA
+cd ~/wafer-poc
+cargo clean -p ort-sys
+cargo build --release --features cuda --bin wafer
+
+# Run
+RUST_LOG=debug cargo run --release --features cuda --bin wafer \
+  -- --config examples/dag-mnist-inference.toml
+```
+
+> **Tip:** Add the `export` lines to your `~/.bashrc` or `~/.zshrc` so you don't have to set them every session.
+
+> **Compatibility:** Requires JetPack 6 with CUDA 12.6 and cuDNN 9.x. Works with `ort` Rust crate v2.0.0-rc.10 (API version 22).
+
+##### Option B: Build ORT from source
+
+If the pre-built library doesn't match your JetPack/CUDA version, build from source.
+
+**Prerequisites:**
+
+- CUDA toolkit (included with JetPack): verify with `/usr/local/cuda/bin/nvcc --version`
+- cuDNN: verify with `ls /usr/lib/aarch64-linux-gnu/libcudnn.so*`
+- GCC 11 (default on JetPack 6): `sudo apt install -y gcc-11 g++-11`
+- Git, CMake, Python 3
+
+> **Version note:** ORT version must match the `ort` Rust crate's expected API version. The `ort v2.0.0-rc.10` crate requires ORT API version 22 (= ORT 1.22.0).
+
+**Step 1: Build ONNX Runtime with CUDA**
+
+```bash
+# Clone ORT v1.22.0
+cd ~
+git clone --branch v1.22.0 --depth 1 --recurse-submodules \
+  https://github.com/microsoft/onnxruntime.git onnxruntime-build
+cd onnxruntime-build
+
+# If GitLab is blocked (Eigen download fails with 403), clone Eigen manually:
+git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen-src
+cd /tmp/eigen-src && git checkout 1d8b82b0740839c0de7f1242a3585e3390ff5f33 && cd ~/onnxruntime-build
+
+# Build (takes 60-90 min on Jetson Orin Nano with --parallel 2)
+# Use --parallel 1 if you have <= 4GB RAM
+./build.sh --config Release --build_shared_lib \
+  --use_cuda --cuda_home /usr/local/cuda \
+  --cudnn_home /usr/lib/aarch64-linux-gnu \
+  --parallel 2 \
+  --skip_tests \
+  --cmake_extra_defines FETCHCONTENT_SOURCE_DIR_EIGEN3=/tmp/eigen-src
+
+# Verify the output
+ls ~/onnxruntime-build/build/Linux/Release/libonnxruntime*.so*
+```
+
+**Step 2: Build and run WAFER**
+
+```bash
+cd ~/wafer-poc
+
+export ORT_LIB_LOCATION=~/onnxruntime-build/build/Linux/Release
+export ORT_PREFER_DYNAMIC_LINK=1
+export LD_LIBRARY_PATH=$ORT_LIB_LOCATION:$LD_LIBRARY_PATH
+export PATH=/usr/local/cuda/bin:$PATH
+
+cargo clean -p ort-sys
+cargo build --release --features cuda --bin wafer
+
+RUST_LOG=debug cargo run --release --features cuda --bin wafer \
+  -- --config examples/dag-mnist-inference.toml
+```
+
+##### Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `CUDA execution provider is not enabled` | `ORT_LIB_LOCATION` not set or pointing to CPU-only ORT |
+| `requested API version [22] is not available` | ORT version mismatch — must use ORT 1.22.0 (not 1.21.x) |
+| `#error -- unsupported GNU version! gcc > 13` | Use GCC 11-13: `sudo update-alternatives --set gcc /usr/bin/gcc-11` |
+| Eigen download 403 from GitLab | Clone Eigen via git and pass `FETCHCONTENT_SOURCE_DIR_EIGEN3` (see above) |
+| OOM during build | Reduce parallelism: `--parallel 1` and/or add swap: `sudo fallocate -l 4G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` |
+
+#### Setup on x86_64 (Desktop/Server)
+
+On x86_64 Linux, prebuilt CUDA binaries are available automatically:
+
+```bash
+# Just build with the cuda feature — no extra setup needed
+cargo build --release --features cuda --bin wafer
+```
+
+If you prefer a system-installed ONNX Runtime, use the same `ORT_LIB_LOCATION` approach as above.
+
+#### Execution Target Configuration
+
+The MNIST inference plugin supports selecting the execution target in the pipeline config:
+
+```toml
+[nodes.config]
+execution_target = "auto"  # auto (default), cpu, gpu, tpu
+```
+
+- `auto` — Tries GPU first, falls back to CPU
+- `gpu` — Forces GPU; fails if CUDA is not available in the build
+- `cpu` — Forces CPU execution
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ORT_LIB_LOCATION` | Path to ONNX Runtime library directory | *(auto-download)* |
+| `ORT_PREFER_DYNAMIC_LINK` | Set to `1` to link `.so` dynamically | `0` |
+
 ## Documentation
 
 | Document | Description |
