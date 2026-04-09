@@ -21,45 +21,10 @@ use super::orchestrator::{ControlState, RunState};
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
-    /// Build a fully-configured DAG orchestrator from a Config.
-    ///
-    /// This is the high-level constructor that:
-    /// 1. Validates the topology
-    /// 2. Creates all nodes using the factory
-    /// 3. Wires queues between nodes
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Full pipeline configuration
-    /// * `use_cache` - Whether to use OCI registry cache for remote plugins
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Topology validation fails
-    /// - Node creation fails
-    /// - Queue wiring fails
     pub async fn from_config(config: Config, use_cache: bool) -> Result<Self> {
         Self::from_config_with_path(config, use_cache, None::<PathBuf>).await
     }
 
-    /// Build a fully-configured DAG orchestrator from a Config with an optional config path.
-    ///
-    /// Same as [`from_config`](Self::from_config), but stores the config file path for
-    /// later use by [`reload_config`](crate::control::PipelineControl::reload_config).
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Full pipeline configuration
-    /// * `use_cache` - Whether to use OCI registry cache for remote plugins
-    /// * `config_path` - Optional path to the config file (for reload support)
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Topology validation fails
-    /// - Node creation fails
-    /// - Queue wiring fails
     pub async fn from_config_with_path(
         config: Config,
         use_cache: bool,
@@ -68,10 +33,8 @@ impl DagOrchestrator {
         let dag_config = config.to_dag_config();
         let mut orchestrator = Self::from_dag_config(dag_config.clone())?;
 
-        // Store the config path for reload_config
         orchestrator.config_path = config_path.map(|p| p.as_ref().to_path_buf());
 
-        // Apply cache setting
         let mut registry_config = dag_config.registry.clone();
         if !use_cache {
             registry_config.no_cache = true;
@@ -158,18 +121,6 @@ impl DagOrchestrator {
         Ok(())
     }
 
-    /// Build a DAG orchestrator from DagConfig (low-level).
-    ///
-    /// This creates the orchestrator without creating nodes. You must call
-    /// `register_node` for each node and then `wire_queues` before running.
-    ///
-    /// For most use cases, prefer `from_config` which handles all setup.
-    ///
-    /// Validates the topology at construction time:
-    /// - No cycles (would fail topological sort)
-    /// - Exactly one source (no incoming edges)
-    /// - Exactly one sink (no outgoing edges)
-    /// - No orphan nodes (all connected to main graph)
     #[must_use = "creating an orchestrator without using it is likely a bug"]
     pub fn from_dag_config(config: DagConfig) -> Result<Self> {
         let mut graph = DiGraph::new();
@@ -222,11 +173,6 @@ impl DagOrchestrator {
         Ok(orchestrator)
     }
 
-    /// Register a node instance for execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the node ID is not defined in the DAG configuration.
     pub async fn register_node(&self, id: &str, node: AnyNode) -> Result<()> {
         if !self.node_indices.contains_key(id) {
             return Err(WaferError::Config(ConfigError::Message(format!(
@@ -237,16 +183,9 @@ impl DagOrchestrator {
         // Register node with metrics registry (http-api feature)
         #[cfg(feature = "http-api")]
         {
-            let node_type = match &node {
-                AnyNode::Source(_, _) => "source",
-                AnyNode::Transform(_, _) => "transform",
-                AnyNode::Sink(_, _) => "sink",
-                AnyNode::Router(_, _) => "router",
-                AnyNode::Joiner(_, _) => "joiner",
-            };
             self.control_state
                 .metrics_registry
-                .register_node(id, node_type);
+                .register_node(id, node.to_string());
         }
 
         let mut nodes = self.nodes.lock().await;

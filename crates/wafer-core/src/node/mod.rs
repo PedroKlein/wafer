@@ -238,3 +238,16 @@ impl AnyNode {
         }
     }
 }
+
+impl fmt::Display for AnyNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let name = match self {
+            AnyNode::Source(s, _) => s.node_type(),
+            AnyNode::Transform(t, _) => t.node_type(),
+            AnyNode::Sink(s, _) => s.node_type(),
+            AnyNode::Router(r, _) => r.node_type(),
+            AnyNode::Joiner(j, _) => j.node_type(),
+        };
+        write!(f, "{name}")
+    }
+}

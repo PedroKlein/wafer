@@ -33,9 +33,7 @@ impl exports::pipeline::transform::lifecycle::Guest for JsonParse {
 impl exports::pipeline::transform::transform::Guest for JsonParse {
     /// Process a message - parse JSON and pretty-print with 2-space indent
     fn process(input: Envelope) -> ProcessResult {
-        let bytes = match &input.payload {
-            Payload::Raw(b) => b,
-        };
+        let Payload::Raw(bytes) = &input.payload;
 
         if bytes.is_empty() {
             return ProcessResult::Error(ProcessError {
