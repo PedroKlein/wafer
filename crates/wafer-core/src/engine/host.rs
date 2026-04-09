@@ -48,20 +48,12 @@ impl WaferState {
         let ctx = builder.build();
 
         let nn_ctx = if capabilities.allow_inference {
-            Some(WasiNnCtx::new(
-                [OnnxBackend::default().into()],
-                InMemoryRegistry::new().into(),
-            ))
+            Some(WasiNnCtx::new([OnnxBackend::default().into()], InMemoryRegistry::new().into()))
         } else {
             None
         };
 
-        Self {
-            ctx,
-            table: ResourceTable::new(),
-            capabilities,
-            nn_ctx,
-        }
+        Self { ctx, table: ResourceTable::new(), capabilities, nn_ctx }
     }
 
     /// Create a sandboxed state with no host access.
@@ -89,10 +81,7 @@ impl Default for WaferState {
 
 impl WasiView for WaferState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
-        WasiCtxView {
-            ctx: &mut self.ctx,
-            table: &mut self.table,
-        }
+        WasiCtxView { ctx: &mut self.ctx, table: &mut self.table }
     }
 }
 

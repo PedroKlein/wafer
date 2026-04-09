@@ -41,12 +41,7 @@ impl OciReference {
             return None;
         }
 
-        Some(Self {
-            reference: s.to_string(),
-            registry,
-            repository,
-            tag: tag.to_string(),
-        })
+        Some(Self { reference: s.to_string(), registry, repository, tag: tag.to_string() })
     }
 
     /// Get the full reference string.
@@ -65,11 +60,7 @@ pub struct OciParseError {
 
 impl std::fmt::Display for OciParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "invalid OCI reference '{}': expected format 'registry/repo:tag'",
-            self.input
-        )
+        write!(f, "invalid OCI reference '{}': expected format 'registry/repo:tag'", self.input)
     }
 }
 
@@ -79,9 +70,7 @@ impl std::str::FromStr for OciReference {
     type Err = OciParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s).ok_or_else(|| OciParseError {
-            input: s.to_string(),
-        })
+        Self::parse(s).ok_or_else(|| OciParseError { input: s.to_string() })
     }
 }
 
@@ -143,11 +132,7 @@ impl ResolvedPlugin {
     /// Create a new resolved plugin.
     #[must_use]
     pub fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
-        Self {
-            source,
-            content_hash,
-            wasm_path,
-        }
+        Self { source, content_hash, wasm_path }
     }
 }
 
@@ -166,11 +151,7 @@ pub struct RegistryConfig {
 
 impl Default for RegistryConfig {
     fn default() -> Self {
-        Self {
-            cache_ttl_hours: 24,
-            cache_dir: None,
-            no_cache: false,
-        }
+        Self { cache_ttl_hours: 24, cache_dir: None, no_cache: false }
     }
 }
 
@@ -259,10 +240,7 @@ mod tests {
 
     #[test]
     fn test_registry_config_cache_ttl() {
-        let config = RegistryConfig {
-            cache_ttl_hours: 12,
-            ..Default::default()
-        };
+        let config = RegistryConfig { cache_ttl_hours: 12, ..Default::default() };
         assert_eq!(config.cache_ttl(), Duration::from_secs(12 * 3600));
     }
 }

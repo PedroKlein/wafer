@@ -24,8 +24,6 @@ pub struct StdoutSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-
-
 /// A stdout-based sink node that writes messages to standard output.
 ///
 /// Each message payload is written followed by a newline character.
@@ -206,10 +204,8 @@ impl Sink for StdoutSink {
         self.batch_buffer.as_ref()?;
 
         // Update current buffer size
-        self.batch_stats.current_buffer_size = self
-            .batch_buffer
-            .as_ref()
-            .map_or(0, |b| b.len() as u64);
+        self.batch_stats.current_buffer_size =
+            self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();
@@ -234,10 +230,7 @@ mod tests {
     fn test_stdout_sink_with_batching_creation() {
         let sink = StdoutSink::with_batching(
             "test-sink",
-            StdoutSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            StdoutSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_config.batch_size, Some(10));
@@ -248,10 +241,7 @@ mod tests {
     fn test_stdout_sink_batch_timeout_returns_configured_value() {
         let sink = StdoutSink::with_batching(
             "test-sink",
-            StdoutSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            StdoutSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_timeout(), Some(Duration::from_millis(500)));
@@ -267,10 +257,7 @@ mod tests {
     fn test_stdout_sink_validate_zero_batch_size() {
         let sink = StdoutSink::with_batching(
             "test-sink",
-            StdoutSinkBatchConfig {
-                batch_size: Some(0),
-                batch_timeout_ms: Some(1000),
-            },
+            StdoutSinkBatchConfig { batch_size: Some(0), batch_timeout_ms: Some(1000) },
         );
 
         let result = sink.validate();

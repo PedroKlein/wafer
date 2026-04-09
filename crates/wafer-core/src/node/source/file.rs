@@ -55,12 +55,7 @@ impl FileSource {
     ///
     /// The file is not opened until `init()` is called.
     pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
-        Self {
-            id: id.into(),
-            path: path.into(),
-            reader: None,
-            binary_sent: false,
-        }
+        Self { id: id.into(), path: path.into(), reader: None, binary_sent: false }
     }
 
     /// Get the file path this source reads from.
@@ -82,9 +77,7 @@ impl Lifecycle for FileSource {
     fn validate(&self) -> Result<()> {
         // Check file exists and is readable
         if !self.path.exists() {
-            return Err(WaferError::Config(ConfigError::PluginNotFound(
-                self.path.clone(),
-            )));
+            return Err(WaferError::Config(ConfigError::PluginNotFound(self.path.clone())));
         }
         // Check it's a file, not a directory
         if !self.path.is_file() {
@@ -140,15 +133,12 @@ impl Source for FileSource {
                 Ok(0) => Ok(None), // EOF
                 Ok(_) => {
                     // Strip trailing newline(s)
-                    let payload = line
-                        .trim_end_matches('\n')
-                        .trim_end_matches('\r')
-                        .as_bytes()
-                        .to_vec();
-                    Ok(Some(RuntimeEnvelope::new(&self.id, payload).with_metadata(
-                        "source_route",
-                        self.path.display().to_string(),
-                    )))
+                    let payload =
+                        line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
+                    Ok(Some(
+                        RuntimeEnvelope::new(&self.id, payload)
+                            .with_metadata("source_route", self.path.display().to_string()),
+                    ))
                 }
                 Err(e) => Err(WaferError::Io(e)),
             }

@@ -263,11 +263,7 @@ impl From<ControlError> for ErrorResponse {
             error: ErrorDetail {
                 code: err.code().to_string(),
                 message: err.to_string(),
-                details: if details.is_empty() {
-                    None
-                } else {
-                    Some(details)
-                },
+                details: if details.is_empty() { None } else { Some(details) },
             },
         }
     }
@@ -298,9 +294,7 @@ mod tests {
 
     #[test]
     fn test_control_error_serialization() {
-        let err = ControlError::NodeNotFound {
-            node_id: "filter".to_string(),
-        };
+        let err = ControlError::NodeNotFound { node_id: "filter".to_string() };
         let response: ErrorResponse = err.into();
 
         let json = serde_json::to_string(&response).unwrap();
@@ -376,9 +370,8 @@ mod tests {
 
     #[test]
     fn test_reload_result_serialization_roundtrip() {
-        let result = ReloadResult {
-            swapped_nodes: vec!["filter-1".to_string(), "transform-2".to_string()],
-        };
+        let result =
+            ReloadResult { swapped_nodes: vec!["filter-1".to_string(), "transform-2".to_string()] };
 
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ReloadResult = serde_json::from_str(&json).unwrap();
@@ -388,9 +381,7 @@ mod tests {
 
     #[test]
     fn test_reload_result_empty() {
-        let result = ReloadResult {
-            swapped_nodes: vec![],
-        };
+        let result = ReloadResult { swapped_nodes: vec![] };
 
         let json = serde_json::to_string(&result).unwrap();
         let parsed: ReloadResult = serde_json::from_str(&json).unwrap();
@@ -475,26 +466,16 @@ mod tests {
     #[test]
     fn test_all_control_errors_roundtrip() {
         let errors = vec![
-            ControlError::NodeNotFound {
-                node_id: "test".to_string(),
-            },
+            ControlError::NodeNotFound { node_id: "test".to_string() },
             ControlError::SwapInProgress,
-            ControlError::NotSwappable {
-                node_id: "source".to_string(),
-            },
-            ControlError::NotImplemented {
-                operation: "hot_swap".to_string(),
-            },
-            ControlError::ConfigError {
-                message: "invalid toml".to_string(),
-            },
+            ControlError::NotSwappable { node_id: "source".to_string() },
+            ControlError::NotImplemented { operation: "hot_swap".to_string() },
+            ControlError::ConfigError { message: "invalid toml".to_string() },
             ControlError::InvalidState {
                 expected: "running".to_string(),
                 actual: "stopped".to_string(),
             },
-            ControlError::Internal {
-                message: "unexpected".to_string(),
-            },
+            ControlError::Internal { message: "unexpected".to_string() },
         ];
 
         for err in errors {

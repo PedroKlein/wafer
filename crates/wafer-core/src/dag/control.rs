@@ -16,9 +16,7 @@ impl PipelineControl for DagOrchestrator {
     async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
         // Check if node exists
         if !self.node_indices.contains_key(node_id) {
-            return Err(ControlError::NodeNotFound {
-                node_id: node_id.to_string(),
-            });
+            return Err(ControlError::NodeNotFound { node_id: node_id.to_string() });
         }
 
         // Check if node is swappable (only transforms are swappable)
@@ -27,9 +25,7 @@ impl PipelineControl for DagOrchestrator {
             node_config.is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
 
         if !is_transform {
-            return Err(ControlError::NotSwappable {
-                node_id: node_id.to_string(),
-            });
+            return Err(ControlError::NotSwappable { node_id: node_id.to_string() });
         }
 
         // The trait method hot_swap(node_id) is for manual triggering of a single node.
@@ -42,42 +38,31 @@ impl PipelineControl for DagOrchestrator {
         })?;
 
         // Reload config to get current path for this node
-        let new_config =
-            crate::config::load_dag_config(config_path).map_err(|e| ControlError::ConfigError {
-                message: format!("Failed to reload config: {e}"),
-            })?;
+        let new_config = crate::config::load_dag_config(config_path).map_err(|e| {
+            ControlError::ConfigError { message: format!("Failed to reload config: {e}") }
+        })?;
 
         // Find the node's WASM path in the new config
         let node_def = new_config
             .nodes
             .iter()
             .find(|n| n.id == node_id)
-            .ok_or_else(|| ControlError::NodeNotFound {
-                node_id: node_id.to_string(),
-            })?;
+            .ok_or_else(|| ControlError::NodeNotFound { node_id: node_id.to_string() })?;
 
         // Extract plugin path from config
         let node_cfg: crate::config::NodeConfig =
-            node_def
-                .config
-                .clone()
-                .try_into()
-                .map_err(|e| ControlError::ConfigError {
-                    message: format!("Invalid node config for {node_id}: {e}"),
-                })?;
-
-        let wasm_path = node_cfg
-            .plugin_path
-            .ok_or_else(|| ControlError::ConfigError {
-                message: format!("Node {node_id} has no plugin_path configured"),
+            node_def.config.clone().try_into().map_err(|e| ControlError::ConfigError {
+                message: format!("Invalid node config for {node_id}: {e}"),
             })?;
+
+        let wasm_path = node_cfg.plugin_path.ok_or_else(|| ControlError::ConfigError {
+            message: format!("Node {node_id} has no plugin_path configured"),
+        })?;
 
         // Perform the hot-swap using the inherent method
         let metrics = DagOrchestrator::hot_swap(self, node_id, &wasm_path)
             .await
-            .map_err(|e| ControlError::Internal {
-                message: format!("Hot-swap failed: {e}"),
-            })?;
+            .map_err(|e| ControlError::Internal { message: format!("Hot-swap failed: {e}") })?;
 
         Ok(HotSwapResult {
             node_id: node_id.to_string(),
@@ -99,12 +84,10 @@ impl PipelineControl for DagOrchestrator {
                 crate::error::WaferError::Runtime(msg) if msg.contains("require restart") => {
                     ControlError::ConfigError { message: msg }
                 }
-                crate::error::WaferError::Config(cfg_err) => ControlError::ConfigError {
-                    message: cfg_err.to_string(),
-                },
-                other => ControlError::Internal {
-                    message: other.to_string(),
-                },
+                crate::error::WaferError::Config(cfg_err) => {
+                    ControlError::ConfigError { message: cfg_err.to_string() }
+                }
+                other => ControlError::Internal { message: other.to_string() },
             }
         })?;
 
@@ -140,10 +123,7 @@ impl PipelineControl for DagOrchestrator {
             name: self.control_state.name.clone(),
             state,
             uptime_secs: self.control_state.uptime_secs(),
-            messages_processed: self
-                .control_state
-                .messages_processed
-                .load(Ordering::Relaxed),
+            messages_processed: self.control_state.messages_processed.load(Ordering::Relaxed),
             messages_failed: self.control_state.messages_failed.load(Ordering::Relaxed),
             node_count: self.node_indices.len(),
             swap_in_progress: false,
@@ -289,11 +269,7 @@ mod tests {
             }
         }
 
-        let topo_order = vec![
-            "source".to_string(),
-            "transform".to_string(),
-            "sink".to_string(),
-        ];
+        let topo_order = vec!["source".to_string(), "transform".to_string(), "sink".to_string()];
         let control_state = Arc::new(ControlState::new("test-pipeline".to_string()));
 
         DagOrchestrator {

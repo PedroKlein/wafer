@@ -168,13 +168,8 @@ impl DagOrchestrator {
         control_state: &ControlState,
     ) {
         if output_senders.len() == 1 {
-            Self::send_with_overflow_policy(
-                &output_senders[0],
-                envelope,
-                node_id,
-                control_state,
-            )
-            .await;
+            Self::send_with_overflow_policy(&output_senders[0], envelope, node_id, control_state)
+                .await;
         } else {
             for edge_info in output_senders {
                 Self::send_with_overflow_policy(

@@ -26,8 +26,6 @@ pub struct FileSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-
-
 /// A file-based sink node that writes messages to a file.
 ///
 /// Each message payload is written followed by a newline character.
@@ -246,10 +244,8 @@ impl Sink for FileSink {
         self.batch_buffer.as_ref()?;
 
         // Update current buffer size
-        self.batch_stats.current_buffer_size = self
-            .batch_buffer
-            .as_ref()
-            .map_or(0, |b| b.len() as u64);
+        self.batch_stats.current_buffer_size =
+            self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();
@@ -335,34 +331,22 @@ mod tests {
         let mut sink = FileSink::with_batching(
             "test-sink",
             path.clone(),
-            FileSinkBatchConfig {
-                batch_size: Some(3),
-                batch_timeout_ms: Some(1000),
-            },
+            FileSinkBatchConfig { batch_size: Some(3), batch_timeout_ms: Some(1000) },
         );
 
         sink.validate().unwrap();
         sink.init().await.unwrap();
 
         // Send 2 messages (less than batch size)
-        sink.collect(RuntimeEnvelope::from_string("test", "msg1"))
-            .await
-            .unwrap();
-        sink.collect(RuntimeEnvelope::from_string("test", "msg2"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "msg1")).await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "msg2")).await.unwrap();
 
         // File should be empty (messages buffered)
         let contents = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(
-            contents, "",
-            "File should be empty before batch size reached"
-        );
+        assert_eq!(contents, "", "File should be empty before batch size reached");
 
         // Third message triggers batch write
-        sink.collect(RuntimeEnvelope::from_string("test", "msg3"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "msg3")).await.unwrap();
 
         // Now file should have all 3 messages
         let contents = std::fs::read_to_string(&path).unwrap();
@@ -389,12 +373,8 @@ mod tests {
         sink.init().await.unwrap();
 
         // Send fewer messages than batch size
-        sink.collect(RuntimeEnvelope::from_string("test", "partial1"))
-            .await
-            .unwrap();
-        sink.collect(RuntimeEnvelope::from_string("test", "partial2"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "partial1")).await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "partial2")).await.unwrap();
 
         // File should be empty
         let contents = std::fs::read_to_string(&path).unwrap();
@@ -417,22 +397,15 @@ mod tests {
         let mut sink = FileSink::with_batching(
             "test-sink",
             path.clone(),
-            FileSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(1000),
-            },
+            FileSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(1000) },
         );
 
         sink.validate().unwrap();
         sink.init().await.unwrap();
 
         // Send messages
-        sink.collect(RuntimeEnvelope::from_string("test", "close1"))
-            .await
-            .unwrap();
-        sink.collect(RuntimeEnvelope::from_string("test", "close2"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "close1")).await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "close2")).await.unwrap();
 
         // Close should flush remaining messages
         sink.close().await.unwrap();
@@ -446,10 +419,7 @@ mod tests {
         let sink = FileSink::with_batching(
             "test-sink",
             "/tmp/test.txt",
-            FileSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            FileSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_timeout(), Some(Duration::from_millis(500)));
@@ -467,10 +437,7 @@ mod tests {
         let sink = FileSink::with_batching(
             "test-sink",
             "/tmp/test.txt",
-            FileSinkBatchConfig {
-                batch_size: Some(0),
-                batch_timeout_ms: Some(1000),
-            },
+            FileSinkBatchConfig { batch_size: Some(0), batch_timeout_ms: Some(1000) },
         );
 
         let result = sink.validate();
@@ -486,35 +453,22 @@ mod tests {
         let mut sink = FileSink::with_batching(
             "test-sink",
             path.clone(),
-            FileSinkBatchConfig {
-                batch_size: Some(2),
-                batch_timeout_ms: Some(1000),
-            },
+            FileSinkBatchConfig { batch_size: Some(2), batch_timeout_ms: Some(1000) },
         );
 
         sink.validate().unwrap();
         sink.init().await.unwrap();
 
         // First batch
-        sink.collect(RuntimeEnvelope::from_string("test", "b1m1"))
-            .await
-            .unwrap();
-        sink.collect(RuntimeEnvelope::from_string("test", "b1m2"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "b1m1")).await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "b1m2")).await.unwrap();
 
         // Second batch
-        sink.collect(RuntimeEnvelope::from_string("test", "b2m1"))
-            .await
-            .unwrap();
-        sink.collect(RuntimeEnvelope::from_string("test", "b2m2"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "b2m1")).await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "b2m2")).await.unwrap();
 
         // Third partial batch
-        sink.collect(RuntimeEnvelope::from_string("test", "b3m1"))
-            .await
-            .unwrap();
+        sink.collect(RuntimeEnvelope::from_string("test", "b3m1")).await.unwrap();
 
         sink.close().await.unwrap();
 

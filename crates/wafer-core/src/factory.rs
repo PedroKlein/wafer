@@ -104,11 +104,7 @@ impl FactoryContext {
     pub fn new(registry_config: RegistryConfig) -> Result<Self> {
         let registry = WaferRegistry::new(registry_config).map_err(WaferError::Registry)?;
 
-        Ok(Self {
-            epoch_tickers: Vec::new(),
-            registry,
-            resolved_plugins: HashMap::new(),
-        })
+        Ok(Self { epoch_tickers: Vec::new(), registry, resolved_plugins: HashMap::new() })
     }
 
     /// Abort all epoch tickers.
@@ -165,55 +161,32 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
     if source_type == "stdin" {
         Ok(AnyNode::from_source(StdinSource::new(&node_def.id)))
     } else if source_type == "mqtt" {
-        let broker = node_def
-            .config
-            .get("broker")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("localhost");
+        let broker =
+            node_def.config.get("broker").and_then(toml::Value::as_str).unwrap_or("localhost");
         let port = node_def
             .config
             .get("port")
             .and_then(toml::Value::as_integer)
             .map_or(1883, |v| v as u16);
-        let topic = node_def
-            .config
-            .get("topic")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
+        let topic =
+            node_def.config.get("topic").and_then(toml::Value::as_str).ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "mqtt source '{}' requires 'topic' in config",
                     node_def.id
                 )))
             })?;
-        let qos = node_def
-            .config
-            .get("qos")
-            .and_then(toml::Value::as_integer)
-            .map_or(0, |v| v as u8);
+        let qos =
+            node_def.config.get("qos").and_then(toml::Value::as_integer).map_or(0, |v| v as u8);
         let client_id = node_def
             .config
             .get("client_id")
             .and_then(toml::Value::as_str)
             .map_or_else(|| format!("wafer-{}", node_def.id), String::from);
-        Ok(AnyNode::from_source(MqttSource::new(
-            &node_def.id,
-            broker,
-            port,
-            topic,
-            qos,
-            client_id,
-        )))
+        Ok(AnyNode::from_source(MqttSource::new(&node_def.id, broker, port, topic, qos, client_id)))
     } else if source_type == "http" {
-        let bind = node_def
-            .config
-            .get("bind")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("127.0.0.1:8081");
-        let path = node_def
-            .config
-            .get("path")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("/ingest");
+        let bind =
+            node_def.config.get("bind").and_then(toml::Value::as_str).unwrap_or("127.0.0.1:8081");
+        let path = node_def.config.get("path").and_then(toml::Value::as_str).unwrap_or("/ingest");
         let buffer_size = node_def
             .config
             .get("buffer_size")
@@ -224,16 +197,12 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
         ))
     } else {
         // Default to file source
-        let path = node_def
-            .config
-            .get("path")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "source '{}' requires 'path' in config",
-                    node_def.id
-                )))
-            })?;
+        let path = node_def.config.get("path").and_then(toml::Value::as_str).ok_or_else(|| {
+            WaferError::Config(ConfigError::Message(format!(
+                "source '{}' requires 'path' in config",
+                node_def.id
+            )))
+        })?;
         Ok(AnyNode::from_source(FileSource::new(&node_def.id, path)))
     }
 }
@@ -248,16 +217,12 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
 async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def
-            .config
-            .clone()
-            .try_into()
-            .map_err(|e: toml::de::Error| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "failed to parse transform '{}' config: {}",
-                    node_def.id, e
-                )))
-            })?;
+        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
+            WaferError::Config(ConfigError::Message(format!(
+                "failed to parse transform '{}' config: {}",
+                node_def.id, e
+            )))
+        })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -288,16 +253,12 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -
 async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def
-            .config
-            .clone()
-            .try_into()
-            .map_err(|e: toml::de::Error| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "failed to parse router '{}' config: {}",
-                    node_def.id, e
-                )))
-            })?;
+        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
+            WaferError::Config(ConfigError::Message(format!(
+                "failed to parse router '{}' config: {}",
+                node_def.id, e
+            )))
+        })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -327,16 +288,12 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> R
 async fn create_joiner(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
     // Parse the node config to get plugin source specification
     let plugin_config: PluginNodeConfig =
-        node_def
-            .config
-            .clone()
-            .try_into()
-            .map_err(|e: toml::de::Error| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "failed to parse joiner '{}' config: {}",
-                    node_def.id, e
-                )))
-            })?;
+        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
+            WaferError::Config(ConfigError::Message(format!(
+                "failed to parse joiner '{}' config: {}",
+                node_def.id, e
+            )))
+        })?;
 
     // Create the WASM engine
     let engine = WaferEngine::new()?;
@@ -390,11 +347,7 @@ async fn resolve_and_load_plugin(
     let source = plugin_config.plugin_source().map_err(WaferError::Config)?;
 
     // Resolve the plugin (validates local paths, fetches remote packages)
-    let resolved = ctx
-        .registry
-        .resolve(&source)
-        .await
-        .map_err(WaferError::Registry)?;
+    let resolved = ctx.registry.resolve(&source).await.map_err(WaferError::Registry)?;
 
     // Load the component based on source type
     let component = match &resolved.source {
@@ -521,60 +474,37 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
     if sink_type == "stdout" {
         Ok(AnyNode::from_sink(StdoutSink::new(&node_def.id)))
     } else if sink_type == "mqtt" {
-        let broker = node_def
-            .config
-            .get("broker")
-            .and_then(toml::Value::as_str)
-            .unwrap_or("localhost");
+        let broker =
+            node_def.config.get("broker").and_then(toml::Value::as_str).unwrap_or("localhost");
         let port = node_def
             .config
             .get("port")
             .and_then(toml::Value::as_integer)
             .map_or(1883, |v| v as u16);
-        let topic = node_def
-            .config
-            .get("topic")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
+        let topic =
+            node_def.config.get("topic").and_then(toml::Value::as_str).ok_or_else(|| {
                 WaferError::Config(ConfigError::Message(format!(
                     "mqtt sink '{}' requires 'topic' in config",
                     node_def.id
                 )))
             })?;
-        let qos = node_def
-            .config
-            .get("qos")
-            .and_then(toml::Value::as_integer)
-            .map_or(0, |v| v as u8);
+        let qos =
+            node_def.config.get("qos").and_then(toml::Value::as_integer).map_or(0, |v| v as u8);
         let client_id = node_def
             .config
             .get("client_id")
             .and_then(toml::Value::as_str)
             .map_or_else(|| format!("wafer-{}", node_def.id), String::from);
-        Ok(AnyNode::from_sink(MqttSink::new(
-            &node_def.id,
-            broker,
-            port,
-            topic,
-            qos,
-            client_id,
-        )))
+        Ok(AnyNode::from_sink(MqttSink::new(&node_def.id, broker, port, topic, qos, client_id)))
     } else if sink_type == "http" {
-        let url = node_def
-            .config
-            .get("url")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "http sink '{}' requires 'url' in config",
-                    node_def.id
-                )))
-            })?;
-        let batch_size = node_def
-            .config
-            .get("batch_size")
-            .and_then(toml::Value::as_integer)
-            .map(|v| v as usize);
+        let url = node_def.config.get("url").and_then(toml::Value::as_str).ok_or_else(|| {
+            WaferError::Config(ConfigError::Message(format!(
+                "http sink '{}' requires 'url' in config",
+                node_def.id
+            )))
+        })?;
+        let batch_size =
+            node_def.config.get("batch_size").and_then(toml::Value::as_integer).map(|v| v as usize);
         let batch_timeout_ms = node_def
             .config
             .get("batch_timeout_ms")
@@ -586,10 +516,7 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
             .and_then(toml::Value::as_integer)
             .map_or(30, |v| v as u64);
 
-        let batch_config = HttpSinkBatchConfig {
-            batch_size,
-            batch_timeout_ms,
-        };
+        let batch_config = HttpSinkBatchConfig { batch_size, batch_timeout_ms };
 
         let sink = HttpSink::with_batching(&node_def.id, url, batch_config)
             .with_timeout(Duration::from_secs(timeout_secs));
@@ -597,16 +524,12 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
         Ok(AnyNode::from_sink(sink))
     } else {
         // Default to file sink
-        let path = node_def
-            .config
-            .get("path")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "sink '{}' requires 'path' in config",
-                    node_def.id
-                )))
-            })?;
+        let path = node_def.config.get("path").and_then(toml::Value::as_str).ok_or_else(|| {
+            WaferError::Config(ConfigError::Message(format!(
+                "sink '{}' requires 'path' in config",
+                node_def.id
+            )))
+        })?;
         Ok(AnyNode::from_sink(FileSink::new(&node_def.id, path)))
     }
 }

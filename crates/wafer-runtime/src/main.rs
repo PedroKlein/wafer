@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! WAFER Runtime - Main entry point.
 //!
 //! This binary wraps wafer-core with HTTP API enabled by default.
@@ -66,16 +67,10 @@ async fn main() -> Result<()> {
 
     match args.log_format {
         LogFormat::Pretty => {
-            tracing_subscriber::registry()
-                .with(fmt::layer())
-                .with(env_filter)
-                .init();
+            tracing_subscriber::registry().with(fmt::layer()).with(env_filter).init();
         }
         LogFormat::Json => {
-            tracing_subscriber::registry()
-                .with(fmt::layer().json())
-                .with(env_filter)
-                .init();
+            tracing_subscriber::registry().with(fmt::layer().json()).with(env_filter).init();
         }
     }
 
@@ -83,9 +78,7 @@ async fn main() -> Result<()> {
     info!(config = %args.config.display(), "Loading configuration");
 
     // Load configuration
-    let config = load_config(&args.config)
-        .await
-        .context("Failed to load configuration")?;
+    let config = load_config(&args.config).await.context("Failed to load configuration")?;
 
     let pipeline_name = config.pipeline.name.clone();
     let api_config = config.api.clone();
@@ -113,10 +106,7 @@ async fn main() -> Result<()> {
     // Start API server if enabled
     if !args.no_api && api_config.enabled {
         let api_bind = args.api_bind.unwrap_or(api_config.bind);
-        let api_server_config = ApiConfig {
-            bind: api_bind,
-            serve_metrics: serve_metrics_on_api,
-        };
+        let api_server_config = ApiConfig { bind: api_bind, serve_metrics: serve_metrics_on_api };
 
         let api_server = ApiServer::new(api_server_config, Arc::clone(&orchestrator))
             .await
@@ -136,10 +126,8 @@ async fn main() -> Result<()> {
     // Start separate metrics server if configured
     if metrics_config.enabled {
         if let Some(bind) = metrics_bind {
-            let metrics_server_config = MetricsServerConfig {
-                bind,
-                path: metrics_config.path.clone(),
-            };
+            let metrics_server_config =
+                MetricsServerConfig { bind, path: metrics_config.path.clone() };
 
             let metrics_server =
                 MetricsServer::new(metrics_server_config, Arc::clone(&orchestrator))
@@ -172,10 +160,7 @@ async fn main() -> Result<()> {
 
     // Run pipeline until completion or cancellation
     // Note: run() now takes &self (not &mut self) thanks to internal mutability
-    orchestrator
-        .run()
-        .await
-        .context("Pipeline execution failed")?;
+    orchestrator.run().await.context("Pipeline execution failed")?;
 
     // Signal server shutdown after pipeline stops
     server_shutdown.cancel();
@@ -186,9 +171,7 @@ async fn main() -> Result<()> {
 
 async fn shutdown_signal() {
     let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
+        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]

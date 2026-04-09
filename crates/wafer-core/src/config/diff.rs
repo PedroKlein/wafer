@@ -128,10 +128,7 @@ pub fn diff_configs(old: &DagConfig, new: &DagConfig) -> ConfigDiff {
 
 /// Check if a node type supports hot-swap.
 fn is_swappable_type(node_type: &NodeType) -> bool {
-    matches!(
-        node_type,
-        NodeType::Transform | NodeType::Router | NodeType::Joiner
-    )
+    matches!(node_type, NodeType::Transform | NodeType::Router | NodeType::Joiner)
 }
 
 /// Extract WASM path from a node's config if it changed.
@@ -214,10 +211,7 @@ mod tests {
 
     fn make_transform_node(id: &str, plugin_path: &str) -> NodeDefinition {
         let mut config = toml::map::Map::new();
-        config.insert(
-            "plugin_path".to_string(),
-            toml::Value::String(plugin_path.to_string()),
-        );
+        config.insert("plugin_path".to_string(), toml::Value::String(plugin_path.to_string()));
 
         NodeDefinition {
             id: id.to_string(),
@@ -252,10 +246,7 @@ mod tests {
     #[test]
     fn test_no_changes() {
         let config = make_dag_config(
-            vec![
-                make_source_node("src"),
-                make_transform_node("t1", "/v1.wasm"),
-            ],
+            vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 
@@ -267,18 +258,12 @@ mod tests {
     #[test]
     fn test_wasm_path_change() {
         let old = make_dag_config(
-            vec![
-                make_source_node("src"),
-                make_transform_node("t1", "/v1.wasm"),
-            ],
+            vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 
         let new = make_dag_config(
-            vec![
-                make_source_node("src"),
-                make_transform_node("t1", "/v2.wasm"),
-            ],
+            vec![make_source_node("src"), make_transform_node("t1", "/v2.wasm")],
             vec![make_edge("src", "t1")],
         );
 
@@ -296,10 +281,7 @@ mod tests {
         let old = make_dag_config(vec![make_source_node("src")], vec![]);
 
         let new = make_dag_config(
-            vec![
-                make_source_node("src"),
-                make_transform_node("t1", "/v1.wasm"),
-            ],
+            vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 
@@ -313,10 +295,7 @@ mod tests {
     #[test]
     fn test_node_removed() {
         let old = make_dag_config(
-            vec![
-                make_source_node("src"),
-                make_transform_node("t1", "/v1.wasm"),
-            ],
+            vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 

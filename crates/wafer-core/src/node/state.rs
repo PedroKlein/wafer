@@ -156,9 +156,7 @@ impl NodeStateTracker {
         let from_val = Self::state_to_u8(from);
         let to_val = Self::state_to_u8(to);
 
-        self.state
-            .compare_exchange(from_val, to_val, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+        self.state.compare_exchange(from_val, to_val, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 
     /// Check if this node accepts new messages.

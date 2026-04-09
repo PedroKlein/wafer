@@ -33,9 +33,9 @@ clean:
 fmt:
     cargo fmt --all
 
-# Run clippy lints
+# Run clippy lints (levels configured in [workspace.lints] in Cargo.toml)
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features
 
 # =============================================================================
 # Binary-specific Commands

@@ -26,8 +26,6 @@ pub struct MqttSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-
-
 /// An MQTT-based sink node that publishes messages to an MQTT broker.
 ///
 /// # Batching Support
@@ -307,10 +305,8 @@ impl Sink for MqttSink {
         self.batch_buffer.as_ref()?;
 
         // Update current buffer size
-        self.batch_stats.current_buffer_size = self
-            .batch_buffer
-            .as_ref()
-            .map_or(0, |b| b.len() as u64);
+        self.batch_stats.current_buffer_size =
+            self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();
@@ -326,14 +322,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_creation() {
-        let sink = MqttSink::new(
-            "test-sink",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
 
         assert_eq!(sink.id(), "test-sink");
         assert_eq!(sink.node_type(), "sink/mqtt");
@@ -379,27 +368,14 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_validate_success() {
-        let sink = MqttSink::new(
-            "test-sink",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
         assert!(sink.validate().is_ok());
     }
 
     #[tokio::test]
     async fn test_mqtt_sink_collect_before_init() {
-        let mut sink = MqttSink::new(
-            "test-sink",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let mut sink =
+            MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
         let env = RuntimeEnvelope::from_string("test", "data");
 
         let result = sink.collect(env).await;
@@ -417,10 +393,7 @@ mod tests {
             "test/topic",
             1,
             "test-client",
-            MqttSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            MqttSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_config.batch_size, Some(10));
@@ -436,10 +409,7 @@ mod tests {
             "test/topic",
             1,
             "test-client",
-            MqttSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            MqttSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_timeout(), Some(Duration::from_millis(500)));
@@ -447,14 +417,7 @@ mod tests {
 
     #[test]
     fn test_mqtt_sink_batch_timeout_none_without_batching() {
-        let sink = MqttSink::new(
-            "test-sink",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
         assert_eq!(sink.batch_timeout(), None);
     }
 
@@ -467,10 +430,7 @@ mod tests {
             "test/topic",
             1,
             "test-client",
-            MqttSinkBatchConfig {
-                batch_size: Some(0),
-                batch_timeout_ms: Some(1000),
-            },
+            MqttSinkBatchConfig { batch_size: Some(0), batch_timeout_ms: Some(1000) },
         );
 
         let result = sink.validate();

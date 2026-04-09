@@ -31,17 +31,12 @@ pub enum DlqReason {
 impl DlqReason {
     /// Create a `ProcessError` reason.
     pub fn process_error(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::ProcessError {
-            code: code.into(),
-            message: message.into(),
-        }
+        Self::ProcessError { code: code.into(), message: message.into() }
     }
 
     /// Create a `SinkError` reason.
     pub fn sink_error(message: impl Into<String>) -> Self {
-        Self::SinkError {
-            message: message.into(),
-        }
+        Self::SinkError { message: message.into() }
     }
 }
 
@@ -158,9 +153,7 @@ pub fn wrap_for_dlq(
     reason: DlqReason,
 ) -> RuntimeEnvelope {
     let dlq_envelope = DlqEnvelope::new(envelope, failed_edge, reason);
-    let payload = dlq_envelope
-        .to_json_bytes()
-        .expect("DlqEnvelope serialization should not fail");
+    let payload = dlq_envelope.to_json_bytes().expect("DlqEnvelope serialization should not fail");
 
     RuntimeEnvelope::new("dlq", payload).with_metadata("content_type", "application/json")
 }
@@ -269,10 +262,7 @@ mod tests {
         let wrapped = wrap_for_dlq(original, "edge-1", DlqReason::QueueFull);
 
         assert_eq!(wrapped.source, "dlq");
-        assert_eq!(
-            wrapped.metadata.get("content_type"),
-            Some(&"application/json".to_string())
-        );
+        assert_eq!(wrapped.metadata.get("content_type"), Some(&"application/json".to_string()));
 
         // Parse the payload back
         let dlq_envelope: DlqEnvelope = serde_json::from_slice(&wrapped.payload).unwrap();

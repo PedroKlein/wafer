@@ -55,17 +55,13 @@ impl RouterInstance {
         component: &Component,
         capabilities: Capabilities,
     ) -> Result<Self> {
-        let mut store = Store::new(
-            engine.inner(),
-            WaferState::with_capabilities(capabilities.clone()),
-        );
+        let mut store =
+            Store::new(engine.inner(), WaferState::with_capabilities(capabilities.clone()));
 
         // Set initial fuel
         store
             .set_fuel(engine.fuel_limit())
-            .map_err(|e| WaferError::PluginInit {
-                message: e.to_string(),
-            })?;
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
         // Set epoch deadline for cooperative interruption
         store.set_epoch_deadline(engine.epoch_deadline());
@@ -75,9 +71,7 @@ impl RouterInstance {
 
         let bindings = RouterNode::instantiate_async(&mut store, component, linker)
             .await
-            .map_err(|e| WaferError::PluginInit {
-                message: e.to_string(),
-            })?;
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
         Ok(Self {
             store,
@@ -101,9 +95,7 @@ impl RouterInstance {
             .pipeline_transform_lifecycle()
             .call_init(&mut self.store, config)
             .await
-            .map_err(|e| WaferError::PluginInit {
-                message: e.to_string(),
-            })?
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?
             .map_err(|e| WaferError::PluginInit { message: e })?;
         Ok(())
     }
@@ -123,9 +115,7 @@ impl RouterInstance {
             .pipeline_transform_lifecycle()
             .call_validate(&mut self.store, config)
             .await
-            .map_err(|e| WaferError::PluginInit {
-                message: e.to_string(),
-            })
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })
     }
 
     /// Call the lifecycle close function.
@@ -137,9 +127,7 @@ impl RouterInstance {
         // Reset fuel before close for consistent execution budget
         self.store
             .set_fuel(self.fuel_limit)
-            .map_err(|e| WaferError::PluginInit {
-                message: format!("failed to set fuel: {e}"),
-            })?;
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
 
         // Reset epoch deadline before close
         self.store.set_epoch_deadline(self.epoch_deadline);
@@ -148,9 +136,7 @@ impl RouterInstance {
             .pipeline_transform_lifecycle()
             .call_close(&mut self.store)
             .await
-            .map_err(|e| WaferError::PluginInit {
-                message: e.to_string(),
-            })?;
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
         Ok(())
     }
 
@@ -161,23 +147,16 @@ impl RouterInstance {
     /// Returns [`WaferError::ProcessError`] if the call fails.
     pub async fn call_output_ports(&mut self) -> Result<Vec<String>> {
         // Reset fuel before call for consistent metering
-        self.store
-            .set_fuel(self.fuel_limit)
-            .map_err(|e| WaferError::ProcessError {
-                code: "FUEL_ERROR".to_string(),
-                message: e.to_string(),
-            })?;
+        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::ProcessError {
+            code: "FUEL_ERROR".to_string(),
+            message: e.to_string(),
+        })?;
 
         self.store.set_epoch_deadline(self.epoch_deadline);
 
-        self.bindings
-            .pipeline_transform_router()
-            .call_output_ports(&mut self.store)
-            .await
-            .map_err(|e| WaferError::ProcessError {
-                code: "WASM_TRAP".to_string(),
-                message: e.to_string(),
-            })
+        self.bindings.pipeline_transform_router().call_output_ports(&mut self.store).await.map_err(
+            |e| WaferError::ProcessError { code: "WASM_TRAP".to_string(), message: e.to_string() },
+        )
     }
 
     /// Call the router route function.
@@ -195,12 +174,10 @@ impl RouterInstance {
         >,
     > {
         // Reset fuel before each call for consistent metering
-        self.store
-            .set_fuel(self.fuel_limit)
-            .map_err(|e| WaferError::ProcessError {
-                code: "FUEL_ERROR".to_string(),
-                message: e.to_string(),
-            })?;
+        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::ProcessError {
+            code: "FUEL_ERROR".to_string(),
+            message: e.to_string(),
+        })?;
 
         // Reset epoch deadline before each call
         self.store.set_epoch_deadline(self.epoch_deadline);
@@ -254,13 +231,7 @@ impl WasmRouter {
     /// Call `init()` before `route()`.
     #[must_use]
     pub fn new(engine: WaferEngine, instance: RouterInstance, config: NodeConfig) -> Self {
-        Self {
-            config,
-            engine,
-            instance,
-            initialized: false,
-            cached_ports: Vec::new(),
-        }
+        Self { config, engine, instance, initialized: false, cached_ports: Vec::new() }
     }
 
     /// Convert NodeConfig to WIT NodeConfig

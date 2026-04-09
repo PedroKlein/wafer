@@ -25,10 +25,7 @@ pub struct ApiConfig {
 
 impl Default for ApiConfig {
     fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:9090".parse().unwrap(),
-            serve_metrics: true,
-        }
+        Self { bind: "127.0.0.1:9090".parse().unwrap(), serve_metrics: true }
     }
 }
 
@@ -65,9 +62,7 @@ impl ApiServer {
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        axum::serve(self.listener, self.router)
-            .with_graceful_shutdown(shutdown)
-            .await
+        axum::serve(self.listener, self.router).with_graceful_shutdown(shutdown).await
     }
 }
 
@@ -79,10 +74,7 @@ fn create_router<C: PipelineControl + 'static>(controller: Arc<C>, serve_metrics
         .route("/ready", get(handlers::ready::<C>))
         // Pipeline endpoints
         .route("/api/v1/pipeline", get(handlers::get_pipeline::<C>))
-        .route(
-            "/api/v1/pipeline/reload",
-            post(handlers::reload_config::<C>),
-        )
+        .route("/api/v1/pipeline/reload", post(handlers::reload_config::<C>))
         .route("/api/v1/pipeline/drain", post(handlers::drain::<C>))
         .route("/api/v1/pipeline/shutdown", post(handlers::shutdown::<C>))
         // Node endpoints
@@ -94,9 +86,7 @@ fn create_router<C: PipelineControl + 'static>(controller: Arc<C>, serve_metrics
         router = router.route("/metrics", get(handlers::metrics::<C>));
     }
 
-    router
-        .layer(TraceLayer::new_for_http())
-        .with_state(controller)
+    router.layer(TraceLayer::new_for_http()).with_state(controller)
 }
 
 /// Starts the API server as a convenience function.

@@ -16,10 +16,7 @@ pub enum RegistryError {
 
     /// No version matching the requirement was found.
     #[error("no version matching {requirement} found for {package}")]
-    VersionNotFound {
-        package: String,
-        requirement: String,
-    },
+    VersionNotFound { package: String, requirement: String },
 
     /// Cache operation failed.
     #[error("cache error: {0}")]

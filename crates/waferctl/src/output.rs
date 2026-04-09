@@ -73,10 +73,7 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
                 processed: n.messages_processed,
                 failed: n.messages_failed,
                 avg_ms: format!("{:.2}", n.avg_process_us as f64 / 1000.0),
-                queue: n
-                    .queue_depth
-                    .map(|d| d.to_string())
-                    .unwrap_or_else(|| "-".to_string()),
+                queue: n.queue_depth.map(|d| d.to_string()).unwrap_or_else(|| "-".to_string()),
             })
             .collect();
 
@@ -153,11 +150,8 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
         for (name, metric) in &metrics.counters {
             println!("  {} - {}", name, metric.description);
             for value in &metric.values {
-                let labels: Vec<String> = value
-                    .labels
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect();
+                let labels: Vec<String> =
+                    value.labels.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {
@@ -173,11 +167,8 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
         for (name, metric) in &metrics.gauges {
             println!("  {} - {}", name, metric.description);
             for value in &metric.values {
-                let labels: Vec<String> = value
-                    .labels
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect();
+                let labels: Vec<String> =
+                    value.labels.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {
@@ -195,11 +186,8 @@ pub fn print_config(config: &CtlConfig) {
         println!("  (none configured)");
     } else {
         for (name, endpoint) in &config.endpoints {
-            let default_marker = if config.default.as_deref() == Some(name) {
-                " (default)"
-            } else {
-                ""
-            };
+            let default_marker =
+                if config.default.as_deref() == Some(name) { " (default)" } else { "" };
             println!("  {}: {}{}", name, endpoint.url, default_marker);
         }
     }

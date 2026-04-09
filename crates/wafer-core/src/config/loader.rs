@@ -205,10 +205,7 @@ to = "sink"
 
         let config = load_config(file.path()).await.unwrap();
         assert_eq!(config.pipeline.name, "test-pipeline");
-        assert_eq!(
-            config.pipeline.description,
-            Some("A test pipeline".to_string())
-        );
+        assert_eq!(config.pipeline.description, Some("A test pipeline".to_string()));
         assert!(config.api.enabled);
         assert_eq!(config.api.bind, "127.0.0.1:8080".parse().unwrap());
         assert!(config.metrics.enabled);

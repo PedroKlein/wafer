@@ -37,40 +37,24 @@ pub async fn ready<C: PipelineControl>(State(controller): State<Arc<C>>) -> impl
     let status = controller.status();
 
     match status.state {
-        PipelineState::Running => (
-            StatusCode::OK,
-            Json(ReadyResponse {
-                ready: true,
-                reason: None,
-            }),
-        ),
+        PipelineState::Running => {
+            (StatusCode::OK, Json(ReadyResponse { ready: true, reason: None }))
+        }
         PipelineState::Starting => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ReadyResponse {
-                ready: false,
-                reason: Some("starting".to_string()),
-            }),
+            Json(ReadyResponse { ready: false, reason: Some("starting".to_string()) }),
         ),
         PipelineState::Draining => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ReadyResponse {
-                ready: false,
-                reason: Some("draining".to_string()),
-            }),
+            Json(ReadyResponse { ready: false, reason: Some("draining".to_string()) }),
         ),
         PipelineState::Stopped => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ReadyResponse {
-                ready: false,
-                reason: Some("stopped".to_string()),
-            }),
+            Json(ReadyResponse { ready: false, reason: Some("stopped".to_string()) }),
         ),
         PipelineState::Error => (
             StatusCode::SERVICE_UNAVAILABLE,
-            Json(ReadyResponse {
-                ready: false,
-                reason: Some("error".to_string()),
-            }),
+            Json(ReadyResponse { ready: false, reason: Some("error".to_string()) }),
         ),
     }
 }
@@ -96,14 +80,10 @@ pub async fn get_node<C: PipelineControl>(
 ) -> Result<Json<NodeInfo>, (StatusCode, Json<ErrorResponse>)> {
     let nodes = controller.nodes();
 
-    nodes
-        .into_iter()
-        .find(|n| n.id == id)
-        .map(Json)
-        .ok_or_else(|| {
-            let err = ControlError::NodeNotFound { node_id: id };
-            (StatusCode::NOT_FOUND, Json(err.into()))
-        })
+    nodes.into_iter().find(|n| n.id == id).map(Json).ok_or_else(|| {
+        let err = ControlError::NodeNotFound { node_id: id };
+        (StatusCode::NOT_FOUND, Json(err.into()))
+    })
 }
 
 /// POST /api/v1/nodes/:id/hot-swap - Trigger hot-swap
@@ -142,17 +122,13 @@ pub async fn reload_config<C: PipelineControl>(
 pub async fn drain<C: PipelineControl>(
     State(controller): State<Arc<C>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    controller
-        .drain()
-        .await
-        .map(|()| StatusCode::OK)
-        .map_err(|err| {
-            let status = match &err {
-                ControlError::InvalidState { .. } => StatusCode::CONFLICT,
-                _ => StatusCode::INTERNAL_SERVER_ERROR,
-            };
-            (status, Json(err.into()))
-        })
+    controller.drain().await.map(|()| StatusCode::OK).map_err(|err| {
+        let status = match &err {
+            ControlError::InvalidState { .. } => StatusCode::CONFLICT,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, Json(err.into()))
+    })
 }
 
 /// POST /api/v1/pipeline/shutdown - Shutdown pipeline
@@ -171,13 +147,7 @@ pub async fn metrics<C: PipelineControl>(State(controller): State<Arc<C>>) -> im
     let snapshot = controller.metrics();
     let prometheus_text = snapshot.to_prometheus();
 
-    (
-        [(
-            axum::http::header::CONTENT_TYPE,
-            "text/plain; version=0.0.4",
-        )],
-        prometheus_text,
-    )
+    ([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], prometheus_text)
 }
 
 #[cfg(test)]
@@ -281,15 +251,11 @@ mod tests {
             // Default behavior: check if node exists and is swappable
             let node = self.nodes.iter().find(|n| n.id == node_id);
             match node {
-                None => Err(ControlError::NodeNotFound {
-                    node_id: node_id.to_string(),
-                }),
-                Some(n) if !n.swappable => Err(ControlError::NotSwappable {
-                    node_id: node_id.to_string(),
-                }),
-                Some(_) => Err(ControlError::NotImplemented {
-                    operation: "hot_swap".to_string(),
-                }),
+                None => Err(ControlError::NodeNotFound { node_id: node_id.to_string() }),
+                Some(n) if !n.swappable => {
+                    Err(ControlError::NotSwappable { node_id: node_id.to_string() })
+                }
+                Some(_) => Err(ControlError::NotImplemented { operation: "hot_swap".to_string() }),
             }
         }
 
@@ -297,9 +263,7 @@ mod tests {
             if let Some(ref result) = self.reload_result {
                 return result.clone();
             }
-            Err(ControlError::NotImplemented {
-                operation: "reload_config".to_string(),
-            })
+            Err(ControlError::NotImplemented { operation: "reload_config".to_string() })
         }
 
         async fn drain(&self) -> Result<(), ControlError> {
@@ -349,30 +313,18 @@ mod tests {
             .route("/health", get(health))
             .route("/ready", get(ready::<MockController>))
             .route("/api/v1/pipeline", get(get_pipeline::<MockController>))
-            .route(
-                "/api/v1/pipeline/reload",
-                post(reload_config::<MockController>),
-            )
+            .route("/api/v1/pipeline/reload", post(reload_config::<MockController>))
             .route("/api/v1/pipeline/drain", post(drain::<MockController>))
-            .route(
-                "/api/v1/pipeline/shutdown",
-                post(shutdown::<MockController>),
-            )
+            .route("/api/v1/pipeline/shutdown", post(shutdown::<MockController>))
             .route("/api/v1/nodes", get(list_nodes::<MockController>))
             .route("/api/v1/nodes/{id}", get(get_node::<MockController>))
-            .route(
-                "/api/v1/nodes/{id}/hot-swap",
-                post(hot_swap::<MockController>),
-            )
+            .route("/api/v1/nodes/{id}/hot-swap", post(hot_swap::<MockController>))
             .route("/metrics", get(metrics::<MockController>))
             .with_state(controller)
     }
 
     async fn get_body_string(body: Body) -> String {
-        let bytes = http_body_util::BodyExt::collect(body)
-            .await
-            .unwrap()
-            .to_bytes();
+        let bytes = http_body_util::BodyExt::collect(body).await.unwrap().to_bytes();
         String::from_utf8(bytes.to_vec()).unwrap()
     }
 
@@ -383,10 +335,8 @@ mod tests {
         let controller = Arc::new(MockController::new());
         let router = create_test_router(controller);
 
-        let response = router
-            .oneshot(Request::get("/health").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response =
+            router.oneshot(Request::get("/health").body(Body::empty()).unwrap()).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_body_string(response.into_body()).await;
@@ -400,10 +350,8 @@ mod tests {
         let controller = Arc::new(MockController::new().with_state(PipelineState::Running));
         let router = create_test_router(controller);
 
-        let response = router
-            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response =
+            router.oneshot(Request::get("/ready").body(Body::empty()).unwrap()).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
         let body = get_body_string(response.into_body()).await;
@@ -415,10 +363,8 @@ mod tests {
         let controller = Arc::new(MockController::new().with_state(PipelineState::Draining));
         let router = create_test_router(controller);
 
-        let response = router
-            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response =
+            router.oneshot(Request::get("/ready").body(Body::empty()).unwrap()).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = get_body_string(response.into_body()).await;
@@ -431,10 +377,8 @@ mod tests {
         let controller = Arc::new(MockController::new().with_state(PipelineState::Starting));
         let router = create_test_router(controller);
 
-        let response = router
-            .oneshot(Request::get("/ready").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response =
+            router.oneshot(Request::get("/ready").body(Body::empty()).unwrap()).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         let body = get_body_string(response.into_body()).await;
@@ -449,11 +393,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::get("/api/v1/pipeline")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/v1/pipeline").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -488,11 +428,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::get("/api/v1/nodes/transform")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/v1/nodes/transform").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -509,11 +445,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::get("/api/v1/nodes/nonexistent")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::get("/api/v1/nodes/nonexistent").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -531,9 +463,7 @@ mod tests {
 
         let response = router
             .oneshot(
-                Request::post("/api/v1/nodes/nonexistent/hot-swap")
-                    .body(Body::empty())
-                    .unwrap(),
+                Request::post("/api/v1/nodes/nonexistent/hot-swap").body(Body::empty()).unwrap(),
             )
             .await
             .unwrap();
@@ -547,11 +477,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/nodes/source/hot-swap")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/nodes/source/hot-swap").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -566,11 +492,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/nodes/transform/hot-swap")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/nodes/transform/hot-swap").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -584,11 +506,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/nodes/transform/hot-swap")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/nodes/transform/hot-swap").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -603,11 +521,7 @@ mod tests {
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/pipeline/reload")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/pipeline/reload").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -616,19 +530,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_reload_config_returns_400_for_config_error() {
-        let controller = Arc::new(MockController::new().with_reload_result(Err(
-            ControlError::ConfigError {
+        let controller =
+            Arc::new(MockController::new().with_reload_result(Err(ControlError::ConfigError {
                 message: "invalid TOML".to_string(),
-            },
-        )));
+            })));
         let router = create_test_router(controller);
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/pipeline/reload")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/pipeline/reload").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -643,11 +552,7 @@ mod tests {
         let router = create_test_router(controller.clone());
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/pipeline/drain")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/pipeline/drain").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -663,11 +568,7 @@ mod tests {
         let router = create_test_router(controller.clone());
 
         let response = router
-            .oneshot(
-                Request::post("/api/v1/pipeline/shutdown")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
+            .oneshot(Request::post("/api/v1/pipeline/shutdown").body(Body::empty()).unwrap())
             .await
             .unwrap();
 
@@ -682,20 +583,14 @@ mod tests {
         let controller = Arc::new(MockController::new());
         let router = create_test_router(controller);
 
-        let response = router
-            .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
+        let response =
+            router.oneshot(Request::get("/metrics").body(Body::empty()).unwrap()).await.unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
 
         // Check content type header
-        let content_type = response
-            .headers()
-            .get(axum::http::header::CONTENT_TYPE)
-            .unwrap()
-            .to_str()
-            .unwrap();
+        let content_type =
+            response.headers().get(axum::http::header::CONTENT_TYPE).unwrap().to_str().unwrap();
         assert!(content_type.contains("text/plain"));
 
         let body = get_body_string(response.into_body()).await;

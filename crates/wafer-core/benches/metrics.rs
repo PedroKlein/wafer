@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::print_stderr)]
 //! Metrics endpoint benchmarks for WAFER.
 //!
 //! Measures the performance of the Prometheus metrics registry to ensure
@@ -77,16 +78,12 @@ fn bench_metrics_encoding(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(1)); // One encode per iteration
 
-        group.bench_with_input(
-            BenchmarkId::new("encode", name),
-            &registry,
-            |b, registry| {
-                b.iter(|| {
-                    let output = registry.encode();
-                    black_box(output)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("encode", name), &registry, |b, registry| {
+            b.iter(|| {
+                let output = registry.encode();
+                black_box(output)
+            })
+        });
     }
 
     group.finish();
@@ -214,9 +211,8 @@ fn bench_hotswap_metrics(c: &mut Criterion) {
         })
     });
 
-    group.bench_function("record_hotswap_failure", |b| {
-        b.iter(|| registry.record_hotswap_failure())
-    });
+    group
+        .bench_function("record_hotswap_failure", |b| b.iter(|| registry.record_hotswap_failure()));
 
     group.finish();
 }

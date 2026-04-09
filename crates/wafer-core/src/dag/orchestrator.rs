@@ -614,9 +614,7 @@ impl DagOrchestrator {
 
             let node = node_arc.lock().await;
             if !node.is_swappable() {
-                return Err(WaferError::from(SwapError::NotSwappable(
-                    node_id.to_string(),
-                )));
+                return Err(WaferError::from(SwapError::NotSwappable(node_id.to_string())));
             }
 
             let tracker = node.state_tracker_clone();

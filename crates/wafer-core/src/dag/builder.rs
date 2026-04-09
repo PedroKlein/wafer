@@ -175,17 +175,13 @@ impl DagOrchestrator {
 
     pub async fn register_node(&self, id: &str, node: AnyNode) -> Result<()> {
         if !self.node_indices.contains_key(id) {
-            return Err(WaferError::Config(ConfigError::Message(format!(
-                "Unknown node ID: {id}"
-            ))));
+            return Err(WaferError::Config(ConfigError::Message(format!("Unknown node ID: {id}"))));
         }
 
         // Register node with metrics registry (http-api feature)
         #[cfg(feature = "http-api")]
         {
-            self.control_state
-                .metrics_registry
-                .register_node(id, node.to_string());
+            self.control_state.metrics_registry.register_node(id, node.to_string());
         }
 
         let mut nodes = self.nodes.lock().await;
@@ -213,18 +209,13 @@ impl DagOrchestrator {
         })?;
 
         for edge in &self.config.edges {
-            let capacity = edge
-                .queue_capacity
-                .unwrap_or(self.config.default_queue_capacity);
+            let capacity = edge.queue_capacity.unwrap_or(self.config.default_queue_capacity);
             let queue = BoundedQueue::new(capacity);
             let (sender, receiver) = queue.split();
 
             let from_port = edge.from_port.as_deref().unwrap_or("default");
             let to_port = edge.to_port.as_deref().unwrap_or("default");
-            let key = (
-                format!("{}:{}", edge.from, from_port),
-                format!("{}:{}", edge.to, to_port),
-            );
+            let key = (format!("{}:{}", edge.from, from_port), format!("{}:{}", edge.to, to_port));
             run_state.queue_senders.insert(key.clone(), sender);
             run_state.queue_receivers.insert(key, receiver);
 
@@ -244,11 +235,8 @@ impl DagOrchestrator {
     /// Validate that all nodes defined in config are registered.
     pub(super) async fn validate_nodes_registered(&self) -> Result<()> {
         let nodes = self.nodes.lock().await;
-        let missing: Vec<_> = self
-            .node_indices
-            .keys()
-            .filter(|id| !nodes.contains_key(*id))
-            .collect();
+        let missing: Vec<_> =
+            self.node_indices.keys().filter(|id| !nodes.contains_key(*id)).collect();
 
         if !missing.is_empty() {
             return Err(WaferError::Config(ConfigError::Message(format!(
@@ -267,9 +255,7 @@ impl DagOrchestrator {
 
     fn validate_not_empty(&self) -> Result<()> {
         if self.node_indices.is_empty() {
-            return Err(WaferError::Config(ConfigError::Message(
-                "DAG has no nodes".into(),
-            )));
+            return Err(WaferError::Config(ConfigError::Message("DAG has no nodes".into())));
         }
         Ok(())
     }
@@ -283,14 +269,8 @@ impl DagOrchestrator {
             .node_indices
             .iter()
             .filter(|(_, idx)| {
-                let incoming = self
-                    .graph
-                    .neighbors_directed(**idx, Direction::Incoming)
-                    .count();
-                let outgoing = self
-                    .graph
-                    .neighbors_directed(**idx, Direction::Outgoing)
-                    .count();
+                let incoming = self.graph.neighbors_directed(**idx, Direction::Incoming).count();
+                let outgoing = self.graph.neighbors_directed(**idx, Direction::Outgoing).count();
                 incoming == 0 && outgoing == 0
             })
             .map(|(id, _)| id.as_str())
@@ -353,10 +333,7 @@ mod tests {
                 make_node("transform", NodeType::Transform),
                 make_node("sink", NodeType::Sink),
             ],
-            vec![
-                make_edge("source", "transform"),
-                make_edge("transform", "sink"),
-            ],
+            vec![make_edge("source", "transform"), make_edge("transform", "sink")],
         );
 
         let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
@@ -373,11 +350,7 @@ mod tests {
                 make_node("b", NodeType::Transform),
                 make_node("c", NodeType::Transform),
             ],
-            vec![
-                make_edge("a", "b"),
-                make_edge("b", "c"),
-                make_edge("c", "a"),
-            ],
+            vec![make_edge("a", "b"), make_edge("b", "c"), make_edge("c", "a")],
         );
 
         let result = DagOrchestrator::from_dag_config(config);
@@ -389,14 +362,8 @@ mod tests {
     #[test]
     fn test_dag_no_source() {
         let config = make_dag_config(
-            vec![
-                make_node("transform", NodeType::Transform),
-                make_node("sink", NodeType::Sink),
-            ],
-            vec![
-                make_edge("sink", "transform"),
-                make_edge("transform", "sink"),
-            ],
+            vec![make_node("transform", NodeType::Transform), make_node("sink", NodeType::Sink)],
+            vec![make_edge("sink", "transform"), make_edge("transform", "sink")],
         );
 
         let result = DagOrchestrator::from_dag_config(config);
@@ -491,10 +458,7 @@ mod tests {
                 make_node("transform", NodeType::Transform),
                 make_node("sink", NodeType::Sink),
             ],
-            vec![
-                make_edge("source", "transform"),
-                make_edge("transform", "sink"),
-            ],
+            vec![make_edge("source", "transform"), make_edge("transform", "sink")],
         );
 
         let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
@@ -504,10 +468,9 @@ mod tests {
         let run_state = run_state.as_ref().unwrap();
         assert_eq!(run_state.queue_senders.len(), 2);
         assert_eq!(run_state.queue_receivers.len(), 2);
-        assert!(run_state.queue_senders.contains_key(&(
-            "source:default".to_string(),
-            "transform:default".to_string()
-        )));
+        assert!(run_state
+            .queue_senders
+            .contains_key(&("source:default".to_string(), "transform:default".to_string())));
         assert!(run_state
             .queue_senders
             .contains_key(&("transform:default".to_string(), "sink:default".to_string())));
@@ -517,10 +480,7 @@ mod tests {
     async fn test_wire_queues_uses_custom_capacity() {
         let config = DagConfig {
             pipeline: PipelineConfig::default(),
-            nodes: vec![
-                make_node("source", NodeType::Source),
-                make_node("sink", NodeType::Sink),
-            ],
+            nodes: vec![make_node("source", NodeType::Source), make_node("sink", NodeType::Sink)],
             edges: vec![EdgeDefinition {
                 from: "source".to_string(),
                 to: "sink".to_string(),
@@ -595,18 +555,12 @@ mod tests {
         let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
 
         // Initialize DLQ
-        orchestrator
-            .initialize_dlq(&dlq_config)
-            .await
-            .expect("Failed to initialize DLQ");
+        orchestrator.initialize_dlq(&dlq_config).await.expect("Failed to initialize DLQ");
 
         // Verify DLQ sender was set
         {
             let dlq_sender = orchestrator.control_state.dlq_sender.lock().await;
-            assert!(
-                dlq_sender.is_some(),
-                "DLQ sender should be set after initialization"
-            );
+            assert!(dlq_sender.is_some(), "DLQ sender should be set after initialization");
         }
 
         // Clean up
@@ -646,10 +600,7 @@ mod tests {
         // Verify DLQ sender was set
         {
             let dlq_sender = orchestrator.control_state.dlq_sender.lock().await;
-            assert!(
-                dlq_sender.is_some(),
-                "DLQ sender should be set after initialization"
-            );
+            assert!(dlq_sender.is_some(), "DLQ sender should be set after initialization");
         }
     }
 
@@ -711,9 +662,6 @@ mod tests {
         let result = orchestrator.initialize_dlq(&dlq_config).await;
         assert!(result.is_err(), "Should fail when file sink has no path");
         let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("path"),
-            "Error should mention missing path: {err}"
-        );
+        assert!(err.contains("path"), "Error should mention missing path: {err}");
     }
 }

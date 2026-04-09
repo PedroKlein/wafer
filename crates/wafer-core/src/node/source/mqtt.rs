@@ -189,12 +189,9 @@ impl Lifecycle for MqttSource {
             let (client, eventloop) = AsyncClient::new(options, 10);
 
             let qos = Self::map_qos(self.qos);
-            client
-                .subscribe(&self.topic, qos)
-                .await
-                .map_err(|e| WaferError::PluginInit {
-                    message: format!("Failed to subscribe to MQTT topic '{}': {}", self.topic, e),
-                })?;
+            client.subscribe(&self.topic, qos).await.map_err(|e| WaferError::PluginInit {
+                message: format!("Failed to subscribe to MQTT topic '{}': {}", self.topic, e),
+            })?;
 
             let (tx, rx) = mpsc::channel(100);
             let handle = spawn_eventloop_task(eventloop, tx, self.id.clone());
@@ -226,12 +223,9 @@ impl Source for MqttSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let rx = self
-                .message_rx
-                .as_mut()
-                .ok_or_else(|| WaferError::PluginInit {
-                    message: "MqttSource not initialized - call init() first".into(),
-                })?;
+            let rx = self.message_rx.as_mut().ok_or_else(|| WaferError::PluginInit {
+                message: "MqttSource not initialized - call init() first".into(),
+            })?;
 
             match rx.recv().await {
                 Some(publish) => {
@@ -251,14 +245,8 @@ mod tests {
 
     #[test]
     fn test_mqtt_source_creation() {
-        let source = MqttSource::new(
-            "test-mqtt",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let source =
+            MqttSource::new("test-mqtt", "localhost", 1883, "test/topic", 1, "test-client");
         assert_eq!(source.id(), "test-mqtt");
         assert_eq!(source.node_type(), "source/mqtt");
         assert_eq!(source.broker(), "localhost");
@@ -295,27 +283,15 @@ mod tests {
 
     #[test]
     fn test_mqtt_source_validate_success() {
-        let source = MqttSource::new(
-            "test-mqtt",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let source =
+            MqttSource::new("test-mqtt", "localhost", 1883, "test/topic", 1, "test-client");
         assert!(source.validate().is_ok());
     }
 
     #[tokio::test]
     async fn test_mqtt_source_poll_before_init() {
-        let mut source = MqttSource::new(
-            "test-mqtt",
-            "localhost",
-            1883,
-            "test/topic",
-            1,
-            "test-client",
-        );
+        let mut source =
+            MqttSource::new("test-mqtt", "localhost", 1883, "test/topic", 1, "test-client");
 
         let result = source.poll().await;
         assert!(result.is_err());

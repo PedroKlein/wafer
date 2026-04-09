@@ -25,8 +25,6 @@ pub struct HttpSinkBatchConfig {
     pub batch_timeout_ms: Option<u64>,
 }
 
-
-
 /// An HTTP-based sink node that sends messages to an HTTP endpoint.
 ///
 /// # Batching Support
@@ -176,15 +174,11 @@ impl HttpSink {
             .collect();
 
         let json_body = serde_json::to_vec(&payloads).map_err(|e| {
-            WaferError::Io(std::io::Error::other(format!(
-                "Failed to serialize batch: {e}"
-            )))
+            WaferError::Io(std::io::Error::other(format!("Failed to serialize batch: {e}")))
         })?;
 
-        let mut request = client
-            .post(&self.url)
-            .header("Content-Type", "application/json")
-            .body(json_body);
+        let mut request =
+            client.post(&self.url).header("Content-Type", "application/json").body(json_body);
 
         // Add custom headers
         for (name, value) in &self.headers {
@@ -192,9 +186,7 @@ impl HttpSink {
         }
 
         let response = request.send().await.map_err(|e| {
-            WaferError::Io(std::io::Error::other(format!(
-                "HTTP batch request failed: {e}"
-            )))
+            WaferError::Io(std::io::Error::other(format!("HTTP batch request failed: {e}")))
         })?;
 
         if !response.status().is_success() {
@@ -249,12 +241,9 @@ impl Lifecycle for HttpSink {
 
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            let client = reqwest::Client::builder()
-                .timeout(self.timeout)
-                .build()
-                .map_err(|e| WaferError::PluginInit {
-                    message: format!("Failed to create HTTP client: {e}"),
-                })?;
+            let client = reqwest::Client::builder().timeout(self.timeout).build().map_err(|e| {
+                WaferError::PluginInit { message: format!("Failed to create HTTP client: {e}") }
+            })?;
 
             self.client = Some(client);
 
@@ -340,10 +329,8 @@ impl Sink for HttpSink {
         self.batch_buffer.as_ref()?;
 
         // Update current buffer size
-        self.batch_stats.current_buffer_size = self
-            .batch_buffer
-            .as_ref()
-            .map_or(0, |b| b.len() as u64);
+        self.batch_stats.current_buffer_size =
+            self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
         // Take the stats and reset counters
         let stats = self.batch_stats.clone();
@@ -392,10 +379,7 @@ mod tests {
         let sink = HttpSink::with_batching(
             "test-sink",
             "http://localhost:8080/api",
-            HttpSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            HttpSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_config.batch_size, Some(10));
@@ -407,10 +391,7 @@ mod tests {
         let sink = HttpSink::with_batching(
             "test-sink",
             "http://localhost:8080/api",
-            HttpSinkBatchConfig {
-                batch_size: Some(10),
-                batch_timeout_ms: Some(500),
-            },
+            HttpSinkBatchConfig { batch_size: Some(10), batch_timeout_ms: Some(500) },
         );
 
         assert_eq!(sink.batch_timeout(), Some(Duration::from_millis(500)));
@@ -427,10 +408,7 @@ mod tests {
         let sink = HttpSink::with_batching(
             "test-sink",
             "http://localhost:8080/api",
-            HttpSinkBatchConfig {
-                batch_size: Some(0),
-                batch_timeout_ms: Some(1000),
-            },
+            HttpSinkBatchConfig { batch_size: Some(0), batch_timeout_ms: Some(1000) },
         );
 
         let result = sink.validate();
@@ -445,10 +423,7 @@ mod tests {
             .with_header("X-Custom", "value");
 
         assert_eq!(sink.headers.len(), 2);
-        assert_eq!(
-            sink.headers[0],
-            ("Authorization".to_string(), "Bearer token123".to_string())
-        );
+        assert_eq!(sink.headers[0], ("Authorization".to_string(), "Bearer token123".to_string()));
     }
 
     #[test]

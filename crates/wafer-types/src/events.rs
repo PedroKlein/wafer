@@ -5,25 +5,11 @@ use crate::{HotSwapResult, NodeState};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum PipelineEvent {
-    HotSwapStarted {
-        node_id: String,
-    },
-    HotSwapCompleted {
-        node_id: String,
-        result: HotSwapResult,
-    },
-    HotSwapFailed {
-        node_id: String,
-        error: String,
-    },
-    NodeStateChanged {
-        node_id: String,
-        old_state: NodeState,
-        new_state: NodeState,
-    },
-    ConfigReloaded {
-        swapped_nodes: Vec<String>,
-    },
+    HotSwapStarted { node_id: String },
+    HotSwapCompleted { node_id: String, result: HotSwapResult },
+    HotSwapFailed { node_id: String, error: String },
+    NodeStateChanged { node_id: String, old_state: NodeState, new_state: NodeState },
+    ConfigReloaded { swapped_nodes: Vec<String> },
     DrainStarted,
     DrainCompleted,
     ShutdownStarted,
@@ -75,21 +61,14 @@ mod tests {
     #[test]
     fn test_all_event_types() {
         let events = vec![
-            PipelineEvent::HotSwapStarted {
-                node_id: "a".to_string(),
-            },
-            PipelineEvent::HotSwapFailed {
-                node_id: "a".to_string(),
-                error: "test".to_string(),
-            },
+            PipelineEvent::HotSwapStarted { node_id: "a".to_string() },
+            PipelineEvent::HotSwapFailed { node_id: "a".to_string(), error: "test".to_string() },
             PipelineEvent::NodeStateChanged {
                 node_id: "a".to_string(),
                 old_state: NodeState::Running,
                 new_state: NodeState::Draining,
             },
-            PipelineEvent::ConfigReloaded {
-                swapped_nodes: vec!["a".to_string()],
-            },
+            PipelineEvent::ConfigReloaded { swapped_nodes: vec!["a".to_string()] },
             PipelineEvent::DrainStarted,
             PipelineEvent::DrainCompleted,
             PipelineEvent::ShutdownStarted,

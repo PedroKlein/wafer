@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/wafer-core",
-    "crates/wafer-runtime",
-    "crates/wafer-types",
-    "crates/waferctl",
+  "crates/wafer-core",
+  "crates/wafer-runtime",
+  "crates/wafer-types",
+  "crates/waferctl",
 ]
 exclude = ["plugins/*"]
 
@@ -31,10 +31,21 @@ petgraph = "0.8"
 # Can switch back to crates.io when wasmtime 42.x releases.
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main" }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main" }
-wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main", features = ["onnx"] }
+wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main", features = [
+  "onnx",
+] }
 
 # Async runtime
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "io-std", "sync", "time", "signal", "fs"] }
+tokio = { version = "1", features = [
+  "rt",
+  "rt-multi-thread",
+  "macros",
+  "io-std",
+  "sync",
+  "time",
+  "signal",
+  "fs",
+] }
 tokio-util = "0.7"
 
 # Serialization
@@ -56,7 +67,10 @@ clap = { version = "4", features = ["derive"] }
 # HTTP (feature-gated in wafer-core)
 axum = "0.8"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+] }
 
 # Metrics
 prometheus-client = "0.23"
@@ -76,6 +90,45 @@ sha2 = "0.10"
 hex = "0.4"
 dirs = "6"
 futures-util = "0.3"
+
+[workspace.lints.rust]
+future-incompatible = { level = "warn", priority = -1 }
+nonstandard-style = { level = "deny", priority = -1 }
+rust-2018-idioms = { level = "warn", priority = -1 }
+
+[workspace.lints.clippy]
+# Groups (Ch2.2, Ch2.5)
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+
+# Performance (Ch2.3, Ch3)
+redundant_clone = "deny"
+large_enum_variant = "warn"
+needless_collect = "warn"
+clone_on_copy = "deny"
+
+# Error handling (Ch4.2)
+# TODO: promote to "deny" after fixing existing violations
+unwrap_used = "warn"
+expect_used = "warn"
+
+# Style & idioms (Ch1, Ch2.3)
+needless_borrow = "deny"
+manual_let_else = "warn"
+or_fun_call = "warn"
+implicit_clone = "warn"
+inefficient_to_string = "warn"
+needless_pass_by_value = "warn"
+
+# Documentation (Ch8.8)
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+
+# Debug artifacts
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
 
 [patch.crates-io]
 # NOTE: ort version must match what wasmtime-wasi-nn expects. Cannot upgrade independently.

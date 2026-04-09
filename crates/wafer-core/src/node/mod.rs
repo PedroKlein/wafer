@@ -173,10 +173,7 @@ impl AnyNode {
     /// Native Source and Sink nodes do not.
     #[must_use]
     pub fn is_swappable(&self) -> bool {
-        matches!(
-            self,
-            AnyNode::Transform(_, _) | AnyNode::Router(_, _) | AnyNode::Joiner(_, _)
-        )
+        matches!(self, AnyNode::Transform(_, _) | AnyNode::Router(_, _) | AnyNode::Joiner(_, _))
     }
 
     /// Validate the node's configuration.

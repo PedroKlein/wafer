@@ -82,10 +82,7 @@ impl RoutingController {
     pub async fn send(&self, envelope: RuntimeEnvelope) -> Result<(), SendError> {
         if self.downstream_tracker.routing_enabled() {
             // Normal path: send directly
-            self.sender
-                .send(envelope)
-                .await
-                .map_err(|_| SendError::Closed)
+            self.sender.send(envelope).await.map_err(|_| SendError::Closed)
         } else {
             // Drain path: buffer the message
             let mut buffer = self.buffer.lock().await;
@@ -127,10 +124,7 @@ impl RoutingController {
         let count = buffer.len();
 
         while let Some(envelope) = buffer.pop_front() {
-            self.sender
-                .send(envelope)
-                .await
-                .map_err(|_| SendError::Closed)?;
+            self.sender.send(envelope).await.map_err(|_| SendError::Closed)?;
         }
 
         tracing::debug!(messages = count, "Flushed routing buffer");

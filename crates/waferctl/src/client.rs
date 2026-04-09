@@ -27,10 +27,7 @@ impl WaferClient {
             .build()
             .context("Failed to create HTTP client")?;
 
-        Ok(Self {
-            client,
-            base_url: base_url.trim_end_matches('/').to_string(),
-        })
+        Ok(Self { client, base_url: base_url.trim_end_matches('/').to_string() })
     }
 
     /// Health check.
@@ -55,8 +52,7 @@ impl WaferClient {
 
     /// Trigger hot-swap.
     pub async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult> {
-        self.post(&format!("/api/v1/nodes/{}/hot-swap", node_id))
-            .await
+        self.post(&format!("/api/v1/nodes/{}/hot-swap", node_id)).await
     }
 
     /// Reload configuration.

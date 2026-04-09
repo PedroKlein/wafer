@@ -29,10 +29,7 @@ pub struct EndpointConfig {
 impl CtlConfig {
     /// Returns the config file path.
     pub fn config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("wafer")
-            .join("config.toml")
+        dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("wafer").join("config.toml")
     }
 
     /// Loads configuration from the default path.
@@ -78,9 +75,7 @@ impl CtlConfig {
             return Some("http://127.0.0.1:9090".to_string());
         }
 
-        self.default
-            .as_ref()
-            .and_then(|name| self.get_endpoint(name))
+        self.default.as_ref().and_then(|name| self.get_endpoint(name))
     }
 
     /// Checks if an endpoint exists.
@@ -90,12 +85,7 @@ impl CtlConfig {
 
     /// Sets an endpoint.
     pub fn set_endpoint(&mut self, name: &str, url: &str) {
-        self.endpoints.insert(
-            name.to_string(),
-            EndpointConfig {
-                url: url.to_string(),
-            },
-        );
+        self.endpoints.insert(name.to_string(), EndpointConfig { url: url.to_string() });
 
         // If this is the first endpoint, make it default
         if self.default.is_none() {
@@ -119,10 +109,7 @@ mod tests {
         assert!(config.default.is_none());
         assert!(config.endpoints.is_empty());
         // Should fall back to localhost
-        assert_eq!(
-            config.get_default_endpoint(),
-            Some("http://127.0.0.1:9090".to_string())
-        );
+        assert_eq!(config.get_default_endpoint(), Some("http://127.0.0.1:9090".to_string()));
     }
 
     #[test]
@@ -130,10 +117,7 @@ mod tests {
         let mut config = CtlConfig::default();
         config.set_endpoint("local", "http://localhost:9090");
 
-        assert_eq!(
-            config.get_endpoint("local"),
-            Some("http://localhost:9090".to_string())
-        );
+        assert_eq!(config.get_endpoint("local"), Some("http://localhost:9090".to_string()));
         // First endpoint becomes default
         assert_eq!(config.default, Some("local".to_string()));
     }

@@ -105,16 +105,10 @@ impl WaferEngine {
         // This allows long-running WASM code to be interrupted
         config.epoch_interruption(true);
 
-        let engine = Engine::new(&config).map_err(|e| WaferError::PluginInit {
-            message: e.to_string(),
-        })?;
+        let engine =
+            Engine::new(&config).map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        Ok(Self {
-            engine,
-            fuel_limit,
-            epoch_deadline,
-            linker: OnceLock::new(),
-        })
+        Ok(Self { engine, fuel_limit, epoch_deadline, linker: OnceLock::new() })
     }
 
     /// Load a WASM component from file path.
@@ -125,10 +119,8 @@ impl WaferEngine {
     #[must_use = "loading a component without using it is expensive"]
     pub fn load_component(&self, path: impl AsRef<Path>) -> Result<Component> {
         let path = path.as_ref();
-        Component::from_file(&self.engine, path).map_err(|source| WaferError::ComponentLoad {
-            path: path.to_path_buf(),
-            source,
-        })
+        Component::from_file(&self.engine, path)
+            .map_err(|source| WaferError::ComponentLoad { path: path.to_path_buf(), source })
     }
 
     /// Load a WASM component from raw bytes.
@@ -170,14 +162,10 @@ impl WaferEngine {
         }
 
         let mut linker = Linker::new(&self.engine);
-        add_to_linker_async(&mut linker).map_err(|e| WaferError::PluginInit {
-            message: e.to_string(),
-        })?;
-        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view()).map_err(|e| {
-            WaferError::PluginInit {
-                message: e.to_string(),
-            }
-        })?;
+        add_to_linker_async(&mut linker)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view())
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
         // Ignore the result of set - if another thread already set it, that's fine
         let _ = self.linker.set(linker);
@@ -304,10 +292,7 @@ mod tests {
         let err = result.err().expect("Expected error");
         match err {
             WaferError::ComponentLoad { path, .. } => {
-                assert_eq!(
-                    path.to_string_lossy(),
-                    "/nonexistent/path/to/component.wasm"
-                );
+                assert_eq!(path.to_string_lossy(), "/nonexistent/path/to/component.wasm");
             }
             other => panic!("Expected ComponentLoad error, got {other:?}"),
         }
@@ -322,8 +307,7 @@ mod tests {
 
         // Write invalid data to the file
         let mut file = std::fs::File::create(&invalid_wasm).expect("Failed to create temp file");
-        file.write_all(b"not a valid wasm file")
-            .expect("Failed to write");
+        file.write_all(b"not a valid wasm file").expect("Failed to write");
         drop(file);
 
         let engine = WaferEngine::new().expect("Failed to create engine");

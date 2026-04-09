@@ -100,10 +100,7 @@ pub struct ProcessTimer<'a> {
 impl<'a> ProcessTimer<'a> {
     /// Start timing a process() call.
     pub fn start(metrics: &'a PipelineMetrics) -> Self {
-        Self {
-            metrics,
-            start: Instant::now(),
-        }
+        Self { metrics, start: Instant::now() }
     }
 }
 

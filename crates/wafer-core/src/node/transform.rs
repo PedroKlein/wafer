@@ -36,12 +36,7 @@ impl WasmTransform {
     /// Call `init()` before `process()`.
     #[must_use]
     pub fn new(engine: WaferEngine, instance: TransformInstance, config: NodeConfig) -> Self {
-        Self {
-            config,
-            engine,
-            instance,
-            initialized: false,
-        }
+        Self { config, engine, instance, initialized: false }
     }
 
     /// Convert NodeConfig to WIT NodeConfig

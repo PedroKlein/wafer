@@ -24,11 +24,7 @@ impl<T> BoundedQueue<T> {
     #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (sender, receiver) = mpsc::channel(capacity);
-        Self {
-            sender,
-            receiver,
-            capacity,
-        }
+        Self { sender, receiver, capacity }
     }
 
     /// Create a new bounded queue with default capacity.
@@ -77,13 +73,8 @@ impl<T> BoundedQueue<T> {
     /// moved to different tasks.
     pub fn split(self) -> (QueueSender<T>, QueueReceiver<T>) {
         (
-            QueueSender {
-                sender: self.sender,
-            },
-            QueueReceiver {
-                receiver: self.receiver,
-                capacity: self.capacity,
-            },
+            QueueSender { sender: self.sender },
+            QueueReceiver { receiver: self.receiver, capacity: self.capacity },
         )
     }
 }

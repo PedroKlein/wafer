@@ -53,13 +53,10 @@ impl MetricsSnapshot {
         labels: HashMap<String, String>,
         value: u64,
     ) {
-        let entry = self
-            .counters
-            .entry(name.to_string())
-            .or_insert_with(|| CounterMetric {
-                description: description.to_string(),
-                values: Vec::new(),
-            });
+        let entry = self.counters.entry(name.to_string()).or_insert_with(|| CounterMetric {
+            description: description.to_string(),
+            values: Vec::new(),
+        });
         entry.values.push(MetricValue { labels, value });
     }
 
@@ -71,13 +68,10 @@ impl MetricsSnapshot {
         labels: HashMap<String, String>,
         value: f64,
     ) {
-        let entry = self
-            .gauges
-            .entry(name.to_string())
-            .or_insert_with(|| GaugeMetric {
-                description: description.to_string(),
-                values: Vec::new(),
-            });
+        let entry = self.gauges.entry(name.to_string()).or_insert_with(|| GaugeMetric {
+            description: description.to_string(),
+            values: Vec::new(),
+        });
         entry.values.push(MetricValue { labels, value });
     }
 
@@ -154,12 +148,7 @@ mod tests {
         let mut labels = HashMap::new();
         labels.insert("node".to_string(), "filter".to_string());
 
-        snapshot.add_counter(
-            "wafer_messages_total",
-            "Total messages processed",
-            labels,
-            1000,
-        );
+        snapshot.add_counter("wafer_messages_total", "Total messages processed", labels, 1000);
 
         let prometheus = snapshot.to_prometheus();
         assert!(prometheus.contains("# HELP wafer_messages_total Total messages processed"));

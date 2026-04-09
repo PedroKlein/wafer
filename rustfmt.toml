@@ -1,0 +1,10 @@
+# Must match the edition in Cargo.toml (currently 2021).
+# Update to "2024" when the project upgrades editions.
+edition = "2021"
+max_width = 100
+use_small_heuristics = "Max"
+
+# Import ordering (requires: cargo +nightly fmt)
+# reorder_imports = true
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"

@@ -95,11 +95,7 @@ pub struct ProcessError {
 impl ProcessError {
     /// Create a new ProcessError.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: code.into(),
-            message: message.into(),
-            retriable: false,
-        }
+        Self { code: code.into(), message: message.into(), retriable: false }
     }
 
     /// Mark this error as retriable.

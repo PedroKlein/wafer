@@ -105,8 +105,7 @@ impl MetricsRegistry {
 
     /// Records processing time at the pipeline level.
     pub fn record_process_time(&self, ns: u64) {
-        self.pipeline_process_time_ns
-            .fetch_add(ns, Ordering::Relaxed);
+        self.pipeline_process_time_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
     /// Returns total messages processed.
@@ -176,9 +175,7 @@ impl MetricsRegistry {
     pub fn record_node_invocation(&self, node_id: &str, process_time_ns: u64) {
         if let Some(metrics) = self.node_metrics.read().unwrap().get(node_id) {
             metrics.invocations_total.fetch_add(1, Ordering::Relaxed);
-            metrics
-                .process_time_ns
-                .fetch_add(process_time_ns, Ordering::Relaxed);
+            metrics.process_time_ns.fetch_add(process_time_ns, Ordering::Relaxed);
         }
     }
 
@@ -352,37 +349,21 @@ impl MetricsRegistry {
         drain_timed_out: bool,
     ) {
         self.hotswap_metrics.total.fetch_add(1, Ordering::Relaxed);
-        self.hotswap_metrics
-            .success_total
-            .fetch_add(1, Ordering::Relaxed);
-        self.hotswap_metrics
-            .prepare_time_ns
-            .fetch_add(prepare_ns, Ordering::Relaxed);
-        self.hotswap_metrics
-            .drain_time_ns
-            .fetch_add(drain_ns, Ordering::Relaxed);
-        self.hotswap_metrics
-            .flip_time_ns
-            .fetch_add(flip_ns, Ordering::Relaxed);
-        self.hotswap_metrics
-            .retire_time_ns
-            .fetch_add(retire_ns, Ordering::Relaxed);
-        self.hotswap_metrics
-            .messages_drained_total
-            .fetch_add(messages_drained, Ordering::Relaxed);
+        self.hotswap_metrics.success_total.fetch_add(1, Ordering::Relaxed);
+        self.hotswap_metrics.prepare_time_ns.fetch_add(prepare_ns, Ordering::Relaxed);
+        self.hotswap_metrics.drain_time_ns.fetch_add(drain_ns, Ordering::Relaxed);
+        self.hotswap_metrics.flip_time_ns.fetch_add(flip_ns, Ordering::Relaxed);
+        self.hotswap_metrics.retire_time_ns.fetch_add(retire_ns, Ordering::Relaxed);
+        self.hotswap_metrics.messages_drained_total.fetch_add(messages_drained, Ordering::Relaxed);
         if drain_timed_out {
-            self.hotswap_metrics
-                .drain_timeout_total
-                .fetch_add(1, Ordering::Relaxed);
+            self.hotswap_metrics.drain_timeout_total.fetch_add(1, Ordering::Relaxed);
         }
     }
 
     /// Records a failed hot-swap operation.
     pub fn record_hotswap_failure(&self) {
         self.hotswap_metrics.total.fetch_add(1, Ordering::Relaxed);
-        self.hotswap_metrics
-            .failure_total
-            .fetch_add(1, Ordering::Relaxed);
+        self.hotswap_metrics.failure_total.fetch_add(1, Ordering::Relaxed);
     }
 
     // ============================================================
@@ -579,24 +560,15 @@ mod tests {
             output.contains("wafer_sink_batch_flush_total"),
             "Missing wafer_sink_batch_flush_total metric"
         );
-        assert!(
-            output.contains("wafer_sink_batch_size"),
-            "Missing wafer_sink_batch_size metric"
-        );
+        assert!(output.contains("wafer_sink_batch_size"), "Missing wafer_sink_batch_size metric");
         assert!(
             output.contains("wafer_sink_batch_buffer_size"),
             "Missing wafer_sink_batch_buffer_size metric"
         );
 
         // Check for sink labels
-        assert!(
-            output.contains("sink=\"file-sink\""),
-            "Missing file-sink label"
-        );
-        assert!(
-            output.contains("sink=\"mqtt-sink\""),
-            "Missing mqtt-sink label"
-        );
+        assert!(output.contains("sink=\"file-sink\""), "Missing file-sink label");
+        assert!(output.contains("sink=\"mqtt-sink\""), "Missing mqtt-sink label");
     }
 
     #[test]
@@ -808,14 +780,8 @@ mod tests {
         let help_count = output.lines().filter(|l| l.starts_with("# HELP")).count();
         let type_count = output.lines().filter(|l| l.starts_with("# TYPE")).count();
 
-        assert!(
-            help_count >= required_metrics.len(),
-            "Missing HELP comments"
-        );
-        assert!(
-            type_count >= required_metrics.len(),
-            "Missing TYPE comments"
-        );
+        assert!(help_count >= required_metrics.len(), "Missing HELP comments");
+        assert!(type_count >= required_metrics.len(), "Missing TYPE comments");
 
         // Verify global labels appear in node metrics
         assert!(
@@ -824,24 +790,12 @@ mod tests {
         );
 
         // Verify node labels appear correctly
-        assert!(
-            output.contains("node_id=\"transform-1\""),
-            "Node label not found"
-        );
-        assert!(
-            output.contains("node_type=\"transform\""),
-            "Node type label not found"
-        );
+        assert!(output.contains("node_id=\"transform-1\""), "Node label not found");
+        assert!(output.contains("node_type=\"transform\""), "Node type label not found");
 
         // Verify queue labels appear correctly
-        assert!(
-            output.contains("from=\"source-1\""),
-            "Queue 'from' label not found"
-        );
-        assert!(
-            output.contains("to=\"transform-1\""),
-            "Queue 'to' label not found"
-        );
+        assert!(output.contains("from=\"source-1\""), "Queue 'from' label not found");
+        assert!(output.contains("to=\"transform-1\""), "Queue 'to' label not found");
     }
 
     /// Test that concurrent metric updates don't cause data races.
@@ -891,20 +845,8 @@ mod tests {
 
         // Initially all hot-swap counters should be zero
         assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 0);
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .success_total
-                .load(Ordering::Relaxed),
-            0
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .failure_total
-                .load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(registry.hotswap_metrics.success_total.load(Ordering::Relaxed), 0);
+        assert_eq!(registry.hotswap_metrics.failure_total.load(Ordering::Relaxed), 0);
 
         // Record a successful hot-swap
         registry.record_hotswap_success(
@@ -917,62 +859,14 @@ mod tests {
         );
 
         assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .success_total
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .failure_total
-                .load(Ordering::Relaxed),
-            0
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .prepare_time_ns
-                .load(Ordering::Relaxed),
-            1_000_000
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .drain_time_ns
-                .load(Ordering::Relaxed),
-            5_000_000
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .flip_time_ns
-                .load(Ordering::Relaxed),
-            100_000
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .retire_time_ns
-                .load(Ordering::Relaxed),
-            500_000
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .messages_drained_total
-                .load(Ordering::Relaxed),
-            42
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .drain_timeout_total
-                .load(Ordering::Relaxed),
-            0
-        );
+        assert_eq!(registry.hotswap_metrics.success_total.load(Ordering::Relaxed), 1);
+        assert_eq!(registry.hotswap_metrics.failure_total.load(Ordering::Relaxed), 0);
+        assert_eq!(registry.hotswap_metrics.prepare_time_ns.load(Ordering::Relaxed), 1_000_000);
+        assert_eq!(registry.hotswap_metrics.drain_time_ns.load(Ordering::Relaxed), 5_000_000);
+        assert_eq!(registry.hotswap_metrics.flip_time_ns.load(Ordering::Relaxed), 100_000);
+        assert_eq!(registry.hotswap_metrics.retire_time_ns.load(Ordering::Relaxed), 500_000);
+        assert_eq!(registry.hotswap_metrics.messages_drained_total.load(Ordering::Relaxed), 42);
+        assert_eq!(registry.hotswap_metrics.drain_timeout_total.load(Ordering::Relaxed), 0);
 
         // Record a successful hot-swap with timeout
         registry.record_hotswap_success(
@@ -985,53 +879,20 @@ mod tests {
         );
 
         assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 2);
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .success_total
-                .load(Ordering::Relaxed),
-            2
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .drain_timeout_total
-                .load(Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .messages_drained_total
-                .load(Ordering::Relaxed),
-            52
-        ); // 42 + 10
+        assert_eq!(registry.hotswap_metrics.success_total.load(Ordering::Relaxed), 2);
+        assert_eq!(registry.hotswap_metrics.drain_timeout_total.load(Ordering::Relaxed), 1);
+        assert_eq!(registry.hotswap_metrics.messages_drained_total.load(Ordering::Relaxed), 52); // 42 + 10
 
         // Record a failed hot-swap
         registry.record_hotswap_failure();
 
         assert_eq!(registry.hotswap_metrics.total.load(Ordering::Relaxed), 3);
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .success_total
-                .load(Ordering::Relaxed),
-            2
-        );
-        assert_eq!(
-            registry
-                .hotswap_metrics
-                .failure_total
-                .load(Ordering::Relaxed),
-            1
-        );
+        assert_eq!(registry.hotswap_metrics.success_total.load(Ordering::Relaxed), 2);
+        assert_eq!(registry.hotswap_metrics.failure_total.load(Ordering::Relaxed), 1);
 
         // Verify metrics appear in Prometheus output
         let output = registry.encode();
-        assert!(
-            output.contains("wafer_hotswap_total"),
-            "Missing wafer_hotswap_total metric"
-        );
+        assert!(output.contains("wafer_hotswap_total"), "Missing wafer_hotswap_total metric");
         assert!(
             output.contains("wafer_hotswap_success_total"),
             "Missing wafer_hotswap_success_total metric"

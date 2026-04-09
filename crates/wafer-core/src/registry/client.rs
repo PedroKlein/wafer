@@ -26,11 +26,7 @@ impl WaferRegistry {
 
         let cache = PackageCache::new(config.cache_directory(), config.cache_ttl());
 
-        Ok(Self {
-            client,
-            cache,
-            config,
-        })
+        Ok(Self { client, cache, config })
     }
 
     /// Get authentication for a registry using docker_credential.
@@ -106,9 +102,7 @@ impl WaferRegistry {
 
         // Check cache first (unless no_cache is set)
         if !self.config.no_cache {
-            if let Some(entry) = self
-                .cache
-                .get(&oci_ref.registry, &oci_ref.repository, &cache_key)
+            if let Some(entry) = self.cache.get(&oci_ref.registry, &oci_ref.repository, &cache_key)
             {
                 tracing::info!("Using cached {} (age: {:?})", oci_ref.as_str(), entry.age);
 
@@ -130,14 +124,9 @@ impl WaferRegistry {
 
         // Store in cache
         let cache_path =
-            self.cache
-                .put(&oci_ref.registry, &oci_ref.repository, &cache_key, &content)?;
+            self.cache.put(&oci_ref.registry, &oci_ref.repository, &cache_key, &content)?;
 
-        Ok(ResolvedPlugin::new(
-            PluginSource::Oci(oci_ref.clone()),
-            content_hash,
-            cache_path,
-        ))
+        Ok(ResolvedPlugin::new(PluginSource::Oci(oci_ref.clone()), content_hash, cache_path))
     }
 
     /// Fetch an OCI image and extract the WASM content.

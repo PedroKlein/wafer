@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::print_stderr)]
 //! Pipeline throughput benchmarks for WAFER.
 //!
 //! Measures end-to-end message throughput through various pipeline configurations:
@@ -183,17 +184,13 @@ fn bench_envelope_creation(c: &mut Criterion) {
             })
         });
 
-        group.bench_with_input(
-            BenchmarkId::new("from_string", size),
-            &payload,
-            |b, payload| {
-                let s = String::from_utf8_lossy(payload).to_string();
-                b.iter(|| {
-                    let env = RuntimeEnvelope::from_string("bench-source", &s);
-                    black_box(env)
-                })
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("from_string", size), &payload, |b, payload| {
+            let s = String::from_utf8_lossy(payload).to_string();
+            b.iter(|| {
+                let env = RuntimeEnvelope::from_string("bench-source", &s);
+                black_box(env)
+            })
+        });
     }
 
     group.finish();
@@ -222,9 +219,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
     let engine = WaferEngine::new().expect("Failed to create engine");
     let _ticker = engine.start_epoch_ticker();
 
-    let component = engine
-        .load_component(&passthrough)
-        .expect("Failed to load pass-through");
+    let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 
     // Benchmark pass-through (minimal work)
     let message_counts = [100, 1000, 10000];
@@ -232,50 +227,45 @@ fn bench_transform_throughput(c: &mut Criterion) {
     for count in message_counts {
         group.throughput(Throughput::Elements(count as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("passthrough", count),
-            &count,
-            |b, &count| {
-                b.iter_custom(|iters| {
-                    let mut total = Duration::ZERO;
+        group.bench_with_input(BenchmarkId::new("passthrough", count), &count, |b, &count| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
 
-                    for _ in 0..iters {
-                        // Create fresh instance for each iteration (realistic)
-                        let mut instance = rt.block_on(async {
-                            TransformInstance::new(&engine, &component, Capabilities::default())
-                                .await
-                                .expect("Failed to instantiate")
-                        });
+                for _ in 0..iters {
+                    // Create fresh instance for each iteration (realistic)
+                    let mut instance = rt.block_on(async {
+                        TransformInstance::new(&engine, &component, Capabilities::default())
+                            .await
+                            .expect("Failed to instantiate")
+                    });
 
-                        let envelope = create_test_envelope(256);
-                        let wit_env = to_wit_envelope(&envelope);
+                    let envelope = create_test_envelope(256);
+                    let wit_env = to_wit_envelope(&envelope);
 
-                        let elapsed = rt.block_on(async {
-                            let start = Instant::now();
+                    let elapsed = rt.block_on(async {
+                        let start = Instant::now();
 
-                            for _ in 0..count {
-                                let result = instance.call_process(&wit_env).await;
-                                let _ = black_box(result);
-                            }
+                        for _ in 0..count {
+                            let result = instance.call_process(&wit_env).await;
+                            let _ = black_box(result);
+                        }
 
-                            start.elapsed()
-                        });
+                        start.elapsed()
+                    });
 
-                        total += elapsed;
-                    }
+                    total += elapsed;
+                }
 
-                    total
-                })
-            },
-        );
+                total
+            })
+        });
     }
 
     // Also benchmark with uppercase transform (actual work) if available
     let uppercase = uppercase_wasm();
     if uppercase.exists() {
-        let uppercase_component = engine
-            .load_component(&uppercase)
-            .expect("Failed to load uppercase");
+        let uppercase_component =
+            engine.load_component(&uppercase).expect("Failed to load uppercase");
 
         for count in [100, 1000] {
             group.throughput(Throughput::Elements(count as u64));
@@ -341,9 +331,7 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
     let engine = WaferEngine::new().expect("Failed to create engine");
     let _ticker = engine.start_epoch_ticker();
 
-    let component = engine
-        .load_component(&passthrough)
-        .expect("Failed to load pass-through");
+    let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 
     // Test different message sizes
     let sizes = [64, 256, 1024, 4096, 16384, 65536];
@@ -408,9 +396,7 @@ fn bench_transform_latency(c: &mut Criterion) {
     let engine = WaferEngine::new().expect("Failed to create engine");
     let _ticker = engine.start_epoch_ticker();
 
-    let component = engine
-        .load_component(&passthrough)
-        .expect("Failed to load pass-through");
+    let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 
     let mut instance = rt.block_on(async {
         TransformInstance::new(&engine, &component, Capabilities::default())

@@ -110,14 +110,8 @@ impl std::fmt::Display for SwapError {
                 write!(f, "swap already in progress for node '{id}'")
             }
             SwapError::PrepareError(msg) => write!(f, "prepare failed: {msg}"),
-            SwapError::DrainTimeout {
-                node_id,
-                timeout_ms,
-            } => {
-                write!(
-                    f,
-                    "drain timed out for node '{node_id}' after {timeout_ms}ms"
-                )
+            SwapError::DrainTimeout { node_id, timeout_ms } => {
+                write!(f, "drain timed out for node '{node_id}' after {timeout_ms}ms")
             }
             SwapError::Internal(msg) => write!(f, "internal error: {msg}"),
         }
@@ -490,12 +484,8 @@ mod tests {
     async fn test_drain_not_running() {
         let lock = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(NodeStateTracker::new()); // Starting state, not Running
-        let mut coordinator = HotSwapCoordinator::new(
-            "test".to_string(),
-            PathBuf::from("/test.wasm"),
-            tracker,
-            lock,
-        );
+        let mut coordinator =
+            HotSwapCoordinator::new("test".to_string(), PathBuf::from("/test.wasm"), tracker, lock);
 
         let result = coordinator.drain().await;
         assert!(result.is_err());

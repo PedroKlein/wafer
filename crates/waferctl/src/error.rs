@@ -34,11 +34,7 @@ pub struct CliError {
 impl CliError {
     /// Create a new CLI error with the given exit code.
     pub fn new(error: impl Into<anyhow::Error>, exit_code: i32) -> Self {
-        Self {
-            error: error.into(),
-            exit_code,
-            hint: None,
-        }
+        Self { error: error.into(), exit_code, hint: None }
     }
 
     /// Create a user error (exit code 1).
@@ -279,9 +275,6 @@ mod tests {
         let formatted = err.format_json();
         let parsed: serde_json::Value = serde_json::from_str(&formatted).unwrap();
         assert_eq!(parsed["error"]["exit_code"], 2);
-        assert!(parsed["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("not found"));
+        assert!(parsed["error"]["message"].as_str().unwrap().contains("not found"));
     }
 }

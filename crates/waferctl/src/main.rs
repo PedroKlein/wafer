@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! waferctl - CLI for managing WAFER pipeline instances.
 
 mod client;
@@ -167,28 +169,20 @@ fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()>
             config.set_endpoint(name, url);
             config.save().user_err()?;
             if json {
-                println!(
-                    r#"{{"ok": true, "message": "Endpoint '{}' set to '{}'"}}"#,
-                    name, url
-                );
+                println!(r#"{{"ok": true, "message": "Endpoint '{}' set to '{}'"}}"#, name, url);
             } else {
                 println!("✓ Endpoint '{}' set to '{}'", name, url);
             }
         }
         ConfigAction::Use { name } => {
             if !config.has_endpoint(name) {
-                return Err(
-                    CliError::user(anyhow::anyhow!("Endpoint '{}' not found", name))
-                        .with_hint("Run 'waferctl config list' to see available endpoints."),
-                );
+                return Err(CliError::user(anyhow::anyhow!("Endpoint '{}' not found", name))
+                    .with_hint("Run 'waferctl config list' to see available endpoints."));
             }
             config.set_default(name);
             config.save().user_err()?;
             if json {
-                println!(
-                    r#"{{"ok": true, "message": "Default endpoint set to '{}'"}}"#,
-                    name
-                );
+                println!(r#"{{"ok": true, "message": "Default endpoint set to '{}'"}}"#, name);
             } else {
                 println!("✓ Default endpoint set to '{}'", name);
             }
@@ -401,18 +395,11 @@ mod tests {
 
     #[test]
     fn test_cli_parses_config_set_endpoint() {
-        let cli = Cli::try_parse_from([
-            "waferctl",
-            "config",
-            "set-endpoint",
-            "prod",
-            "http://prod:9090",
-        ])
-        .unwrap();
+        let cli =
+            Cli::try_parse_from(["waferctl", "config", "set-endpoint", "prod", "http://prod:9090"])
+                .unwrap();
         match cli.command {
-            Commands::Config {
-                action: ConfigAction::SetEndpoint { name, url },
-            } => {
+            Commands::Config { action: ConfigAction::SetEndpoint { name, url } } => {
                 assert_eq!(name, "prod");
                 assert_eq!(url, "http://prod:9090");
             }
@@ -424,9 +411,7 @@ mod tests {
     fn test_cli_parses_config_use() {
         let cli = Cli::try_parse_from(["waferctl", "config", "use", "staging"]).unwrap();
         match cli.command {
-            Commands::Config {
-                action: ConfigAction::Use { name },
-            } => {
+            Commands::Config { action: ConfigAction::Use { name } } => {
                 assert_eq!(name, "staging");
             }
             _ => panic!("Expected Config Use command"),
@@ -436,12 +421,7 @@ mod tests {
     #[test]
     fn test_cli_parses_config_list() {
         let cli = Cli::try_parse_from(["waferctl", "config", "list"]).unwrap();
-        assert!(matches!(
-            cli.command,
-            Commands::Config {
-                action: ConfigAction::List
-            }
-        ));
+        assert!(matches!(cli.command, Commands::Config { action: ConfigAction::List }));
     }
 
     #[test]

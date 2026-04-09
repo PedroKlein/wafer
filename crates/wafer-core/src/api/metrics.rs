@@ -21,10 +21,7 @@ pub struct MetricsServerConfig {
 
 impl Default for MetricsServerConfig {
     fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:9091".parse().unwrap(),
-            path: "/metrics".to_string(),
-        }
+        Self { bind: "127.0.0.1:9091".parse().unwrap(), path: "/metrics".to_string() }
     }
 }
 
@@ -63,17 +60,13 @@ impl MetricsServer {
         self,
         shutdown: impl std::future::Future<Output = ()> + Send + 'static,
     ) -> std::io::Result<()> {
-        axum::serve(self.listener, self.router)
-            .with_graceful_shutdown(shutdown)
-            .await
+        axum::serve(self.listener, self.router).with_graceful_shutdown(shutdown).await
     }
 }
 
 /// Creates a minimal router with just the metrics endpoint.
 fn create_metrics_router<C: PipelineControl + 'static>(controller: Arc<C>, path: &str) -> Router {
-    Router::new()
-        .route(path, get(handlers::metrics::<C>))
-        .with_state(controller)
+    Router::new().route(path, get(handlers::metrics::<C>)).with_state(controller)
 }
 
 #[cfg(test)]

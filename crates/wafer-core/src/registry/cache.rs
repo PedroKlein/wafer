@@ -23,10 +23,7 @@ impl PackageCache {
 
     /// Get the cache path for a package version.
     pub fn cache_path(&self, namespace: &str, name: &str, version: &str) -> PathBuf {
-        self.cache_dir
-            .join(namespace)
-            .join(name)
-            .join(format!("{version}.wasm"))
+        self.cache_dir.join(namespace).join(name).join(format!("{version}.wasm"))
     }
 
     /// Check if a cached entry exists and is still valid.
@@ -51,11 +48,7 @@ impl PackageCache {
             return None;
         }
 
-        Some(CacheEntry {
-            path,
-            age,
-            size: metadata.len(),
-        })
+        Some(CacheEntry { path, age, size: metadata.len() })
     }
 
     /// Store content in the cache.
@@ -78,13 +71,7 @@ impl PackageCache {
         fs::write(&path, content)
             .map_err(|e| RegistryError::Cache(format!("failed to write cache file: {e}")))?;
 
-        tracing::debug!(
-            "Cached {}:{} v{} ({} bytes)",
-            namespace,
-            name,
-            version,
-            content.len()
-        );
+        tracing::debug!("Cached {}:{} v{} ({} bytes)", namespace, name, version, content.len());
 
         Ok(path)
     }
@@ -109,9 +96,8 @@ impl PackageCache {
         for namespace_entry in fs::read_dir(&self.cache_dir)
             .map_err(|e| RegistryError::Cache(format!("failed to read cache dir: {e}")))?
         {
-            let namespace_path = namespace_entry
-                .map_err(|e| RegistryError::Cache(e.to_string()))?
-                .path();
+            let namespace_path =
+                namespace_entry.map_err(|e| RegistryError::Cache(e.to_string()))?.path();
             if !namespace_path.is_dir() {
                 continue;
             }
@@ -119,9 +105,7 @@ impl PackageCache {
             for name_entry in
                 fs::read_dir(&namespace_path).map_err(|e| RegistryError::Cache(e.to_string()))?
             {
-                let name_path = name_entry
-                    .map_err(|e| RegistryError::Cache(e.to_string()))?
-                    .path();
+                let name_path = name_entry.map_err(|e| RegistryError::Cache(e.to_string()))?.path();
                 if !name_path.is_dir() {
                     continue;
                 }
@@ -129,9 +113,8 @@ impl PackageCache {
                 for version_entry in
                     fs::read_dir(&name_path).map_err(|e| RegistryError::Cache(e.to_string()))?
                 {
-                    let version_path = version_entry
-                        .map_err(|e| RegistryError::Cache(e.to_string()))?
-                        .path();
+                    let version_path =
+                        version_entry.map_err(|e| RegistryError::Cache(e.to_string()))?.path();
 
                     if let Ok(metadata) = fs::metadata(&version_path) {
                         if let Ok(modified) = metadata.modified() {
@@ -204,10 +187,7 @@ mod tests {
     #[test]
     fn test_compute_hash() {
         let hash = compute_hash(b"hello world");
-        assert_eq!(
-            hash,
-            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
-        );
+        assert_eq!(hash, "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9");
     }
 
     #[test]

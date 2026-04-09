@@ -246,9 +246,7 @@ impl MetricsRegistry {
             "wafer_hotswap_drain_timeout_total",
             "Total hot-swaps where drain phase timed out",
             base_labels.clone(),
-            self.hotswap_metrics
-                .drain_timeout_total
-                .load(Ordering::Relaxed),
+            self.hotswap_metrics.drain_timeout_total.load(Ordering::Relaxed),
         );
 
         snapshot.add_counter(
@@ -283,9 +281,7 @@ impl MetricsRegistry {
             "wafer_hotswap_messages_drained_total",
             "Total messages drained during hot-swap operations",
             base_labels.clone(),
-            self.hotswap_metrics
-                .messages_drained_total
-                .load(Ordering::Relaxed),
+            self.hotswap_metrics.messages_drained_total.load(Ordering::Relaxed),
         );
     }
 

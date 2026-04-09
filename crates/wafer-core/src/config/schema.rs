@@ -66,17 +66,13 @@ fn default_true() -> bool {
 }
 
 fn default_api_bind() -> SocketAddr {
-    DEFAULT_API_BIND
-        .parse()
-        .expect("DEFAULT_API_BIND is a valid socket address literal")
+    DEFAULT_API_BIND.parse().expect("DEFAULT_API_BIND is a valid socket address literal")
 }
 
 /// Default bind address for metrics endpoint (when served separately from API).
 #[allow(dead_code)] // Reserved for future standalone metrics server
 fn default_metrics_bind() -> SocketAddr {
-    DEFAULT_METRICS_BIND
-        .parse()
-        .expect("DEFAULT_METRICS_BIND is a valid socket address literal")
+    DEFAULT_METRICS_BIND.parse().expect("DEFAULT_METRICS_BIND is a valid socket address literal")
 }
 
 fn default_metrics_path() -> String {
@@ -143,10 +139,7 @@ pub struct PipelineConfig {
 
 impl Default for PipelineConfig {
     fn default() -> Self {
-        Self {
-            name: default_pipeline_name(),
-            description: None,
-        }
+        Self { name: default_pipeline_name(), description: None }
     }
 }
 
@@ -167,10 +160,7 @@ pub struct ApiServerConfig {
 
 impl Default for ApiServerConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            bind: default_api_bind(),
-        }
+        Self { enabled: true, bind: default_api_bind() }
     }
 }
 
@@ -307,12 +297,12 @@ impl NodeConfig {
     /// - The OCI reference is invalid
     pub fn validate(&self) -> Result<(), ConfigError> {
         match (&self.plugin_path, &self.oci) {
-            (Some(_), Some(_)) => Err(ConfigError::Message(
-                "cannot specify both plugin_path and oci".to_string(),
-            )),
-            (None, None) => Err(ConfigError::Message(
-                "must specify either plugin_path or oci".to_string(),
-            )),
+            (Some(_), Some(_)) => {
+                Err(ConfigError::Message("cannot specify both plugin_path and oci".to_string()))
+            }
+            (None, None) => {
+                Err(ConfigError::Message("must specify either plugin_path or oci".to_string()))
+            }
             (None, Some(oci_str)) => {
                 // Validate the OCI reference format
                 OciReference::parse(oci_str).ok_or_else(|| {
@@ -416,10 +406,8 @@ impl DagConfig {
 
         // Validate DLQ configuration: if any edge uses dead-letter policy,
         // the DLQ must be configured and enabled.
-        let has_dead_letter_edge = self
-            .edges
-            .iter()
-            .any(|e| e.overflow == OverflowPolicy::DeadLetter);
+        let has_dead_letter_edge =
+            self.edges.iter().any(|e| e.overflow == OverflowPolicy::DeadLetter);
 
         if has_dead_letter_edge {
             match &self.dead_letter {
@@ -506,12 +494,7 @@ mod tests {
 
     #[test]
     fn valid_stdin_source_type() {
-        let config = make_config(vec![make_node(
-            "src",
-            NodeType::Source,
-            Some("stdin"),
-            None,
-        )]);
+        let config = make_config(vec![make_node("src", NodeType::Source, Some("stdin"), None)]);
         assert!(config.validate().is_ok());
     }
 
@@ -523,12 +506,7 @@ mod tests {
 
     #[test]
     fn valid_stdout_sink_type() {
-        let config = make_config(vec![make_node(
-            "sink",
-            NodeType::Sink,
-            None,
-            Some("stdout"),
-        )]);
+        let config = make_config(vec![make_node("sink", NodeType::Sink, None, Some("stdout"))]);
         assert!(config.validate().is_ok());
     }
 
@@ -540,24 +518,14 @@ mod tests {
 
     #[test]
     fn invalid_source_type_rejected() {
-        let config = make_config(vec![make_node(
-            "src",
-            NodeType::Source,
-            Some("invalid"),
-            None,
-        )]);
+        let config = make_config(vec![make_node("src", NodeType::Source, Some("invalid"), None)]);
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("invalid source_type 'invalid'"));
     }
 
     #[test]
     fn invalid_sink_type_rejected() {
-        let config = make_config(vec![make_node(
-            "sink",
-            NodeType::Sink,
-            None,
-            Some("invalid"),
-        )]);
+        let config = make_config(vec![make_node("sink", NodeType::Sink, None, Some("invalid"))]);
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("invalid sink_type 'invalid'"));
     }
@@ -569,9 +537,7 @@ mod tests {
             make_node("src2", NodeType::Source, Some("stdin"), None),
         ]);
         let err = config.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("at most one source can have source_type = 'stdin'"));
+        assert!(err.to_string().contains("at most one source can have source_type = 'stdin'"));
     }
 
     #[test]
@@ -581,9 +547,7 @@ mod tests {
             make_node("sink2", NodeType::Sink, None, Some("stdout")),
         ]);
         let err = config.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("at most one sink can have sink_type = 'stdout'"));
+        assert!(err.to_string().contains("at most one sink can have sink_type = 'stdout'"));
     }
 
     #[test]
@@ -634,26 +598,19 @@ mod tests {
             ..Default::default()
         };
         let err = config.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("cannot specify both plugin_path and oci"));
+        assert!(err.to_string().contains("cannot specify both plugin_path and oci"));
     }
 
     #[test]
     fn node_config_neither_path_nor_oci_rejected() {
         let config = NodeConfig::default();
         let err = config.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("must specify either plugin_path or oci"));
+        assert!(err.to_string().contains("must specify either plugin_path or oci"));
     }
 
     #[test]
     fn node_config_invalid_oci_ref_rejected() {
-        let config = NodeConfig {
-            oci: Some("invalid-no-tag".to_string()),
-            ..Default::default()
-        };
+        let config = NodeConfig { oci: Some("invalid-no-tag".to_string()), ..Default::default() };
         let err = config.validate().unwrap_err();
         assert!(err.to_string().contains("invalid OCI reference"));
     }
@@ -842,17 +799,11 @@ mod tests {
             make_node("src", NodeType::Source, None, None),
             make_node("sink", NodeType::Sink, None, None),
         ]);
-        config.edges = vec![make_edge_with_overflow(
-            "src",
-            "sink",
-            OverflowPolicy::DeadLetter,
-        )];
+        config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
         config.dead_letter = None;
 
         let err = config.validate().unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("no [dead_letter] section is configured"));
+        assert!(err.to_string().contains("no [dead_letter] section is configured"));
     }
 
     #[test]
@@ -861,11 +812,7 @@ mod tests {
             make_node("src", NodeType::Source, None, None),
             make_node("sink", NodeType::Sink, None, None),
         ]);
-        config.edges = vec![make_edge_with_overflow(
-            "src",
-            "sink",
-            OverflowPolicy::DeadLetter,
-        )];
+        config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
         config.dead_letter = Some(make_dlq_config(false)); // disabled
 
         let err = config.validate().unwrap_err();
@@ -878,11 +825,7 @@ mod tests {
             make_node("src", NodeType::Source, None, None),
             make_node("sink", NodeType::Sink, None, None),
         ]);
-        config.edges = vec![make_edge_with_overflow(
-            "src",
-            "sink",
-            OverflowPolicy::DeadLetter,
-        )];
+        config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
         config.dead_letter = Some(make_dlq_config(true));
 
         assert!(config.validate().is_ok());

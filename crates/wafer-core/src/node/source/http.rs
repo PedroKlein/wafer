@@ -80,9 +80,7 @@ impl HttpSource {
         path: impl Into<String>,
     ) -> Self {
         let bind_str = bind_addr.into();
-        let bind_addr = bind_str
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
+        let bind_addr = bind_str.parse().unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
 
         Self {
             id: id.into(),
@@ -193,12 +191,9 @@ impl Source for HttpSource {
         &mut self,
     ) -> Pin<Box<dyn Future<Output = Result<Option<RuntimeEnvelope>>> + Send + '_>> {
         Box::pin(async move {
-            let rx = self
-                .message_rx
-                .as_mut()
-                .ok_or_else(|| WaferError::PluginInit {
-                    message: "HttpSource not initialized - call init() first".into(),
-                })?;
+            let rx = self.message_rx.as_mut().ok_or_else(|| WaferError::PluginInit {
+                message: "HttpSource not initialized - call init() first".into(),
+            })?;
 
             match rx.recv().await {
                 Some(envelope) => Ok(Some(envelope)),

@@ -60,10 +60,7 @@ impl Capabilities {
     /// Create capabilities that inherit stdio (for debugging).
     #[must_use]
     pub fn with_stdio() -> Self {
-        Self {
-            inherit_stdio: true,
-            ..Self::default()
-        }
+        Self { inherit_stdio: true, ..Self::default() }
     }
 
     /// Create full capabilities (for trusted plugins).

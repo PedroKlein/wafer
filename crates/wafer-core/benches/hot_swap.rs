@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::print_stderr)]
 //! Hot-swap benchmarks for WAFER.
 //!
 //! Measures swap-related latency:
@@ -81,9 +82,8 @@ fn bench_wasm_loading(c: &mut Criterion) {
 
                     // This is exactly what HotSwapCoordinator::prepare() does
                     let engine = WaferEngine::new().expect("Failed to create engine");
-                    let component = engine
-                        .load_component(&passthrough)
-                        .expect("Failed to load component");
+                    let component =
+                        engine.load_component(&passthrough).expect("Failed to load component");
                     let _instance =
                         TransformInstance::new(&engine, &component, Capabilities::default())
                             .await
@@ -110,9 +110,8 @@ fn bench_wasm_loading(c: &mut Criterion) {
                 let elapsed = rt.block_on(async {
                     let start = Instant::now();
 
-                    let component = engine
-                        .load_component(&passthrough)
-                        .expect("Failed to load component");
+                    let component =
+                        engine.load_component(&passthrough).expect("Failed to load component");
                     let _instance =
                         TransformInstance::new(&engine, &component, Capabilities::default())
                             .await
@@ -188,10 +187,7 @@ fn bench_prepare_target(c: &mut Criterion) {
         return;
     }
 
-    let failures: Vec<_> = times
-        .iter()
-        .filter(|d| d.as_millis() > TARGET_MS as u128)
-        .collect();
+    let failures: Vec<_> = times.iter().filter(|d| d.as_millis() > TARGET_MS as u128).collect();
 
     let mut sorted: Vec<_> = times.iter().map(|d| d.as_micros()).collect();
     sorted.sort();
@@ -221,10 +217,7 @@ fn bench_prepare_target(c: &mut Criterion) {
         println!("  Result: PASS");
     } else {
         let max_failure = failures.iter().max().unwrap();
-        println!(
-            "  Max failure: {:.2}ms",
-            max_failure.as_micros() as f64 / 1000.0
-        );
+        println!("  Max failure: {:.2}ms", max_failure.as_micros() as f64 / 1000.0);
         println!("  Result: FAIL");
     }
 }

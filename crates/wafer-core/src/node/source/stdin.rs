@@ -50,10 +50,7 @@ impl StdinSource {
     ///
     /// The stdin reader is not created until `init()` is called.
     pub fn new(id: impl Into<String>) -> Self {
-        Self {
-            id: id.into(),
-            reader: None,
-        }
+        Self { id: id.into(), reader: None }
     }
 }
 
@@ -100,11 +97,8 @@ impl Source for StdinSource {
                 Ok(0) => Ok(None), // EOF
                 Ok(_) => {
                     // Strip trailing newline(s)
-                    let payload = line
-                        .trim_end_matches('\n')
-                        .trim_end_matches('\r')
-                        .as_bytes()
-                        .to_vec();
+                    let payload =
+                        line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
                     Ok(Some(
                         RuntimeEnvelope::new(&self.id, payload)
                             .with_metadata("source_route", "stdin"),

@@ -283,8 +283,7 @@ impl DagOrchestrator {
             };
 
             state_tracker.set_processing(true);
-            ctx.handle_process_result(transform.process(envelope).await)
-                .await;
+            ctx.handle_process_result(transform.process(envelope).await).await;
             state_tracker.set_processing(false);
         }
         tracing::info!("Transform loop stopped");
@@ -331,9 +330,8 @@ impl DagOrchestrator {
 
         // Set up batch flush timer if batching is enabled
         // Use a very long interval (1 year) as "disabled" since we can't conditionally include the arm
-        let flush_interval_duration = sink
-            .batch_timeout()
-            .unwrap_or(Duration::from_secs(DISABLED_BATCH_INTERVAL_SECS));
+        let flush_interval_duration =
+            sink.batch_timeout().unwrap_or(Duration::from_secs(DISABLED_BATCH_INTERVAL_SECS));
         let batching_enabled = sink.batch_timeout().is_some();
         let mut flush_timer = interval(flush_interval_duration);
         flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -497,9 +495,7 @@ impl DagOrchestrator {
                 let stream = futures_util::stream::unfold(
                     (port_name, receiver),
                     |(port_name, mut rx)| async move {
-                        rx.recv()
-                            .await
-                            .map(|env| ((port_name.clone(), env), (port_name, rx)))
+                        rx.recv().await.map(|env| ((port_name.clone(), env), (port_name, rx)))
                     },
                 );
                 Box::pin(stream) as PortedEnvelopeStream
@@ -541,8 +537,7 @@ impl DagOrchestrator {
 
             state_tracker.set_processing(true);
             // WASM call OUTSIDE select - cancel safe
-            ctx.handle_process_result(joiner.process(&port_name, envelope).await)
-                .await;
+            ctx.handle_process_result(joiner.process(&port_name, envelope).await).await;
             state_tracker.set_processing(false);
         }
         tracing::info!("Joiner loop stopped");
@@ -652,10 +647,7 @@ mod tests {
             &control_state,
         )
         .await;
-        assert!(
-            result,
-            "Send with drop policy should return true even when dropped"
-        );
+        assert!(result, "Send with drop policy should return true even when dropped");
 
         // Only the first message should be in the queue
         let received = receiver.recv().await.expect("Should receive first message");
@@ -664,10 +656,7 @@ mod tests {
         // Queue should now be empty (second message was dropped)
         let second =
             tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await;
-        assert!(
-            second.is_err(),
-            "No second message should be in queue (it was dropped)"
-        );
+        assert!(second.is_err(), "No second message should be in queue (it was dropped)");
     }
 
     #[tokio::test]
@@ -711,14 +700,9 @@ mod tests {
         assert_eq!(received.id, env1.id);
 
         // Second message should be in DLQ
-        let dlq_msg: RuntimeEnvelope = dlq_receiver
-            .recv()
-            .await
-            .expect("Should receive DLQ message");
-        assert_eq!(
-            dlq_msg.source, "dlq",
-            "DLQ message should have source 'dlq'"
-        );
+        let dlq_msg: RuntimeEnvelope =
+            dlq_receiver.recv().await.expect("Should receive DLQ message");
+        assert_eq!(dlq_msg.source, "dlq", "DLQ message should have source 'dlq'");
 
         // Parse the DLQ envelope from the payload
         let dlq_envelope: DlqEnvelope =
@@ -748,10 +732,7 @@ mod tests {
             &control_state,
         )
         .await;
-        assert!(
-            result,
-            "Send should return true even when DLQ is not configured"
-        );
+        assert!(result, "Send should return true even when DLQ is not configured");
     }
 
     #[tokio::test]
@@ -781,10 +762,7 @@ mod tests {
         .await;
 
         // Verify message arrived in DLQ
-        let dlq_msg = dlq_receiver
-            .recv()
-            .await
-            .expect("Should receive DLQ message");
+        let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
         assert_eq!(dlq_msg.source, "dlq");
 
         // Parse and verify DLQ envelope contents
@@ -799,10 +777,7 @@ mod tests {
                 assert_eq!(code, "VALIDATION_ERROR");
                 assert_eq!(message, "Invalid payload format");
             }
-            _ => panic!(
-                "Expected ProcessError reason, got {:?}",
-                dlq_envelope.reason
-            ),
+            _ => panic!("Expected ProcessError reason, got {:?}", dlq_envelope.reason),
         }
     }
 
@@ -832,10 +807,7 @@ mod tests {
         .await;
 
         // Verify message arrived in DLQ
-        let dlq_msg = dlq_receiver
-            .recv()
-            .await
-            .expect("Should receive DLQ message");
+        let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
         assert_eq!(dlq_msg.source, "dlq");
 
         // Parse and verify DLQ envelope contents
@@ -882,10 +854,7 @@ mod tests {
         .await;
 
         // Retrieve and verify original message is preserved
-        let dlq_msg = dlq_receiver
-            .recv()
-            .await
-            .expect("Should receive DLQ message");
+        let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
 
@@ -980,14 +949,12 @@ mod tests {
             &mut self,
             _envelope: RuntimeEnvelope,
         ) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
-            self.collected
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.collected.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         }
 
         fn flush(&mut self) -> Pin<Box<dyn Future<Output = WaferResult<()>> + Send + '_>> {
-            self.flushed
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            self.flushed.store(true, std::sync::atomic::Ordering::SeqCst);
             Box::pin(async { Ok(()) })
         }
 
@@ -1025,10 +992,7 @@ mod tests {
         .await;
 
         // Verify flush was called during shutdown
-        assert!(
-            sink.was_flushed(),
-            "Sink should have been flushed before shutdown"
-        );
+        assert!(sink.was_flushed(), "Sink should have been flushed before shutdown");
     }
 
     #[tokio::test]
@@ -1072,9 +1036,6 @@ mod tests {
         let sink = sink_handle.await.expect("Sink loop should complete");
 
         // Verify flush was called during shutdown
-        assert!(
-            sink.was_flushed(),
-            "Sink should have been flushed on cancellation"
-        );
+        assert!(sink.was_flushed(), "Sink should have been flushed on cancellation");
     }
 }

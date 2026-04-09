@@ -1,3 +1,4 @@
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr))]
 //! WAFER - WebAssembly Flow Execution Runtime
 //!
 //! A DAG pipeline runtime for WebAssembly plugins.
