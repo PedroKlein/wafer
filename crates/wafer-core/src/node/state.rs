@@ -1,41 +1,19 @@
 //! Node state tracking for hot-swap support.
 //!
-//! This module provides [`NodeStateTracker`], a thread-safe state machine
-//! for tracking node lifecycle states during hot-swap operations.
-//!
-//! # State Machine
-//!
 //! ```text
 //! Starting → Running ⟶ Draining → Retired
 //!                    ↘ Error
 //! ```
-//!
-//! # Hot-Swap Protocol
-//!
-//! During a hot-swap operation:
-//! 1. Node starts in `Running` state
-//! 2. When swap begins, transitions to `Draining`
-//! 3. `processing` flag indicates if a message is currently being processed
-//! 4. Drain completes when queue is empty AND `processing` is false
-//! 5. After flip, old node transitions to `Retired`
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use wafer_types::NodeState;
 
 /// Thread-safe state tracker for node lifecycle during hot-swap.
-///
-/// Uses atomic operations for lock-free state queries from multiple threads.
-/// The state machine enforces valid transitions and provides drain detection.
 #[derive(Debug)]
 pub struct NodeStateTracker {
-    /// Current state encoded as u8 for atomic access
     state: AtomicU8,
-    /// Whether the node is currently processing a message.
-    /// Set to true before process() call, false after.
     /// Used for drain detection: drain is complete when queue empty AND not processing.
     processing: AtomicBool,
-    /// Whether routing to this node is enabled.
-    /// When false, upstream nodes should buffer or drop messages.
     routing_enabled: AtomicBool,
 }
 
@@ -46,7 +24,6 @@ impl Default for NodeStateTracker {
 }
 
 impl NodeStateTracker {
-    /// Create a new state tracker in the `Starting` state.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -56,9 +33,7 @@ impl NodeStateTracker {
         }
     }
 
-    /// Create a state tracker already in `Running` state.
-    ///
-    /// Used for nodes that skip the Starting phase (e.g., test fixtures).
+    /// Create a state tracker already in `Running` state (e.g., for test fixtures).
     #[must_use]
     pub fn running() -> Self {
         Self {
@@ -96,18 +71,11 @@ impl NodeStateTracker {
         Self::u8_to_state(self.state.load(Ordering::Acquire))
     }
 
-    /// Transition to `Running` state.
-    ///
-    /// Valid from: `Starting`
-    /// Returns `true` if transition succeeded.
     pub fn transition_to_running(&self) -> bool {
         self.try_transition(NodeState::Starting, NodeState::Running)
     }
 
-    /// Transition to `Draining` state and disable routing.
-    ///
-    /// Valid from: `Running`
-    /// Returns `true` if transition succeeded.
+    /// Also disables routing.
     pub fn transition_to_draining(&self) -> bool {
         if self.try_transition(NodeState::Running, NodeState::Draining) {
             self.routing_enabled.store(false, Ordering::Release);
@@ -117,18 +85,11 @@ impl NodeStateTracker {
         }
     }
 
-    /// Transition to `Retired` state.
-    ///
-    /// Valid from: `Draining`
-    /// Returns `true` if transition succeeded.
     pub fn transition_to_retired(&self) -> bool {
         self.try_transition(NodeState::Draining, NodeState::Retired)
     }
 
-    /// Transition to `Error` state.
-    ///
-    /// Valid from: any non-terminal state
-    /// Returns `true` if transition succeeded.
+    /// Valid from: any non-terminal state.
     pub fn transition_to_error(&self) -> bool {
         loop {
             let current = self.state.load(Ordering::Acquire);
@@ -151,7 +112,6 @@ impl NodeStateTracker {
         }
     }
 
-    /// Attempt a state transition using compare-and-swap.
     fn try_transition(&self, from: NodeState, to: NodeState) -> bool {
         let from_val = Self::state_to_u8(from);
         let to_val = Self::state_to_u8(to);
@@ -159,8 +119,6 @@ impl NodeStateTracker {
         self.state.compare_exchange(from_val, to_val, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 
-    /// Check if this node accepts new messages.
-    ///
     /// Returns `true` only if state is `Running` and routing is enabled.
     #[must_use]
     pub fn accepts_messages(&self) -> bool {
@@ -173,37 +131,25 @@ impl NodeStateTracker {
         self.routing_enabled.load(Ordering::Acquire)
     }
 
-    /// Enable routing to this node.
     pub fn enable_routing(&self) {
         self.routing_enabled.store(true, Ordering::Release);
     }
 
-    /// Disable routing to this node.
     pub fn disable_routing(&self) {
         self.routing_enabled.store(false, Ordering::Release);
     }
 
-    /// Check if the node is currently processing a message.
     #[must_use]
     pub fn is_processing(&self) -> bool {
         self.processing.load(Ordering::Acquire)
     }
 
-    /// Set the processing flag.
-    ///
-    /// Call with `true` before starting message processing,
-    /// `false` after processing completes.
     pub fn set_processing(&self, processing: bool) {
         self.processing.store(processing, Ordering::Release);
     }
 
-    /// Check if drain is complete.
-    ///
-    /// Drain is complete when:
-    /// 1. State is `Draining`
-    /// 2. `processing` flag is false (no message in-flight)
-    ///
-    /// Note: Caller must also verify the input queue is empty.
+    /// Drain is complete when state is `Draining` and not processing.
+    /// Caller must also verify the input queue is empty.
     #[must_use]
     pub fn is_drain_ready(&self) -> bool {
         self.state() == NodeState::Draining && !self.is_processing()

@@ -1,18 +1,4 @@
 //! Node trait architecture for WAFER pipeline.
-//!
-//! This module defines the core traits that all pipeline nodes implement:
-//! - [`Lifecycle`] - Node lifecycle management (validate, init, close)
-//! - [`Transform`] - Transform node processing
-//!
-//! Future node types (Source, Sink, Router, Joiner) will have their own traits
-//! that compose with Lifecycle.
-//!
-//! # Design
-//!
-//! Traits use composition rather than inheritance. All node types implement
-//! Lifecycle, then additionally implement their role-specific trait (Transform,
-//! Source, etc.). This enables flexible DAG orchestration where nodes can be
-//! treated uniformly for lifecycle but specifically for processing.
 
 mod joiner;
 mod router;
@@ -40,12 +26,7 @@ use wafer_types::NodeState;
 
 /// Enum for heterogeneous node storage in DAG orchestration.
 ///
-/// This allows storing different node types in the same collection
-/// while still being able to call lifecycle methods uniformly.
-///
 /// Each variant includes a shared [`NodeStateTracker`] for hot-swap support.
-/// The tracker is wrapped in `Arc` so it can be shared with the orchestrator
-/// while the node itself is owned by the execution task.
 pub enum AnyNode {
     Transform(Box<dyn Transform>, Arc<NodeStateTracker>),
     Source(Box<dyn Source>, Arc<NodeStateTracker>),
@@ -92,13 +73,11 @@ impl fmt::Debug for AnyNode {
 }
 
 impl AnyNode {
-    /// Wrap a transform node in the `AnyNode` enum.
     #[must_use]
     pub fn from_transform(t: impl Transform + 'static) -> Self {
         AnyNode::Transform(Box::new(t), Arc::new(NodeStateTracker::new()))
     }
 
-    /// Wrap a transform node with an existing state tracker.
     #[must_use]
     pub fn from_transform_with_tracker(
         t: impl Transform + 'static,
@@ -113,25 +92,21 @@ impl AnyNode {
         AnyNode::Source(Box::new(s), Arc::new(NodeStateTracker::new()))
     }
 
-    /// Wrap a sink node in the `AnyNode` enum.
     #[must_use]
     pub fn from_sink(s: impl Sink + 'static) -> Self {
         AnyNode::Sink(Box::new(s), Arc::new(NodeStateTracker::new()))
     }
 
-    /// Wrap a router node in the `AnyNode` enum.
     #[must_use]
     pub fn from_router(r: impl Router + 'static) -> Self {
         AnyNode::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
     }
 
-    /// Wrap a joiner node in the `AnyNode` enum.
     #[must_use]
     pub fn from_joiner(j: impl Joiner + 'static) -> Self {
         AnyNode::Joiner(Box::new(j), Arc::new(NodeStateTracker::new()))
     }
 
-    /// Get the node's unique identifier.
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
@@ -149,7 +124,6 @@ impl AnyNode {
         self.state_tracker().state()
     }
 
-    /// Get a reference to the state tracker.
     #[must_use]
     pub fn state_tracker(&self) -> &Arc<NodeStateTracker> {
         match self {
@@ -167,20 +141,13 @@ impl AnyNode {
         Arc::clone(self.state_tracker())
     }
 
-    /// Check if this node supports hot-swap.
-    ///
     /// Only WASM Transform, Router, and Joiner nodes support hot-swap.
-    /// Native Source and Sink nodes do not.
     #[must_use]
     pub fn is_swappable(&self) -> bool {
         matches!(self, AnyNode::Transform(_, _) | AnyNode::Router(_, _) | AnyNode::Joiner(_, _))
     }
 
     /// Validate the node's configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the node's configuration is invalid.
     pub fn validate(&self) -> Result<()> {
         match self {
             AnyNode::Transform(t, _) => t.validate(),
@@ -191,14 +158,7 @@ impl AnyNode {
         }
     }
 
-    /// Initialize the node for execution.
-    ///
-    /// Transitions state from `Starting` to `Running` on success.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if initialization fails.
-    /// State transitions to `Error` on failure.
+    /// Initialize the node. Transitions state to `Running` on success, `Error` on failure.
     pub async fn init(&mut self) -> Result<()> {
         let result = match self {
             AnyNode::Transform(t, _) => t.init().await,
@@ -221,10 +181,6 @@ impl AnyNode {
     }
 
     /// Gracefully close the node and release resources.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if cleanup fails.
     pub async fn close(&mut self) -> Result<()> {
         match self {
             AnyNode::Transform(t, _) => t.close().await,

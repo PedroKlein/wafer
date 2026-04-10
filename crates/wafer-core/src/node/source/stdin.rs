@@ -1,6 +1,4 @@
-//! Stdin-based source node implementation.
-//!
-//! Reads lines from standard input, producing one [`RuntimeEnvelope`] per line.
+//! Stdin source node that reads lines from standard input.
 
 use std::future::Future;
 use std::io::{BufRead, BufReader, Stdin};
@@ -12,43 +10,14 @@ use crate::queue::RuntimeEnvelope;
 
 use super::Source;
 
-/// A stdin-based source node that reads lines from standard input.
-///
-/// Each call to `poll()` returns one line from stdin as a `RuntimeEnvelope`.
-/// Returns `None` when EOF is reached (Ctrl+D on Unix, Ctrl+Z on Windows).
-///
-/// # Example
-///
-/// ```ignore
-/// use wafer_core::node::{StdinSource, Lifecycle, Source};
-///
-/// let mut source = StdinSource::new("stdin-source");
-/// source.init().await?;
-///
-/// // Read lines until EOF
-/// while let Some(envelope) = source.poll().await? {
-///     println!("Got input: {:?}", envelope.payload);
-/// }
-///
-/// source.close().await?;
-/// ```
-///
-/// # Notes
-///
-/// - This source is primarily useful for interactive CLI tools or piped input
-/// - Each `StdinSource` instance shares the same underlying stdin handle
-/// - For testing, consider using [`FileSource`](super::FileSource) instead
+/// Reads lines from stdin, one `RuntimeEnvelope` per line.
+/// Returns `None` on EOF (Ctrl+D / Ctrl+Z).
 pub struct StdinSource {
-    /// Node identifier
     id: String,
-    /// Buffered reader, initialized in init()
     reader: Option<BufReader<Stdin>>,
 }
 
 impl StdinSource {
-    /// Create a new StdinSource.
-    ///
-    /// The stdin reader is not created until `init()` is called.
     pub fn new(id: impl Into<String>) -> Self {
         Self { id: id.into(), reader: None }
     }
@@ -64,7 +33,6 @@ impl Lifecycle for StdinSource {
     }
 
     fn validate(&self) -> Result<()> {
-        // stdin is always available, no validation needed
         Ok(())
     }
 
@@ -94,9 +62,8 @@ impl Source for StdinSource {
 
             let mut line = String::new();
             match reader.read_line(&mut line) {
-                Ok(0) => Ok(None), // EOF
+                Ok(0) => Ok(None),
                 Ok(_) => {
-                    // Strip trailing newline(s)
                     let payload =
                         line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
                     Ok(Some(
@@ -110,8 +77,6 @@ impl Source for StdinSource {
     }
 }
 
-// Note: StdinSource tests are limited because stdin cannot be easily mocked.
-// For testing stdin-like behavior, use FileSource with a temp file instead.
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,7 +1,4 @@
 //! Dead Letter Queue (DLQ) types and utilities.
-//!
-//! This module provides the envelope types used to wrap failed messages
-//! before routing them to the Dead Letter Queue sink.
 
 use crate::queue::RuntimeEnvelope;
 use chrono::{DateTime, Utc};
@@ -12,29 +9,16 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DlqReason {
-    /// Queue was full when message arrived (overflow with `dead-letter` policy).
     QueueFull,
-    /// Transform/router/joiner processing returned an error.
-    ProcessError {
-        /// Error code (e.g., "transform_failed", "route_error").
-        code: String,
-        /// Human-readable error message.
-        message: String,
-    },
-    /// Sink failed to collect the message.
-    SinkError {
-        /// Human-readable error message.
-        message: String,
-    },
+    ProcessError { code: String, message: String },
+    SinkError { message: String },
 }
 
 impl DlqReason {
-    /// Create a `ProcessError` reason.
     pub fn process_error(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self::ProcessError { code: code.into(), message: message.into() }
     }
 
-    /// Create a `SinkError` reason.
     pub fn sink_error(message: impl Into<String>) -> Self {
         Self::SinkError { message: message.into() }
     }
@@ -42,19 +26,13 @@ impl DlqReason {
 
 /// Serializable representation of a `RuntimeEnvelope`.
 ///
-/// Used within `DlqEnvelope` to preserve the original message.
-/// The payload is encoded as base64 since it may contain binary data.
+/// Payload is encoded as base64 since it may contain binary data.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableEnvelope {
-    /// Unique message identifier.
     pub id: String,
-    /// Creation timestamp (Unix millis).
     pub timestamp: u64,
-    /// Source node name.
     pub source: String,
-    /// Message metadata.
     pub metadata: HashMap<String, String>,
-    /// Raw payload bytes encoded as base64.
     #[serde(with = "base64_serde")]
     pub payload: Vec<u8>,
 }
@@ -83,24 +61,16 @@ impl From<SerializableEnvelope> for RuntimeEnvelope {
     }
 }
 
-/// Dead Letter Queue envelope wrapping a failed message.
-///
-/// This envelope captures the original message along with error context
-/// for debugging and potential replay scenarios.
+/// Dead Letter Queue envelope wrapping a failed message with error context.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DlqEnvelope {
-    /// Original message that failed.
     pub original: SerializableEnvelope,
-    /// Edge identifier where the failure occurred (e.g., "source:default->transform:default").
     pub failed_edge: String,
-    /// Reason for the failure.
     pub reason: DlqReason,
-    /// When the failure occurred (UTC timestamp).
     pub failed_at: DateTime<Utc>,
 }
 
 impl DlqEnvelope {
-    /// Create a new DLQ envelope.
     pub fn new(
         original: RuntimeEnvelope,
         failed_edge: impl Into<String>,
@@ -119,41 +89,20 @@ impl DlqEnvelope {
         self.original.into()
     }
 
-    /// Serialize this envelope to JSON bytes.
-    ///
-    /// This is used when wrapping the DLQ envelope as payload in a `RuntimeEnvelope`
-    /// for routing to the DLQ sink.
+    /// Serialize this envelope to JSON bytes for routing to the DLQ sink.
     pub fn to_json_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
         serde_json::to_vec(self)
     }
 }
 
-/// Wrap a failed message for routing to the Dead Letter Queue.
-///
-/// This creates a new `RuntimeEnvelope` with the `DlqEnvelope` serialized as JSON payload.
-/// The returned envelope can be sent through standard queue channels to the DLQ sink.
-///
-/// # Arguments
-///
-/// * `envelope` - The original message that failed.
-/// * `failed_edge` - Identifier for the edge where failure occurred.
-/// * `reason` - Why the message failed.
-///
-/// # Returns
-///
-/// A new `RuntimeEnvelope` with source "dlq" and the serialized `DlqEnvelope` as payload.
-///
-/// # Panics
-///
-/// Panics if `DlqEnvelope` serialization fails, which should never happen
-/// for valid envelope data.
 pub fn wrap_for_dlq(
     envelope: RuntimeEnvelope,
     failed_edge: impl Into<String>,
     reason: DlqReason,
 ) -> RuntimeEnvelope {
     let dlq_envelope = DlqEnvelope::new(envelope, failed_edge, reason);
-    let payload = dlq_envelope.to_json_bytes().expect("DlqEnvelope serialization should not fail");
+    // SAFETY: DlqEnvelope contains only String, u64, HashMap<String,String>, Vec<u8> -- all infallible to serialize
+    let payload = dlq_envelope.to_json_bytes().expect("infallible serialization");
 
     RuntimeEnvelope::new("dlq", payload).with_metadata("content_type", "application/json")
 }

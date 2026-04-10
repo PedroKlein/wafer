@@ -7,28 +7,20 @@ use std::time::Duration;
 /// OCI image reference (e.g., "ghcr.io/pedroklein/wafer-uppercase:0.0.1").
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct OciReference {
-    /// Full OCI reference string.
     reference: String,
-    /// Parsed registry (e.g., "ghcr.io").
     pub registry: String,
-    /// Parsed repository (e.g., "pedroklein/wafer-uppercase").
     pub repository: String,
-    /// Parsed tag (e.g., "0.0.1").
     pub tag: String,
 }
 
 impl OciReference {
-    /// Parse an OCI reference from a string like "ghcr.io/user/repo:tag".
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
-        // Split off the tag
         let (repo_part, tag) = s.rsplit_once(':')?;
         if tag.is_empty() {
             return None;
         }
 
-        // Split registry from repository
-        // Format: registry/repo or registry/namespace/repo
         let parts: Vec<&str> = repo_part.splitn(2, '/').collect();
         if parts.len() < 2 {
             return None;
@@ -44,17 +36,14 @@ impl OciReference {
         Some(Self { reference: s.to_string(), registry, repository, tag: tag.to_string() })
     }
 
-    /// Get the full reference string.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.reference
     }
 }
 
-/// Error type for OCI reference parsing failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OciParseError {
-    /// The invalid input string.
     pub input: String,
 }
 
@@ -80,36 +69,30 @@ impl std::fmt::Display for OciReference {
     }
 }
 
-/// Source specification for a plugin - either local path or OCI registry.
+/// Either a local filesystem path or a remote OCI image reference.
 #[derive(Debug, Clone)]
 pub enum PluginSource {
-    /// Local filesystem path to a .wasm file.
     Local(PathBuf),
-    /// Remote OCI image reference.
     Oci(OciReference),
 }
 
 impl PluginSource {
-    /// Create a local plugin source.
     #[must_use]
     pub fn local(path: impl Into<PathBuf>) -> Self {
         Self::Local(path.into())
     }
 
-    /// Create an OCI plugin source.
     #[must_use]
     pub fn oci(reference: OciReference) -> Self {
         Self::Oci(reference)
     }
 
-    /// Check if this is a local source.
     #[inline]
     #[must_use]
     pub fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
     }
 
-    /// Check if this is a remote OCI source.
     #[inline]
     #[must_use]
     pub fn is_oci(&self) -> bool {
@@ -117,34 +100,27 @@ impl PluginSource {
     }
 }
 
-/// A resolved plugin with metadata about its source and content.
+/// A resolved plugin with its source, content hash, and path to the WASM file.
 #[derive(Debug, Clone)]
 pub struct ResolvedPlugin {
-    /// Original source specification.
     pub source: PluginSource,
-    /// SHA-256 hash of the WASM content.
     pub content_hash: String,
-    /// Path to the WASM file (local path or cache path).
     pub wasm_path: PathBuf,
 }
 
 impl ResolvedPlugin {
-    /// Create a new resolved plugin.
     #[must_use]
     pub fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
         Self { source, content_hash, wasm_path }
     }
 }
 
-/// Configuration for the registry client.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RegistryConfig {
-    /// Cache time-to-live in hours.
     pub cache_ttl_hours: u64,
-    /// Custom cache directory (defaults to ~/.cache/wafer/plugins).
+    /// Defaults to ~/.cache/wafer/plugins when `None`.
     pub cache_dir: Option<PathBuf>,
-    /// Whether to skip cache and always fetch from registry.
     #[serde(skip)]
     pub no_cache: bool,
 }
@@ -156,13 +132,11 @@ impl Default for RegistryConfig {
 }
 
 impl RegistryConfig {
-    /// Get the cache TTL as a Duration.
     #[must_use]
     pub fn cache_ttl(&self) -> Duration {
         Duration::from_secs(self.cache_ttl_hours * 3600)
     }
 
-    /// Get the cache directory, using default if not specified.
     #[must_use]
     pub fn cache_directory(&self) -> PathBuf {
         self.cache_dir.clone().unwrap_or_else(|| {
@@ -186,17 +160,15 @@ mod tests {
         assert_eq!(oci.tag, "0.0.1");
         assert_eq!(oci.as_str(), "ghcr.io/pedroklein/wafer-uppercase:0.0.1");
 
-        // Docker Hub style
         let docker = OciReference::parse("docker.io/library/nginx:latest").unwrap();
         assert_eq!(docker.registry, "docker.io");
         assert_eq!(docker.repository, "library/nginx");
         assert_eq!(docker.tag, "latest");
 
-        // Invalid cases
         assert!(OciReference::parse("invalid").is_none());
-        assert!(OciReference::parse("ghcr.io/repo").is_none()); // no tag
-        assert!(OciReference::parse("ghcr.io/repo:").is_none()); // empty tag
-        assert!(OciReference::parse("/repo:tag").is_none()); // empty registry
+        assert!(OciReference::parse("ghcr.io/repo").is_none());
+        assert!(OciReference::parse("ghcr.io/repo:").is_none());
+        assert!(OciReference::parse("/repo:tag").is_none());
     }
 
     #[test]
@@ -207,13 +179,11 @@ mod tests {
 
     #[test]
     fn test_oci_reference_from_str() {
-        // Valid reference via FromStr
         let oci: OciReference = "ghcr.io/user/repo:v1.0.0".parse().unwrap();
         assert_eq!(oci.registry, "ghcr.io");
         assert_eq!(oci.repository, "user/repo");
         assert_eq!(oci.tag, "v1.0.0");
 
-        // Invalid reference returns error
         let err = "invalid".parse::<OciReference>().unwrap_err();
         assert_eq!(err.input, "invalid");
         assert!(err.to_string().contains("invalid OCI reference"));

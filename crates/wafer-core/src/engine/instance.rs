@@ -1,22 +1,6 @@
 //! Transform component instance wrapper.
 //!
-//! This module provides [`TransformInstance`], which wraps a wasmtime store
-//! and instantiated WASM component to provide a safe interface for calling
-//! the transform node's lifecycle and processing functions.
-//!
-//! # Lifecycle
-//!
-//! 1. Create with [`TransformInstance::new`]
-//! 2. Call [`call_validate`](TransformInstance::call_validate) to validate config
-//! 3. Call [`call_init`](TransformInstance::call_init) to initialize
-//! 4. Call [`call_process`](TransformInstance::call_process) for each message
-//! 5. Call [`call_close`](TransformInstance::call_close) for cleanup
-//!
-//! # Fuel Management
-//!
-//! Fuel is reset before each [`call_process`](TransformInstance::call_process)
-//! to ensure consistent metering. This means each message gets a fresh fuel
-//! budget regardless of previous processing.
+//! Fuel is reset before each `call_process` to ensure consistent metering.
 
 use super::loader::WaferEngine;
 use super::{Capabilities, WaferState};
@@ -36,28 +20,12 @@ pub struct TransformInstance {
     bindings: TransformNode,
     fuel_limit: u64,
     epoch_deadline: u64,
-    /// Security capabilities for this instance.
-    /// Retained for future capability inspection/auditing APIs.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "retained for future capability inspection")]
     capabilities: Capabilities,
 }
 
 impl TransformInstance {
     /// Create a new transform instance with specified capabilities.
-    ///
-    /// Uses the engine's cached linker for efficient instantiation.
-    ///
-    /// # Arguments
-    ///
-    /// * `engine` - The WASM engine to use
-    /// * `component` - The compiled WASM component
-    /// * `capabilities` - Security capabilities for this instance
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::PluginInit`] if:
-    /// - Initial fuel cannot be set
-    /// - The linker fails to instantiate the component
     #[must_use = "creating an instance without using it is expensive"]
     pub async fn new(
         engine: &WaferEngine,
@@ -67,15 +35,12 @@ impl TransformInstance {
         let mut store =
             Store::new(engine.inner(), WaferState::with_capabilities(capabilities.clone()));
 
-        // Set initial fuel
         store
             .set_fuel(engine.fuel_limit())
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        // Set epoch deadline for cooperative interruption
         store.set_epoch_deadline(engine.epoch_deadline());
 
-        // Use the cached linker from the engine
         let linker = engine.linker()?;
 
         let bindings = TransformNode::instantiate_async(&mut store, component, linker)
@@ -92,10 +57,6 @@ impl TransformInstance {
     }
 
     /// Call the lifecycle init function.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::PluginInit`] if the init call fails.
     pub async fn call_init(
         &mut self,
         config: &exports::pipeline::transform::lifecycle::NodeConfig,
@@ -111,25 +72,16 @@ impl TransformInstance {
 
     /// Call the transform process function.
     ///
-    /// Resets fuel before each call to ensure consistent metering.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::ProcessError`] if:
-    /// - Fuel reset fails
-    /// - The WASM process call fails
+    /// Resets fuel and epoch deadline before each call.
     pub async fn call_process(
         &mut self,
         envelope: &pipeline::transform::types::Envelope,
     ) -> Result<pipeline::transform::types::ProcessResult> {
-        // Reset fuel before each call for consistent metering
-        // This ensures each call gets a fresh fuel budget
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::ProcessError {
             code: "FUEL_ERROR".to_string(),
             message: e.to_string(),
         })?;
 
-        // Reset epoch deadline before each call (prevents accumulated epochs from interrupting)
         self.store.set_epoch_deadline(self.epoch_deadline);
 
         self.bindings
@@ -145,10 +97,6 @@ impl TransformInstance {
     /// Call the lifecycle validate function.
     ///
     /// Returns `Ok(None)` if valid, `Ok(Some(error_msg))` if invalid.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::PluginInit`] if the validate call fails.
     pub async fn call_validate(
         &mut self,
         config: &exports::pipeline::transform::lifecycle::NodeConfig,
@@ -161,17 +109,11 @@ impl TransformInstance {
     }
 
     /// Call the lifecycle close function.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::PluginInit`] if the close call fails.
     pub async fn call_close(&mut self) -> Result<()> {
-        // Reset fuel before close for consistent execution budget
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
 
-        // Reset epoch deadline before close (prevents accumulated epochs from interrupting)
         self.store.set_epoch_deadline(self.epoch_deadline);
 
         self.bindings
@@ -183,10 +125,6 @@ impl TransformInstance {
     }
 
     /// Get remaining fuel in the store.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WaferError::ProcessError`] if fuel query fails.
     pub fn remaining_fuel(&self) -> Result<u64> {
         self.store.get_fuel().map_err(|e| WaferError::ProcessError {
             code: "FUEL_QUERY_ERROR".to_string(),
@@ -246,7 +184,6 @@ mod tests {
             .await
             .expect("Failed to create instance");
 
-        // Should have full fuel after creation
         let fuel = instance.remaining_fuel().expect("Failed to get fuel");
         assert_eq!(fuel, engine.fuel_limit());
     }
@@ -262,7 +199,6 @@ mod tests {
         let engine = WaferEngine::new().expect("Failed to create engine");
         let component = engine.load_component(&plugin_path).expect("Failed to load component");
 
-        // Test with stdio capabilities
         let caps = Capabilities::with_stdio();
         let instance = TransformInstance::new(&engine, &component, caps)
             .await
@@ -292,7 +228,6 @@ mod tests {
         let validation = instance.call_validate(&config).await.expect("Failed to validate");
         assert!(validation.is_none(), "Passthrough should have no validation errors");
 
-        // Init should succeed
         instance.call_init(&config).await.expect("Failed to init");
     }
 
@@ -350,7 +285,6 @@ mod tests {
 
         let _ = instance.call_process(&envelope).await.expect("Failed to process");
 
-        // Fuel should be consumed (less than max but reset for each call)
         let fuel = instance.remaining_fuel().expect("Failed to get fuel");
         assert!(fuel < engine.fuel_limit(), "Fuel should be consumed after processing");
     }
@@ -373,7 +307,6 @@ mod tests {
         let config = make_config("test", "transform/passthrough");
         instance.call_init(&config).await.expect("Failed to init");
 
-        // Close should succeed
         instance.call_close().await.expect("Failed to close");
     }
 

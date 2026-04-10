@@ -1,10 +1,7 @@
 // Duration nanosecond casts: 2^64 ns = ~585 years, truncation is acceptable
 #![allow(clippy::cast_possible_truncation)]
 
-//! Sink processing helper functions.
-//!
-//! This module contains helper methods for processing messages through sinks,
-//! including batch flushing and message handling with metrics.
+//! Sink processing helpers: message handling, batch flushing, and metrics.
 
 use std::time::Instant;
 
@@ -16,7 +13,6 @@ use super::orchestrator::ControlState;
 use super::DagOrchestrator;
 
 impl DagOrchestrator {
-    /// Flush the sink batch and record metrics.
     pub(super) async fn flush_sink_batch(
         sink: &mut dyn Sink,
         node_id: &str,
@@ -28,7 +24,6 @@ impl DagOrchestrator {
             tracing::trace!(node = %node_id, "Batch flush completed");
         }
 
-        // Record batch metrics after flush
         if let Some(stats) = sink.take_batch_stats() {
             metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
         }
@@ -42,20 +37,17 @@ impl DagOrchestrator {
         state_tracker: &NodeStateTracker,
         control_state: &ControlState,
     ) {
-        let message_id = envelope.id.clone();
         let input_size_bytes = envelope.payload.len();
         let start = Instant::now();
 
         state_tracker.set_processing(true);
 
-        // Clone envelope before collect() in case we need to send to DLQ on error
         let envelope_for_dlq = envelope.clone();
 
         if let Err(e) = sink.collect(envelope).await {
             let duration_ns = start.elapsed().as_nanos() as u64;
-            tracing::error!(message_id = %message_id, error = %e, "Sink collect failed");
+            tracing::error!(message_id = %envelope_for_dlq.id, error = %e, "Sink collect failed");
 
-            // Route failed message to DLQ if configured
             Self::send_sink_error_to_dlq(envelope_for_dlq, node_id, &e.to_string(), control_state)
                 .await;
 
@@ -63,7 +55,7 @@ impl DagOrchestrator {
         } else {
             let duration_ns = start.elapsed().as_nanos() as u64;
             tracing::debug!(
-                message_id = %message_id,
+                message_id = %envelope_for_dlq.id,
                 input_size_bytes,
                 duration_ns,
                 "Sink delivered"
@@ -71,7 +63,6 @@ impl DagOrchestrator {
 
             metrics_helper::record_success_metrics(control_state, node_id, duration_ns);
 
-            // Record batch metrics after collect (batch may have flushed)
             if let Some(stats) = sink.take_batch_stats() {
                 metrics_helper::record_sink_batch_metrics(control_state, node_id, &stats);
             }

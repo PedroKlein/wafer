@@ -1,48 +1,21 @@
 //! Batch buffer utility for sink batching.
-//!
-//! Provides a reusable buffer that collects items and signals when a batch
-//! should be flushed based on size or timeout.
 
 use std::time::{Duration, Instant};
 
-/// A buffer that collects items and signals when to flush based on batch size or timeout.
+/// A buffer that collects items and flushes based on batch size or timeout.
 ///
-/// # Example
+/// # Panics
 ///
-/// ```ignore
-/// use wafer_core::node::sink::BatchBuffer;
-/// use std::time::Duration;
-///
-/// let mut buffer = BatchBuffer::new(10, Duration::from_millis(100));
-///
-/// // Push items - returns None until batch size reached
-/// assert!(buffer.push("item1").is_none());
-/// assert!(buffer.push("item2").is_none());
-///
-/// // When batch size reached, returns the batch
-/// // Or call take() to drain manually
-/// let batch = buffer.take();
-/// ```
+/// `new()` panics if `batch_size` is 0.
 #[derive(Debug)]
 pub struct BatchBuffer<T> {
     buffer: Vec<T>,
     batch_size: usize,
-    #[allow(dead_code)] // Used for timeout-based flushing in sinks
     timeout: Duration,
     last_flush: Instant,
 }
 
 impl<T> BatchBuffer<T> {
-    /// Create a new batch buffer with the given batch size and timeout.
-    ///
-    /// # Arguments
-    ///
-    /// * `batch_size` - Number of items that triggers a flush (must be > 0)
-    /// * `timeout` - Duration after which buffer should be flushed even if not full
-    ///
-    /// # Panics
-    ///
-    /// Panics if `batch_size` is 0.
     pub fn new(batch_size: usize, timeout: Duration) -> Self {
         assert!(batch_size > 0, "batch_size must be greater than 0");
         Self {
@@ -53,12 +26,9 @@ impl<T> BatchBuffer<T> {
         }
     }
 
-    /// Push an item into the buffer.
+    /// Push an item. Returns `Some(batch)` if batch size is reached.
     ///
-    /// Returns `Some(Vec<T>)` containing the batch if the batch size is reached,
-    /// otherwise returns `None`.
-    ///
-    /// Note: This does NOT check timeout - use `should_flush()` for timeout checks.
+    /// Does NOT check timeout - use `should_flush()` for that.
     pub fn push(&mut self, item: T) -> Option<Vec<T>> {
         self.buffer.push(item);
         if self.buffer.len() >= self.batch_size {
@@ -68,56 +38,45 @@ impl<T> BatchBuffer<T> {
         }
     }
 
-    /// Drain the buffer and return all items.
-    ///
-    /// Resets the last flush time to now.
-    /// Returns an empty Vec if the buffer is empty.
+    /// Drain the buffer and reset the last flush time.
     pub fn take(&mut self) -> Vec<T> {
         self.last_flush = Instant::now();
         std::mem::take(&mut self.buffer)
     }
 
-    /// Check if the buffer should be flushed due to timeout.
-    ///
-    /// Returns `true` if:
-    /// - The buffer is not empty AND
-    /// - The time since last flush exceeds the timeout
-    #[allow(dead_code)] // Public API for sink implementations
+    /// Returns `true` if buffer is non-empty and timeout has elapsed.
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn should_flush(&self) -> bool {
         !self.buffer.is_empty() && self.last_flush.elapsed() >= self.timeout
     }
 
     /// Returns `true` if the buffer contains no items.
-    #[allow(dead_code)] // Public API for sink implementations
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
-    /// Returns the number of items currently in the buffer.
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
 
-    /// Returns the configured batch size.
-    #[allow(dead_code)] // Public API for sink implementations
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn batch_size(&self) -> usize {
         self.batch_size
     }
 
-    /// Returns the configured timeout duration.
-    #[allow(dead_code)] // Public API for sink implementations
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
-    /// Returns the time elapsed since the last flush.
-    #[allow(dead_code)] // Public API for sink implementations
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn elapsed_since_flush(&self) -> Duration {
         self.last_flush.elapsed()
     }
 
     /// Returns the time remaining until the timeout, or zero if already past.
-    #[allow(dead_code)] // Public API for sink implementations
+    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn time_until_timeout(&self) -> Duration {
         self.timeout.saturating_sub(self.last_flush.elapsed())
     }

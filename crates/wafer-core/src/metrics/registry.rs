@@ -1,7 +1,4 @@
 //! Prometheus metrics registry.
-//!
-//! Provides a central registry that collects pipeline, node, queue, and system metrics
-//! and exports them in Prometheus text format.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -17,58 +14,36 @@ use super::types::{HotSwapMetrics, NodeMetrics, QueueMetrics, SinkMetrics};
 
 /// Central metrics registry for WAFER runtime.
 ///
-/// Thread-safe registry that collects metrics from various sources and
-/// exports them in Prometheus text format on demand.
-///
-/// # Thread Safety
-///
-/// The registry uses atomic counters and RwLock for thread-safe access.
-/// Multiple producers can update metrics concurrently, and the registry
-/// can be safely shared across async tasks via Arc.
+/// Thread-safe: uses atomic counters and RwLock. Multiple producers can
+/// update concurrently; safe to share across async tasks via Arc.
 pub struct MetricsRegistry {
-    /// Start time for uptime calculation
     start_time: Instant,
 
-    /// Pipeline-level counters (atomic for lock-free updates)
     pub(super) pipeline_messages_total: AtomicU64,
     pub(super) pipeline_errors_total: AtomicU64,
     pipeline_process_time_ns: AtomicU64,
 
-    /// Total messages dropped due to overflow (all queues combined)
     pub(super) overflow_drop_total: AtomicU64,
-    /// Total messages sent to DLQ due to overflow (all queues combined)
     pub(super) overflow_dlq_total: AtomicU64,
-    /// Total errors from DLQ sink itself
     pub(super) dlq_sink_error_total: AtomicU64,
 
-    /// Node-level metrics (RwLock for dynamic node registration)
     pub(super) node_metrics: RwLock<HashMap<String, NodeMetrics>>,
-
-    /// Queue-level metrics (RwLock for dynamic queue registration)
     pub(super) queue_metrics: RwLock<HashMap<String, QueueMetrics>>,
-
-    /// Sink-level batching metrics (RwLock for dynamic sink registration)
     pub(super) sink_metrics: RwLock<HashMap<String, SinkMetrics>>,
-
-    /// Hot-swap metrics (aggregated)
     pub(super) hotswap_metrics: HotSwapMetrics,
 
-    /// System metrics collector
     #[cfg(feature = "http-api")]
     pub(super) system: RwLock<System>,
 
-    /// Global labels to add to all metrics
     pub(super) global_labels: HashMap<String, String>,
 }
 
 impl MetricsRegistry {
-    /// Creates a new metrics registry.
     #[must_use]
     pub fn new() -> Self {
         Self::with_labels(HashMap::new())
     }
 
-    /// Creates a new metrics registry with global labels.
     #[must_use]
     pub fn with_labels(global_labels: HashMap<String, String>) -> Self {
         Self {
@@ -89,76 +64,58 @@ impl MetricsRegistry {
         }
     }
 
-    // ============================================================
     // Pipeline-level metrics
-    // ============================================================
 
-    /// Records a processed message at the pipeline level.
     pub fn record_message(&self) {
         self.pipeline_messages_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records an error at the pipeline level.
     pub fn record_error(&self) {
         self.pipeline_errors_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records processing time at the pipeline level.
     pub fn record_process_time(&self, ns: u64) {
         self.pipeline_process_time_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
-    /// Returns total messages processed.
     pub fn messages_total(&self) -> u64 {
         self.pipeline_messages_total.load(Ordering::Relaxed)
     }
 
-    /// Returns total errors.
     pub fn errors_total(&self) -> u64 {
         self.pipeline_errors_total.load(Ordering::Relaxed)
     }
 
-    /// Returns uptime in seconds.
     pub fn uptime_secs(&self) -> f64 {
         self.start_time.elapsed().as_secs_f64()
     }
 
-    /// Records a message dropped due to overflow (pipeline-level aggregate).
     pub fn record_overflow_drop(&self) {
         self.overflow_drop_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records a message sent to DLQ due to overflow (pipeline-level aggregate).
     pub fn record_overflow_dlq(&self) {
         self.overflow_dlq_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Records an error from the DLQ sink itself.
     pub fn record_dlq_sink_error(&self) {
         self.dlq_sink_error_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Returns total messages dropped due to overflow.
     pub fn overflow_drop_total(&self) -> u64 {
         self.overflow_drop_total.load(Ordering::Relaxed)
     }
 
-    /// Returns total messages sent to DLQ due to overflow.
     pub fn overflow_dlq_total(&self) -> u64 {
         self.overflow_dlq_total.load(Ordering::Relaxed)
     }
 
-    /// Returns total DLQ sink errors.
     pub fn dlq_sink_error_total(&self) -> u64 {
         self.dlq_sink_error_total.load(Ordering::Relaxed)
     }
 
-    // ============================================================
     // Node-level metrics
-    // ============================================================
 
-    /// Registers a node for metrics collection.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -167,8 +124,6 @@ impl MetricsRegistry {
         nodes.insert(node_id.into(), NodeMetrics::new(node_type));
     }
 
-    /// Records a node invocation.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -179,8 +134,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Records a node error.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -190,8 +143,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Records fuel consumed by a WASM node.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -201,8 +152,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Updates memory usage for a node.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -212,12 +161,8 @@ impl MetricsRegistry {
         }
     }
 
-    // ============================================================
     // Queue-level metrics
-    // ============================================================
 
-    /// Registers a queue for metrics collection.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -234,8 +179,6 @@ impl MetricsRegistry {
         queues.insert(queue_id, QueueMetrics::new(from, to, capacity));
     }
 
-    /// Records a message enqueued.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -246,8 +189,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Records a message dropped (overflow with drop policy).
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -258,8 +199,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Records a message sent to DLQ (overflow with dead-letter policy).
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -270,8 +209,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Updates current queue depth.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -282,12 +219,8 @@ impl MetricsRegistry {
         }
     }
 
-    // ============================================================
     // Sink batching metrics
-    // ============================================================
 
-    /// Registers a sink for batching metrics collection.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -297,13 +230,6 @@ impl MetricsRegistry {
         sinks.insert(id.clone(), SinkMetrics::new(id));
     }
 
-    /// Records a batch flush operation for a sink.
-    ///
-    /// # Arguments
-    ///
-    /// * `sink_id` - The sink node ID
-    /// * `batch_size` - Number of messages in the flushed batch
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -314,8 +240,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Updates the current buffer size for a sink.
-    ///
     /// # Panics
     ///
     /// Panics if the internal `RwLock` is poisoned.
@@ -325,20 +249,8 @@ impl MetricsRegistry {
         }
     }
 
-    // ============================================================
     // Hot-swap metrics
-    // ============================================================
 
-    /// Records a successful hot-swap operation.
-    ///
-    /// # Arguments
-    ///
-    /// * `prepare_ns` - Time spent in prepare phase (nanoseconds)
-    /// * `drain_ns` - Time spent in drain phase (nanoseconds)
-    /// * `flip_ns` - Time spent in flip phase (nanoseconds)
-    /// * `retire_ns` - Time spent in retire phase (nanoseconds)
-    /// * `messages_drained` - Number of messages drained during swap
-    /// * `drain_timed_out` - Whether drain timed out
     pub fn record_hotswap_success(
         &self,
         prepare_ns: u64,
@@ -366,11 +278,8 @@ impl MetricsRegistry {
         self.hotswap_metrics.failure_total.fetch_add(1, Ordering::Relaxed);
     }
 
-    // ============================================================
     // Snapshot and encoding
-    // ============================================================
 
-    /// Creates a snapshot of all current metrics.
     pub fn snapshot(&self) -> MetricsSnapshot {
         let mut snapshot = MetricsSnapshot::new();
         let base_labels = self.global_labels.clone();
@@ -632,8 +541,11 @@ mod tests {
     /// - Properly quoted label values
     /// - Valid numeric values (integers or floats)
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive format validation requires many assertions
-    #[allow(clippy::items_after_statements)] // Helper function defined inline for test clarity
+    #[expect(clippy::too_many_lines, reason = "comprehensive format validation")]
+    #[expect(
+        clippy::items_after_statements,
+        reason = "helper function defined inline for test clarity"
+    )]
     fn test_prometheus_format_validation() {
         let mut labels = HashMap::new();
         labels.insert("pipeline".to_string(), "test-pipeline".to_string());
@@ -839,7 +751,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::too_many_lines)] // Comprehensive hot-swap validation requires many assertions
+    #[expect(clippy::too_many_lines, reason = "comprehensive hot-swap validation")]
     fn test_hotswap_metrics() {
         let registry = MetricsRegistry::new();
 

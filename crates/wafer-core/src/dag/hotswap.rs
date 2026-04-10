@@ -1,32 +1,7 @@
-//! Hot-swap coordinator for live WASM node replacement.
+//! Hot-swap coordinator for live WASM node replacement (SPEC §10.1, ADR-0003).
 //!
-//! This module implements the drain-and-flip algorithm per SPEC §10.1 and ADR-0003.
-//! Hot-swap allows replacing WASM nodes (Transform, Router, Joiner) without
-//! stopping the pipeline.
-//!
-//! # Algorithm Overview
-//!
-//! 1. **PREPARE**: Load and validate the new WASM component
-//! 2. **DRAIN**: Disable routing, wait for in-flight messages to complete
-//! 3. **FLIP**: Atomically swap the node reference
-//! 4. **RETIRE**: Close the old node and release resources
-//!
-//! # Usage
-//!
-//! ```ignore
-//! // Trigger hot-swap from orchestrator
-//! let metrics = orchestrator.hot_swap("my-transform", "/path/to/new.wasm").await?;
-//! println!("Swap completed in {:?}", metrics.total_duration);
-//! ```
-//!
-//! # Cancel Safety
-//!
-//! Hot-swap is designed to be cancel-safe. If cancelled during drain phase:
-//! - Routing is re-enabled
-//! - Old node continues operating
-//! - Buffered messages are flushed
-//!
-//! If cancelled after flip, the swap is considered complete.
+//! Cancel-safe: if cancelled during drain, routing is re-enabled and the old
+//! node continues. If cancelled after flip, the swap is considered complete.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -40,29 +15,18 @@ use crate::factory::FactoryContext;
 use crate::node::{AnyNode, NodeConfig, NodeStateTracker, WasmTransform};
 use crate::Result;
 
-/// Default drain timeout in milliseconds.
 pub const DEFAULT_DRAIN_TIMEOUT_MS: u64 = 5000;
 
-/// Metrics collected during a hot-swap operation.
 #[derive(Debug, Clone, Default)]
 pub struct SwapMetrics {
-    /// Node ID that was swapped
     pub node_id: String,
-    /// Path to the new WASM component
     pub new_wasm_path: PathBuf,
-    /// Time spent in prepare phase (loading, validating)
     pub prepare_duration: Duration,
-    /// Time spent in drain phase (waiting for in-flight messages)
     pub drain_duration: Duration,
-    /// Time spent in flip phase (swapping node reference)
     pub flip_duration: Duration,
-    /// Time spent in retire phase (closing old node)
     pub retire_duration: Duration,
-    /// Total swap duration
     pub total_duration: Duration,
-    /// Number of messages that were in-flight when drain started
     pub messages_drained: u64,
-    /// Whether drain timed out (forced flip)
     pub drain_timed_out: bool,
 }
 
@@ -82,20 +46,13 @@ impl SwapMetrics {
     }
 }
 
-/// Error types specific to hot-swap operations.
 #[derive(Debug)]
 pub enum SwapError {
-    /// Node not found in orchestrator
     NodeNotFound(String),
-    /// Node type does not support hot-swap (e.g., Source, Sink)
     NotSwappable(String),
-    /// Another swap is already in progress for this node
     SwapInProgress(String),
-    /// Failed to load or validate new component
     PrepareError(String),
-    /// Drain timed out (swap proceeded anyway)
     DrainTimeout { node_id: String, timeout_ms: u64 },
-    /// Internal error during swap
     Internal(String),
 }
 
@@ -126,40 +83,19 @@ impl From<SwapError> for WaferError {
     }
 }
 
-/// Coordinator for hot-swap operations on a single node.
+/// Coordinates a single hot-swap through phases: prepare, drain, flip, retire.
 ///
-/// Each swap operation creates a new coordinator instance. The coordinator
-/// manages the lifecycle of the swap through its phases: prepare, drain,
-/// flip, retire.
-///
-/// # Thread Safety
-///
-/// The coordinator is designed to run on a single task. It coordinates with
-/// the node execution task via the shared [`NodeStateTracker`].
+/// Runs on a single task; coordinates with the node execution task via [`NodeStateTracker`].
 pub struct HotSwapCoordinator {
-    /// Node ID being swapped
     node_id: String,
-    /// Path to the new WASM component
     new_wasm_path: PathBuf,
-    /// Drain timeout
     drain_timeout: Duration,
-    /// State tracker for the old node (shared with execution task)
     old_tracker: Arc<NodeStateTracker>,
-    /// Swap-in-progress lock (prevents concurrent swaps)
     swap_lock: Arc<AtomicBool>,
-    /// Metrics collected during swap
     metrics: SwapMetrics,
 }
 
 impl HotSwapCoordinator {
-    /// Create a new hot-swap coordinator.
-    ///
-    /// # Arguments
-    ///
-    /// * `node_id` - ID of the node to swap
-    /// * `new_wasm_path` - Path to the new WASM component
-    /// * `old_tracker` - State tracker for the current node
-    /// * `swap_lock` - Shared lock to prevent concurrent swaps
     pub fn new(
         node_id: String,
         new_wasm_path: PathBuf,
@@ -176,17 +112,12 @@ impl HotSwapCoordinator {
         }
     }
 
-    /// Set a custom drain timeout.
     #[must_use]
     pub fn with_drain_timeout(mut self, timeout: Duration) -> Self {
         self.drain_timeout = timeout;
         self
     }
 
-    /// Acquire the swap lock.
-    ///
-    /// Returns `Err(SwapError::SwapInProgress)` if another swap is already
-    /// in progress for this node.
     pub fn acquire_lock(&self) -> std::result::Result<(), SwapError> {
         if self
             .swap_lock
@@ -198,25 +129,11 @@ impl HotSwapCoordinator {
         Ok(())
     }
 
-    /// Release the swap lock.
     fn release_lock(&self) {
         self.swap_lock.store(false, Ordering::Release);
     }
 
-    /// PREPARE phase: Load and validate the new WASM component.
-    ///
-    /// This phase:
-    /// 1. Loads the new WASM component from disk
-    /// 2. Creates a new instance with the same capabilities
-    /// 3. Validates the component (calls lifecycle.validate if implemented)
-    ///
-    /// # Arguments
-    ///
-    /// * `ctx` - Factory context for creating the instance
-    ///
-    /// # Returns
-    ///
-    /// Returns the prepared new node ready for swapping.
+    /// PREPARE: Load and validate the new WASM component.
     pub async fn prepare(&mut self, ctx: &mut FactoryContext) -> Result<AnyNode> {
         let start = Instant::now();
         tracing::info!(
@@ -225,26 +142,17 @@ impl HotSwapCoordinator {
             "PREPARE: Loading new WASM component"
         );
 
-        // Create a new engine for the new component
         let engine = WaferEngine::new()?;
         ctx.epoch_tickers.push(engine.start_epoch_ticker());
 
-        // Load the component from the new path
         let component = engine.load_component(&self.new_wasm_path)?;
-
-        // Use stdio + inference capabilities (same as original)
         let capabilities = Capabilities::with_stdio().inference(true);
-
-        // Create a new node config
         let node_config = NodeConfig::new(&self.node_id, "transform");
-
-        // Create the transform instance
         let instance = TransformInstance::new(&engine, &component, capabilities).await?;
 
         let transform = WasmTransform::new(engine, instance, node_config);
         let new_node = AnyNode::from_transform(transform);
 
-        // Validate the new node
         new_node.validate()?;
 
         self.metrics.prepare_duration = start.elapsed();
@@ -257,18 +165,10 @@ impl HotSwapCoordinator {
         Ok(new_node)
     }
 
-    /// DRAIN phase: Wait for in-flight messages to complete.
+    /// DRAIN: Wait for in-flight messages to complete.
     ///
-    /// This phase:
-    /// 1. Transitions the old node to `Draining` state (disables routing)
-    /// 2. Waits for `processing` flag to be false (no message in-flight)
-    /// 3. Respects the drain timeout - returns `Ok(true)` if timed out
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(false)` - Drain completed normally
-    /// - `Ok(true)` - Drain timed out (swap should proceed anyway)
-    /// - `Err(...)` - Drain failed (swap should abort)
+    /// Returns `Ok(true)` if drain timed out (swap proceeds anyway),
+    /// `Ok(false)` if drain completed normally.
     pub async fn drain(&mut self) -> Result<bool> {
         let start = Instant::now();
         tracing::info!(
@@ -277,9 +177,7 @@ impl HotSwapCoordinator {
             "DRAIN: Starting drain"
         );
 
-        // Transition to draining state (this disables routing)
         if !self.old_tracker.transition_to_draining() {
-            // Node is not in Running state - cannot drain
             let state = self.old_tracker.state();
             tracing::warn!(
                 node = %self.node_id,
@@ -292,14 +190,12 @@ impl HotSwapCoordinator {
             )));
         }
 
-        // Wait for drain to complete with timeout
         let drain_result = tokio::time::timeout(self.drain_timeout, async {
             let mut poll_count = 0u64;
             loop {
                 if self.old_tracker.is_drain_ready() {
                     return poll_count;
                 }
-                // Poll at 1ms intervals
                 tokio::time::sleep(Duration::from_millis(1)).await;
                 poll_count += 1;
             }
@@ -316,7 +212,7 @@ impl HotSwapCoordinator {
                 poll_count = poll_count,
                 "DRAIN: Complete"
             );
-            Ok(false) // Not timed out
+            Ok(false)
         } else {
             self.metrics.drain_timed_out = true;
             tracing::warn!(
@@ -324,23 +220,11 @@ impl HotSwapCoordinator {
                 duration_ms = %self.metrics.drain_duration.as_millis(),
                 "DRAIN: Timed out, proceeding with swap"
             );
-            Ok(true) // Timed out
+            Ok(true)
         }
     }
 
-    /// FLIP phase: Swap the node reference atomically.
-    ///
-    /// This phase replaces the old node with the new node in the orchestrator's
-    /// node map. After this phase, new messages will be routed to the new node.
-    ///
-    /// # Arguments
-    ///
-    /// * `nodes` - Mutable reference to the orchestrator's node map
-    /// * `new_node` - The prepared new node to swap in
-    ///
-    /// # Returns
-    ///
-    /// Returns the old node for retirement.
+    /// FLIP: Atomically swap the node reference.
     pub async fn flip(
         &mut self,
         nodes: &Mutex<std::collections::HashMap<String, Arc<Mutex<AnyNode>>>>,
@@ -349,16 +233,12 @@ impl HotSwapCoordinator {
         let start = Instant::now();
         tracing::info!(node = %self.node_id, "FLIP: Swapping node reference");
 
-        // Get the old node and replace with new
         let nodes_guard = nodes.lock().await;
         let old_node_arc = nodes_guard.get(&self.node_id).ok_or_else(|| {
             WaferError::Runtime(format!("node '{}' not found during flip", self.node_id))
         })?;
 
-        // Extract the old node
         let mut old_node_guard = old_node_arc.lock().await;
-
-        // Swap the contents - we need to replace the inner AnyNode
         let old_node = std::mem::replace(&mut *old_node_guard, new_node);
 
         drop(old_node_guard);
@@ -374,23 +254,13 @@ impl HotSwapCoordinator {
         Ok(old_node)
     }
 
-    /// RETIRE phase: Close the old node and release resources.
-    ///
-    /// This phase:
-    /// 1. Transitions the old node to `Retired` state
-    /// 2. Calls `close()` on the old node
-    ///
-    /// # Arguments
-    ///
-    /// * `old_node` - The old node to retire
+    /// RETIRE: Close the old node and release resources.
     pub async fn retire(&mut self, mut old_node: AnyNode) -> Result<()> {
         let start = Instant::now();
         tracing::info!(node = %self.node_id, "RETIRE: Closing old node");
 
-        // Transition to retired state
         self.old_tracker.transition_to_retired();
 
-        // Close the old node
         if let Err(e) = old_node.close().await {
             tracing::warn!(
                 node = %self.node_id,
@@ -409,13 +279,11 @@ impl HotSwapCoordinator {
         Ok(())
     }
 
-    /// Get the collected metrics.
     #[must_use]
     pub fn metrics(&self) -> &SwapMetrics {
         &self.metrics
     }
 
-    /// Take ownership of the metrics.
     #[must_use]
     pub fn into_metrics(mut self) -> SwapMetrics {
         self.metrics.total_duration = self.metrics.prepare_duration
@@ -428,7 +296,7 @@ impl HotSwapCoordinator {
 
 impl Drop for HotSwapCoordinator {
     fn drop(&mut self) {
-        // Ensure lock is released if coordinator is dropped
+        // SAFETY: ensure lock is released if coordinator is dropped mid-swap
         self.release_lock();
     }
 }
@@ -468,14 +336,11 @@ mod tests {
             lock.clone(),
         );
 
-        // Should acquire successfully
         assert!(coordinator.acquire_lock().is_ok());
         assert!(lock.load(Ordering::Acquire));
 
-        // Second acquire should fail
         assert!(coordinator.acquire_lock().is_err());
 
-        // Release should work
         coordinator.release_lock();
         assert!(!lock.load(Ordering::Acquire));
     }
@@ -483,7 +348,7 @@ mod tests {
     #[tokio::test]
     async fn test_drain_not_running() {
         let lock = Arc::new(AtomicBool::new(false));
-        let tracker = Arc::new(NodeStateTracker::new()); // Starting state, not Running
+        let tracker = Arc::new(NodeStateTracker::new());
         let mut coordinator =
             HotSwapCoordinator::new("test".to_string(), PathBuf::from("/test.wasm"), tracker, lock);
 
@@ -503,7 +368,6 @@ mod tests {
         )
         .with_drain_timeout(Duration::from_millis(100));
 
-        // Node is not processing, so drain should complete immediately
         let timed_out = coordinator.drain().await.unwrap();
         assert!(!timed_out);
         assert!(!coordinator.metrics.drain_timed_out);
@@ -513,7 +377,7 @@ mod tests {
     async fn test_drain_timeout() {
         let lock = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(NodeStateTracker::running());
-        tracker.set_processing(true); // Simulate processing
+        tracker.set_processing(true);
 
         let mut coordinator = HotSwapCoordinator::new(
             "test".to_string(),

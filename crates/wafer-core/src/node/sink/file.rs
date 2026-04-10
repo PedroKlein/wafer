@@ -17,56 +17,21 @@ use super::{BatchStats, Sink};
 /// Configuration for FileSink batching behavior.
 #[derive(Debug, Clone, Default)]
 pub struct FileSinkBatchConfig {
-    /// Number of messages to buffer before flushing.
-    /// When `None`, messages are written immediately (no batching).
     pub batch_size: Option<usize>,
-    /// Timeout in milliseconds for batch flush.
-    /// Even if batch_size is not reached, flush after this timeout.
-    /// Only used when `batch_size` is `Some`.
     pub batch_timeout_ms: Option<u64>,
 }
 
-/// A file-based sink node that writes messages to a file.
-///
-/// Each message payload is written followed by a newline character.
-/// The file is truncated on initialization (overwrite mode).
-///
-/// # Batching Support
-///
-/// When `batch_config.batch_size` is set, messages are buffered and written
-/// in batches for improved I/O efficiency. Messages are flushed when:
-/// - The batch size is reached
-/// - The batch timeout expires
-/// - The sink is closed
-///
-/// # Example
-///
-/// ```ignore
-/// // No batching (immediate writes)
-/// let sink = FileSink::new("my-sink", "/path/to/output.txt");
-///
-/// // With batching (flush every 100 messages or 1 second)
-/// let sink = FileSink::with_batching(
-///     "my-sink",
-///     "/path/to/output.txt",
-///     FileSinkBatchConfig {
-///         batch_size: Some(100),
-///         batch_timeout_ms: Some(1000),
-///     },
-/// );
-/// ```
+/// A file-based sink that writes messages line-by-line. Supports optional batching.
 pub struct FileSink {
     id: String,
     path: PathBuf,
     writer: Option<BufWriter<File>>,
     batch_config: FileSinkBatchConfig,
     batch_buffer: Option<BatchBuffer<RuntimeEnvelope>>,
-    /// Batch statistics for metrics reporting.
     batch_stats: BatchStats,
 }
 
 impl FileSink {
-    /// Create a new FileSink without batching (immediate writes).
     #[must_use]
     pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
         Self {
@@ -108,10 +73,8 @@ impl FileSink {
             writer.write_all(b"\n")?;
         }
 
-        // Flush to disk after writing the batch
         writer.flush()?;
 
-        // Record batch stats for metrics
         self.batch_stats.flushes_since_last_check += 1;
         self.batch_stats.last_flush_size = batch_size as u64;
 
@@ -138,7 +101,6 @@ impl Lifecycle for FileSink {
             }
         }
 
-        // Validate batch configuration
         if let Some(batch_size) = self.batch_config.batch_size {
             if batch_size == 0 {
                 return Err(WaferError::Config(ConfigError::Message(
@@ -155,7 +117,6 @@ impl Lifecycle for FileSink {
             let file = File::create(&self.path)?;
             self.writer = Some(BufWriter::new(file));
 
-            // Initialize batch buffer if batching is enabled
             if let Some(batch_size) = self.batch_config.batch_size {
                 let timeout =
                     Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000));
@@ -168,9 +129,7 @@ impl Lifecycle for FileSink {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Flush any remaining buffered messages
-            // Note: The sink loop already calls flush() before close(), but we
-            // handle it here too for safety when close() is called directly.
+            // Flush remaining buffered messages (safety net if close() called directly)
             if let Some(ref mut buffer) = self.batch_buffer {
                 let remaining = buffer.take();
                 if !remaining.is_empty() {
@@ -194,15 +153,12 @@ impl Sink for FileSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Check if batching is enabled
             if let Some(ref mut buffer) = self.batch_buffer {
-                // Push to buffer; if batch size reached, write the batch
                 if let Some(batch) = buffer.push(envelope) {
                     self.write_batch(batch)?;
                 }
                 Ok(())
             } else {
-                // No batching - write immediately
                 let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
                     message: "FileSink not initialized - call init() first".to_string(),
                 })?;
@@ -215,7 +171,6 @@ impl Sink for FileSink {
 
     fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Flush any buffered messages
             if let Some(ref mut buffer) = self.batch_buffer {
                 let batch = buffer.take();
                 if !batch.is_empty() {
@@ -233,21 +188,17 @@ impl Sink for FileSink {
     }
 
     fn batch_timeout(&self) -> Option<Duration> {
-        // Return the configured timeout if batching is enabled
         self.batch_config
             .batch_size
             .map(|_| Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000)))
     }
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
-        // Only return stats if batching is enabled
         self.batch_buffer.as_ref()?;
 
-        // Update current buffer size
         self.batch_stats.current_buffer_size =
             self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
-        // Take the stats and reset counters
         let stats = self.batch_stats.clone();
         self.batch_stats.flushes_since_last_check = 0;
         // Keep last_flush_size for reference, but it will be updated on next flush

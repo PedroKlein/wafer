@@ -1,18 +1,4 @@
-//! Metrics module - Runtime observability.
-//!
-//! Tracks messages processed, timing, and queue depths.
-//!
-//! ## Components
-//!
-//! - [`PipelineMetrics`]: Internal atomic counters for basic tracking
-//! - [`MetricsRegistry`]: Full Prometheus-compatible registry (feature-gated under `http-api`)
-//!
-//! ## Module Structure
-//!
-//! The metrics registry implementation is split across several files for maintainability:
-//! - `types.rs`: Metric type structs (NodeMetrics, QueueMetrics, etc.)
-//! - `registry.rs`: Core registry struct and methods
-//! - `snapshot_builder.rs`: Helper methods for building metric snapshots
+//! Metrics module - runtime observability.
 
 mod counters;
 #[cfg(feature = "http-api")]

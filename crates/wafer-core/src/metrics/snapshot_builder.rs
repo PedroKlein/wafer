@@ -1,7 +1,4 @@
 //! Snapshot builder methods for MetricsRegistry.
-//!
-//! These helper methods add various metric categories to a snapshot.
-//! Separated from the main registry to reduce file size.
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -12,8 +9,7 @@ use super::registry::MetricsRegistry;
 use super::types::SystemMetrics;
 
 impl MetricsRegistry {
-    /// Add pipeline-level metrics to the snapshot.
-    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
+    #[expect(clippy::cast_precision_loss, reason = "acceptable for metrics counters")]
     pub(super) fn add_pipeline_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -40,7 +36,7 @@ impl MetricsRegistry {
             self.pipeline_errors_total.load(Ordering::Relaxed),
         );
 
-        // Calculate messages per second (rate over uptime)
+        // Messages per second (rate over uptime)
         let uptime = self.uptime_secs();
         let messages = self.pipeline_messages_total.load(Ordering::Relaxed) as f64;
         let mps = if uptime > 0.0 { messages / uptime } else { 0.0 };
@@ -53,7 +49,7 @@ impl MetricsRegistry {
     }
 
     /// Add per-node metrics to the snapshot.
-    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
+    #[expect(clippy::cast_precision_loss, reason = "acceptable for metrics counters")]
     pub(super) fn add_node_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -102,8 +98,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// Add queue metrics to the snapshot.
-    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
+    #[expect(clippy::cast_precision_loss, reason = "acceptable for metrics counters")]
     pub(super) fn add_queue_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -152,8 +147,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// Add sink batching metrics to the snapshot.
-    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
+    #[expect(clippy::cast_precision_loss, reason = "acceptable for metrics counters")]
     pub(super) fn add_sink_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -187,7 +181,6 @@ impl MetricsRegistry {
         }
     }
 
-    /// Add overflow and DLQ metrics to the snapshot.
     pub(super) fn add_overflow_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -215,7 +208,6 @@ impl MetricsRegistry {
         );
     }
 
-    /// Add hot-swap metrics to the snapshot.
     pub(super) fn add_hotswap_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -285,8 +277,7 @@ impl MetricsRegistry {
         );
     }
 
-    /// Add system metrics to the snapshot.
-    #[allow(clippy::cast_precision_loss)] // Acceptable for metrics counters
+    #[expect(clippy::cast_precision_loss, reason = "acceptable for metrics counters")]
     pub(super) fn add_system_metrics(
         &self,
         snapshot: &mut MetricsSnapshot,
@@ -322,7 +313,6 @@ impl MetricsRegistry {
 
         let mut system = self.system.write().unwrap();
 
-        // Refresh only the current process
         let pid = Pid::from_u32(std::process::id());
         let process_refresh = ProcessRefreshKind::nothing().with_cpu().with_memory();
         system.refresh_processes_specifics(

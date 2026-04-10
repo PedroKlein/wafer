@@ -1,6 +1,4 @@
-//! File-based source node implementation.
-//!
-//! Reads lines from a file, producing one [`RuntimeEnvelope`] per line.
+//! File-based source node that reads lines or binary content from a file.
 
 use std::fs::File;
 use std::future::Future;
@@ -14,51 +12,21 @@ use crate::queue::RuntimeEnvelope;
 
 use super::Source;
 
-/// A file-based source node that reads lines from a file.
-///
-/// Each call to `poll()` returns one line from the file as a `RuntimeEnvelope`.
-/// Returns `None` when EOF is reached.
-///
-/// # Binary File Support
-///
-/// Files with a `.bin` extension are treated as binary and read in a single
-/// `poll()` call, returning the entire file contents as one envelope.
-///
-/// # Example
-///
-/// ```ignore
-/// use wafer_core::node::{FileSource, Lifecycle, Source};
-///
-/// let mut source = FileSource::new("my-source", "data/input.txt");
-/// source.validate()?;
-/// source.init().await?;
-///
-/// while let Some(envelope) = source.poll().await? {
-///     println!("Got line: {:?}", envelope.payload);
-/// }
-///
-/// source.close().await?;
-/// ```
+/// Reads lines from a file, one `RuntimeEnvelope` per line.
+/// Files with `.bin` extension are read as a single blob.
 pub struct FileSource {
-    /// Node identifier
     id: String,
-    /// Path to the file to read
     path: PathBuf,
-    /// Buffered reader, initialized in init()
     reader: Option<BufReader<File>>,
-    /// Track if binary content has been sent (binary files are read once as a whole)
+    /// Binary files are read in one shot; tracks whether that read happened.
     binary_sent: bool,
 }
 
 impl FileSource {
-    /// Create a new FileSource.
-    ///
-    /// The file is not opened until `init()` is called.
     pub fn new(id: impl Into<String>, path: impl Into<PathBuf>) -> Self {
         Self { id: id.into(), path: path.into(), reader: None, binary_sent: false }
     }
 
-    /// Get the file path this source reads from.
     #[must_use]
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -75,11 +43,9 @@ impl Lifecycle for FileSource {
     }
 
     fn validate(&self) -> Result<()> {
-        // Check file exists and is readable
         if !self.path.exists() {
             return Err(WaferError::Config(ConfigError::PluginNotFound(self.path.clone())));
         }
-        // Check it's a file, not a directory
         if !self.path.is_file() {
             return Err(WaferError::Config(ConfigError::Message(format!(
                 "Path is not a file: {}",
@@ -130,9 +96,8 @@ impl Source for FileSource {
 
             let mut line = String::new();
             match reader.read_line(&mut line) {
-                Ok(0) => Ok(None), // EOF
+                Ok(0) => Ok(None),
                 Ok(_) => {
-                    // Strip trailing newline(s)
                     let payload =
                         line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
                     Ok(Some(

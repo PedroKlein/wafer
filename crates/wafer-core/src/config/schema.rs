@@ -13,17 +13,12 @@ pub const DEFAULT_API_BIND: &str = "127.0.0.1:9090";
 pub const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9091";
 
 /// Queue overflow policy for edge backpressure handling.
-///
-/// Determines what happens when a queue is full and a new message arrives.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum OverflowPolicy {
-    /// Block the sender until space is available (default).
     #[default]
     Slow,
-    /// Drop the newest message when queue is full.
     Drop,
-    /// Route dropped messages to the Dead Letter Queue.
     DeadLetter,
 }
 
@@ -32,23 +27,16 @@ fn default_dlq_queue_capacity() -> usize {
 }
 
 /// Dead Letter Queue configuration.
-///
-/// When enabled, messages that fail processing or are dropped due to
-/// overflow policies are routed to this sink for later inspection.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeadLetterConfig {
-    /// Whether the DLQ is enabled.
     #[serde(default)]
     pub enabled: bool,
 
-    /// Type of sink to use for the DLQ (e.g., "file", "mqtt").
     pub sink_type: String,
 
-    /// Sink-specific configuration (e.g., file path, MQTT topic).
     #[serde(default = "default_config")]
     pub config: toml::Value,
 
-    /// Queue capacity for the internal DLQ buffer.
     #[serde(default = "default_dlq_queue_capacity")]
     pub queue_capacity: usize,
 }
@@ -70,7 +58,7 @@ fn default_api_bind() -> SocketAddr {
 }
 
 /// Default bind address for metrics endpoint (when served separately from API).
-#[allow(dead_code)] // Reserved for future standalone metrics server
+#[expect(dead_code, reason = "reserved for future standalone metrics server")]
 fn default_metrics_bind() -> SocketAddr {
     DEFAULT_METRICS_BIND.parse().expect("DEFAULT_METRICS_BIND is a valid socket address literal")
 }
@@ -84,43 +72,27 @@ fn default_pipeline_name() -> String {
 }
 
 /// Top-level configuration for a WAFER pipeline.
-///
-/// This struct represents the full configuration file with sections for:
-/// - `[pipeline]` - Pipeline metadata
-/// - `[api]` - HTTP API server configuration
-/// - `[metrics]` - Prometheus metrics configuration
-/// - `[registry]` - OCI registry configuration
-/// - `[[nodes]]` - Node definitions
-/// - `[[edges]]` - Edge definitions
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
-    /// Pipeline metadata
     #[serde(default)]
     pub pipeline: PipelineConfig,
 
-    /// HTTP API server configuration
     #[serde(default)]
     pub api: ApiServerConfig,
 
-    /// Prometheus metrics configuration
     #[serde(default)]
     pub metrics: MetricsConfig,
 
-    /// Node definitions
     pub nodes: Vec<NodeDefinition>,
 
-    /// Edge definitions
     pub edges: Vec<EdgeDefinition>,
 
-    /// Default queue capacity for edges
     #[serde(default = "default_queue_capacity")]
     pub default_queue_capacity: usize,
 
-    /// Registry configuration for remote plugin loading.
     #[serde(default)]
     pub registry: RegistryConfig,
 
-    /// Dead Letter Queue configuration.
     #[serde(default)]
     pub dead_letter: Option<DeadLetterConfig>,
 }
@@ -128,11 +100,9 @@ pub struct Config {
 /// Pipeline metadata configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PipelineConfig {
-    /// Name of the pipeline (used in metrics and logging)
     #[serde(default = "default_pipeline_name")]
     pub name: String,
 
-    /// Optional description
     #[serde(default)]
     pub description: Option<String>,
 }
@@ -144,16 +114,11 @@ impl Default for PipelineConfig {
 }
 
 /// HTTP API server configuration (from TOML config file).
-///
-/// This is the TOML-parsed configuration. See `wafer_core::api::ApiConfig`
-/// for the runtime server configuration struct.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ApiServerConfig {
-    /// Whether the API server is enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Address to bind the API server to
     #[serde(default = "default_api_bind")]
     pub bind: SocketAddr,
 }
@@ -167,20 +132,16 @@ impl Default for ApiServerConfig {
 /// Prometheus metrics configuration.
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetricsConfig {
-    /// Whether metrics are enabled
     #[serde(default = "default_true")]
     pub enabled: bool,
 
-    /// Address to bind the metrics server to (if different from API)
     /// When None, metrics are served on the same server as the API.
     #[serde(default)]
     pub bind: Option<SocketAddr>,
 
-    /// Path for metrics endpoint
     #[serde(default = "default_metrics_path")]
     pub path: String,
 
-    /// Global labels to add to all metrics (e.g., environment, cluster)
     #[serde(default)]
     pub labels: std::collections::HashMap<String, String>,
 }
@@ -213,17 +174,14 @@ impl Config {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct DagConfig {
-    /// Pipeline metadata
     #[serde(default)]
     pub pipeline: PipelineConfig,
     pub nodes: Vec<NodeDefinition>,
     pub edges: Vec<EdgeDefinition>,
     #[serde(default = "default_queue_capacity")]
     pub default_queue_capacity: usize,
-    /// Registry configuration for remote plugin loading.
     #[serde(default)]
     pub registry: RegistryConfig,
-    /// Dead Letter Queue configuration.
     #[serde(default)]
     pub dead_letter: Option<DeadLetterConfig>,
 }
@@ -260,41 +218,28 @@ pub struct EdgeDefinition {
     pub to_port: Option<String>,
     #[serde(default)]
     pub queue_capacity: Option<usize>,
-    /// Overflow policy for this edge's queue.
-    /// Defaults to `Slow` (blocking backpressure).
+    /// Overflow policy for this edge's queue (defaults to `Slow`).
     #[serde(default)]
     pub overflow: OverflowPolicy,
 }
 
-/// Configuration for a node's plugin source.
+/// Node plugin source configuration.
 ///
-/// Supports both local paths and OCI registry references.
 /// Either `plugin_path` OR `oci` must be specified, but not both.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct NodeConfig {
-    /// Local path to the plugin WASM file (mutually exclusive with oci).
     #[serde(default)]
     pub plugin_path: Option<PathBuf>,
 
     /// OCI image reference (e.g., "ghcr.io/pedroklein/wafer-uppercase:0.0.1").
-    /// Mutually exclusive with plugin_path.
     #[serde(default)]
     pub oci: Option<String>,
 
-    /// Fuel limit for WASM execution (optional, uses default if not specified).
     #[serde(default)]
     pub fuel_limit: Option<u64>,
 }
 
 impl NodeConfig {
-    /// Validate the node configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Both `plugin_path` and `oci` are specified
-    /// - Neither `plugin_path` nor `oci` is specified
-    /// - The OCI reference is invalid
     pub fn validate(&self) -> Result<(), ConfigError> {
         match (&self.plugin_path, &self.oci) {
             (Some(_), Some(_)) => {
@@ -304,7 +249,6 @@ impl NodeConfig {
                 Err(ConfigError::Message("must specify either plugin_path or oci".to_string()))
             }
             (None, Some(oci_str)) => {
-                // Validate the OCI reference format
                 OciReference::parse(oci_str).ok_or_else(|| {
                     ConfigError::Message(format!(
                         "invalid OCI reference '{oci_str}': expected format 'registry/repo:tag'"
@@ -317,12 +261,6 @@ impl NodeConfig {
     }
 
     /// Convert this config to a `PluginSource`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - Validation fails (see [`validate`](Self::validate))
-    /// - The OCI reference is invalid
     ///
     /// # Panics
     ///
@@ -404,8 +342,7 @@ impl DagConfig {
             )));
         }
 
-        // Validate DLQ configuration: if any edge uses dead-letter policy,
-        // the DLQ must be configured and enabled.
+        // Validate DLQ: if any edge uses dead-letter policy, DLQ must be configured and enabled
         let has_dead_letter_edge =
             self.edges.iter().any(|e| e.overflow == OverflowPolicy::DeadLetter);
 
@@ -460,7 +397,7 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)] // Test utility function
+    #[expect(dead_code, reason = "test utility")]
     fn make_edge(from: &str, to: &str) -> EdgeDefinition {
         EdgeDefinition {
             from: from.to_string(),

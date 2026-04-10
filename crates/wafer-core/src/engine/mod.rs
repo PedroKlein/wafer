@@ -1,10 +1,4 @@
 //! Engine module - Wasmtime component loading and execution.
-//!
-//! This module provides the core runtime abstractions:
-//! - [`WaferEngine`] - Configured wasmtime Engine with fuel metering
-//! - [`TransformInstance`] - Instantiated transform component
-//! - [`Capabilities`] - Security capabilities for WASM plugins
-//! - [`WaferState`] - Host state for WASI implementation
 
 mod capabilities;
 mod host;

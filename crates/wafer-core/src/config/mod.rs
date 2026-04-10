@@ -1,4 +1,4 @@
-//! Config module - TOML configuration parsing for DAG pipelines.
+//! TOML configuration parsing for DAG pipelines.
 
 pub mod diff;
 pub mod loader;

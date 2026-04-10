@@ -1,9 +1,4 @@
 //! Pipeline metrics - atomic counters for runtime observability.
-//!
-//! Provides three metrics as specified:
-//! - `messages_total` - Total messages processed
-//! - `process_time_ns` - Cumulative processing time in nanoseconds
-//! - `queue_depth` - Current queue depth (gauge)
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;
@@ -11,21 +6,16 @@ use std::time::Instant;
 /// Pipeline metrics using atomic counters for thread-safe updates.
 #[derive(Debug, Default)]
 pub struct PipelineMetrics {
-    /// Total number of messages processed.
     messages_total: AtomicU64,
-    /// Cumulative processing time in nanoseconds.
     process_time_ns: AtomicU64,
-    /// Current queue depth.
     queue_depth: AtomicUsize,
 }
 
 impl PipelineMetrics {
-    /// Create a new metrics instance with all counters at zero.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Increment the total message count by 1.
     pub fn increment_messages(&self) {
         self.messages_total.fetch_add(1, Ordering::Relaxed);
     }
@@ -35,27 +25,22 @@ impl PipelineMetrics {
         self.process_time_ns.fetch_add(ns, Ordering::Relaxed);
     }
 
-    /// Set the current queue depth.
     pub fn set_queue_depth(&self, depth: usize) {
         self.queue_depth.store(depth, Ordering::Relaxed);
     }
 
-    /// Get current messages total.
     pub fn messages_total(&self) -> u64 {
         self.messages_total.load(Ordering::Relaxed)
     }
 
-    /// Get cumulative process time in nanoseconds.
     pub fn process_time_ns(&self) -> u64 {
         self.process_time_ns.load(Ordering::Relaxed)
     }
 
-    /// Get current queue depth.
     pub fn queue_depth(&self) -> usize {
         self.queue_depth.load(Ordering::Relaxed)
     }
 
-    /// Get average processing time per message in nanoseconds.
     /// Returns 0 if no messages have been processed.
     pub fn avg_process_time_ns(&self) -> u64 {
         let total = self.messages_total();
@@ -65,7 +50,7 @@ impl PipelineMetrics {
         self.process_time_ns() / total
     }
 
-    /// Create a snapshot of current metrics for reporting.
+    /// Create a snapshot of current metrics.
     pub fn report(&self) -> MetricsReport {
         MetricsReport {
             messages_total: self.messages_total(),
@@ -79,26 +64,19 @@ impl PipelineMetrics {
 /// A snapshot of metrics at a point in time.
 #[derive(Debug, Clone, Copy)]
 pub struct MetricsReport {
-    /// Total messages processed.
     pub messages_total: u64,
-    /// Cumulative processing time in nanoseconds.
     pub process_time_ns: u64,
-    /// Average processing time per message in nanoseconds.
     pub avg_process_time_ns: u64,
-    /// Current queue depth.
     pub queue_depth: usize,
 }
 
-/// RAII guard for timing a process() call.
-///
-/// Records elapsed time to metrics when dropped.
+/// RAII guard for timing a process() call. Records elapsed time on drop.
 pub struct ProcessTimer<'a> {
     metrics: &'a PipelineMetrics,
     start: Instant,
 }
 
 impl<'a> ProcessTimer<'a> {
-    /// Start timing a process() call.
     pub fn start(metrics: &'a PipelineMetrics) -> Self {
         Self { metrics, start: Instant::now() }
     }

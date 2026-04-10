@@ -4,34 +4,22 @@ use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-/// Runtime representation of a pipeline message.
-///
-/// This is the host-side envelope that gets converted to/from
-/// the WIT-generated types when crossing the WASM boundary.
+/// Host-side message envelope, converted to/from WIT types at the WASM boundary.
 #[derive(Debug, Clone)]
 pub struct RuntimeEnvelope {
-    /// Unique message identifier.
     pub id: String,
-    /// Creation timestamp (Unix millis).
     pub timestamp: u64,
-    /// Source node name.
     pub source: String,
-    /// Message metadata.
     pub metadata: HashMap<String, String>,
-    /// Raw payload bytes.
     pub payload: Vec<u8>,
 }
 
 impl RuntimeEnvelope {
-    /// Create a new envelope with the given payload.
     #[must_use]
     pub fn new(source: impl Into<String>, payload: Vec<u8>) -> Self {
-        // Timestamp in milliseconds since UNIX epoch
-        // Saturates at u64::MAX for dates far in the future (~584 million years)
+        // Saturates at u64::MAX (~584 million years from epoch)
         let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
             |_| {
-                // System clock is before UNIX epoch (misconfigured system)
-                // This should be extremely rare but we handle it gracefully
                 tracing::warn!("system clock before UNIX epoch, using 0 as timestamp");
                 0
             },
@@ -47,20 +35,17 @@ impl RuntimeEnvelope {
         }
     }
 
-    /// Create an envelope with a string payload.
     #[must_use]
     pub fn from_string(source: impl Into<String>, data: impl Into<String>) -> Self {
         Self::new(source, data.into().into_bytes())
     }
 
-    /// Add metadata entry (builder pattern).
     #[must_use]
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
         self
     }
 
-    /// Get payload as UTF-8 string (lossy).
     pub fn payload_as_string(&self) -> String {
         String::from_utf8_lossy(&self.payload).to_string()
     }

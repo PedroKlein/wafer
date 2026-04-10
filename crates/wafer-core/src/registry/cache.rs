@@ -9,24 +9,19 @@ use std::time::{Duration, SystemTime};
 /// Manages cached WASM components with TTL-based invalidation.
 #[derive(Debug, Clone)]
 pub struct PackageCache {
-    /// Root directory for cached packages.
     cache_dir: PathBuf,
-    /// Time-to-live for cached entries.
     ttl: Duration,
 }
 
 impl PackageCache {
-    /// Create a new package cache.
     pub fn new(cache_dir: PathBuf, ttl: Duration) -> Self {
         Self { cache_dir, ttl }
     }
 
-    /// Get the cache path for a package version.
     pub fn cache_path(&self, namespace: &str, name: &str, version: &str) -> PathBuf {
         self.cache_dir.join(namespace).join(name).join(format!("{version}.wasm"))
     }
 
-    /// Check if a cached entry exists and is still valid.
     pub fn get(&self, namespace: &str, name: &str, version: &str) -> Option<CacheEntry> {
         let path = self.cache_path(namespace, name, version);
         if !path.exists() {
@@ -51,7 +46,6 @@ impl PackageCache {
         Some(CacheEntry { path, age, size: metadata.len() })
     }
 
-    /// Store content in the cache.
     pub fn put(
         &self,
         namespace: &str,
@@ -61,7 +55,6 @@ impl PackageCache {
     ) -> Result<PathBuf, RegistryError> {
         let path = self.cache_path(namespace, name, version);
 
-        // Create parent directories
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|e| {
                 RegistryError::Cache(format!("failed to create cache directory: {e}"))
@@ -76,7 +69,6 @@ impl PackageCache {
         Ok(path)
     }
 
-    /// Remove a cached entry.
     pub fn remove(&self, namespace: &str, name: &str, version: &str) -> Result<(), RegistryError> {
         let path = self.cache_path(namespace, name, version);
         if path.exists() {
@@ -86,7 +78,6 @@ impl PackageCache {
         Ok(())
     }
 
-    /// Clear all expired entries from the cache.
     pub fn clear_expired(&self) -> Result<usize, RegistryError> {
         let mut removed = 0;
         if !self.cache_dir.exists() {
@@ -133,18 +124,13 @@ impl PackageCache {
     }
 }
 
-/// Information about a cached entry.
 #[derive(Debug)]
 pub struct CacheEntry {
-    /// Path to the cached file.
     pub path: PathBuf,
-    /// Age of the cache entry.
     pub age: Duration,
-    /// Size in bytes.
     pub size: u64,
 }
 
-/// Compute SHA-256 hash of content and return as hex string.
 pub fn compute_hash(content: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content);

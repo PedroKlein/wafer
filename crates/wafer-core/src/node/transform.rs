@@ -1,7 +1,4 @@
 //! WASM Transform node implementation.
-//!
-//! This module provides [`WasmTransform`], which wraps a WASM component
-//! implementing the transform-node world and provides the [`Transform`] trait.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -12,34 +9,21 @@ use crate::queue::RuntimeEnvelope;
 
 use super::traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
 
-/// A WASM-based transform node.
-///
-/// Wraps a [`TransformInstance`] and implements the [`Transform`] trait,
-/// bridging the Rust trait interface to the WIT component interface.
 pub struct WasmTransform {
-    /// Node configuration
     config: NodeConfig,
-    /// The wasmtime engine - must be kept alive for the instance's lifetime.
-    /// The instance holds references to the engine's compiled code.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "engine must outlive the instance")]
     engine: WaferEngine,
-    /// The instantiated WASM component
     instance: TransformInstance,
-    /// Whether init() has been called
     initialized: bool,
 }
 
 impl WasmTransform {
-    /// Create a new WasmTransform from a loaded component.
-    ///
-    /// The component must implement the `transform-node` world.
-    /// Call `init()` before `process()`.
     #[must_use]
     pub fn new(engine: WaferEngine, instance: TransformInstance, config: NodeConfig) -> Self {
         Self { config, engine, instance, initialized: false }
     }
 
-    /// Convert NodeConfig to WIT NodeConfig
+    /// Convert NodeConfig to WIT NodeConfig.
     fn to_wit_config(&self) -> exports::pipeline::transform::lifecycle::NodeConfig {
         exports::pipeline::transform::lifecycle::NodeConfig {
             id: self.config.id.clone(),
@@ -49,11 +33,9 @@ impl WasmTransform {
         }
     }
 
-    /// Convert RuntimeEnvelope to WIT Envelope (takes ownership to avoid clones)
     fn to_wit_envelope(envelope: RuntimeEnvelope) -> pipeline::transform::types::Envelope {
         use pipeline::transform::types::{Envelope, Payload};
 
-        // Convert HashMap to Vec<(String, String)> by taking ownership
         let metadata: Vec<(String, String)> = envelope.metadata.into_iter().collect();
 
         Envelope {
@@ -65,13 +47,10 @@ impl WasmTransform {
         }
     }
 
-    /// Convert WIT Envelope to RuntimeEnvelope
     fn from_wit_envelope(envelope: pipeline::transform::types::Envelope) -> RuntimeEnvelope {
         use pipeline::transform::types::Payload;
 
         let metadata = envelope.metadata.into_iter().collect();
-
-        // Use let-else for cleaner destructuring (will need update when Payload gains variants)
         let Payload::Raw(payload) = envelope.payload;
 
         RuntimeEnvelope {
@@ -83,7 +62,6 @@ impl WasmTransform {
         }
     }
 
-    /// Convert WIT ProcessResult to trait ProcessResult
     fn from_wit_result(result: pipeline::transform::types::ProcessResult) -> ProcessResult {
         use pipeline::transform::types::ProcessResult as WitResult;
 
@@ -109,10 +87,6 @@ impl Lifecycle for WasmTransform {
     }
 
     fn validate(&self) -> Result<()> {
-        // Note: validate() is sync in the trait but async in WASM.
-        // TransformInstance::call_validate() exists but requires &mut self,
-        // and this trait method takes &self. For MVP, validation is deferred
-        // to init() which can return errors if validation fails.
         Ok(())
     }
 

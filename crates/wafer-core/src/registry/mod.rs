@@ -1,7 +1,4 @@
 //! Registry client for loading WASM components from OCI registries.
-//!
-//! This module provides support for fetching transform plugins from
-//! remote registries like ghcr.io using direct OCI image references.
 
 mod cache;
 mod client;

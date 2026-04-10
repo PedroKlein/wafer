@@ -1,4 +1,4 @@
-//! Stdout-based sink implementation.
+//! Stdout sink with optional batching support.
 
 use std::future::Future;
 use std::io::{BufWriter, Stdout, Write};
@@ -12,36 +12,22 @@ use crate::queue::RuntimeEnvelope;
 use super::batch::BatchBuffer;
 use super::{BatchStats, Sink};
 
-/// Configuration for StdoutSink batching behavior.
 #[derive(Debug, Clone, Default)]
 pub struct StdoutSinkBatchConfig {
-    /// Number of messages to buffer before writing.
     /// When `None`, messages are written immediately (no batching).
     pub batch_size: Option<usize>,
-    /// Timeout in milliseconds for batch flush.
     /// Even if batch_size is not reached, flush after this timeout.
     /// Only used when `batch_size` is `Some`.
     pub batch_timeout_ms: Option<u64>,
 }
 
-/// A stdout-based sink node that writes messages to standard output.
-///
-/// Each message payload is written followed by a newline character.
-/// Uses buffered writing for efficiency.
-///
-/// # Batching Support
-///
-/// When `batch_config.batch_size` is set, messages are buffered and written
-/// in batches for improved I/O efficiency. Messages are flushed when:
-/// - The batch size is reached
-/// - The batch timeout expires
-/// - The sink is closed
+/// Writes message payloads to stdout, one per line.
+/// Supports optional batching for improved I/O throughput.
 pub struct StdoutSink {
     id: String,
     writer: Option<BufWriter<Stdout>>,
     batch_config: StdoutSinkBatchConfig,
     batch_buffer: Option<BatchBuffer<RuntimeEnvelope>>,
-    /// Batch statistics for metrics reporting.
     batch_stats: BatchStats,
 }
 
@@ -57,7 +43,6 @@ impl StdoutSink {
         }
     }
 
-    /// Create a new StdoutSink with custom batching configuration.
     #[must_use]
     pub fn with_batching(id: impl Into<String>, batch_config: StdoutSinkBatchConfig) -> Self {
         Self {
@@ -69,7 +54,6 @@ impl StdoutSink {
         }
     }
 
-    /// Write a batch of envelopes to stdout.
     fn write_batch(&mut self, batch: Vec<RuntimeEnvelope>) -> Result<()> {
         let batch_size = batch.len();
         let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
@@ -81,10 +65,8 @@ impl StdoutSink {
             writer.write_all(b"\n")?;
         }
 
-        // Flush to ensure output is visible
         writer.flush()?;
 
-        // Record batch stats for metrics
         self.batch_stats.flushes_since_last_check += 1;
         self.batch_stats.last_flush_size = batch_size as u64;
 
@@ -102,7 +84,6 @@ impl Lifecycle for StdoutSink {
     }
 
     fn validate(&self) -> Result<()> {
-        // Validate batch configuration
         if let Some(batch_size) = self.batch_config.batch_size {
             if batch_size == 0 {
                 return Err(WaferError::Config(ConfigError::Message(
@@ -117,7 +98,6 @@ impl Lifecycle for StdoutSink {
         Box::pin(async move {
             self.writer = Some(BufWriter::new(std::io::stdout()));
 
-            // Initialize batch buffer if batching is enabled
             if let Some(batch_size) = self.batch_config.batch_size {
                 let timeout =
                     Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000));
@@ -130,7 +110,6 @@ impl Lifecycle for StdoutSink {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Flush any remaining buffered messages
             if let Some(ref mut buffer) = self.batch_buffer {
                 let remaining = buffer.take();
                 if !remaining.is_empty() {
@@ -154,15 +133,12 @@ impl Sink for StdoutSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Check if batching is enabled
             if let Some(ref mut buffer) = self.batch_buffer {
-                // Push to buffer; if batch size reached, write the batch
                 if let Some(batch) = buffer.push(envelope) {
                     self.write_batch(batch)?;
                 }
                 Ok(())
             } else {
-                // No batching - write immediately
                 let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
                     message: "StdoutSink not initialized - call init() first".to_string(),
                 })?;
@@ -175,7 +151,6 @@ impl Sink for StdoutSink {
 
     fn flush(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Flush any buffered messages
             if let Some(ref mut buffer) = self.batch_buffer {
                 let batch = buffer.take();
                 if !batch.is_empty() {
@@ -183,7 +158,6 @@ impl Sink for StdoutSink {
                 }
             }
 
-            // Also flush the underlying writer
             if let Some(ref mut writer) = self.writer {
                 writer.flush()?;
             }
@@ -193,21 +167,17 @@ impl Sink for StdoutSink {
     }
 
     fn batch_timeout(&self) -> Option<Duration> {
-        // Return the configured timeout if batching is enabled
         self.batch_config
             .batch_size
             .map(|_| Duration::from_millis(self.batch_config.batch_timeout_ms.unwrap_or(1000)))
     }
 
     fn take_batch_stats(&mut self) -> Option<BatchStats> {
-        // Only return stats if batching is enabled
         self.batch_buffer.as_ref()?;
 
-        // Update current buffer size
         self.batch_stats.current_buffer_size =
             self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
 
-        // Take the stats and reset counters
         let stats = self.batch_stats.clone();
         self.batch_stats.flushes_since_last_check = 0;
 

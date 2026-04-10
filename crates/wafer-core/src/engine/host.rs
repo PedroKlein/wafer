@@ -11,24 +11,21 @@ use super::Capabilities;
 /// Host state for WASM component execution.
 ///
 /// Implements `WasiView` to provide WASI capabilities to guest components.
-/// Each `TransformInstance` gets its own `WaferState` with configured capabilities.
 pub struct WaferState {
     ctx: WasiCtx,
     table: ResourceTable,
     /// Retained for future capability inspection/auditing.
-    #[allow(dead_code)]
+    #[expect(dead_code, reason = "retained for future capability inspection")]
     capabilities: Capabilities,
     nn_ctx: Option<WasiNnCtx>,
 }
 
 impl WaferState {
-    /// Create a new host state with default capabilities (inherit stdio).
     #[must_use]
     pub fn new() -> Self {
         Self::with_capabilities(Capabilities::with_stdio())
     }
 
-    /// Create a new host state with specific capabilities.
     #[must_use]
     pub fn with_capabilities(capabilities: Capabilities) -> Self {
         let mut builder = WasiCtxBuilder::new();
@@ -41,9 +38,7 @@ impl WaferState {
             builder.inherit_env();
         }
 
-        // Note: Network and filesystem capabilities require additional
-        // configuration with specific paths/hosts. For now, these flags
-        // are placeholders for future capability-based security.
+        // Network and filesystem capabilities are placeholders for future use
 
         let ctx = builder.build();
 
@@ -56,14 +51,11 @@ impl WaferState {
         Self { ctx, table: ResourceTable::new(), capabilities, nn_ctx }
     }
 
-    /// Create a sandboxed state with no host access.
     #[must_use]
     pub fn sandboxed() -> Self {
         Self::with_capabilities(Capabilities::sandbox())
     }
 
-    /// Get a view into the wasi-nn context for the linker.
-    ///
     /// # Panics
     ///
     /// Panics if inference capability was not enabled.

@@ -17,28 +17,11 @@ use super::{BatchStats, Sink};
 /// Configuration for MqttSink batching behavior.
 #[derive(Debug, Clone, Default)]
 pub struct MqttSinkBatchConfig {
-    /// Number of messages to buffer before publishing.
-    /// When `None`, messages are published immediately (no batching).
     pub batch_size: Option<usize>,
-    /// Timeout in milliseconds for batch flush.
-    /// Even if batch_size is not reached, flush after this timeout.
-    /// Only used when `batch_size` is `Some`.
     pub batch_timeout_ms: Option<u64>,
 }
 
-/// An MQTT-based sink node that publishes messages to an MQTT broker.
-///
-/// # Batching Support
-///
-/// When `batch_config.batch_size` is set, messages are buffered and published
-/// in batches. Note that MQTT doesn't have a native batch publish mechanism,
-/// so each message in the batch is published individually but without waiting
-/// for acknowledgment between messages (fire-and-forget within the batch).
-///
-/// Messages are flushed when:
-/// - The batch size is reached
-/// - The batch timeout expires
-/// - The sink is closed
+/// An MQTT sink that publishes messages to a broker. Supports optional batching.
 pub struct MqttSink {
     id: String,
     broker: String,
@@ -50,7 +33,6 @@ pub struct MqttSink {
     eventloop_handle: Option<JoinHandle<()>>,
     batch_config: MqttSinkBatchConfig,
     batch_buffer: Option<BatchBuffer<RuntimeEnvelope>>,
-    /// Batch statistics for metrics reporting.
     batch_stats: BatchStats,
 }
 

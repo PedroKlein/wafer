@@ -1,7 +1,4 @@
-//! HTTP-based source node implementation.
-//!
-//! Receives HTTP requests and produces [`RuntimeEnvelope`] messages from request bodies.
-//! Supports webhook-style ingestion where external systems POST data to the pipeline.
+//! HTTP source node that receives POST requests and feeds them into the pipeline.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -16,59 +13,19 @@ use crate::queue::RuntimeEnvelope;
 
 use super::Source;
 
-/// An HTTP-based source node that receives messages via HTTP POST requests.
-///
-/// The source starts an HTTP server that accepts POST requests on a configurable
-/// path. Each request body becomes a message in the pipeline.
-///
-/// # Example
-///
-/// ```ignore
-/// use wafer_core::node::{HttpSource, Lifecycle, Source};
-///
-/// let mut source = HttpSource::new(
-///     "http-source",
-///     "0.0.0.0:8081",
-///     "/ingest",
-/// );
-/// source.validate()?;
-/// source.init().await?;
-///
-/// // External clients can now POST to http://0.0.0.0:8081/ingest
-/// while let Some(envelope) = source.poll().await? {
-///     println!("Got message: {:?}", envelope.payload);
-/// }
-///
-/// source.close().await?;
-/// ```
+/// Starts an HTTP server that accepts POST requests on a configurable path.
+/// Each request body becomes a `RuntimeEnvelope` in the pipeline.
 pub struct HttpSource {
-    /// Node identifier
     id: String,
-    /// Address to bind the HTTP server to
     bind_addr: SocketAddr,
-    /// Path to accept POST requests on
     path: String,
-    /// Channel capacity for buffering incoming messages
     buffer_size: usize,
-    /// Channel receiver for incoming messages
     message_rx: Option<mpsc::Receiver<RuntimeEnvelope>>,
-    /// Shutdown signal sender
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-    /// Server task handle
     server_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl HttpSource {
-    /// Create a new HttpSource.
-    ///
-    /// The HTTP server is not started until `init()` is called.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Node identifier
-    /// * `bind_addr` - Address to bind the HTTP server to (e.g., "0.0.0.0:8081")
-    /// * `path` - Path to accept POST requests on (e.g., "/ingest")
-    ///
     /// # Panics
     ///
     /// Panics if the hardcoded fallback address `127.0.0.1:8081` fails to parse
@@ -93,20 +50,17 @@ impl HttpSource {
         }
     }
 
-    /// Create a new HttpSource with custom buffer size.
     #[must_use]
     pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = buffer_size;
         self
     }
 
-    /// Get the bind address.
     #[must_use]
     pub fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
 
-    /// Get the path.
     #[must_use]
     pub fn path(&self) -> &str {
         &self.path
@@ -145,7 +99,6 @@ impl Lifecycle for HttpSource {
             let path = self.path.clone();
             let source_id = self.id.clone();
 
-            // Create a simple HTTP server using hyper directly (lighter weight than axum)
             let handle = tokio::spawn(async move {
                 run_http_server(bind_addr, path, source_id, tx, shutdown_rx).await;
             });
@@ -167,12 +120,10 @@ impl Lifecycle for HttpSource {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            // Send shutdown signal
             if let Some(shutdown_tx) = self.shutdown_tx.take() {
                 let _ = shutdown_tx.send(());
             }
 
-            // Wait for server to stop
             if let Some(handle) = self.server_handle.take() {
                 handle.abort();
                 let _ = handle.await;
@@ -197,13 +148,12 @@ impl Source for HttpSource {
 
             match rx.recv().await {
                 Some(envelope) => Ok(Some(envelope)),
-                None => Ok(None), // Channel closed
+                None => Ok(None),
             }
         })
     }
 }
 
-/// Run the HTTP server that receives messages.
 async fn run_http_server(
     bind_addr: SocketAddr,
     path: String,
@@ -280,7 +230,6 @@ async fn handle_request(
     use http_body_util::{BodyExt, Full};
     use hyper::body::Bytes;
 
-    // Check method and path
     if req.method() != hyper::Method::POST {
         return Ok(hyper::Response::builder()
             .status(hyper::StatusCode::METHOD_NOT_ALLOWED)
@@ -295,7 +244,6 @@ async fn handle_request(
             .unwrap());
     }
 
-    // Extract body
     let body_bytes = match req.collect().await {
         Ok(collected) => collected.to_bytes().to_vec(),
         Err(e) => {
@@ -307,10 +255,8 @@ async fn handle_request(
         }
     };
 
-    // Create envelope
     let envelope = RuntimeEnvelope::new(source_id, body_bytes);
 
-    // Send to channel
     if tx.send(envelope).await.is_err() {
         return Ok(hyper::Response::builder()
             .status(hyper::StatusCode::SERVICE_UNAVAILABLE)

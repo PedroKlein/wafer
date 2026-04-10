@@ -1,20 +1,8 @@
 //! Routing control for hot-swap message buffering.
 //!
-//! This module provides [`RoutingController`], which wraps a queue sender
-//! and adds routing control for hot-swap operations.
-//!
-//! # Hot-Swap Protocol
-//!
-//! During a hot-swap:
-//! 1. Upstream nodes continue sending messages
-//! 2. When `routing_enabled` is false, messages are buffered
-//! 3. When routing is re-enabled (after swap), buffered messages are flushed
-//! 4. If swap is aborted, buffered messages are flushed to original node
-//!
-//! # Backpressure
-//!
-//! The buffer has a configurable capacity. When full, sends will block
-//! waiting for capacity (applying backpressure to upstream).
+//! During a hot-swap, messages are buffered when routing is disabled,
+//! then flushed when routing resumes. Buffer has configurable capacity;
+//! when full, sends block (backpressure to upstream).
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -26,23 +14,15 @@ use crate::queue::{QueueSender, RuntimeEnvelope};
 /// Default buffer capacity for routing during drain.
 const DEFAULT_BUFFER_CAPACITY: usize = 1024;
 
-/// Controller for routing messages with hot-swap awareness.
-///
-/// Wraps a [`QueueSender`] and adds the ability to buffer messages
-/// when routing is disabled, then flush them when routing resumes.
+/// Wraps a [`QueueSender`] with hot-swap buffering support.
 pub struct RoutingController {
-    /// The downstream queue sender
     sender: QueueSender<RuntimeEnvelope>,
-    /// State tracker for the downstream node (for routing check)
     downstream_tracker: Arc<NodeStateTracker>,
-    /// Buffer for messages when routing is disabled
     buffer: Mutex<VecDeque<RuntimeEnvelope>>,
-    /// Maximum buffer capacity
     buffer_capacity: usize,
 }
 
 impl RoutingController {
-    /// Create a new routing controller.
     #[must_use]
     pub fn new(
         sender: QueueSender<RuntimeEnvelope>,
@@ -56,7 +36,7 @@ impl RoutingController {
         }
     }
 
-    /// Create a new routing controller with custom buffer capacity.
+    /// Create with custom buffer capacity.
     #[must_use]
     pub fn with_capacity(
         sender: QueueSender<RuntimeEnvelope>,
@@ -71,24 +51,13 @@ impl RoutingController {
         }
     }
 
-    /// Send a message to the downstream node.
-    ///
-    /// If routing is enabled, sends directly to the queue.
-    /// If routing is disabled (during drain), buffers the message.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the queue is closed.
+    /// Send a message. Buffers if routing is disabled (during drain).
     pub async fn send(&self, envelope: RuntimeEnvelope) -> Result<(), SendError> {
         if self.downstream_tracker.routing_enabled() {
-            // Normal path: send directly
             self.sender.send(envelope).await.map_err(|_| SendError::Closed)
         } else {
-            // Drain path: buffer the message
             let mut buffer = self.buffer.lock().await;
             if buffer.len() >= self.buffer_capacity {
-                // Buffer full - this indicates backpressure situation
-                // For MVP, we log and drop. Future: block or expand buffer.
                 tracing::warn!(
                     capacity = self.buffer_capacity,
                     "Routing buffer full, message dropped"
@@ -106,19 +75,11 @@ impl RoutingController {
         self.downstream_tracker.routing_enabled()
     }
 
-    /// Get the number of buffered messages.
     pub async fn buffer_len(&self) -> usize {
         self.buffer.lock().await.len()
     }
 
-    /// Flush all buffered messages to the queue.
-    ///
-    /// Call this after routing is re-enabled (swap complete).
-    /// Returns the number of messages flushed.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the queue is closed before all messages are flushed.
+    /// Flush buffered messages to the queue. Call after routing is re-enabled.
     pub async fn flush(&self) -> Result<usize, SendError> {
         let mut buffer = self.buffer.lock().await;
         let count = buffer.len();
@@ -131,9 +92,7 @@ impl RoutingController {
         Ok(count)
     }
 
-    /// Drain the buffer without sending, returning all buffered messages.
-    ///
-    /// Use this to retrieve messages if the swap is aborted.
+    /// Drain the buffer without sending. Use if swap is aborted.
     pub async fn drain_buffer(&self) -> Vec<RuntimeEnvelope> {
         let mut buffer = self.buffer.lock().await;
         buffer.drain(..).collect()
@@ -149,9 +108,7 @@ impl RoutingController {
 /// Error types for routing operations.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SendError {
-    /// The queue is closed (receiver dropped)
     Closed,
-    /// The buffer is full (backpressure)
     BufferFull,
 }
 

@@ -6,18 +6,8 @@ use std::path::Path;
 
 /// Load and parse the full pipeline configuration file (async).
 ///
-/// This is the primary config loader for the wafer-runtime binary.
-/// It supports the full config format including `[pipeline]`, `[api]`,
-/// and `[metrics]` sections.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The file cannot be read
-/// - The TOML is invalid
-/// - The config validation fails
-///
-/// Error messages include the file path for debugging context.
+/// Supports the full config format including `[pipeline]`, `[api]`,
+/// and `[metrics]` sections. Error messages include the file path for context.
 pub async fn load_config(path: impl AsRef<Path>) -> Result<Config> {
     let path = path.as_ref();
 
@@ -48,18 +38,8 @@ pub async fn load_config(path: impl AsRef<Path>) -> Result<Config> {
 
 /// Load and parse a DAG pipeline configuration file (sync).
 ///
-/// This is the legacy config loader that only supports the core DAG
-/// configuration (nodes, edges, registry). Use `load_config` for the
-/// full configuration with API/metrics settings.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The file cannot be read ([`ConfigError::Read`])
-/// - The TOML is invalid ([`ConfigError::Parse`])
-/// - The config validation fails
-///
-/// Error messages include the file path for debugging context.
+/// Only supports core DAG config (nodes, edges, registry).
+/// Use `load_config` for the full configuration with API/metrics settings.
 pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 
@@ -90,14 +70,6 @@ pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
 /// Load DAG config without validation (sync).
 ///
 /// Useful for testing or when validation will be done separately.
-///
-/// # Errors
-///
-/// Returns an error if:
-/// - The file cannot be read ([`ConfigError::Read`])
-/// - The TOML is invalid ([`ConfigError::Parse`])
-///
-/// Error messages include the file path for debugging context.
 pub fn load_dag_config_unchecked(path: impl AsRef<Path>) -> Result<DagConfig> {
     let path = path.as_ref();
 

@@ -1,6 +1,4 @@
-//! MQTT-based source node implementation.
-//!
-//! Subscribes to an MQTT topic and produces one [`RuntimeEnvelope`] per message.
+//! MQTT source node that subscribes to a topic and produces envelopes per message.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,67 +14,21 @@ use crate::queue::RuntimeEnvelope;
 
 use super::Source;
 
-/// An MQTT-based source node that subscribes to a topic.
-///
-/// Each call to `poll()` returns one MQTT message as a `RuntimeEnvelope`.
-/// The source automatically reconnects on connection errors (handled by rumqttc).
-///
-/// # Example
-///
-/// ```ignore
-/// use wafer_core::node::{MqttSource, Lifecycle, Source};
-///
-/// let mut source = MqttSource::new(
-///     "mqtt-source",
-///     "localhost",
-///     1883,
-///     "sensors/temperature",
-///     1,  // QoS 1 (AtLeastOnce)
-///     "wafer-client-001",
-/// );
-/// source.validate()?;
-/// source.init().await?;
-///
-/// while let Some(envelope) = source.poll().await? {
-///     println!("Got message: {:?}", envelope.payload);
-/// }
-///
-/// source.close().await?;
-/// ```
+/// Subscribes to an MQTT topic; each message becomes a `RuntimeEnvelope`.
+/// Reconnection on errors is handled by rumqttc.
 pub struct MqttSource {
-    /// Node identifier
     id: String,
-    /// MQTT broker hostname
     broker: String,
-    /// MQTT broker port
     port: u16,
-    /// Topic to subscribe to
     topic: String,
-    /// Quality of Service level (0, 1, or 2)
     qos: u8,
-    /// Client identifier for MQTT connection
     client_id: String,
-    /// MQTT client, initialized in init()
     client: Option<AsyncClient>,
-    /// Handle to the background eventloop task
     eventloop_handle: Option<JoinHandle<()>>,
-    /// Channel receiver for incoming Publish messages
     message_rx: Option<mpsc::Receiver<Publish>>,
 }
 
 impl MqttSource {
-    /// Create a new MqttSource.
-    ///
-    /// The MQTT connection is not established until `init()` is called.
-    ///
-    /// # Arguments
-    ///
-    /// * `id` - Node identifier
-    /// * `broker` - MQTT broker hostname
-    /// * `port` - MQTT broker port (usually 1883)
-    /// * `topic` - Topic to subscribe to
-    /// * `qos` - Quality of Service level (0=AtMostOnce, 1=AtLeastOnce, 2+=ExactlyOnce)
-    /// * `client_id` - Client identifier for MQTT connection
     pub fn new(
         id: impl Into<String>,
         broker: impl Into<String>,
@@ -98,19 +50,16 @@ impl MqttSource {
         }
     }
 
-    /// Get the MQTT broker hostname.
     #[must_use]
     pub fn broker(&self) -> &str {
         &self.broker
     }
 
-    /// Get the subscribed topic.
     #[must_use]
     pub fn topic(&self) -> &str {
         &self.topic
     }
 
-    /// Map u8 QoS value to rumqttc QoS enum.
     fn map_qos(qos: u8) -> QoS {
         match qos {
             0 => QoS::AtMostOnce,
@@ -309,7 +258,7 @@ mod tests {
         assert!(matches!(MqttSource::map_qos(0), QoS::AtMostOnce));
         assert!(matches!(MqttSource::map_qos(1), QoS::AtLeastOnce));
         assert!(matches!(MqttSource::map_qos(2), QoS::ExactlyOnce));
-        assert!(matches!(MqttSource::map_qos(3), QoS::ExactlyOnce)); // 3+ maps to ExactlyOnce
+        assert!(matches!(MqttSource::map_qos(3), QoS::ExactlyOnce));
         assert!(matches!(MqttSource::map_qos(255), QoS::ExactlyOnce));
     }
 }

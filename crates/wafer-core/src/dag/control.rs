@@ -1,7 +1,4 @@
-//! PipelineControl trait implementation for DagOrchestrator.
-//!
-//! This module implements the `PipelineControl` trait for `DagOrchestrator`,
-//! using the shared `ControlState` defined in `orchestrator.rs`.
+//! `PipelineControl` trait implementation for `DagOrchestrator`.
 
 use std::sync::atomic::Ordering;
 use wafer_types::{
@@ -14,12 +11,11 @@ use crate::control::{EventReceiver, PipelineControl};
 
 impl PipelineControl for DagOrchestrator {
     async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
-        // Check if node exists
         if !self.node_indices.contains_key(node_id) {
             return Err(ControlError::NodeNotFound { node_id: node_id.to_string() });
         }
 
-        // Check if node is swappable (only transforms are swappable)
+        // Check if node is swappable (only transforms)
         let node_config = self.config.nodes.iter().find(|n| n.id == node_id);
         let is_transform =
             node_config.is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
@@ -28,21 +24,17 @@ impl PipelineControl for DagOrchestrator {
             return Err(ControlError::NotSwappable { node_id: node_id.to_string() });
         }
 
-        // The trait method hot_swap(node_id) is for manual triggering of a single node.
-        // To get the WASM path, we need to reload the config file.
-        // This is useful for re-loading a node that was updated in-place (same path).
+        // To get the WASM path, we reload the config file.
         let config_path = self.config_path.as_ref().ok_or_else(|| {
             ControlError::ConfigError {
                 message: "Cannot hot-swap: no config path stored. Use reload_config() after creating orchestrator with from_config_with_path().".into(),
             }
         })?;
 
-        // Reload config to get current path for this node
         let new_config = crate::config::load_dag_config(config_path).map_err(|e| {
             ControlError::ConfigError { message: format!("Failed to reload config: {e}") }
         })?;
 
-        // Find the node's WASM path in the new config
         let node_def = new_config
             .nodes
             .iter()
@@ -59,7 +51,7 @@ impl PipelineControl for DagOrchestrator {
             message: format!("Node {node_id} has no plugin_path configured"),
         })?;
 
-        // Perform the hot-swap using the inherent method
+        // Perform the hot-swap
         let metrics = DagOrchestrator::hot_swap(self, node_id, &wasm_path)
             .await
             .map_err(|e| ControlError::Internal { message: format!("Hot-swap failed: {e}") })?;
@@ -74,44 +66,37 @@ impl PipelineControl for DagOrchestrator {
     }
 
     async fn reload_config(&self) -> Result<ReloadResult, ControlError> {
-        // Use resync() which handles config diffing and hot-swapping
-        let swapped_nodes = self.resync().await.map_err(|e| {
-            // Convert WaferError to ControlError
-            match e {
-                crate::error::WaferError::Runtime(msg) if msg.contains("no config path") => {
-                    ControlError::ConfigError { message: msg }
-                }
-                crate::error::WaferError::Runtime(msg) if msg.contains("require restart") => {
-                    ControlError::ConfigError { message: msg }
-                }
-                crate::error::WaferError::Config(cfg_err) => {
-                    ControlError::ConfigError { message: cfg_err.to_string() }
-                }
-                other => ControlError::Internal { message: other.to_string() },
+        let swapped_nodes = self.resync().await.map_err(|e| match e {
+            crate::error::WaferError::Runtime(msg) if msg.contains("no config path") => {
+                ControlError::ConfigError { message: msg }
             }
+            crate::error::WaferError::Runtime(msg) if msg.contains("require restart") => {
+                ControlError::ConfigError { message: msg }
+            }
+            crate::error::WaferError::Config(cfg_err) => {
+                ControlError::ConfigError { message: cfg_err.to_string() }
+            }
+            other => ControlError::Internal { message: other.to_string() },
         })?;
 
         Ok(ReloadResult { swapped_nodes })
     }
 
     async fn drain(&self) -> Result<(), ControlError> {
-        // Signal shutdown which effectively drains
         self.cancel_token.cancel();
         Ok(())
     }
 
     async fn shutdown(&self) -> Result<(), ControlError> {
-        // Signal shutdown
         self.cancel_token.cancel();
         Ok(())
     }
 
     fn status(&self) -> PipelineStatus {
-        // Use control_state for actual metrics
         let state = if self.cancel_token.is_cancelled() {
             PipelineState::Draining
         } else {
-            // Note: Can't await in sync fn, so we use try_lock
+            // Can't await in sync fn, use try_lock
             self.control_state
                 .state
                 .try_lock()
@@ -131,7 +116,6 @@ impl PipelineControl for DagOrchestrator {
     }
 
     fn metrics(&self) -> MetricsSnapshot {
-        // Use the Prometheus metrics registry when http-api feature is enabled
         #[cfg(feature = "http-api")]
         {
             self.control_state.metrics_registry.snapshot()
@@ -172,7 +156,6 @@ impl PipelineControl for DagOrchestrator {
     }
 
     fn subscribe(&self) -> EventReceiver {
-        // Subscribe to the shared event broadcaster
         self.control_state.event_tx.subscribe()
     }
 }
@@ -192,7 +175,6 @@ mod tests {
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
-    /// Creates a minimal DagOrchestrator for testing without needing actual nodes.
     fn create_test_orchestrator() -> DagOrchestrator {
         let config = DagConfig {
             pipeline: PipelineConfig {
@@ -301,11 +283,9 @@ mod tests {
     fn test_status_shows_draining_when_cancelled() {
         let orchestrator = create_test_orchestrator();
 
-        // Initially not draining
         let status = orchestrator.status();
         assert_ne!(status.state, PipelineState::Draining);
 
-        // After cancellation, should show draining
         orchestrator.cancel_token.cancel();
         let status = orchestrator.status();
         assert_eq!(status.state, PipelineState::Draining);
@@ -337,10 +317,8 @@ mod tests {
         let metrics = orchestrator.metrics();
 
         // With http-api feature, MetricsRegistry returns populated metrics
-        // Without http-api feature, MetricsSnapshot::default() has empty collections
         #[cfg(feature = "http-api")]
         {
-            // Should have pipeline uptime metric at minimum
             let prometheus_output = metrics.to_prometheus();
             assert!(prometheus_output.contains("wafer_pipeline_uptime_seconds"));
         }
@@ -355,13 +333,11 @@ mod tests {
     fn test_subscribe_returns_receiver() {
         let orchestrator = create_test_orchestrator();
         let _receiver = orchestrator.subscribe();
-        // Just verify we can subscribe without panic
     }
 
     #[tokio::test]
     async fn test_hot_swap_node_not_found() {
         let orchestrator = create_test_orchestrator();
-        // Use UFCS to call the trait method, not the inherent method
         let result = PipelineControl::hot_swap(&orchestrator, "nonexistent").await;
 
         assert!(matches!(
@@ -373,7 +349,6 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_source() {
         let orchestrator = create_test_orchestrator();
-        // Use UFCS to call the trait method, not the inherent method
         let result = PipelineControl::hot_swap(&orchestrator, "source").await;
 
         assert!(matches!(
@@ -385,7 +360,6 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_sink() {
         let orchestrator = create_test_orchestrator();
-        // Use UFCS to call the trait method, not the inherent method
         let result = PipelineControl::hot_swap(&orchestrator, "sink").await;
 
         assert!(matches!(
@@ -397,10 +371,9 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_requires_config_path() {
         let orchestrator = create_test_orchestrator();
-        // Use UFCS to call the trait method, not the inherent method
         let result = PipelineControl::hot_swap(&orchestrator, "transform").await;
 
-        // Transform is swappable but no config_path set, so returns ConfigError
+        // Transform is swappable but no config_path set
         assert!(matches!(
             result,
             Err(ControlError::ConfigError { message }) if message.contains("no config path")
@@ -412,7 +385,6 @@ mod tests {
         let orchestrator = create_test_orchestrator();
         let result = orchestrator.reload_config().await;
 
-        // No config_path set, so returns ConfigError
         assert!(matches!(
             result,
             Err(ControlError::ConfigError { message }) if message.contains("no config path")
@@ -434,7 +406,7 @@ mod tests {
         let orchestrator = create_test_orchestrator();
         assert!(!orchestrator.cancel_token.is_cancelled());
 
-        // Use explicit trait call to call PipelineControl::shutdown, not the inherent method
+        // Use explicit trait call to avoid calling the inherent method
         let result = PipelineControl::shutdown(&orchestrator).await;
         assert!(result.is_ok());
         assert!(orchestrator.cancel_token.is_cancelled());
@@ -444,11 +416,9 @@ mod tests {
     async fn test_drain_is_idempotent() {
         let orchestrator = create_test_orchestrator();
 
-        // First drain
         let result1 = orchestrator.drain().await;
         assert!(result1.is_ok());
 
-        // Second drain should also succeed
         let result2 = orchestrator.drain().await;
         assert!(result2.is_ok());
     }
@@ -458,21 +428,16 @@ mod tests {
         let orchestrator = create_test_orchestrator();
         let status1 = orchestrator.status();
 
-        // Sleep briefly to let uptime increase
         std::thread::sleep(std::time::Duration::from_millis(10));
 
         let status2 = orchestrator.status();
-        // uptime_secs is in seconds, so may not increase in 10ms
-        // but it should at least not decrease
         assert!(status2.uptime_secs >= status1.uptime_secs);
     }
 
     #[test]
     fn test_arc_pipeline_control_delegation() {
-        // Test that Arc<DagOrchestrator> also implements PipelineControl
         let orchestrator = Arc::new(create_test_orchestrator());
 
-        // These should compile and work via the Arc impl
         let status = orchestrator.status();
         assert_eq!(status.name, "test-pipeline");
 
