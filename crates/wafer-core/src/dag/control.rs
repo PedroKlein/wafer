@@ -11,7 +11,7 @@ use crate::control::{EventReceiver, PipelineControl};
 
 impl PipelineControl for DagOrchestrator {
     async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
-        if !self.node_indices.contains_key(node_id) {
+        if !self.dag_graph.contains_node(node_id) {
             return Err(ControlError::NodeNotFound { node_id: node_id.to_string() });
         }
 
@@ -110,7 +110,7 @@ impl PipelineControl for DagOrchestrator {
             uptime_secs: self.control_state.uptime_secs(),
             messages_processed: self.control_state.messages_processed.load(Ordering::Relaxed),
             messages_failed: self.control_state.messages_failed.load(Ordering::Relaxed),
-            node_count: self.node_indices.len(),
+            node_count: self.dag_graph.node_count(),
             swap_in_progress: false,
         }
     }
@@ -167,9 +167,9 @@ mod tests {
     use crate::config::{
         DagConfig, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig,
     };
+    use crate::dag::graph::DagGraph;
     use crate::dag::orchestrator::ControlState;
     use crate::registry::RegistryConfig;
-    use petgraph::graph::DiGraph;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -234,31 +234,12 @@ mod tests {
             ],
         };
 
-        // Build minimal graph
-        let mut graph = DiGraph::new();
-        let mut node_indices = HashMap::new();
-
-        for node in &config.nodes {
-            let idx = graph.add_node(node.id.clone());
-            node_indices.insert(node.id.clone(), idx);
-        }
-
-        for edge in &config.edges {
-            if let (Some(&from_idx), Some(&to_idx)) =
-                (node_indices.get(&edge.from), node_indices.get(&edge.to))
-            {
-                graph.add_edge(from_idx, to_idx, ());
-            }
-        }
-
-        let topo_order = vec!["source".to_string(), "transform".to_string(), "sink".to_string()];
+        let dag_graph = DagGraph::from_config(&config).unwrap();
         let control_state = Arc::new(ControlState::new("test-pipeline".to_string()));
 
         DagOrchestrator {
-            graph,
-            node_indices,
+            dag_graph,
             config,
-            topo_order,
             config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(None),

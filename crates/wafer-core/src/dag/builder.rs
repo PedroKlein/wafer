@@ -1,8 +1,5 @@
 //! Builder and validation methods for [`DagOrchestrator`].
 
-use petgraph::algo::toposort;
-use petgraph::graph::DiGraph;
-use petgraph::Direction;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -15,6 +12,7 @@ use crate::factory::{create_dlq_sink, create_node, FactoryContext};
 use crate::node::AnyNode;
 use crate::queue::{BoundedQueue, RuntimeEnvelope};
 
+use super::graph::DagGraph;
 use super::orchestrator::{ControlState, RunState};
 use super::DagOrchestrator;
 
@@ -109,41 +107,12 @@ impl DagOrchestrator {
 
     #[must_use = "creating an orchestrator without using it is likely a bug"]
     pub fn from_dag_config(config: DagConfig) -> Result<Self> {
-        let mut graph = DiGraph::new();
-        let mut node_indices = HashMap::new();
-
-        for node_def in &config.nodes {
-            let idx = graph.add_node(node_def.id.clone());
-            node_indices.insert(node_def.id.clone(), idx);
-        }
-
-        for edge_def in &config.edges {
-            let from_idx = node_indices.get(&edge_def.from).ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "Unknown source node in edge: {}",
-                    edge_def.from
-                )))
-            })?;
-            let to_idx = node_indices.get(&edge_def.to).ok_or_else(|| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "Unknown destination node in edge: {}",
-                    edge_def.to
-                )))
-            })?;
-            graph.add_edge(*from_idx, *to_idx, ());
-        }
-
-        let topo_indices = toposort(&graph, None).map_err(|_| {
-            WaferError::Config(ConfigError::Message("Cycle detected in DAG".into()))
-        })?;
-        let topo_order: Vec<String> = topo_indices.iter().map(|idx| graph[*idx].clone()).collect();
+        let dag_graph = DagGraph::from_config(&config)?;
 
         let pipeline_name = config.pipeline.name.clone();
         let orchestrator = Self {
-            graph,
-            node_indices,
+            dag_graph,
             config,
-            topo_order,
             config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(Some(RunState {
@@ -155,12 +124,11 @@ impl DagOrchestrator {
             factory_ctx: Mutex::new(None),
             swap_locks: Mutex::new(HashMap::new()),
         };
-        orchestrator.validate()?;
         Ok(orchestrator)
     }
 
     pub async fn register_node(&self, id: &str, node: AnyNode) -> Result<()> {
-        if !self.node_indices.contains_key(id) {
+        if !self.dag_graph.contains_node(id) {
             return Err(WaferError::Config(ConfigError::Message(format!("Unknown node ID: {id}"))));
         }
 
@@ -209,7 +177,7 @@ impl DagOrchestrator {
     pub(super) async fn validate_nodes_registered(&self) -> Result<()> {
         let nodes = self.nodes.lock().await;
         let missing: Vec<_> =
-            self.node_indices.keys().filter(|id| !nodes.contains_key(*id)).collect();
+            self.dag_graph.node_indices().keys().filter(|id| !nodes.contains_key(*id)).collect();
 
         if !missing.is_empty() {
             return Err(WaferError::Config(ConfigError::Message(format!(
@@ -217,44 +185,6 @@ impl DagOrchestrator {
             ))));
         }
         Ok(())
-    }
-
-    fn validate(&self) -> Result<()> {
-        self.validate_not_empty()?;
-        self.validate_no_orphans()?;
-        Ok(())
-    }
-
-    fn validate_not_empty(&self) -> Result<()> {
-        if self.node_indices.is_empty() {
-            return Err(WaferError::Config(ConfigError::Message("DAG has no nodes".into())));
-        }
-        Ok(())
-    }
-
-    fn validate_no_orphans(&self) -> Result<()> {
-        if self.node_indices.len() == 1 {
-            return Ok(());
-        }
-
-        let orphans: Vec<&str> = self
-            .node_indices
-            .iter()
-            .filter(|(_, idx)| {
-                let incoming = self.graph.neighbors_directed(**idx, Direction::Incoming).count();
-                let outgoing = self.graph.neighbors_directed(**idx, Direction::Outgoing).count();
-                incoming == 0 && outgoing == 0
-            })
-            .map(|(id, _)| id.as_str())
-            .collect();
-
-        if orphans.is_empty() {
-            Ok(())
-        } else {
-            Err(WaferError::Config(ConfigError::Message(format!(
-                "Orphan nodes found (no connections): {orphans:?}"
-            ))))
-        }
     }
 }
 

@@ -9,7 +9,6 @@
 //! The `run()` method takes `&self` (not `&mut self`), enabling the orchestrator
 //! to be wrapped in `Arc` for sharing with API handlers.
 
-use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -29,6 +28,7 @@ use crate::factory::FactoryContext;
 use crate::node::AnyNode;
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
 
+use super::graph::DagGraph;
 use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
 
 /// Bundles sender, overflow policy, and edge name for queue overflow handling.
@@ -113,10 +113,8 @@ impl ControlState {
 /// Uses internal mutability (`run()` takes `&self`) so it can be shared via `Arc`
 /// between the execution task and API handlers.
 pub struct DagOrchestrator {
-    pub(super) graph: DiGraph<String, ()>,
-    pub(super) node_indices: HashMap<String, NodeIndex>,
+    pub(super) dag_graph: DagGraph,
     pub(super) config: DagConfig,
-    pub(super) topo_order: Vec<String>,
 
     /// `None` if constructed programmatically without a file.
     pub(super) config_path: Option<PathBuf>,
@@ -141,9 +139,9 @@ impl fmt::Debug for DagOrchestrator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DagOrchestrator")
             .field("name", &self.control_state.name)
-            .field("node_count", &self.node_indices.len())
-            .field("edge_count", &self.graph.edge_count())
-            .field("topo_order", &self.topo_order)
+            .field("node_count", &self.dag_graph.node_count())
+            .field("edge_count", &self.dag_graph.edge_count())
+            .field("topo_order", &self.dag_graph.topo_order())
             .finish_non_exhaustive()
     }
 }
@@ -219,7 +217,7 @@ impl DagOrchestrator {
         &self,
         nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>,
     ) -> Result<()> {
-        for node_id in &self.topo_order {
+        for node_id in self.dag_graph.topo_order() {
             if let Some(node) = nodes_snapshot.get(node_id) {
                 let mut locked = node.lock().await;
                 if let Err(e) = locked.init().await {
@@ -240,7 +238,7 @@ impl DagOrchestrator {
     ) -> Vec<tokio::task::JoinHandle<()>> {
         let mut handles = Vec::new();
 
-        for node_id in &self.topo_order {
+        for node_id in self.dag_graph.topo_order() {
             let output_senders = self.collect_output_senders(node_id, run_state);
             let input_receivers = Self::collect_input_receivers(node_id, run_state);
 
@@ -323,7 +321,7 @@ impl DagOrchestrator {
     async fn shutdown_nodes(&self, nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>) {
         self.set_pipeline_state(PipelineState::Draining).await;
 
-        for node_id in self.topo_order.iter().rev() {
+        for node_id in self.dag_graph.topo_order().iter().rev() {
             if let Some(node) = nodes_snapshot.get(node_id) {
                 let mut locked = node.lock().await;
                 if let Err(e) = locked.close().await {
@@ -343,7 +341,7 @@ impl DagOrchestrator {
 
     #[must_use]
     pub fn topo_order(&self) -> &[String] {
-        &self.topo_order
+        self.dag_graph.topo_order()
     }
 
     #[must_use]
@@ -353,12 +351,12 @@ impl DagOrchestrator {
 
     #[must_use]
     pub fn node_count(&self) -> usize {
-        self.node_indices.len()
+        self.dag_graph.node_count()
     }
 
     #[must_use]
     pub fn edge_count(&self) -> usize {
-        self.graph.edge_count()
+        self.dag_graph.edge_count()
     }
 
     /// Clone of the cancellation token for external shutdown triggering.

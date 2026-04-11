@@ -3,6 +3,7 @@
 mod builder;
 mod control;
 mod dlq_handlers;
+pub mod graph;
 mod hotswap;
 mod metrics_helper;
 mod orchestrator;
