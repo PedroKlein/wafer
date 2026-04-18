@@ -1,2 +1,0 @@
-- Use enums for source and sink types
-- **Engine sharing refactor**: Current implementation creates one `WaferEngine` per transform/router/joiner plugin (`factory.rs` lines 263, 303, 342). This contradicts SPEC.md's "Wasmtime Engine Pool" architecture which implies shared infrastructure. Per wasmtime docs, `Engine` is a global compilation context meant to be shared across threads/instances. Refactor to share one engine across all nodes, using per-node `Store` for isolation instead.

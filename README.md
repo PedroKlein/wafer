@@ -92,13 +92,19 @@ wafer-poc/
 │   ├── filter/           # Pattern-based filtering
 │   ├── content-router/   # Content-based 1→N routing
 │   ├── merge-joiner/     # Stateless N→1 merge
-│   └── mnist-inference/  # ML inference with WASI-NN
-├── examples/             # Example pipeline configurations
+│   ├── mnist-inference/  # ML inference with WASI-NN
+│   ├── tensor-prep/      # Tensor preprocessing for inference
+│   └── result-format/    # Inference result formatting
+├── examples/             # Example pipeline configurations (TOML)
 ├── wit/                  # WIT interface definitions for plugins
 ├── docs/                 # Documentation
 │   ├── api/              # OpenAPI spec and Bruno collection
 │   ├── adr/              # Architecture Decision Records
-│   └── *.md              # Various docs
+│   ├── benchmarks/       # Performance benchmark results
+│   └── *.md              # Various docs (SPEC, MVP, API, REGISTRY, etc.)
+├── models/               # ML model files (e.g., MNIST ONNX)
+├── scripts/              # Helper scripts (traffic generation, load testing)
+├── specs/                # Feature specifications (OpenSpec workflow)
 └── tests/                # Integration tests
 ```
 
@@ -178,7 +184,7 @@ cargo test --workspace -- --nocapture
 cargo run -p wafer-runtime -- --config <path-to-config.toml>
 
 # Or after building
-./target/debug/wafer-runtime --config examples/dag-uppercase.toml
+./target/debug/wafer --config examples/dag-uppercase.toml
 ```
 
 ### Example Pipelines
@@ -205,6 +211,21 @@ cargo run -p wafer-runtime -- --config examples/dag-file-io.toml
 
 # Diamond pattern (fan-out/fan-in)
 cargo run -p wafer-runtime -- --config examples/dag-diamond.toml
+
+# Fan-out only
+cargo run -p wafer-runtime -- --config examples/dag-fanout.toml
+
+# HTTP webhook source/sink
+cargo run -p wafer-runtime -- --config examples/dag-http.toml
+
+# MQTT pub/sub
+cargo run -p wafer-runtime -- --config examples/dag-mqtt.toml
+
+# Queue overflow and dead-letter queue demo
+cargo run -p wafer-runtime -- --config examples/dag-overflow-dlq-demo.toml
+
+# Metrics demo
+cargo run -p wafer-runtime -- --config examples/dag-metrics-demo.toml
 
 # With control plane API enabled
 cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
@@ -261,22 +282,36 @@ cargo build --release --manifest-path plugins/uppercase/Cargo.toml
    crate-type = ["cdylib"]
    
    [dependencies]
-   wit-bindgen = "0.41"
+   wit-bindgen = "0.53"
    ```
 
 3. Implement the transform interface in `src/lib.rs`:
    ```rust
    wit_bindgen::generate!({
-       world: "transform",
        path: "../../wit",
+       world: "transform-node",
    });
    
    struct MyTransform;
    
-   impl Guest for MyTransform {
-       fn process(input: Vec<u8>) -> Result<Vec<u8>, String> {
+   impl exports::pipeline::transform::lifecycle::Guest for MyTransform {
+       fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
+           None // Return Some("error") to reject config
+       }
+   
+       fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
+           Ok(())
+       }
+   
+       fn close() {}
+   }
+   
+   impl exports::pipeline::transform::transform::Guest for MyTransform {
+       fn process(
+           input: pipeline::transform::types::Envelope,
+       ) -> pipeline::transform::types::ProcessResult {
            // Your transformation logic here
-           Ok(input)
+           pipeline::transform::types::ProcessResult::Emit(input)
        }
    }
    
@@ -584,7 +619,7 @@ execution_target = "auto"  # auto (default), cpu, gpu, tpu
 
 ## Contributing
 
-This project uses AI-assisted development with [OpenCode](https://agent-runner.ai). 
+This project uses AI-assisted development with [pi](https://github.com/mariozechner/pi-coding-agent).
 
 ### Development Workflow
 
