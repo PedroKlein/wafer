@@ -1,4 +1,4 @@
-//! Builder and validation methods for [`DagOrchestrator`].
+//! Builder and validation methods for [`PipelineOrchestrator`].
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -6,17 +6,17 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use super::assembler::{create_dlq_sink, create_node, NodeAssembler};
 use crate::config::{Config, DagConfig};
+use crate::engine::WaferEngine;
 use crate::error::{ConfigError, Result, WaferError};
-use crate::factory::{create_dlq_sink, create_node, FactoryContext};
 use crate::node::AnyNode;
 use crate::queue::{BoundedQueue, RuntimeEnvelope};
 
-use super::graph::DagGraph;
-use super::orchestrator::{ControlState, RunState};
-use super::DagOrchestrator;
+use super::pipeline::{ControlState, PipelineOrchestrator, RunState};
+use crate::dag::graph::DagGraph;
 
-impl DagOrchestrator {
+impl PipelineOrchestrator {
     pub async fn from_config(config: Config, use_cache: bool) -> Result<Self> {
         Self::from_config_with_path(config, use_cache, None::<PathBuf>).await
     }
@@ -26,41 +26,42 @@ impl DagOrchestrator {
         use_cache: bool,
         config_path: Option<impl AsRef<Path>>,
     ) -> Result<Self> {
-        let dag_config = config.to_dag_config();
-        let mut orchestrator = Self::from_dag_config(dag_config.clone())?;
+        let mut orchestrator = Self::from_config_inner(config)?;
 
         orchestrator.config_path = config_path.map(|p| p.as_ref().to_path_buf());
 
-        let mut registry_config = dag_config.registry.clone();
+        let engine = Arc::new(WaferEngine::from_engine_config(&orchestrator.config.engine)?);
+        engine.ensure_epoch_ticker();
+
+        let mut registry_config = orchestrator.config.registry.clone();
         if !use_cache {
             registry_config.no_cache = true;
         }
 
-        let mut factory_ctx = FactoryContext::new(registry_config)?;
+        let mut assembler = NodeAssembler::new(Arc::clone(&engine), registry_config)?;
 
-        for node_def in &dag_config.nodes {
-            let any_node = create_node(node_def, &mut factory_ctx).await?;
+        for node_def in &orchestrator.config.nodes.clone() {
+            let any_node = create_node(node_def, &mut assembler).await?;
             orchestrator.register_node(&node_def.id, any_node).await?;
         }
 
         orchestrator.wire_queues().await?;
 
-        if let Some(ref dlq_config) = dag_config.dead_letter {
+        if let Some(ref dlq_config) = orchestrator.config.dead_letter {
             if dlq_config.enabled {
-                orchestrator.initialize_dlq(dlq_config).await?;
+                orchestrator.dlq_config = Some(dlq_config.clone());
             }
         }
 
-        {
-            let mut ctx_guard = orchestrator.factory_ctx.lock().await;
-            *ctx_guard = Some(factory_ctx);
-        }
+        orchestrator.factory_ctx = Some(Mutex::new(assembler));
 
         Ok(orchestrator)
     }
 
-    /// Initialize the DLQ sink and spawn its processing task.
-    async fn initialize_dlq(&self, dlq_config: &crate::config::DeadLetterConfig) -> Result<()> {
+    pub(crate) async fn initialize_dlq(
+        &self,
+        dlq_config: &crate::config::DeadLetterConfig,
+    ) -> Result<()> {
         let mut dlq_sink = create_dlq_sink(dlq_config)?;
         dlq_sink.init().await?;
 
@@ -107,12 +108,31 @@ impl DagOrchestrator {
 
     #[must_use = "creating an orchestrator without using it is likely a bug"]
     pub fn from_dag_config(config: DagConfig) -> Result<Self> {
-        let dag_graph = DagGraph::from_config(&config)?;
+        // Convert DagConfig to a full Config with defaults for the extra fields.
+        let full_config = Config {
+            pipeline: config.pipeline,
+            engine: crate::config::EngineConfig::default(),
+            api: crate::config::ApiServerConfig::default(),
+            metrics: crate::config::MetricsConfig::default(),
+            nodes: config.nodes,
+            edges: config.edges,
+            default_queue_capacity: config.default_queue_capacity,
+            registry: Default::default(),
+            dead_letter: None,
+        };
+        Self::from_config_inner(full_config)
+    }
+
+    /// Create the orchestrator skeleton from a full `Config`.
+    fn from_config_inner(config: Config) -> Result<Self> {
+        let dag_config = config.dag_config();
+        let dag_graph = DagGraph::from_config(&dag_config)?;
 
         let pipeline_name = config.pipeline.name.clone();
         let orchestrator = Self {
             dag_graph,
             config,
+            dlq_config: None,
             config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(Some(RunState {
@@ -121,7 +141,7 @@ impl DagOrchestrator {
             })),
             cancel_token: CancellationToken::new(),
             control_state: Arc::new(ControlState::new(pipeline_name)),
-            factory_ctx: Mutex::new(None),
+            factory_ctx: None,
             swap_locks: Mutex::new(HashMap::new()),
         };
         Ok(orchestrator)
@@ -174,7 +194,7 @@ impl DagOrchestrator {
         Ok(())
     }
 
-    pub(super) async fn validate_nodes_registered(&self) -> Result<()> {
+    pub(crate) async fn validate_nodes_registered(&self) -> Result<()> {
         let nodes = self.nodes.lock().await;
         let missing: Vec<_> =
             self.dag_graph.node_indices().keys().filter(|id| !nodes.contains_key(*id)).collect();
@@ -193,7 +213,6 @@ mod tests {
     use super::*;
     use crate::config::{EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy, PipelineConfig};
     use crate::node::FileSource;
-    use crate::registry::RegistryConfig;
 
     fn make_node(id: &str, node_type: NodeType) -> NodeDefinition {
         NodeDefinition {
@@ -202,6 +221,7 @@ mod tests {
             source_type: None,
             sink_type: None,
             config: toml::Value::Table(toml::map::Map::new()),
+            capabilities: Default::default(),
         }
     }
 
@@ -222,8 +242,6 @@ mod tests {
             nodes,
             edges,
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: None,
         }
     }
 
@@ -238,7 +256,7 @@ mod tests {
             vec![make_edge("source", "transform"), make_edge("transform", "sink")],
         );
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["source", "transform", "sink"]);
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
@@ -255,7 +273,7 @@ mod tests {
             vec![make_edge("a", "b"), make_edge("b", "c"), make_edge("c", "a")],
         );
 
-        let result = DagOrchestrator::from_dag_config(config);
+        let result = PipelineOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Cycle"));
@@ -268,7 +286,7 @@ mod tests {
             vec![make_edge("sink", "transform"), make_edge("transform", "sink")],
         );
 
-        let result = DagOrchestrator::from_dag_config(config);
+        let result = PipelineOrchestrator::from_dag_config(config);
         assert!(result.is_err());
     }
 
@@ -283,7 +301,7 @@ mod tests {
             vec![make_edge("source1", "sink"), make_edge("source2", "sink")],
         );
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
     }
@@ -299,7 +317,7 @@ mod tests {
             vec![make_edge("source", "sink")],
         );
 
-        let result = DagOrchestrator::from_dag_config(config);
+        let result = PipelineOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Orphan"));
@@ -312,7 +330,7 @@ mod tests {
             vec![make_edge("source", "nonexistent")],
         );
 
-        let result = DagOrchestrator::from_dag_config(config);
+        let result = PipelineOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Unknown"));
@@ -322,7 +340,7 @@ mod tests {
     fn test_dag_single_node() {
         let config = make_dag_config(vec![make_node("single", NodeType::Source)], vec![]);
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.topo_order(), &["single"]);
     }
 
@@ -330,7 +348,7 @@ mod tests {
     fn test_dag_empty_rejected() {
         let config = make_dag_config(vec![], vec![]);
 
-        let result = DagOrchestrator::from_dag_config(config);
+        let result = PipelineOrchestrator::from_dag_config(config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no nodes"));
@@ -347,7 +365,7 @@ mod tests {
             vec![make_edge("source", "sink1"), make_edge("source", "sink2")],
         );
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         assert_eq!(orchestrator.node_count(), 3);
         assert_eq!(orchestrator.edge_count(), 2);
     }
@@ -363,7 +381,7 @@ mod tests {
             vec![make_edge("source", "transform"), make_edge("transform", "sink")],
         );
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         orchestrator.wire_queues().await.unwrap();
 
         let run_state = orchestrator.run_state.lock().await;
@@ -392,11 +410,9 @@ mod tests {
                 overflow: OverflowPolicy::default(),
             }],
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: None,
         };
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         orchestrator.wire_queues().await.unwrap();
 
         let run_state = orchestrator.run_state.lock().await;
@@ -412,7 +428,7 @@ mod tests {
     async fn test_register_node_unknown_id_fails() {
         let config = make_dag_config(vec![make_node("source", NodeType::Source)], vec![]);
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         let node = AnyNode::from_source(FileSource::new("wrong-id", "/tmp/test.txt"));
         let result = orchestrator.register_node("unknown", node).await;
 
@@ -447,11 +463,9 @@ mod tests {
             nodes: vec![make_node("source", NodeType::Source)],
             edges: vec![],
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: Some(dlq_config.clone()),
         };
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         orchestrator.initialize_dlq(&dlq_config).await.expect("Failed to initialize DLQ");
 
         {
@@ -474,17 +488,14 @@ mod tests {
             queue_capacity: 50,
         };
 
-        // Create a minimal DAG config
         let config = DagConfig {
             pipeline: PipelineConfig::default(),
             nodes: vec![make_node("source", NodeType::Source)],
             edges: vec![],
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: Some(dlq_config.clone()),
         };
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
         orchestrator
             .initialize_dlq(&dlq_config)
             .await
@@ -507,16 +518,9 @@ mod tests {
             queue_capacity: 100,
         };
 
-        let config = DagConfig {
-            pipeline: PipelineConfig::default(),
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: Some(dlq_config.clone()),
-        };
+        let config = make_dag_config(vec![make_node("source", NodeType::Source)], vec![]);
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
 
         let result = orchestrator.initialize_dlq(&dlq_config).await;
         assert!(result.is_err(), "Should fail with unknown sink type");
@@ -531,7 +535,6 @@ mod tests {
     async fn test_dlq_file_sink_missing_path() {
         use crate::config::DeadLetterConfig;
 
-        // File sink without path should fail
         let dlq_config = DeadLetterConfig {
             enabled: true,
             sink_type: "file".to_string(),
@@ -539,16 +542,9 @@ mod tests {
             queue_capacity: 100,
         };
 
-        let config = DagConfig {
-            pipeline: PipelineConfig::default(),
-            nodes: vec![make_node("source", NodeType::Source)],
-            edges: vec![],
-            default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: Some(dlq_config.clone()),
-        };
+        let config = make_dag_config(vec![make_node("source", NodeType::Source)], vec![]);
 
-        let orchestrator = DagOrchestrator::from_dag_config(config).unwrap();
+        let orchestrator = PipelineOrchestrator::from_dag_config(config).unwrap();
 
         let result = orchestrator.initialize_dlq(&dlq_config).await;
         assert!(result.is_err(), "Should fail when file sink has no path");

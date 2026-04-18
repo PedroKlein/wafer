@@ -14,7 +14,9 @@ use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use wafer_poc::engine::{Capabilities, TransformInstance, WaferEngine};
-use wafer_poc::node::{Lifecycle, MqttSource, NodeConfig, ProcessResult, Source, Transform, WasmTransform};
+use wafer_poc::node::{
+    Lifecycle, MqttSource, NodeConfig, ProcessResult, Source, Transform, WasmTransform,
+};
 
 /// Get project root directory.
 fn project_root() -> PathBuf {
@@ -46,9 +48,7 @@ fn spawn_eventloop_task(mut eventloop: rumqttc::EventLoop) -> JoinHandle<()> {
 
 /// Create a WASM transform with the pass-through plugin.
 async fn create_wasm_transform(engine: &WaferEngine, id: &str) -> WasmTransform {
-    let component = engine
-        .load_component(plugin_path())
-        .expect("Failed to load plugin");
+    let component = engine.load_component(plugin_path()).expect("Failed to load plugin");
     let instance = TransformInstance::new(engine, &component, Capabilities::with_stdio())
         .await
         .expect("Failed to create instance");
@@ -73,24 +73,16 @@ async fn create_wasm_transform(engine: &WaferEngine, id: &str) -> WasmTransform 
 async fn test_mqtt_wasm_multiple_messages() {
     // 1. Skip if plugin not built
     if !plugin_path().exists() {
-        eprintln!(
-            "Skipping test: pass-through plugin not built at {:?}",
-            plugin_path()
-        );
+        eprintln!("Skipping test: pass-through plugin not built at {:?}", plugin_path());
         return;
     }
 
     // 2. Start Mosquitto container
-    let container = Mosquitto::default()
-        .start()
-        .await
-        .expect("Failed to start Mosquitto container");
+    let container =
+        Mosquitto::default().start().await.expect("Failed to start Mosquitto container");
 
     let host = container.get_host().await.expect("Failed to get host");
-    let port = container
-        .get_host_port_ipv4(1883)
-        .await
-        .expect("Failed to get port");
+    let port = container.get_host_port_ipv4(1883).await.expect("Failed to get port");
 
     let topic = "test/mqtt-wasm/input";
     let message_count = 10;
@@ -99,7 +91,7 @@ async fn test_mqtt_wasm_multiple_messages() {
     let engine = WaferEngine::new().expect("Failed to create engine");
 
     // 4. Start epoch ticker - CRITICAL for WASM execution
-    let epoch_ticker = engine.start_epoch_ticker();
+    engine.ensure_epoch_ticker();
 
     // 5. Create MqttSource subscribed to input topic
     let mut source = MqttSource::new(
@@ -163,7 +155,9 @@ async fn test_mqtt_wasm_multiple_messages() {
                         }
                     }
                     Ok(ProcessResult::Filter) => {
-                        errors.push("Unexpected Filter result from pass-through transform".to_string());
+                        errors.push(
+                            "Unexpected Filter result from pass-through transform".to_string(),
+                        );
                     }
                     Ok(ProcessResult::Error(e)) => {
                         errors.push(format!("Transform error: {} (code: {})", e.message, e.code));
@@ -187,19 +181,15 @@ async fn test_mqtt_wasm_multiple_messages() {
     }
 
     // 10. Assert all messages processed
-    assert!(
-        errors.is_empty(),
-        "Errors during processing: {:?}",
-        errors
-    );
+    assert!(errors.is_empty(), "Errors during processing: {:?}", errors);
     assert_eq!(
         processed_count, message_count,
         "Expected {} messages processed, got {}",
         message_count, processed_count
     );
 
-    // 11. Cleanup: abort epoch ticker, close nodes
-    epoch_ticker.abort();
+    // 11. Cleanup: shutdown engine, close nodes
+    engine.shutdown();
     pub_handle.abort();
     let _ = pub_client.disconnect().await;
     transform.close().await.expect("Transform close failed");
@@ -213,31 +203,23 @@ async fn test_mqtt_wasm_multiple_messages() {
 async fn test_mqtt_wasm_single_message() {
     // Skip if plugin not built
     if !plugin_path().exists() {
-        eprintln!(
-            "Skipping test: pass-through plugin not built at {:?}",
-            plugin_path()
-        );
+        eprintln!("Skipping test: pass-through plugin not built at {:?}", plugin_path());
         return;
     }
 
     // Start Mosquitto container
-    let container = Mosquitto::default()
-        .start()
-        .await
-        .expect("Failed to start Mosquitto container");
+    let container =
+        Mosquitto::default().start().await.expect("Failed to start Mosquitto container");
 
     let host = container.get_host().await.expect("Failed to get host");
-    let port = container
-        .get_host_port_ipv4(1883)
-        .await
-        .expect("Failed to get port");
+    let port = container.get_host_port_ipv4(1883).await.expect("Failed to get port");
 
     let topic = "test/mqtt-wasm/single";
     let test_payload = b"hello-from-mqtt-wasm-test";
 
     // Create engine and start epoch ticker
     let engine = WaferEngine::new().expect("Failed to create engine");
-    let epoch_ticker = engine.start_epoch_ticker();
+    engine.ensure_epoch_ticker();
 
     // Create and init source
     let mut source = MqttSource::new(
@@ -267,9 +249,8 @@ async fn test_mqtt_wasm_single_message() {
     let envelope = {
         let publish_task = async {
             loop {
-                let _ = pub_client
-                    .publish(topic, QoS::AtLeastOnce, false, test_payload.to_vec())
-                    .await;
+                let _ =
+                    pub_client.publish(topic, QoS::AtLeastOnce, false, test_payload.to_vec()).await;
                 tokio::time::sleep(Duration::from_millis(200)).await;
             }
         };
@@ -299,8 +280,7 @@ async fn test_mqtt_wasm_single_message() {
             assert_eq!(
                 output.payload, test_payload,
                 "Payload mismatch: expected {:?}, got {:?}",
-                test_payload,
-                output.payload
+                test_payload, output.payload
             );
         }
         ProcessResult::Filter => {
@@ -312,7 +292,7 @@ async fn test_mqtt_wasm_single_message() {
     }
 
     // Cleanup
-    epoch_ticker.abort();
+    engine.shutdown();
     pub_handle.abort();
     let _ = pub_client.disconnect().await;
     transform.close().await.expect("Transform close failed");

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::{DagConfig, NodeConfig, NodeType};
+use super::{Config, NodeConfig, NodeType};
 
 /// Detected changes between two configurations.
 #[derive(Debug, Default)]
@@ -41,7 +41,7 @@ impl ConfigDiff {
 
 /// Compare two configurations and detect changes.
 #[must_use]
-pub fn diff_configs(old: &DagConfig, new: &DagConfig) -> ConfigDiff {
+pub fn diff_configs(old: &Config, new: &Config) -> ConfigDiff {
     let mut diff = ConfigDiff::default();
 
     let old_nodes: std::collections::HashMap<&str, &super::NodeDefinition> =
@@ -80,7 +80,7 @@ pub fn diff_configs(old: &DagConfig, new: &DagConfig) -> ConfigDiff {
 }
 
 /// Check if a node type supports hot-swap.
-fn is_swappable_type(node_type: &NodeType) -> bool {
+const fn is_swappable_type(node_type: &NodeType) -> bool {
     matches!(node_type, NodeType::Transform | NodeType::Router | NodeType::Joiner)
 }
 
@@ -144,15 +144,17 @@ fn edges_differ(old: &[super::EdgeDefinition], new: &[super::EdgeDefinition]) ->
 mod tests {
     use super::*;
     use crate::config::{EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy, PipelineConfig};
-    use crate::registry::RegistryConfig;
 
-    fn make_dag_config(nodes: Vec<NodeDefinition>, edges: Vec<EdgeDefinition>) -> DagConfig {
-        DagConfig {
+    fn make_config(nodes: Vec<NodeDefinition>, edges: Vec<EdgeDefinition>) -> Config {
+        Config {
             pipeline: PipelineConfig::default(),
+            engine: Default::default(),
+            api: Default::default(),
+            metrics: Default::default(),
             nodes,
             edges,
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
+            registry: Default::default(),
             dead_letter: None,
         }
     }
@@ -167,6 +169,7 @@ mod tests {
             source_type: None,
             sink_type: None,
             config: toml::Value::Table(config),
+            capabilities: Default::default(),
         }
     }
 
@@ -177,6 +180,7 @@ mod tests {
             source_type: Some("file".to_string()),
             sink_type: None,
             config: toml::Value::Table(toml::map::Map::new()),
+            capabilities: Default::default(),
         }
     }
 
@@ -193,7 +197,7 @@ mod tests {
 
     #[test]
     fn test_no_changes() {
-        let config = make_dag_config(
+        let config = make_config(
             vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
@@ -205,12 +209,12 @@ mod tests {
 
     #[test]
     fn test_wasm_path_change() {
-        let old = make_dag_config(
+        let old = make_config(
             vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 
-        let new = make_dag_config(
+        let new = make_config(
             vec![make_source_node("src"), make_transform_node("t1", "/v2.wasm")],
             vec![make_edge("src", "t1")],
         );
@@ -226,9 +230,9 @@ mod tests {
 
     #[test]
     fn test_node_added() {
-        let old = make_dag_config(vec![make_source_node("src")], vec![]);
+        let old = make_config(vec![make_source_node("src")], vec![]);
 
-        let new = make_dag_config(
+        let new = make_config(
             vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
@@ -242,12 +246,12 @@ mod tests {
 
     #[test]
     fn test_node_removed() {
-        let old = make_dag_config(
+        let old = make_config(
             vec![make_source_node("src"), make_transform_node("t1", "/v1.wasm")],
             vec![make_edge("src", "t1")],
         );
 
-        let new = make_dag_config(vec![make_source_node("src")], vec![]);
+        let new = make_config(vec![make_source_node("src")], vec![]);
 
         let diff = diff_configs(&old, &new);
         assert!(diff.has_changes());
@@ -258,7 +262,7 @@ mod tests {
 
     #[test]
     fn test_edge_changed() {
-        let old = make_dag_config(
+        let old = make_config(
             vec![
                 make_source_node("src"),
                 make_transform_node("t1", "/v1.wasm"),
@@ -267,7 +271,7 @@ mod tests {
             vec![make_edge("src", "t1"), make_edge("t1", "t2")],
         );
 
-        let new = make_dag_config(
+        let new = make_config(
             vec![
                 make_source_node("src"),
                 make_transform_node("t1", "/v1.wasm"),
@@ -285,10 +289,10 @@ mod tests {
 
     #[test]
     fn test_source_change_not_swappable() {
-        let old = make_dag_config(vec![make_source_node("src")], vec![]);
+        let old = make_config(vec![make_source_node("src")], vec![]);
 
         // Even if we changed the source config, it's not swappable
-        let new = make_dag_config(vec![make_source_node("src")], vec![]);
+        let new = make_config(vec![make_source_node("src")], vec![]);
 
         let diff = diff_configs(&old, &new);
         assert!(!diff.has_changes()); // No swappable changes

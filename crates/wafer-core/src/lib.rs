@@ -12,20 +12,19 @@
 pub mod error;
 
 pub mod config;
-pub mod control;
 pub mod dag;
 pub mod dlq;
 pub mod engine;
-pub mod factory;
 pub mod metrics;
 pub mod node;
+pub mod orchestrator;
 pub mod queue;
 pub mod registry;
+pub mod runner;
 
 #[cfg(feature = "http-api")]
 pub mod api;
 
-pub use control::PipelineControl;
 pub use error::{RegistryError, Result, WaferError};
 pub use wafer_types::*;
 

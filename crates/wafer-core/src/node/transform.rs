@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::engine::{exports, pipeline, TransformInstance, WaferEngine};
 use crate::error::{Result, WaferError};
@@ -11,16 +12,15 @@ use super::traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transfor
 
 pub struct WasmTransform {
     config: NodeConfig,
-    #[expect(dead_code, reason = "engine must outlive the instance")]
-    engine: WaferEngine,
+    _engine: Arc<WaferEngine>,
     instance: TransformInstance,
     initialized: bool,
 }
 
 impl WasmTransform {
     #[must_use]
-    pub fn new(engine: WaferEngine, instance: TransformInstance, config: NodeConfig) -> Self {
-        Self { config, engine, instance, initialized: false }
+    pub fn new(engine: Arc<WaferEngine>, instance: TransformInstance, config: NodeConfig) -> Self {
+        Self { config, _engine: engine, instance, initialized: false }
     }
 
     /// Convert NodeConfig to WIT NodeConfig.

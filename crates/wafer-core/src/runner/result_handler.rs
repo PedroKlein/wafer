@@ -9,8 +9,7 @@ use crate::node::{ProcessResult, RouteResult};
 use crate::queue::RuntimeEnvelope;
 
 use super::metrics_helper;
-use super::orchestrator::{ControlState, EdgeSendInfo};
-use super::DagOrchestrator;
+use crate::orchestrator::{ControlState, EdgeSendInfo};
 
 /// Context for handling a process/route result.
 pub struct ProcessContext<'a> {
@@ -97,7 +96,7 @@ impl ProcessContext<'_> {
 
         metrics_helper::record_error_metrics(self.control_state, self.node_id, duration_ns);
 
-        DagOrchestrator::send_process_error_to_dlq(
+        super::dlq_handlers::send_process_error_to_dlq(
             self.envelope_for_dlq.clone(),
             self.node_id,
             error_code,
@@ -127,7 +126,7 @@ impl ProcessContext<'_> {
 
         metrics_helper::record_error_metrics(self.control_state, self.node_id, duration_ns);
 
-        DagOrchestrator::send_process_error_to_dlq(
+        super::dlq_handlers::send_process_error_to_dlq(
             self.envelope_for_dlq.clone(),
             self.node_id,
             "runtime_error",
@@ -172,7 +171,7 @@ impl ProcessContext<'_> {
 
         // Find sender for this port
         if let Some(edge_info) = self.output_senders.iter().find(|e| e.port == port) {
-            DagOrchestrator::send_with_overflow_policy(
+            super::overflow::send_with_overflow_policy(
                 edge_info,
                 output,
                 self.node_id,
@@ -187,7 +186,7 @@ impl ProcessContext<'_> {
     /// Send output to downstream edges with overflow policy handling.
     async fn send_to_downstream(&self, output: RuntimeEnvelope) {
         if self.output_senders.len() == 1 {
-            DagOrchestrator::send_with_overflow_policy(
+            super::overflow::send_with_overflow_policy(
                 &self.output_senders[0],
                 output,
                 self.node_id,
@@ -196,7 +195,7 @@ impl ProcessContext<'_> {
             .await;
         } else {
             for edge_info in self.output_senders {
-                DagOrchestrator::send_with_overflow_policy(
+                super::overflow::send_with_overflow_policy(
                     edge_info,
                     output.clone(),
                     self.node_id,

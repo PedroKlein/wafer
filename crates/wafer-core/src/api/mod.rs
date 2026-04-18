@@ -1,6 +1,6 @@
 //! HTTP API server for pipeline control.
 //!
-//! This module provides a REST API wrapping the `PipelineControl` trait.
+//! This module provides a REST API for controlling the `PipelineOrchestrator`.
 //! It is feature-gated behind the `http-api` feature.
 
 mod handlers;

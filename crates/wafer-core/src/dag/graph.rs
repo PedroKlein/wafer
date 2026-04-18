@@ -88,13 +88,8 @@ impl DagGraph {
     }
 
     /// Returns the internal node indices map.
-    pub(crate) fn node_indices(&self) -> &HashMap<String, NodeIndex> {
+    pub(crate) const fn node_indices(&self) -> &HashMap<String, NodeIndex> {
         &self.node_indices
-    }
-
-    /// Returns a reference to the internal petgraph.
-    pub(crate) fn inner_graph(&self) -> &DiGraph<String, ()> {
-        &self.graph
     }
 
     fn validate(&self) -> Result<()> {
@@ -140,7 +135,6 @@ impl DagGraph {
 mod tests {
     use super::*;
     use crate::config::{EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy, PipelineConfig};
-    use crate::registry::RegistryConfig;
 
     fn make_node(id: &str, node_type: NodeType) -> NodeDefinition {
         NodeDefinition {
@@ -149,6 +143,7 @@ mod tests {
             source_type: None,
             sink_type: None,
             config: toml::Value::Table(toml::map::Map::new()),
+            capabilities: Default::default(),
         }
     }
 
@@ -169,8 +164,6 @@ mod tests {
             nodes,
             edges,
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: None,
         }
     }
 

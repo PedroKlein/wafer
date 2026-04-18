@@ -6,7 +6,7 @@ use std::sync::Arc;
 use axum::{routing::get, Router};
 use tokio::net::TcpListener;
 
-use crate::control::PipelineControl;
+use crate::orchestrator::PipelineOrchestrator;
 
 use super::handlers;
 
@@ -35,9 +35,9 @@ pub struct MetricsServer {
 
 impl MetricsServer {
     /// Creates a new metrics server.
-    pub async fn new<C: PipelineControl + 'static>(
+    pub async fn new(
         config: MetricsServerConfig,
-        controller: Arc<C>,
+        controller: Arc<PipelineOrchestrator>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
         let router = create_metrics_router(controller, &config.path);
@@ -65,8 +65,8 @@ impl MetricsServer {
 }
 
 /// Creates a minimal router with just the metrics endpoint.
-fn create_metrics_router<C: PipelineControl + 'static>(controller: Arc<C>, path: &str) -> Router {
-    Router::new().route(path, get(handlers::metrics::<C>)).with_state(controller)
+fn create_metrics_router(controller: Arc<PipelineOrchestrator>, path: &str) -> Router {
+    Router::new().route(path, get(handlers::metrics)).with_state(controller)
 }
 
 #[cfg(test)]

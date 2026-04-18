@@ -10,7 +10,7 @@ use axum::{
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 
-use crate::control::PipelineControl;
+use crate::orchestrator::PipelineOrchestrator;
 
 use super::handlers;
 
@@ -37,9 +37,9 @@ pub struct ApiServer {
 
 impl ApiServer {
     /// Creates a new API server.
-    pub async fn new<C: PipelineControl + 'static>(
+    pub async fn new(
         config: ApiConfig,
-        controller: Arc<C>,
+        controller: Arc<PipelineOrchestrator>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
         let router = create_router(controller, config.serve_metrics);
@@ -67,32 +67,32 @@ impl ApiServer {
 }
 
 /// Creates the Axum router with all routes.
-fn create_router<C: PipelineControl + 'static>(controller: Arc<C>, serve_metrics: bool) -> Router {
+fn create_router(controller: Arc<PipelineOrchestrator>, serve_metrics: bool) -> Router {
     let mut router = Router::new()
         // Health endpoints
         .route("/health", get(handlers::health))
-        .route("/ready", get(handlers::ready::<C>))
+        .route("/ready", get(handlers::ready))
         // Pipeline endpoints
-        .route("/api/v1/pipeline", get(handlers::get_pipeline::<C>))
-        .route("/api/v1/pipeline/reload", post(handlers::reload_config::<C>))
-        .route("/api/v1/pipeline/drain", post(handlers::drain::<C>))
-        .route("/api/v1/pipeline/shutdown", post(handlers::shutdown::<C>))
+        .route("/api/v1/pipeline", get(handlers::get_pipeline))
+        .route("/api/v1/pipeline/reload", post(handlers::reload_config))
+        .route("/api/v1/pipeline/drain", post(handlers::drain))
+        .route("/api/v1/pipeline/shutdown", post(handlers::shutdown))
         // Node endpoints
-        .route("/api/v1/nodes", get(handlers::list_nodes::<C>))
-        .route("/api/v1/nodes/{id}", get(handlers::get_node::<C>))
-        .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap::<C>));
+        .route("/api/v1/nodes", get(handlers::list_nodes))
+        .route("/api/v1/nodes/{id}", get(handlers::get_node))
+        .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap));
 
     if serve_metrics {
-        router = router.route("/metrics", get(handlers::metrics::<C>));
+        router = router.route("/metrics", get(handlers::metrics));
     }
 
     router.layer(TraceLayer::new_for_http()).with_state(controller)
 }
 
 /// Starts the API server as a convenience function.
-pub async fn start_api_server<C: PipelineControl + 'static>(
+pub async fn start_api_server(
     config: ApiConfig,
-    controller: Arc<C>,
+    controller: Arc<PipelineOrchestrator>,
 ) -> std::io::Result<ApiServer> {
     ApiServer::new(config, controller).await
 }

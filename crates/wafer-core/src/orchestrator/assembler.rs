@@ -1,10 +1,10 @@
 //! Node factory for creating pipeline nodes from configuration.
-
+// TODO: improve this file
 use std::collections::HashMap;
-use tokio::task::JoinHandle;
+use std::sync::Arc;
 
 use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
-use crate::engine::{Capabilities, TransformInstance, WaferEngine};
+use crate::engine::{TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
     AnyNode, FileSink, FileSource, HttpSink, HttpSource, JoinerInstance, MqttSink, MqttSource,
@@ -14,24 +14,16 @@ use crate::node::{
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 use crate::Result;
 
-/// Context for node creation that tracks resources needing cleanup.
-pub struct FactoryContext {
-    pub epoch_tickers: Vec<JoinHandle<()>>,
+pub struct NodeAssembler {
+    engine: Arc<WaferEngine>,
     registry: WaferRegistry,
     resolved_plugins: HashMap<String, ResolvedPlugin>,
 }
 
-impl FactoryContext {
-    pub fn new(registry_config: RegistryConfig) -> Result<Self> {
+impl NodeAssembler {
+    pub fn new(engine: Arc<WaferEngine>, registry_config: RegistryConfig) -> Result<Self> {
         let registry = WaferRegistry::new(registry_config).map_err(WaferError::Registry)?;
-
-        Ok(Self { epoch_tickers: Vec::new(), registry, resolved_plugins: HashMap::new() })
-    }
-
-    pub fn abort_tickers(&self) {
-        for ticker in &self.epoch_tickers {
-            ticker.abort();
-        }
+        Ok(Self { engine, registry, resolved_plugins: HashMap::new() })
     }
 
     #[must_use]
@@ -43,9 +35,13 @@ impl FactoryContext {
     pub fn get_resolved_plugin(&self, node_id: &str) -> Option<&ResolvedPlugin> {
         self.resolved_plugins.get(node_id)
     }
+
+    pub fn engine(&self) -> &Arc<WaferEngine> {
+        &self.engine
+    }
 }
 
-pub async fn create_node(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+pub async fn create_node(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
     match node_def.node_type {
         NodeType::Source => create_source(node_def),
         NodeType::Transform => create_transform(node_def, ctx).await,
@@ -120,7 +116,7 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
     }
 }
 
-async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+async fn create_transform(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
     let plugin_config: PluginNodeConfig =
         node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
             WaferError::Config(ConfigError::Message(format!(
@@ -129,13 +125,10 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -
             )))
         })?;
 
-    let engine = WaferEngine::new()?;
-    ctx.epoch_tickers.push(engine.start_epoch_ticker());
+    let engine = Arc::clone(&ctx.engine);
     let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
-    // TODO(#issue): Add per-node capability configuration in TOML schema
-    let capabilities = Capabilities::with_stdio().inference(true);
-    let instance = TransformInstance::new(&engine, &component, capabilities).await?;
+    let instance = TransformInstance::new(&engine, &component, node_def.capabilities).await?;
 
     let config_str = toml::to_string(&node_def.config)
         .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -146,7 +139,7 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut FactoryContext) -
     Ok(AnyNode::from_transform(transform))
 }
 
-async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+async fn create_router(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
     let plugin_config: PluginNodeConfig =
         node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
             WaferError::Config(ConfigError::Message(format!(
@@ -155,12 +148,10 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> R
             )))
         })?;
 
-    let engine = WaferEngine::new()?;
-    ctx.epoch_tickers.push(engine.start_epoch_ticker());
+    let engine = Arc::clone(&ctx.engine);
     let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
-    let capabilities = Capabilities::with_stdio().inference(true);
-    let instance = RouterInstance::new(&engine, &component, capabilities).await?;
+    let instance = RouterInstance::new(&engine, &component, node_def.capabilities).await?;
 
     let config_str = toml::to_string(&node_def.config)
         .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -171,7 +162,7 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> R
     Ok(AnyNode::from_router(router))
 }
 
-async fn create_joiner(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> Result<AnyNode> {
+async fn create_joiner(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
     let plugin_config: PluginNodeConfig =
         node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
             WaferError::Config(ConfigError::Message(format!(
@@ -180,12 +171,10 @@ async fn create_joiner(node_def: &NodeDefinition, ctx: &mut FactoryContext) -> R
             )))
         })?;
 
-    let engine = WaferEngine::new()?;
-    ctx.epoch_tickers.push(engine.start_epoch_ticker());
+    let engine = Arc::clone(&ctx.engine);
     let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
-    let capabilities = Capabilities::with_stdio().inference(true);
-    let instance = JoinerInstance::new(&engine, &component, capabilities).await?;
+    let instance = JoinerInstance::new(&engine, &component, node_def.capabilities).await?;
 
     let config_str = toml::to_string(&node_def.config)
         .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -200,7 +189,7 @@ async fn resolve_and_load_plugin(
     node_id: &str,
     plugin_config: &PluginNodeConfig,
     engine: &WaferEngine,
-    ctx: &mut FactoryContext,
+    ctx: &mut NodeAssembler,
 ) -> Result<wasmtime::component::Component> {
     let source = plugin_config.plugin_source().map_err(WaferError::Config)?;
     let resolved = ctx.registry.resolve(&source).await.map_err(WaferError::Registry)?;

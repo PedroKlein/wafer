@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{Result, WaferError};
@@ -34,8 +35,7 @@ impl JoinerInstance {
         component: &Component,
         capabilities: Capabilities,
     ) -> Result<Self> {
-        let mut store =
-            Store::new(engine.inner(), WaferState::with_capabilities(capabilities.clone()));
+        let mut store = Store::new(engine.inner(), WaferState::with_capabilities(capabilities));
 
         store
             .set_fuel(engine.fuel_limit())
@@ -120,8 +120,7 @@ impl JoinerInstance {
 
 pub struct WasmJoiner {
     config: NodeConfig,
-    #[expect(dead_code, reason = "engine must outlive the instance")]
-    engine: WaferEngine,
+    _engine: Arc<WaferEngine>,
     instance: JoinerInstance,
     initialized: bool,
     cached_input_ports: Vec<String>,
@@ -129,8 +128,14 @@ pub struct WasmJoiner {
 
 impl WasmJoiner {
     #[must_use]
-    pub fn new(engine: WaferEngine, instance: JoinerInstance, config: NodeConfig) -> Self {
-        Self { config, engine, instance, initialized: false, cached_input_ports: Vec::new() }
+    pub fn new(engine: Arc<WaferEngine>, instance: JoinerInstance, config: NodeConfig) -> Self {
+        Self {
+            config,
+            _engine: engine,
+            instance,
+            initialized: false,
+            cached_input_ports: Vec::new(),
+        }
     }
 
     /// Convert NodeConfig to WIT NodeConfig.

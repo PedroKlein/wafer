@@ -26,82 +26,40 @@ use futures_util::stream::StreamExt;
 use crate::node::{AnyNode, Joiner, NodeStateTracker, Router, Sink, Source, Transform};
 use crate::queue::{QueueReceiver, RuntimeEnvelope};
 
-use super::orchestrator::{ControlState, EdgeSendInfo};
-use super::DagOrchestrator;
+use crate::orchestrator::{ControlState, EdgeSendInfo};
 
 type PortedEnvelopeStream =
     Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>;
 
-impl DagOrchestrator {
-    pub(super) async fn run_node_loop(
-        node_id: String,
-        node: Arc<Mutex<AnyNode>>,
-        input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
-        output_senders: Vec<EdgeSendInfo>,
-        cancel_token: CancellationToken,
-        control_state: Arc<ControlState>,
-    ) {
-        let mut locked = node.lock().await;
-        let state_tracker = locked.state_tracker_clone();
+pub(crate) async fn run_node_loop(
+    node_id: String,
+    node: Arc<Mutex<AnyNode>>,
+    input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
+    output_senders: Vec<EdgeSendInfo>,
+    cancel_token: CancellationToken,
+    control_state: Arc<ControlState>,
+) {
+    let mut locked = node.lock().await;
+    let state_tracker = locked.state_tracker_clone();
 
-        match &mut *locked {
-            AnyNode::Source(source, _) => {
-                Self::run_source_loop(
+    match &mut *locked {
+        AnyNode::Source(source, _) => {
+            run_source_loop(
+                &node_id,
+                source.as_mut(),
+                &output_senders,
+                &cancel_token,
+                &state_tracker,
+                &control_state,
+            )
+            .await;
+        }
+        AnyNode::Transform(transform, _) => {
+            if let Some((_, receiver)) = input_receivers.into_iter().next() {
+                run_transform_loop(
                     &node_id,
-                    source.as_mut(),
-                    &output_senders,
-                    &cancel_token,
-                    &state_tracker,
-                    &control_state,
-                )
-                .await;
-            }
-            AnyNode::Transform(transform, _) => {
-                if let Some((_, receiver)) = input_receivers.into_iter().next() {
-                    Self::run_transform_loop(
-                        &node_id,
-                        transform.as_mut(),
-                        receiver,
-                        &output_senders,
-                        &cancel_token,
-                        &state_tracker,
-                        &control_state,
-                    )
-                    .await;
-                }
-            }
-            AnyNode::Sink(sink, _) => {
-                if let Some((_, receiver)) = input_receivers.into_iter().next() {
-                    Self::run_sink_loop(
-                        &node_id,
-                        sink.as_mut(),
-                        receiver,
-                        &cancel_token,
-                        &state_tracker,
-                        &control_state,
-                    )
-                    .await;
-                }
-            }
-            AnyNode::Router(router, _) => {
-                if let Some((_, receiver)) = input_receivers.into_iter().next() {
-                    Self::run_router_loop(
-                        &node_id,
-                        router.as_mut(),
-                        receiver,
-                        &output_senders,
-                        &cancel_token,
-                        &state_tracker,
-                        &control_state,
-                    )
-                    .await;
-                }
-            }
-            AnyNode::Joiner(joiner, _) => {
-                Self::run_joiner_loop(
-                    &node_id,
-                    joiner.as_mut(),
-                    input_receivers,
+                    transform.as_mut(),
+                    receiver,
                     &output_senders,
                     &cancel_token,
                     &state_tracker,
@@ -110,343 +68,382 @@ impl DagOrchestrator {
                 .await;
             }
         }
-    }
-
-    /// # Cancel Safety
-    ///
-    /// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
-    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "source"))]
-    pub(super) async fn run_source_loop(
-        node_id: &str,
-        source: &mut dyn Source,
-        output_senders: &[EdgeSendInfo],
-        cancel_token: &CancellationToken,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        use super::metrics_helper;
-
-        tracing::info!("Source loop started");
-        loop {
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Source cancelled");
-                break;
-            }
-
-            // Sources stop polling when draining
-            if state_tracker.state() == wafer_types::NodeState::Draining {
-                tracing::debug!(node = %node_id, "Source draining, stopping poll");
-                break;
-            }
-
-            tokio::select! {
-                biased;
-
-                () = cancel_token.cancelled() => {
-                    tracing::debug!("Source cancelled");
-                    break;
-                }
-
-                result = source.poll() => {
-                    state_tracker.set_processing(true);
-                    match result {
-                        Ok(Some(envelope)) => {
-                            tracing::debug!(
-                                message_id = %envelope.id,
-                                payload_size = envelope.payload.len(),
-                                "Source received message"
-                            );
-
-                            metrics_helper::record_source_message(control_state, node_id);
-
-                            Self::send_to_downstream(
-                                output_senders,
-                                envelope,
-                                node_id,
-                                control_state,
-                            ).await;
-                        }
-                        Ok(None) => {
-                            tracing::debug!("Source reached EOF");
-                            state_tracker.set_processing(false);
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Source poll error");
-                            metrics_helper::record_source_error(control_state, node_id);
-                            state_tracker.set_processing(false);
-                            break;
-                        }
-                    }
-                    state_tracker.set_processing(false);
-                }
+        AnyNode::Sink(sink, _) => {
+            if let Some((_, receiver)) = input_receivers.into_iter().next() {
+                run_sink_loop(
+                    &node_id,
+                    sink.as_mut(),
+                    receiver,
+                    &cancel_token,
+                    &state_tracker,
+                    &control_state,
+                )
+                .await;
             }
         }
-        tracing::info!("Source loop stopped");
+        AnyNode::Router(router, _) => {
+            if let Some((_, receiver)) = input_receivers.into_iter().next() {
+                run_router_loop(
+                    &node_id,
+                    router.as_mut(),
+                    receiver,
+                    &output_senders,
+                    &cancel_token,
+                    &state_tracker,
+                    &control_state,
+                )
+                .await;
+            }
+        }
+        AnyNode::Joiner(joiner, _) => {
+            run_joiner_loop(
+                &node_id,
+                joiner.as_mut(),
+                input_receivers,
+                &output_senders,
+                &cancel_token,
+                &state_tracker,
+                &control_state,
+            )
+            .await;
+        }
     }
+}
 
-    /// # Cancel Safety
-    ///
-    /// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
-    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "transform"))]
-    pub(super) async fn run_transform_loop(
-        node_id: &str,
-        transform: &mut dyn Transform,
-        mut receiver: QueueReceiver<RuntimeEnvelope>,
-        output_senders: &[EdgeSendInfo],
-        cancel_token: &CancellationToken,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        use super::result_handler::ProcessContext;
+/// # Cancel Safety
+///
+/// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
+#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "source"))]
+pub(crate) async fn run_source_loop(
+    node_id: &str,
+    source: &mut dyn Source,
+    output_senders: &[EdgeSendInfo],
+    cancel_token: &CancellationToken,
+    state_tracker: &NodeStateTracker,
+    control_state: &ControlState,
+) {
+    use super::metrics_helper;
 
-        tracing::info!("Transform loop started");
-        loop {
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Transform cancelled");
+    tracing::info!("Source loop started");
+    loop {
+        if cancel_token.is_cancelled() {
+            tracing::debug!(node = %node_id, "Source cancelled");
+            break;
+        }
+
+        // Sources stop polling when draining
+        if state_tracker.state() == wafer_types::NodeState::Draining {
+            tracing::debug!(node = %node_id, "Source draining, stopping poll");
+            break;
+        }
+
+        tokio::select! {
+            biased;
+
+            () = cancel_token.cancelled() => {
+                tracing::debug!("Source cancelled");
                 break;
             }
 
-            let maybe_envelope = tokio::select! {
-                biased;
-                () = cancel_token.cancelled() => None,
-                envelope = receiver.recv() => envelope,
-            };
+            result = source.poll() => {
+                state_tracker.set_processing(true);
+                match result {
+                    Ok(Some(envelope)) => {
+                        tracing::debug!(
+                            message_id = %envelope.id,
+                            payload_size = envelope.payload.len(),
+                            "Source received message"
+                        );
 
-            let Some(envelope) = maybe_envelope else {
+                        metrics_helper::record_source_message(control_state, node_id);
+
+                        super::overflow::send_to_downstream(
+                            output_senders,
+                            envelope,
+                            node_id,
+                            control_state,
+                        ).await;
+                    }
+                    Ok(None) => {
+                        tracing::debug!("Source reached EOF");
+                        state_tracker.set_processing(false);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Source poll error");
+                        metrics_helper::record_source_error(control_state, node_id);
+                        state_tracker.set_processing(false);
+                        break;
+                    }
+                }
+                state_tracker.set_processing(false);
+            }
+        }
+    }
+    tracing::info!("Source loop stopped");
+}
+
+/// # Cancel Safety
+///
+/// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
+#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "transform"))]
+pub(crate) async fn run_transform_loop(
+    node_id: &str,
+    transform: &mut dyn Transform,
+    mut receiver: QueueReceiver<RuntimeEnvelope>,
+    output_senders: &[EdgeSendInfo],
+    cancel_token: &CancellationToken,
+    state_tracker: &NodeStateTracker,
+    control_state: &ControlState,
+) {
+    use super::result_handler::ProcessContext;
+
+    tracing::info!("Transform loop started");
+    loop {
+        if cancel_token.is_cancelled() {
+            tracing::debug!(node = %node_id, "Transform cancelled");
+            break;
+        }
+
+        let maybe_envelope = tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => None,
+            envelope = receiver.recv() => envelope,
+        };
+
+        let Some(envelope) = maybe_envelope else {
+            if !cancel_token.is_cancelled() {
+                tracing::debug!("Input queue closed");
+            }
+            break;
+        };
+
+        let ctx = ProcessContext {
+            node_id,
+            input_size_bytes: envelope.payload.len(),
+            start: Instant::now(),
+            envelope_for_dlq: envelope.clone(),
+            output_senders,
+            control_state,
+            input_port: None,
+        };
+
+        state_tracker.set_processing(true);
+        ctx.handle_process_result(transform.process(envelope).await).await;
+        state_tracker.set_processing(false);
+    }
+    tracing::info!("Transform loop stopped");
+}
+
+/// # Cancel Safety
+///
+/// Sink calls run OUTSIDE `tokio::select!`. See module-level docs.
+///
+/// If `batch_timeout()` returns `Some(Duration)`, a flush timer is included in
+/// the select loop. `flush()` is always called before exit.
+#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "sink"))]
+pub(crate) async fn run_sink_loop(
+    node_id: &str,
+    sink: &mut dyn Sink,
+    mut receiver: QueueReceiver<RuntimeEnvelope>,
+    cancel_token: &CancellationToken,
+    state_tracker: &NodeStateTracker,
+    control_state: &ControlState,
+) {
+    /// "Disabled" batching sentinel (1 year).
+    const DISABLED_BATCH_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
+
+    tracing::info!("Sink loop started");
+
+    #[cfg(feature = "http-api")]
+    if sink.batch_timeout().is_some() {
+        control_state.metrics_registry.register_sink(node_id);
+    }
+
+    // Use a long interval as "disabled" since we can't conditionally include the select arm
+    let flush_interval_duration =
+        sink.batch_timeout().unwrap_or(Duration::from_secs(DISABLED_BATCH_INTERVAL_SECS));
+    let batching_enabled = sink.batch_timeout().is_some();
+    let mut flush_timer = interval(flush_interval_duration);
+    flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    flush_timer.tick().await; // skip first immediate tick
+
+    enum SinkAction {
+        ProcessMessage(RuntimeEnvelope),
+        FlushBatch,
+        Exit,
+    }
+
+    loop {
+        if cancel_token.is_cancelled() {
+            tracing::debug!(node = %node_id, "Sink cancelled");
+            break;
+        }
+
+        let action = tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => SinkAction::Exit,
+            _ = flush_timer.tick(), if batching_enabled => SinkAction::FlushBatch,
+            envelope = receiver.recv() => {
+                match envelope {
+                    Some(env) => SinkAction::ProcessMessage(env),
+                    None => SinkAction::Exit,
+                }
+            }
+        };
+
+        match action {
+            SinkAction::Exit => {
                 if !cancel_token.is_cancelled() {
                     tracing::debug!("Input queue closed");
                 }
                 break;
-            };
-
-            let ctx = ProcessContext {
-                node_id,
-                input_size_bytes: envelope.payload.len(),
-                start: Instant::now(),
-                envelope_for_dlq: envelope.clone(),
-                output_senders,
-                control_state,
-                input_port: None,
-            };
-
-            state_tracker.set_processing(true);
-            ctx.handle_process_result(transform.process(envelope).await).await;
-            state_tracker.set_processing(false);
-        }
-        tracing::info!("Transform loop stopped");
-    }
-
-    /// # Cancel Safety
-    ///
-    /// Sink calls run OUTSIDE `tokio::select!`. See module-level docs.
-    ///
-    /// If `batch_timeout()` returns `Some(Duration)`, a flush timer is included in
-    /// the select loop. `flush()` is always called before exit.
-    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "sink"))]
-    pub(super) async fn run_sink_loop(
-        node_id: &str,
-        sink: &mut dyn Sink,
-        mut receiver: QueueReceiver<RuntimeEnvelope>,
-        cancel_token: &CancellationToken,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        /// "Disabled" batching sentinel (1 year).
-        const DISABLED_BATCH_INTERVAL_SECS: u64 = 365 * 24 * 60 * 60;
-
-        tracing::info!("Sink loop started");
-
-        #[cfg(feature = "http-api")]
-        if sink.batch_timeout().is_some() {
-            control_state.metrics_registry.register_sink(node_id);
-        }
-
-        // Use a long interval as "disabled" since we can't conditionally include the select arm
-        let flush_interval_duration =
-            sink.batch_timeout().unwrap_or(Duration::from_secs(DISABLED_BATCH_INTERVAL_SECS));
-        let batching_enabled = sink.batch_timeout().is_some();
-        let mut flush_timer = interval(flush_interval_duration);
-        flush_timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        flush_timer.tick().await; // skip first immediate tick
-
-        enum SinkAction {
-            ProcessMessage(RuntimeEnvelope),
-            FlushBatch,
-            Exit,
-        }
-
-        loop {
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Sink cancelled");
-                break;
             }
-
-            let action = tokio::select! {
-                biased;
-                () = cancel_token.cancelled() => SinkAction::Exit,
-                _ = flush_timer.tick(), if batching_enabled => SinkAction::FlushBatch,
-                envelope = receiver.recv() => {
-                    match envelope {
-                        Some(env) => SinkAction::ProcessMessage(env),
-                        None => SinkAction::Exit,
-                    }
-                }
-            };
-
-            match action {
-                SinkAction::Exit => {
-                    if !cancel_token.is_cancelled() {
-                        tracing::debug!("Input queue closed");
-                    }
-                    break;
-                }
-                SinkAction::FlushBatch => {
-                    Self::flush_sink_batch(sink, node_id, control_state).await;
-                }
-                SinkAction::ProcessMessage(envelope) => {
-                    Self::process_sink_message(
-                        sink,
-                        envelope,
-                        node_id,
-                        state_tracker,
-                        control_state,
-                    )
-                    .await;
-                }
+            SinkAction::FlushBatch => {
+                super::sink_helpers::flush_sink_batch(sink, node_id, control_state).await;
+            }
+            SinkAction::ProcessMessage(envelope) => {
+                super::sink_helpers::process_sink_message(
+                    sink,
+                    envelope,
+                    node_id,
+                    state_tracker,
+                    control_state,
+                )
+                .await;
             }
         }
-
-        // Flush remaining buffered messages before exiting
-        tracing::debug!(node = %node_id, "Flushing sink before shutdown");
-        if let Err(e) = sink.flush().await {
-            tracing::warn!(node = %node_id, error = %e, "Final flush failed during shutdown");
-        }
-
-        tracing::info!("Sink loop stopped");
     }
 
-    /// # Cancel Safety
-    ///
-    /// Router calls run OUTSIDE `tokio::select!`. See module-level docs.
-    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "router"))]
-    pub(super) async fn run_router_loop(
-        node_id: &str,
-        router: &mut dyn Router,
-        mut receiver: QueueReceiver<RuntimeEnvelope>,
-        output_senders: &[EdgeSendInfo],
-        cancel_token: &CancellationToken,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        use super::result_handler::ProcessContext;
+    // Flush remaining buffered messages before exiting
+    tracing::debug!(node = %node_id, "Flushing sink before shutdown");
+    if let Err(e) = sink.flush().await {
+        tracing::warn!(node = %node_id, error = %e, "Final flush failed during shutdown");
+    }
 
-        tracing::info!("Router loop started");
-        loop {
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Router cancelled");
-                break;
+    tracing::info!("Sink loop stopped");
+}
+
+/// # Cancel Safety
+///
+/// Router calls run OUTSIDE `tokio::select!`. See module-level docs.
+#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "router"))]
+pub(crate) async fn run_router_loop(
+    node_id: &str,
+    router: &mut dyn Router,
+    mut receiver: QueueReceiver<RuntimeEnvelope>,
+    output_senders: &[EdgeSendInfo],
+    cancel_token: &CancellationToken,
+    state_tracker: &NodeStateTracker,
+    control_state: &ControlState,
+) {
+    use super::result_handler::ProcessContext;
+
+    tracing::info!("Router loop started");
+    loop {
+        if cancel_token.is_cancelled() {
+            tracing::debug!(node = %node_id, "Router cancelled");
+            break;
+        }
+
+        // Cancel-safe: only recv() inside select, WASM calls outside
+        let maybe_envelope = tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => None,
+            envelope = receiver.recv() => envelope,
+        };
+
+        let Some(envelope) = maybe_envelope else {
+            if !cancel_token.is_cancelled() {
+                tracing::debug!("Input queue closed");
             }
+            break;
+        };
 
-            // Cancel-safe: only recv() inside select, WASM calls outside
-            let maybe_envelope = tokio::select! {
-                biased;
-                () = cancel_token.cancelled() => None,
-                envelope = receiver.recv() => envelope,
-            };
+        let ctx = ProcessContext {
+            node_id,
+            input_size_bytes: envelope.payload.len(),
+            start: Instant::now(),
+            envelope_for_dlq: envelope.clone(),
+            output_senders,
+            control_state,
+            input_port: None,
+        };
 
-            let Some(envelope) = maybe_envelope else {
-                if !cancel_token.is_cancelled() {
-                    tracing::debug!("Input queue closed");
-                }
-                break;
-            };
-
-            let ctx = ProcessContext {
-                node_id,
-                input_size_bytes: envelope.payload.len(),
-                start: Instant::now(),
-                envelope_for_dlq: envelope.clone(),
-                output_senders,
-                control_state,
-                input_port: None,
-            };
-
-            state_tracker.set_processing(true);
-            ctx.handle_route_result(router.route(envelope).await).await;
-            state_tracker.set_processing(false);
-        }
-        tracing::info!("Router loop stopped");
+        state_tracker.set_processing(true);
+        ctx.handle_route_result(router.route(envelope).await).await;
+        state_tracker.set_processing(false);
     }
+    tracing::info!("Router loop stopped");
+}
 
-    /// # Cancel Safety
-    ///
-    /// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
-    #[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "joiner", input_count = input_receivers.len()))]
-    pub(super) async fn run_joiner_loop(
-        node_id: &str,
-        joiner: &mut dyn Joiner,
-        input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
-        output_senders: &[EdgeSendInfo],
-        cancel_token: &CancellationToken,
-        state_tracker: &NodeStateTracker,
-        control_state: &ControlState,
-    ) {
-        use super::result_handler::ProcessContext;
+/// # Cancel Safety
+///
+/// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
+#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "joiner", input_count = input_receivers.len()))]
+pub(crate) async fn run_joiner_loop(
+    node_id: &str,
+    joiner: &mut dyn Joiner,
+    input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
+    output_senders: &[EdgeSendInfo],
+    cancel_token: &CancellationToken,
+    state_tracker: &NodeStateTracker,
+    control_state: &ControlState,
+) {
+    use super::result_handler::ProcessContext;
 
-        tracing::info!("Joiner loop started");
+    tracing::info!("Joiner loop started");
 
-        let streams: Vec<PortedEnvelopeStream> = input_receivers
-            .into_iter()
-            .map(|(port_name, receiver)| {
-                let stream = futures_util::stream::unfold(
-                    (port_name, receiver),
-                    |(port_name, mut rx)| async move {
-                        rx.recv().await.map(|env| ((port_name.clone(), env), (port_name, rx)))
-                    },
-                );
-                Box::pin(stream) as PortedEnvelopeStream
-            })
-            .collect();
+    let streams: Vec<PortedEnvelopeStream> = input_receivers
+        .into_iter()
+        .map(|(port_name, receiver)| {
+            let stream = futures_util::stream::unfold(
+                (port_name, receiver),
+                |(port_name, mut rx)| async move {
+                    rx.recv().await.map(|env| ((port_name.clone(), env), (port_name, rx)))
+                },
+            );
+            Box::pin(stream) as PortedEnvelopeStream
+        })
+        .collect();
 
-        let mut merged = futures_util::stream::select_all(streams);
+    let mut merged = futures_util::stream::select_all(streams);
 
-        loop {
-            if cancel_token.is_cancelled() {
-                tracing::debug!(node = %node_id, "Joiner cancelled");
-                break;
+    loop {
+        if cancel_token.is_cancelled() {
+            tracing::debug!(node = %node_id, "Joiner cancelled");
+            break;
+        }
+
+        // Cancel-safe: only stream.next() inside select, WASM calls outside
+        let maybe_item = tokio::select! {
+            biased;
+            () = cancel_token.cancelled() => None,
+            item = merged.next() => item,
+        };
+
+        let Some((port_name, envelope)) = maybe_item else {
+            if !cancel_token.is_cancelled() {
+                tracing::debug!("All input queues closed");
             }
+            break;
+        };
 
-            // Cancel-safe: only stream.next() inside select, WASM calls outside
-            let maybe_item = tokio::select! {
-                biased;
-                () = cancel_token.cancelled() => None,
-                item = merged.next() => item,
-            };
+        let ctx = ProcessContext {
+            node_id,
+            input_size_bytes: envelope.payload.len(),
+            start: Instant::now(),
+            envelope_for_dlq: envelope.clone(),
+            output_senders,
+            control_state,
+            input_port: Some(&port_name),
+        };
 
-            let Some((port_name, envelope)) = maybe_item else {
-                if !cancel_token.is_cancelled() {
-                    tracing::debug!("All input queues closed");
-                }
-                break;
-            };
-
-            let ctx = ProcessContext {
-                node_id,
-                input_size_bytes: envelope.payload.len(),
-                start: Instant::now(),
-                envelope_for_dlq: envelope.clone(),
-                output_senders,
-                control_state,
-                input_port: Some(&port_name),
-            };
-
-            state_tracker.set_processing(true);
-            ctx.handle_process_result(joiner.process(&port_name, envelope).await).await;
-            state_tracker.set_processing(false);
-        }
-        tracing::info!("Joiner loop stopped");
+        state_tracker.set_processing(true);
+        ctx.handle_process_result(joiner.process(&port_name, envelope).await).await;
+        state_tracker.set_processing(false);
     }
+    tracing::info!("Joiner loop stopped");
 }
 
 #[cfg(test)]
@@ -487,7 +484,7 @@ mod tests {
         let control_state = test_control_state();
 
         let env1 = test_envelope("1");
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env1.clone(),
             "test-node",
@@ -504,8 +501,13 @@ mod tests {
         let send_handle = tokio::spawn({
             let control = control_clone.clone();
             async move {
-                DagOrchestrator::send_with_overflow_policy(&edge_clone, env2, "test-node", &control)
-                    .await
+                super::super::overflow::send_with_overflow_policy(
+                    &edge_clone,
+                    env2,
+                    "test-node",
+                    &control,
+                )
+                .await
             }
         });
 
@@ -528,7 +530,7 @@ mod tests {
         let control_state = test_control_state();
 
         let env1 = test_envelope("1");
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env1.clone(),
             "test-node",
@@ -538,7 +540,7 @@ mod tests {
         assert!(result, "First send should succeed");
 
         let env2 = test_envelope("2");
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env2,
             "test-node",
@@ -568,7 +570,7 @@ mod tests {
         }
 
         let env1 = test_envelope("1");
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env1.clone(),
             "test-node",
@@ -579,7 +581,7 @@ mod tests {
 
         let env2 = test_envelope("2");
         let env2_id = env2.id.clone();
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env2,
             "test-node",
@@ -608,11 +610,16 @@ mod tests {
         let control_state = test_control_state();
 
         let env1 = test_envelope("1");
-        DagOrchestrator::send_with_overflow_policy(&edge_info, env1, "test-node", &control_state)
-            .await;
+        super::super::overflow::send_with_overflow_policy(
+            &edge_info,
+            env1,
+            "test-node",
+            &control_state,
+        )
+        .await;
 
         let env2 = test_envelope("2");
-        let result = DagOrchestrator::send_with_overflow_policy(
+        let result = super::super::overflow::send_with_overflow_policy(
             &edge_info,
             env2,
             "test-node",
@@ -636,7 +643,7 @@ mod tests {
         let envelope = test_envelope("failed-msg");
         let original_id = envelope.id.clone();
 
-        DagOrchestrator::send_process_error_to_dlq(
+        super::super::dlq_handlers::send_process_error_to_dlq(
             envelope,
             "transform-node",
             "VALIDATION_ERROR",
@@ -676,7 +683,7 @@ mod tests {
         let envelope = test_envelope("sink-failed-msg");
         let original_id = envelope.id.clone();
 
-        DagOrchestrator::send_sink_error_to_dlq(
+        super::super::dlq_handlers::send_sink_error_to_dlq(
             envelope,
             "file-sink",
             "disk full: cannot write to /var/log/output.log",
@@ -716,7 +723,7 @@ mod tests {
         let original_id = envelope.id.clone();
         let original_source = envelope.source.clone();
 
-        DagOrchestrator::send_process_error_to_dlq(
+        super::super::dlq_handlers::send_process_error_to_dlq(
             envelope,
             "test-node",
             "ERROR",
@@ -739,7 +746,7 @@ mod tests {
         let control_state = test_control_state();
 
         let envelope = test_envelope("no-dlq");
-        DagOrchestrator::send_process_error_to_dlq(
+        super::super::dlq_handlers::send_process_error_to_dlq(
             envelope,
             "test-node",
             "ERROR",
@@ -749,7 +756,7 @@ mod tests {
         .await;
 
         let envelope2 = test_envelope("no-dlq-2");
-        DagOrchestrator::send_sink_error_to_dlq(
+        super::super::dlq_handlers::send_sink_error_to_dlq(
             envelope2,
             "sink-node",
             "sink error",
@@ -837,7 +844,7 @@ mod tests {
         sender.send(test_envelope("1")).await.unwrap();
         drop(sender);
 
-        DagOrchestrator::run_sink_loop(
+        run_sink_loop(
             "test-sink",
             &mut sink,
             receiver,
@@ -866,7 +873,7 @@ mod tests {
         let sink_handle = tokio::spawn({
             let cancel = cancel_token.clone();
             async move {
-                DagOrchestrator::run_sink_loop(
+                run_sink_loop(
                     "test-sink",
                     &mut sink,
                     receiver,

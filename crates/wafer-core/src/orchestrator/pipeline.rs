@@ -1,13 +1,13 @@
 // Duration nanosecond casts: 2^64 ns = ~585 years, truncation is acceptable
 #![allow(clippy::cast_possible_truncation)]
 
-//! DAG orchestrator for multi-node pipeline execution.
+//! Pipeline orchestrator for multi-node execution.
 //!
 //! Manages graph topology, node lifecycle, queue wiring, and coordinated
 //! async execution. Supports graceful shutdown via `CancellationToken`.
 //!
-//! The `run()` method takes `&self` (not `&mut self`), enabling the orchestrator
-//! to be wrapped in `Arc` for sharing with API handlers.
+//! `run()` takes `&self` (not `&mut self`) so the orchestrator can be
+//! wrapped in `Arc` for sharing with API handlers.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -22,14 +22,13 @@ use wafer_types::{PipelineEvent, PipelineState};
 #[cfg(feature = "http-api")]
 use crate::metrics::MetricsRegistry;
 
-use crate::config::{DagConfig, OverflowPolicy};
+use super::assembler::NodeAssembler;
+use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
+use crate::config::{Config, OverflowPolicy};
+use crate::dag::graph::DagGraph;
 use crate::error::{Result, WaferError};
-use crate::factory::FactoryContext;
 use crate::node::AnyNode;
 use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
-
-use super::graph::DagGraph;
-use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
 
 /// Bundles sender, overflow policy, and edge name for queue overflow handling.
 #[derive(Clone)]
@@ -88,7 +87,6 @@ impl ControlState {
     /// Create new control state with global labels for metrics.
     #[cfg(feature = "http-api")]
     #[must_use]
-    #[expect(dead_code, reason = "public API for metrics/inspection")]
     pub fn with_labels(name: String, labels: HashMap<String, String>) -> Self {
         let (event_tx, _) = broadcast::channel(256);
         Self {
@@ -112,32 +110,31 @@ impl ControlState {
 ///
 /// Uses internal mutability (`run()` takes `&self`) so it can be shared via `Arc`
 /// between the execution task and API handlers.
-pub struct DagOrchestrator {
-    pub(super) dag_graph: DagGraph,
-    pub(super) config: DagConfig,
+pub struct PipelineOrchestrator {
+    pub(crate) dag_graph: DagGraph,
+    pub(crate) config: Config,
+    pub(crate) dlq_config: Option<crate::config::DeadLetterConfig>,
 
-    /// `None` if constructed programmatically without a file.
-    pub(super) config_path: Option<PathBuf>,
+    pub(crate) config_path: Option<PathBuf>,
 
-    /// Protected by Mutex for interior mutability (WASM stores are not thread-safe).
-    pub(super) nodes: Mutex<HashMap<String, Arc<Mutex<AnyNode>>>>,
+    pub(crate) nodes: Mutex<HashMap<String, Arc<Mutex<AnyNode>>>>,
 
-    /// `None` after `run()` has been called.
-    pub(super) run_state: Mutex<Option<RunState>>,
+    pub(crate) run_state: Mutex<Option<RunState>>,
 
-    pub(super) cancel_token: CancellationToken,
-    pub(super) control_state: Arc<ControlState>,
+    pub(crate) cancel_token: CancellationToken,
+    pub(crate) control_state: Arc<ControlState>,
 
-    /// Uses Mutex because we set it after construction.
-    pub(super) factory_ctx: Mutex<Option<FactoryContext>>,
+    /// Node assembler for hot-swap node creation. Set once during `from_config_with_path`,
+    /// `None` for test-only orchestrators created via `from_dag_config`.
+    pub(crate) factory_ctx: Option<Mutex<NodeAssembler>>,
 
     /// Prevents concurrent swaps on the same node.
-    pub(super) swap_locks: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    pub(crate) swap_locks: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
-impl fmt::Debug for DagOrchestrator {
+impl fmt::Debug for PipelineOrchestrator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("DagOrchestrator")
+        f.debug_struct("PipelineOrchestrator")
             .field("name", &self.control_state.name)
             .field("node_count", &self.dag_graph.node_count())
             .field("edge_count", &self.dag_graph.edge_count())
@@ -146,7 +143,7 @@ impl fmt::Debug for DagOrchestrator {
     }
 }
 
-impl DagOrchestrator {
+impl PipelineOrchestrator {
     fn parse_node_port(key: &str) -> (&str, &str) {
         key.split_once(':').unwrap_or((key, "default"))
     }
@@ -187,6 +184,10 @@ impl DagOrchestrator {
                 WaferError::Runtime("Pipeline has already been run (run state consumed)".into())
             })?
         };
+
+        if let Some(ref dlq_config) = self.dlq_config {
+            self.initialize_dlq(dlq_config).await?;
+        }
 
         self.set_pipeline_state(PipelineState::Running).await;
 
@@ -248,7 +249,7 @@ impl DagOrchestrator {
                 let control_state = Arc::clone(&self.control_state);
 
                 let handle = tokio::spawn(async move {
-                    Self::run_node_loop(
+                    crate::runner::loops::run_node_loop(
                         node_id_owned,
                         node_arc,
                         input_receivers,
@@ -331,11 +332,6 @@ impl DagOrchestrator {
             }
         }
 
-        // Clean up epoch tickers
-        if let Some(ref ctx) = *self.factory_ctx.lock().await {
-            ctx.abort_tickers();
-        }
-
         self.set_pipeline_state(PipelineState::Stopped).await;
     }
 
@@ -345,7 +341,7 @@ impl DagOrchestrator {
     }
 
     #[must_use]
-    pub fn config(&self) -> &DagConfig {
+    pub fn config(&self) -> &Config {
         &self.config
     }
 
@@ -424,22 +420,33 @@ impl DagOrchestrator {
             (tracker, lock)
         };
 
-        let mut coordinator =
-            HotSwapCoordinator::new(node_id.to_string(), new_wasm_path, old_tracker, swap_lock)
-                .with_drain_timeout(drain_timeout);
+        let capabilities = self
+            .config
+            .nodes
+            .iter()
+            .find(|n| n.id == node_id)
+            .map(|n| n.capabilities)
+            .unwrap_or_default();
 
-        let mut ctx = {
-            let mut factory_ctx_guard = self.factory_ctx.lock().await;
-            factory_ctx_guard.take().ok_or_else(|| {
-                WaferError::Runtime("factory context not available for hot-swap".into())
-            })?
-        };
+        let mut coordinator = HotSwapCoordinator::new(
+            node_id.to_string(),
+            new_wasm_path,
+            capabilities,
+            old_tracker,
+            swap_lock,
+        )
+        .with_drain_timeout(drain_timeout);
+
+        let factory_mutex = self.factory_ctx.as_ref().ok_or_else(|| {
+            WaferError::Runtime("factory context not available for hot-swap".into())
+        })?;
+
+        let mut ctx = factory_mutex.lock().await;
 
         // PREPARE
         let new_node = match coordinator.prepare(&mut ctx).await {
             Ok(node) => node,
             Err(e) => {
-                *self.factory_ctx.lock().await = Some(ctx);
                 tracing::error!(node = %node_id, error = %e, "Hot-swap prepare failed");
                 #[cfg(feature = "http-api")]
                 self.control_state.metrics_registry.record_hotswap_failure();
@@ -447,11 +454,13 @@ impl DagOrchestrator {
             }
         };
 
+        // Release the lock before drain (drain doesn't need the assembler)
+        drop(ctx);
+
         // DRAIN
         let drain_timed_out = match coordinator.drain().await {
             Ok(timed_out) => timed_out,
             Err(e) => {
-                *self.factory_ctx.lock().await = Some(ctx);
                 tracing::error!(node = %node_id, error = %e, "Hot-swap drain failed");
                 #[cfg(feature = "http-api")]
                 self.control_state.metrics_registry.record_hotswap_failure();
@@ -471,8 +480,6 @@ impl DagOrchestrator {
 
         // RETIRE
         coordinator.retire(old_node).await?;
-
-        *self.factory_ctx.lock().await = Some(ctx);
 
         let metrics = coordinator.into_metrics();
         tracing::info!(
@@ -504,7 +511,7 @@ impl DagOrchestrator {
     /// Returns the list of node IDs that were hot-swapped.
     /// Errors if changes require restart (node add/remove, topology change).
     pub async fn resync(&self) -> Result<Vec<String>> {
-        use crate::config::{diff_configs, load_dag_config};
+        use crate::config::{diff_configs, load_config};
 
         let config_path = self.config_path.as_ref().ok_or_else(|| {
             WaferError::Runtime(
@@ -515,7 +522,7 @@ impl DagOrchestrator {
 
         tracing::info!(path = %config_path.display(), "Reloading configuration");
 
-        let new_config = load_dag_config(config_path)?;
+        let new_config = load_config(config_path).await?;
         let diff = diff_configs(&self.config, &new_config);
 
         if !diff.has_changes() {

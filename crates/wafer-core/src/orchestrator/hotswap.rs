@@ -3,16 +3,16 @@
 //! Cancel-safe: if cancelled during drain, routing is re-enabled and the old
 //! node continues. If cancelled after flip, the swap is considered complete.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
-use crate::engine::{Capabilities, TransformInstance, WaferEngine};
+use crate::engine::{Capabilities, TransformInstance};
 use crate::error::WaferError;
-use crate::factory::FactoryContext;
 use crate::node::{AnyNode, NodeConfig, NodeStateTracker, WasmTransform};
+use crate::orchestrator::NodeAssembler;
 use crate::Result;
 
 pub const DEFAULT_DRAIN_TIMEOUT_MS: u64 = 5000;
@@ -31,10 +31,10 @@ pub struct SwapMetrics {
 }
 
 impl SwapMetrics {
-    fn new(node_id: String, new_wasm_path: PathBuf) -> Self {
+    fn new(node_id: &str, new_wasm_path: &Path) -> Self {
         Self {
-            node_id,
-            new_wasm_path,
+            node_id: node_id.to_string(),
+            new_wasm_path: new_wasm_path.to_path_buf(),
             prepare_duration: Duration::ZERO,
             drain_duration: Duration::ZERO,
             flip_duration: Duration::ZERO,
@@ -89,6 +89,7 @@ impl From<SwapError> for WaferError {
 pub struct HotSwapCoordinator {
     node_id: String,
     new_wasm_path: PathBuf,
+    capabilities: Capabilities,
     drain_timeout: Duration,
     old_tracker: Arc<NodeStateTracker>,
     swap_lock: Arc<AtomicBool>,
@@ -99,13 +100,15 @@ impl HotSwapCoordinator {
     pub fn new(
         node_id: String,
         new_wasm_path: PathBuf,
+        capabilities: Capabilities,
         old_tracker: Arc<NodeStateTracker>,
         swap_lock: Arc<AtomicBool>,
     ) -> Self {
         Self {
-            metrics: SwapMetrics::new(node_id.clone(), new_wasm_path.clone()),
+            metrics: SwapMetrics::new(&node_id, &new_wasm_path),
             node_id,
             new_wasm_path,
+            capabilities,
             drain_timeout: Duration::from_millis(DEFAULT_DRAIN_TIMEOUT_MS),
             old_tracker,
             swap_lock,
@@ -134,7 +137,7 @@ impl HotSwapCoordinator {
     }
 
     /// PREPARE: Load and validate the new WASM component.
-    pub async fn prepare(&mut self, ctx: &mut FactoryContext) -> Result<AnyNode> {
+    pub async fn prepare(&mut self, ctx: &mut NodeAssembler) -> Result<AnyNode> {
         let start = Instant::now();
         tracing::info!(
             node = %self.node_id,
@@ -142,13 +145,10 @@ impl HotSwapCoordinator {
             "PREPARE: Loading new WASM component"
         );
 
-        let engine = WaferEngine::new()?;
-        ctx.epoch_tickers.push(engine.start_epoch_ticker());
-
+        let engine = Arc::clone(ctx.engine());
         let component = engine.load_component(&self.new_wasm_path)?;
-        let capabilities = Capabilities::with_stdio().inference(true);
         let node_config = NodeConfig::new(&self.node_id, "transform");
-        let instance = TransformInstance::new(&engine, &component, capabilities).await?;
+        let instance = TransformInstance::new(&engine, &component, self.capabilities).await?;
 
         let transform = WasmTransform::new(engine, instance, node_config);
         let new_node = AnyNode::from_transform(transform);
@@ -296,7 +296,7 @@ impl HotSwapCoordinator {
 
 impl Drop for HotSwapCoordinator {
     fn drop(&mut self) {
-        // SAFETY: ensure lock is released if coordinator is dropped mid-swap
+        // Ensure lock is released if coordinator is dropped mid-swap
         self.release_lock();
     }
 }
@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn test_swap_metrics_new() {
-        let metrics = SwapMetrics::new("test".to_string(), PathBuf::from("/test.wasm"));
+        let metrics = SwapMetrics::new("test", Path::new("/test.wasm"));
         assert_eq!(metrics.node_id, "test");
         assert_eq!(metrics.new_wasm_path, PathBuf::from("/test.wasm"));
         assert!(!metrics.drain_timed_out);
@@ -332,6 +332,7 @@ mod tests {
         let coordinator = HotSwapCoordinator::new(
             "test".to_string(),
             PathBuf::from("/test.wasm"),
+            Capabilities::default(),
             tracker,
             lock.clone(),
         );
@@ -349,8 +350,13 @@ mod tests {
     async fn test_drain_not_running() {
         let lock = Arc::new(AtomicBool::new(false));
         let tracker = Arc::new(NodeStateTracker::new());
-        let mut coordinator =
-            HotSwapCoordinator::new("test".to_string(), PathBuf::from("/test.wasm"), tracker, lock);
+        let mut coordinator = HotSwapCoordinator::new(
+            "test".to_string(),
+            PathBuf::from("/test.wasm"),
+            Capabilities::default(),
+            tracker,
+            lock,
+        );
 
         let result = coordinator.drain().await;
         assert!(result.is_err());
@@ -363,6 +369,7 @@ mod tests {
         let mut coordinator = HotSwapCoordinator::new(
             "test".to_string(),
             PathBuf::from("/test.wasm"),
+            Capabilities::default(),
             tracker.clone(),
             lock,
         )
@@ -382,6 +389,7 @@ mod tests {
         let mut coordinator = HotSwapCoordinator::new(
             "test".to_string(),
             PathBuf::from("/test.wasm"),
+            Capabilities::default(),
             tracker.clone(),
             lock,
         )

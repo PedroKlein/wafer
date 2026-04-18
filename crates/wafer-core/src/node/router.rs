@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{Result, WaferError};
@@ -34,8 +35,7 @@ impl RouterInstance {
         component: &Component,
         capabilities: Capabilities,
     ) -> Result<Self> {
-        let mut store =
-            Store::new(engine.inner(), WaferState::with_capabilities(capabilities.clone()));
+        let mut store = Store::new(engine.inner(), WaferState::with_capabilities(capabilities));
 
         store
             .set_fuel(engine.fuel_limit())
@@ -144,8 +144,7 @@ impl RouterInstance {
 
 pub struct WasmRouter {
     config: NodeConfig,
-    #[expect(dead_code, reason = "engine must outlive the instance")]
-    engine: WaferEngine,
+    _engine: Arc<WaferEngine>,
     instance: RouterInstance,
     initialized: bool,
     cached_ports: Vec<String>,
@@ -153,8 +152,8 @@ pub struct WasmRouter {
 
 impl WasmRouter {
     #[must_use]
-    pub fn new(engine: WaferEngine, instance: RouterInstance, config: NodeConfig) -> Self {
-        Self { config, engine, instance, initialized: false, cached_ports: Vec::new() }
+    pub fn new(engine: Arc<WaferEngine>, instance: RouterInstance, config: NodeConfig) -> Self {
+        Self { config, _engine: engine, instance, initialized: false, cached_ports: Vec::new() }
     }
 
     /// Convert NodeConfig to WIT NodeConfig.

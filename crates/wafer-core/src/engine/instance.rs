@@ -32,8 +32,7 @@ impl TransformInstance {
         component: &Component,
         capabilities: Capabilities,
     ) -> Result<Self> {
-        let mut store =
-            Store::new(engine.inner(), WaferState::with_capabilities(capabilities.clone()));
+        let mut store = Store::new(engine.inner(), WaferState::with_capabilities(capabilities));
 
         store
             .set_fuel(engine.fuel_limit())
@@ -319,7 +318,8 @@ mod tests {
         }
 
         let custom_fuel = 500_000u64;
-        let engine = WaferEngine::with_fuel_limit(custom_fuel).expect("Failed to create engine");
+        let cfg = crate::config::EngineConfig { fuel_limit: custom_fuel, ..Default::default() };
+        let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
         let component = engine.load_component(&plugin_path).expect("Failed to load component");
 
         let instance = TransformInstance::new(&engine, &component, Capabilities::default())

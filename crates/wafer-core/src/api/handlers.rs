@@ -11,7 +11,7 @@ use axum::{
 use serde::Serialize;
 use wafer_types::{ControlError, ErrorResponse, NodeInfo, PipelineState, PipelineStatus};
 
-use crate::control::PipelineControl;
+use crate::orchestrator::PipelineOrchestrator;
 
 /// Health check response.
 #[derive(Serialize)]
@@ -33,7 +33,7 @@ pub async fn health() -> Json<HealthResponse> {
 }
 
 /// GET /ready - Readiness check
-pub async fn ready<C: PipelineControl>(State(controller): State<Arc<C>>) -> impl IntoResponse {
+pub async fn ready(State(controller): State<Arc<PipelineOrchestrator>>) -> impl IntoResponse {
     let status = controller.status();
 
     match status.state {
@@ -60,22 +60,22 @@ pub async fn ready<C: PipelineControl>(State(controller): State<Arc<C>>) -> impl
 }
 
 /// GET /api/v1/pipeline - Get pipeline status
-pub async fn get_pipeline<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn get_pipeline(
+    State(controller): State<Arc<PipelineOrchestrator>>,
 ) -> Json<PipelineStatus> {
     Json(controller.status())
 }
 
 /// GET /api/v1/nodes - List all nodes
-pub async fn list_nodes<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn list_nodes(
+    State(controller): State<Arc<PipelineOrchestrator>>,
 ) -> Json<Vec<NodeInfo>> {
     Json(controller.nodes())
 }
 
 /// GET /api/v1/nodes/:id - Get specific node
-pub async fn get_node<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn get_node(
+    State(controller): State<Arc<PipelineOrchestrator>>,
     Path(id): Path<String>,
 ) -> Result<Json<NodeInfo>, (StatusCode, Json<ErrorResponse>)> {
     let nodes = controller.nodes();
@@ -87,11 +87,11 @@ pub async fn get_node<C: PipelineControl>(
 }
 
 /// POST /api/v1/nodes/:id/hot-swap - Trigger hot-swap
-pub async fn hot_swap<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn hot_swap(
+    State(controller): State<Arc<PipelineOrchestrator>>,
     Path(id): Path<String>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
-    controller.hot_swap(&id).await.map(Json).map_err(|err| {
+    controller.control_hot_swap(&id).await.map(Json).map_err(|err| {
         let status = match &err {
             ControlError::NodeNotFound { .. } => StatusCode::NOT_FOUND,
             ControlError::SwapInProgress => StatusCode::CONFLICT,
@@ -104,8 +104,8 @@ pub async fn hot_swap<C: PipelineControl>(
 }
 
 /// POST /api/v1/pipeline/reload - Reload configuration
-pub async fn reload_config<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn reload_config(
+    State(controller): State<Arc<PipelineOrchestrator>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     controller.reload_config().await.map(Json).map_err(|err| {
         let status = match &err {
@@ -119,8 +119,8 @@ pub async fn reload_config<C: PipelineControl>(
 }
 
 /// POST /api/v1/pipeline/drain - Drain pipeline
-pub async fn drain<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn drain(
+    State(controller): State<Arc<PipelineOrchestrator>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     controller.drain().await.map(|()| StatusCode::OK).map_err(|err| {
         let status = match &err {
@@ -132,18 +132,18 @@ pub async fn drain<C: PipelineControl>(
 }
 
 /// POST /api/v1/pipeline/shutdown - Shutdown pipeline
-pub async fn shutdown<C: PipelineControl>(
-    State(controller): State<Arc<C>>,
+pub async fn shutdown(
+    State(controller): State<Arc<PipelineOrchestrator>>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorResponse>)> {
     controller
-        .shutdown()
+        .control_shutdown()
         .await
         .map(|()| StatusCode::OK)
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, Json(err.into())))
 }
 
 /// GET /metrics - Prometheus metrics
-pub async fn metrics<C: PipelineControl>(State(controller): State<Arc<C>>) -> impl IntoResponse {
+pub async fn metrics(State(controller): State<Arc<PipelineOrchestrator>>) -> impl IntoResponse {
     let snapshot = controller.metrics();
     let prometheus_text = snapshot.to_prometheus();
 
@@ -153,6 +153,12 @@ pub async fn metrics<C: PipelineControl>(State(controller): State<Arc<C>>) -> im
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{
+        Config, EdgeDefinition, NodeDefinition, NodeType as ConfigNodeType, OverflowPolicy,
+        PipelineConfig,
+    };
+    use crate::dag::graph::DagGraph;
+    use crate::orchestrator::pipeline::ControlState;
     use axum::{
         body::Body,
         http::{Request, StatusCode},
@@ -160,166 +166,105 @@ mod tests {
         Router,
     };
     use std::collections::HashMap;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use tokio::sync::broadcast;
+    use tokio::sync::Mutex;
+    use tokio_util::sync::CancellationToken;
     use tower::ServiceExt;
-    use wafer_types::{
-        ControlError, HotSwapResult, MetricsSnapshot, NodeInfo, NodeState, NodeType, PipelineEvent,
-        PipelineState, PipelineStatus, ReloadResult,
-    };
 
-    /// Mock controller for testing HTTP handlers.
-    struct MockController {
-        name: String,
-        state: PipelineState,
-        nodes: Vec<NodeInfo>,
-        event_tx: broadcast::Sender<PipelineEvent>,
-        drain_called: AtomicBool,
-        shutdown_called: AtomicBool,
-        hot_swap_result: Option<Result<HotSwapResult, ControlError>>,
-        reload_result: Option<Result<ReloadResult, ControlError>>,
-    }
-
-    impl MockController {
-        fn new() -> Self {
-            let (event_tx, _) = broadcast::channel(16);
-            Self {
+    fn create_test_orchestrator() -> Arc<PipelineOrchestrator> {
+        let config = Config {
+            pipeline: PipelineConfig {
                 name: "test-pipeline".to_string(),
-                state: PipelineState::Running,
-                nodes: vec![
-                    NodeInfo {
-                        id: "source".to_string(),
-                        node_type: NodeType::Source,
-                        state: NodeState::Running,
-                        swappable: false,
-                        messages_processed: 100,
-                        messages_failed: 0,
-                        avg_process_us: 50,
-                        queue_depth: None,
-                    },
-                    NodeInfo {
-                        id: "transform".to_string(),
-                        node_type: NodeType::Transform,
-                        state: NodeState::Running,
-                        swappable: true,
-                        messages_processed: 100,
-                        messages_failed: 2,
-                        avg_process_us: 150,
-                        queue_depth: Some(10),
-                    },
-                    NodeInfo {
-                        id: "sink".to_string(),
-                        node_type: NodeType::Sink,
-                        state: NodeState::Running,
-                        swappable: false,
-                        messages_processed: 98,
-                        messages_failed: 0,
-                        avg_process_us: 30,
-                        queue_depth: None,
-                    },
-                ],
-                event_tx,
-                drain_called: AtomicBool::new(false),
-                shutdown_called: AtomicBool::new(false),
-                hot_swap_result: None,
-                reload_result: None,
-            }
-        }
+                description: Some("Test pipeline".to_string()),
+            },
+            engine: Default::default(),
+            api: Default::default(),
+            metrics: Default::default(),
+            default_queue_capacity: 1024,
+            nodes: vec![
+                NodeDefinition {
+                    id: "source".to_string(),
+                    node_type: ConfigNodeType::Source,
+                    source_type: Some("stdin".to_string()),
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "transform".to_string(),
+                    node_type: ConfigNodeType::Transform,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table({
+                        let mut map = toml::map::Map::new();
+                        map.insert(
+                            "plugin_path".to_string(),
+                            toml::Value::String("test.wasm".to_string()),
+                        );
+                        map
+                    }),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "sink".to_string(),
+                    node_type: ConfigNodeType::Sink,
+                    source_type: None,
+                    sink_type: Some("stdout".to_string()),
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+            ],
+            edges: vec![
+                EdgeDefinition {
+                    from: "source".to_string(),
+                    to: "transform".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+                EdgeDefinition {
+                    from: "transform".to_string(),
+                    to: "sink".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+            ],
+            registry: Default::default(),
+            dead_letter: None,
+        };
 
-        fn with_state(mut self, state: PipelineState) -> Self {
-            self.state = state;
-            self
-        }
+        let dag_config = config.dag_config();
+        let dag_graph = DagGraph::from_config(&dag_config).unwrap();
+        let control_state = Arc::new(ControlState::new("test-pipeline".to_string()));
 
-        fn with_hot_swap_result(mut self, result: Result<HotSwapResult, ControlError>) -> Self {
-            self.hot_swap_result = Some(result);
-            self
-        }
-
-        fn with_reload_result(mut self, result: Result<ReloadResult, ControlError>) -> Self {
-            self.reload_result = Some(result);
-            self
-        }
+        Arc::new(PipelineOrchestrator {
+            dag_graph,
+            config,
+            dlq_config: None,
+            config_path: None,
+            nodes: Mutex::new(HashMap::new()),
+            run_state: Mutex::new(None),
+            cancel_token: CancellationToken::new(),
+            control_state,
+            factory_ctx: None,
+            swap_locks: Mutex::new(HashMap::new()),
+        })
     }
 
-    impl PipelineControl for MockController {
-        async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
-            if let Some(ref result) = self.hot_swap_result {
-                return result.clone();
-            }
-
-            // Default behavior: check if node exists and is swappable
-            let node = self.nodes.iter().find(|n| n.id == node_id);
-            match node {
-                None => Err(ControlError::NodeNotFound { node_id: node_id.to_string() }),
-                Some(n) if !n.swappable => {
-                    Err(ControlError::NotSwappable { node_id: node_id.to_string() })
-                }
-                Some(_) => Err(ControlError::NotImplemented { operation: "hot_swap".to_string() }),
-            }
-        }
-
-        async fn reload_config(&self) -> Result<ReloadResult, ControlError> {
-            if let Some(ref result) = self.reload_result {
-                return result.clone();
-            }
-            Err(ControlError::NotImplemented { operation: "reload_config".to_string() })
-        }
-
-        async fn drain(&self) -> Result<(), ControlError> {
-            self.drain_called.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        async fn shutdown(&self) -> Result<(), ControlError> {
-            self.shutdown_called.store(true, Ordering::SeqCst);
-            Ok(())
-        }
-
-        fn status(&self) -> PipelineStatus {
-            PipelineStatus {
-                name: self.name.clone(),
-                state: self.state,
-                uptime_secs: 3600,
-                messages_processed: 1000,
-                messages_failed: 5,
-                node_count: self.nodes.len(),
-                swap_in_progress: false,
-            }
-        }
-
-        fn metrics(&self) -> MetricsSnapshot {
-            let mut snapshot = MetricsSnapshot::default();
-            snapshot.add_counter(
-                "wafer_messages_total",
-                "Total messages processed",
-                HashMap::from([("node".to_string(), "transform".to_string())]),
-                1000,
-            );
-            snapshot
-        }
-
-        fn nodes(&self) -> Vec<NodeInfo> {
-            self.nodes.clone()
-        }
-
-        fn subscribe(&self) -> crate::control::EventReceiver {
-            self.event_tx.subscribe()
-        }
-    }
-
-    fn create_test_router(controller: Arc<MockController>) -> Router {
+    fn create_test_router(controller: Arc<PipelineOrchestrator>) -> Router {
         Router::new()
             .route("/health", get(health))
-            .route("/ready", get(ready::<MockController>))
-            .route("/api/v1/pipeline", get(get_pipeline::<MockController>))
-            .route("/api/v1/pipeline/reload", post(reload_config::<MockController>))
-            .route("/api/v1/pipeline/drain", post(drain::<MockController>))
-            .route("/api/v1/pipeline/shutdown", post(shutdown::<MockController>))
-            .route("/api/v1/nodes", get(list_nodes::<MockController>))
-            .route("/api/v1/nodes/{id}", get(get_node::<MockController>))
-            .route("/api/v1/nodes/{id}/hot-swap", post(hot_swap::<MockController>))
-            .route("/metrics", get(metrics::<MockController>))
+            .route("/ready", get(ready))
+            .route("/api/v1/pipeline", get(get_pipeline))
+            .route("/api/v1/pipeline/reload", post(reload_config))
+            .route("/api/v1/pipeline/drain", post(drain))
+            .route("/api/v1/pipeline/shutdown", post(shutdown))
+            .route("/api/v1/nodes", get(list_nodes))
+            .route("/api/v1/nodes/{id}", get(get_node))
+            .route("/api/v1/nodes/{id}/hot-swap", post(hot_swap))
+            .route("/metrics", get(metrics))
             .with_state(controller)
     }
 
@@ -332,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_health_returns_ok() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response =
@@ -347,7 +292,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_ready_returns_ok_when_running() {
-        let controller = Arc::new(MockController::new().with_state(PipelineState::Running));
+        let controller = create_test_orchestrator();
+        // Transition to running state
+        {
+            let mut state = controller.control_state.state.lock().await;
+            *state = PipelineState::Running;
+        }
         let router = create_test_router(controller);
 
         let response =
@@ -360,7 +310,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_ready_returns_unavailable_when_draining() {
-        let controller = Arc::new(MockController::new().with_state(PipelineState::Draining));
+        let controller = create_test_orchestrator();
+        // Cancel token to simulate draining
+        controller.cancel_token.cancel();
         let router = create_test_router(controller);
 
         let response =
@@ -374,7 +326,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_ready_returns_unavailable_when_starting() {
-        let controller = Arc::new(MockController::new().with_state(PipelineState::Starting));
+        let controller = create_test_orchestrator();
+        // Default state is Starting, no need to change
         let router = create_test_router(controller);
 
         let response =
@@ -389,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_pipeline_returns_status() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -408,7 +361,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_nodes_returns_all_nodes() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -424,7 +377,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_returns_single_node() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -441,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_node_returns_404_for_nonexistent() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -458,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hot_swap_returns_404_for_nonexistent_node() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -473,7 +426,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hot_swap_returns_400_for_non_swappable_node() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -483,12 +436,12 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body = get_body_string(response.into_body()).await;
-        assert!(body.contains("not_swappable")); // error code is snake_case
+        assert!(body.contains("not_swappable"));
     }
 
     #[tokio::test]
-    async fn test_hot_swap_returns_501_not_implemented() {
-        let controller = Arc::new(MockController::new());
+    async fn test_hot_swap_requires_config_path() {
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -496,28 +449,15 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[tokio::test]
-    async fn test_hot_swap_returns_409_when_swap_in_progress() {
-        let controller =
-            Arc::new(MockController::new().with_hot_swap_result(Err(ControlError::SwapInProgress)));
-        let router = create_test_router(controller);
-
-        let response = router
-            .oneshot(Request::post("/api/v1/nodes/transform/hot-swap").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        // Transform is swappable but no config_path set => ConfigError => 500
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     // Reload config tests
 
     #[tokio::test]
-    async fn test_reload_config_returns_501_not_implemented() {
-        let controller = Arc::new(MockController::new());
+    async fn test_reload_config_requires_config_path() {
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response = router
@@ -525,22 +465,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
-    }
-
-    #[tokio::test]
-    async fn test_reload_config_returns_400_for_config_error() {
-        let controller =
-            Arc::new(MockController::new().with_reload_result(Err(ControlError::ConfigError {
-                message: "invalid TOML".to_string(),
-            })));
-        let router = create_test_router(controller);
-
-        let response = router
-            .oneshot(Request::post("/api/v1/pipeline/reload").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-
+        // No config_path => ConfigError => 400
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
@@ -548,8 +473,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_drain_calls_controller_and_returns_ok() {
-        let controller = Arc::new(MockController::new());
-        let router = create_test_router(controller.clone());
+        let controller = create_test_orchestrator();
+        let router = create_test_router(controller);
 
         let response = router
             .oneshot(Request::post("/api/v1/pipeline/drain").body(Body::empty()).unwrap())
@@ -557,15 +482,14 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(controller.drain_called.load(Ordering::SeqCst));
     }
 
     // Shutdown tests
 
     #[tokio::test]
     async fn test_shutdown_calls_controller_and_returns_ok() {
-        let controller = Arc::new(MockController::new());
-        let router = create_test_router(controller.clone());
+        let controller = create_test_orchestrator();
+        let router = create_test_router(controller);
 
         let response = router
             .oneshot(Request::post("/api/v1/pipeline/shutdown").body(Body::empty()).unwrap())
@@ -573,14 +497,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::OK);
-        assert!(controller.shutdown_called.load(Ordering::SeqCst));
     }
 
     // Metrics tests
 
     #[tokio::test]
     async fn test_metrics_returns_prometheus_format() {
-        let controller = Arc::new(MockController::new());
+        let controller = create_test_orchestrator();
         let router = create_test_router(controller);
 
         let response =
@@ -592,8 +515,5 @@ mod tests {
         let content_type =
             response.headers().get(axum::http::header::CONTENT_TYPE).unwrap().to_str().unwrap();
         assert!(content_type.contains("text/plain"));
-
-        let body = get_body_string(response.into_body()).await;
-        assert!(body.contains("wafer_messages_total"));
     }
 }

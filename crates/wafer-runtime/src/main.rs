@@ -16,7 +16,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::config::loader::load_config;
-use wafer_core::dag::PipelineOrchestrator;
+use wafer_core::orchestrator::PipelineOrchestrator;
 
 /// Log output format.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]

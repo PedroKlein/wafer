@@ -8,15 +8,9 @@ use wasmtime_wasi_nn::InMemoryRegistry;
 
 use super::Capabilities;
 
-/// Host state for WASM component execution.
-///
-/// Implements `WasiView` to provide WASI capabilities to guest components.
 pub struct WaferState {
     ctx: WasiCtx,
     table: ResourceTable,
-    /// Retained for future capability inspection/auditing.
-    #[expect(dead_code, reason = "retained for future capability inspection")]
-    capabilities: Capabilities,
     nn_ctx: Option<WasiNnCtx>,
 }
 
@@ -38,8 +32,6 @@ impl WaferState {
             builder.inherit_env();
         }
 
-        // Network and filesystem capabilities are placeholders for future use
-
         let ctx = builder.build();
 
         let nn_ctx = if capabilities.allow_inference {
@@ -48,7 +40,7 @@ impl WaferState {
             None
         };
 
-        Self { ctx, table: ResourceTable::new(), capabilities, nn_ctx }
+        Self { ctx, table: ResourceTable::new(), nn_ctx }
     }
 
     #[must_use]
@@ -56,11 +48,23 @@ impl WaferState {
         Self::with_capabilities(Capabilities::sandbox())
     }
 
+    /// Returns a [`WasiNnView`] for wasi-nn host function calls.
+    ///
     /// # Panics
     ///
-    /// Panics if inference capability was not enabled.
+    /// Panics if `allow_inference` was not enabled for this node's
+    /// [`Capabilities`]. Wasmtime catches host-function panics via
+    /// `catch_unwind` and converts them into WASM traps, so the host
+    /// process is not affected. This is the idiomatic pattern used by
+    /// the wasmtime CLI itself (see `serve.rs`).
+    ///
+    /// The `add_nn_to_linker` closure signature requires `WasiNnView`
+    /// (not `Result<WasiNnView>`), so returning an error is not an option.
     pub fn nn_view(&mut self) -> wasmtime_wasi_nn::wit::WasiNnView<'_> {
-        let nn_ctx = self.nn_ctx.as_mut().expect("inference not enabled");
+        let nn_ctx = self
+            .nn_ctx
+            .as_mut()
+            .expect("wasi-nn called but inference capability is not enabled for this node");
         wasmtime_wasi_nn::wit::WasiNnView::new(&mut self.table, nn_ctx)
     }
 }
@@ -82,20 +86,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_state_has_stdio() {
+    fn default_state_has_no_inference() {
         let state = WaferState::new();
-        // Can't easily inspect WasiCtx, but we can verify it doesn't panic
         assert!(state.nn_ctx.is_none());
     }
 
     #[test]
-    fn test_sandboxed_state() {
+    fn sandboxed_state_has_no_inference() {
         let state = WaferState::sandboxed();
         assert!(state.nn_ctx.is_none());
     }
 
     #[test]
-    fn test_with_inference() {
+    fn with_inference_has_nn_ctx() {
         let caps = Capabilities::sandbox().inference(true);
         let state = WaferState::with_capabilities(caps);
         assert!(state.nn_ctx.is_some());

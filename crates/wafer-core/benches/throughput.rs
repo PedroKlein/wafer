@@ -217,7 +217,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
 
     // Setup: Create engine and load pass-through transform
     let engine = WaferEngine::new().expect("Failed to create engine");
-    let _ticker = engine.start_epoch_ticker();
+    engine.ensure_epoch_ticker();
 
     let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 
@@ -329,7 +329,7 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
     group.sample_size(50);
 
     let engine = WaferEngine::new().expect("Failed to create engine");
-    let _ticker = engine.start_epoch_ticker();
+    engine.ensure_epoch_ticker();
 
     let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 
@@ -394,7 +394,7 @@ fn bench_transform_latency(c: &mut Criterion) {
     group.sample_size(100);
 
     let engine = WaferEngine::new().expect("Failed to create engine");
-    let _ticker = engine.start_epoch_ticker();
+    engine.ensure_epoch_ticker();
 
     let component = engine.load_component(&passthrough).expect("Failed to load pass-through");
 

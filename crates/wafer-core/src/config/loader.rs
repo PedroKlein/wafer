@@ -1,6 +1,6 @@
 //! Configuration file loading.
 
-use super::schema::{Config, DagConfig};
+use super::schema::Config;
 use crate::error::{ConfigError, Result, WaferError};
 use std::path::Path;
 
@@ -25,64 +25,9 @@ pub async fn load_config(path: impl AsRef<Path>) -> Result<Config> {
         )))
     })?;
 
-    // Validate via DagConfig conversion
-    config.to_dag_config().validate().map_err(|e| {
-        WaferError::Config(ConfigError::Message(format!(
-            "config validation failed for '{}': {e}",
-            path.display()
-        )))
-    })?;
-
-    Ok(config)
-}
-
-/// Load and parse a DAG pipeline configuration file (sync).
-///
-/// Only supports core DAG config (nodes, edges, registry).
-/// Use `load_config` for the full configuration with API/metrics settings.
-pub fn load_dag_config(path: impl AsRef<Path>) -> Result<DagConfig> {
-    let path = path.as_ref();
-
-    let contents = std::fs::read_to_string(path).map_err(|e| {
-        WaferError::Config(ConfigError::Message(format!(
-            "failed to read config '{}': {e}",
-            path.display()
-        )))
-    })?;
-
-    let config: DagConfig = toml::from_str(&contents).map_err(|e| {
-        WaferError::Config(ConfigError::Message(format!(
-            "failed to parse TOML '{}': {e}",
-            path.display()
-        )))
-    })?;
-
     config.validate().map_err(|e| {
         WaferError::Config(ConfigError::Message(format!(
             "config validation failed for '{}': {e}",
-            path.display()
-        )))
-    })?;
-
-    Ok(config)
-}
-
-/// Load DAG config without validation (sync).
-///
-/// Useful for testing or when validation will be done separately.
-pub fn load_dag_config_unchecked(path: impl AsRef<Path>) -> Result<DagConfig> {
-    let path = path.as_ref();
-
-    let contents = std::fs::read_to_string(path).map_err(|e| {
-        WaferError::Config(ConfigError::Message(format!(
-            "failed to read config '{}': {e}",
-            path.display()
-        )))
-    })?;
-
-    let config: DagConfig = toml::from_str(&contents).map_err(|e| {
-        WaferError::Config(ConfigError::Message(format!(
-            "failed to parse TOML '{}': {e}",
             path.display()
         )))
     })?;
@@ -96,8 +41,8 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
-    #[test]
-    fn test_parse_valid_dag_config() {
+    #[tokio::test]
+    async fn test_load_config_with_nodes_and_edges() {
         let config_str = r#"
 [[nodes]]
 id = "source"
@@ -116,13 +61,13 @@ to = "sink"
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(config_str.as_bytes()).unwrap();
 
-        let config = load_dag_config(file.path()).unwrap();
+        let config = load_config(file.path()).await.unwrap();
         assert_eq!(config.nodes.len(), 2);
         assert_eq!(config.edges.len(), 1);
     }
 
-    #[test]
-    fn test_dag_config_default_queue_capacity() {
+    #[tokio::test]
+    async fn test_load_config_default_queue_capacity() {
         let config_str = r#"
 [[nodes]]
 id = "source"
@@ -139,7 +84,7 @@ to = "sink"
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(config_str.as_bytes()).unwrap();
 
-        let config = load_dag_config_unchecked(file.path()).unwrap();
+        let config = load_config(file.path()).await.unwrap();
         assert_eq!(config.default_queue_capacity, 1024);
     }
 
@@ -320,53 +265,8 @@ to = "sink"
         assert!(err.contains("at most one source can have source_type = 'stdin'"));
     }
 
-    #[test]
-    fn test_load_dag_config_missing_file() {
-        let result = load_dag_config("/nonexistent/path/config.toml");
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("failed to read config"));
-    }
-
-    #[test]
-    fn test_load_dag_config_invalid_toml() {
-        let config_str = "not valid } toml";
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(config_str.as_bytes()).unwrap();
-
-        let result = load_dag_config(file.path());
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("failed to parse TOML"));
-    }
-
-    #[test]
-    fn test_load_dag_config_with_registry() {
-        let config_str = r#"
-[registry]
-cache_ttl_hours = 48
-
-[[nodes]]
-id = "source"
-node_type = "source"
-
-[[nodes]]
-id = "sink"
-node_type = "sink"
-
-[[edges]]
-from = "source"
-to = "sink"
-"#;
-        let mut file = NamedTempFile::new().unwrap();
-        file.write_all(config_str.as_bytes()).unwrap();
-
-        let config = load_dag_config(file.path()).unwrap();
-        assert_eq!(config.registry.cache_ttl_hours, 48);
-    }
-
-    #[test]
-    fn test_load_dag_config_with_transform_plugin() {
+    #[tokio::test]
+    async fn test_load_config_with_transform_plugin() {
         let config_str = r#"
 [[nodes]]
 id = "source"
@@ -394,7 +294,7 @@ to = "sink"
         let mut file = NamedTempFile::new().unwrap();
         file.write_all(config_str.as_bytes()).unwrap();
 
-        let config = load_dag_config(file.path()).unwrap();
+        let config = load_config(file.path()).await.unwrap();
         assert_eq!(config.nodes.len(), 3);
 
         let transform = config.nodes.iter().find(|n| n.id == "transform").unwrap();

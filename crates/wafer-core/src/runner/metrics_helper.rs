@@ -5,7 +5,7 @@
 //!
 //! Centralizes `#[cfg(feature = "http-api")]` conditional compilation.
 
-use super::orchestrator::ControlState;
+use crate::orchestrator::ControlState;
 
 #[inline]
 pub fn record_success_metrics(control_state: &ControlState, node_id: &str, duration_ns: u64) {

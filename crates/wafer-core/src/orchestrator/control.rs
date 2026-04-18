@@ -1,21 +1,23 @@
-//! `PipelineControl` trait implementation for `DagOrchestrator`.
+//! Lifecycle control methods for `PipelineOrchestrator`.
 
 use std::sync::atomic::Ordering;
+use tokio::sync::broadcast;
 use wafer_types::{
-    ControlError, HotSwapResult, MetricsSnapshot, NodeInfo, NodeState, NodeType, PipelineState,
-    PipelineStatus, ReloadResult,
+    ControlError, HotSwapResult, MetricsSnapshot, NodeInfo, NodeState, NodeType, PipelineEvent,
+    PipelineState, PipelineStatus, ReloadResult,
 };
 
-use super::DagOrchestrator;
-use crate::control::{EventReceiver, PipelineControl};
+use super::pipeline::PipelineOrchestrator;
 
-impl PipelineControl for DagOrchestrator {
-    async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
+/// Type alias for the event receiver from `subscribe()`.
+pub type EventReceiver = broadcast::Receiver<PipelineEvent>;
+
+impl PipelineOrchestrator {
+    pub async fn control_hot_swap(&self, node_id: &str) -> Result<HotSwapResult, ControlError> {
         if !self.dag_graph.contains_node(node_id) {
             return Err(ControlError::NodeNotFound { node_id: node_id.to_string() });
         }
 
-        // Check if node is swappable (only transforms)
         let node_config = self.config.nodes.iter().find(|n| n.id == node_id);
         let is_transform =
             node_config.is_some_and(|n| matches!(n.node_type, crate::config::NodeType::Transform));
@@ -24,14 +26,14 @@ impl PipelineControl for DagOrchestrator {
             return Err(ControlError::NotSwappable { node_id: node_id.to_string() });
         }
 
-        // To get the WASM path, we reload the config file.
+        // Reload config to get the current WASM path for this node
         let config_path = self.config_path.as_ref().ok_or_else(|| {
             ControlError::ConfigError {
                 message: "Cannot hot-swap: no config path stored. Use reload_config() after creating orchestrator with from_config_with_path().".into(),
             }
         })?;
 
-        let new_config = crate::config::load_dag_config(config_path).map_err(|e| {
+        let new_config = crate::config::load_config(config_path).await.map_err(|e| {
             ControlError::ConfigError { message: format!("Failed to reload config: {e}") }
         })?;
 
@@ -41,7 +43,6 @@ impl PipelineControl for DagOrchestrator {
             .find(|n| n.id == node_id)
             .ok_or_else(|| ControlError::NodeNotFound { node_id: node_id.to_string() })?;
 
-        // Extract plugin path from config
         let node_cfg: crate::config::NodeConfig =
             node_def.config.clone().try_into().map_err(|e| ControlError::ConfigError {
                 message: format!("Invalid node config for {node_id}: {e}"),
@@ -51,8 +52,8 @@ impl PipelineControl for DagOrchestrator {
             message: format!("Node {node_id} has no plugin_path configured"),
         })?;
 
-        // Perform the hot-swap
-        let metrics = DagOrchestrator::hot_swap(self, node_id, &wasm_path)
+        let metrics = self
+            .hot_swap(node_id, &wasm_path)
             .await
             .map_err(|e| ControlError::Internal { message: format!("Hot-swap failed: {e}") })?;
 
@@ -65,7 +66,7 @@ impl PipelineControl for DagOrchestrator {
         })
     }
 
-    async fn reload_config(&self) -> Result<ReloadResult, ControlError> {
+    pub async fn reload_config(&self) -> Result<ReloadResult, ControlError> {
         let swapped_nodes = self.resync().await.map_err(|e| match e {
             crate::error::WaferError::Runtime(msg) if msg.contains("no config path") => {
                 ControlError::ConfigError { message: msg }
@@ -82,17 +83,17 @@ impl PipelineControl for DagOrchestrator {
         Ok(ReloadResult { swapped_nodes })
     }
 
-    async fn drain(&self) -> Result<(), ControlError> {
+    pub async fn drain(&self) -> Result<(), ControlError> {
         self.cancel_token.cancel();
         Ok(())
     }
 
-    async fn shutdown(&self) -> Result<(), ControlError> {
+    pub async fn control_shutdown(&self) -> Result<(), ControlError> {
         self.cancel_token.cancel();
         Ok(())
     }
 
-    fn status(&self) -> PipelineStatus {
+    pub fn status(&self) -> PipelineStatus {
         let state = if self.cancel_token.is_cancelled() {
             PipelineState::Draining
         } else {
@@ -115,7 +116,7 @@ impl PipelineControl for DagOrchestrator {
         }
     }
 
-    fn metrics(&self) -> MetricsSnapshot {
+    pub fn metrics(&self) -> MetricsSnapshot {
         #[cfg(feature = "http-api")]
         {
             self.control_state.metrics_registry.snapshot()
@@ -126,7 +127,7 @@ impl PipelineControl for DagOrchestrator {
         }
     }
 
-    fn nodes(&self) -> Vec<NodeInfo> {
+    pub fn nodes(&self) -> Vec<NodeInfo> {
         self.config
             .nodes
             .iter()
@@ -155,7 +156,7 @@ impl PipelineControl for DagOrchestrator {
             .collect()
     }
 
-    fn subscribe(&self) -> EventReceiver {
+    pub fn subscribe(&self) -> EventReceiver {
         self.control_state.event_tx.subscribe()
     }
 }
@@ -164,26 +165,24 @@ impl PipelineControl for DagOrchestrator {
 mod tests {
     use super::*;
     use crate::config::NodeType as ConfigNodeType;
-    use crate::config::{
-        DagConfig, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig,
-    };
+    use crate::config::{Config, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig};
     use crate::dag::graph::DagGraph;
-    use crate::dag::orchestrator::ControlState;
-    use crate::registry::RegistryConfig;
+    use crate::orchestrator::pipeline::ControlState;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tokio_util::sync::CancellationToken;
 
-    fn create_test_orchestrator() -> DagOrchestrator {
-        let config = DagConfig {
+    fn create_test_orchestrator() -> PipelineOrchestrator {
+        let config = Config {
             pipeline: PipelineConfig {
                 name: "test-pipeline".to_string(),
                 description: Some("Test pipeline".to_string()),
             },
+            engine: Default::default(),
+            api: Default::default(),
+            metrics: Default::default(),
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: None,
             nodes: vec![
                 NodeDefinition {
                     id: "source".to_string(),
@@ -191,6 +190,7 @@ mod tests {
                     source_type: Some("stdin".to_string()),
                     sink_type: None,
                     config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
                 },
                 NodeDefinition {
                     id: "transform".to_string(),
@@ -205,6 +205,7 @@ mod tests {
                         );
                         map
                     }),
+                    capabilities: Default::default(),
                 },
                 NodeDefinition {
                     id: "sink".to_string(),
@@ -212,6 +213,7 @@ mod tests {
                     source_type: None,
                     sink_type: Some("stdout".to_string()),
                     config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
                 },
             ],
             edges: vec![
@@ -232,20 +234,24 @@ mod tests {
                     overflow: OverflowPolicy::default(),
                 },
             ],
+            registry: Default::default(),
+            dead_letter: None,
         };
 
-        let dag_graph = DagGraph::from_config(&config).unwrap();
+        let dag_config = config.dag_config();
+        let dag_graph = DagGraph::from_config(&dag_config).unwrap();
         let control_state = Arc::new(ControlState::new("test-pipeline".to_string()));
 
-        DagOrchestrator {
+        PipelineOrchestrator {
             dag_graph,
             config,
+            dlq_config: None,
             config_path: None,
             nodes: Mutex::new(HashMap::new()),
             run_state: Mutex::new(None),
             cancel_token: CancellationToken::new(),
             control_state,
-            factory_ctx: Mutex::new(None),
+            factory_ctx: None,
             swap_locks: Mutex::new(HashMap::new()),
         }
     }
@@ -297,7 +303,6 @@ mod tests {
         let orchestrator = create_test_orchestrator();
         let metrics = orchestrator.metrics();
 
-        // With http-api feature, MetricsRegistry returns populated metrics
         #[cfg(feature = "http-api")]
         {
             let prometheus_output = metrics.to_prometheus();
@@ -319,7 +324,7 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_node_not_found() {
         let orchestrator = create_test_orchestrator();
-        let result = PipelineControl::hot_swap(&orchestrator, "nonexistent").await;
+        let result = orchestrator.control_hot_swap("nonexistent").await;
 
         assert!(matches!(
             result,
@@ -330,7 +335,7 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_source() {
         let orchestrator = create_test_orchestrator();
-        let result = PipelineControl::hot_swap(&orchestrator, "source").await;
+        let result = orchestrator.control_hot_swap("source").await;
 
         assert!(matches!(
             result,
@@ -341,7 +346,7 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_not_swappable_for_sink() {
         let orchestrator = create_test_orchestrator();
-        let result = PipelineControl::hot_swap(&orchestrator, "sink").await;
+        let result = orchestrator.control_hot_swap("sink").await;
 
         assert!(matches!(
             result,
@@ -352,7 +357,7 @@ mod tests {
     #[tokio::test]
     async fn test_hot_swap_requires_config_path() {
         let orchestrator = create_test_orchestrator();
-        let result = PipelineControl::hot_swap(&orchestrator, "transform").await;
+        let result = orchestrator.control_hot_swap("transform").await;
 
         // Transform is swappable but no config_path set
         assert!(matches!(
@@ -387,8 +392,7 @@ mod tests {
         let orchestrator = create_test_orchestrator();
         assert!(!orchestrator.cancel_token.is_cancelled());
 
-        // Use explicit trait call to avoid calling the inherent method
-        let result = PipelineControl::shutdown(&orchestrator).await;
+        let result = orchestrator.control_shutdown().await;
         assert!(result.is_ok());
         assert!(orchestrator.cancel_token.is_cancelled());
     }
@@ -416,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn test_arc_pipeline_control_delegation() {
+    fn test_arc_status_delegation() {
         let orchestrator = Arc::new(create_test_orchestrator());
 
         let status = orchestrator.status();

@@ -1,5 +1,6 @@
 //! Configuration schema definitions.
 
+use crate::engine::Capabilities;
 use crate::error::ConfigError;
 use crate::registry::{OciReference, PluginSource, RegistryConfig};
 use serde::Deserialize;
@@ -11,6 +12,8 @@ pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
 pub const DEFAULT_DLQ_QUEUE_CAPACITY: usize = 10_000;
 pub const DEFAULT_API_BIND: &str = "127.0.0.1:9090";
 pub const DEFAULT_METRICS_BIND: &str = "127.0.0.1:9091";
+pub const DEFAULT_EPOCH_DEADLINE: u64 = 100;
+pub const DEFAULT_EPOCH_TICK_MS: u64 = 10;
 
 /// Queue overflow policy for edge backpressure handling.
 #[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -22,7 +25,7 @@ pub enum OverflowPolicy {
     DeadLetter,
 }
 
-fn default_dlq_queue_capacity() -> usize {
+const fn default_dlq_queue_capacity() -> usize {
     DEFAULT_DLQ_QUEUE_CAPACITY
 }
 
@@ -41,7 +44,7 @@ pub struct DeadLetterConfig {
     pub queue_capacity: usize,
 }
 
-fn default_queue_capacity() -> usize {
+const fn default_queue_capacity() -> usize {
     DEFAULT_QUEUE_CAPACITY
 }
 
@@ -49,7 +52,7 @@ fn default_config() -> toml::Value {
     toml::Value::Table(toml::map::Map::new())
 }
 
-fn default_true() -> bool {
+const fn default_true() -> bool {
     true
 }
 
@@ -76,6 +79,9 @@ fn default_pipeline_name() -> String {
 pub struct Config {
     #[serde(default)]
     pub pipeline: PipelineConfig,
+
+    #[serde(default)]
+    pub engine: EngineConfig,
 
     #[serde(default)]
     pub api: ApiServerConfig,
@@ -157,17 +163,120 @@ impl Default for MetricsConfig {
     }
 }
 
+const fn default_fuel_limit() -> u64 {
+    DEFAULT_FUEL_LIMIT
+}
+
+const fn default_epoch_deadline() -> u64 {
+    DEFAULT_EPOCH_DEADLINE
+}
+
+const fn default_epoch_tick_ms() -> u64 {
+    DEFAULT_EPOCH_TICK_MS
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct EngineConfig {
+    #[serde(default = "default_fuel_limit")]
+    pub fuel_limit: u64,
+
+    #[serde(default = "default_epoch_deadline")]
+    pub epoch_deadline: u64,
+
+    #[serde(default = "default_epoch_tick_ms")]
+    pub epoch_tick_ms: u64,
+}
+
+impl Default for EngineConfig {
+    fn default() -> Self {
+        Self {
+            fuel_limit: DEFAULT_FUEL_LIMIT,
+            epoch_deadline: DEFAULT_EPOCH_DEADLINE,
+            epoch_tick_ms: DEFAULT_EPOCH_TICK_MS,
+        }
+    }
+}
+
 impl Config {
-    /// Convert to the older DagConfig format for compatibility.
+    /// Validate the full pipeline configuration.
+    ///
+    /// Checks node source/sink types, singleton constraints (stdin/stdout),
+    /// and dead-letter queue consistency.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        let mut stdin_count = 0;
+        let mut stdout_count = 0;
+
+        for node in &self.nodes {
+            if let Some(ref source_type) = node.source_type {
+                if !VALID_SOURCE_TYPES.contains(&source_type.as_str()) {
+                    return Err(ConfigError::Message(format!(
+                        "invalid source_type '{}' for node '{}', valid values: {:?}",
+                        source_type, node.id, VALID_SOURCE_TYPES
+                    )));
+                }
+                if source_type == "stdin" {
+                    stdin_count += 1;
+                }
+            }
+
+            if let Some(ref sink_type) = node.sink_type {
+                if !VALID_SINK_TYPES.contains(&sink_type.as_str()) {
+                    return Err(ConfigError::Message(format!(
+                        "invalid sink_type '{}' for node '{}', valid values: {:?}",
+                        sink_type, node.id, VALID_SINK_TYPES
+                    )));
+                }
+                if sink_type == "stdout" {
+                    stdout_count += 1;
+                }
+            }
+        }
+
+        if stdin_count > 1 {
+            return Err(ConfigError::Message(format!(
+                "at most one source can have source_type = 'stdin', found {stdin_count}"
+            )));
+        }
+
+        if stdout_count > 1 {
+            return Err(ConfigError::Message(format!(
+                "at most one sink can have sink_type = 'stdout', found {stdout_count}"
+            )));
+        }
+
+        let has_dead_letter_edge =
+            self.edges.iter().any(|e| e.overflow == OverflowPolicy::DeadLetter);
+
+        if has_dead_letter_edge {
+            match self.dead_letter.as_ref() {
+                None => {
+                    return Err(ConfigError::Message(
+                        "edge uses 'dead-letter' overflow policy but no [dead_letter] section is configured".to_string(),
+                    ));
+                }
+                Some(dlq) if !dlq.enabled => {
+                    return Err(ConfigError::Message(
+                        "edge uses 'dead-letter' overflow policy but dead_letter.enabled = false"
+                            .to_string(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Build a `DagConfig` from the relevant fields of this config.
+    ///
+    /// Used internally where `DagConfig` is still needed (graph construction, diff).
     #[must_use]
-    pub fn to_dag_config(&self) -> DagConfig {
+    pub fn dag_config(&self) -> DagConfig {
         DagConfig {
             pipeline: self.pipeline.clone(),
             nodes: self.nodes.clone(),
             edges: self.edges.clone(),
             default_queue_capacity: self.default_queue_capacity,
-            registry: self.registry.clone(),
-            dead_letter: self.dead_letter.clone(),
         }
     }
 }
@@ -180,10 +289,6 @@ pub struct DagConfig {
     pub edges: Vec<EdgeDefinition>,
     #[serde(default = "default_queue_capacity")]
     pub default_queue_capacity: usize,
-    #[serde(default)]
-    pub registry: RegistryConfig,
-    #[serde(default)]
-    pub dead_letter: Option<DeadLetterConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +301,8 @@ pub struct NodeDefinition {
     pub sink_type: Option<String>,
     #[serde(default = "default_config")]
     pub config: toml::Value,
+    #[serde(default)]
+    pub capabilities: Capabilities,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -273,7 +380,7 @@ impl NodeConfig {
             return Ok(PluginSource::local(path));
         }
 
-        // SAFETY: validate() ensures oci is Some when plugin_path is None
+        // INVARIANT: validate() ensures oci is Some when plugin_path is None
         let oci_str = self.oci.as_ref().expect("validate() ensures oci is Some");
 
         let oci_ref = OciReference::parse(oci_str).ok_or_else(|| {
@@ -286,21 +393,30 @@ impl NodeConfig {
     }
 
     /// Check if this config specifies a local plugin.
-    pub fn is_local(&self) -> bool {
+    pub const fn is_local(&self) -> bool {
         self.plugin_path.is_some()
     }
 
     /// Check if this config specifies an OCI plugin.
-    pub fn is_oci(&self) -> bool {
+    pub const fn is_oci(&self) -> bool {
         self.oci.is_some()
     }
 }
 
+// TODO: use enum for source/sink types instead of strings, with custom deserialization to validate
+// values at parse time
 const VALID_SOURCE_TYPES: &[&str] = &["stdin", "file", "mqtt"];
 const VALID_SINK_TYPES: &[&str] = &["stdout", "file", "mqtt"];
 
 impl DagConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
+        self.validate_with_dead_letter(None)
+    }
+
+    pub fn validate_with_dead_letter(
+        &self,
+        dead_letter: Option<&DeadLetterConfig>,
+    ) -> Result<(), ConfigError> {
         let mut stdin_count = 0;
         let mut stdout_count = 0;
 
@@ -342,12 +458,11 @@ impl DagConfig {
             )));
         }
 
-        // Validate DLQ: if any edge uses dead-letter policy, DLQ must be configured and enabled
         let has_dead_letter_edge =
             self.edges.iter().any(|e| e.overflow == OverflowPolicy::DeadLetter);
 
         if has_dead_letter_edge {
-            match &self.dead_letter {
+            match dead_letter {
                 None => {
                     return Err(ConfigError::Message(
                         "edge uses 'dead-letter' overflow policy but no [dead_letter] section is configured".to_string(),
@@ -383,6 +498,7 @@ mod tests {
             source_type: source_type.map(String::from),
             sink_type: sink_type.map(String::from),
             config: toml::Value::Table(toml::map::Map::new()),
+            capabilities: Capabilities::default(),
         }
     }
 
@@ -392,8 +508,6 @@ mod tests {
             nodes,
             edges: vec![],
             default_queue_capacity: 1024,
-            registry: RegistryConfig::default(),
-            dead_letter: None,
         }
     }
 
@@ -553,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn dag_config_with_registry_parses() {
+    fn config_with_registry_parses() {
         let toml_str = r#"
             [registry]
             cache_ttl_hours = 12
@@ -571,12 +685,12 @@ mod tests {
             to = "sink"
         "#;
 
-        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.registry.cache_ttl_hours, 12);
     }
 
     #[test]
-    fn dag_config_registry_defaults_when_omitted() {
+    fn config_registry_defaults_when_omitted() {
         let toml_str = r#"
             [[nodes]]
             id = "source"
@@ -591,8 +705,8 @@ mod tests {
             to = "sink"
         "#;
 
-        let config: DagConfig = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.registry.cache_ttl_hours, 24); // default
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.registry.cache_ttl_hours, 24);
     }
 
     // OverflowPolicy tests
@@ -700,7 +814,7 @@ mod tests {
             to = "sink"
         "#;
 
-        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        let config: Config = toml::from_str(toml_str).unwrap();
         let dlq = config.dead_letter.unwrap();
         assert!(dlq.enabled);
         assert_eq!(dlq.sink_type, "file");
@@ -723,7 +837,7 @@ mod tests {
             to = "sink"
         "#;
 
-        let config: DagConfig = toml::from_str(toml_str).unwrap();
+        let config: Config = toml::from_str(toml_str).unwrap();
         let dlq = config.dead_letter.unwrap();
         assert_eq!(dlq.queue_capacity, DEFAULT_DLQ_QUEUE_CAPACITY);
     }
@@ -737,9 +851,8 @@ mod tests {
             make_node("sink", NodeType::Sink, None, None),
         ]);
         config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
-        config.dead_letter = None;
 
-        let err = config.validate().unwrap_err();
+        let err = config.validate_with_dead_letter(None).unwrap_err();
         assert!(err.to_string().contains("no [dead_letter] section is configured"));
     }
 
@@ -750,9 +863,9 @@ mod tests {
             make_node("sink", NodeType::Sink, None, None),
         ]);
         config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
-        config.dead_letter = Some(make_dlq_config(false)); // disabled
+        let dlq = make_dlq_config(false);
 
-        let err = config.validate().unwrap_err();
+        let err = config.validate_with_dead_letter(Some(&dlq)).unwrap_err();
         assert!(err.to_string().contains("dead_letter.enabled = false"));
     }
 
@@ -763,9 +876,9 @@ mod tests {
             make_node("sink", NodeType::Sink, None, None),
         ]);
         config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::DeadLetter)];
-        config.dead_letter = Some(make_dlq_config(true));
+        let dlq = make_dlq_config(true);
 
-        assert!(config.validate().is_ok());
+        assert!(config.validate_with_dead_letter(Some(&dlq)).is_ok());
     }
 
     #[test]
@@ -775,7 +888,6 @@ mod tests {
             make_node("sink", NodeType::Sink, None, None),
         ]);
         config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::Drop)];
-        config.dead_letter = None;
 
         assert!(config.validate().is_ok());
     }
@@ -787,8 +899,75 @@ mod tests {
             make_node("sink", NodeType::Sink, None, None),
         ]);
         config.edges = vec![make_edge_with_overflow("src", "sink", OverflowPolicy::Slow)];
-        config.dead_letter = None;
 
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn engine_config_defaults_when_omitted() {
+        let cfg = EngineConfig::default();
+        assert_eq!(cfg.fuel_limit, DEFAULT_FUEL_LIMIT);
+        assert_eq!(cfg.epoch_deadline, DEFAULT_EPOCH_DEADLINE);
+        assert_eq!(cfg.epoch_tick_ms, DEFAULT_EPOCH_TICK_MS);
+    }
+
+    #[test]
+    fn engine_config_deserializes_custom_values() {
+        let toml_str = r#"
+            fuel_limit = 2_000_000
+            epoch_deadline = 200
+            epoch_tick_ms = 5
+        "#;
+        let cfg: EngineConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.fuel_limit, 2_000_000);
+        assert_eq!(cfg.epoch_deadline, 200);
+        assert_eq!(cfg.epoch_tick_ms, 5);
+    }
+
+    #[test]
+    fn engine_config_partial_override_uses_defaults() {
+        let toml_str = r#"
+            fuel_limit = 500_000
+        "#;
+        let cfg: EngineConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(cfg.fuel_limit, 500_000);
+        assert_eq!(cfg.epoch_deadline, DEFAULT_EPOCH_DEADLINE);
+        assert_eq!(cfg.epoch_tick_ms, DEFAULT_EPOCH_TICK_MS);
+    }
+
+    #[test]
+    fn top_level_config_includes_engine_section() {
+        let toml_str = r#"
+            [engine]
+            fuel_limit = 3_000_000
+
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.engine.fuel_limit, 3_000_000);
+        assert_eq!(config.engine.epoch_deadline, DEFAULT_EPOCH_DEADLINE);
+    }
+
+    #[test]
+    fn top_level_config_defaults_engine_when_omitted() {
+        let toml_str = r#"
+            [[nodes]]
+            id = "source"
+            node_type = "source"
+
+            [[edges]]
+            from = "source"
+            to = "sink"
+        "#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.engine.fuel_limit, DEFAULT_FUEL_LIMIT);
+        assert_eq!(config.engine.epoch_deadline, DEFAULT_EPOCH_DEADLINE);
+        assert_eq!(config.engine.epoch_tick_ms, DEFAULT_EPOCH_TICK_MS);
     }
 }
