@@ -8,4 +8,4 @@ mod metrics;
 mod server;
 
 pub use metrics::{MetricsServer, MetricsServerConfig};
-pub use server::{start_api_server, ApiConfig, ApiServer};
+pub use server::{ApiConfig, ApiServer, start_api_server};

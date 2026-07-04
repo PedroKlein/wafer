@@ -1,0 +1,13 @@
+# Clippy configuration for WAFER
+# Relaxes panic/unwrap/indexing lints inside test code
+allow-indexing-slicing-in-tests = true
+allow-panic-in-tests = true
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true
+
+# Large future threshold (bytes) — warn if a future's state machine exceeds this
+future-size-threshold = 4096
+
+# Large enum variant threshold (bytes) — suggest Boxing above this
+enum-variant-size-threshold = 200

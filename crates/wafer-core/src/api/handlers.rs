@@ -3,10 +3,10 @@
 use std::sync::Arc;
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
 use serde::Serialize;
 use wafer_types::{ControlError, ErrorResponse, NodeInfo, PipelineState, PipelineStatus};
@@ -160,10 +160,10 @@ mod tests {
     use crate::dag::graph::DagGraph;
     use crate::orchestrator::pipeline::ControlState;
     use axum::{
+        Router,
         body::Body,
         http::{Request, StatusCode},
         routing::{get, post},
-        Router,
     };
     use std::collections::HashMap;
     use tokio::sync::Mutex;

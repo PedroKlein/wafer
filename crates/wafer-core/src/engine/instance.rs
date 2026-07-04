@@ -5,8 +5,8 @@
 use super::loader::WaferEngine;
 use super::{Capabilities, WaferState};
 use crate::error::{Result, WaferError};
-use wasmtime::component::Component;
 use wasmtime::Store;
+use wasmtime::component::Component;
 
 wasmtime::component::bindgen!({
     path: "wit",

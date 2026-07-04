@@ -6,7 +6,7 @@
 use tokio::sync::mpsc::error::TrySendError;
 
 use crate::config::OverflowPolicy;
-use crate::dlq::{wrap_for_dlq, DlqReason};
+use crate::dlq::{DlqReason, wrap_for_dlq};
 use crate::queue::{QueueSender, RuntimeEnvelope};
 
 use crate::orchestrator::{ControlState, EdgeSendInfo};

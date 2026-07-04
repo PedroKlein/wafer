@@ -2,8 +2,8 @@
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use wafer_types::{
     ErrorResponse, HotSwapResult, MetricsSnapshot, NodeInfo, PipelineStatus, ReloadResult,
 };

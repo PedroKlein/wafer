@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand};
 
 use client::WaferClient;
 use config::CtlConfig;
-use error::{exit_code, CliError, ResultExt};
+use error::{CliError, ResultExt, exit_code};
 
 /// waferctl - Manage WAFER pipeline instances
 #[derive(Parser)]

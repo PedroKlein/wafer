@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::Result;
 use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefinition, NodeType};
 use crate::engine::{TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
@@ -12,7 +13,6 @@ use crate::node::{
     WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
-use crate::Result;
 
 pub struct NodeAssembler {
     engine: Arc<WaferEngine>,
@@ -224,61 +224,42 @@ pub fn create_dlq_sink(config: &DeadLetterConfig) -> Result<Box<dyn Sink + Send>
     match sink_type {
         "stdout" => Ok(Box::new(StdoutSink::new("dlq"))),
         "file" => {
-            let path = config
-                .config
-                .get("path")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    WaferError::Config(ConfigError::Message(
-                        "dead_letter file sink requires 'path' in config".to_string(),
-                    ))
-                })?;
+            let path = config.config.get("path").and_then(|v| v.as_str()).ok_or_else(|| {
+                WaferError::Config(ConfigError::Message(
+                    "dead_letter file sink requires 'path' in config".to_string(),
+                ))
+            })?;
             Ok(Box::new(FileSink::new("dlq", path)))
         }
         "mqtt" => {
-            let broker = config
-                .config
-                .get("broker")
-                .and_then(toml::Value::as_str)
-                .unwrap_or("localhost");
+            let broker =
+                config.config.get("broker").and_then(toml::Value::as_str).unwrap_or("localhost");
             let port = config
                 .config
                 .get("port")
                 .and_then(toml::Value::as_integer)
                 .map_or(1883, |v| v as u16);
-            let topic = config
-                .config
-                .get("topic")
-                .and_then(toml::Value::as_str)
-                .ok_or_else(|| {
+            let topic =
+                config.config.get("topic").and_then(toml::Value::as_str).ok_or_else(|| {
                     WaferError::Config(ConfigError::Message(
                         "dead_letter mqtt sink requires 'topic' in config".to_string(),
                     ))
                 })?;
-            let qos = config
-                .config
-                .get("qos")
-                .and_then(toml::Value::as_integer)
-                .map_or(0, |v| v as u8);
+            let qos =
+                config.config.get("qos").and_then(toml::Value::as_integer).map_or(0, |v| v as u8);
             let client_id = config
                 .config
                 .get("client_id")
                 .and_then(toml::Value::as_str)
                 .map_or_else(|| "wafer-dlq".to_string(), String::from);
-            Ok(Box::new(MqttSink::new(
-                "dlq", broker, port, topic, qos, client_id,
-            )))
+            Ok(Box::new(MqttSink::new("dlq", broker, port, topic, qos, client_id)))
         }
         "http" => {
-            let url = config
-                .config
-                .get("url")
-                .and_then(toml::Value::as_str)
-                .ok_or_else(|| {
-                    WaferError::Config(ConfigError::Message(
-                        "dead_letter http sink requires 'url' in config".to_string(),
-                    ))
-                })?;
+            let url = config.config.get("url").and_then(toml::Value::as_str).ok_or_else(|| {
+                WaferError::Config(ConfigError::Message(
+                    "dead_letter http sink requires 'url' in config".to_string(),
+                ))
+            })?;
             Ok(Box::new(HttpSink::new("dlq", url)))
         }
         _ => Err(WaferError::Config(ConfigError::Message(format!(

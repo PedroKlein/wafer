@@ -2,9 +2,9 @@
 
 use wasmtime::component::ResourceTable;
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_nn::InMemoryRegistry;
 use wasmtime_wasi_nn::backend::onnx::OnnxBackend;
 use wasmtime_wasi_nn::wit::WasiNnCtx;
-use wasmtime_wasi_nn::InMemoryRegistry;
 
 use super::Capabilities;
 

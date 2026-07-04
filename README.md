@@ -4,7 +4,7 @@
 
 A high-performance, Rust-based DAG pipeline runtime that executes WebAssembly plugins using [Wasmtime](https://wasmtime.dev/). Designed for building data processing pipelines with hot-swappable transforms, bounded queues with backpressure, and flexible fan-out/fan-in topologies.
 
-[![Rust](https://img.shields.io/badge/rust-1.93%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
 
 ## Features
@@ -55,7 +55,7 @@ echo "hello world" | cargo run -p wafer-runtime -- --config examples/dag-upperca
 
 ### Prerequisites
 
-- **Rust 1.93+** (with `wasm32-wasip2` target)
+- **Rust stable** (with `wasm32-wasip2` target)
 - **just** (command runner) — `cargo install just` or `brew install just`
 - **wasm-tools** (optional, for validation) — `cargo install wasm-tools`
 - **wkg** (optional, for OCI publishing) — `cargo install wkg`
@@ -67,7 +67,7 @@ echo "hello world" | cargo run -p wafer-runtime -- --config examples/dag-upperca
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # The rust-toolchain.toml will automatically configure:
-# - Rust 1.93
+# - Rust stable (Edition 2024)
 # - wasm32-wasip2 target
 # - rustfmt and clippy
 

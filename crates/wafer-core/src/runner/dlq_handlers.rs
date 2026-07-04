@@ -1,6 +1,6 @@
 //! Dead Letter Queue (DLQ) routing handlers.
 
-use crate::dlq::{wrap_for_dlq, DlqReason};
+use crate::dlq::{DlqReason, wrap_for_dlq};
 use crate::queue::RuntimeEnvelope;
 
 use crate::orchestrator::ControlState;

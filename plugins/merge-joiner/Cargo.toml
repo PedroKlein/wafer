@@ -1,7 +1,7 @@
 [package]
 name = "merge-joiner"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Merge joiner plugin for WAFER pipeline - stateless passthrough from multiple inputs"
 
 [workspace]

@@ -31,11 +31,7 @@ impl<T> BatchBuffer<T> {
     /// Does NOT check timeout - use `should_flush()` for that.
     pub fn push(&mut self, item: T) -> Option<Vec<T>> {
         self.buffer.push(item);
-        if self.buffer.len() >= self.batch_size {
-            Some(self.take())
-        } else {
-            None
-        }
+        if self.buffer.len() >= self.batch_size { Some(self.take()) } else { None }
     }
 
     /// Drain the buffer and reset the last flush time.

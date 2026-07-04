@@ -161,10 +161,10 @@ async fn run_http_server(
     tx: mpsc::Sender<RuntimeEnvelope>,
     mut shutdown_rx: tokio::sync::oneshot::Receiver<()>,
 ) {
+    use hyper::Request;
     use hyper::body::Incoming;
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
-    use hyper::Request;
     use hyper_util::rt::TokioIo;
 
     let listener = match tokio::net::TcpListener::bind(bind_addr).await {

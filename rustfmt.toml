@@ -1,6 +1,5 @@
-# Must match the edition in Cargo.toml (currently 2021).
-# Update to "2024" when the project upgrades editions.
-edition = "2021"
+# Must match the edition in Cargo.toml.
+edition = "2024"
 max_width = 100
 use_small_heuristics = "Max"
 

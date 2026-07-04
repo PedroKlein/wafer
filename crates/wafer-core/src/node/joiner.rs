@@ -10,8 +10,8 @@ use crate::queue::RuntimeEnvelope;
 
 use super::traits::{Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult};
 
-use wasmtime::component::Component;
 use wasmtime::Store;
+use wasmtime::component::Component;
 
 wasmtime::component::bindgen!({
     path: "wit",

@@ -1,7 +1,7 @@
 [package]
 name = "filter-transform"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Filter transform plugin for WAFER pipeline - drops messages matching a pattern"
 
 [workspace]

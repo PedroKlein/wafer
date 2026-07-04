@@ -7,8 +7,8 @@ pub mod hotswap;
 pub(crate) mod pipeline;
 pub mod routing;
 
-pub use assembler::{create_dlq_sink, create_node, NodeAssembler};
+pub use assembler::{NodeAssembler, create_dlq_sink, create_node};
 pub use control::EventReceiver;
-pub use hotswap::{HotSwapCoordinator, SwapError, SwapMetrics, DEFAULT_DRAIN_TIMEOUT_MS};
+pub use hotswap::{DEFAULT_DRAIN_TIMEOUT_MS, HotSwapCoordinator, SwapError, SwapMetrics};
 pub use pipeline::{ControlState, EdgeSendInfo, PipelineOrchestrator};
 pub use routing::{RoutingController, SendError};

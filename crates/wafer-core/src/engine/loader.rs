@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use wasmtime::{
-    component::{Component, Linker},
     Config, Engine,
+    component::{Component, Linker},
 };
 use wasmtime_wasi::p2::add_to_linker_async;
 use wasmtime_wasi_nn::wit::add_to_linker as add_nn_to_linker;

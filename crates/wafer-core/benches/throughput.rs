@@ -16,10 +16,10 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use tokio::runtime::Runtime;
 
-use wafer_core::engine::{pipeline, Capabilities, TransformInstance, WaferEngine};
+use wafer_core::engine::{Capabilities, TransformInstance, WaferEngine, pipeline};
 use wafer_core::queue::{BoundedQueue, RuntimeEnvelope};
 
 /// Path to a simple pass-through WASM plugin.

@@ -10,11 +10,11 @@ exclude = ["plugins/*"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Pedro Klein <pedroklein1@hotmail.com>"]
 repository = "https://github.com/PedroKlein/wafer-poc"
 license = "MIT OR Apache-2.0"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # Internal crates
@@ -92,43 +92,80 @@ dirs = "6"
 futures-util = "0.3"
 
 [workspace.lints.rust]
-future-incompatible = { level = "warn", priority = -1 }
+future-incompatible = { level = "deny", priority = -1 }
 nonstandard-style = { level = "deny", priority = -1 }
-rust-2018-idioms = { level = "warn", priority = -1 }
+rust-2018-idioms = { level = "deny", priority = -1 }
+rust-2024-compatibility = { level = "deny", priority = -1 }
+unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-# Groups (Ch2.2, Ch2.5)
+# === Groups ===
 all = { level = "deny", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 
-# Performance (Ch2.3, Ch3)
-redundant_clone = "deny"
-large_enum_variant = "warn"
-needless_collect = "warn"
-clone_on_copy = "deny"
-
-# Error handling (Ch4.2)
-# TODO: promote to "deny" after fixing existing violations
+# === Don't Panic (WAFER runs 24/7 — panics kill all healthy nodes) ===
 unwrap_used = "warn"
 expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+unreachable = "warn"
+get_unwrap = "warn"
+unwrap_in_result = "warn"
+panic_in_result_fn = "warn"
+indexing_slicing = "warn"
+string_slice = "warn"
 
-# Style & idioms (Ch1, Ch2.3)
-needless_borrow = "deny"
-manual_let_else = "warn"
-or_fun_call = "warn"
+# === Don't Fail Silently ===
+let_underscore_future = "deny"
+let_underscore_must_use = "warn"
+unused_result_ok = "warn"
+map_err_ignore = "warn"
+assertions_on_result_states = "warn"
+
+# === Don't Do Bad Async Stuff (see async-tokio skill) ===
+await_holding_lock = "deny"
+await_holding_refcell_ref = "deny"
+large_futures = "warn"
+
+# === Memory & Unsafe ===
+mem_forget = "warn"
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "warn"
+
+# === Performance (see rust-best-practices: zero-allocation hot path) ===
+redundant_clone = "deny"
+clone_on_copy = "deny"
+needless_collect = "warn"
+large_enum_variant = "warn"
 implicit_clone = "warn"
 inefficient_to_string = "warn"
 needless_pass_by_value = "warn"
+rc_mutex = "deny"
 
-# Documentation (Ch8.8)
-missing_errors_doc = "warn"
-missing_panics_doc = "warn"
+# === Modern Idioms (Edition 2024) ===
+manual_let_else = "warn"
+or_fun_call = "warn"
+needless_borrow = "deny"
 
-# Debug artifacts
+# === Numeric Safety ===
+cast_sign_loss = "warn"
+float_cmp = "warn"
+lossy_float_literal = "warn"
+
+# === Don't #[allow] Without Reason (forces #[expect(..., reason = "...")] ) ===
+allow_attributes = "warn"
+allow_attributes_without_reason = "warn"
+
+# === Debug Artifacts (must not reach production) ===
 dbg_macro = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
+
+# === Documentation ===
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
 
 [patch.crates-io]
 # NOTE: ort version must match what wasmtime-wasi-nn expects. Cannot upgrade independently.

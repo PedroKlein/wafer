@@ -12,7 +12,7 @@ use clap::{Parser, ValueEnum};
 use tokio::signal;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info};
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::config::loader::load_config;

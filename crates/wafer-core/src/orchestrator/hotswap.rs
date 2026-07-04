@@ -4,16 +4,16 @@
 //! node continues. If cancelled after flip, the swap is considered complete.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 
+use crate::Result;
 use crate::engine::{Capabilities, TransformInstance};
 use crate::error::WaferError;
 use crate::node::{AnyNode, NodeConfig, NodeStateTracker, WasmTransform};
 use crate::orchestrator::NodeAssembler;
-use crate::Result;
 
 pub const DEFAULT_DRAIN_TIMEOUT_MS: u64 = 5000;
 

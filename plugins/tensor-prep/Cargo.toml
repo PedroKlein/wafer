@@ -1,7 +1,7 @@
 [package]
 name = "tensor-prep"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Image-to-tensor normalization plugin for WAFER pipeline (28x28 grayscale to F32)"
 
 [workspace]

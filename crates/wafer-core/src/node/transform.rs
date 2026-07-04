@@ -4,7 +4,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::engine::{exports, pipeline, TransformInstance, WaferEngine};
+use crate::engine::{TransformInstance, WaferEngine, exports, pipeline};
 use crate::error::{Result, WaferError};
 use crate::queue::RuntimeEnvelope;
 

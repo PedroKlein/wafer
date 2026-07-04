@@ -6,7 +6,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use super::assembler::{create_dlq_sink, create_node, NodeAssembler};
+use super::assembler::{NodeAssembler, create_dlq_sink, create_node};
 use crate::config::{Config, DagConfig};
 use crate::engine::WaferEngine;
 use crate::error::{ConfigError, Result, WaferError};
@@ -388,12 +388,16 @@ mod tests {
         let run_state = run_state.as_ref().unwrap();
         assert_eq!(run_state.queue_senders.len(), 2);
         assert_eq!(run_state.queue_receivers.len(), 2);
-        assert!(run_state
-            .queue_senders
-            .contains_key(&("source:default".to_string(), "transform:default".to_string())));
-        assert!(run_state
-            .queue_senders
-            .contains_key(&("transform:default".to_string(), "sink:default".to_string())));
+        assert!(
+            run_state
+                .queue_senders
+                .contains_key(&("source:default".to_string(), "transform:default".to_string()))
+        );
+        assert!(
+            run_state
+                .queue_senders
+                .contains_key(&("transform:default".to_string(), "sink:default".to_string()))
+        );
     }
 
     #[tokio::test]

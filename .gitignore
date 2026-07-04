@@ -125,4 +125,4 @@ mqtt/log/
 
 docker-compose.override.yml
 
-.tasks/
+/.delegation-runner/artifacts

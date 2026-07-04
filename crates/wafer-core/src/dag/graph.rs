@@ -3,9 +3,9 @@
 //! `DagGraph` owns the validated graph structure and provides synchronous
 //! queries over it. No async, no tokio, no WASM knowledge.
 
+use petgraph::Direction;
 use petgraph::algo::toposort;
 use petgraph::graph::{DiGraph, NodeIndex};
-use petgraph::Direction;
 use std::collections::HashMap;
 
 use crate::config::DagConfig;

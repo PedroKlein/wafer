@@ -1,7 +1,7 @@
 //! Registry client for fetching WASM components from OCI registries.
 
 use crate::error::RegistryError;
-use crate::registry::cache::{compute_hash, PackageCache};
+use crate::registry::cache::{PackageCache, compute_hash};
 use crate::registry::types::{OciReference, PluginSource, RegistryConfig, ResolvedPlugin};
 use docker_credential::{CredentialRetrievalError, DockerCredential};
 use oci_client::secrets::RegistryAuth;
