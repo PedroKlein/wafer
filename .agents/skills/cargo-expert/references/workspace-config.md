@@ -41,7 +41,7 @@ project/
 
 ```toml
 [workspace]
-resolver = "2"              # Required for edition 2021+
+resolver = "2"              # Required for edition 2021+ (automatic in 2024)
 members = [
     "crates/wafer-core",
     "crates/wafer-runtime",
@@ -73,7 +73,7 @@ Use `[workspace.package]` to share metadata across all members:
 ```toml
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 authors = ["Your Name <email@example.com>"]
 repository = "https://github.com/org/project"
 license = "MIT OR Apache-2.0"

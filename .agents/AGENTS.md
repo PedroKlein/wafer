@@ -18,7 +18,7 @@
 
 ### Tech Stack
 
-- **Rust 1.93+** (toolchain pinned in `rust-toolchain.toml`)
+- **Rust stable** (toolchain pinned in `rust-toolchain.toml`)
 - **wasmtime** — WebAssembly runtime with WASI Preview 2 / Component Model
 - **wit-bindgen** — Code generation from WIT interface definitions
 - **petgraph** — DAG topology management
@@ -87,7 +87,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 |------|---------|
 | `README.md` | **Project README.** Quick start, installation prerequisites, project structure, development setup, running pipelines, building plugins, control plane API overview, full configuration reference (node types, overflow policies, env vars), and GPU/CUDA setup for Jetson. The most comprehensive single-file overview. |
 | `justfile` | **Command runner recipes.** All `just` commands for building, testing, running, plugin management, registry operations, and more. Run `just` with no args to see the full list. |
-| `rust-toolchain.toml` | **Pinned Rust toolchain.** Ensures consistent Rust version (1.93) and targets (`wasm32-wasip2`) across all contributors. |
+| `rust-toolchain.toml` | **Pinned Rust toolchain.** Ensures stable Rust channel and targets (`wasm32-wasip2`) across all contributors. |
 | `rustfmt.toml` | **Formatter configuration.** Rust formatting rules for the project. |
 | `Cargo.toml` | **Workspace root.** Defines workspace members, shared dependencies, and profiles. |
 

@@ -43,7 +43,7 @@ Pin the Rust toolchain version and required components for the project:
 
 ```toml
 [toolchain]
-channel = "1.93"
+channel = "stable"
 components = ["rustfmt", "clippy"]
 targets = ["wasm32-wasip2"]
 ```
@@ -52,7 +52,7 @@ targets = ["wasm32-wasip2"]
 
 | Field | Purpose | Example |
 |---|---|---|
-| `channel` | Rust version | `"1.93"`, `"stable"`, `"nightly-2026-01-15"` |
+| `channel` | Rust version | `"stable"`, `"1.96"`, `"nightly-2026-01-15"` |
 | `components` | Required rustup components | `["rustfmt", "clippy", "rust-src"]` |
 | `targets` | Pre-installed compilation targets | `["wasm32-wasip2"]` |
 
@@ -109,7 +109,7 @@ runner = "wasmtime"
 [package]
 name = "my-plugin"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Description of what this plugin does"
 
 [lib]
@@ -141,7 +141,7 @@ Each plugin has its own `[workspace]` declaration (empty, to prevent Cargo from 
 [package]
 name = "my-plugin"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace]  # Empty -- prevents parent workspace lookup
 ```
