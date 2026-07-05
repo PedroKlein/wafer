@@ -1,5 +1,27 @@
 # Agent Instructions
 
+## Thesis Context
+
+This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFRGS). The research design, evaluation methodology, and thesis framing live in a sibling repo.
+
+| What you need | Where to find it |
+|---------------|------------------|
+| **What to build next** | `TODO.md` (repo root) — implementation tasks with cross-references |
+| **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
+| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` |
+| **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
+| **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
+| **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
+| **Literature on a topic** | Obsidian vault `TCC/papers/` (252 notes) |
+
+**Sibling repos** (pi-repos group `tcc`):
+- `github.com/PedroKlein/tcc-doc` — research, evaluation plan, thesis writing
+- `github.com/PedroKlein/obsidian-personal` — knowledge base (252 notes under `TCC/`)
+
+**Key framing:** The runtime IS the contribution (not just hot-swap). RQ1=Performance, RQ2=Isolation, RQ3=Hot-swap.
+
+---
+
 ## Project Overview
 
 **WAFER** (WebAssembly Flow Execution Runtime) is a high-performance, Rust-based DAG pipeline runtime that executes WebAssembly plugins using [Wasmtime](https://wasmtime.dev/). It is designed for building data processing pipelines with hot-swappable transforms, bounded queues with backpressure, and flexible fan-out/fan-in topologies.
@@ -62,7 +84,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/MVP.md` | **Current implementation status** (v0.4.0). Documents what's built, what's in progress, and what's next. Check this to understand the gap between the spec and reality — not everything in SPEC.md is implemented yet. |
 | `docs/adr/` | **Architecture Decision Records.** 6 accepted ADRs: (1) wasmtime runtime selection, (2) SPSC bounded queues, (3) drain-and-flip hot-swap, (4) native sources/sinks, (5) OCI registry support, (6) workspace architecture. See `docs/adr/README.md` for the template, index, and conventions. |
 | `specs/` | **Feature specifications directory.** Contains detailed specs for planned features using the OpenSpec workflow. See `specs/README.md` for structure and how to create new specs. |
-| `todo.md` | **Known tech debt and refactor items.** Short list — check before starting refactoring work to see if it's already tracked. |
+| `TODO.md` | **Implementation task list.** Evaluation infrastructure to build, experiments to run, cross-references to thesis methodology in tcc-doc. Start here for what needs to be done. |
 
 ### API & Integration
 

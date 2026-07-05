@@ -5,6 +5,15 @@
 **Version:** 0.1.0-draft  
 **Last Updated:** 2026-02-28
 
+> **⚠️ Thesis Framing Note (2026-07-04):** This spec was written during early planning when
+> hot-swap was framed as the "primary thesis target." The **current thesis framing** (per
+> `tcc-doc/research/analysis/thesis-statement-v3.md`) is: **the runtime architecture IS the
+> contribution** — no single feature is elevated above others. Hot-swap, isolation, and
+> performance are co-equal properties the architecture enables. The technical content of this
+> spec remains accurate; only the priority/framing language is outdated.
+>
+> Current RQs: RQ1 (Performance), RQ2 (Isolation), RQ3 (Hot-swap) — see `tcc-doc/SOURCES-OF-TRUTH.md`.
+
 ---
 
 ## Table of Contents
@@ -60,7 +69,7 @@ A single-process Rust runtime that executes typed DAGs of WebAssembly components
 | **Efficient data flow**            | Minimal-copy semantics as data moves through the DAG; true zero-copy is future work (see §18.1) |
 | **Strong isolation**               | WASI capability grants + Wasm sandboxing + fuel/epoch limits                                |
 | **Cross-architecture portability** | Same `.wasm` binary runs on ARM (Pi, Jetson, Mac M3) and x86                                |
-| **Per-node hot-swap**              | Upgrade individual nodes without stopping the pipeline (**primary thesis target**)          |
+| **Per-node hot-swap**              | Upgrade individual nodes without stopping the pipeline                                       |
 | **Low latency**                    | In-process execution avoids IPC/network overhead                                            |
 | **Dynamic topology**               | Add/remove nodes and edges at runtime (stretch goal)                                        |
 
@@ -122,7 +131,7 @@ The specification will note where such trade-offs may be made.
 | G1  | Type-safe DAG execution            | WIT contracts define node interfaces; host validates type compatibility at connection time | Must     |
 | G2  | Efficient data passing             | Minimal-copy semantics; true zero-copy via WIT resources is future work (see §18.1)        | Must     |
 | G3  | Bounded queues with backpressure   | All inter-node channels are bounded; explicit policies for overflow                        | Must     |
-| G4  | Per-node hot-swap                  | **Primary thesis deliverable.** Drain-and-flip upgrade path; measure pause and loss empirically | Must     |
+| G4  | Per-node hot-swap                  | Drain-and-flip upgrade path; measure pause and loss empirically | Must     |
 | G5  | Full dynamic topology              | Add/remove nodes and edges at runtime. **Stretch goal** - hot-swap (G4) takes priority    | Should   |
 | G6  | WASI capability isolation          | Nodes receive only explicitly granted capabilities                                         | Must     |
 | G7  | wasi-nn compatible inference       | Leverage emerging standard for ML inference capability                                     | Must     |
@@ -1572,6 +1581,12 @@ Nodes must explicitly import capabilities. The host grants only what's configure
 ---
 
 ## 15. Evaluation Plan
+
+> **⚠️ Note (2026-07-04):** This section contains the original evaluation plan from the SPEC draft.
+> The **authoritative, refined version** lives at `tcc-doc/research/analysis/evaluation-plan.md`,
+> which adds: statistical methodology (N=30, Mann-Whitney U, Bootstrap CI95), open-loop load
+> generation, coordinated omission avoidance, HdrHistogram, threats to validity, and a detailed
+> experiment execution order. The hardware targets and scenario definitions below remain valid.
 
 ### 15.1 Platforms
 
