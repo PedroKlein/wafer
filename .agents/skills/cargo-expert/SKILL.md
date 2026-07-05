@@ -62,6 +62,42 @@ fixes. Once wasmtime publishes a stable release with full async CM support, swit
 
 ---
 
+## Wasmtime Feature Flags for Edge Builds
+
+Wasmtime has many feature flags. For WAFER's edge targets, use the minimum set:
+
+```toml
+# Minimum viable for WAFER:
+wasmtime = { git = "...", features = [
+    "component-model",     # Required: Wasm Component Model
+    "async",               # Required: call_async for Tokio integration  
+    "cranelift",           # Required: compilation (or use AOT-only path)
+    "pooling-allocator",   # Recommended: syscall-free instantiation on edge
+] }
+
+# Do NOT enable unless needed:
+# "gc"             — garbage collection (large code, not used by WAFER plugins)
+# "winch"          — baseline compiler (unnecessary if using cranelift)
+# "cache"          — built-in file cache (WAFER implements its own AOT cache)
+# "component-model-async" — experimental CM async ABI (post-thesis)
+```
+
+**Binary size impact**: Each disabled feature saves 100KB-1MB in final binary.
+On Pi4 with limited storage, this matters.
+
+### Feature-Gating Unsafe Operations (from Spin)
+
+Spin feature-gates `unsafe` AOT deserialization behind a compile-time flag:
+```toml
+[features]
+unsafe-aot-compilation = []  # Must be explicitly opted-in
+```
+
+WAFER should adopt this pattern for `Component::deserialize()` calls — makes it
+impossible to accidentally use unsafe deserialization without explicit opt-in.
+
+---
+
 ## Plugin Build Configuration
 
 ### `.cargo/config.toml` (in each plugin directory)
@@ -174,6 +210,18 @@ Build on target for final benchmarks (ensures matching LLVM codegen for the actu
 | ORT (onnx) fails on aarch64 | Prebuilt binaries don't include CUDA | Set `ORT_LIB_LOCATION` to custom-built ONNX Runtime |
 | Feature flag not propagating | Crate dep missing feature forward | Add `crate/feature` in consuming crate's features |
 | `cargo test --workspace` fails on plugins | Plugins excluded but test tries to link host deps | Plugins in `exclude`; test only with `just test` |
+| Newer Rust toolchain breaks deps | Upstream crate has strict lint probes | Patch with `[patch.crates-io]` (flow-like pattern) |
+
+### Patching Upstream Dependencies (from Flow-Like)
+
+When upstream crates break on newer Rust toolchains, use `[patch.crates-io]`:
+```toml
+[patch.crates-io]
+broken-crate = { git = "https://github.com/our-fork/broken-crate", branch = "fix-rust-2024" }
+```
+
+Document each patch with a comment linking to the upstream issue. Remove patches
+as upstream releases fixes. This is common in large workspaces (flow-like patches 6 crates).
 
 ---
 

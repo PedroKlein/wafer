@@ -27,6 +27,27 @@ Ask yourself:
 
 ---
 
+## Execution Model Taxonomy (Validated Across 12 Systems)
+
+WAFER's task-per-node model is unique among Wasm pipeline runtimes:
+
+| # | Model | System | Trade-offs |
+|---|-------|--------|------------|
+| 1 | **Task-per-node** (bounded channels) | WAFER | Full parallelism + per-node isolation + explicit backpressure. Cost: channel allocation + context switches |
+| 2 | Task-per-flow (sequential scheduling) | Torvyn | Zero sync overhead. Cost: head-of-line blocking, no per-stage parallelism |
+| 3 | Stack-based frontier expansion | Flow-Like | Natural termination for one-shot workflows. Not streaming. |
+| 4 | Event-loop dispatch | Wick (abandoned) | Perfect observability, simple consistency. Cost: throughput bottleneck at coordinator |
+| 5 | Inline-chain-per-request | Fluvio | Simple, no coordination. Cost: shared fate, no persistence |
+| 6 | Trigger-per-instance (serverless) | Spin | Perfect isolation, no state leakage. Cost: cold start, no streaming |
+| 7 | Platform-mediated per-message | Azure Dataflow | Platform handles complexity. Cost: no standalone operation |
+| 8 | Goroutine-per-operator | eKuiper | Lightweight concurrency. Cost: no per-operator isolation |
+
+**Key insight**: Only models #1 (WAFER) and #8 (eKuiper) provide per-stage parallelism in a
+continuous streaming context. WAFER adds per-node fault isolation via Wasm Stores; eKuiper
+shares process memory across all operators.
+
+---
+
 ## Core Design: Separation of Topology from Execution
 
 From Meridian Space (data pipeline orchestration reference):
@@ -178,16 +199,35 @@ see channel close when upstream tasks finish, propagating clean shutdown through
 
 ---
 
-## Petgraph Type Selection
+## Petgraph Type Selection (Validated by wasm-compose + 12-Repo Review)
 
-| Type | Use When | WAFER Usage |
-|------|----------|-------------|
-| `DiGraph<N, E>` | Fixed topology, no runtime removal | Current: pipeline config is static |
-| `StableGraph<N, E>` | Runtime node add/remove | Future: dynamic hot-add of nodes |
-| `Acyclic<G>` | Dynamic edges with cycle prevention | Future: Pierce-Kelly algorithm |
+| Type | Use When | WAFER Status |
+|------|----------|----------|
+| `DiGraph<N, E>` | Fixed topology, no runtime removal | ✅ Current & correct (validated) |
+| `StableGraph<N, E>` | Runtime node add/remove (index stability) | NOT needed — hot-swap replaces Wasm instance, not graph node |
+| `Acyclic<G>` | Dynamic edges with cycle prevention (Pierce-Kelly algorithm) | 🔮 Future: dynamic topology |
+| `GraphMap<N, E>` | Value-keyed nodes (Copy+Ord+Hash constraint) | ❌ Wrong constraints for WAFER |
 
-**Do NOT use `Acyclic<G>` in current WAFER** — topology changes require restart.
-Listed for future reference only.
+**Key correction**: Hot-swap replaces the WASM instance, NOT the graph node. The topology
+remains fixed. `DiGraph` is correct; `StableGraph` is unnecessary overhead.
+
+**Optimization**: `Ix = u16` type parameter halves index memory. For WAFER's edge IoT targets
+(Pi4, Jetson) with pipelines of <100 nodes, this is free optimization.
+
+### Useful Algorithms Not Yet Used
+
+| Algorithm | Use Case | API | Priority |
+|-----------|----------|-----|----------|
+| `has_path_connecting` | Hot-swap reachability safety check | `algo::has_path_connecting(g, from, to, space)` | ✅ Should adopt |
+| `connected_components` | Validate graph connectivity | `algo::connected_components()` | Low |
+| `dominators` | Find single-point-of-failure nodes | `algo::dominators::*` | Low |
+| `Topo` walker | Incremental topo iteration | `visit::Topo` | Not needed (batch toposort sufficient) |
+
+### XOR Hash Deadlock Detection (from flow-like)
+
+For iterative DAG executors, XOR all node pointer keys. If hash unchanged between steps,
+no progress was made → deadlock. O(1) time and space. Not needed for WAFER (single-pass
+DAG, not iterative) but valuable reference for extending architecture.
 
 ---
 
@@ -195,8 +235,9 @@ Listed for future reference only.
 
 - **NEVER store execution state in the graph** — DagGraph is pure topology; WASM
   instances, channels, and metrics live in the orchestrator/runner layer
-- **NEVER use `NodeIndex` as a persistent identifier** — DiGraph reuses indices after
-  removal; use String IDs in the `node_indices` map for stable lookups
+- **NEVER use `NodeIndex` as a persistent identifier** — DiGraph's `swap_remove` on
+  `remove_node` causes the last node to take the removed node's slot, silently corrupting
+  any external data structure indexing by NodeIndex; use String IDs in the `node_indices` map
 - **NEVER allow an unbounded channel anywhere in the DAG** — one unbounded link breaks
   end-to-end backpressure for the entire pipeline (Meridian Space: "the unbounded channel
   acts as an infinite buffer; stages downstream OOM while upstream thinks everything is fine")

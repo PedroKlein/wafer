@@ -205,6 +205,64 @@ Mutex guard is cancelled, the guard drops — releasing the lock with the invari
 not yet restored. This is how Oxide found state corruption bugs. WAFER avoids this
 by holding the node mutex for the entire loop (no cancel point while holding it).
 
+### YieldController Pattern (from Torvyn — Cooperative Scheduling)
+
+For Tokio tasks doing CPU-intensive work (e.g., processing messages in a loop),
+yield back to the executor periodically to prevent starvation of other tasks:
+
+```rust
+struct YieldController {
+    elements_since_yield: u32,
+    elements_per_yield: u32,      // e.g., 64 elements
+    time_quantum: Duration,       // e.g., 100μs
+    last_yield: Instant,
+    hard_ceiling: u32,            // e.g., 256 elements (absolute max)
+}
+
+impl YieldController {
+    async fn maybe_yield(&mut self) {
+        self.elements_since_yield += 1;
+        if self.elements_since_yield >= self.elements_per_yield
+            || self.last_yield.elapsed() >= self.time_quantum
+            || self.elements_since_yield >= self.hard_ceiling
+        {
+            tokio::task::yield_now().await;
+            self.elements_since_yield = 0;
+            self.last_yield = Instant::now();
+        }
+    }
+}
+```
+
+Use this in WAFER's node task loops: yield after N messages or M microseconds to
+prevent one busy node from starving others on the same Tokio worker thread.
+
+### Epoch Ticker: MUST Be OS Thread
+
+**Critical lesson from Spin + Wasmtime review**: If all Tokio workers are blocked
+executing Wasm (on fibers), a `tokio::spawn`'d epoch ticker won't get scheduled.
+The epoch never fires. A runaway node hangs forever.
+
+```rust
+// WRONG — may not fire under Tokio saturation
+tokio::spawn(async move {
+    let mut interval = tokio::time::interval(Duration::from_millis(10));
+    loop { interval.tick().await; engine.increment_epoch(); }
+});
+
+// CORRECT — OS thread ticks regardless of Tokio state
+let engine_weak = engine.weak();
+std::thread::spawn(move || {
+    loop {
+        std::thread::sleep(Duration::from_millis(10));
+        match engine_weak.upgrade() {
+            Some(engine) => engine.increment_epoch(),
+            None => break,
+        }
+    }
+});
+```
+
 ---
 
 ## Drain-and-Flip (Thesis RQ3: Hot-Swap Disruption Cost)

@@ -29,6 +29,30 @@ const WASM_CONFIG_MEDIA_TYPE: &str = "application/vnd.wasm.config.v0+json";
 const WASM_LAYER_MEDIA_TYPE: &str = "application/vnd.wasm.content.layer.v1+wasm";
 ```
 
+### WAFER-Specific Media Types (Recommended Convention)
+
+For discoverability in registries, WAFER should define its own media types
+(following Azure IoT Operations pattern: `application/vnd.microsoft.aio.graph.v1+yaml`):
+
+```rust
+// Plugins (individual Wasm components)
+const WAFER_PLUGIN_MEDIA_TYPE: &str = "application/vnd.wafer.plugin.v1+wasm";
+// Pipeline definitions
+const WAFER_PIPELINE_MEDIA_TYPE: &str = "application/vnd.wafer.pipeline.v1+toml";
+// Pre-compiled artifacts (target-specific)
+const WAFER_AOT_MEDIA_TYPE: &str = "application/vnd.wafer.plugin.aot.v1+cwasm";
+```
+
+### Crate Options: oci-client vs oci-wasm
+
+| Crate | Level | Used By | Notes |
+|-------|-------|---------|-------|
+| `oci-client` | Low-level (raw OCI distribution API) | Spin | More control, more boilerplate |
+| `oci-wasm` | High-level (Wasm-specific conventions) | Wassette | Handles artifact conventions automatically |
+
+For WAFER: start with `oci-wasm` (less boilerplate). Drop to `oci-client` only if
+custom media types or multi-layer handling needs arise.
+
 ---
 
 ## Tag Mutability: The Core Hazard

@@ -72,7 +72,7 @@ fn process_batch_into(messages: &[Envelope], output: &mut Vec<Output>) {
 }
 ```
 
-### Key Optimizations (from Microsoft guidelines + omq.rs 80K→9M msg/s)
+### Key Optimizations (from Microsoft guidelines + omq.rs 80K→9M msg/s + Torvyn)
 
 | Pattern | When | Example |
 |---------|------|---------|
@@ -82,6 +82,32 @@ fn process_batch_into(messages: &[Envelope], output: &mut Vec<Output>) {
 | `Vec::with_capacity(n)` | Known final size | Collecting topo_order |
 | `.clear()` + reuse | Per-message scratch buffers | Serialization buffers |
 | Avoid `format!` in loops | Hidden allocation per call | Use write! to a buffer |
+| Lock-free Treiber stack | Hot-path resource pooling | Buffer reuse (Torvyn pattern) |
+| `OnceLock` + `Weak` for graph init | Graph-of-arcs construction phasing | Create nodes, then wire connections |
+
+### Lock-Free Buffer Pool (from Torvyn — Future WAFER Optimization)
+
+Highest-priority hot-path gap: WAFER allocates per-envelope per boundary crossing.
+Torvyn's pattern: Treiber stack with tagged ABA protection (64-bit CAS: 32-bit tag +
+32-bit index), tiered by size, pre-allocated at startup, loom model-checked.
+
+- Hot path: `pool.acquire()` ≈ 5ns (single CAS) vs heap allocation ≈ 50ns
+- RAII guard returns buffer to pool on drop
+- Verify with loom + empirical stress tests (8 threads × 50K iterations)
+
+### Minimizing Monomorphization (from Wasmtime)
+
+Wasmtime's Store design: `Store<T>` (thin generic shell) → `StoreInner<T>` → `StoreOpaque`
+(non-generic workhorse). Only the outermost layer is generic; all internal code operates on
+the opaque core. This reduces compile times dramatically in heavily-generic APIs.
+
+Apply when: a generic type has a large impl surface but most methods don't need `T`.
+
+### ManuallyDrop for Non-Replaceable Owned Fields (from Wasmtime)
+
+When `&mut T` must never be used to replace T (only to access it), `ManuallyDrop<T>` +
+unsafe accessor methods is the correct pattern. Prevents destructive reassignment
+while still allowing ownership transfer (via `into_inner`).
 
 ---
 
@@ -314,72 +340,15 @@ Don't over-apply: simple flags or 2-state booleans don't need PhantomData ceremo
 
 ## Modern Rust Idioms (Edition 2024, Rust 1.85+)
 
-WAFER uses `edition = "2024"`. Prefer these modern patterns over their older equivalents:
+WAFER uses `edition = "2024"`. Key patterns to prefer:
 
-### let-else (stable since Rust 1.65)
-```rust
-// OLD — verbose match for the error path
-let config = match load_config(&path) {
-    Ok(c) => c,
-    Err(e) => return Err(e.into()),
-};
+- **let-else** over verbose match for the error path (`let Ok(x) = expr else { return Err(...) }`)
+- **let chains** (Edition 2024) for nested pattern matches (`if let Some(x) = a && let Y(z) = x`)
+- **async fn in traits** (Rust 1.75+) over `#[async_trait]` crate for static dispatch (zero alloc per call)
+- **#[expect(lint)]** over `#[allow(lint)]` — warns when suppression becomes unnecessary
+- **assert_matches!** over `assert!(matches!(...))` — better error messages showing actual value
 
-// MODERN — let-else: flat, clear divergence path
-let Ok(config) = load_config(&path) else {
-    return Err(WaferError::ConfigLoad { path: path.into() });
-};
-```
-
-### let chains (Edition 2024 — now available)
-```rust
-// OLD — nested if-let
-if let Some(node) = graph.get_node(id) {
-    if let NodeKind::Transform(t) = &node.kind {
-        t.process(envelope);
-    }
-}
-
-// MODERN — let chain with &&
-if let Some(node) = graph.get_node(id)
-    && let NodeKind::Transform(t) = &node.kind
-{
-    t.process(envelope);
-}
-```
-
-### async fn in traits (stable since Rust 1.75)
-```rust
-// OLD — #[async_trait] crate: boxes the future, adds allocation per call
-#[async_trait]
-trait Source {
-    async fn poll(&mut self) -> Result<Option<Envelope>>;
-}
-
-// MODERN — native async fn in trait (static dispatch, zero allocation)
-trait Source {
-    async fn poll(&mut self) -> Result<Option<Envelope>>;
-}
-// Caveat: not dyn-compatible. For dyn dispatch, still use manual Pin<Box<...>>.
-```
-
-### #[expect(lint)] (stable since Rust 1.81)
-```rust
-// OLD — #[allow] silently persists after the issue is fixed
-#[allow(clippy::large_enum_variant)]
-enum Message { ... }
-
-// MODERN — #[expect] warns when the suppression becomes unnecessary
-#[expect(clippy::large_enum_variant, reason = "Envelope variant is 256 bytes; boxing pending ADR")]
-enum Message { ... }
-```
-
-### assert_matches! (stable since Rust 1.82)
-```rust
-use std::assert_matches::assert_matches;
-
-assert_matches!(result, ProcessResult::Emit(env) if env.source == "mqtt");
-// Better error messages than assert!(matches!(...)) — shows actual value on failure
-```
+**Caveat**: `async fn in trait` is not dyn-compatible. For dyn dispatch, still use manual `Pin<Box<...>>`.
 
 ---
 

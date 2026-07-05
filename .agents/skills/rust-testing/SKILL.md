@@ -105,6 +105,26 @@ Single-threaded is correct for 95% of unit tests. Multi-thread only when:
 
 ## Benchmarking with Criterion
 
+### Thesis Evaluation Methodology (from eKuiper + Comparator Analysis)
+
+WAFER's thesis requires matching eKuiper's benchmark methodology (end-to-end throughput +
+system resources) then exceeding with latency histograms:
+
+| Requirement | Source | Implementation |
+|-------------|--------|----------------|
+| Saturating load generator | eKuiper methodology | Dedicated Rust MQTT publisher (not JMeter) |
+| Warm-up period | Standard practice | 10s warm-up, 60s measurement window |
+| Latency histograms (p50/p95/p99) | Missing from eKuiper | hdrhist crate (HdrHistogram) |
+| Per-node metrics | eKuiper StatManager | Prometheus labels: node_id, node_type |
+| System resource monitoring | eKuiper methodology | /proc/stat + /proc/self/status polling |
+| Nop sink for throughput isolation | eKuiper pattern | Sink that counts + drops messages |
+| Multiple pipeline depths | WAFER-specific | 1-node, 3-node, 5-node, 10-node chains |
+| Hardware spec documentation | Standard | Exact model, kernel version, governor (performance) |
+| N≥30 repetitions | Thesis stats requirement | Mann-Whitney U, Bootstrap CI95 |
+
+**eKuiper baseline**: 12k msg/s on RPi 3B+. WAFER target: >5k msg/s on RPi 4 with isolation.
+Overhead budget: <60% throughput reduction is defensible; <40% is excellent.
+
 ### The Setup/Measurement Separation Problem
 
 The #1 criterion mistake for async code: measuring setup in the benchmark loop.
@@ -216,6 +236,14 @@ queue ordering invariants, graph validation (no panic on any input).
 
 **Do NOT use for WASM tests** — fixture overhead makes proptest's thousands of iterations
 impractical. WASM tests are scenario-based, not exhaustive.
+
+### Dual Verification Approach (from Torvyn — Concurrency Correctness)
+
+For concurrent data structure correctness (e.g., if WAFER adopts lock-free buffer pools):
+1. **loom model-checking**: Exhaustive interleaving proof (tests run under `loom` crate)
+2. **Empirical stress tests**: 8 threads × 50K iterations with aliasing detection flags
+
+Use loom for proof of correctness, stress tests for confidence on real hardware.
 
 ---
 

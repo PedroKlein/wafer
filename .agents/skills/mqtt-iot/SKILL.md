@@ -139,6 +139,27 @@ at least 3x your worst-case pipeline latency.
 
 ## Production Hardening
 
+### Shared Connection Pooling (from eKuiper)
+
+eKuiper implements shared MQTT connection pooling across rules: first rule opens
+connection, last one closes (reference-counted SubTopo pool). For WAFER's single-pipeline
+model this isn't needed, but if multi-pipeline support is ever added:
+
+```rust
+// Pattern: reference-counted connection pool
+struct MqttConnectionPool {
+    connections: HashMap<BrokerConfig, Arc<SharedConnection>>,
+}
+
+impl MqttConnectionPool {
+    fn get_or_create(&mut self, config: &BrokerConfig) -> Arc<SharedConnection> {
+        self.connections.entry(config.clone())
+            .or_insert_with(|| Arc::new(SharedConnection::connect(config)))
+            .clone()
+    }
+}
+```
+
 ### TLS/mTLS for Non-Local Brokers
 
 ```rust

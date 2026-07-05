@@ -124,19 +124,39 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 
 ---
 
-## Comparator Positioning
+## Comparator Positioning (Validated by 12-Repo Systematic Review)
 
 | System | Shares With WAFER | Lacks vs WAFER |
 |--------|-------------------|----------------|
-| **eKuiper** | Same HW (RPi), same protocol (MQTT), lightweight | No isolation, no typed contracts, full rule restart |
+| **eKuiper** | Same HW (RPi), same protocol (MQTT), lightweight, goroutine-per-op | No per-operator isolation, no typed contracts, full rule restart |
+| **Torvyn** | Rust+Wasmtime+WIT+typed streams+backpressure | No hot-swap, no IoT protocols, no edge HW benchmarks, single-task model |
+| **Spin** | Component Model, Tokio, InstancePre, Factors, pooling | Serverless (no streaming, no DAG, no backpressure), whole-app reload |
+| **Wassette** | Component Model, deny-by-default, InstancePre, OCI | No streaming, no DAG, no backpressure, atomic replace (no drain) |
+| **Azure IoT Ops** | Wasm+WIT+DAG, same domain, edge IoT | Platform-managed (K8s), linear only, no hot-swap, no standalone |
+| **Fluvio** | Wasm in data path, Rust, streaming | Core modules (not CM), shared Store, no isolation, eventual-consistency reload |
+| **Flow-Like** | Wasm+DAG, AOT caching, epoch+fuel | One-shot workflows (not streaming), no isolation, no hot-swap |
+| **Tremor** | Rust DAG, streaming, backpressure, 10TB/day | No Wasm isolation, no typed plugin contracts, no per-node hot-swap |
+| **Wick** | Wasm components, flow DAG, reactive streams | Custom WasmRS (obsolete), no backpressure, abandoned (single-maintainer risk) |
 | **Node-RED** | Flow DAG, edge deployment, huge ecosystem | Zero isolation (CVE-2025-41656), no typing, JS single-thread |
-| **Azure IoT Operations** | Wasm+WIT+DAG, same domain | No per-operator hot-swap, requires K8s+16GB, closed source |
-| **Torvyn** (2026) | Rust+Wasmtime+WIT+DAG+backpressure | No hot-swap, no IoT protocols, no edge HW benchmarks |
-| **Wick** | Wasm components, flow DAG | Custom WasmRS (not standard WIT), no hot-swap, no edge benchmarks |
-| **Sledge** | Wasm isolation, edge-native | Request/response only, no DAG pipeline, no typed boundaries |
 
-**Uniqueness**: No existing system combines ALL of: per-node WIT-typed isolation + per-node
+**Industry Validation Chain** (12-repo review confirmed):
+1. **Bytecode Alliance (wasmtime)** — Component Model runtime foundation ✓
+2. **Fermyon (Spin)** — Component Model at scale, Factors architecture ✓
+3. **Microsoft (Wassette)** — Security-focused CM, deny-by-default ✓
+4. **Azure (Dataflow Graphs)** — WIT operators in DAG at edge, wasm32-wasip2 ✓
+5. **eKuiper (LF Edge)** — Production edge streaming, published RPi numbers ✓
+
+**Uniqueness confirmed**: No existing system combines ALL of: per-node WIT-typed isolation + per-node
 drain-and-flip hot-swap + bounded backpressure + continuous streaming + measured on ≤4GB ARM.
+
+### Positioning Framing (for Thesis Writing)
+
+- vs eKuiper: "What does per-operator isolation cost?" — not "faster than native"
+- vs Spin: "Spin demonstrates CM viability for serverless; WAFER extends CM to continuous edge streaming"
+- vs Azure: "WAFER provides equivalent data processing as a standalone runtime with explicit backpressure and hot-swap"
+- vs Torvyn: "WAFER adds per-stage fault isolation and IoT-protocol integration"
+- vs Wick (abandoned): validates narrow scope + standard protocols + clear contribution criteria
+- vs Fluvio: validates Wasm-in-data-path at scale; WAFER adds persistent DAG with isolation
 
 ---
 

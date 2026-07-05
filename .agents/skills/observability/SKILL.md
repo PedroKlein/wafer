@@ -96,6 +96,35 @@ pub fn init_tracing(json: bool) {
 - `.with_current_span(true)` in JSON — attaches `node_id` to every event automatically
 - Never `.with_span_list(true)` — creates massive JSON per event with full ancestry
 
+### Future: tracing → OTel Layer (Spin Pattern)
+
+Spin uses `tracing::trace!` with magic prefixes (`counter.`, `histogram.`, `monotonic_counter.`,
+`gauge.`) that a MetricsLayer picks up and exports as OTel metrics. This avoids direct
+opentelemetry SDK calls in application code. Advantage: metrics work even without an OTLP
+collector (just trace logs). Consider adopting when WAFER adds production OTel support.
+
+---
+
+## Three-Level Observability (from Torvyn — Recommended Pattern)
+
+Per-element instrumentation overhead varies by deployment context. Torvyn's three-level
+model with explicit overhead budgets prevents observability from dominating hot-path cost:
+
+| Level | Budget per element | What's Active | Use When |
+|-------|-------------------|---------------|----------|
+| **Off** | 0 | Atomic counters only | Production (max throughput) |
+| **Production** | <500ns | + per-node latency histograms | Production (monitored) |
+| **Diagnostic** | <2μs | + per-message tracing, copy ledger | Debugging, evaluation |
+
+**Implementation pattern**:
+- Pre-allocate all metrics containers (counters, histograms) per node at pipeline setup
+- Hot path only increments existing pre-registered counters (no lock, no allocation)
+- Level switching via `AtomicU8` — checked with `Ordering::Relaxed` (cost: single atomic load)
+- `SpanRingBuffer`: circular buffer of recent spans, exported only post-mortem (zero live overhead)
+
+This directly supports WAFER's thesis evaluation: Off for throughput benchmarks,
+Diagnostic for RQ1 (boundary overhead measurement with CopyLedger).
+
 ---
 
 ## Metrics: The Dual-Registry Pattern
@@ -180,6 +209,48 @@ Buckets should reveal whether overhead is fixed (call boundary) or proportional 
 let wasm_buckets = [0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.05, 0.1];
 // Interpretation: if most samples land in 0.0001-0.001, overhead is <1ms (acceptable)
 ```
+
+**Important (from Spin review)**: Always declare explicit boundaries for non-duration
+histograms. OTel's defaults are tuned for ms-scale durations — metrics on different
+scales (ratios, byte counts) collapse into one bucket with default boundaries.
+
+### Per-Node Metric Labels (eKuiper-Compatible for Thesis Comparison)
+
+eKuiper's StatManager labels: `rule_id`, `op_type`, `op_id`, `instance_id`.
+WAFER should use compatible labels for apples-to-apples comparison:
+
+```rust
+#[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
+struct NodeLabels {
+    node_id: String,       // maps to eKuiper's op_id
+    node_type: String,     // maps to eKuiper's op_type
+    pipeline: String,      // maps to eKuiper's rule_id
+}
+```
+
+### CallHook for Per-Invocation CPU Time (from Spin + Wasmtime)
+
+Wasmtime's `CallHook::CallingWasm | CallingHost` transitions record timestamps.
+This measures actual guest execution time, excluding host-side I/O:
+
+```rust
+store.call_hook(|_store, kind| {
+    match kind {
+        CallHook::CallingWasm => { /* start timer */ }
+        CallHook::ReturningFromWasm => { /* record elapsed as wasm_cpu_time */ }
+        _ => {}
+    }
+    Ok(())
+});
+```
+
+Directly adoptable for per-message instrumentation in WAFER's RQ1 evaluation.
+
+### Relaxed Ordering for Monotonic Counters
+
+From Fluvio + Torvyn: `AtomicU64` with `Ordering::Relaxed` is acceptable for
+observability counters that are monotonic and only read for approximate values.
+The possible reordering across metrics is irrelevant for monitoring dashboards.
 
 ---
 
