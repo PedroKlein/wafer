@@ -126,3 +126,4 @@ mqtt/log/
 docker-compose.override.yml
 
 /.delegation-runner/artifacts
+/.pi
