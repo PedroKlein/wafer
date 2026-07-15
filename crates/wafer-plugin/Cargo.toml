@@ -1,0 +1,20 @@
+[package]
+name = "wafer-plugin"
+description = "Guest SDK for WAFER pipeline plugins (wasm32-wasip2 compatible)"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+serde = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true
