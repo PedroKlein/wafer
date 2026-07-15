@@ -102,11 +102,11 @@ impl NewPipelineOrchestrator {
         for bundle in bundles {
             let node_id = bundle.node_id.clone();
             let cancel = bundle.cancel;
-            let state = bundle.state;
-            let metrics = bundle.metrics;
+            let _state = bundle.state;
+            let _metrics = bundle.metrics;
 
             match bundle.kind {
-                NodeBundleKind::Transform { receiver, senders, swap_rx, policy } => {
+                NodeBundleKind::Transform { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
                     self.tasks.spawn(async move {
                         // WasmTransformNode will be created by the orchestrator before spawn
                         // in the full integration. For now, the runner loop needs an actual
@@ -117,25 +117,25 @@ impl NewPipelineOrchestrator {
                         cancel.cancelled().await;
                     });
                 }
-                NodeBundleKind::Filter { receiver, senders, swap_rx, policy } => {
+                NodeBundleKind::Filter { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
                     self.tasks.spawn(async move {
                         tracing::debug!(node = %node_id, "Filter task placeholder spawned");
                         cancel.cancelled().await;
                     });
                 }
-                NodeBundleKind::Router { receiver, senders, swap_rx, policy } => {
+                NodeBundleKind::Router { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
                     self.tasks.spawn(async move {
                         tracing::debug!(node = %node_id, "Router task placeholder spawned");
                         cancel.cancelled().await;
                     });
                 }
-                NodeBundleKind::Source { senders } => {
+                NodeBundleKind::Source { senders: _senders } => {
                     self.tasks.spawn(async move {
                         tracing::debug!(node = %node_id, "Source task placeholder spawned");
                         cancel.cancelled().await;
                     });
                 }
-                NodeBundleKind::Sink { receiver } => {
+                NodeBundleKind::Sink { receiver: _receiver } => {
                     self.tasks.spawn(async move {
                         tracing::debug!(node = %node_id, "Sink task placeholder spawned");
                         cancel.cancelled().await;

@@ -58,7 +58,6 @@ impl WaferEngine {
         config.consume_fuel(true);
         config.wasm_component_model(true);
         config.epoch_interruption(true);
-        config.async_support(true);
 
         let engine =
             Engine::new(&config).map_err(|e| WaferError::PluginInit { message: e.to_string() })?;

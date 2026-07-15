@@ -11,9 +11,6 @@ use std::sync::Arc;
 use wasmtime::Store;
 
 use crate::engine::WaferEngine;
-use crate::engine::bindings::transform_node::{TransformNode, TransformNodePre};
-use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
-use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::state::WaferState;
 use crate::engine::Capabilities;
 use crate::error::{Result, WaferError};
@@ -127,6 +124,7 @@ pub async fn prepare_router_swap(
 // Legacy hot-swap coordinator — feature-gated for old tests
 // =============================================================================
 
+#[cfg(feature = "phase2-tests")]
 #[cfg(feature = "phase2-tests")]
 pub use legacy::*;
 

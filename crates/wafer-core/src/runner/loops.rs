@@ -21,13 +21,12 @@ use tokio::sync::Mutex;
 use tokio::time::{MissedTickBehavior, interval};
 use tokio_util::sync::CancellationToken;
 
-use futures_util::stream::StreamExt;
-
 use crate::node::{AnyNode, NodeStateTracker, Router, Sink, Source, Transform};
 use crate::queue::{QueueReceiver, RuntimeEnvelope};
 
 use crate::orchestrator::{ControlState, EdgeSendInfo};
 
+#[expect(dead_code, reason = "legacy type alias kept for Phase 2 compatibility")]
 type PortedEnvelopeStream =
     Pin<Box<dyn futures_util::Stream<Item = (String, RuntimeEnvelope)> + Send>>;
 

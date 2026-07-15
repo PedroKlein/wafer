@@ -14,6 +14,8 @@ http-api = ["axum", "tower-http", "prometheus-client", "sysinfo"]
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wasmtime-wasi-nn/onnx-cuda"]
+# Legacy test support — enables old runner/orchestrator tests from Phase 2
+phase2-tests = []
 
 [dependencies]
 wafer-types = { workspace = true }

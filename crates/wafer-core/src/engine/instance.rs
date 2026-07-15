@@ -33,7 +33,7 @@ impl TransformInstance {
     /// # Errors
     ///
     /// Returns `WaferError` if the Wasm call traps or returns an error.
-    pub async fn call_process(&mut self, envelope: &RuntimeEnvelope) -> Result<Vec<u8>> {
+    pub async fn call_process(&mut self, _envelope: &RuntimeEnvelope) -> Result<Vec<u8>> {
         // Phase 2 implements actual WIT bindgen call here
         let _ = &self.store;
         Err(WaferError::Runtime("transform instance pending Phase 2 rewrite".into()))

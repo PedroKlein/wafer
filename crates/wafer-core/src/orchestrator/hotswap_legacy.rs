@@ -89,6 +89,7 @@ impl From<SwapError> for WaferError {
 pub struct HotSwapCoordinator {
     node_id: String,
     new_wasm_path: PathBuf,
+    #[expect(dead_code, reason = "planned for use in instantiation after swap")]
     capabilities: Capabilities,
     drain_timeout: Duration,
     old_tracker: Arc<NodeStateTracker>,

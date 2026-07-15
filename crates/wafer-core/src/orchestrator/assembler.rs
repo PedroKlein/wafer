@@ -150,7 +150,7 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Re
         })?;
 
     let engine = Arc::clone(&ctx.engine);
-    let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
+    let _component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
     let instance = RouterInstance;
 
