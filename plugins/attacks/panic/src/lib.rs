@@ -1,3 +1,6 @@
+//! Attack scenario S6: Panic (abort).
+//! Expected runtime behavior: Trap (unreachable instruction) — panic compiles to abort in Wasm.
+
 wit_bindgen::generate!({
     path: "../../../wit/node",
     world: "transform-node",
@@ -13,8 +16,10 @@ impl exports::pipeline::node::lifecycle::Guest for AttackPlugin {
 }
 
 impl exports::pipeline::node::transform::Guest for AttackPlugin {
-    fn process(_input: exports::pipeline::node::transform::Message) -> Result<exports::pipeline::node::transform::OutputMessage, exports::pipeline::node::transform::ProcessError> {
-        unimplemented!()
+    fn process(
+        _input: exports::pipeline::node::transform::Message,
+    ) -> Result<exports::pipeline::node::transform::OutputMessage, exports::pipeline::node::transform::ProcessError> {
+        panic!("malicious payload triggers panic");
     }
 }
 

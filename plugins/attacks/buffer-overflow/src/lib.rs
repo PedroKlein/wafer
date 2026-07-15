@@ -1,3 +1,6 @@
+//! Attack scenario S1: Buffer overflow attempt.
+//! Expected runtime behavior: Trap (out-of-bounds memory access).
+
 wit_bindgen::generate!({
     path: "../../../wit/node",
     world: "transform-node",
@@ -13,8 +16,17 @@ impl exports::pipeline::node::lifecycle::Guest for AttackPlugin {
 }
 
 impl exports::pipeline::node::transform::Guest for AttackPlugin {
-    fn process(_input: exports::pipeline::node::transform::Message) -> Result<exports::pipeline::node::transform::OutputMessage, exports::pipeline::node::transform::ProcessError> {
-        unimplemented!()
+    fn process(
+        _input: exports::pipeline::node::transform::Message,
+    ) -> Result<exports::pipeline::node::transform::OutputMessage, exports::pipeline::node::transform::ProcessError> {
+        // Attempt to write past allocation using unsafe pointer arithmetic
+        let v: Vec<u8> = Vec::with_capacity(16);
+        let ptr = v.as_ptr() as *mut u8;
+        unsafe {
+            // Write far beyond the allocated capacity into unmapped linear memory
+            core::ptr::write(ptr.add(1_000_000), 0xFF);
+        }
+        unreachable!()
     }
 }
 
