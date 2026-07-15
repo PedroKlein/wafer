@@ -157,7 +157,7 @@ impl WaferEngine {
     /// both of which are backed by the same `WaferState` trait impls.
     fn build_linker(&self) -> Result<wasmtime::component::Linker<WaferState>> {
         let mut linker = wasmtime::component::Linker::new(&self.engine);
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
         Ok(linker)
     }

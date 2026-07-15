@@ -16,6 +16,8 @@ http-api = ["axum", "tower-http", "prometheus-client", "sysinfo"]
 cuda = ["wasmtime-wasi-nn/onnx-cuda"]
 # Legacy test support — enables old runner/orchestrator tests from Phase 2
 phase2-tests = []
+# Enables integration tests that require pre-built .wasm plugin artifacts
+integration-tests = []
 
 [dependencies]
 wafer-types = { workspace = true }
