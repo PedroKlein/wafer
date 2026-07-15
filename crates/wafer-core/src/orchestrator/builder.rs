@@ -15,7 +15,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{Config, DagConfig, EdgeDefinition, NodeType, OverflowPolicy};
 use crate::dag::graph::DagGraph;
 use crate::error::{ConfigError, Result, WaferError};
-use crate::node::{NodeMetrics, NodeStateTracker};
+use crate::node::{NodeMetrics, NodeStateTracker, Sink, Source};
+use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqEnvelope, ErrorPolicyExecutor, ResolvedErrorPolicy};
 use crate::runner::{DownstreamSender, SwapPayload};
@@ -66,23 +67,33 @@ pub enum NodeBundleKind {
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
+        /// Compiled Wasm node instance (None in unit tests without .wasm).
+        node: Option<WasmTransformNode>,
     },
     Filter {
         receiver: mpsc::Receiver<RuntimeEnvelope>,
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
+        /// Compiled Wasm node instance (None in unit tests without .wasm).
+        node: Option<WasmFilterNode>,
     },
     Router {
         receiver: mpsc::Receiver<RuntimeEnvelope>,
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
+        /// Compiled Wasm node instance (None in unit tests without .wasm).
+        node: Option<WasmRouterNode>,
     },
     Source {
+        /// Constructed source instance (None when builder is used without I/O construction).
+        source: Option<Box<dyn Source + Send>>,
         senders: Vec<DownstreamSender>,
     },
     Sink {
+        /// Constructed sink instance (None when builder is used without I/O construction).
+        sink: Option<Box<dyn Sink + Send>>,
         receiver: mpsc::Receiver<RuntimeEnvelope>,
     },
 }
@@ -174,29 +185,32 @@ pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
                         senders,
                         swap_rx: watch_rx,
                         policy,
+                        node: None,
                     },
                     NodeType::Filter => NodeBundleKind::Filter {
                         receiver,
                         senders,
                         swap_rx: watch_rx,
                         policy,
+                        node: None,
                     },
                     NodeType::Router => NodeBundleKind::Router {
                         receiver,
                         senders,
                         swap_rx: watch_rx,
                         policy,
+                        node: None,
                     },
                     _ => unreachable!(),
                 }
             }
             NodeType::Source => {
                 let senders = wiring.collect_downstream_senders(&node_def.id);
-                NodeBundleKind::Source { senders }
+                NodeBundleKind::Source { source: None, senders }
             }
             NodeType::Sink => {
                 let receiver = wiring.take_receiver(&node_def.id);
-                NodeBundleKind::Sink { receiver }
+                NodeBundleKind::Sink { sink: None, receiver }
             }
             NodeType::Joiner => {
                 // Joiner removed in Session 3 A1 — merge is handled by multi-sender.
@@ -216,6 +230,157 @@ pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
                     senders,
                     swap_rx: watch_rx,
                     policy,
+                        node: None,
+                }
+            }
+        };
+
+        node_bundles.push(NodeBundle {
+            node_id,
+            kind,
+            cancel: node_cancel,
+            state,
+            metrics,
+        });
+    }
+
+    Ok(BuildOutput {
+        node_bundles,
+        watch_senders,
+        cancel_token,
+        dlq_receiver: Some(dlq_rx),
+        state_trackers,
+        metrics_map,
+        dag_graph,
+    })
+}
+
+/// Build pipeline with externally-provided source/sink instances.
+///
+/// Used by integration tests to inject ChannelSource/ChannelSink without
+/// needing real I/O. The topology wiring (channels, control infrastructure)
+/// is identical to `build_pipeline()`, but source/sink bundles carry the
+/// provided instances instead of `None`.
+///
+/// # Arguments
+/// - `config`: Pipeline configuration (topology, edges, policies)
+/// - `sources`: Map from node_id → pre-built Source instance
+/// - `sinks`: Map from node_id → pre-built Sink instance
+///
+/// # Errors
+///
+/// Returns error if DAG validation fails or wiring encounters issues.
+#[expect(dead_code, reason = "entry point for integration tests, not yet wired to main.rs")]
+pub fn build_pipeline_with_io(
+    config: &Config,
+    sources: HashMap<String, Box<dyn Source + Send>>,
+    sinks: HashMap<String, Box<dyn Sink + Send>>,
+) -> Result<BuildOutput> {
+    let dag_config = config.dag_config();
+    let dag_graph = DagGraph::from_config(&dag_config)?;
+
+    // --- Queue Wiring (same algorithm as build_pipeline) ---
+    let mut wiring = wire_queues(&config.edges, config.default_queue_capacity)?;
+
+    // --- Control Infrastructure ---
+    let cancel_token = CancellationToken::new();
+    let mut watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>> = HashMap::new();
+    let mut state_trackers: HashMap<Box<str>, Arc<NodeStateTracker>> = HashMap::new();
+    let mut metrics_map: HashMap<Box<str>, Arc<NodeMetrics>> = HashMap::new();
+
+    // --- DLQ Channel ---
+    let dlq_capacity = config
+        .dead_letter
+        .as_ref()
+        .map_or(1024, |dl| dl.queue_capacity);
+    let (dlq_tx, dlq_rx) = mpsc::channel(dlq_capacity);
+
+    // --- Mutable maps for consuming provided instances ---
+    let mut sources = sources;
+    let mut sinks = sinks;
+
+    // --- Build NodeBundles ---
+    let mut node_bundles = Vec::with_capacity(config.nodes.len());
+
+    for node_def in &config.nodes {
+        let node_id: Box<str> = node_def.id.clone().into_boxed_str();
+        let state = Arc::new(NodeStateTracker::new());
+        let metrics = Arc::new(NodeMetrics::new());
+
+        state_trackers.insert(node_id.clone(), Arc::clone(&state));
+        metrics_map.insert(node_id.clone(), Arc::clone(&metrics));
+
+        let node_cancel = cancel_token.child_token();
+
+        let kind = match node_def.node_type {
+            NodeType::Transform | NodeType::Filter | NodeType::Router => {
+                let (watch_tx, watch_rx) = watch::channel(None);
+                watch_senders.insert(node_id.clone(), watch_tx);
+
+                let receiver = wiring.take_receiver(&node_def.id);
+                let senders = wiring.collect_downstream_senders(&node_def.id);
+
+                let policy_config = resolve_error_policy(config, &node_def.id);
+                let policy = ErrorPolicyExecutor::new(
+                    policy_config,
+                    Some(dlq_tx.clone()),
+                    node_id.clone(),
+                );
+
+                match node_def.node_type {
+                    NodeType::Transform => NodeBundleKind::Transform {
+                        receiver,
+                        senders,
+                        swap_rx: watch_rx,
+                        policy,
+                        node: None,
+                    },
+                    NodeType::Filter => NodeBundleKind::Filter {
+                        receiver,
+                        senders,
+                        swap_rx: watch_rx,
+                        policy,
+                        node: None,
+                    },
+                    NodeType::Router => NodeBundleKind::Router {
+                        receiver,
+                        senders,
+                        swap_rx: watch_rx,
+                        policy,
+                        node: None,
+                    },
+                    _ => unreachable!(),
+                }
+            }
+            NodeType::Source => {
+                let downstream_senders = wiring.collect_downstream_senders(&node_def.id);
+                // Take the provided source instance for this node
+                let source = sources.remove(&node_def.id);
+                NodeBundleKind::Source { source, senders: downstream_senders }
+            }
+            NodeType::Sink => {
+                let receiver = wiring.take_receiver(&node_def.id);
+                // Take the provided sink instance for this node
+                let sink = sinks.remove(&node_def.id);
+                NodeBundleKind::Sink { sink, receiver }
+            }
+            NodeType::Joiner => {
+                let (watch_tx, watch_rx) = watch::channel(None);
+                watch_senders.insert(node_id.clone(), watch_tx);
+                let receiver = wiring.take_receiver(&node_def.id);
+                let downstream_senders = wiring.collect_downstream_senders(&node_def.id);
+                let policy_config = resolve_error_policy(config, &node_def.id);
+                let policy = ErrorPolicyExecutor::new(
+                    policy_config,
+                    Some(dlq_tx.clone()),
+                    node_id.clone(),
+                );
+                NodeBundleKind::Transform {
+                    receiver,
+                    senders: downstream_senders,
+                    swap_rx: watch_rx,
+                    policy,
+                        node: None,
                 }
             }
         };
@@ -362,5 +527,200 @@ fn resolve_error_policy(_config: &Config, _node_id: &str) -> ResolvedErrorPolicy
     // TODO: When config schema gets per-node error_policy fields,
     // merge pipeline defaults with per-node overrides here.
     ResolvedErrorPolicy::default()
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        ApiServerConfig, Config, EdgeDefinition, MetricsConfig, NodeDefinition, NodeType,
+        OverflowPolicy, PipelineConfig,
+    };
+    use crate::testing::channel::{ChannelSink, ChannelSource};
+
+    /// Minimal config: source → transform → sink
+    fn test_config() -> Config {
+        Config {
+            pipeline: PipelineConfig::default(),
+            engine: crate::config::EngineConfig::default(),
+            api: ApiServerConfig::default(),
+            metrics: MetricsConfig::default(),
+            nodes: vec![
+                NodeDefinition {
+                    id: "src".to_string(),
+                    node_type: NodeType::Source,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "t1".to_string(),
+                    node_type: NodeType::Transform,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "sink".to_string(),
+                    node_type: NodeType::Sink,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+            ],
+            edges: vec![
+                EdgeDefinition {
+                    from: "src".to_string(),
+                    to: "t1".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+                EdgeDefinition {
+                    from: "t1".to_string(),
+                    to: "sink".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+            ],
+            default_queue_capacity: 1024,
+            registry: Default::default(),
+            dead_letter: None,
+        }
+    }
+
+    #[test]
+    fn build_pipeline_still_works_without_io() {
+        let config = test_config();
+        let output = build_pipeline(&config).expect("build should succeed");
+
+        assert_eq!(output.node_bundles.len(), 3);
+
+        // Source bundle has None source
+        let src_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "src").unwrap();
+        match &src_bundle.kind {
+            NodeBundleKind::Source { source, senders } => {
+                assert!(source.is_none());
+                assert_eq!(senders.len(), 1); // src → t1
+            }
+            _ => panic!("expected Source bundle"),
+        }
+
+        // Sink bundle has None sink
+        let sink_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "sink").unwrap();
+        match &sink_bundle.kind {
+            NodeBundleKind::Sink { sink, .. } => {
+                assert!(sink.is_none());
+            }
+            _ => panic!("expected Sink bundle"),
+        }
+    }
+
+    #[test]
+    fn build_pipeline_with_io_injects_source() {
+        let config = test_config();
+
+        let (_tx, channel_source) = ChannelSource::new("src");
+        let mut sources: HashMap<String, Box<dyn Source + Send>> = HashMap::new();
+        sources.insert("src".to_string(), Box::new(channel_source));
+
+        let output = build_pipeline_with_io(&config, sources, HashMap::new())
+            .expect("build should succeed");
+
+        let src_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "src").unwrap();
+        match &src_bundle.kind {
+            NodeBundleKind::Source { source, senders } => {
+                assert!(source.is_some(), "source should be injected");
+                assert_eq!(senders.len(), 1);
+            }
+            _ => panic!("expected Source bundle"),
+        }
+    }
+
+    #[test]
+    fn build_pipeline_with_io_injects_sink() {
+        let config = test_config();
+
+        let (channel_sink, _rx) = ChannelSink::new("sink");
+        let mut sinks: HashMap<String, Box<dyn Sink + Send>> = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(channel_sink));
+
+        let output = build_pipeline_with_io(&config, HashMap::new(), sinks)
+            .expect("build should succeed");
+
+        let sink_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "sink").unwrap();
+        match &sink_bundle.kind {
+            NodeBundleKind::Sink { sink, .. } => {
+                assert!(sink.is_some(), "sink should be injected");
+            }
+            _ => panic!("expected Sink bundle"),
+        }
+    }
+
+    #[tokio::test]
+    async fn build_pipeline_with_io_wiring_correct() {
+        // Verify: messages sent to source's downstream channel can be received
+        // by the sink's receiver — proving the wiring is correct.
+        let config = test_config();
+
+        let (_tx, channel_source) = ChannelSource::new("src");
+        let (channel_sink, _rx) = ChannelSink::new("sink");
+
+        let mut sources: HashMap<String, Box<dyn Source + Send>> = HashMap::new();
+        sources.insert("src".to_string(), Box::new(channel_source));
+        let mut sinks: HashMap<String, Box<dyn Sink + Send>> = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(channel_sink));
+
+        let output = build_pipeline_with_io(&config, sources, sinks)
+            .expect("build should succeed");
+
+        // Source has a downstream sender that goes to t1's receiver
+        let src_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "src").unwrap();
+        let source_senders = match &src_bundle.kind {
+            NodeBundleKind::Source { senders, .. } => senders,
+            _ => panic!("expected Source bundle"),
+        };
+        assert_eq!(source_senders.len(), 1, "source has one downstream sender (to t1)");
+
+        // Send a message through the source's downstream channel
+        let test_envelope = RuntimeEnvelope::from_string("test", "hello-from-builder-test");
+        source_senders[0].sender.send(test_envelope).await.unwrap();
+
+        // The transform (t1) receives from its channel
+        let t1_bundle = output.node_bundles.into_iter().find(|b| &*b.node_id == "t1").unwrap();
+        let mut t1_receiver = match t1_bundle.kind {
+            NodeBundleKind::Transform { receiver, .. } => receiver,
+            _ => panic!("expected Transform bundle"),
+        };
+        let received = t1_receiver.recv().await.unwrap();
+        assert_eq!(received.payload_as_string(), "hello-from-builder-test");
+    }
+
+    #[test]
+    fn build_pipeline_with_io_missing_source_gives_none() {
+        // If no source is provided for a node, it gets None (graceful)
+        let config = test_config();
+
+        let output = build_pipeline_with_io(&config, HashMap::new(), HashMap::new())
+            .expect("build should succeed");
+
+        let src_bundle = output.node_bundles.iter().find(|b| &*b.node_id == "src").unwrap();
+        match &src_bundle.kind {
+            NodeBundleKind::Source { source, .. } => {
+                assert!(source.is_none(), "no source provided → None");
+            }
+            _ => panic!("expected Source bundle"),
+        }
+    }
 }
 

@@ -23,6 +23,11 @@ use wafer_types::NodeState;
 use crate::orchestrator::builder::{BuildOutput, NodeBundleKind};
 use crate::runner::SwapPayload;
 use crate::runner::error_policy::DlqEnvelope;
+use crate::runner::source::run_source_loop;
+use crate::runner::sink::run_sink_loop;
+use crate::runner::transform::run_transform_loop;
+use crate::runner::filter::run_filter_loop;
+use crate::runner::router::run_router_loop;
 
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
@@ -95,6 +100,9 @@ impl NewPipelineOrchestrator {
     }
 
     /// Spawn all node bundles into independent tokio tasks via JoinSet.
+    ///
+    /// Source/Sink: init() is called here before spawning the adapter loop.
+    /// Wasm nodes: spawned with real runner loops when node instance is present.
     fn spawn_bundles(
         &mut self,
         bundles: Vec<crate::orchestrator::builder::NodeBundle>,
@@ -102,44 +110,92 @@ impl NewPipelineOrchestrator {
         for bundle in bundles {
             let node_id = bundle.node_id.clone();
             let cancel = bundle.cancel;
-            let _state = bundle.state;
-            let _metrics = bundle.metrics;
+            let state = bundle.state;
+            let metrics = bundle.metrics;
 
             match bundle.kind {
-                NodeBundleKind::Transform { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
-                    self.tasks.spawn(async move {
-                        // WasmTransformNode will be created by the orchestrator before spawn
-                        // in the full integration. For now, the runner loop needs an actual
-                        // WasmTransformNode which requires a compiled component.
-                        // This is wired in the full pipeline startup path.
-                        tracing::debug!(node = %node_id, "Transform task placeholder spawned");
-                        // In full integration: run_transform_loop(transform, receiver, senders, swap_rx, policy, cancel, state, metrics).await
-                        cancel.cancelled().await;
-                    });
+                NodeBundleKind::Transform { receiver, senders, swap_rx, policy, node } => {
+                    if let Some(transform) = node {
+                        self.tasks.spawn(async move {
+                            run_transform_loop(
+                                transform, receiver, senders, swap_rx,
+                                policy, cancel, state, metrics,
+                            ).await;
+                        });
+                    } else {
+                        // No compiled Wasm node — await cancellation.
+                        // This path is used in unit tests without .wasm fixtures.
+                        tracing::debug!(node = %node_id, "Transform task: no Wasm instance, awaiting cancel");
+                        self.tasks.spawn(async move {
+                            cancel.cancelled().await;
+                        });
+                    }
                 }
-                NodeBundleKind::Filter { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
-                    self.tasks.spawn(async move {
-                        tracing::debug!(node = %node_id, "Filter task placeholder spawned");
-                        cancel.cancelled().await;
-                    });
+                NodeBundleKind::Filter { receiver, senders, swap_rx, policy, node } => {
+                    if let Some(filter) = node {
+                        self.tasks.spawn(async move {
+                            run_filter_loop(
+                                filter, receiver, senders, swap_rx,
+                                policy, cancel, state, metrics,
+                            ).await;
+                        });
+                    } else {
+                        tracing::debug!(node = %node_id, "Filter task: no Wasm instance, awaiting cancel");
+                        self.tasks.spawn(async move {
+                            cancel.cancelled().await;
+                        });
+                    }
                 }
-                NodeBundleKind::Router { receiver: _receiver, senders: _senders, swap_rx: _swap_rx, policy: _policy } => {
-                    self.tasks.spawn(async move {
-                        tracing::debug!(node = %node_id, "Router task placeholder spawned");
-                        cancel.cancelled().await;
-                    });
+                NodeBundleKind::Router { receiver, senders, swap_rx, policy, node } => {
+                    if let Some(router) = node {
+                        self.tasks.spawn(async move {
+                            run_router_loop(
+                                router, receiver, senders, swap_rx,
+                                policy, cancel, state, metrics,
+                            ).await;
+                        });
+                    } else {
+                        tracing::debug!(node = %node_id, "Router task: no Wasm instance, awaiting cancel");
+                        self.tasks.spawn(async move {
+                            cancel.cancelled().await;
+                        });
+                    }
                 }
-                NodeBundleKind::Source { senders: _senders } => {
-                    self.tasks.spawn(async move {
-                        tracing::debug!(node = %node_id, "Source task placeholder spawned");
-                        cancel.cancelled().await;
-                    });
+                NodeBundleKind::Source { source, senders } => {
+                    if let Some(mut source) = source {
+                        // Init source before spawning its loop
+                        self.tasks.spawn(async move {
+                            if let Err(e) = source.init().await {
+                                tracing::error!(node = %node_id, error = %e, "source init failed");
+                                return;
+                            }
+                            run_source_loop(source, senders, cancel, state, metrics).await;
+                        });
+                    } else {
+                        // No source instance (unit test without I/O construction)
+                        tracing::debug!(node = %node_id, "Source task: no instance, awaiting cancel");
+                        self.tasks.spawn(async move {
+                            cancel.cancelled().await;
+                        });
+                    }
                 }
-                NodeBundleKind::Sink { receiver: _receiver } => {
-                    self.tasks.spawn(async move {
-                        tracing::debug!(node = %node_id, "Sink task placeholder spawned");
-                        cancel.cancelled().await;
-                    });
+                NodeBundleKind::Sink { sink, receiver } => {
+                    if let Some(mut sink) = sink {
+                        // Init sink before spawning its loop
+                        self.tasks.spawn(async move {
+                            if let Err(e) = sink.init().await {
+                                tracing::error!(node = %node_id, error = %e, "sink init failed");
+                                return;
+                            }
+                            run_sink_loop(sink, receiver, cancel, state, metrics).await;
+                        });
+                    } else {
+                        // No sink instance (unit test without I/O construction)
+                        tracing::debug!(node = %node_id, "Sink task: no instance, awaiting cancel");
+                        self.tasks.spawn(async move {
+                            cancel.cancelled().await;
+                        });
+                    }
                 }
             }
         }
@@ -324,6 +380,9 @@ async fn run_dlq_sink(
 mod tests {
     use super::*;
     use crate::orchestrator::builder::build_pipeline;
+    use crate::orchestrator::builder::build_pipeline_with_io;
+    use crate::testing::channel::{ChannelSource, ChannelSink};
+    use crate::queue::RuntimeEnvelope;
     use crate::config::{
         Config, EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy,
         PipelineConfig, ApiServerConfig, MetricsConfig,
@@ -495,5 +554,96 @@ mod tests {
         assert!(!orch.watch_senders.contains_key("sink"));
 
         orch.shutdown().await.expect("shutdown");
+    }
+
+    #[tokio::test]
+    async fn test_source_sink_real_loops_process_messages() {
+        // Build a source → sink config (no transform to avoid needing Wasm)
+        let config = Config {
+            pipeline: PipelineConfig::default(),
+            engine: crate::config::EngineConfig::default(),
+            api: ApiServerConfig::default(),
+            metrics: MetricsConfig::default(),
+            nodes: vec![
+                NodeDefinition {
+                    id: "src".to_string(),
+                    node_type: NodeType::Source,
+                    source_type: Some("channel".to_string()),
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "sink".to_string(),
+                    node_type: NodeType::Sink,
+                    source_type: None,
+                    sink_type: Some("channel".to_string()),
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+            ],
+            edges: vec![
+                EdgeDefinition {
+                    from: "src".to_string(),
+                    to: "sink".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+            ],
+            default_queue_capacity: 1024,
+            registry: Default::default(),
+            dead_letter: None,
+        };
+
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+
+        // Create channel-based source and sink
+        let (source_tx, source) = ChannelSource::new("src");
+        let (sink, mut sink_rx) = ChannelSink::new("sink");
+
+        let mut sources = HashMap::new();
+        sources.insert("src".to_string(), Box::new(source) as Box<dyn crate::node::Source + Send>);
+        let mut sinks = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(sink) as Box<dyn crate::node::Sink + Send>);
+
+        let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
+        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        assert_eq!(orch.task_count(), 2);
+
+        // Send messages through the source
+        for i in 0..5 {
+            source_tx
+                .send(RuntimeEnvelope::from_string("test", format!("msg-{i}")))
+                .await
+                .unwrap();
+        }
+        // Signal EOF
+        drop(source_tx);
+
+        // Receive messages from the sink
+        let mut received = Vec::new();
+        let deadline = tokio::time::sleep(Duration::from_secs(2));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut deadline => panic!("timeout waiting for sink messages"),
+                msg = sink_rx.recv() => match msg {
+                    Some(env) => received.push(env),
+                    None => break,
+                }
+            }
+        }
+
+        assert_eq!(received.len(), 5);
+        for (i, env) in received.iter().enumerate() {
+            assert_eq!(env.payload_as_string(), format!("msg-{i}"));
+        }
+
+        orch.shutdown().await.expect("shutdown");
+        assert!(!orch.is_running());
     }
 }
