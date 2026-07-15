@@ -136,8 +136,9 @@ impl PipelineOrchestrator {
                     crate::config::NodeType::Source => NodeType::Source,
                     crate::config::NodeType::Transform => NodeType::Transform,
                     crate::config::NodeType::Router => NodeType::Router,
-                    crate::config::NodeType::Joiner => NodeType::Joiner,
                     crate::config::NodeType::Sink => NodeType::Sink,
+                    crate::config::NodeType::Filter => NodeType::Transform,
+                    crate::config::NodeType::Joiner => NodeType::Source,
                 };
 
                 let swappable = matches!(node_type, NodeType::Transform);

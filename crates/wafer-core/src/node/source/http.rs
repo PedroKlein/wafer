@@ -255,7 +255,7 @@ async fn handle_request(
         }
     };
 
-    let envelope = RuntimeEnvelope::new(source_id, body_bytes);
+    let envelope = RuntimeEnvelope::new(source_id, bytes::Bytes::from(body_bytes));
 
     if tx.send(envelope).await.is_err() {
         return Ok(hyper::Response::builder()

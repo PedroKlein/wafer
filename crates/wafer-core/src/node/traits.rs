@@ -128,14 +128,3 @@ pub trait Router: Lifecycle {
     ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>>;
 }
 
-/// Joiner node trait for N→1 merge operations.
-pub trait Joiner: Lifecycle {
-    fn input_ports(&self) -> Vec<String>;
-
-    /// Process a message arriving on a specific port.
-    fn process(
-        &mut self,
-        port: &str,
-        envelope: RuntimeEnvelope,
-    ) -> Pin<Box<dyn Future<Output = Result<ProcessResult>> + Send + '_>>;
-}

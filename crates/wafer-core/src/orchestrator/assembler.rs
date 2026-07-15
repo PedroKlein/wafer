@@ -8,8 +8,8 @@ use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefini
 use crate::engine::{TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
-    AnyNode, FileSink, FileSource, HttpSink, HttpSource, JoinerInstance, MqttSink, MqttSource,
-    NodeConfig, RouterInstance, Sink, StdinSource, StdoutSink, WasmJoiner, WasmRouter,
+    AnyNode, FileSink, FileSource, HttpSink, HttpSource, MqttSink, MqttSource,
+    NodeConfig, RouterInstance, Sink, StdinSource, StdoutSink, WasmRouter,
     WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
@@ -47,7 +47,8 @@ pub async fn create_node(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> 
         NodeType::Transform => create_transform(node_def, ctx).await,
         NodeType::Sink => create_sink(node_def),
         NodeType::Router => create_router(node_def, ctx).await,
-        NodeType::Joiner => create_joiner(node_def, ctx).await,
+        NodeType::Filter => create_transform(node_def, ctx).await,
+        NodeType::Joiner => Err(WaferError::Runtime("joiner removed".into())),
     }
 }
 
@@ -128,7 +129,7 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut NodeAssembler) ->
     let engine = Arc::clone(&ctx.engine);
     let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
-    let instance = TransformInstance::new(&engine, &component, node_def.capabilities).await?;
+    let instance = TransformInstance::new(&engine, &component).await?;
 
     let config_str = toml::to_string(&node_def.config)
         .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -151,7 +152,7 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Re
     let engine = Arc::clone(&ctx.engine);
     let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
 
-    let instance = RouterInstance::new(&engine, &component, node_def.capabilities).await?;
+    let instance = RouterInstance;
 
     let config_str = toml::to_string(&node_def.config)
         .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
@@ -162,28 +163,6 @@ async fn create_router(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Re
     Ok(AnyNode::from_router(router))
 }
 
-async fn create_joiner(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
-    let plugin_config: PluginNodeConfig =
-        node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
-            WaferError::Config(ConfigError::Message(format!(
-                "failed to parse joiner '{}' config: {}",
-                node_def.id, e
-            )))
-        })?;
-
-    let engine = Arc::clone(&ctx.engine);
-    let component = resolve_and_load_plugin(&node_def.id, &plugin_config, &engine, ctx).await?;
-
-    let instance = JoinerInstance::new(&engine, &component, node_def.capabilities).await?;
-
-    let config_str = toml::to_string(&node_def.config)
-        .map_err(|e| WaferError::Config(ConfigError::Message(e.to_string())))?;
-    let node_config =
-        NodeConfig::new(&node_def.id, "joiner").with_config_bytes(config_str.into_bytes());
-
-    let joiner = WasmJoiner::new(engine, instance, node_config);
-    Ok(AnyNode::from_joiner(joiner))
-}
 
 async fn resolve_and_load_plugin(
     node_id: &str,

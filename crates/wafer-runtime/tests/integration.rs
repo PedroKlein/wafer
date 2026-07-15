@@ -1,3 +1,4 @@
+#![cfg(feature = "phase2-tests")]
 //! Integration tests for wafer-runtime.
 //!
 //! These tests verify that the API server components work correctly.

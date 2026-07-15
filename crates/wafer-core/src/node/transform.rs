@@ -1,14 +1,14 @@
-//! WASM Transform node implementation.
+//! WASM Transform node — STUB pending Phase 2 rewrite.
 
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use crate::engine::{TransformInstance, WaferEngine, exports, pipeline};
+use crate::engine::{TransformInstance, WaferEngine};
 use crate::error::{Result, WaferError};
 use crate::queue::RuntimeEnvelope;
 
-use super::traits::{Lifecycle, NodeConfig, ProcessError, ProcessResult, Transform};
+use super::traits::{Lifecycle, NodeConfig, ProcessResult, Transform};
 
 pub struct WasmTransform {
     config: NodeConfig,
@@ -21,59 +21,6 @@ impl WasmTransform {
     #[must_use]
     pub fn new(engine: Arc<WaferEngine>, instance: TransformInstance, config: NodeConfig) -> Self {
         Self { config, _engine: engine, instance, initialized: false }
-    }
-
-    /// Convert NodeConfig to WIT NodeConfig.
-    fn to_wit_config(&self) -> exports::pipeline::transform::lifecycle::NodeConfig {
-        exports::pipeline::transform::lifecycle::NodeConfig {
-            id: self.config.id.clone(),
-            node_type: self.config.node_type.clone(),
-            config_bytes: self.config.config_bytes.clone(),
-            metadata: self.config.metadata.clone(),
-        }
-    }
-
-    fn to_wit_envelope(envelope: RuntimeEnvelope) -> pipeline::transform::types::Envelope {
-        use pipeline::transform::types::{Envelope, Payload};
-
-        let metadata: Vec<(String, String)> = envelope.metadata.into_iter().collect();
-
-        Envelope {
-            id: envelope.id,
-            timestamp: envelope.timestamp,
-            source: envelope.source,
-            metadata,
-            payload: Payload::Raw(envelope.payload),
-        }
-    }
-
-    fn from_wit_envelope(envelope: pipeline::transform::types::Envelope) -> RuntimeEnvelope {
-        use pipeline::transform::types::Payload;
-
-        let metadata = envelope.metadata.into_iter().collect();
-        let Payload::Raw(payload) = envelope.payload;
-
-        RuntimeEnvelope {
-            id: envelope.id,
-            timestamp: envelope.timestamp,
-            source: envelope.source,
-            metadata,
-            payload,
-        }
-    }
-
-    fn from_wit_result(result: pipeline::transform::types::ProcessResult) -> ProcessResult {
-        use pipeline::transform::types::ProcessResult as WitResult;
-
-        match result {
-            WitResult::Emit(envelope) => ProcessResult::Emit(Self::from_wit_envelope(envelope)),
-            WitResult::Filter => ProcessResult::Filter,
-            WitResult::Error(e) => ProcessResult::Error(ProcessError {
-                code: e.code,
-                message: e.message,
-                retriable: e.retriable,
-            }),
-        }
     }
 }
 
@@ -92,12 +39,7 @@ impl Lifecycle for WasmTransform {
 
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            if self.initialized {
-                return Ok(());
-            }
-
-            let wit_config = self.to_wit_config();
-            self.instance.call_init(&wit_config).await?;
+            let _ = &self.instance;
             self.initialized = true;
             Ok(())
         })
@@ -105,10 +47,7 @@ impl Lifecycle for WasmTransform {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            if self.initialized {
-                self.instance.call_close().await?;
-                self.initialized = false;
-            }
+            self.initialized = false;
             Ok(())
         })
     }
@@ -117,18 +56,10 @@ impl Lifecycle for WasmTransform {
 impl Transform for WasmTransform {
     fn process(
         &mut self,
-        input: RuntimeEnvelope,
+        _input: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<ProcessResult>> + Send + '_>> {
         Box::pin(async move {
-            if !self.initialized {
-                return Err(WaferError::PluginInit {
-                    message: "Node not initialized - call init() first".to_string(),
-                });
-            }
-
-            let wit_envelope = Self::to_wit_envelope(input);
-            let result = self.instance.call_process(&wit_envelope).await?;
-            Ok(Self::from_wit_result(result))
+            Err(WaferError::Runtime("transform pending Phase 2 rewrite".into()))
         })
     }
 }

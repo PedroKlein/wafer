@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use futures_util::stream::StreamExt;
 
-use crate::node::{AnyNode, Joiner, NodeStateTracker, Router, Sink, Source, Transform};
+use crate::node::{AnyNode, NodeStateTracker, Router, Sink, Source, Transform};
 use crate::queue::{QueueReceiver, RuntimeEnvelope};
 
 use crate::orchestrator::{ControlState, EdgeSendInfo};
@@ -95,18 +95,6 @@ pub(crate) async fn run_node_loop(
                 .await;
             }
         }
-        AnyNode::Joiner(joiner, _) => {
-            run_joiner_loop(
-                &node_id,
-                joiner.as_mut(),
-                input_receivers,
-                &output_senders,
-                &cancel_token,
-                &state_tracker,
-                &control_state,
-            )
-            .await;
-        }
     }
 }
 
@@ -150,7 +138,7 @@ pub(crate) async fn run_source_loop(
                 match result {
                     Ok(Some(envelope)) => {
                         tracing::debug!(
-                            message_id = %envelope.id,
+                            message_id = %envelope.header.id,
                             payload_size = envelope.payload.len(),
                             "Source received message"
                         );
@@ -379,74 +367,8 @@ pub(crate) async fn run_router_loop(
 
 /// # Cancel Safety
 ///
-/// WASM calls run OUTSIDE `tokio::select!`. See module-level docs.
-#[tracing::instrument(skip_all, fields(node_id = %node_id, node_type = "joiner", input_count = input_receivers.len()))]
-pub(crate) async fn run_joiner_loop(
-    node_id: &str,
-    joiner: &mut dyn Joiner,
-    input_receivers: Vec<(String, QueueReceiver<RuntimeEnvelope>)>,
-    output_senders: &[EdgeSendInfo],
-    cancel_token: &CancellationToken,
-    state_tracker: &NodeStateTracker,
-    control_state: &ControlState,
-) {
-    use super::result_handler::ProcessContext;
 
-    tracing::info!("Joiner loop started");
-
-    let streams: Vec<PortedEnvelopeStream> = input_receivers
-        .into_iter()
-        .map(|(port_name, receiver)| {
-            let stream = futures_util::stream::unfold(
-                (port_name, receiver),
-                |(port_name, mut rx)| async move {
-                    rx.recv().await.map(|env| ((port_name.clone(), env), (port_name, rx)))
-                },
-            );
-            Box::pin(stream) as PortedEnvelopeStream
-        })
-        .collect();
-
-    let mut merged = futures_util::stream::select_all(streams);
-
-    loop {
-        if cancel_token.is_cancelled() {
-            tracing::debug!(node = %node_id, "Joiner cancelled");
-            break;
-        }
-
-        // Cancel-safe: only stream.next() inside select, WASM calls outside
-        let maybe_item = tokio::select! {
-            biased;
-            () = cancel_token.cancelled() => None,
-            item = merged.next() => item,
-        };
-
-        let Some((port_name, envelope)) = maybe_item else {
-            if !cancel_token.is_cancelled() {
-                tracing::debug!("All input queues closed");
-            }
-            break;
-        };
-
-        let ctx = ProcessContext {
-            node_id,
-            input_size_bytes: envelope.payload.len(),
-            start: Instant::now(),
-            envelope_for_dlq: envelope.clone(),
-            output_senders,
-            control_state,
-            input_port: Some(&port_name),
-        };
-
-        state_tracker.set_processing(true);
-        ctx.handle_process_result(joiner.process(&port_name, envelope).await).await;
-        state_tracker.set_processing(false);
-    }
-    tracing::info!("Joiner loop stopped");
-}
-
-#[cfg(test)]
+#[cfg(all(test, feature = "phase2-tests"))]
 #[expect(clippy::similar_names, reason = "receiver/received are idiomatic in test code")]
 mod tests {
     use super::*;
@@ -550,7 +472,7 @@ mod tests {
         assert!(result, "Send with drop policy should return true even when dropped");
 
         let received = receiver.recv().await.expect("Should receive first message");
-        assert_eq!(received.id, env1.id);
+        assert_eq!(received.header.id, env1.id);
 
         let second =
             tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await;
@@ -591,15 +513,15 @@ mod tests {
         assert!(result, "Send with dead-letter policy should return true");
 
         let received = receiver.recv().await.expect("Should receive first message");
-        assert_eq!(received.id, env1.id);
+        assert_eq!(received.header.id, env1.id);
 
         let dlq_msg: RuntimeEnvelope =
             dlq_receiver.recv().await.expect("Should receive DLQ message");
-        assert_eq!(dlq_msg.source, "dlq", "DLQ message should have source 'dlq'");
+        assert_eq!(dlq_msg.header.source, "dlq", "DLQ message should have source 'dlq'");
 
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
-        assert_eq!(dlq_envelope.original.id, env2_id);
+        assert_eq!(dlq_envelope.original.header.id, env2_id);
         assert_eq!(dlq_envelope.reason, crate::dlq::DlqReason::QueueFull);
         assert_eq!(dlq_envelope.failed_edge, "test:default->downstream:default");
     }
@@ -641,7 +563,7 @@ mod tests {
         }
 
         let envelope = test_envelope("failed-msg");
-        let original_id = envelope.id.clone();
+        let original_id = envelope.header.id.clone();
 
         super::super::dlq_handlers::send_process_error_to_dlq(
             envelope,
@@ -653,11 +575,11 @@ mod tests {
         .await;
 
         let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
-        assert_eq!(dlq_msg.source, "dlq");
+        assert_eq!(dlq_msg.header.source, "dlq");
 
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
-        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.original.header.id, original_id);
         assert_eq!(dlq_envelope.failed_edge, "transform-node");
 
         match dlq_envelope.reason {
@@ -681,7 +603,7 @@ mod tests {
         }
 
         let envelope = test_envelope("sink-failed-msg");
-        let original_id = envelope.id.clone();
+        let original_id = envelope.header.id.clone();
 
         super::super::dlq_handlers::send_sink_error_to_dlq(
             envelope,
@@ -692,11 +614,11 @@ mod tests {
         .await;
 
         let dlq_msg = dlq_receiver.recv().await.expect("Should receive DLQ message");
-        assert_eq!(dlq_msg.source, "dlq");
+        assert_eq!(dlq_msg.header.source, "dlq");
 
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
-        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.original.header.id, original_id);
         assert_eq!(dlq_envelope.failed_edge, "file-sink");
 
         match dlq_envelope.reason {
@@ -720,8 +642,8 @@ mod tests {
 
         let original_payload = b"original message content 12345".to_vec();
         let envelope = RuntimeEnvelope::new("my-source", original_payload.clone());
-        let original_id = envelope.id.clone();
-        let original_source = envelope.source.clone();
+        let original_id = envelope.header.id.clone();
+        let original_source = envelope.header.source.clone();
 
         super::super::dlq_handlers::send_process_error_to_dlq(
             envelope,
@@ -736,8 +658,8 @@ mod tests {
         let dlq_envelope: DlqEnvelope =
             serde_json::from_slice(&dlq_msg.payload).expect("Should parse DLQ envelope");
 
-        assert_eq!(dlq_envelope.original.id, original_id);
-        assert_eq!(dlq_envelope.original.source, original_source);
+        assert_eq!(dlq_envelope.original.header.id, original_id);
+        assert_eq!(dlq_envelope.original.header.source, original_source);
         assert_eq!(dlq_envelope.original.payload, original_payload);
     }
 

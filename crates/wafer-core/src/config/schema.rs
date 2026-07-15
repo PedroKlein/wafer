@@ -312,6 +312,7 @@ pub enum NodeType {
     Transform,
     Router,
     Joiner,
+    Filter,
     Sink,
 }
 

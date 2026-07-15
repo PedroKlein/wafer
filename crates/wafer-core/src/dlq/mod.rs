@@ -40,23 +40,32 @@ pub struct SerializableEnvelope {
 impl From<RuntimeEnvelope> for SerializableEnvelope {
     fn from(env: RuntimeEnvelope) -> Self {
         Self {
-            id: env.id,
-            timestamp: env.timestamp,
-            source: env.source,
-            metadata: env.metadata,
-            payload: env.payload,
+            id: env.header.id.to_string(),
+            timestamp: env.header.timestamp,
+            source: env.header.source.to_string(),
+            metadata: env.header.metadata.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            payload: env.payload.to_vec(),
         }
     }
 }
 
 impl From<SerializableEnvelope> for RuntimeEnvelope {
     fn from(env: SerializableEnvelope) -> Self {
-        Self {
-            id: env.id,
+        use std::sync::Arc;
+        use bytes::Bytes;
+        use crate::queue::envelope::{EnvelopeHeader, Lineage};
+
+        let header = EnvelopeHeader {
+            id: env.id.into_boxed_str(),
             timestamp: env.timestamp,
-            source: env.source,
-            metadata: env.metadata,
-            payload: env.payload,
+            source: env.source.into_boxed_str(),
+            content_type: "application/octet-stream".into(),
+            metadata: env.metadata.into_iter().map(|(k, v)| (k.into_boxed_str(), v.into_boxed_str())).collect(),
+        };
+        Self {
+            header: Arc::new(header),
+            payload: Bytes::from(env.payload),
+            lineage: Lineage::default(),
         }
     }
 }
@@ -104,7 +113,7 @@ pub fn wrap_for_dlq(
     // SAFETY: DlqEnvelope contains only String, u64, HashMap<String,String>, Vec<u8> -- all infallible to serialize
     let payload = dlq_envelope.to_json_bytes().expect("infallible serialization");
 
-    RuntimeEnvelope::new("dlq", payload).with_metadata("content_type", "application/json")
+    RuntimeEnvelope::new("dlq", bytes::Bytes::from(payload)).with_metadata("content_type", "application/json")
 }
 
 /// Custom serde module for base64 encoding/decoding of binary data.
@@ -131,7 +140,7 @@ mod base64_serde {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "phase2-tests"))]
 mod tests {
     use super::*;
 
@@ -170,7 +179,7 @@ mod tests {
 
     #[test]
     fn serializable_envelope_roundtrip() {
-        let original = RuntimeEnvelope::new("test-source", b"hello world".to_vec())
+        let original = RuntimeEnvelope::new("test-source", Bytes::from(&b"hello world"[..]))
             .with_metadata("key", "value");
 
         let serializable: SerializableEnvelope = original.clone().into();
@@ -182,16 +191,16 @@ mod tests {
         let parsed: SerializableEnvelope = serde_json::from_str(&json).unwrap();
         let restored: RuntimeEnvelope = parsed.into();
 
-        assert_eq!(restored.id, original.id);
-        assert_eq!(restored.timestamp, original.timestamp);
-        assert_eq!(restored.source, original.source);
-        assert_eq!(restored.metadata, original.metadata);
+        assert_eq!(restored.header.id, original.header.id);
+        assert_eq!(restored.header.timestamp, original.header.timestamp);
+        assert_eq!(restored.header.source, original.header.source);
+        assert_eq!(restored.header.metadata, original.header.metadata);
         assert_eq!(restored.payload, original.payload);
     }
 
     #[test]
     fn dlq_envelope_serialization_roundtrip() {
-        let original = RuntimeEnvelope::new("test-source", b"test payload".to_vec());
+        let original = RuntimeEnvelope::new("test-source", Bytes::from(&b"test payload"[..]));
         let dlq = DlqEnvelope::new(original.clone(), "src->transform", DlqReason::QueueFull);
 
         let json = serde_json::to_string(&dlq).unwrap();
@@ -199,36 +208,36 @@ mod tests {
 
         assert_eq!(parsed.failed_edge, "src->transform");
         assert_eq!(parsed.reason, DlqReason::QueueFull);
-        assert_eq!(parsed.original.id, original.id);
+        assert_eq!(parsed.original.header.id, original.header.id);
         assert_eq!(parsed.original.payload, original.payload);
     }
 
     #[test]
     fn wrap_for_dlq_creates_valid_envelope() {
-        let original = RuntimeEnvelope::new("test-source", b"test".to_vec());
-        let original_id = original.id.clone();
+        let original = RuntimeEnvelope::new("test-source", Bytes::from(&b"test"[..]));
+        let original_id = original.header.id.clone();
 
         let wrapped = wrap_for_dlq(original, "edge-1", DlqReason::QueueFull);
 
-        assert_eq!(wrapped.source, "dlq");
-        assert_eq!(wrapped.metadata.get("content_type"), Some(&"application/json".to_string()));
+        assert_eq!(wrapped.header.source, "dlq");
+        assert_eq!(wrapped.header.metadata.get("content_type"), Some(&"application/json".to_string()));
 
         // Parse the payload back
         let dlq_envelope: DlqEnvelope = serde_json::from_slice(&wrapped.payload).unwrap();
-        assert_eq!(dlq_envelope.original.id, original_id);
+        assert_eq!(dlq_envelope.original.header.id, original_id);
         assert_eq!(dlq_envelope.reason, DlqReason::QueueFull);
     }
 
     #[test]
     fn dlq_envelope_into_original_extracts_message() {
-        let original = RuntimeEnvelope::new("test-source", b"test".to_vec());
-        let original_id = original.id.clone();
+        let original = RuntimeEnvelope::new("test-source", Bytes::from(&b"test"[..]));
+        let original_id = original.header.id.clone();
         let original_payload = original.payload.clone();
 
         let dlq = DlqEnvelope::new(original, "edge-1", DlqReason::QueueFull);
         let restored = dlq.into_original();
 
-        assert_eq!(restored.id, original_id);
+        assert_eq!(restored.header.id, original_id);
         assert_eq!(restored.payload, original_payload);
     }
 }

@@ -1,4 +1,5 @@
 //! Stdin source node that reads lines from standard input.
+use bytes::Bytes;
 
 use std::future::Future;
 use std::io::{BufRead, BufReader, Stdin};
@@ -67,7 +68,7 @@ impl Source for StdinSource {
                     let payload =
                         line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
                     Ok(Some(
-                        RuntimeEnvelope::new(&self.id, payload)
+                        RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
                             .with_metadata("source_route", "stdin"),
                     ))
                 }

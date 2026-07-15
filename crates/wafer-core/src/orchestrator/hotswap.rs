@@ -148,7 +148,7 @@ impl HotSwapCoordinator {
         let engine = Arc::clone(ctx.engine());
         let component = engine.load_component(&self.new_wasm_path)?;
         let node_config = NodeConfig::new(&self.node_id, "transform");
-        let instance = TransformInstance::new(&engine, &component, self.capabilities).await?;
+        let instance = TransformInstance::new(&engine, &component).await?;
 
         let transform = WasmTransform::new(engine, instance, node_config);
         let new_node = AnyNode::from_transform(transform);

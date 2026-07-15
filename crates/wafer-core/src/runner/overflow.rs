@@ -61,7 +61,7 @@ pub(crate) async fn send_with_overflow_policy(
                     tracing::debug!(
                         node = %node_id,
                         edge = %edge_info.edge_name,
-                        message_id = %rejected.id,
+                        message_id = %rejected.header.id,
                         "Queue full, routing to DLQ (dead-letter policy)"
                     );
                     let dlq_envelope =

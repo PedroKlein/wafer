@@ -1,6 +1,5 @@
 //! Node trait architecture for WAFER pipeline.
 
-mod joiner;
 mod router;
 mod sink;
 mod source;
@@ -8,13 +7,12 @@ mod state;
 mod traits;
 mod transform;
 
-pub use joiner::{JoinerInstance, WasmJoiner};
 pub use router::{RouterInstance, WasmRouter};
 pub use sink::{BatchStats, FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
 pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use state::NodeStateTracker;
 pub use traits::{
-    ConfigParseError, Joiner, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
+    ConfigParseError, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
     Router, Transform,
 };
 pub use transform::WasmTransform;
@@ -32,7 +30,6 @@ pub enum AnyNode {
     Source(Box<dyn Source>, Arc<NodeStateTracker>),
     Sink(Box<dyn Sink>, Arc<NodeStateTracker>),
     Router(Box<dyn Router>, Arc<NodeStateTracker>),
-    Joiner(Box<dyn Joiner>, Arc<NodeStateTracker>),
 }
 
 impl fmt::Debug for AnyNode {
@@ -60,12 +57,6 @@ impl fmt::Debug for AnyNode {
                 .debug_struct("AnyNode::Router")
                 .field("id", &r.id())
                 .field("node_type", &r.node_type())
-                .field("state", &tracker.state())
-                .finish(),
-            AnyNode::Joiner(j, tracker) => f
-                .debug_struct("AnyNode::Joiner")
-                .field("id", &j.id())
-                .field("node_type", &j.node_type())
                 .field("state", &tracker.state())
                 .finish(),
         }
@@ -102,10 +93,6 @@ impl AnyNode {
         AnyNode::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
     }
 
-    #[must_use]
-    pub fn from_joiner(j: impl Joiner + 'static) -> Self {
-        AnyNode::Joiner(Box::new(j), Arc::new(NodeStateTracker::new()))
-    }
 
     #[must_use]
     pub fn id(&self) -> &str {
@@ -114,7 +101,6 @@ impl AnyNode {
             AnyNode::Source(s, _) => s.id(),
             AnyNode::Sink(s, _) => s.id(),
             AnyNode::Router(r, _) => r.id(),
-            AnyNode::Joiner(j, _) => j.id(),
         }
     }
 
@@ -130,8 +116,7 @@ impl AnyNode {
             AnyNode::Transform(_, tracker)
             | AnyNode::Source(_, tracker)
             | AnyNode::Sink(_, tracker)
-            | AnyNode::Router(_, tracker)
-            | AnyNode::Joiner(_, tracker) => tracker,
+            | AnyNode::Router(_, tracker) => tracker,
         }
     }
 
@@ -141,10 +126,9 @@ impl AnyNode {
         Arc::clone(self.state_tracker())
     }
 
-    /// Only WASM Transform, Router, and Joiner nodes support hot-swap.
     #[must_use]
     pub fn is_swappable(&self) -> bool {
-        matches!(self, AnyNode::Transform(_, _) | AnyNode::Router(_, _) | AnyNode::Joiner(_, _))
+        matches!(self, AnyNode::Transform(_, _) | AnyNode::Router(_, _))
     }
 
     /// Validate the node's configuration.
@@ -154,7 +138,6 @@ impl AnyNode {
             AnyNode::Source(s, _) => s.validate(),
             AnyNode::Sink(s, _) => s.validate(),
             AnyNode::Router(r, _) => r.validate(),
-            AnyNode::Joiner(j, _) => j.validate(),
         }
     }
 
@@ -165,7 +148,6 @@ impl AnyNode {
             AnyNode::Source(s, _) => s.init().await,
             AnyNode::Sink(s, _) => s.init().await,
             AnyNode::Router(r, _) => r.init().await,
-            AnyNode::Joiner(j, _) => j.init().await,
         };
 
         match &result {
@@ -187,7 +169,6 @@ impl AnyNode {
             AnyNode::Source(s, _) => s.close().await,
             AnyNode::Sink(s, _) => s.close().await,
             AnyNode::Router(r, _) => r.close().await,
-            AnyNode::Joiner(j, _) => j.close().await,
         }
     }
 }
@@ -199,7 +180,6 @@ impl fmt::Display for AnyNode {
             AnyNode::Transform(t, _) => t.node_type(),
             AnyNode::Sink(s, _) => s.node_type(),
             AnyNode::Router(r, _) => r.node_type(),
-            AnyNode::Joiner(j, _) => j.node_type(),
         };
         write!(f, "{name}")
     }

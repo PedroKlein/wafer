@@ -44,7 +44,7 @@ pub(crate) async fn process_sink_message(
 
     if let Err(e) = sink.collect(envelope).await {
         let duration_ns = start.elapsed().as_nanos() as u64;
-        tracing::error!(message_id = %envelope_for_dlq.id, error = %e, "Sink collect failed");
+        tracing::error!(message_id = %envelope_for_dlq.header.id, error = %e, "Sink collect failed");
 
         super::dlq_handlers::send_sink_error_to_dlq(
             envelope_for_dlq,
@@ -58,7 +58,7 @@ pub(crate) async fn process_sink_message(
     } else {
         let duration_ns = start.elapsed().as_nanos() as u64;
         tracing::debug!(
-            message_id = %envelope_for_dlq.id,
+            message_id = %envelope_for_dlq.header.id,
             input_size_bytes,
             duration_ns,
             "Sink delivered"

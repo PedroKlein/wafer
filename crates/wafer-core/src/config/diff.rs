@@ -81,7 +81,7 @@ pub fn diff_configs(old: &Config, new: &Config) -> ConfigDiff {
 
 /// Check if a node type supports hot-swap.
 const fn is_swappable_type(node_type: &NodeType) -> bool {
-    matches!(node_type, NodeType::Transform | NodeType::Router | NodeType::Joiner)
+    matches!(node_type, NodeType::Transform | NodeType::Router | NodeType::Filter)
 }
 
 /// Extract WASM path from a node's config if it changed.

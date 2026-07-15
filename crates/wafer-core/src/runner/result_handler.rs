@@ -29,7 +29,7 @@ impl ProcessContext<'_> {
 
         if let Some(port) = self.input_port {
             tracing::debug!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_port = %port,
                 input_size_bytes = self.input_size_bytes,
                 output_size_bytes,
@@ -38,7 +38,7 @@ impl ProcessContext<'_> {
             );
         } else {
             tracing::debug!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_size_bytes = self.input_size_bytes,
                 output_size_bytes,
                 duration_ns,
@@ -56,7 +56,7 @@ impl ProcessContext<'_> {
 
         if let Some(port) = self.input_port {
             tracing::debug!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_port = %port,
                 input_size_bytes = self.input_size_bytes,
                 duration_ns,
@@ -64,7 +64,7 @@ impl ProcessContext<'_> {
             );
         } else {
             tracing::debug!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_size_bytes = self.input_size_bytes,
                 duration_ns,
                 "Node filtered"
@@ -79,7 +79,7 @@ impl ProcessContext<'_> {
 
         if let Some(port) = self.input_port {
             tracing::warn!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_port = %port,
                 error_code = %error_code,
                 error_message = %error_message,
@@ -87,7 +87,7 @@ impl ProcessContext<'_> {
             );
         } else {
             tracing::warn!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 error_code = %error_code,
                 error_message = %error_message,
                 "Node error - routing to DLQ"
@@ -111,14 +111,14 @@ impl ProcessContext<'_> {
 
         if let Some(port) = self.input_port {
             tracing::error!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 input_port = %port,
                 error = %error,
                 "Node process failed - routing to DLQ"
             );
         } else {
             tracing::error!(
-                message_id = %self.envelope_for_dlq.id,
+                message_id = %self.envelope_for_dlq.header.id,
                 error = %error,
                 "Node process failed - routing to DLQ"
             );
@@ -159,7 +159,7 @@ impl ProcessContext<'_> {
         let output_size_bytes = output.payload.len();
 
         tracing::debug!(
-            message_id = %self.envelope_for_dlq.id,
+            message_id = %self.envelope_for_dlq.header.id,
             output_port = %port,
             input_size_bytes = self.input_size_bytes,
             output_size_bytes,

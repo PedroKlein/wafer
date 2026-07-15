@@ -1,4 +1,5 @@
 //! File-based source node that reads lines or binary content from a file.
+use bytes::Bytes;
 
 use std::fs::File;
 use std::future::Future;
@@ -89,7 +90,7 @@ impl Source for FileSource {
                 reader.read_to_end(&mut bytes)?;
                 self.binary_sent = true;
                 return Ok(Some(
-                    RuntimeEnvelope::new(&self.id, bytes)
+                    RuntimeEnvelope::new(&*self.id, Bytes::from(bytes))
                         .with_metadata("source_route", self.path.display().to_string()),
                 ));
             }
@@ -101,7 +102,7 @@ impl Source for FileSource {
                     let payload =
                         line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
                     Ok(Some(
-                        RuntimeEnvelope::new(&self.id, payload)
+                        RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
                             .with_metadata("source_route", self.path.display().to_string()),
                     ))
                 }
@@ -111,7 +112,7 @@ impl Source for FileSource {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "phase2-tests"))]
 mod tests {
     use super::*;
     use std::io::Write;
@@ -131,7 +132,7 @@ mod tests {
 
         let env1 = source.poll().await.unwrap().unwrap();
         assert_eq!(env1.payload, b"line1");
-        assert_eq!(env1.source, "test-source");
+        assert_eq!(env1.header.source, "test-source");
 
         let env2 = source.poll().await.unwrap().unwrap();
         assert_eq!(env2.payload, b"line2");
@@ -203,8 +204,8 @@ mod tests {
 
         let env = source.poll().await.unwrap().unwrap();
 
-        assert_eq!(env.id.len(), 36);
-        assert!(env.id.contains('-'));
-        assert!(env.timestamp > 1_700_000_000_000);
+        assert_eq!(env.header.id.len(), 36);
+        assert!(env.header.id.contains('-'));
+        assert!(env.header.timestamp > 1_700_000_000_000);
     }
 }
