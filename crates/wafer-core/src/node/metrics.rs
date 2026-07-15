@@ -81,7 +81,7 @@ impl NodeMetrics {
         self.swaps.fetch_add(1, Ordering::Relaxed);
     }
 
-    // --- Read accessors (for exposition) ---
+    // --- Read accessors (exposition layer reads these) ---
 
     /// Total messages processed successfully.
     #[inline]

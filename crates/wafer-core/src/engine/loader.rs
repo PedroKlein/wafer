@@ -56,7 +56,6 @@ impl WaferEngine {
         config.consume_fuel(true);
         config.wasm_component_model(true);
         config.epoch_interruption(true);
-        // Async support for WASI host calls that .await
         config.async_support(true);
 
         let engine =
@@ -162,7 +161,6 @@ impl WaferEngine {
         &self,
         component: &Component,
     ) -> Result<TransformNodePre<WaferState>> {
-        // Create a linker with WASI support
         let mut linker = wasmtime::component::Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;

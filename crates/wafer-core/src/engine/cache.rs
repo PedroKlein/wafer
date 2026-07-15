@@ -18,7 +18,6 @@ use crate::error::{Result, WaferError};
 /// Wasmtime major version embedded in cache keys.
 /// Prevents loading serialized modules from incompatible engine versions.
 fn wasmtime_version_major() -> &'static str {
-    // wasmtime's Cargo.toml version (compile-time)
     env!("CARGO_PKG_VERSION_MAJOR")
 }
 
@@ -65,19 +64,15 @@ impl ComponentCache {
         let hash = blake3::hash(wasm_bytes);
         let hash_bytes = *hash.as_bytes();
 
-        // Tier 1: in-memory hit
         if let Some(component) = self.memory.get(&hash_bytes) {
             return Ok(Arc::clone(component));
         }
 
-        // Tier 2: disk hit
         if let Some(component) = self.try_load_from_disk(engine, &hash)? {
             let arc = Arc::new(component);
             self.memory.insert(hash_bytes, Arc::clone(&arc));
             return Ok(arc);
         }
-
-        // Cache miss: compile and store in both tiers
         let component = Component::new(engine, wasm_bytes).map_err(|source| {
             WaferError::ComponentLoad { path: PathBuf::from("<bytes>"), source }
         })?;

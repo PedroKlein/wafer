@@ -43,7 +43,6 @@ impl NodeStateTracker {
         }
     }
 
-    // State encoding/decoding
     const fn state_to_u8(state: NodeState) -> u8 {
         match state {
             NodeState::Starting => 0,
