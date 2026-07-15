@@ -1,0 +1,8 @@
+[loadgen]
+rate = 1000
+duration_secs = 120
+payload_size = 128
+warmup_secs = 30
+topic = "wafer/bench/input"
+profile = "burst"
+# Burst: 2x rate for 10s every 60s

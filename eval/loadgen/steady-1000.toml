@@ -1,0 +1,6 @@
+[loadgen]
+rate = 1000
+duration_secs = 60
+payload_size = 128
+warmup_secs = 30
+topic = "wafer/bench/input"

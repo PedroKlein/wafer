@@ -1,0 +1,28 @@
+# Minimal passthrough pipeline for benchmarking (both metering enabled)
+[pipeline]
+name = "bench-passthrough"
+
+[pipeline.source]
+type = "bench-source"
+
+[pipeline.source.config]
+rate = 1000
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 128
+
+[[pipeline.nodes]]
+id = "transform"
+type = "transform"
+plugin = "pass-through"
+
+[pipeline.sink]
+type = "bench-sink"
+
+[pipeline.sink.config]
+warmup_secs = 30
+track_sequences = true
+
+[pipeline.metering]
+fuel = true
+epoch = true

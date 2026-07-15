@@ -1,0 +1,28 @@
+# Passthrough with no metering (raw Wasm overhead only)
+[pipeline]
+name = "bench-passthrough-no-metering"
+
+[pipeline.source]
+type = "bench-source"
+
+[pipeline.source.config]
+rate = 1000
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 128
+
+[[pipeline.nodes]]
+id = "transform"
+type = "transform"
+plugin = "pass-through"
+
+[pipeline.sink]
+type = "bench-sink"
+
+[pipeline.sink.config]
+warmup_secs = 30
+track_sequences = true
+
+[pipeline.metering]
+fuel = false
+epoch = false

@@ -1,0 +1,25 @@
+[package]
+name = "wafer-loadgen"
+description = "WAFER evaluation: MQTT load generator for E2E benchmarks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "wafer-loadgen"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { workspace = true }
+rumqttc = "0.25"
+clap = { version = "4", features = ["derive"] }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+
+[lints]
+workspace = true

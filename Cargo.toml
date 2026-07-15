@@ -3,6 +3,7 @@ resolver = "2"
 members = [
   "crates/wafer-config",
   "crates/wafer-core",
+  "crates/wafer-loadgen",
   "crates/wafer-plugin",
   "crates/wafer-runtime",
   "crates/wafer-types",

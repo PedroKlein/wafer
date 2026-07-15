@@ -1,0 +1,26 @@
+# Native baseline (no Wasm — direct Rust function calls)
+[pipeline]
+name = "bench-native-baseline"
+
+[pipeline.source]
+type = "bench-source"
+
+[pipeline.source.config]
+rate = 1000
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 128
+
+[[pipeline.nodes]]
+id = "transform"
+type = "native-transform"
+
+[pipeline.nodes.config]
+function = "passthrough"
+
+[pipeline.sink]
+type = "bench-sink"
+
+[pipeline.sink.config]
+warmup_secs = 30
+track_sequences = true
