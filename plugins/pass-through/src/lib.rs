@@ -1,40 +1,49 @@
 //! Pass-through transform plugin for WAFER pipeline.
 //!
-//! This plugin implements a no-op transform that passes envelopes through unchanged.
-//! It serves as the simplest possible transform implementation and can be used
-//! for testing the WASM plugin infrastructure.
+//! Implements the `transform-node` world: reads the full payload from the
+//! host-managed buffer and returns an identical output-message. Serves as
+//! the minimal transform for integration testing the Wasm plugin boundary.
 
 wit_bindgen::generate!({
-    path: "../../wit",
+    path: "../../wit/node",
     world: "transform-node",
+    generate_all,
 });
 
 struct PassThrough;
 
-impl exports::pipeline::transform::lifecycle::Guest for PassThrough {
-    /// Validate configuration - pass-through accepts any config
-    fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
-        // No validation errors - pass-through accepts any config
+impl exports::pipeline::node::lifecycle::Guest for PassThrough {
+    fn validate(_config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
         None
     }
 
-    /// Initialize the node - pass-through needs no initialization
-    fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
+    fn init(
+        _config: exports::pipeline::node::lifecycle::NodeConfig,
+    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
         Ok(())
     }
 
-    /// Graceful shutdown - pass-through has nothing to clean up
-    fn close() {
-        // No resources to release
-    }
+    fn close() {}
 }
 
-impl exports::pipeline::transform::transform::Guest for PassThrough {
-    /// Process a message - pass-through emits unchanged
+impl exports::pipeline::node::transform::Guest for PassThrough {
     fn process(
-        input: pipeline::transform::types::Envelope,
-    ) -> pipeline::transform::types::ProcessResult {
-        pipeline::transform::types::ProcessResult::Emit(input)
+        input: exports::pipeline::node::transform::Message,
+    ) -> Result<
+        exports::pipeline::node::transform::OutputMessage,
+        exports::pipeline::node::transform::ProcessError,
+    > {
+        // Read entire payload from host buffer (the only copy needed for pass-through)
+        let payload = input.payload.read_all();
+
+        Ok(exports::pipeline::node::transform::OutputMessage {
+            id: input.id,
+            timestamp: input.timestamp,
+            source: input.source,
+            content_type: input.content_type,
+            metadata: input.metadata,
+            payload,
+        })
     }
 }
 

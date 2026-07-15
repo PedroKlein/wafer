@@ -80,12 +80,12 @@ build-plugins:
     for plugin in plugins/*/Cargo.toml; do
         name=$(dirname "$plugin" | xargs basename)
         echo "Building plugin: $name"
-        cargo build --release --manifest-path "$plugin"
+        cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
     done
 
 # Build a specific plugin
 build-plugin name:
-    cargo build --release --manifest-path plugins/{{name}}/Cargo.toml
+    cargo build --release --manifest-path plugins/{{name}}/Cargo.toml --target wasm32-wasip2
 
 # =============================================================================
 # OCI Registry Commands

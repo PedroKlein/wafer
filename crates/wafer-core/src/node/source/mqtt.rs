@@ -178,7 +178,7 @@ impl Source for MqttSource {
 
             match rx.recv().await {
                 Some(publish) => {
-                    let envelope = RuntimeEnvelope::new(&*self.id, bytes::Bytes::from(publish.payload.to_vec()))
+                    let envelope = RuntimeEnvelope::new(&*self.id, publish.payload)
                         .with_metadata("source_route", publish.topic.as_str());
                     Ok(Some(envelope))
                 }

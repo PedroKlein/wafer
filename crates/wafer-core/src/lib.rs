@@ -21,6 +21,7 @@ pub mod orchestrator;
 pub mod queue;
 pub mod registry;
 pub mod runner;
+pub mod testing;
 
 #[cfg(feature = "http-api")]
 pub mod api;
