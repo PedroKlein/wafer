@@ -9,6 +9,8 @@
 pub mod error_policy;
 pub mod filter;
 pub mod router;
+pub mod sink;
+pub mod source;
 pub mod transform;
 
 // Old modules — will be deleted in Phase 8 cleanup.
