@@ -1,10 +1,12 @@
 //! Source node trait and implementations for pipeline entry points.
 
+pub mod bench;
 mod file;
 mod http;
 mod mqtt;
 mod stdin;
 
+pub use bench::{BenchSource, BenchSourceConfig};
 pub use file::FileSource;
 pub use http::HttpSource;
 pub use mqtt::MqttSource;

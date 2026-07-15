@@ -1,11 +1,13 @@
 //! Sink node trait and implementations for pipeline endpoints.
 
+pub mod bench;
 mod batch;
 mod file;
 mod http;
 mod mqtt;
 mod stdout;
 
+pub use bench::{BenchSink, BenchSinkConfig, HotSwapRecorder, SequenceTracker, SwapTransition};
 pub use file::FileSink;
 pub use http::{HttpSink, HttpSinkBatchConfig};
 pub use mqtt::MqttSink;

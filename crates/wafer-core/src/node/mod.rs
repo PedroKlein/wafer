@@ -2,6 +2,7 @@
 
 mod kind;
 mod metrics;
+pub mod native;
 mod router;
 mod sink;
 mod source;
@@ -11,8 +12,9 @@ mod transform;
 pub mod wasm;
 
 pub use router::{RouterInstance, WasmRouter};
-pub use sink::{BatchStats, FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
-pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
+pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition};
+pub use source::{BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
+pub use native::{NativeFilter, NativeTransform};
 pub use kind::{Node, NodeKind};
 pub use metrics::NodeMetrics;
 pub use state::{NodeStateTracker, ProcessingGuard};

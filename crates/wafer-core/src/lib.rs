@@ -11,6 +11,7 @@
 
 pub mod error;
 
+pub mod bench;
 pub mod config;
 pub mod dag;
 pub mod dlq;
