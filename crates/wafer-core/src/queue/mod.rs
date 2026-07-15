@@ -1,8 +1,8 @@
 //! Async bounded channel wrapper with backpressure.
 
 mod bounded;
-mod envelope;
+pub(crate) mod envelope;
 
 pub use crate::config::DEFAULT_QUEUE_CAPACITY;
 pub use bounded::{BoundedQueue, QueueReceiver, QueueSender};
-pub use envelope::RuntimeEnvelope;
+pub use envelope::{EnvelopeHeader, RuntimeEnvelope};
