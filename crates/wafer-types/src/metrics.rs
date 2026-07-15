@@ -1,7 +1,9 @@
 //! Metrics snapshot types.
 
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt::Write as _;
+
+use serde::{Deserialize, Serialize};
 
 /// A snapshot of current metrics from the pipeline.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -26,7 +28,7 @@ pub struct CounterMetric {
 pub struct GaugeMetric {
     /// Metric description
     pub description: String,
-    /// Values by label combination  
+    /// Values by label combination
     pub values: Vec<MetricValue<f64>>,
 }
 
@@ -41,6 +43,7 @@ pub struct MetricValue<T> {
 
 impl MetricsSnapshot {
     /// Creates an empty metrics snapshot.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
@@ -76,26 +79,26 @@ impl MetricsSnapshot {
     }
 
     /// Converts the snapshot to Prometheus text format.
+    #[must_use]
+    #[expect(clippy::let_underscore_must_use, reason = "writeln! to String is infallible")]
     pub fn to_prometheus(&self) -> String {
         let mut output = String::new();
 
-        // Counters
         for (name, metric) in &self.counters {
-            output.push_str(&format!("# HELP {} {}\n", name, metric.description));
-            output.push_str(&format!("# TYPE {} counter\n", name));
+            let _ = writeln!(output, "# HELP {name} {}", metric.description);
+            let _ = writeln!(output, "# TYPE {name} counter");
             for mv in &metric.values {
                 let labels = format_labels(&mv.labels);
-                output.push_str(&format!("{}{} {}\n", name, labels, mv.value));
+                let _ = writeln!(output, "{name}{labels} {}", mv.value);
             }
         }
 
-        // Gauges
         for (name, metric) in &self.gauges {
-            output.push_str(&format!("# HELP {} {}\n", name, metric.description));
-            output.push_str(&format!("# TYPE {} gauge\n", name));
+            let _ = writeln!(output, "# HELP {name} {}", metric.description);
+            let _ = writeln!(output, "# TYPE {name} gauge");
             for mv in &metric.values {
                 let labels = format_labels(&mv.labels);
-                output.push_str(&format!("{}{} {}\n", name, labels, mv.value));
+                let _ = writeln!(output, "{name}{labels} {}", mv.value);
             }
         }
 
@@ -109,7 +112,7 @@ fn format_labels(labels: &HashMap<String, String>) -> String {
     }
     let pairs: Vec<String> = labels
         .iter()
-        .map(|(k, v)| format!("{}=\"{}\"", k, v.replace('\\', "\\\\").replace('"', "\\\"")))
+        .map(|(k, v)| format!("{k}=\"{}\"", v.replace('\\', "\\\\").replace('"', "\\\"")))
         .collect();
     format!("{{{}}}", pairs.join(","))
 }

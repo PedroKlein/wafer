@@ -24,11 +24,11 @@ pub enum PipelineState {
 impl std::fmt::Display for PipelineState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PipelineState::Starting => write!(f, "starting"),
-            PipelineState::Running => write!(f, "running"),
-            PipelineState::Draining => write!(f, "draining"),
-            PipelineState::Stopped => write!(f, "stopped"),
-            PipelineState::Error => write!(f, "error"),
+            Self::Starting => write!(f, "starting"),
+            Self::Running => write!(f, "running"),
+            Self::Draining => write!(f, "draining"),
+            Self::Stopped => write!(f, "stopped"),
+            Self::Error => write!(f, "error"),
         }
     }
 }
@@ -58,6 +58,7 @@ pub struct PipelineStatus {
 /// ```text
 /// Starting → Running ⟶ Draining → Retired
 ///                    ↘ Error
+///                    ↘ Recovering → Running  (after unrecoverable + re-instantiation)
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -73,16 +74,22 @@ pub enum NodeState {
     Retired,
     /// Node encountered an error
     Error,
+    /// Node is re-instantiating after an unrecoverable error via `InstancePre`.
+    ///
+    /// This state exists between Error and a fresh Running state — the node
+    /// accepts no messages until instantiation completes.
+    Recovering,
 }
 
 impl std::fmt::Display for NodeState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeState::Starting => write!(f, "starting"),
-            NodeState::Running => write!(f, "running"),
-            NodeState::Draining => write!(f, "draining"),
-            NodeState::Retired => write!(f, "retired"),
-            NodeState::Error => write!(f, "error"),
+            Self::Starting => write!(f, "starting"),
+            Self::Running => write!(f, "running"),
+            Self::Draining => write!(f, "draining"),
+            Self::Retired => write!(f, "retired"),
+            Self::Error => write!(f, "error"),
+            Self::Recovering => write!(f, "recovering"),
         }
     }
 }
@@ -90,14 +97,14 @@ impl std::fmt::Display for NodeState {
 impl NodeState {
     /// Returns true if the node is in a state that accepts new messages.
     #[must_use]
-    pub fn accepts_messages(&self) -> bool {
-        matches!(self, NodeState::Running)
+    pub const fn accepts_messages(&self) -> bool {
+        matches!(self, Self::Running)
     }
 
     /// Returns true if the node has finished its lifecycle.
     #[must_use]
-    pub fn is_terminal(&self) -> bool {
-        matches!(self, NodeState::Retired | NodeState::Error)
+    pub const fn is_terminal(&self) -> bool {
+        matches!(self, Self::Retired | Self::Error)
     }
 }
 
@@ -111,8 +118,12 @@ pub enum NodeType {
     Transform,
     /// Router node (routes messages)
     Router,
-    /// Joiner node (merges streams)
+    /// Joiner node (merges streams) — kept for backward compatibility.
+    ///
+    /// New pipelines should rely on implicit merge topology (Session 3 A1).
     Joiner,
+    /// Filter node (pure predicate, borrow-only)
+    Filter,
     /// Sink node (consumes messages)
     Sink,
 }
@@ -120,11 +131,12 @@ pub enum NodeType {
 impl std::fmt::Display for NodeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeType::Source => write!(f, "source"),
-            NodeType::Transform => write!(f, "transform"),
-            NodeType::Router => write!(f, "router"),
-            NodeType::Joiner => write!(f, "joiner"),
-            NodeType::Sink => write!(f, "sink"),
+            Self::Source => write!(f, "source"),
+            Self::Transform => write!(f, "transform"),
+            Self::Router => write!(f, "router"),
+            Self::Joiner => write!(f, "joiner"),
+            Self::Filter => write!(f, "filter"),
+            Self::Sink => write!(f, "sink"),
         }
     }
 }
@@ -207,15 +219,16 @@ pub enum ControlError {
 
 impl ControlError {
     /// Returns the error code as a string.
-    pub fn code(&self) -> &'static str {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
         match self {
-            ControlError::NodeNotFound { .. } => "node_not_found",
-            ControlError::SwapInProgress => "swap_in_progress",
-            ControlError::NotSwappable { .. } => "not_swappable",
-            ControlError::NotImplemented { .. } => "not_implemented",
-            ControlError::ConfigError { .. } => "config_error",
-            ControlError::InvalidState { .. } => "invalid_state",
-            ControlError::Internal { .. } => "internal_error",
+            Self::NodeNotFound { .. } => "node_not_found",
+            Self::SwapInProgress => "swap_in_progress",
+            Self::NotSwappable { .. } => "not_swappable",
+            Self::NotImplemented { .. } => "not_implemented",
+            Self::ConfigError { .. } => "config_error",
+            Self::InvalidState { .. } => "invalid_state",
+            Self::Internal { .. } => "internal_error",
         }
     }
 }
@@ -229,7 +242,7 @@ pub struct ErrorResponse {
 /// Error detail in API responses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorDetail {
-    /// Error code (e.g., "node_not_found")
+    /// Error code (e.g., "`node_not_found`")
     pub code: String,
     /// Human-readable error message
     pub message: String,
@@ -243,10 +256,7 @@ impl From<ControlError> for ErrorResponse {
         let mut details = HashMap::new();
 
         match &err {
-            ControlError::NodeNotFound { node_id } => {
-                details.insert("node_id".to_string(), node_id.clone());
-            }
-            ControlError::NotSwappable { node_id } => {
+            ControlError::NodeNotFound { node_id } | ControlError::NotSwappable { node_id } => {
                 details.insert("node_id".to_string(), node_id.clone());
             }
             ControlError::NotImplemented { operation } => {
@@ -259,7 +269,7 @@ impl From<ControlError> for ErrorResponse {
             _ => {}
         }
 
-        ErrorResponse {
+        Self {
             error: ErrorDetail {
                 code: err.code().to_string(),
                 message: err.to_string(),
@@ -414,6 +424,7 @@ mod tests {
             NodeState::Draining,
             NodeState::Retired,
             NodeState::Error,
+            NodeState::Recovering,
         ];
 
         for state in states {
@@ -430,6 +441,7 @@ mod tests {
         assert!(!NodeState::Draining.accepts_messages());
         assert!(!NodeState::Retired.accepts_messages());
         assert!(!NodeState::Error.accepts_messages());
+        assert!(!NodeState::Recovering.accepts_messages());
     }
 
     #[test]
@@ -439,6 +451,7 @@ mod tests {
         assert!(!NodeState::Draining.is_terminal());
         assert!(NodeState::Retired.is_terminal());
         assert!(NodeState::Error.is_terminal());
+        assert!(!NodeState::Recovering.is_terminal());
     }
 
     #[test]
@@ -453,6 +466,7 @@ mod tests {
             NodeType::Transform,
             NodeType::Router,
             NodeType::Joiner,
+            NodeType::Filter,
             NodeType::Sink,
         ];
 

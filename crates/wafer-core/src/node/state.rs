@@ -51,6 +51,7 @@ impl NodeStateTracker {
             NodeState::Draining => 2,
             NodeState::Retired => 3,
             NodeState::Error => 4,
+            NodeState::Recovering => 5,
         }
     }
 
@@ -60,6 +61,7 @@ impl NodeStateTracker {
             1 => NodeState::Running,
             2 => NodeState::Draining,
             3 => NodeState::Retired,
+            5 => NodeState::Recovering,
             // 4 or any invalid encoding → Error
             _ => NodeState::Error,
         }

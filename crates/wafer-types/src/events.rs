@@ -17,17 +17,18 @@ pub enum PipelineEvent {
 }
 
 impl PipelineEvent {
-    pub fn event_type(&self) -> &'static str {
+    #[must_use]
+    pub const fn event_type(&self) -> &'static str {
         match self {
-            PipelineEvent::HotSwapStarted { .. } => "hot_swap_started",
-            PipelineEvent::HotSwapCompleted { .. } => "hot_swap_completed",
-            PipelineEvent::HotSwapFailed { .. } => "hot_swap_failed",
-            PipelineEvent::NodeStateChanged { .. } => "node_state_changed",
-            PipelineEvent::ConfigReloaded { .. } => "config_reloaded",
-            PipelineEvent::DrainStarted => "drain_started",
-            PipelineEvent::DrainCompleted => "drain_completed",
-            PipelineEvent::ShutdownStarted => "shutdown_started",
-            PipelineEvent::ShutdownCompleted => "shutdown_completed",
+            Self::HotSwapStarted { .. } => "hot_swap_started",
+            Self::HotSwapCompleted { .. } => "hot_swap_completed",
+            Self::HotSwapFailed { .. } => "hot_swap_failed",
+            Self::NodeStateChanged { .. } => "node_state_changed",
+            Self::ConfigReloaded { .. } => "config_reloaded",
+            Self::DrainStarted => "drain_started",
+            Self::DrainCompleted => "drain_completed",
+            Self::ShutdownStarted => "shutdown_started",
+            Self::ShutdownCompleted => "shutdown_completed",
         }
     }
 }
