@@ -1,0 +1,20 @@
+[package]
+name = "wafer-cayenne-decoder"
+version = "0.1.0"
+edition = "2024"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+wafer-plugin = { path = "../../crates/wafer-plugin", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

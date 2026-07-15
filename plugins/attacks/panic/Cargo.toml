@@ -1,8 +1,7 @@
 [package]
-name = "merge-joiner"
+name = "wafer-attack-panic"
 version = "0.1.0"
 edition = "2024"
-description = "Merge joiner plugin for WAFER pipeline - stateless passthrough from multiple inputs"
 
 [workspace]
 
@@ -15,3 +14,4 @@ wit-bindgen = "0.53"
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

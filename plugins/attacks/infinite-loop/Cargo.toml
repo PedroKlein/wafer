@@ -1,8 +1,7 @@
 [package]
-name = "wafer-json-parse"
+name = "wafer-attack-infinite-loop"
 version = "0.1.0"
 edition = "2024"
-description = "JSON parse transform plugin for WAFER pipeline"
 
 [workspace]
 
@@ -11,8 +10,8 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.53"
-wafer-plugin = { path = "../../crates/wafer-plugin" }
 
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

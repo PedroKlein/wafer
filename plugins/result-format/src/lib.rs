@@ -1,269 +1,317 @@
-//! Result format plugin for WAFER inference output parsing.
+//! Result format plugin for WAFER pipeline.
 //!
-//! This plugin converts 40 bytes (10 F32 little-endian logits) to JSON output.
-//! Applies softmax to convert logits to probabilities, finds argmax for predicted digit.
+//! Formats inference output (f32 bytes, little-endian) back to structured JSON
+//! with configurable labels and confidence threshold.
 //!
-//! Output format: {"digit": N, "confidence": 0.XX, "all_scores": [...]}
+//! Config: { "labels": ["normal", "anomaly", "critical"], "threshold": 0.5 }
+//! Output: { "prediction": "normal", "confidence": 0.92, "scores": [0.92, 0.05, 0.03], "above_threshold": true }
 
 wit_bindgen::generate!({
-    path: "wit",
+    path: "../../wit/node",
     world: "transform-node",
+    generate_all,
 });
+
+use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use wafer_plugin::{bad_input, define_state, output_with_type, payload_bytes, set_state, with_state};
+
+struct ResultFormatConfig {
+    labels: Vec<String>,
+    threshold: f64,
+}
+
+define_state!(ResultFormatConfig);
 
 struct ResultFormat;
 
-/// Apply numerically stable softmax to logits
-fn softmax(logits: &[f32]) -> Vec<f32> {
-    let max = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-    let exps: Vec<f32> = logits.iter().map(|&x| (x - max).exp()).collect();
-    let sum: f32 = exps.iter().sum();
-    exps.iter().map(|&e| e / sum).collect()
-}
-
-/// Find index of maximum value (argmax)
-fn argmax(values: &[f32]) -> usize {
-    values
-        .iter()
-        .enumerate()
-        .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|(idx, _)| idx)
-        .unwrap_or(0)
-}
-
-/// Parse 40 bytes as 10 little-endian F32 values
-fn parse_logits(bytes: &[u8]) -> Option<Vec<f32>> {
-    if bytes.len() != 40 {
-        return None;
+impl exports::pipeline::node::lifecycle::Guest for ResultFormat {
+    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+        match parse_result_config(&config.config) {
+            Ok(_) => None,
+            Err(e) => Some(e),
+        }
     }
 
-    let mut logits = Vec::with_capacity(10);
-    for i in 0..10 {
-        let start = i * 4;
-        let bytes_slice: [u8; 4] = bytes[start..start + 4].try_into().ok()?;
-        logits.push(f32::from_le_bytes(bytes_slice));
-    }
-    Some(logits)
-}
-
-/// Format f32 with 4 decimal places, removing trailing zeros
-fn format_f32(value: f32) -> String {
-    let formatted = format!("{:.4}", value);
-    // Trim trailing zeros after decimal point, but keep at least one digit after decimal
-    let trimmed = formatted.trim_end_matches('0');
-    if trimmed.ends_with('.') {
-        format!("{}0", trimmed)
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn format_json(digit: usize, confidence: f32, all_scores: &[f32]) -> String {
-    let scores_str: Vec<String> = all_scores.iter().map(|&s| format_f32(s)).collect();
-    format!(
-        r#"{{"digit": {}, "confidence": {}, "all_scores": [{}]}}"#,
-        digit,
-        format_f32(confidence),
-        scores_str.join(", ")
-    )
-}
-
-impl exports::pipeline::transform::lifecycle::Guest for ResultFormat {
-    /// Validate configuration - result-format has no config, always valid
-    fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
-        None
-    }
-
-    /// Initialize the node - result-format needs no initialization
-    fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
+    fn init(
+        config: exports::pipeline::node::lifecycle::NodeConfig,
+    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        let cfg = parse_result_config(&config.config)
+            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+        set_state!(cfg);
         Ok(())
     }
 
-    /// Graceful shutdown - result-format has nothing to clean up
-    fn close() {
-        // No resources to release
-    }
+    fn close() {}
 }
 
-impl exports::pipeline::transform::transform::Guest for ResultFormat {
-    /// Process a message - convert 40 bytes of logits to JSON output
+impl exports::pipeline::node::transform::Guest for ResultFormat {
     fn process(
-        input: pipeline::transform::types::Envelope,
-    ) -> pipeline::transform::types::ProcessResult {
-        use pipeline::transform::types::{Envelope, Payload, ProcessError, ProcessResult};
+        input: exports::pipeline::node::transform::Message,
+    ) -> Result<
+        exports::pipeline::node::transform::OutputMessage,
+        exports::pipeline::node::transform::ProcessError,
+    > {
+        let bytes = payload_bytes!(&input);
 
-        let Payload::Raw(bytes) = input.payload;
-
-        // Validate input is exactly 40 bytes
-        if bytes.len() != 40 {
-            return ProcessResult::Error(ProcessError {
-                code: "INVALID_INPUT_SIZE".to_string(),
-                message: format!(
-                    "Expected exactly 40 bytes (10 F32 logits), got {} bytes",
-                    bytes.len()
-                ),
-                retriable: false,
-            });
+        if bytes.is_empty() {
+            return Err(bad_input!("empty tensor"));
         }
 
-        // Parse bytes as F32 logits
-        let logits = match parse_logits(&bytes) {
-            Some(l) => l,
-            None => {
-                return ProcessResult::Error(ProcessError {
-                    code: "PARSE_ERROR".to_string(),
-                    message: "Failed to parse bytes as F32 logits".to_string(),
-                    retriable: false,
+        if bytes.len() % 4 != 0 {
+            return Err(bad_input!("payload not aligned to f32"));
+        }
+
+        // Parse bytes as f32 array (little-endian)
+        let num_values = bytes.len() / 4;
+        let mut scores: Vec<f32> = Vec::with_capacity(num_values);
+        for i in 0..num_values {
+            let start = i * 4;
+            let chunk: [u8; 4] = [bytes[start], bytes[start + 1], bytes[start + 2], bytes[start + 3]];
+            scores.push(f32::from_le_bytes(chunk));
+        }
+
+        with_state!(cfg => {
+            // Find max confidence (argmax)
+            let (max_idx, max_val) = scores
+                .iter()
+                .enumerate()
+                .fold((0usize, f32::NEG_INFINITY), |(best_i, best_v), (i, &v)| {
+                    if v > best_v { (i, v) } else { (best_i, best_v) }
                 });
-            }
-        };
 
-        // Apply softmax to get probabilities
-        let probabilities = softmax(&logits);
+            // Map index to label (use index string if out of range)
+            let prediction = if max_idx < cfg.labels.len() {
+                cfg.labels[max_idx].as_str()
+            } else {
+                "unknown"
+            };
 
-        // Find predicted digit (argmax)
-        let digit = argmax(&probabilities);
-        let confidence = probabilities[digit];
+            let above_threshold = (max_val as f64) >= cfg.threshold;
 
-        // Format as JSON
-        let json_output = format_json(digit, confidence, &probabilities);
+            // Build JSON output manually
+            let json_output = build_json_output(prediction, max_val, &scores, above_threshold);
 
-        ProcessResult::Emit(Envelope {
-            payload: Payload::Raw(json_output.into_bytes()),
-            ..input
+            Ok(output_with_type!(
+                &input,
+                json_output.into_bytes(),
+                "application/json"
+            ))
         })
     }
 }
 
-export!(ResultFormat);
+// ---------------------------------------------------------------------------
+// JSON output construction
+// ---------------------------------------------------------------------------
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn build_json_output(prediction: &str, confidence: f32, scores: &[f32], above_threshold: bool) -> String {
+    let mut out = String::with_capacity(128);
+    out.push_str("{\"prediction\": \"");
+    out.push_str(prediction);
+    out.push_str("\", \"confidence\": ");
+    write_f32(&mut out, confidence);
+    out.push_str(", \"scores\": [");
 
-    #[test]
-    fn test_softmax_basic() {
-        let logits = vec![1.0, 2.0, 3.0];
-        let probs = softmax(&logits);
-
-        // Sum should be approximately 1.0
-        let sum: f32 = probs.iter().sum();
-        assert!(
-            (sum - 1.0).abs() < 1e-6,
-            "Softmax sum should be 1.0, got {}",
-            sum
-        );
-
-        // Higher logit should have higher probability
-        assert!(probs[2] > probs[1], "Higher logit should have higher prob");
-        assert!(probs[1] > probs[0], "Higher logit should have higher prob");
-    }
-
-    #[test]
-    fn test_softmax_numerical_stability() {
-        // Large values that would overflow without numerical stability
-        let logits = vec![1000.0, 1001.0, 1002.0];
-        let probs = softmax(&logits);
-
-        let sum: f32 = probs.iter().sum();
-        assert!(
-            (sum - 1.0).abs() < 1e-6,
-            "Softmax should handle large values"
-        );
-        assert!(
-            probs.iter().all(|&p| p.is_finite()),
-            "All probs should be finite"
-        );
-    }
-
-    #[test]
-    fn test_softmax_equal_logits() {
-        let logits = vec![1.0, 1.0, 1.0, 1.0, 1.0];
-        let probs = softmax(&logits);
-
-        // All probabilities should be equal (1/5 = 0.2)
-        for prob in &probs {
-            assert!(
-                (prob - 0.2).abs() < 1e-6,
-                "Equal logits should give equal probs"
-            );
+    for (i, &score) in scores.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
         }
+        write_f32(&mut out, score);
     }
 
-    #[test]
-    fn test_argmax() {
-        assert_eq!(argmax(&[0.1, 0.2, 0.7]), 2);
-        assert_eq!(argmax(&[0.9, 0.05, 0.05]), 0);
-        assert_eq!(argmax(&[0.1, 0.8, 0.1]), 1);
+    out.push_str("], \"above_threshold\": ");
+    if above_threshold {
+        out.push_str("true");
+    } else {
+        out.push_str("false");
+    }
+    out.push('}');
+    out
+}
+
+/// Write f32 with up to 4 decimal places, trimming trailing zeros.
+fn write_f32(out: &mut String, value: f32) {
+    // Format to 4 decimal places
+    let mut buf = [0u8; 20];
+    let s = format_f32_fixed(value, &mut buf);
+    out.push_str(&s);
+}
+
+/// Simple f32 formatter with 4 decimal places, trailing-zero trimmed.
+fn format_f32_fixed(value: f32, _buf: &mut [u8; 20]) -> String {
+    // Use integer arithmetic to avoid alloc-heavy format! in simple cases
+    let negative = value < 0.0;
+    let abs_val = if negative { -value } else { value };
+
+    let integer_part = abs_val as u64;
+    let frac = ((abs_val - integer_part as f32) * 10000.0 + 0.5) as u64;
+
+    let mut result = String::with_capacity(12);
+    if negative {
+        result.push('-');
     }
 
-    #[test]
-    fn test_parse_logits_valid() {
-        // Create 40 bytes representing 10 F32 values
-        let mut bytes = Vec::with_capacity(40);
-        for i in 0..10 {
-            let value = i as f32;
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
+    // Integer part
+    push_u64(&mut result, integer_part);
 
-        let logits = parse_logits(&bytes).unwrap();
-        assert_eq!(logits.len(), 10);
-        for (i, &logit) in logits.iter().enumerate() {
-            assert_eq!(logit, i as f32);
-        }
+    // Fractional part (up to 4 digits, trim trailing zeros)
+    if frac == 0 {
+        result.push_str(".0");
+    } else {
+        result.push('.');
+        // Pad to 4 digits
+        let frac_str = format!("{frac:04}");
+        let trimmed = frac_str.trim_end_matches('0');
+        result.push_str(trimmed);
     }
 
-    #[test]
-    fn test_parse_logits_invalid_size() {
-        assert!(parse_logits(&[0u8; 39]).is_none(), "39 bytes should fail");
-        assert!(parse_logits(&[0u8; 41]).is_none(), "41 bytes should fail");
-        assert!(parse_logits(&[]).is_none(), "Empty should fail");
+    result
+}
+
+fn push_u64(out: &mut String, mut n: u64) {
+    if n == 0 {
+        out.push('0');
+        return;
     }
 
-    #[test]
-    fn test_format_f32() {
-        assert_eq!(format_f32(0.9823), "0.9823");
-        assert_eq!(format_f32(0.1), "0.1");
-        assert_eq!(format_f32(1.0), "1.0");
-        assert_eq!(format_f32(0.0), "0.0");
-        assert_eq!(format_f32(0.12345), "0.1235"); // Rounds to 4 places
+    let mut digits = [0u8; 20];
+    let mut i = 0;
+    while n > 0 {
+        digits[i] = (n % 10) as u8 + b'0';
+        n /= 10;
+        i += 1;
     }
-
-    #[test]
-    fn test_format_json() {
-        let json = format_json(
-            7,
-            0.9823,
-            &[
-                0.001, 0.002, 0.003, 0.001, 0.002, 0.001, 0.002, 0.9823, 0.003, 0.002,
-            ],
-        );
-
-        assert!(json.contains("\"digit\": 7"));
-        assert!(json.contains("\"confidence\": 0.9823"));
-        assert!(json.contains("\"all_scores\":"));
-        // Should have 10 values
-        assert!(json.contains("[0.001"));
-        assert!(json.contains("0.002]"));
-    }
-
-    #[test]
-    fn test_end_to_end() {
-        // Create logits where digit 7 has highest value
-        let mut logits_f32 = vec![0.0f32; 10];
-        logits_f32[7] = 10.0; // High logit for digit 7
-
-        // Convert to bytes
-        let mut bytes = Vec::with_capacity(40);
-        for logit in &logits_f32 {
-            bytes.extend_from_slice(&logit.to_le_bytes());
-        }
-
-        // Parse and process
-        let parsed = parse_logits(&bytes).unwrap();
-        let probs = softmax(&parsed);
-        let digit = argmax(&probs);
-
-        assert_eq!(digit, 7, "Should predict digit 7");
-        assert!(probs[7] > 0.99, "Digit 7 should have very high confidence");
+    // Reverse
+    for j in (0..i).rev() {
+        out.push(digits[j] as char);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Config parsing (manual — no serde)
+// ---------------------------------------------------------------------------
+
+fn parse_result_config(json: &str) -> Result<ResultFormatConfig, String> {
+    let labels = extract_string_array(json, "labels")
+        .ok_or_else(|| "missing or invalid 'labels' array in config".to_string())?;
+
+    if labels.is_empty() {
+        return Err("'labels' array must not be empty".to_string());
+    }
+
+    let threshold = extract_number(json, "threshold").unwrap_or(0.5);
+
+    Ok(ResultFormatConfig { labels, threshold })
+}
+
+fn extract_number(json: &str, key: &str) -> Option<f64> {
+    let mut needle = String::with_capacity(key.len() + 2);
+    needle.push('"');
+    needle.push_str(key);
+    needle.push('"');
+
+    let key_pos = json.find(&needle)?;
+    let after_key = &json[key_pos + needle.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = &after_key[colon_pos + 1..];
+    let trimmed = after_colon.trim_start();
+
+    let end = trimmed
+        .find(|c: char| c == ',' || c == '}' || c == ']' || c == '\n' || c == '\r')
+        .unwrap_or(trimmed.len());
+    let num_str = trimmed[..end].trim();
+    num_str.parse::<f64>().ok()
+}
+
+fn extract_string_array(json: &str, key: &str) -> Option<Vec<String>> {
+    let mut needle = String::with_capacity(key.len() + 2);
+    needle.push('"');
+    needle.push_str(key);
+    needle.push('"');
+
+    let key_pos = json.find(&needle)?;
+    let after_key = &json[key_pos + needle.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = &after_key[colon_pos + 1..];
+    let trimmed = after_colon.trim_start();
+
+    if !trimmed.starts_with('[') {
+        return None;
+    }
+
+    let bracket_end = find_matching_bracket(&trimmed[1..])?;
+    let inner = &trimmed[1..bracket_end + 1];
+
+    let mut result = Vec::new();
+    let mut remaining = inner;
+
+    loop {
+        remaining = remaining.trim_start();
+        if remaining.is_empty() {
+            break;
+        }
+
+        if !remaining.starts_with('"') {
+            break;
+        }
+
+        let value_start = &remaining[1..];
+        let end_quote = find_unescaped_quote(value_start)?;
+        result.push(value_start[..end_quote].to_string());
+        remaining = &value_start[end_quote + 1..];
+
+        remaining = remaining.trim_start();
+        if remaining.starts_with(',') {
+            remaining = &remaining[1..];
+        }
+    }
+
+    Some(result)
+}
+
+fn find_matching_bracket(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut depth: u32 = 0;
+    let mut i = 0;
+    let mut in_string = false;
+
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' if in_string => i += 2,
+            b'"' => {
+                in_string = !in_string;
+                i += 1;
+            }
+            b'[' if !in_string => {
+                depth += 1;
+                i += 1;
+            }
+            b']' if !in_string => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+fn find_unescaped_quote(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\\' {
+            i += 2;
+        } else if bytes[i] == b'"' {
+            return Some(i);
+        } else {
+            i += 1;
+        }
+    }
+    None
+}
+
+export!(ResultFormat);

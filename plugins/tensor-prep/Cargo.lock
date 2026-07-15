@@ -171,13 +171,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tensor-prep"
-version = "0.1.0"
-dependencies = [
- "wit-bindgen",
-]
-
-[[package]]
 name = "unicode-ident"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -188,6 +181,18 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "wafer-plugin"
+version = "0.1.0"
+
+[[package]]
+name = "wafer-tensor-prep"
+version = "0.1.0"
+dependencies = [
+ "wafer-plugin",
+ "wit-bindgen",
+]
 
 [[package]]
 name = "wasm-encoder"

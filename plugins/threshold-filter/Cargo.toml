@@ -1,8 +1,8 @@
 [package]
-name = "wafer-tensor-prep"
+name = "wafer-threshold-filter"
 version = "0.1.0"
 edition = "2024"
-description = "Image-to-tensor normalization plugin for WAFER pipeline (28x28 grayscale to F32)"
+description = "Threshold filter plugin for WAFER pipeline - filter-node world"
 
 [workspace]
 
@@ -16,3 +16,4 @@ wafer-plugin = { path = "../../crates/wafer-plugin" }
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

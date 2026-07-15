@@ -1,5 +1,5 @@
 [package]
-name = "result-format"
+name = "wafer-result-format"
 version = "0.1.0"
 edition = "2024"
 description = "Result format plugin for WAFER inference output parsing"
@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wit-bindgen = "0.53"
+wafer-plugin = { path = "../../crates/wafer-plugin" }
 
 [profile.release]
 opt-level = "s"
