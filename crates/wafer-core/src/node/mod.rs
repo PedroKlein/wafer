@@ -8,6 +8,7 @@ mod source;
 mod state;
 mod traits;
 mod transform;
+pub mod wasm;
 
 pub use router::{RouterInstance, WasmRouter};
 pub use sink::{BatchStats, FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};

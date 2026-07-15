@@ -1,13 +1,13 @@
 //! Wasmtime integration layer: Engine, bindgen, buffer resource, cache, state.
 
-mod bindings;
+pub(crate) mod bindings;
 mod buffer;
 mod cache;
 mod capabilities;
 mod host;
 mod instance;
 mod loader;
-mod state;
+pub(crate) mod state;
 
 pub use bindings::WasmBindings;
 pub use buffer::WaferBuffer;
