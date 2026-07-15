@@ -3,6 +3,7 @@
 //!
 //! This crate contains API types shared between wafer-core, wafer-runtime, and waferctl.
 
+pub mod config;
 mod control;
 mod events;
 mod metrics;
