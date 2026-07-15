@@ -98,5 +98,9 @@ harness = false
 required-features = ["http-api"]
 
 [[bench]]
+name = "native_vs_wasm"
+harness = false
+
+[[bench]]
 name = "throughput"
 harness = false
