@@ -13,7 +13,7 @@
 package pipeline:host@0.1.0;
 
 interface logging {
-    use pipeline:types/types.{log-level};
+    use pipeline:types/types@0.1.0.{log-level};
 
     // Emit a structured log message visible in the host tracing span for this node.
     log: func(level: log-level, message: string);

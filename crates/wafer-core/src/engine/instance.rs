@@ -4,7 +4,7 @@
 //! using the new WIT contracts under wit/.
 
 use super::loader::WaferEngine;
-use super::WaferState;
+use super::LegacyWaferState as WaferState;
 use crate::error::{Result, WaferError};
 use crate::queue::RuntimeEnvelope;
 use wasmtime::Store;

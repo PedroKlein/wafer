@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! Starting → Running ⟶ Draining → Retired
-//!                    ↘ Error
+//!                    ↘ Error → Recovering → Running
 //! ```
 
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -114,6 +114,21 @@ impl NodeStateTracker {
         }
     }
 
+    /// Transition from Error to Recovering (re-instantiation starting).
+    pub fn transition_to_recovering(&self) -> bool {
+        self.try_transition(NodeState::Error, NodeState::Recovering)
+    }
+
+    /// Transition from Recovering back to Running (re-instantiation succeeded).
+    pub fn transition_recovering_to_running(&self) -> bool {
+        if self.try_transition(NodeState::Recovering, NodeState::Running) {
+            self.routing_enabled.store(true, Ordering::Release);
+            true
+        } else {
+            false
+        }
+    }
+
     fn try_transition(&self, from: NodeState, to: NodeState) -> bool {
         let from_val = Self::state_to_u8(from);
         let to_val = Self::state_to_u8(to);
@@ -161,6 +176,34 @@ impl NodeStateTracker {
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         self.state().is_terminal()
+    }
+}
+
+/// RAII guard that sets `processing = true` on creation and `false` on drop.
+///
+/// Ensures the processing flag is always cleared, even on panic or early return
+/// via `?`. This makes drain detection correct — without the guard, an early
+/// return between `set_processing(true)` and `set_processing(false)` would
+/// permanently mark the node as processing.
+///
+/// See docs/decisions/2025-07-12-performance-optimizations.md C4.
+pub struct ProcessingGuard<'a> {
+    tracker: &'a NodeStateTracker,
+}
+
+impl<'a> ProcessingGuard<'a> {
+    /// Enter the processing state. Returns a guard that clears it on drop.
+    #[inline]
+    pub fn enter(tracker: &'a NodeStateTracker) -> Self {
+        tracker.set_processing(true);
+        Self { tracker }
+    }
+}
+
+impl Drop for ProcessingGuard<'_> {
+    #[inline]
+    fn drop(&mut self) {
+        self.tracker.set_processing(false);
     }
 }
 
@@ -313,5 +356,76 @@ mod tests {
 
         tracker.transition_to_draining();
         assert!(!tracker.routing_enabled());
+    }
+
+    #[test]
+    fn test_recovering_transition() {
+        let tracker = NodeStateTracker::running();
+
+        // Running → Error
+        assert!(tracker.transition_to_error());
+        assert_eq!(tracker.state(), NodeState::Error);
+
+        // Error → Recovering
+        assert!(tracker.transition_to_recovering());
+        assert_eq!(tracker.state(), NodeState::Recovering);
+
+        // Recovering → Running
+        assert!(tracker.transition_recovering_to_running());
+        assert_eq!(tracker.state(), NodeState::Running);
+        assert!(tracker.routing_enabled());
+    }
+
+    #[test]
+    fn test_recovering_invalid_from_running() {
+        let tracker = NodeStateTracker::running();
+        // Cannot recover from Running (must be in Error first)
+        assert!(!tracker.transition_to_recovering());
+    }
+
+    #[test]
+    fn test_processing_guard_basic() {
+        let tracker = NodeStateTracker::running();
+        assert!(!tracker.is_processing());
+
+        {
+            let _guard = ProcessingGuard::enter(&tracker);
+            assert!(tracker.is_processing());
+        }
+
+        // Guard dropped — processing cleared
+        assert!(!tracker.is_processing());
+    }
+
+    #[test]
+    fn test_processing_guard_clears_on_panic() {
+        let tracker = NodeStateTracker::running();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = ProcessingGuard::enter(&tracker);
+            panic!("simulated panic");
+        }));
+
+        assert!(result.is_err());
+        // Guard's Drop still ran during unwind
+        assert!(!tracker.is_processing());
+    }
+
+    #[test]
+    fn test_drain_ready_with_guard() {
+        let tracker = NodeStateTracker::running();
+        tracker.transition_to_draining();
+
+        // Not processing → drain ready
+        assert!(tracker.is_drain_ready());
+
+        // While processing → not ready
+        {
+            let _guard = ProcessingGuard::enter(&tracker);
+            assert!(!tracker.is_drain_ready());
+        }
+
+        // After guard drops → ready again
+        assert!(tracker.is_drain_ready());
     }
 }

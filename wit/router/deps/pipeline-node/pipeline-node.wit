@@ -88,14 +88,3 @@ world filter-node {
     export filter;
 }
 
-// An inference node: same as transform-node with wasi:nn imports.
-world inference-node {
-    import pipeline:types/types@0.1.0;
-    import pipeline:host/logging@0.1.0;
-    import wasi:nn/tensor@0.2.0-rc-2024-10-28;
-    import wasi:nn/graph@0.2.0-rc-2024-10-28;
-    import wasi:nn/inference@0.2.0-rc-2024-10-28;
-    import wasi:nn/errors@0.2.0-rc-2024-10-28;
-    export lifecycle;
-    export transform;
-}

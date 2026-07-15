@@ -1,5 +1,6 @@
 //! Node trait architecture for WAFER pipeline.
 
+mod metrics;
 mod router;
 mod sink;
 mod source;
@@ -10,7 +11,8 @@ mod transform;
 pub use router::{RouterInstance, WasmRouter};
 pub use sink::{BatchStats, FileSink, HttpSink, HttpSinkBatchConfig, MqttSink, Sink, StdoutSink};
 pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
-pub use state::NodeStateTracker;
+pub use metrics::NodeMetrics;
+pub use state::{NodeStateTracker, ProcessingGuard};
 pub use traits::{
     ConfigParseError, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
     Router, Transform,

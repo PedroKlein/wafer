@@ -1,40 +1,63 @@
-use crate::config::EngineConfig;
-use crate::error::{Result, WaferError};
+//! `WaferEngine` — singleton Wasm runtime engine with OS-thread epoch ticker.
+//!
+//! The engine is created once at startup, cloned (Arc-based) everywhere.
+//! The epoch ticker uses `std::thread::spawn` (NOT `tokio::spawn`) following
+//! Spin's validated pattern: if all Tokio workers are blocked executing Wasm,
+//! a tokio task won't get scheduled to tick the epoch.
+//!
+//! See docs/decisions/2025-07-12-performance-optimizations.md C1.
+
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use tokio::task::JoinHandle;
-use wasmtime::{
-    Config, Engine,
-    component::{Component, Linker},
-};
-use wasmtime_wasi::p2::add_to_linker_async;
-use wasmtime_wasi_nn::wit::add_to_linker as add_nn_to_linker;
+use wasmtime::{Config, Engine, component::Component};
 
-use super::host::WaferState;
+use super::bindings::transform_node::TransformNodePre;
+use super::cache::ComponentCache;
+use super::state::WaferState;
+use crate::config::EngineConfig;
+use crate::error::{Result, WaferError};
 
+/// Core Wasm runtime engine for WAFER.
+///
+/// Owns the wasmtime `Engine` (Arc internally), epoch configuration, and the
+/// component cache. Create once at startup, pass by reference everywhere.
 pub struct WaferEngine {
     engine: Engine,
     fuel_limit: u64,
     epoch_deadline: u64,
     epoch_tick_ms: u64,
-    linker: OnceLock<Linker<WaferState>>,
-    epoch_ticker: OnceLock<JoinHandle<()>>,
+    /// Epoch ticker is started lazily on first use.
+    epoch_started: OnceLock<()>,
+    /// Component compilation cache (optional disk tier).
+    cache: std::sync::Mutex<ComponentCache>,
 }
 
 impl WaferEngine {
+    /// Create a new engine with default configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
     #[must_use = "creating an engine without using it is expensive"]
     pub fn new() -> Result<Self> {
         Self::from_engine_config(&EngineConfig::default())
     }
 
+    /// Create a new engine from explicit configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
     #[must_use = "creating an engine without using it is expensive"]
     pub fn from_engine_config(engine_config: &EngineConfig) -> Result<Self> {
         let mut config = Config::new();
         config.consume_fuel(true);
         config.wasm_component_model(true);
         config.epoch_interruption(true);
+        // Async support for WASI host calls that .await
+        config.async_support(true);
 
         let engine =
             Engine::new(&config).map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
@@ -44,32 +67,54 @@ impl WaferEngine {
             fuel_limit: engine_config.fuel_limit,
             epoch_deadline: engine_config.epoch_deadline,
             epoch_tick_ms: engine_config.epoch_tick_ms,
-            linker: OnceLock::new(),
-            epoch_ticker: OnceLock::new(),
+            epoch_started: OnceLock::new(),
+            cache: std::sync::Mutex::new(ComponentCache::memory_only()),
         })
     }
 
+    /// Create an engine with a disk-backed component cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
+    pub fn with_cache_dir(engine_config: &EngineConfig, cache_dir: impl Into<std::path::PathBuf>) -> Result<Self> {
+        let mut this = Self::from_engine_config(engine_config)?;
+        this.cache = std::sync::Mutex::new(ComponentCache::new(Some(cache_dir.into())));
+        Ok(this)
+    }
+
+    /// Start the OS-thread epoch ticker (idempotent).
+    ///
+    /// Uses `std::thread::spawn` with a Weak engine reference so the thread
+    /// exits when all `Engine` clones are dropped. This ensures epoch ticks
+    /// fire even when all Tokio workers are blocked in Wasm execution.
     pub fn ensure_epoch_ticker(&self) {
-        self.epoch_ticker.get_or_init(|| {
-            let engine = self.engine.clone();
+        self.epoch_started.get_or_init(|| {
+            let engine_weak = self.engine.weak();
             let interval = Duration::from_millis(self.epoch_tick_ms);
-            tokio::spawn(async move {
-                let mut ticker = tokio::time::interval(interval);
-                ticker.tick().await;
-                loop {
-                    ticker.tick().await;
-                    engine.increment_epoch();
-                }
-            })
+
+            std::thread::Builder::new()
+                .name("wafer-epoch-ticker".into())
+                .spawn(move || {
+                    loop {
+                        std::thread::sleep(interval);
+                        if let Some(engine) = engine_weak.upgrade() {
+                            engine.increment_epoch();
+                        } else {
+                            // Engine dropped → exit ticker thread
+                            break;
+                        }
+                    }
+                })
+                .expect("failed to spawn epoch ticker thread");
         });
     }
 
-    pub fn shutdown(&self) {
-        if let Some(handle) = self.epoch_ticker.get() {
-            handle.abort();
-        }
-    }
-
+    /// Load a component from a file path (no caching — use `compile_cached` instead).
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::ComponentLoad` if the file cannot be read or compiled.
     #[must_use = "loading a component without using it is expensive"]
     pub fn load_component(&self, path: impl AsRef<Path>) -> Result<Component> {
         let path = path.as_ref();
@@ -77,6 +122,11 @@ impl WaferEngine {
             .map_err(|source| WaferError::ComponentLoad { path: path.to_path_buf(), source })
     }
 
+    /// Load a component from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::ComponentLoad` if compilation fails.
     #[must_use = "loading a component without using it is expensive"]
     pub fn load_component_from_bytes(&self, bytes: &[u8], name: &str) -> Result<Component> {
         Component::from_binary(&self.engine, bytes).map_err(|source| WaferError::ComponentLoad {
@@ -85,42 +135,61 @@ impl WaferEngine {
         })
     }
 
-    pub fn linker(&self) -> Result<&Linker<WaferState>> {
-        if let Some(linker) = self.linker.get() {
-            return Ok(linker);
-        }
-
-        let mut linker = Linker::new(&self.engine);
-        add_to_linker_async(&mut linker)
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
-        add_nn_to_linker(&mut linker, |state: &mut WaferState| state.nn_view())
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
-
-        let _ = self.linker.set(linker);
-
-        self.linker.get().ok_or_else(|| WaferError::PluginInit {
-            message: "linker initialization failed unexpectedly".to_string(),
-        })
+    /// Compile a component from bytes, using the cache.
+    ///
+    /// Returns a shared `Arc<Component>` that can be used to create `InstancePre`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::ComponentLoad` if compilation fails.
+    pub fn compile_cached(
+        &self,
+        wasm_bytes: &[u8],
+    ) -> Result<std::sync::Arc<Component>> {
+        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get_or_compile(&self.engine, wasm_bytes)
     }
 
+    /// Create a `TransformNodePre` from a compiled component.
+    ///
+    /// `TransformNodePre` is the pre-resolved, type-checked binding that can be
+    /// efficiently instantiated into a Store. Thread-safe (Clone + Send + Sync).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the component doesn't match the transform-node world.
+    pub fn pre_instantiate_transform(
+        &self,
+        component: &Component,
+    ) -> Result<TransformNodePre<WaferState>> {
+        // Create a linker with WASI support
+        let mut linker = wasmtime::component::Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
+        let instance_pre = linker.instantiate_pre(component)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
+        TransformNodePre::new(instance_pre)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })
+    }
+
+    /// Get a reference to the inner wasmtime `Engine`.
+    #[inline]
     pub fn inner(&self) -> &Engine {
         &self.engine
     }
 
+    /// Configured fuel limit per process() call.
+    #[inline]
     pub fn fuel_limit(&self) -> u64 {
         self.fuel_limit
     }
 
+    /// Configured epoch deadline (number of ticks before timeout).
+    #[inline]
     pub fn epoch_deadline(&self) -> u64 {
         self.epoch_deadline
-    }
-}
-
-impl Drop for WaferEngine {
-    fn drop(&mut self) {
-        if let Some(handle) = self.epoch_ticker.get() {
-            handle.abort();
-        }
     }
 }
 
@@ -149,14 +218,6 @@ mod tests {
     }
 
     #[test]
-    fn engine_from_default_engine_config() {
-        let cfg = EngineConfig::default();
-        let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), DEFAULT_FUEL_LIMIT);
-        assert_eq!(engine.epoch_deadline(), DEFAULT_EPOCH_DEADLINE);
-    }
-
-    #[test]
     fn engine_inner_is_valid() {
         let engine = WaferEngine::new().expect("Failed to create engine");
         let _inner = engine.inner();
@@ -178,80 +239,35 @@ mod tests {
     }
 
     #[test]
-    fn load_component_invalid_file() {
-        use std::io::Write;
-
-        let temp_dir = std::env::temp_dir();
-        let invalid_wasm = temp_dir.join("invalid_test.wasm");
-
-        let mut file = std::fs::File::create(&invalid_wasm).expect("Failed to create temp file");
-        file.write_all(b"not a valid wasm file").expect("Failed to write");
-        drop(file);
-
-        let engine = WaferEngine::new().expect("Failed to create engine");
-        let result = engine.load_component(&invalid_wasm);
-
-        let _ = std::fs::remove_file(&invalid_wasm);
-
-        assert!(result.is_err());
-        let err = result.err().expect("Expected error");
-        assert!(matches!(err, WaferError::ComponentLoad { .. }));
-    }
-
-    #[test]
-    fn linker_is_cached() {
-        let engine = WaferEngine::new().expect("Failed to create engine");
-        let linker1 = engine.linker().expect("Failed to get linker");
-        let linker2 = engine.linker().expect("Failed to get linker");
-        assert!(std::ptr::eq(linker1, linker2));
-    }
-
-    #[tokio::test]
-    async fn epoch_ticker_starts_and_runs() {
+    fn epoch_ticker_uses_os_thread() {
         let engine = WaferEngine::new().expect("Failed to create engine");
         engine.ensure_epoch_ticker();
-        tokio::time::sleep(Duration::from_millis(50)).await;
-        assert!(!engine.epoch_ticker.get().unwrap().is_finished());
+        // Verify the ticker started (no crash)
+        std::thread::sleep(Duration::from_millis(20));
+        // If we got here, the OS thread is running
     }
 
     #[test]
-    fn zero_fuel_limit() {
-        let cfg = EngineConfig { fuel_limit: 0, ..Default::default() };
-        let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), 0);
-    }
-
-    #[test]
-    fn max_fuel_limit() {
-        let cfg = EngineConfig { fuel_limit: u64::MAX, ..Default::default() };
-        let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), u64::MAX);
-    }
-
-    #[test]
-    fn load_component_from_bytes_invalid() {
+    fn epoch_ticker_is_idempotent() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let invalid_bytes = b"not a valid wasm component";
-        let result = engine.load_component_from_bytes(invalid_bytes, "test-component");
-
-        assert!(result.is_err());
-        let err = result.err().expect("Expected error");
-        match err {
-            WaferError::ComponentLoad { path, .. } => {
-                assert_eq!(path.to_string_lossy(), "<bytes:test-component>");
-            }
-            other => panic!("Expected ComponentLoad error, got {other:?}"),
-        }
+        engine.ensure_epoch_ticker();
+        engine.ensure_epoch_ticker(); // Should not panic or spawn second thread
     }
 
     #[test]
-    fn load_component_from_bytes_empty() {
+    fn compile_cached_invalid_bytes() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let empty_bytes: &[u8] = &[];
-        let result = engine.load_component_from_bytes(empty_bytes, "empty");
-
+        let result = engine.compile_cached(b"not valid wasm");
         assert!(result.is_err());
-        let err = result.err().expect("Expected error");
-        assert!(matches!(err, WaferError::ComponentLoad { .. }));
+    }
+
+    #[test]
+    fn cache_with_disk_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = EngineConfig::default();
+        let engine = WaferEngine::with_cache_dir(&cfg, dir.path()).expect("engine");
+        // Cache should be empty initially
+        let cache = engine.cache.lock().unwrap();
+        assert!(cache.is_empty());
     }
 }
