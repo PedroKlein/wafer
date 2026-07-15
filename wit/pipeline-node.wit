@@ -1,0 +1,101 @@
+// pipeline:node — core processing interfaces for WAFER pipeline nodes.
+//
+// All Wasm processing nodes (transform, filter) implement:
+//   1. The lifecycle interface (validate → init → process loop → close).
+//   2. Exactly one processing interface (transform or filter).
+//
+// Amendment A2 (Session 3): Transform returns result<output-message, process-error>
+// directly — no process-outcome wrapper. Filter is a distinct interface.
+// Amendment A1 (Session 3): Merge is implicit host topology — no merge WIT interface.
+//
+// See docs/decisions/2025-07-05-wit-contracts-envelope-design.md.
+
+package pipeline:node@0.1.0;
+
+// -------------------------------------------------------------------------
+// Lifecycle — shared by all Wasm node types
+// -------------------------------------------------------------------------
+
+interface lifecycle {
+    use pipeline:types/types.{process-error};
+
+    // Config passed to every node at startup.
+    record node-config {
+        // The node's own identifier, for logging and tracing.
+        id: string,
+        // Plugin-specific config serialized as JSON (from [nodes.X.config] in TOML).
+        config: string,
+    }
+
+    // Validate config without side effects. Returns error message string on failure.
+    //
+    // Called before init() so the host can fail-fast before committing resources.
+    validate: func(config: node-config) -> option<string>;
+
+    // Initialize the node (open connections, load models, allocate state).
+    init: func(config: node-config) -> result<_, process-error>;
+
+    // Graceful shutdown — flush buffers, close connections.
+    close: func();
+}
+
+// -------------------------------------------------------------------------
+// Transform — strict 1:1 message transformation (ownership, produces new bytes)
+// -------------------------------------------------------------------------
+
+interface transform {
+    use pipeline:types/types.{message, output-message, process-error};
+
+    // Transform one input message into one output message.
+    //
+    // Must always return either an output or an error — there is no "skip" path.
+    // Use a filter node upstream to drop unwanted messages.
+    process: func(input: message) -> result<output-message, process-error>;
+}
+
+// -------------------------------------------------------------------------
+// Filter — pure predicate (borrow-only, zero-copy pass-through)
+// -------------------------------------------------------------------------
+
+interface filter {
+    use pipeline:types/types.{message, process-error};
+
+    // Evaluate whether the message should be forwarded.
+    //
+    // ok(true)  → host forwards the original message unchanged (zero copy).
+    // ok(false) → host drops the message.
+    // err(e)    → error policy applies.
+    evaluate: func(input: message) -> result<bool, process-error>;
+}
+
+// -------------------------------------------------------------------------
+// Worlds
+// -------------------------------------------------------------------------
+
+// A standard transform node: exports lifecycle + transform.
+world transform-node {
+    import pipeline:types/types;
+    import pipeline:host/logging;
+    export lifecycle;
+    export transform;
+}
+
+// A filter node: exports lifecycle + filter.
+world filter-node {
+    import pipeline:types/types;
+    import pipeline:host/logging;
+    export lifecycle;
+    export filter;
+}
+
+// An inference node: same as transform-node with wasi:nn imports.
+world inference-node {
+    import pipeline:types/types;
+    import pipeline:host/logging;
+    import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+    import wasi:nn/graph@0.2.0-rc-2024-10-28;
+    import wasi:nn/inference@0.2.0-rc-2024-10-28;
+    import wasi:nn/errors@0.2.0-rc-2024-10-28;
+    export lifecycle;
+    export transform;
+}
