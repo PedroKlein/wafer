@@ -13,6 +13,8 @@ use std::time::Duration;
 
 use wasmtime::{Config, Engine, component::Component};
 
+use super::bindings::filter_node::FilterNodePre;
+use super::bindings::router_node::RouterNodePre;
 use super::bindings::transform_node::TransformNodePre;
 use super::cache::ComponentCache;
 use super::state::WaferState;
@@ -149,6 +151,18 @@ impl WaferEngine {
         cache.get_or_compile(&self.engine, wasm_bytes)
     }
 
+    /// Build a Linker pre-configured with WASI p2 and WAFER host traits.
+    ///
+    /// Shared setup for all three world types (transform, filter, router).
+    /// Each world imports `pipeline:types/types` and `pipeline:host/logging`,
+    /// both of which are backed by the same `WaferState` trait impls.
+    fn build_linker(&self) -> Result<wasmtime::component::Linker<WaferState>> {
+        let mut linker = wasmtime::component::Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        Ok(linker)
+    }
+
     /// Create a `TransformNodePre` from a compiled component.
     ///
     /// `TransformNodePre` is the pre-resolved, type-checked binding that can be
@@ -161,9 +175,7 @@ impl WaferEngine {
         &self,
         component: &Component,
     ) -> Result<TransformNodePre<WaferState>> {
-        let mut linker = wasmtime::component::Linker::new(&self.engine);
-        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
-            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        let mut linker = self.build_linker()?;
 
         // Add WAFER host traits (HostBuffer + logging) so the component's imports resolve
         super::bindings::transform_node::TransformNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
@@ -177,6 +189,66 @@ impl WaferEngine {
 
         TransformNodePre::new(instance_pre)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })
+    }
+
+    /// Create a `FilterNodePre` from a compiled component.
+    ///
+    /// Analogous to [`Self::pre_instantiate_transform`] but for filter-node world.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the component doesn't implement the filter-node world.
+    pub fn pre_instantiate_filter(
+        &self,
+        component: &Component,
+    ) -> Result<FilterNodePre<WaferState>> {
+        let mut linker = self.build_linker()?;
+
+        super::bindings::filter_node::FilterNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
+            &mut linker,
+            |state: &mut WaferState| state,
+        )
+        .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
+        let instance_pre = linker.instantiate_pre(component)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("Component does not implement the filter-node world: {e}"),
+            })?;
+
+        FilterNodePre::new(instance_pre)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("Failed to create FilterNodePre: {e}"),
+            })
+    }
+
+    /// Create a `RouterNodePre` from a compiled component.
+    ///
+    /// Analogous to [`Self::pre_instantiate_transform`] but for router-node world.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the component doesn't implement the router-node world.
+    pub fn pre_instantiate_router(
+        &self,
+        component: &Component,
+    ) -> Result<RouterNodePre<WaferState>> {
+        let mut linker = self.build_linker()?;
+
+        super::bindings::router_node::RouterNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
+            &mut linker,
+            |state: &mut WaferState| state,
+        )
+        .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
+        let instance_pre = linker.instantiate_pre(component)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("Component does not implement the router-node world: {e}"),
+            })?;
+
+        RouterNodePre::new(instance_pre)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("Failed to create RouterNodePre: {e}"),
+            })
     }
 
     /// Get a reference to the inner wasmtime `Engine`.
@@ -274,5 +346,28 @@ mod tests {
         // Cache should be empty initially
         let cache = engine.cache.lock().unwrap();
         assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn pre_instantiate_filter_rejects_invalid_bytes() {
+        let engine = WaferEngine::new().expect("engine");
+        // Invalid bytes cannot even become a Component
+        let result = engine.load_component_from_bytes(b"not a wasm component", "bad-filter");
+        assert!(result.is_err(), "Invalid bytes should fail to compile");
+    }
+
+    #[test]
+    fn pre_instantiate_router_rejects_invalid_bytes() {
+        let engine = WaferEngine::new().expect("engine");
+        let result = engine.load_component_from_bytes(b"not a wasm component", "bad-router");
+        assert!(result.is_err(), "Invalid bytes should fail to compile");
+    }
+
+    #[test]
+    fn build_linker_succeeds() {
+        // Verify the shared linker helper produces a usable Linker
+        let engine = WaferEngine::new().expect("engine");
+        let linker = engine.build_linker();
+        assert!(linker.is_ok(), "build_linker should succeed");
     }
 }
