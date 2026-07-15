@@ -7,7 +7,7 @@ use wafer_types::{
     PipelineState, PipelineStatus, ReloadResult,
 };
 
-use super::pipeline::PipelineOrchestrator;
+use super::pipeline_legacy::PipelineOrchestrator;
 
 /// Type alias for the event receiver from `subscribe()`.
 pub type EventReceiver = broadcast::Receiver<PipelineEvent>;
@@ -168,7 +168,7 @@ mod tests {
     use crate::config::NodeType as ConfigNodeType;
     use crate::config::{Config, EdgeDefinition, NodeDefinition, OverflowPolicy, PipelineConfig};
     use crate::dag::graph::DagGraph;
-    use crate::orchestrator::pipeline::ControlState;
+    use crate::orchestrator::pipeline_legacy::ControlState;
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;

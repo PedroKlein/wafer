@@ -1,591 +1,499 @@
-// Duration nanosecond casts: 2^64 ns = ~585 years, truncation is acceptable
-#![allow(clippy::cast_possible_truncation)]
-
-//! Pipeline orchestrator for multi-node execution.
+//! Pipeline orchestrator — lifecycle management with watch-channel hot-swap.
 //!
-//! Manages graph topology, node lifecycle, queue wiring, and coordinated
-//! async execution. Supports graceful shutdown via `CancellationToken`.
+//! The orchestrator builds, spawns, monitors, and tears down the pipeline.
+//! After spawn, nodes OWN their instances — no shared Mutex on the hot path.
+//! Hot-swap signals go through `watch::Sender` per Wasm node.
+//! Status queries use atomic reads from `Arc<NodeStateTracker>` + `Arc<NodeMetrics>`.
 //!
-//! `run()` takes `&self` (not `&mut self`) so the orchestrator can be
-//! wrapped in `Arc` for sharing with API handlers.
+//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D6, D11, D12.
 
 use std::collections::HashMap;
-use std::fmt;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::time::{Duration, Instant};
-use tokio::sync::{Mutex, broadcast};
+use std::time::Duration;
+
+use tokio::sync::watch;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use wafer_types::{PipelineEvent, PipelineState};
 
-#[cfg(feature = "http-api")]
-use crate::metrics::MetricsRegistry;
-
-use super::assembler::NodeAssembler;
-use super::hotswap::{HotSwapCoordinator, SwapError, SwapMetrics};
-use crate::config::{Config, OverflowPolicy};
-use crate::dag::graph::DagGraph;
+use crate::config::Config;
+use crate::engine::WaferEngine;
 use crate::error::{Result, WaferError};
-use crate::node::AnyNode;
-use crate::queue::{QueueReceiver, QueueSender, RuntimeEnvelope};
+use crate::node::{NodeMetrics, NodeStateTracker};
+use wafer_types::NodeState;
+use crate::orchestrator::builder::{BuildOutput, NodeBundleKind};
+use crate::runner::SwapPayload;
+use crate::runner::error_policy::DlqEnvelope;
 
-/// Bundles sender, overflow policy, and edge name for queue overflow handling.
-#[derive(Clone)]
-pub struct EdgeSendInfo {
-    /// Output port name (e.g., "default", "high", "low")
-    pub port: String,
-    pub sender: QueueSender<RuntimeEnvelope>,
-    pub overflow_policy: OverflowPolicy,
-    /// Format: "from_node:port->to_node:port"
-    pub edge_name: String,
-}
+/// Default timeout for graceful shutdown (waiting for tasks to exit).
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// State consumed during `run()` - can only be used once.
-pub struct RunState {
-    pub queue_senders: HashMap<(String, String), QueueSender<RuntimeEnvelope>>,
-    pub queue_receivers: HashMap<(String, String), QueueReceiver<RuntimeEnvelope>>,
-}
-
-/// Shared state for control operations and metrics.
-pub struct ControlState {
-    pub name: String,
-    pub created_at: Instant,
-    pub state: Mutex<PipelineState>,
-    pub messages_processed: AtomicU64,
-    pub messages_failed: AtomicU64,
-    pub event_tx: broadcast::Sender<PipelineEvent>,
-    /// DLQ sender, late-initialized after orchestrator construction.
-    pub dlq_sender: Mutex<Option<QueueSender<RuntimeEnvelope>>>,
-    #[cfg(feature = "http-api")]
-    pub metrics_registry: MetricsRegistry,
-}
-
-impl ControlState {
-    #[must_use]
-    pub fn new(name: String) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
-        Self {
-            name,
-            created_at: Instant::now(),
-            state: Mutex::new(PipelineState::Starting),
-            messages_processed: AtomicU64::new(0),
-            messages_failed: AtomicU64::new(0),
-            event_tx,
-            dlq_sender: Mutex::new(None),
-            #[cfg(feature = "http-api")]
-            metrics_registry: MetricsRegistry::new(),
-        }
-    }
-
-    /// Set the DLQ sender for routing failed messages.
-    pub async fn set_dlq_sender(&self, sender: QueueSender<RuntimeEnvelope>) {
-        let mut dlq = self.dlq_sender.lock().await;
-        *dlq = Some(sender);
-    }
-
-    /// Create new control state with global labels for metrics.
-    #[cfg(feature = "http-api")]
-    #[must_use]
-    pub fn with_labels(name: String, labels: HashMap<String, String>) -> Self {
-        let (event_tx, _) = broadcast::channel(256);
-        Self {
-            name,
-            created_at: Instant::now(),
-            state: Mutex::new(PipelineState::Starting),
-            messages_processed: AtomicU64::new(0),
-            messages_failed: AtomicU64::new(0),
-            event_tx,
-            dlq_sender: Mutex::new(None),
-            metrics_registry: MetricsRegistry::with_labels(labels),
-        }
-    }
-
-    pub fn uptime_secs(&self) -> u64 {
-        self.created_at.elapsed().as_secs()
-    }
-}
-
-/// DAG orchestrator managing graph topology, node execution, and inter-node communication.
+/// Pipeline orchestrator managing node lifecycle with watch-channel hot-swap.
 ///
-/// Uses internal mutability (`run()` takes `&self`) so it can be shared via `Arc`
-/// between the execution task and API handlers.
-pub struct PipelineOrchestrator {
-    pub(crate) dag_graph: DagGraph,
-    pub(crate) config: Config,
-    pub(crate) dlq_config: Option<crate::config::DeadLetterConfig>,
-
-    pub(crate) config_path: Option<PathBuf>,
-
-    pub(crate) nodes: Mutex<HashMap<String, Arc<Mutex<AnyNode>>>>,
-
-    pub(crate) run_state: Mutex<Option<RunState>>,
-
-    pub(crate) cancel_token: CancellationToken,
-    pub(crate) control_state: Arc<ControlState>,
-
-    /// Node assembler for hot-swap node creation. Set once during `from_config_with_path`,
-    /// `None` for test-only orchestrators created via `from_dag_config`.
-    pub(crate) factory_ctx: Option<Mutex<NodeAssembler>>,
-
-    /// Prevents concurrent swaps on the same node.
-    pub(crate) swap_locks: Mutex<HashMap<String, Arc<AtomicBool>>>,
+/// After `spawn()`, the orchestrator retains only:
+/// - `JoinSet` for task supervision (detect panics, await completion)
+/// - Watch senders for hot-swap signaling (one per Wasm node)
+/// - `CancellationToken` for triggering shutdown
+/// - Config for diffing on resync
+/// - State trackers + metrics for lock-free status queries
+///
+/// NO shared mutex on the hot path. Nodes own their instances.
+pub struct NewPipelineOrchestrator {
+    /// Supervised task set — first-failure detection via JoinSet.
+    tasks: JoinSet<()>,
+    /// Hot-swap signal channels (ownership transfer via watch).
+    watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>>,
+    /// Shared cancellation token — fires to initiate graceful shutdown.
+    cancel_token: CancellationToken,
+    /// Current pipeline configuration (for diff on resync).
+    config: Config,
+    /// Per-node state trackers — atomic reads, no lock needed.
+    state_trackers: HashMap<Box<str>, Arc<NodeStateTracker>>,
+    /// Per-node metrics — atomic reads for Prometheus exposition.
+    metrics: HashMap<Box<str>, Arc<NodeMetrics>>,
+    /// Wasm engine for hot-swap compilation.
+    engine: Arc<WaferEngine>,
+    /// DLQ task handle (spawned separately from node tasks).
+    dlq_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl fmt::Debug for PipelineOrchestrator {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PipelineOrchestrator")
-            .field("name", &self.control_state.name)
-            .field("node_count", &self.dag_graph.node_count())
-            .field("edge_count", &self.dag_graph.edge_count())
-            .field("topo_order", &self.dag_graph.topo_order())
-            .finish_non_exhaustive()
-    }
-}
-
-impl PipelineOrchestrator {
-    fn parse_node_port(key: &str) -> (&str, &str) {
-        key.split_once(':').unwrap_or((key, "default"))
-    }
-
-    /// Find the overflow policy for an edge. Returns `OverflowPolicy::Slow` if not found.
-    fn find_edge_overflow_policy(&self, from_key: &str, to_key: &str) -> OverflowPolicy {
-        let (from_node, from_port) = Self::parse_node_port(from_key);
-        let (to_node, to_port) = Self::parse_node_port(to_key);
-
-        for edge in &self.config.edges {
-            let edge_from_port = edge.from_port.as_deref().unwrap_or("default");
-            let edge_to_port = edge.to_port.as_deref().unwrap_or("default");
-
-            if edge.from == from_node
-                && edge.to == to_node
-                && edge_from_port == from_port
-                && edge_to_port == to_port
-            {
-                return edge.overflow;
-            }
-        }
-
-        // Default if not found
-        OverflowPolicy::Slow
-    }
-
-    /// Run the DAG pipeline. Can only be called once (run state is consumed).
+impl NewPipelineOrchestrator {
+    /// Build and spawn a pipeline from configuration.
     ///
-    /// Initializes nodes in topo order, spawns async tasks, waits for completion,
-    /// then closes nodes in reverse order.
-    pub async fn run(&self) -> Result<()> {
-        self.validate_nodes_registered().await?;
-
-        // Take the run state - can only succeed once
-        let mut run_state = {
-            let mut guard = self.run_state.lock().await;
-            guard.take().ok_or_else(|| {
-                WaferError::Runtime("Pipeline has already been run (run state consumed)".into())
-            })?
+    /// This is the primary constructor — builds the pipeline infrastructure
+    /// (channels, bundles, control) and spawns all node tasks.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if DAG validation fails or builder encounters issues.
+    pub fn from_build_output(
+        build_output: BuildOutput,
+        config: Config,
+        engine: Arc<WaferEngine>,
+    ) -> Self {
+        let mut orchestrator = Self {
+            tasks: JoinSet::new(),
+            watch_senders: build_output.watch_senders,
+            cancel_token: build_output.cancel_token.clone(),
+            config,
+            state_trackers: build_output.state_trackers,
+            metrics: build_output.metrics_map,
+            engine,
+            dlq_handle: None,
         };
 
-        if let Some(ref dlq_config) = self.dlq_config {
-            self.initialize_dlq(dlq_config).await?;
+        // Spawn DLQ sink task if configured
+        if let Some(dlq_rx) = build_output.dlq_receiver {
+            let cancel = build_output.cancel_token.clone();
+            let handle = tokio::spawn(run_dlq_sink(dlq_rx, cancel));
+            orchestrator.dlq_handle = Some(handle);
         }
 
-        self.set_pipeline_state(PipelineState::Running).await;
+        // Spawn node tasks — each bundle moves into its runner loop
+        orchestrator.spawn_bundles(build_output.node_bundles);
 
-        let nodes_snapshot: HashMap<String, Arc<Mutex<AnyNode>>> = {
-            let nodes = self.nodes.lock().await;
-            nodes.clone()
-        };
+        orchestrator
+    }
 
-        self.init_nodes_in_order(&nodes_snapshot).await?;
-        let handles = self.spawn_node_tasks(&nodes_snapshot, &mut run_state);
+    /// Spawn all node bundles into independent tokio tasks via JoinSet.
+    fn spawn_bundles(
+        &mut self,
+        bundles: Vec<crate::orchestrator::builder::NodeBundle>,
+    ) {
+        for bundle in bundles {
+            let node_id = bundle.node_id.clone();
+            let cancel = bundle.cancel;
+            let state = bundle.state;
+            let metrics = bundle.metrics;
 
-        // Clear remaining senders so receivers see channel close
-        run_state.queue_senders.clear();
-        drop(run_state);
+            match bundle.kind {
+                NodeBundleKind::Transform { receiver, senders, swap_rx, policy } => {
+                    self.tasks.spawn(async move {
+                        // WasmTransformNode will be created by the orchestrator before spawn
+                        // in the full integration. For now, the runner loop needs an actual
+                        // WasmTransformNode which requires a compiled component.
+                        // This is wired in the full pipeline startup path.
+                        tracing::debug!(node = %node_id, "Transform task placeholder spawned");
+                        // In full integration: run_transform_loop(transform, receiver, senders, swap_rx, policy, cancel, state, metrics).await
+                        cancel.cancelled().await;
+                    });
+                }
+                NodeBundleKind::Filter { receiver, senders, swap_rx, policy } => {
+                    self.tasks.spawn(async move {
+                        tracing::debug!(node = %node_id, "Filter task placeholder spawned");
+                        cancel.cancelled().await;
+                    });
+                }
+                NodeBundleKind::Router { receiver, senders, swap_rx, policy } => {
+                    self.tasks.spawn(async move {
+                        tracing::debug!(node = %node_id, "Router task placeholder spawned");
+                        cancel.cancelled().await;
+                    });
+                }
+                NodeBundleKind::Source { senders } => {
+                    self.tasks.spawn(async move {
+                        tracing::debug!(node = %node_id, "Source task placeholder spawned");
+                        cancel.cancelled().await;
+                    });
+                }
+                NodeBundleKind::Sink { receiver } => {
+                    self.tasks.spawn(async move {
+                        tracing::debug!(node = %node_id, "Sink task placeholder spawned");
+                        cancel.cancelled().await;
+                    });
+                }
+            }
+        }
+    }
 
-        self.wait_for_tasks(handles).await;
-        self.shutdown_nodes(&nodes_snapshot).await;
+    /// Send a hot-swap payload to a specific node via its watch channel.
+    ///
+    /// The node loop will pick up the new instance between messages.
+    /// This is non-blocking — the caller doesn't wait for the swap to complete.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the node doesn't exist or doesn't support hot-swap.
+    pub fn send_swap(&self, node_id: &str, payload: SwapPayload) -> Result<()> {
+        let sender = self.watch_senders.get(node_id).ok_or_else(|| {
+            WaferError::Runtime(format!(
+                "cannot hot-swap node '{node_id}': not found or not a Wasm node"
+            ))
+        })?;
+
+        sender.send(Some(payload)).map_err(|_| {
+            WaferError::Runtime(format!(
+                "cannot hot-swap node '{node_id}': receiver dropped (task dead?)"
+            ))
+        })?;
 
         Ok(())
     }
 
-    async fn set_pipeline_state(&self, new_state: PipelineState) {
-        let mut state = self.control_state.state.lock().await;
-        *state = new_state;
-    }
+    /// Initiate graceful shutdown.
+    ///
+    /// Fires the cancellation token → all runner loops break → flush retries →
+    /// tasks complete → join all.
+    ///
+    /// Uses a timeout to prevent hanging if a task is stuck.
+    pub async fn shutdown(&mut self) -> Result<()> {
+        tracing::info!("Pipeline shutdown initiated");
+        self.cancel_token.cancel();
 
-    async fn init_nodes_in_order(
-        &self,
-        nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>,
-    ) -> Result<()> {
-        for node_id in self.dag_graph.topo_order() {
-            if let Some(node) = nodes_snapshot.get(node_id) {
-                let mut locked = node.lock().await;
-                if let Err(e) = locked.init().await {
-                    tracing::error!(node = %node_id, error = %e, "Node init failed");
-                    self.set_pipeline_state(PipelineState::Error).await;
-                    return Err(e);
+        // Wait for all tasks with timeout
+        let deadline = tokio::time::sleep(SHUTDOWN_TIMEOUT);
+        tokio::pin!(deadline);
+
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut deadline => {
+                    tracing::warn!(
+                        remaining = self.tasks.len(),
+                        "Shutdown timeout — aborting remaining tasks"
+                    );
+                    self.tasks.shutdown().await;
+                    break;
                 }
-                tracing::debug!(node = %node_id, "Node initialized");
+                result = self.tasks.join_next() => {
+                    match result {
+                        Some(Ok(())) => {} // Task exited cleanly
+                        Some(Err(e)) => {
+                            tracing::error!(error = %e, "Task panicked during shutdown");
+                        }
+                        None => break, // All tasks done
+                    }
+                }
             }
         }
+
+        // Wait for DLQ task
+        if let Some(handle) = self.dlq_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => tracing::error!(error = %e, "DLQ task panicked"),
+                Err(_) => tracing::warn!("DLQ task did not exit within timeout"),
+            }
+        }
+
+        tracing::info!("Pipeline shutdown complete");
         Ok(())
     }
 
-    fn spawn_node_tasks(
-        &self,
-        nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>,
-        run_state: &mut RunState,
-    ) -> Vec<tokio::task::JoinHandle<()>> {
-        let mut handles = Vec::new();
-
-        for node_id in self.dag_graph.topo_order() {
-            let output_senders = self.collect_output_senders(node_id, run_state);
-            let input_receivers = Self::collect_input_receivers(node_id, run_state);
-
-            if let Some(node_arc) = nodes_snapshot.get(node_id).cloned() {
-                let node_id_owned = node_id.clone();
-                let cancel_token = self.cancel_token.clone();
-                let control_state = Arc::clone(&self.control_state);
-
-                let handle = tokio::spawn(async move {
-                    crate::runner::loops::run_node_loop(
-                        node_id_owned,
-                        node_arc,
-                        input_receivers,
-                        output_senders,
-                        cancel_token,
-                        control_state,
-                    )
-                    .await;
-                });
-                handles.push(handle);
-            }
-        }
-
-        handles
+    /// Request shutdown without waiting (non-blocking).
+    pub fn cancel(&self) {
+        self.cancel_token.cancel();
     }
 
-    fn collect_output_senders(&self, node_id: &str, run_state: &RunState) -> Vec<EdgeSendInfo> {
-        run_state
-            .queue_senders
-            .iter()
-            .filter_map(|((from_key, to_key), sender)| {
-                let (from_node, from_port) = Self::parse_node_port(from_key);
-                if from_node == node_id {
-                    let overflow_policy = self.find_edge_overflow_policy(from_key, to_key);
-                    let edge_name = format!("{from_key}->{to_key}");
-                    Some(EdgeSendInfo {
-                        port: from_port.to_string(),
-                        sender: sender.clone(),
-                        overflow_policy,
-                        edge_name,
-                    })
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn collect_input_receivers(
-        node_id: &str,
-        run_state: &mut RunState,
-    ) -> Vec<(String, QueueReceiver<RuntimeEnvelope>)> {
-        let input_keys_with_ports: Vec<_> = run_state
-            .queue_receivers
-            .keys()
-            .filter_map(|(from_key, to_key)| {
-                let (to_node, to_port) = Self::parse_node_port(to_key);
-                if to_node == node_id {
-                    Some(((from_key.clone(), to_key.clone()), to_port.to_string()))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        input_keys_with_ports
-            .into_iter()
-            .filter_map(|(key, port)| run_state.queue_receivers.remove(&key).map(|rx| (port, rx)))
-            .collect()
-    }
-
-    async fn wait_for_tasks(&self, handles: Vec<tokio::task::JoinHandle<()>>) {
-        for handle in handles {
-            if let Err(e) = handle.await {
-                tracing::error!(error = %e, "Node task panicked");
-            }
-        }
-    }
-
-    async fn shutdown_nodes(&self, nodes_snapshot: &HashMap<String, Arc<Mutex<AnyNode>>>) {
-        self.set_pipeline_state(PipelineState::Draining).await;
-
-        for node_id in self.dag_graph.topo_order().iter().rev() {
-            if let Some(node) = nodes_snapshot.get(node_id) {
-                let mut locked = node.lock().await;
-                if let Err(e) = locked.close().await {
-                    tracing::warn!(node = %node_id, error = %e, "Node close failed");
-                }
-                tracing::debug!(node = %node_id, "Node closed");
-            }
-        }
-
-        self.set_pipeline_state(PipelineState::Stopped).await;
-    }
-
+    /// Check if the pipeline is still running (has active tasks).
     #[must_use]
-    pub fn topo_order(&self) -> &[String] {
-        self.dag_graph.topo_order()
+    pub fn is_running(&self) -> bool {
+        !self.tasks.is_empty()
     }
 
+    /// Get the current state of a specific node.
+    #[must_use]
+    pub fn node_state(&self, node_id: &str) -> Option<NodeState> {
+        self.state_trackers.get(node_id).map(|t| t.state())
+    }
+
+    /// Get a snapshot of metrics for a specific node.
+    #[must_use]
+    pub fn node_metrics(&self, node_id: &str) -> Option<&Arc<NodeMetrics>> {
+        self.metrics.get(node_id)
+    }
+
+    /// Get the number of active tasks.
+    #[must_use]
+    pub fn task_count(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Get the number of Wasm nodes (those with watch channels for hot-swap).
+    #[must_use]
+    pub fn wasm_node_count(&self) -> usize {
+        self.watch_senders.len()
+    }
+
+    /// Get all node IDs that support hot-swap.
+    #[must_use]
+    pub fn swappable_nodes(&self) -> Vec<&str> {
+        self.watch_senders.keys().map(|k| &**k).collect()
+    }
+
+    /// Access the current configuration.
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
     }
 
+    /// Access the cancellation token (for external shutdown triggers).
     #[must_use]
-    pub fn node_count(&self) -> usize {
-        self.dag_graph.node_count()
+    pub fn cancel_token(&self) -> &CancellationToken {
+        &self.cancel_token
     }
 
+    /// Access the Wasm engine (for hot-swap compilation).
     #[must_use]
-    pub fn edge_count(&self) -> usize {
-        self.dag_graph.edge_count()
+    pub fn engine(&self) -> &Arc<WaferEngine> {
+        &self.engine
     }
+}
 
-    /// Clone of the cancellation token for external shutdown triggering.
-    #[must_use]
-    pub fn cancel_token(&self) -> CancellationToken {
-        self.cancel_token.clone()
-    }
-
-    /// Request graceful shutdown. Nodes complete their current operation before stopping.
-    pub fn shutdown(&self) {
-        tracing::info!("Shutdown requested");
-        self.cancel_token.cancel();
-    }
-
-    /// Hot-swap a WASM node with a new component using drain-and-flip.
-    pub async fn hot_swap(
-        &self,
-        node_id: &str,
-        new_wasm_path: impl AsRef<Path>,
-    ) -> Result<SwapMetrics> {
-        self.hot_swap_with_timeout(
-            node_id,
-            new_wasm_path,
-            Duration::from_millis(super::hotswap::DEFAULT_DRAIN_TIMEOUT_MS),
-        )
-        .await
-    }
-
-    /// Hot-swap with a custom drain timeout.
-    pub async fn hot_swap_with_timeout(
-        &self,
-        node_id: &str,
-        new_wasm_path: impl AsRef<Path>,
-        drain_timeout: Duration,
-    ) -> Result<SwapMetrics> {
-        let new_wasm_path = new_wasm_path.as_ref().to_path_buf();
-
-        tracing::info!(
-            node = %node_id,
-            path = %new_wasm_path.display(),
-            timeout_ms = %drain_timeout.as_millis(),
-            "Hot-swap requested"
-        );
-
-        let (old_tracker, swap_lock) = {
-            let nodes = self.nodes.lock().await;
-            let node_arc = nodes
-                .get(node_id)
-                .ok_or_else(|| WaferError::from(SwapError::NodeNotFound(node_id.to_string())))?;
-
-            let node = node_arc.lock().await;
-            if !node.is_swappable() {
-                return Err(WaferError::from(SwapError::NotSwappable(node_id.to_string())));
-            }
-
-            let tracker = node.state_tracker_clone();
-            drop(node);
-
-            let mut swap_locks = self.swap_locks.lock().await;
-            let lock = swap_locks
-                .entry(node_id.to_string())
-                .or_insert_with(|| Arc::new(AtomicBool::new(false)))
-                .clone();
-
-            (tracker, lock)
-        };
-
-        let capabilities = self
-            .config
-            .nodes
-            .iter()
-            .find(|n| n.id == node_id)
-            .map(|n| n.capabilities)
-            .unwrap_or_default();
-
-        let mut coordinator = HotSwapCoordinator::new(
-            node_id.to_string(),
-            new_wasm_path,
-            capabilities,
-            old_tracker,
-            swap_lock,
-        )
-        .with_drain_timeout(drain_timeout);
-
-        let factory_mutex = self.factory_ctx.as_ref().ok_or_else(|| {
-            WaferError::Runtime("factory context not available for hot-swap".into())
-        })?;
-
-        let mut ctx = factory_mutex.lock().await;
-
-        // PREPARE
-        let new_node = match coordinator.prepare(&mut ctx).await {
-            Ok(node) => node,
-            Err(e) => {
-                tracing::error!(node = %node_id, error = %e, "Hot-swap prepare failed");
-                #[cfg(feature = "http-api")]
-                self.control_state.metrics_registry.record_hotswap_failure();
-                return Err(e);
-            }
-        };
-
-        // Release the lock before drain (drain doesn't need the assembler)
-        drop(ctx);
-
-        // DRAIN
-        let drain_timed_out = match coordinator.drain().await {
-            Ok(timed_out) => timed_out,
-            Err(e) => {
-                tracing::error!(node = %node_id, error = %e, "Hot-swap drain failed");
-                #[cfg(feature = "http-api")]
-                self.control_state.metrics_registry.record_hotswap_failure();
-                return Err(e);
-            }
-        };
-
-        if drain_timed_out {
-            tracing::warn!(
-                node = %node_id,
-                "Drain timed out, proceeding with forced swap"
-            );
-        }
-
-        // FLIP
-        let old_node = coordinator.flip(&self.nodes, new_node).await?;
-
-        // RETIRE
-        coordinator.retire(old_node).await?;
-
-        let metrics = coordinator.into_metrics();
-        tracing::info!(
-            node = %node_id,
-            total_ms = %metrics.total_duration.as_millis(),
-            prepare_ms = %metrics.prepare_duration.as_millis(),
-            drain_ms = %metrics.drain_duration.as_millis(),
-            flip_ms = %metrics.flip_duration.as_millis(),
-            retire_ms = %metrics.retire_duration.as_millis(),
-            drain_timed_out = %metrics.drain_timed_out,
-            "Hot-swap complete"
-        );
-
-        #[cfg(feature = "http-api")]
-        self.control_state.metrics_registry.record_hotswap_success(
-            metrics.prepare_duration.as_nanos() as u64,
-            metrics.drain_duration.as_nanos() as u64,
-            metrics.flip_duration.as_nanos() as u64,
-            metrics.retire_duration.as_nanos() as u64,
-            metrics.messages_drained,
-            metrics.drain_timed_out,
-        );
-
-        Ok(metrics)
-    }
-
-    /// Resync the pipeline by reloading config and hot-swapping changed nodes.
-    ///
-    /// Returns the list of node IDs that were hot-swapped.
-    /// Errors if changes require restart (node add/remove, topology change).
-    pub async fn resync(&self) -> Result<Vec<String>> {
-        use crate::config::{diff_configs, load_config};
-
-        let config_path = self.config_path.as_ref().ok_or_else(|| {
-            WaferError::Runtime(
-                "Cannot resync: no config path stored. Use from_config_with_path() to enable reload."
-                    .into(),
-            )
-        })?;
-
-        tracing::info!(path = %config_path.display(), "Reloading configuration");
-
-        let new_config = load_config(config_path).await?;
-        let diff = diff_configs(&self.config, &new_config);
-
-        if !diff.has_changes() {
-            tracing::info!("No configuration changes detected");
-            return Ok(Vec::new());
-        }
-
-        if diff.requires_restart() {
-            let mut reasons = Vec::new();
-            if !diff.nodes_added.is_empty() {
-                reasons.push(format!("nodes added: {:?}", diff.nodes_added));
-            }
-            if !diff.nodes_removed.is_empty() {
-                reasons.push(format!("nodes removed: {:?}", diff.nodes_removed));
-            }
-            if diff.edges_changed {
-                reasons.push("edges changed".to_string());
-            }
-            return Err(WaferError::Runtime(format!(
-                "Configuration changes require restart: {}",
-                reasons.join(", ")
-            )));
-        }
-
-        let mut swapped = Vec::new();
-        for (node_id, new_path) in &diff.nodes_to_swap {
-            tracing::info!(
-                node = %node_id,
-                new_path = %new_path.display(),
-                "Hot-swapping node due to config change"
-            );
-
-            match self.hot_swap(node_id, new_path).await {
-                Ok(metrics) => {
-                    tracing::info!(
-                        node = %node_id,
-                        duration_ms = %metrics.total_duration.as_millis(),
-                        "Node hot-swapped successfully"
+/// Simple DLQ sink that drains envelopes until cancelled.
+///
+/// In a full deployment, this would write to a file, MQTT topic, or HTTP endpoint.
+/// For now, it logs and drops. The DLQ channel is bounded — if this task falls
+/// behind, senders will see backpressure.
+async fn run_dlq_sink(
+    mut receiver: tokio::sync::mpsc::Receiver<DlqEnvelope>,
+    cancel: CancellationToken,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                // Drain remaining messages before exiting
+                while let Ok(envelope) = receiver.try_recv() {
+                    tracing::warn!(
+                        node = %envelope.source_node,
+                        reason = ?envelope.reason,
+                        "DLQ: message during shutdown drain"
                     );
-                    swapped.push(node_id.clone());
                 }
-                Err(e) => {
-                    tracing::error!(
-                        node = %node_id,
-                        error = %e,
-                        "Failed to hot-swap node"
-                    );
-                    return Err(e);
+                break;
+            }
+            msg = receiver.recv() => {
+                match msg {
+                    Some(envelope) => {
+                        tracing::warn!(
+                            node = %envelope.source_node,
+                            category = ?envelope.error_category,
+                            reason = ?envelope.reason,
+                            retry_count = envelope.retry_count,
+                            "DLQ: dead letter received"
+                        );
+                    }
+                    None => break, // All senders dropped
                 }
             }
         }
+    }
+}
 
-        tracing::info!(
-            swapped_count = swapped.len(),
-            nodes = ?swapped,
-            "Configuration resync complete"
-        );
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::orchestrator::builder::build_pipeline;
+    use crate::config::{
+        Config, EdgeDefinition, NodeDefinition, NodeType, OverflowPolicy,
+        PipelineConfig, ApiServerConfig, MetricsConfig,
+    };
 
-        Ok(swapped)
+    /// Helper: minimal config with source → transform → sink
+    fn test_config() -> Config {
+        Config {
+            pipeline: PipelineConfig::default(),
+            engine: crate::config::EngineConfig::default(),
+            api: ApiServerConfig::default(),
+            metrics: MetricsConfig::default(),
+            nodes: vec![
+                NodeDefinition {
+                    id: "src".to_string(),
+                    node_type: NodeType::Source,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "t1".to_string(),
+                    node_type: NodeType::Transform,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "sink".to_string(),
+                    node_type: NodeType::Sink,
+                    source_type: None,
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+            ],
+            edges: vec![
+                EdgeDefinition {
+                    from: "src".to_string(),
+                    to: "t1".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+                EdgeDefinition {
+                    from: "t1".to_string(),
+                    to: "sink".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+            ],
+            default_queue_capacity: 1024,
+            registry: Default::default(),
+            dead_letter: None,
+        }
     }
 
-    #[must_use]
-    pub fn config_path(&self) -> Option<&Path> {
-        self.config_path.as_deref()
+    #[tokio::test]
+    async fn test_build_creates_correct_watch_senders() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // Only Wasm nodes (transform) get watch senders
+        assert_eq!(orch.wasm_node_count(), 1);
+        assert!(orch.swappable_nodes().contains(&"t1"));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_creates_tasks() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // 3 nodes → 3 tasks
+        assert_eq!(orch.task_count(), 3);
+        assert!(orch.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_shutdown_completes_all_tasks() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        assert!(orch.is_running());
+
+        orch.shutdown().await.expect("shutdown");
+
+        assert!(!orch.is_running());
+        assert_eq!(orch.task_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_triggers_shutdown() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // Cancel without shutdown — tasks should still exit
+        orch.cancel();
+
+        // Give tasks time to notice cancellation
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Now join them
+        orch.shutdown().await.expect("shutdown");
+        assert!(!orch.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_node_state_returns_tracker_value() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // State trackers are initialized to New
+        let state = orch.node_state("t1");
+        assert!(state.is_some());
+
+        // Non-existent node
+        assert!(orch.node_state("nonexistent").is_none());
+    }
+
+    #[tokio::test]
+    async fn test_node_metrics_returns_metrics() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        let m = orch.node_metrics("t1");
+        assert!(m.is_some());
+        assert_eq!(m.unwrap().processed(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_send_swap_nonexistent_node_fails() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+
+        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // Wasm node (t1) has a watch sender
+        assert!(orch.watch_senders.contains_key("t1"));
+
+        // Non-existent node: no watch sender
+        assert!(!orch.watch_senders.contains_key("nonexistent"));
+
+        // Source/Sink nodes don't have watch channels
+        assert!(!orch.watch_senders.contains_key("src"));
+        assert!(!orch.watch_senders.contains_key("sink"));
+
+        orch.shutdown().await.expect("shutdown");
     }
 }

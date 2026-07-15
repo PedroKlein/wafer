@@ -366,7 +366,7 @@ fn resolve_error_policy(_config: &Config, _node_id: &str) -> ResolvedErrorPolicy
 // Legacy Builder (kept for PipelineOrchestrator compatibility)
 // =============================================================================
 
-use super::pipeline::PipelineOrchestrator;
+use super::pipeline_legacy::PipelineOrchestrator;
 
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
@@ -375,7 +375,7 @@ use super::assembler::{NodeAssembler, create_dlq_sink, create_node};
 use crate::engine::WaferEngine;
 use crate::node::AnyNode;
 use crate::queue::BoundedQueue;
-use super::pipeline::{ControlState, RunState};
+use super::pipeline_legacy::{ControlState, RunState};
 
 /// Legacy builder methods on PipelineOrchestrator.
 ///
