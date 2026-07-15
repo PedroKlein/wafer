@@ -1,5 +1,5 @@
 [package]
-name = "mnist-inference"
+name = "wafer-mnist-inference"
 version = "0.1.0"
 edition = "2024"
 description = "MNIST inference plugin using wasi-nn"
@@ -16,3 +16,4 @@ toml = "0.8"
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

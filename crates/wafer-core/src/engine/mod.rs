@@ -1,6 +1,6 @@
 //! Wasmtime integration layer: Engine, bindgen, buffer resource, cache, state.
 
-pub(crate) mod bindings;
+pub mod bindings;
 mod buffer;
 mod cache;
 mod capabilities;

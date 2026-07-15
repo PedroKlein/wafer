@@ -19,7 +19,7 @@ use wafer_core::config::{
     OverflowPolicy, PipelineConfig,
 };
 use wafer_core::engine::{Capabilities, WaferEngine, WaferState};
-use wafer_core::node::wasm::WasmTransformNode;
+use wafer_core::node::wasm::{WasmFilterNode, WasmTransformNode};
 use wafer_core::node::{Sink, Source};
 use wafer_core::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
 use wafer_core::orchestrator::pipeline::NewPipelineOrchestrator;
@@ -29,7 +29,7 @@ use wafer_core::testing::channel::{ChannelSink, ChannelSource};
 /// Path to the pre-built pass-through plugin.
 const PASS_THROUGH_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+    "/../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 );
 
 /// Build a minimal pipeline config: source → transform → sink.
@@ -681,4 +681,296 @@ async fn test_attack_containment_panic_does_not_crash_pipeline() {
     // Critical: the pipeline itself didn't crash — shutdown works cleanly
     orch.shutdown().await.expect("pipeline should shutdown cleanly after attack traps");
     assert!(!orch.is_running(), "orchestrator should stop after shutdown");
+}
+
+// =============================================================================
+// Pipeline A (multi-stage): source → json-parse → threshold-filter → sink
+// =============================================================================
+
+/// Path to the pre-built json-parse plugin.
+const JSON_PARSE_WASM: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
+);
+
+/// Path to the pre-built threshold-filter plugin.
+const THRESHOLD_FILTER_WASM: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
+);
+
+/// Load and instantiate a WasmFilterNode from a .wasm file path.
+///
+/// Calls lifecycle `init()` with the provided config JSON so stateful filters
+/// are correctly initialized before the pipeline runs.
+fn load_filter_node(engine: &WaferEngine, wasm_path: &str, node_id: &str, config_json: &str) -> WasmFilterNode {
+    let component = engine
+        .load_component(wasm_path)
+        .expect("failed to load filter .wasm");
+    let pre = engine
+        .pre_instantiate_filter(&component)
+        .expect("failed to pre-instantiate filter");
+    let pre = Arc::new(pre);
+
+    let state = WaferState::new(node_id, Capabilities::sandbox());
+    let mut store = Store::new(engine.inner(), state);
+    store.limiter(|s| s.limits_mut());
+    store.epoch_deadline_trap();
+    store.set_epoch_deadline(engine.epoch_deadline());
+
+    let bindings = pre
+        .instantiate(&mut store)
+        .expect("failed to instantiate filter");
+
+    // Call lifecycle init() with config so the filter sets up its state.
+    use wafer_core::engine::bindings::filter_node::exports::pipeline::node::lifecycle::NodeConfig;
+    let node_config = NodeConfig {
+        id: node_id.to_string(),
+        config: config_json.to_string(),
+    };
+    // Set fuel before calling init (the Wasm execution needs it)
+    store.set_fuel(engine.fuel_limit()).expect("set fuel for init");
+    bindings
+        .pipeline_node_lifecycle()
+        .call_init(&mut store, &node_config)
+        .expect("lifecycle init call failed")
+        .expect("filter init returned error");
+
+    WasmFilterNode::new(store, bindings, pre, engine.fuel_limit())
+}
+
+/// Build a multi-stage pipeline config: source → json-parse (transform) → threshold-filter (filter) → sink.
+fn multistage_config(filter_config_json: &str) -> Config {
+    // The filter's config JSON is embedded in a TOML table as the "config" key.
+    let mut filter_table = toml::map::Map::new();
+    filter_table.insert(
+        "config".to_string(),
+        toml::Value::String(filter_config_json.to_string()),
+    );
+
+    Config {
+        pipeline: PipelineConfig::default(),
+        engine: wafer_core::config::EngineConfig::default(),
+        api: ApiServerConfig::default(),
+        metrics: MetricsConfig::default(),
+        nodes: vec![
+            NodeDefinition {
+                id: "source".to_string(),
+                node_type: NodeType::Source,
+                source_type: Some("channel".to_string()),
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+                capabilities: Default::default(),
+            },
+            NodeDefinition {
+                id: "json-parse".to_string(),
+                node_type: NodeType::Transform,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(toml::map::Map::new()),
+                capabilities: Default::default(),
+            },
+            NodeDefinition {
+                id: "threshold-filter".to_string(),
+                node_type: NodeType::Filter,
+                source_type: None,
+                sink_type: None,
+                config: toml::Value::Table(filter_table),
+                capabilities: Default::default(),
+            },
+            NodeDefinition {
+                id: "sink".to_string(),
+                node_type: NodeType::Sink,
+                source_type: None,
+                sink_type: Some("channel".to_string()),
+                config: toml::Value::Table(toml::map::Map::new()),
+                capabilities: Default::default(),
+            },
+        ],
+        edges: vec![
+            EdgeDefinition {
+                from: "source".to_string(),
+                to: "json-parse".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+                overflow: OverflowPolicy::default(),
+            },
+            EdgeDefinition {
+                from: "json-parse".to_string(),
+                to: "threshold-filter".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+                overflow: OverflowPolicy::default(),
+            },
+            EdgeDefinition {
+                from: "threshold-filter".to_string(),
+                to: "sink".to_string(),
+                from_port: None,
+                to_port: None,
+                queue_capacity: None,
+                overflow: OverflowPolicy::default(),
+            },
+        ],
+        default_queue_capacity: 1024,
+        registry: Default::default(),
+        dead_letter: None,
+    }
+}
+
+/// E2E test: multi-stage pipeline with heterogeneous node types.
+///
+/// source → json-parse (transform) → threshold-filter (filter) → sink
+///
+/// Verifies:
+/// - Multi-stage pipeline with different node types works end-to-end
+/// - json-parse validates and pretty-prints JSON (transform behavior)
+/// - threshold-filter passes only messages where temperature is in [50, 200] range
+/// - Messages that fail the filter are dropped (not delivered to sink)
+#[tokio::test]
+async fn test_pipeline_a_multistage_json_parse_and_filter() {
+    if !Path::new(JSON_PARSE_WASM).exists() {
+        panic!(
+            "json-parse.wasm not found at {JSON_PARSE_WASM}. \
+             Build with `cd plugins/json-parse && cargo build --release`."
+        );
+    }
+    if !Path::new(THRESHOLD_FILTER_WASM).exists() {
+        panic!(
+            "threshold-filter.wasm not found at {THRESHOLD_FILTER_WASM}. \
+             Build with `cd plugins/threshold-filter && cargo build --release`."
+        );
+    }
+
+    // Filter config: pass messages where "temperature" is in [50.0, 200.0]
+    let filter_config = r#"{"field": "temperature", "min": 50.0, "max": 200.0}"#;
+
+    let engine = WaferEngine::new().expect("engine creation");
+    engine.ensure_epoch_ticker();
+
+    // Load the transform (json-parse) and filter (threshold-filter) nodes
+    let mut json_parse_node = Some(load_transform_node(&engine, JSON_PARSE_WASM));
+    let mut filter_node = Some(load_filter_node(&engine, THRESHOLD_FILTER_WASM, "threshold-filter", filter_config));
+    let engine = Arc::new(engine);
+
+    // Create channel-based source and sink
+    let (source_tx, channel_source) = ChannelSource::new("source");
+    let (channel_sink, mut sink_rx) = ChannelSink::new("sink");
+
+    // Build multi-stage pipeline
+    let config = multistage_config(filter_config);
+    let mut sources: HashMap<String, Box<dyn Source + Send>> = HashMap::new();
+    sources.insert("source".to_string(), Box::new(channel_source));
+    let mut sinks: HashMap<String, Box<dyn Sink + Send>> = HashMap::new();
+    sinks.insert("sink".to_string(), Box::new(channel_sink));
+
+    let mut build_output =
+        build_pipeline_with_io(&config, sources, sinks).expect("pipeline build");
+
+    // Inject compiled Wasm nodes into their respective bundles
+    for bundle in &mut build_output.node_bundles {
+        match bundle.node_id.as_ref() {
+            "json-parse" => {
+                if let NodeBundleKind::Transform { node, .. } = &mut bundle.kind {
+                    *node = json_parse_node.take();
+                } else {
+                    panic!("expected Transform bundle for 'json-parse'");
+                }
+            }
+            "threshold-filter" => {
+                if let NodeBundleKind::Filter { node, .. } = &mut bundle.kind {
+                    *node = filter_node.take();
+                } else {
+                    panic!("expected Filter bundle for 'threshold-filter'");
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Spawn the orchestrator
+    let mut orch =
+        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+
+    // Send 5 JSON messages:
+    // 3 should PASS the filter (temperature in [50, 200])
+    // 2 should be DROPPED (temperature outside range)
+    let messages = [
+        r#"{"temperature": 85.2, "humidity": 60.0}"#,   // PASS (85.2 >= 50)
+        r#"{"temperature": 25.0, "humidity": 40.0}"#,   // DROP (25.0 < 50)
+        r#"{"temperature": 100.5, "humidity": 55.0}"#,  // PASS (100.5 >= 50)
+        r#"{"temperature": 10.0, "humidity": 90.0}"#,   // DROP (10.0 < 50)
+        r#"{"temperature": 72.8, "humidity": 45.0}"#,   // PASS (72.8 >= 50)
+    ];
+
+    for msg in &messages {
+        source_tx
+            .send(RuntimeEnvelope::from_string("sensor-1", msg.to_string()))
+            .await
+            .expect("failed to send message");
+    }
+    drop(source_tx); // EOF
+
+    // Receive messages that pass the filter
+    let expected_pass_count = 3;
+    let received = timeout(Duration::from_secs(5), async {
+        let mut out = Vec::new();
+        while let Some(env) = sink_rx.recv().await {
+            out.push(env);
+        }
+        out
+    })
+    .await
+    .expect("TIMEOUT: multi-stage pipeline did not complete within 5 seconds");
+
+    // Assert: exactly 3 messages passed the filter
+    assert_eq!(
+        received.len(),
+        expected_pass_count,
+        "Expected {expected_pass_count} messages to pass filter, got {}",
+        received.len()
+    );
+
+    // Assert: received payloads are valid JSON (json-parse pretty-printed them)
+    for (i, env) in received.iter().enumerate() {
+        let payload = std::str::from_utf8(&env.payload)
+            .expect("payload should be valid UTF-8");
+        // json-parse produces pretty-printed JSON with newlines
+        assert!(
+            payload.contains("temperature"),
+            "Message {i}: payload should contain 'temperature' field: {payload}"
+        );
+        // Verify it's formatted (has newlines from pretty-printing)
+        assert!(
+            payload.contains('\n'),
+            "Message {i}: payload should be pretty-printed (contain newlines): {payload}"
+        );
+    }
+
+    // Assert: the temperatures in received messages are all >= 50.0
+    for (i, env) in received.iter().enumerate() {
+        let payload = std::str::from_utf8(&env.payload).unwrap();
+        // Extract temperature value from the pretty-printed JSON
+        // Look for the pattern: "temperature": <number>
+        let temp_idx = payload.find("\"temperature\"").expect("should have temperature");
+        let after_key = &payload[temp_idx + "\"temperature\"".len()..];
+        let colon_pos = after_key.find(':').expect("should have colon");
+        let after_colon = after_key[colon_pos + 1..].trim_start();
+        let end = after_colon
+            .find(|c: char| c == ',' || c == '}' || c == '\n')
+            .unwrap_or(after_colon.len());
+        let temp_str = after_colon[..end].trim();
+        let temp: f64 = temp_str.parse().unwrap_or_else(|_| {
+            panic!("Message {i}: failed to parse temperature from: {temp_str} (full: {payload})")
+        });
+        assert!(
+            temp >= 50.0 && temp <= 200.0,
+            "Message {i}: temperature {temp} should be in [50, 200]"
+        );
+    }
+
+    // Shutdown cleanly
+    orch.shutdown().await.expect("pipeline shutdown");
+    assert!(!orch.is_running());
 }

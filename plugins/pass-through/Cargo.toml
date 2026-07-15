@@ -1,5 +1,5 @@
 [package]
-name = "pass-through-transform"
+name = "wafer-pass-through"
 version = "0.1.0"
 edition = "2024"
 description = "Pass-through transform plugin for WAFER pipeline"
@@ -15,3 +15,4 @@ wit-bindgen = "0.53"
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

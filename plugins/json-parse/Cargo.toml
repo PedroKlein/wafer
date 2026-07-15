@@ -16,3 +16,4 @@ wafer-plugin = { path = "../../crates/wafer-plugin" }
 [profile.release]
 opt-level = "s"
 lto = true
+strip = "debuginfo"

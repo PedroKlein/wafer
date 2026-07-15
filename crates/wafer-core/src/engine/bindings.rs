@@ -17,7 +17,7 @@
 ///
 /// This is the "canonical" invocation that generates the `pipeline:types/types`
 /// host trait definitions. Other worlds redirect to these types via `with:`.
-pub(crate) mod transform_node {
+pub mod transform_node {
     wasmtime::component::bindgen!({
         path: "wit/node",
         world: "transform-node",
@@ -30,7 +30,7 @@ pub(crate) mod transform_node {
 /// Bindings for the `filter-node` world (package `pipeline:node`).
 ///
 /// Reuses `pipeline:types/types` from the transform-node bindings via `with:`.
-pub(crate) mod filter_node {
+pub mod filter_node {
     wasmtime::component::bindgen!({
         path: "wit/node",
         world: "filter-node",
