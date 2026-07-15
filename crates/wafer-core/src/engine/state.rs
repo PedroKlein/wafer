@@ -147,6 +147,23 @@ impl WaferState {
     pub fn has_logs(&self) -> bool {
         !self.log_buffer.is_empty()
     }
+
+    /// Push a `WaferBuffer` into the ResourceTable and return its handle.
+    ///
+    /// Called once per Wasm call to make the message payload available to the
+    /// guest via `borrow<buffer>`. The handle is deleted after the call returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the ResourceTable is full (extremely unlikely — 2^32 slots).
+    pub fn push_buffer(
+        &mut self,
+        data: bytes::Bytes,
+    ) -> wasmtime::Result<wasmtime::component::Resource<super::WaferBuffer>> {
+        let buffer = super::WaferBuffer::new(data);
+        let resource = self.table.push(buffer)?;
+        Ok(resource)
+    }
 }
 
 impl WasiView for WaferState {
@@ -213,5 +230,29 @@ mod tests {
         let mut state = WaferState::sandboxed("node");
         // Table should be empty initially
         let _table = state.table_mut();
+    }
+
+    #[test]
+    fn push_buffer_creates_resource() {
+        let mut state = WaferState::sandboxed("test-node");
+        let data = bytes::Bytes::from_static(b"hello world");
+
+        let resource = state.push_buffer(data).expect("push_buffer should succeed");
+
+        // Resource handle should be retrievable from the table
+        let buf = state.table().get(&resource).expect("buffer should be in table");
+        assert_eq!(buf.size(), 11);
+        assert_eq!(buf.read_all(), b"hello world");
+    }
+
+    #[test]
+    fn push_buffer_then_delete() {
+        let mut state = WaferState::sandboxed("test-node");
+        let data = bytes::Bytes::from_static(b"payload");
+
+        let resource = state.push_buffer(data).expect("push_buffer should succeed");
+
+        // Delete the resource (simulating post-call cleanup)
+        state.table_mut().delete(resource).expect("delete should succeed");
     }
 }

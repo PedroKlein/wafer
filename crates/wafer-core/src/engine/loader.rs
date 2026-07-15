@@ -165,6 +165,13 @@ impl WaferEngine {
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
+        // Add WAFER host traits (HostBuffer + logging) so the component's imports resolve
+        super::bindings::transform_node::TransformNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
+            &mut linker,
+            |state: &mut WaferState| state,
+        )
+        .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
         let instance_pre = linker.instantiate_pre(component)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
