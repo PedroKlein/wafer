@@ -1,0 +1,21 @@
+[package]
+name = "wafer-config"
+description = "Pipeline configuration loading, validation, and DAG construction for WAFER"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+wafer-types = { path = "../wafer-types" }
+toml = { workspace = true }
+petgraph = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile = { workspace = true }

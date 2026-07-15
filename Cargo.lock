@@ -3947,12 +3947,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "wafer-config"
+version = "0.1.0"
+dependencies = [
+ "petgraph 0.8.3",
+ "tempfile",
+ "thiserror 2.0.18",
+ "toml 0.8.23",
+ "wafer-types",
+]
+
+[[package]]
 name = "wafer-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "bytes",
  "chrono",
  "criterion",
  "dirs",
@@ -3989,6 +4001,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wafer-plugin"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "wafer-runtime"
 version = "0.1.0"
 dependencies = [
@@ -4014,6 +4034,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "toml 0.8.23",
 ]
 
 [[package]]
