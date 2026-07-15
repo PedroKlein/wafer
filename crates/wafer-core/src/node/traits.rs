@@ -84,6 +84,24 @@ pub enum ProcessResult {
     Error(ProcessError),
 }
 
+/// Outcome of a filter evaluation (borrow-only, zero-copy path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FilterOutcome {
+    /// Forward the original message unchanged (zero copy).
+    Forward,
+    /// Drop the message.
+    Drop,
+}
+
+/// Outcome of a router decision (which port(s) to send to).
+#[derive(Debug)]
+pub enum RouteOutcome {
+    /// Route to specific port(s). Empty vec means drop.
+    Ports(Vec<String>),
+    /// Router encountered an error.
+    Error(ProcessError),
+}
+
 /// Result of routing a message.
 #[derive(Debug)]
 pub enum RouteResult {
@@ -126,5 +144,16 @@ pub trait Router: Lifecycle {
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>>;
+}
+
+/// Filter node trait — pure predicate, borrow-only, zero-copy pass-through.
+///
+/// Unlike Transform, filter does NOT take ownership of the envelope payload.
+/// It inspects metadata/headers and returns Forward or Drop.
+pub trait Filter: Lifecycle {
+    fn evaluate(
+        &mut self,
+        envelope: &RuntimeEnvelope,
+    ) -> Pin<Box<dyn Future<Output = Result<FilterOutcome>> + Send + '_>>;
 }
 

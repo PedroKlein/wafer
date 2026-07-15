@@ -14,8 +14,8 @@ pub use source::{FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use metrics::NodeMetrics;
 pub use state::{NodeStateTracker, ProcessingGuard};
 pub use traits::{
-    ConfigParseError, Lifecycle, NodeConfig, ProcessError, ProcessResult, RouteResult,
-    Router, Transform,
+    ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError,
+    ProcessResult, RouteOutcome, RouteResult, Router, Transform,
 };
 pub use transform::WasmTransform;
 
