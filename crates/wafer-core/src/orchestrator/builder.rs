@@ -100,7 +100,6 @@ pub enum NodeBundleKind {
 
 /// An output edge sender with metadata for overflow handling.
 #[derive(Debug, Clone)]
-#[expect(dead_code, reason = "used when orchestrator spawns tasks from NodeBundles")]
 pub struct EdgeSender {
     pub from_node: Box<str>,
     pub from_port: Box<str>,
@@ -125,7 +124,6 @@ pub struct EdgeSender {
 ///
 /// Wasm compilation and instantiation are NOT done here — that's handled by the
 /// orchestrator which uses WaferEngine to create node instances before spawning.
-#[expect(dead_code, reason = "entry point for new orchestrator, not yet wired to main.rs")]
 pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
     let dag_config = config.dag_config();
     let dag_graph = DagGraph::from_config(&dag_config)?;
@@ -270,7 +268,6 @@ pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
 /// # Errors
 ///
 /// Returns error if DAG validation fails or wiring encounters issues.
-#[expect(dead_code, reason = "entry point for integration tests, not yet wired to main.rs")]
 pub fn build_pipeline_with_io(
     config: &Config,
     sources: HashMap<String, Box<dyn Source + Send>>,

@@ -5,9 +5,9 @@
 //! `pipeline_legacy.rs`) is kept for the old runner/loops.rs and API handlers until
 //! Phase 8 cleanup replaces them.
 
-pub(crate) mod builder;
+pub mod builder;
 pub mod hotswap;
-pub(crate) mod pipeline;
+pub mod pipeline;
 
 // Legacy modules — kept for old runner/loops.rs, API handlers, and control.rs tests.
 // Will be deleted in Phase 8 cleanup.
