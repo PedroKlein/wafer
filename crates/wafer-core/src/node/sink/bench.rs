@@ -4,13 +4,17 @@
 //! gaps/duplicates via `SequenceTracker`, and monitors hot-swap version boundaries
 //! via `HotSwapRecorder`.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D4, D7.
+//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D4, D7, D9.
 
 use std::future::Future;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hdrhistogram::Histogram;
+use hdrhistogram::serialization::V2Serializer;
+use hdrhistogram::serialization::interval_log::IntervalLogWriterBuilder;
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
@@ -192,6 +196,8 @@ pub struct BenchSinkConfig {
     pub track_sequences: bool,
     /// Enable hot-swap version transition recording.
     pub track_hotswap: bool,
+    /// Output directory for auto-export on close(). None = no auto-export.
+    pub output_dir: Option<PathBuf>,
 }
 
 impl Default for BenchSinkConfig {
@@ -200,6 +206,7 @@ impl Default for BenchSinkConfig {
             warmup_secs: 30,
             track_sequences: true,
             track_hotswap: false,
+            output_dir: None,
         }
     }
 }
@@ -212,8 +219,31 @@ impl BenchSinkConfig {
             warmup_secs: 0,
             track_sequences: true,
             track_hotswap: false,
+            output_dir: None,
         }
     }
+
+    /// Set output directory for auto-export on close.
+    #[must_use]
+    pub fn with_output_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.output_dir = Some(dir.into());
+        self
+    }
+}
+
+// =============================================================================
+// ThroughputSample
+// =============================================================================
+
+/// A single throughput measurement for one time bucket (1s resolution).
+#[derive(Debug, Clone)]
+pub struct ThroughputSample {
+    /// Seconds since measurement start (after warmup).
+    pub elapsed_secs: f64,
+    /// Messages received in this bucket.
+    pub msg_count: u64,
+    /// Bytes received in this bucket.
+    pub bytes: u64,
 }
 
 // =============================================================================
@@ -224,6 +254,7 @@ impl BenchSinkConfig {
 ///
 /// Records end-to-end latency into HdrHistogram (3 significant digits,
 /// 1µs–10s range). Optionally tracks sequence gaps and hot-swap transitions.
+/// Supports periodic throughput sampling (1s buckets) and export to HDR/CSV.
 pub struct BenchSink {
     id: String,
     config: BenchSinkConfig,
@@ -234,6 +265,18 @@ pub struct BenchSink {
     hotswap_recorder: Option<HotSwapRecorder>,
     message_count: u64,
     started: bool,
+    /// Wall-clock start time for interval log.
+    start_wall_time: Option<SystemTime>,
+    /// Throughput tracking: time measurement started (after warmup).
+    measurement_start: Option<Instant>,
+    /// Current bucket start time.
+    current_bucket_start: Option<Instant>,
+    /// Messages in current bucket.
+    bucket_msg_count: u64,
+    /// Bytes in current bucket.
+    bucket_bytes: u64,
+    /// Completed throughput samples.
+    throughput_samples: Vec<ThroughputSample>,
 }
 
 impl BenchSink {
@@ -264,6 +307,12 @@ impl BenchSink {
             hotswap_recorder,
             message_count: 0,
             started: false,
+            start_wall_time: None,
+            measurement_start: None,
+            current_bucket_start: None,
+            bucket_msg_count: 0,
+            bucket_bytes: 0,
+            throughput_samples: Vec::new(),
         }
     }
 
@@ -335,6 +384,123 @@ impl BenchSink {
     pub fn hotswap_recorder(&self) -> Option<&HotSwapRecorder> {
         self.hotswap_recorder.as_ref()
     }
+
+    /// Access throughput samples collected during measurement.
+    #[must_use]
+    pub fn throughput_samples(&self) -> &[ThroughputSample] {
+        &self.throughput_samples
+    }
+
+    /// Access the raw histogram.
+    #[must_use]
+    pub fn histogram(&self) -> &Histogram<u64> {
+        &self.histogram
+    }
+
+    // --- Export methods (D9 recording output) ---
+
+    /// Serialize histogram to HdrHistogram interval log format.
+    ///
+    /// Format compatible with HdrHistogram tooling and the Python `hdr_loader.py`.
+    /// Single interval spanning the entire measurement period.
+    pub fn to_hdr_log(&self) -> String {
+        let mut buf = Vec::new();
+        let mut serializer = V2Serializer::new();
+
+        let start_time = self.start_wall_time.unwrap_or(UNIX_EPOCH);
+
+        let mut writer_builder = IntervalLogWriterBuilder::new();
+        writer_builder
+            .with_start_time(start_time)
+            .with_base_time(start_time)
+            .add_comment("WAFER BenchSink latency histogram (nanoseconds)")
+            .add_comment(&format!("Total messages: {}", self.message_count))
+            .add_comment(&format!("Recorded values: {}", self.histogram.len()))
+            .add_comment(&format!("Warmup: {}s", self.config.warmup_secs));
+
+        let mut log_writer = writer_builder
+            .begin_log_with(&mut buf, &mut serializer)
+            .expect("begin interval log");
+
+        // Write as a single interval spanning the full measurement
+        let duration = self.measurement_start.map_or(
+            Duration::ZERO,
+            |start| start.elapsed(),
+        );
+
+        log_writer
+            .write_histogram(
+                &self.histogram,
+                Duration::ZERO,
+                duration,
+                hdrhistogram::serialization::interval_log::Tag::new("latency_ns"),
+            )
+            .expect("write histogram");
+
+        String::from_utf8(buf).expect("valid UTF-8 from interval log")
+    }
+
+    /// Generate throughput CSV content.
+    ///
+    /// Format: `elapsed_secs,msg_count,bytes`
+    /// One row per 1-second bucket.
+    pub fn throughput_csv(&self) -> String {
+        let mut csv = String::from("elapsed_secs,msg_count,bytes\n");
+        for sample in &self.throughput_samples {
+            csv.push_str(&format!(
+                "{:.3},{},{}\n",
+                sample.elapsed_secs, sample.msg_count, sample.bytes
+            ));
+        }
+        csv
+    }
+
+    /// Export all measurement data to a directory.
+    ///
+    /// Creates:
+    /// - `latency.hdr` — HdrHistogram interval log
+    /// - `throughput.csv` — periodic throughput samples
+    ///
+    /// # Errors
+    /// Returns IO errors from directory creation or file writing.
+    pub fn export_to_dir(&self, dir: &Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(dir)?;
+
+        // Write latency.hdr
+        let hdr_content = self.to_hdr_log();
+        let mut hdr_file = std::fs::File::create(dir.join("latency.hdr"))?;
+        hdr_file.write_all(hdr_content.as_bytes())?;
+
+        // Write throughput.csv
+        let csv_content = self.throughput_csv();
+        let mut csv_file = std::fs::File::create(dir.join("throughput.csv"))?;
+        csv_file.write_all(csv_content.as_bytes())?;
+
+        Ok(())
+    }
+
+    /// Flush current throughput bucket if ≥1s has elapsed.
+    fn flush_bucket_if_needed(&mut self, now: Instant) {
+        let Some(bucket_start) = self.current_bucket_start else { return };
+        let elapsed = now.duration_since(bucket_start);
+
+        if elapsed >= Duration::from_secs(1) {
+            let elapsed_since_measurement = self.measurement_start
+                .map(|s| now.duration_since(s).as_secs_f64())
+                .unwrap_or(0.0);
+
+            self.throughput_samples.push(ThroughputSample {
+                elapsed_secs: elapsed_since_measurement,
+                msg_count: self.bucket_msg_count,
+                bytes: self.bucket_bytes,
+            });
+
+            // Reset bucket
+            self.current_bucket_start = Some(now);
+            self.bucket_msg_count = 0;
+            self.bucket_bytes = 0;
+        }
+    }
 }
 
 /// Get current wall-clock time in nanoseconds since UNIX epoch.
@@ -362,6 +528,33 @@ impl Lifecycle for BenchSink {
     }
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        // Flush final throughput bucket
+        if self.bucket_msg_count > 0 {
+            if let Some(measurement_start) = self.measurement_start {
+                let now = Instant::now();
+                let elapsed_since_measurement = now.duration_since(measurement_start).as_secs_f64();
+                self.throughput_samples.push(ThroughputSample {
+                    elapsed_secs: elapsed_since_measurement,
+                    msg_count: self.bucket_msg_count,
+                    bytes: self.bucket_bytes,
+                });
+                self.bucket_msg_count = 0;
+                self.bucket_bytes = 0;
+            }
+        }
+
+        // Auto-export if output_dir configured
+        if let Some(ref dir) = self.config.output_dir {
+            if let Err(e) = self.export_to_dir(dir) {
+                tracing::error!("BenchSink export to {:?} failed: {}", dir, e);
+            } else {
+                tracing::info!(
+                    "BenchSink exported results to {:?} (latency.hdr + throughput.csv)",
+                    dir
+                );
+            }
+        }
+
         Box::pin(async { Ok(()) })
     }
 }
@@ -391,6 +584,20 @@ impl Sink for BenchSink {
             }
         }
 
+        // Initialize measurement tracking on first post-warmup message
+        let now = Instant::now();
+        if self.measurement_start.is_none() {
+            self.measurement_start = Some(now);
+            self.current_bucket_start = Some(now);
+            self.start_wall_time = Some(SystemTime::now());
+        }
+
+        // Throughput tracking
+        let payload_len = envelope.payload.len() as u64;
+        self.bucket_msg_count += 1;
+        self.bucket_bytes += payload_len;
+        self.flush_bucket_if_needed(now);
+
         // Extract intended_ns from metadata for latency calculation
         let intended_ns: Option<u64> = envelope
             .header
@@ -400,8 +607,8 @@ impl Sink for BenchSink {
             .and_then(|(_, v)| v.parse().ok());
 
         if let Some(intended) = intended_ns {
-            let now = current_time_ns();
-            let latency_ns = now.saturating_sub(intended);
+            let now_ns = current_time_ns();
+            let latency_ns = now_ns.saturating_sub(intended);
             // Clamp to histogram range (ignore out-of-range values)
             if latency_ns >= 1_000 {
                 let _ = self.histogram.record(latency_ns);
@@ -460,6 +667,7 @@ mod tests {
             warmup_secs: 1,
             track_sequences: false,
             track_hotswap: false,
+            output_dir: None,
         };
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
@@ -567,5 +775,178 @@ mod tests {
     async fn bench_sink_custom_id() {
         let sink = BenchSink::new(BenchSinkConfig::for_test()).with_id("my-sink");
         assert_eq!(sink.id(), "my-sink");
+    }
+
+    // --- Export tests ---
+
+    #[tokio::test]
+    async fn to_hdr_log_produces_valid_format() {
+        let config = BenchSinkConfig::for_test();
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        for seq in 0..50 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+
+        let hdr_log = sink.to_hdr_log();
+
+        // Should contain required HdrHistogram interval log markers
+        assert!(hdr_log.contains("#[StartTime"), "missing StartTime header");
+        assert!(hdr_log.contains("#[BaseTime"), "missing BaseTime header");
+        assert!(
+            hdr_log.contains("WAFER BenchSink latency histogram"),
+            "missing comment"
+        );
+        assert!(hdr_log.contains("Total messages: 50"), "missing total messages");
+        assert!(hdr_log.contains("Recorded values: 50"), "missing recorded count");
+        // Should contain at least one encoded histogram line (Tag:start:duration:...)
+        assert!(
+            hdr_log.lines().any(|l| l.starts_with("Tag=latency_ns,")),
+            "missing histogram data line"
+        );
+    }
+
+    #[tokio::test]
+    async fn to_hdr_log_empty_histogram() {
+        let config = BenchSinkConfig::for_test();
+        let sink = BenchSink::new(config);
+
+        // No messages → should still produce valid (empty) log
+        let hdr_log = sink.to_hdr_log();
+        assert!(hdr_log.contains("#[StartTime"));
+        assert!(hdr_log.contains("Recorded values: 0"));
+    }
+
+    #[tokio::test]
+    async fn throughput_csv_header_present() {
+        let config = BenchSinkConfig::for_test();
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        // Send a few messages (not enough time for a bucket flush)
+        for seq in 0..5 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+
+        let csv = sink.throughput_csv();
+        assert!(csv.starts_with("elapsed_secs,msg_count,bytes\n"));
+    }
+
+    #[tokio::test]
+    async fn throughput_sampling_flushes_on_close() {
+        let config = BenchSinkConfig::for_test();
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        for seq in 0..10 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+
+        // Before close — bucket is pending (not flushed because <1s elapsed)
+        assert!(sink.throughput_samples().is_empty());
+
+        // Close flushes the final bucket
+        sink.close().await.unwrap();
+
+        assert_eq!(sink.throughput_samples().len(), 1);
+        assert_eq!(sink.throughput_samples()[0].msg_count, 10);
+        // Each "payload" is 7 bytes
+        assert_eq!(sink.throughput_samples()[0].bytes, 7 * 10);
+    }
+
+    #[tokio::test]
+    async fn export_to_dir_creates_files() {
+        let config = BenchSinkConfig::for_test();
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        for seq in 0..20 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+        sink.close().await.unwrap();
+
+        let tmp_dir = std::env::temp_dir().join(format!("wafer-bench-test-{}", std::process::id()));
+        // Clean up from prior runs
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        sink.export_to_dir(&tmp_dir).unwrap();
+
+        // Verify files exist and have content
+        let hdr_path = tmp_dir.join("latency.hdr");
+        let csv_path = tmp_dir.join("throughput.csv");
+
+        assert!(hdr_path.exists(), "latency.hdr not created");
+        assert!(csv_path.exists(), "throughput.csv not created");
+
+        let hdr_content = std::fs::read_to_string(&hdr_path).unwrap();
+        assert!(hdr_content.contains("#[StartTime"));
+        assert!(hdr_content.contains("Recorded values: 20"));
+
+        let csv_content = std::fs::read_to_string(&csv_path).unwrap();
+        assert!(csv_content.starts_with("elapsed_secs,msg_count,bytes\n"));
+        // Should have at least the final flush bucket
+        assert!(csv_content.lines().count() >= 2); // header + at least 1 data row
+
+        // Cleanup
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn auto_export_on_close_with_output_dir() {
+        let tmp_dir = std::env::temp_dir().join(format!("wafer-bench-autoexport-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        let config = BenchSinkConfig::for_test().with_output_dir(&tmp_dir);
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        for seq in 0..15 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+
+        // close() should automatically export
+        sink.close().await.unwrap();
+
+        assert!(tmp_dir.join("latency.hdr").exists(), "auto-export failed: latency.hdr missing");
+        assert!(tmp_dir.join("throughput.csv").exists(), "auto-export failed: throughput.csv missing");
+
+        let hdr = std::fs::read_to_string(tmp_dir.join("latency.hdr")).unwrap();
+        assert!(hdr.contains("Recorded values: 15"));
+
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn throughput_csv_format_correctness() {
+        let config = BenchSinkConfig::for_test();
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        for seq in 0..5 {
+            let env = make_bench_envelope(seq);
+            sink.collect(env).await.unwrap();
+        }
+        sink.close().await.unwrap();
+
+        let csv = sink.throughput_csv();
+        let lines: Vec<&str> = csv.lines().collect();
+
+        // Header
+        assert_eq!(lines[0], "elapsed_secs,msg_count,bytes");
+
+        // Data rows are parseable
+        for line in &lines[1..] {
+            let parts: Vec<&str> = line.split(',').collect();
+            assert_eq!(parts.len(), 3, "CSV row should have 3 columns: {line}");
+            parts[0].parse::<f64>().expect("elapsed_secs should be f64");
+            parts[1].parse::<u64>().expect("msg_count should be u64");
+            parts[2].parse::<u64>().expect("bytes should be u64");
+        }
     }
 }

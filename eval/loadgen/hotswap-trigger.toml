@@ -1,0 +1,16 @@
+# Hot-swap trigger configuration for E-Swap experiments
+# Defines when to trigger a plugin swap during a benchmark run
+[loadgen]
+rate = 1000
+duration_secs = 120
+payload_size = 128
+warmup_secs = 30
+topic = "wafer/bench/input"
+
+[hotswap]
+# Trigger swap after this many seconds into the run (post-warmup)
+trigger_after_secs = 60
+# New plugin to swap to
+new_plugin = "pass-through-v2"
+# Node to perform swap on
+target_node = "transform"

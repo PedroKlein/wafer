@@ -1,0 +1,12 @@
+# Ramp load profile: increasing rate for saturation detection (E-Perf-9)
+# Starts at 100 msg/s, increases by 100 every 10s until saturation
+[loadgen]
+mode = "ramp"
+start_rate = 100
+step_rate = 100
+step_interval_secs = 10
+max_rate = 10000
+duration_secs = 300
+payload_size = 128
+warmup_secs = 30
+topic = "wafer/bench/input"

@@ -1,0 +1,43 @@
+# Full telemetry pipeline: MQTT source → JSON parse → threshold filter → sink
+# Matches the E2E evaluation topology (E-Perf-1, E-Perf-2)
+[pipeline]
+name = "bench-telemetry"
+
+[pipeline.source]
+type = "bench-source"
+
+[pipeline.source.config]
+rate = 1000
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 256
+
+[[pipeline.nodes]]
+id = "parser"
+type = "transform"
+plugin = "wafer-json-parse"
+
+[[pipeline.nodes]]
+id = "filter"
+type = "filter"
+plugin = "wafer-threshold-filter"
+
+[pipeline.nodes.config]
+threshold = 50.0
+
+[pipeline.sink]
+type = "bench-sink"
+
+[pipeline.sink.config]
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[pipeline.edges]
+source = ["parser"]
+parser = ["filter"]
+filter = ["sink"]
+
+[pipeline.metering]
+fuel = true
+epoch = true

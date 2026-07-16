@@ -1,0 +1,4 @@
+{
+  "sql": "CREATE STREAM wafer_bench () WITH (DATASOURCE=\"wafer/bench/input\", FORMAT=\"JSON\", TYPE=\"mqtt\")",
+  "comment": "eKuiper stream definition for WAFER comparison benchmark (E-Perf-2). Subscribes to the same MQTT topic used by WAFER's BenchSource loadgen."
+}

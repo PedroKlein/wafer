@@ -1,0 +1,19 @@
+{
+  "id": "wafer_bench_rule",
+  "sql": "SELECT * FROM wafer_bench WHERE temperature > 50",
+  "actions": [
+    {
+      "mqtt": {
+        "server": "tcp://localhost:1883",
+        "topic": "wafer/bench/output",
+        "qos": 0
+      }
+    }
+  ],
+  "options": {
+    "sendMetaToSink": false,
+    "isEventTime": false,
+    "bufferLength": 1024
+  },
+  "comment": "eKuiper rule matching WAFER's telemetry pipeline (parse + threshold filter). Used for competitive comparison (E-Perf-2)."
+}

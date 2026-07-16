@@ -1,0 +1,52 @@
+# 5-hop pipeline depth for scaling measurement (E-Perf-8)
+[pipeline]
+name = "bench-depth-5"
+
+[pipeline.source]
+type = "bench-source"
+
+[pipeline.source.config]
+rate = 1000
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 128
+
+[[pipeline.nodes]]
+id = "t1"
+type = "transform"
+plugin = "pass-through"
+
+[[pipeline.nodes]]
+id = "t2"
+type = "transform"
+plugin = "pass-through"
+
+[[pipeline.nodes]]
+id = "t3"
+type = "transform"
+plugin = "pass-through"
+
+[[pipeline.nodes]]
+id = "t4"
+type = "transform"
+plugin = "pass-through"
+
+[[pipeline.nodes]]
+id = "t5"
+type = "transform"
+plugin = "pass-through"
+
+[pipeline.sink]
+type = "bench-sink"
+
+[pipeline.sink.config]
+warmup_secs = 30
+track_sequences = true
+
+[pipeline.edges]
+source = ["t1"]
+t1 = ["t2"]
+t2 = ["t3"]
+t3 = ["t4"]
+t4 = ["t5"]
+t5 = ["sink"]

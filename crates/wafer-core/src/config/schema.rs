@@ -406,8 +406,8 @@ impl NodeConfig {
 
 // TODO: use enum for source/sink types instead of strings, with custom deserialization to validate
 // values at parse time
-const VALID_SOURCE_TYPES: &[&str] = &["stdin", "file", "mqtt"];
-const VALID_SINK_TYPES: &[&str] = &["stdout", "file", "mqtt"];
+const VALID_SOURCE_TYPES: &[&str] = &["stdin", "file", "mqtt", "http", "bench-source", "bench"];
+const VALID_SINK_TYPES: &[&str] = &["stdout", "file", "mqtt", "http", "bench-sink", "bench"];
 
 impl DagConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {

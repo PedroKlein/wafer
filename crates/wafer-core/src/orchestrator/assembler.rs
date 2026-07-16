@@ -1,6 +1,7 @@
 //! Node factory for creating pipeline nodes from configuration.
 // TODO: improve this file
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::Result;
@@ -8,9 +9,9 @@ use crate::config::{DeadLetterConfig, NodeConfig as PluginNodeConfig, NodeDefini
 use crate::engine::{TransformInstance, WaferEngine};
 use crate::error::{ConfigError, WaferError};
 use crate::node::{
-    AnyNode, FileSink, FileSource, HttpSink, HttpSource, MqttSink, MqttSource,
-    NodeConfig, RouterInstance, Sink, StdinSource, StdoutSink, WasmRouter,
-    WasmTransform,
+    AnyNode, BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink, FileSource,
+    HttpSink, HttpSource, MqttSink, MqttSource, NativeTransform, NodeConfig,
+    RouterInstance, Sink, StdinSource, StdoutSink, WasmRouter, WasmTransform,
 };
 use crate::registry::{PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 
@@ -55,6 +56,45 @@ pub async fn create_node(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> 
 fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
     let source_type = node_def.source_type.as_deref().unwrap_or("file");
     match source_type {
+        "bench-source" | "bench" => {
+            let rate = node_def
+                .config
+                .get("rate")
+                .or_else(|| node_def.config.get("rate_per_sec"))
+                .and_then(toml::Value::as_float)
+                .or_else(|| {
+                    node_def
+                        .config
+                        .get("rate")
+                        .or_else(|| node_def.config.get("rate_per_sec"))
+                        .and_then(toml::Value::as_integer)
+                        .map(|v| v as f64)
+                })
+                .unwrap_or(1000.0);
+            let total_messages = node_def
+                .config
+                .get("total_messages")
+                .and_then(toml::Value::as_integer)
+                .map_or(60_000, |v| v as u64);
+            let warmup_messages = node_def
+                .config
+                .get("warmup_messages")
+                .and_then(toml::Value::as_integer)
+                .map_or(0, |v| v as u64);
+            let payload_size = node_def
+                .config
+                .get("payload_size")
+                .and_then(toml::Value::as_integer)
+                .map_or(128, |v| v as usize);
+
+            let config = BenchSourceConfig::new(rate, total_messages)
+                .with_warmup(warmup_messages)
+                .with_payload_size(payload_size);
+
+            Ok(AnyNode::from_source(
+                BenchSource::new(config).with_id(&node_def.id),
+            ))
+        }
         "stdin" => Ok(AnyNode::from_source(StdinSource::new(&node_def.id))),
         "mqtt" => {
             let broker =
@@ -118,6 +158,21 @@ fn create_source(node_def: &NodeDefinition) -> Result<AnyNode> {
 }
 
 async fn create_transform(node_def: &NodeDefinition, ctx: &mut NodeAssembler) -> Result<AnyNode> {
+    // Check for native node types that don't need Wasm.
+    // Native nodes are identified by a "native" key in config (e.g., native = "transform")
+    // or by having a "function" key without a "plugin_path" or "oci" key.
+    let is_native = node_def.config.get("native").is_some()
+        || (node_def.config.get("function").is_some()
+            && node_def.config.get("plugin_path").is_none()
+            && node_def.config.get("oci").is_none());
+
+    if is_native {
+        return match node_def.node_type {
+            NodeType::Filter => create_native_filter(node_def),
+            _ => create_native_transform(node_def),
+        };
+    }
+
     let plugin_config: PluginNodeConfig =
         node_def.config.clone().try_into().map_err(|e: toml::de::Error| {
             WaferError::Config(ConfigError::Message(format!(
@@ -137,6 +192,63 @@ async fn create_transform(node_def: &NodeDefinition, ctx: &mut NodeAssembler) ->
         NodeConfig::new(&node_def.id, "transform").with_config_bytes(config_str.into_bytes());
 
     let transform = WasmTransform::new(engine, instance, node_config);
+    Ok(AnyNode::from_transform(transform))
+}
+
+fn create_native_transform(node_def: &NodeDefinition) -> Result<AnyNode> {
+    let function = node_def
+        .config
+        .get("function")
+        .and_then(toml::Value::as_str)
+        .unwrap_or("passthrough");
+
+    let transform = match function {
+        "uppercase" => NativeTransform::uppercase(&node_def.id),
+        "passthrough" | _ => NativeTransform::passthrough(&node_def.id),
+    };
+
+    Ok(AnyNode::from_transform(transform))
+}
+
+fn create_native_filter(node_def: &NodeDefinition) -> Result<AnyNode> {
+    let threshold = node_def
+        .config
+        .get("threshold")
+        .and_then(toml::Value::as_float)
+        .unwrap_or(50.0);
+
+    // Wrap filter logic as a NativeTransform that returns the payload unchanged
+    // if it passes the threshold, or an empty payload to signal drop.
+    // The filter runner checks ProcessResult::Emit vs ProcessResult::Error.
+    // For the native baseline, we use NativeTransform with a filtering closure.
+    let transform = NativeTransform::new(&node_def.id, move |payload: &[u8]| {
+        let Ok(s) = std::str::from_utf8(payload) else {
+            return Ok(Vec::new()); // Drop: empty payload signals filter-out
+        };
+        // Extract temperature value
+        let key = "\"temperature\"";
+        let passes = if let Some(idx) = s.find(key) {
+            let after_key = &s[idx + key.len()..];
+            if let Some(after_colon) = after_key.trim_start().strip_prefix(':') {
+                let value_str = after_colon.trim_start();
+                let end = value_str
+                    .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
+                    .unwrap_or(value_str.len());
+                value_str[..end].parse::<f64>().is_ok_and(|t| t > threshold)
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if passes {
+            Ok(payload.to_vec())
+        } else {
+            Ok(Vec::new()) // Drop
+        }
+    });
+
     Ok(AnyNode::from_transform(transform))
 }
 
@@ -253,6 +365,40 @@ fn create_sink(node_def: &NodeDefinition) -> Result<AnyNode> {
 
     let sink_type = node_def.sink_type.as_deref().unwrap_or("file");
     match sink_type {
+        "bench-sink" | "bench" => {
+            let warmup_secs = node_def
+                .config
+                .get("warmup_secs")
+                .and_then(toml::Value::as_integer)
+                .map_or(30, |v| v as u64);
+            let track_sequences = node_def
+                .config
+                .get("track_sequences")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(true);
+            let track_hotswap = node_def
+                .config
+                .get("track_hotswap")
+                .and_then(toml::Value::as_bool)
+                .unwrap_or(false);
+
+            let output_dir = node_def
+                .config
+                .get("output_dir")
+                .and_then(toml::Value::as_str)
+                .map(PathBuf::from);
+
+            let config = BenchSinkConfig {
+                warmup_secs,
+                track_sequences,
+                track_hotswap,
+                output_dir,
+            };
+
+            Ok(AnyNode::from_sink(
+                BenchSink::new(config).with_id(&node_def.id),
+            ))
+        }
         "stdout" => Ok(AnyNode::from_sink(StdoutSink::new(&node_def.id))),
         "mqtt" => {
             let broker =

@@ -24,7 +24,7 @@ pub(crate) mod pipeline_legacy;
 pub use assembler::{NodeAssembler, create_dlq_sink, create_node};
 #[cfg(feature = "phase2-tests")]
 pub use control::EventReceiver;
-pub use hotswap::SwapError;
+pub use hotswap::{SwapError, SwapTimeline, TimedSwapResult};
 pub use pipeline::NewPipelineOrchestrator;
 
 // Legacy re-exports (feature-gated)

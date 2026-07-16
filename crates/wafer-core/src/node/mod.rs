@@ -12,7 +12,7 @@ mod transform;
 pub mod wasm;
 
 pub use router::{RouterInstance, WasmRouter};
-pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition};
+pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition, ThroughputSample};
 pub use source::{BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use native::{NativeFilter, NativeTransform};
 pub use kind::{Node, NodeKind};

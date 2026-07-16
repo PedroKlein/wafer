@@ -7,7 +7,7 @@ mod http;
 mod mqtt;
 mod stdout;
 
-pub use bench::{BenchSink, BenchSinkConfig, HotSwapRecorder, SequenceTracker, SwapTransition};
+pub use bench::{BenchSink, BenchSinkConfig, HotSwapRecorder, SequenceTracker, SwapTransition, ThroughputSample};
 pub use file::FileSink;
 pub use http::{HttpSink, HttpSinkBatchConfig};
 pub use mqtt::MqttSink;
