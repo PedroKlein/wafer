@@ -1,11 +1,11 @@
 //! HTTP API server for pipeline control.
 //!
-//! This module provides a REST API for controlling the `PipelineOrchestrator`.
-//! It is feature-gated behind the `http-api` feature.
+//! Provides a REST API for the `PipelineOrchestrator`.
+//! Feature-gated behind `http-api`.
 
-mod handlers;
+pub mod handlers;
 mod metrics;
 mod server;
 
 pub use metrics::{MetricsServer, MetricsServerConfig};
-pub use server::{ApiConfig, ApiServer, start_api_server};
+pub use server::{ApiConfig, ApiServer};

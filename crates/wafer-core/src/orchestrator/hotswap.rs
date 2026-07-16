@@ -1,9 +1,6 @@
-//! Hot-swap support for the new orchestrator (watch-channel based).
+//! Hot-swap support — watch-channel based swap between messages.
 //!
-//! The old `HotSwapCoordinator` with drain-and-flip is feature-gated under
-//! `phase2-tests` — it's replaced by the simpler watch-channel model where
-//! swap happens atomically between messages (no explicit drain phase needed).
-//!
+//! Swap happens atomically between messages (no explicit drain phase needed).
 //! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D6.
 
 use std::sync::Arc;
@@ -123,15 +120,6 @@ pub async fn prepare_router_swap(
 // =============================================================================
 // Legacy hot-swap coordinator — feature-gated for old tests
 // =============================================================================
-
-#[cfg(feature = "phase2-tests")]
-#[cfg(feature = "phase2-tests")]
-pub use legacy::*;
-
-#[cfg(feature = "phase2-tests")]
-mod legacy {
-    pub use super::super::hotswap_legacy::*;
-}
 
 /// Error types for hot-swap operations.
 #[derive(Debug)]

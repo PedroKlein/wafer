@@ -211,25 +211,10 @@ pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
                 NodeBundleKind::Sink { sink: None, receiver }
             }
             NodeType::Joiner => {
-                // Joiner removed in Session 3 A1 — merge is handled by multi-sender.
-                // Treat as a transform for bundle purposes (has receiver + senders).
-                let (watch_tx, watch_rx) = watch::channel(None);
-                watch_senders.insert(node_id.clone(), watch_tx);
-                let receiver = wiring.take_receiver(&node_def.id);
-                let senders = wiring.collect_downstream_senders(&node_def.id);
-                let policy_config = resolve_error_policy(config, &node_def.id);
-                let policy = ErrorPolicyExecutor::new(
-                    policy_config,
-                    Some(dlq_tx.clone()),
-                    node_id.clone(),
-                );
-                NodeBundleKind::Transform {
-                    receiver,
-                    senders,
-                    swap_rx: watch_rx,
-                    policy,
-                        node: None,
-                }
+                return Err(WaferError::Config(ConfigError::Message(format!(
+                    "node '{}': 'joiner' type is removed — use multi-sender merge topology instead",
+                    node_def.id
+                ))));
             }
         };
 
@@ -362,23 +347,10 @@ pub fn build_pipeline_with_io(
                 NodeBundleKind::Sink { sink, receiver }
             }
             NodeType::Joiner => {
-                let (watch_tx, watch_rx) = watch::channel(None);
-                watch_senders.insert(node_id.clone(), watch_tx);
-                let receiver = wiring.take_receiver(&node_def.id);
-                let downstream_senders = wiring.collect_downstream_senders(&node_def.id);
-                let policy_config = resolve_error_policy(config, &node_def.id);
-                let policy = ErrorPolicyExecutor::new(
-                    policy_config,
-                    Some(dlq_tx.clone()),
-                    node_id.clone(),
-                );
-                NodeBundleKind::Transform {
-                    receiver,
-                    senders: downstream_senders,
-                    swap_rx: watch_rx,
-                    policy,
-                        node: None,
-                }
+                return Err(WaferError::Config(ConfigError::Message(format!(
+                    "node '{}': 'joiner' type is removed — use multi-sender merge topology instead",
+                    node_def.id
+                ))));
             }
         };
 

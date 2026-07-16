@@ -13,21 +13,6 @@ pub mod sink;
 pub mod source;
 pub mod transform;
 
-// Old modules — will be deleted in Phase 8 cleanup.
-// Kept for now because orchestrator/pipeline.rs still references runner::loops.
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod dlq_handlers;
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod loops;
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod metrics_helper;
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod overflow;
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod result_handler;
-#[cfg(feature = "phase2-tests")]
-pub(crate) mod sink_helpers;
-
 use tokio::sync::mpsc;
 use wasmtime::Store;
 

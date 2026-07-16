@@ -1,21 +1,24 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
-//! WAFER Runtime - Main entry point.
+//! WAFER Runtime — WebAssembly Flow Execution Runtime binary.
 //!
-//! This binary wraps wafer-core with HTTP API enabled by default.
+//! Loads pipeline config, launches all nodes, runs until completion or signal.
+//! Supports timed hot-swap triggers for benchmark evaluation (RQ3).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tokio::signal;
-use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use wafer_core::api::{ApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
-use wafer_core::config::loader::load_config;
+use wafer_core::config::load_config;
+use wafer_core::engine::Capabilities;
+use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
+use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::orchestrator::PipelineOrchestrator;
 
 /// Log output format.
@@ -28,7 +31,7 @@ enum LogFormat {
     Json,
 }
 
-/// WAFER Runtime - WebAssembly Flow Execution Runtime
+/// WAFER Runtime — WebAssembly Flow Execution Runtime
 #[derive(Parser, Debug)]
 #[command(name = "wafer")]
 #[command(version, about, long_about = None)]
@@ -56,15 +59,30 @@ struct Args {
     /// Log output format
     #[arg(long, value_enum, default_value_t = LogFormat::Pretty)]
     log_format: LogFormat,
+
+    /// Trigger hot-swap after N seconds (benchmark mode, RQ3 evaluation)
+    #[arg(long, value_name = "SECS")]
+    swap_after_secs: Option<u64>,
+
+    /// Node ID to hot-swap (requires --swap-after-secs)
+    #[arg(long, value_name = "ID")]
+    swap_node: Option<String>,
+
+    /// Path to replacement .wasm plugin (requires --swap-after-secs)
+    #[arg(long, value_name = "PATH")]
+    swap_plugin: Option<PathBuf>,
+
+    /// Directory to write swap timeline JSON output
+    #[arg(long, value_name = "DIR")]
+    swap_output_dir: Option<PathBuf>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize tracing with selected format
+    // Initialize tracing
     let env_filter = EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into());
-
     match args.log_format {
         LogFormat::Pretty => {
             tracing_subscriber::registry().with(fmt::layer()).with(env_filter).init();
@@ -77,96 +95,160 @@ async fn main() -> Result<()> {
     info!("WAFER Runtime starting...");
     info!(config = %args.config.display(), "Loading configuration");
 
-    // Load configuration
-    let config = load_config(&args.config).await.context("Failed to load configuration")?;
+    let config = load_config(&args.config)
+        .await
+        .context("Failed to load configuration")?;
 
     let pipeline_name = config.pipeline.name.clone();
-    let api_config = config.api.clone();
-    let metrics_config = config.metrics.clone();
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
-    // Create the pipeline orchestrator wrapped in Arc for sharing with API server
-    // Pass the config path to enable reload_config() functionality
-    let orchestrator = Arc::new(
-        PipelineOrchestrator::from_config_with_path(config, !args.no_cache, Some(&args.config))
-            .await
-            .context("Failed to create pipeline orchestrator")?,
+    // Launch pipeline (engine, plugins, sources, sinks, topology)
+    let mut orchestrator = launch_pipeline(config, Some(&args.config))
+        .await
+        .context("Failed to launch pipeline")?;
+
+    info!(
+        tasks = orchestrator.task_count(),
+        wasm_nodes = orchestrator.wasm_node_count(),
+        "Pipeline running"
     );
 
-    // Get cancel token for shutdown handling
-    let pipeline_cancel_token = orchestrator.cancel_token();
+    // Spawn timed swap trigger if configured (RQ3 benchmark mode)
+    if let Some(delay_secs) = args.swap_after_secs {
+        let node_id = args.swap_node.clone().context(
+            "--swap-after-secs requires --swap-node <ID>"
+        )?;
+        let plugin_path = args.swap_plugin.clone().context(
+            "--swap-after-secs requires --swap-plugin <PATH>"
+        )?;
 
-    // Create a separate cancellation token for graceful server shutdown
-    let server_shutdown = CancellationToken::new();
+        if !orchestrator.swappable_nodes().contains(&node_id.as_str()) {
+            anyhow::bail!("--swap-node '{node_id}' is not a swappable Wasm node");
+        }
 
-    // Determine if we need a separate metrics server
-    let metrics_bind = args.metrics_bind.or(metrics_config.bind);
-    let serve_metrics_on_api = metrics_bind.is_none() && metrics_config.enabled;
+        let output_dir = args.swap_output_dir.clone();
+        let engine = Arc::clone(orchestrator.engine());
+        let cancel = orchestrator.cancel_token().clone();
 
-    // Start API server if enabled
-    if !args.no_api && api_config.enabled {
-        let api_bind = args.api_bind.unwrap_or(api_config.bind);
-        let api_server_config = ApiConfig { bind: api_bind, serve_metrics: serve_metrics_on_api };
+        // Use a oneshot to pass the prepared swap payload back to main
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
-        let api_server = ApiServer::new(api_server_config, Arc::clone(&orchestrator))
-            .await
-            .context("Failed to create API server")?;
-
-        let addr = api_server.local_addr()?;
-        info!(address = %addr, "API server started");
-
-        let shutdown_signal = server_shutdown.clone().cancelled_owned();
         tokio::spawn(async move {
-            if let Err(e) = api_server.run_with_shutdown(shutdown_signal).await {
-                error!(error = %e, "API server error");
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                () = tokio::time::sleep(Duration::from_secs(delay_secs)) => {}
+            }
+
+            info!(node = %node_id, delay_secs, "Timed swap trigger firing");
+
+            let wasm_bytes = match tokio::fs::read(&plugin_path).await {
+                Ok(b) => b,
+                Err(e) => {
+                    error!(path = %plugin_path.display(), error = %e, "Failed to read swap plugin");
+                    return;
+                }
+            };
+
+            let result = prepare_transform_swap_timed(
+                &engine, &wasm_bytes, &node_id, Capabilities::sandbox(),
+            ).await;
+
+            match result {
+                Ok(timed) => {
+                    info!(
+                        node = %node_id,
+                        compile_ns = ?timed.timeline.compile_duration_ns(),
+                        instantiate_ns = ?timed.timeline.instantiate_duration_ns(),
+                        "Swap prepared"
+                    );
+
+                    // Write timeline
+                    if let Some(ref dir) = output_dir {
+                        let _ = tokio::fs::create_dir_all(dir).await;
+                        let path = dir.join(format!("swap-timeline-{node_id}.json"));
+                        match tokio::fs::write(&path, timed.timeline.to_json()).await {
+                            Ok(()) => info!(path = %path.display(), "Swap timeline written"),
+                            Err(e) => warn!(error = %e, "Failed to write timeline"),
+                        }
+                    }
+
+                    let _ = tx.send((node_id, timed.payload));
+                }
+                Err(e) => error!(error = %e, "Swap preparation failed"),
             }
         });
+
+        // Receive payload and dispatch swap within the run loop
+        let cancel = orchestrator.cancel_token().clone();
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            info!("Shutdown signal received");
+            cancel.cancel();
+        });
+
+        // Custom run loop that also handles swap delivery
+        run_with_swap(&mut orchestrator, rx).await;
+
+        info!("WAFER Runtime stopped");
+        return Ok(());
     }
 
-    // Start separate metrics server if configured
-    if metrics_config.enabled {
-        if let Some(bind) = metrics_bind {
-            let metrics_server_config =
-                MetricsServerConfig { bind, path: metrics_config.path.clone() };
-
-            let metrics_server =
-                MetricsServer::new(metrics_server_config, Arc::clone(&orchestrator))
-                    .await
-                    .context("Failed to create metrics server")?;
-
-            let addr = metrics_server.local_addr()?;
-            info!(address = %addr, path = %metrics_config.path, "Metrics server started");
-
-            let shutdown_signal = server_shutdown.clone().cancelled_owned();
-            tokio::spawn(async move {
-                if let Err(e) = metrics_server.run_with_shutdown(shutdown_signal).await {
-                    error!(error = %e, "Metrics server error");
-                }
-            });
-        }
-    }
-
-    // Spawn shutdown signal handler
-    let pipeline_cancel = pipeline_cancel_token.clone();
-    let server_cancel = server_shutdown.clone();
+    // Standard mode: no swap trigger
+    let cancel = orchestrator.cancel_token().clone();
     tokio::spawn(async move {
         shutdown_signal().await;
-        info!("Shutdown signal received, initiating graceful shutdown...");
-        // Cancel the pipeline first
-        pipeline_cancel.cancel();
-        // Then signal servers to shutdown
-        server_cancel.cancel();
+        info!("Shutdown signal received");
+        cancel.cancel();
     });
 
-    // Run pipeline until completion or cancellation
-    // Note: run() now takes &self (not &mut self) thanks to internal mutability
-    orchestrator.run().await.context("Pipeline execution failed")?;
-
-    // Signal server shutdown after pipeline stops
-    server_shutdown.cancel();
+    match orchestrator.run_until_complete().await {
+        Ok(()) => info!("Pipeline completed"),
+        Err(e) => error!(error = %e, "Pipeline exited with error"),
+    }
 
     info!("WAFER Runtime stopped");
     Ok(())
+}
+
+/// Run the pipeline while also watching for a swap payload delivery.
+///
+/// This integrates the timed swap trigger into the pipeline run loop.
+/// When the swap payload arrives, it's dispatched to the target node
+/// via `send_swap()`, then we continue waiting for pipeline completion.
+async fn run_with_swap(
+    orchestrator: &mut PipelineOrchestrator,
+    rx: tokio::sync::oneshot::Receiver<(String, wafer_core::runner::SwapPayload)>,
+) {
+    // We can't use run_until_complete directly because we need to interleave
+    // with the swap oneshot. Instead, replicate the logic with an additional arm.
+    let mut swap_rx = Some(rx);
+    let cancel = orchestrator.cancel_token().clone();
+
+    loop {
+        if let Some(rx) = swap_rx.take() {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => break,
+                result = rx => {
+                    if let Ok((node_id, payload)) = result {
+                        match orchestrator.send_swap(&node_id, payload) {
+                            Ok(()) => info!(node = %node_id, "Hot-swap dispatched"),
+                            Err(e) => error!(error = %e, "Hot-swap dispatch failed"),
+                        }
+                    }
+                    // After swap dispatched, fall through to run_until_complete
+                }
+            }
+        }
+
+        // Now just run until complete
+        match orchestrator.run_until_complete().await {
+            Ok(()) => info!("Pipeline completed"),
+            Err(e) => error!(error = %e, "Pipeline exited with error"),
+        }
+        break;
+    }
 }
 
 async fn shutdown_signal() {
@@ -186,7 +268,7 @@ async fn shutdown_signal() {
     let terminate = std::future::pending::<()>();
 
     tokio::select! {
-        _ = ctrl_c => {},
-        _ = terminate => {},
+        () = ctrl_c => {},
+        () = terminate => {},
     }
 }

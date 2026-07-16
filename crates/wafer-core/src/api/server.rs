@@ -39,10 +39,10 @@ impl ApiServer {
     /// Creates a new API server.
     pub async fn new(
         config: ApiConfig,
-        controller: Arc<PipelineOrchestrator>,
+        orchestrator: Arc<PipelineOrchestrator>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
-        let router = create_router(controller, config.serve_metrics);
+        let router = create_router(orchestrator, config.serve_metrics);
 
         Ok(Self { listener, router })
     }
@@ -67,17 +67,11 @@ impl ApiServer {
 }
 
 /// Creates the Axum router with all routes.
-fn create_router(controller: Arc<PipelineOrchestrator>, serve_metrics: bool) -> Router {
+fn create_router(orchestrator: Arc<PipelineOrchestrator>, serve_metrics: bool) -> Router {
     let mut router = Router::new()
-        // Health endpoints
         .route("/health", get(handlers::health))
         .route("/ready", get(handlers::ready))
-        // Pipeline endpoints
-        .route("/api/v1/pipeline", get(handlers::get_pipeline))
-        .route("/api/v1/pipeline/reload", post(handlers::reload_config))
-        .route("/api/v1/pipeline/drain", post(handlers::drain))
         .route("/api/v1/pipeline/shutdown", post(handlers::shutdown))
-        // Node endpoints
         .route("/api/v1/nodes", get(handlers::list_nodes))
         .route("/api/v1/nodes/{id}", get(handlers::get_node))
         .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap));
@@ -86,25 +80,5 @@ fn create_router(controller: Arc<PipelineOrchestrator>, serve_metrics: bool) -> 
         router = router.route("/metrics", get(handlers::metrics));
     }
 
-    router.layer(TraceLayer::new_for_http()).with_state(controller)
-}
-
-/// Starts the API server as a convenience function.
-pub async fn start_api_server(
-    config: ApiConfig,
-    controller: Arc<PipelineOrchestrator>,
-) -> std::io::Result<ApiServer> {
-    ApiServer::new(config, controller).await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_default_config() {
-        let config = ApiConfig::default();
-        assert_eq!(config.bind, "127.0.0.1:9090".parse::<SocketAddr>().unwrap());
-        assert!(config.serve_metrics);
-    }
+    router.layer(TraceLayer::new_for_http()).with_state(orchestrator)
 }

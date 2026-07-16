@@ -22,6 +22,7 @@ use crate::node::{NodeMetrics, NodeStateTracker};
 use wafer_types::NodeState;
 use crate::orchestrator::builder::{BuildOutput, NodeBundleKind};
 use crate::runner::SwapPayload;
+use crate::runner::{DownstreamSender, send_downstream};
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::source::run_source_loop;
 use crate::runner::sink::run_sink_loop;
@@ -42,7 +43,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// - State trackers + metrics for lock-free status queries
 ///
 /// NO shared mutex on the hot path. Nodes own their instances.
-pub struct NewPipelineOrchestrator {
+pub struct PipelineOrchestrator {
     /// Supervised task set — first-failure detection via JoinSet.
     tasks: JoinSet<()>,
     /// Hot-swap signal channels (ownership transfer via watch).
@@ -61,7 +62,7 @@ pub struct NewPipelineOrchestrator {
     dlq_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
-impl NewPipelineOrchestrator {
+impl PipelineOrchestrator {
     /// Build and spawn a pipeline from configuration.
     ///
     /// This is the primary constructor — builds the pipeline infrastructure
@@ -123,11 +124,10 @@ impl NewPipelineOrchestrator {
                             ).await;
                         });
                     } else {
-                        // No compiled Wasm node — await cancellation.
-                        // This path is used in unit tests without .wasm fixtures.
-                        tracing::debug!(node = %node_id, "Transform task: no Wasm instance, awaiting cancel");
+                        // No compiled Wasm node — run as identity passthrough.
+                        // Native transforms forward messages unchanged.
                         self.tasks.spawn(async move {
-                            cancel.cancelled().await;
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
                         });
                     }
                 }
@@ -140,9 +140,9 @@ impl NewPipelineOrchestrator {
                             ).await;
                         });
                     } else {
-                        tracing::debug!(node = %node_id, "Filter task: no Wasm instance, awaiting cancel");
+                        // Native filter — forward all messages (no-op filter passes everything)
                         self.tasks.spawn(async move {
-                            cancel.cancelled().await;
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
                         });
                     }
                 }
@@ -155,9 +155,9 @@ impl NewPipelineOrchestrator {
                             ).await;
                         });
                     } else {
-                        tracing::debug!(node = %node_id, "Router task: no Wasm instance, awaiting cancel");
+                        // Native router — broadcast to all downstreams
                         self.tasks.spawn(async move {
-                            cancel.cancelled().await;
+                            run_passthrough_loop(receiver, senders, cancel, state, metrics).await;
                         });
                     }
                 }
@@ -275,6 +275,75 @@ impl NewPipelineOrchestrator {
         Ok(())
     }
 
+    /// Run the pipeline until all tasks complete naturally or cancellation fires.
+    ///
+    /// For finite pipelines (e.g., BenchSource with `total_messages`), the source
+    /// task exits after sending all messages → its downstream channel closes →
+    /// transform/filter tasks see `recv() = None` and exit → sink channels close →
+    /// sink tasks drain and exit → JoinSet empties → this method returns.
+    ///
+    /// Returns `Ok(())` if all tasks exited cleanly, `Err` if any panicked.
+    pub async fn run_until_complete(&mut self) -> Result<()> {
+        let mut had_panic = false;
+
+        loop {
+            tokio::select! {
+                biased;
+                () = self.cancel_token.cancelled() => {
+                    // External cancellation — drain remaining tasks with timeout
+                    let deadline = tokio::time::sleep(SHUTDOWN_TIMEOUT);
+                    tokio::pin!(deadline);
+                    loop {
+                        tokio::select! {
+                            biased;
+                            () = &mut deadline => {
+                                self.tasks.shutdown().await;
+                                break;
+                            }
+                            result = self.tasks.join_next() => match result {
+                                Some(Ok(())) => {}
+                                Some(Err(e)) => {
+                                    tracing::error!(error = %e, "Task panicked during shutdown");
+                                    had_panic = true;
+                                }
+                                None => break,
+                            },
+                        }
+                    }
+                    break;
+                }
+                result = self.tasks.join_next() => {
+                    match result {
+                        Some(Ok(())) => {}
+                        Some(Err(e)) => {
+                            tracing::error!(error = %e, "Task panicked during pipeline run");
+                            had_panic = true;
+                        }
+                        None => break, // All tasks completed
+                    }
+                }
+            }
+        }
+
+        // Wait for DLQ task
+        if let Some(handle) = self.dlq_handle.take() {
+            match tokio::time::timeout(Duration::from_secs(5), handle).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    tracing::error!(error = %e, "DLQ task panicked");
+                    had_panic = true;
+                }
+                Err(_) => tracing::warn!("DLQ task did not exit within timeout"),
+            }
+        }
+
+        if had_panic {
+            Err(WaferError::Runtime("one or more tasks panicked during pipeline run".into()))
+        } else {
+            Ok(())
+        }
+    }
+
     /// Request shutdown without waiting (non-blocking).
     pub fn cancel(&self) {
         self.cancel_token.cancel();
@@ -332,6 +401,42 @@ impl NewPipelineOrchestrator {
     #[must_use]
     pub fn engine(&self) -> &Arc<WaferEngine> {
         &self.engine
+    }
+}
+
+/// Identity passthrough loop for native nodes without Wasm instances.
+///
+/// Receives messages, records metrics, and forwards unchanged to all downstreams.
+/// Used for native-transform (passthrough/uppercase) and nodes without .wasm.
+async fn run_passthrough_loop(
+    mut receiver: tokio::sync::mpsc::Receiver<crate::queue::RuntimeEnvelope>,
+    senders: Vec<DownstreamSender>,
+    cancel: CancellationToken,
+    state: Arc<NodeStateTracker>,
+    metrics: Arc<NodeMetrics>,
+) {
+    use crate::node::ProcessingGuard;
+    use std::time::Instant;
+
+    state.transition_to_running();
+
+    loop {
+        let envelope = tokio::select! {
+            biased;
+            () = cancel.cancelled() => break,
+            msg = receiver.recv() => match msg {
+                Some(e) => e,
+                None => break,
+            },
+        };
+
+        let start = Instant::now();
+        let _guard = ProcessingGuard::enter(&state);
+        // Identity: forward unchanged
+        send_downstream(&senders, envelope).await;
+        let duration_ns = start.elapsed().as_nanos() as u64;
+        drop(_guard);
+        metrics.record_processed(duration_ns);
     }
 }
 
@@ -451,7 +556,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         // Only Wasm nodes (transform) get watch senders
         assert_eq!(orch.wasm_node_count(), 1);
@@ -464,7 +569,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         // 3 nodes → 3 tasks
         assert_eq!(orch.task_count(), 3);
@@ -477,7 +582,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         assert!(orch.is_running());
 
@@ -493,7 +598,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         // Cancel without shutdown — tasks should still exit
         orch.cancel();
@@ -512,7 +617,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         // State trackers are initialized to New
         let state = orch.node_state("t1");
@@ -528,7 +633,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         let m = orch.node_metrics("t1");
         assert!(m.is_some());
@@ -541,7 +646,7 @@ mod tests {
         let engine = Arc::new(WaferEngine::new().expect("engine"));
         let build_output = build_pipeline(&config).expect("build");
 
-        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         // Wasm node (t1) has a watch sender
         assert!(orch.watch_senders.contains_key("t1"));
@@ -609,7 +714,7 @@ mod tests {
         sinks.insert("sink".to_string(), Box::new(sink) as Box<dyn crate::node::Sink + Send>);
 
         let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
-        let mut orch = NewPipelineOrchestrator::from_build_output(build_output, config, engine);
+        let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         assert_eq!(orch.task_count(), 2);
 
@@ -644,6 +749,89 @@ mod tests {
         }
 
         orch.shutdown().await.expect("shutdown");
+        assert!(!orch.is_running());
+    }
+
+    #[tokio::test]
+    async fn test_run_until_complete_finite_pipeline() {
+        // Build source → sink. Source sends 10 messages then drops sender (EOF).
+        // run_until_complete() should return Ok after all tasks drain.
+        let config = Config {
+            pipeline: PipelineConfig::default(),
+            engine: crate::config::EngineConfig::default(),
+            api: ApiServerConfig::default(),
+            metrics: MetricsConfig::default(),
+            nodes: vec![
+                NodeDefinition {
+                    id: "src".to_string(),
+                    node_type: NodeType::Source,
+                    source_type: Some("channel".to_string()),
+                    sink_type: None,
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+                NodeDefinition {
+                    id: "sink".to_string(),
+                    node_type: NodeType::Sink,
+                    source_type: None,
+                    sink_type: Some("channel".to_string()),
+                    config: toml::Value::Table(toml::map::Map::new()),
+                    capabilities: Default::default(),
+                },
+            ],
+            edges: vec![
+                EdgeDefinition {
+                    from: "src".to_string(),
+                    to: "sink".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    queue_capacity: None,
+                    overflow: OverflowPolicy::default(),
+                },
+            ],
+            default_queue_capacity: 1024,
+            registry: Default::default(),
+            dead_letter: None,
+        };
+
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+
+        let (source_tx, source) = ChannelSource::new("src");
+        let (sink, mut sink_rx) = ChannelSink::new("sink");
+
+        let mut sources = HashMap::new();
+        sources.insert("src".to_string(), Box::new(source) as Box<dyn crate::node::Source + Send>);
+        let mut sinks = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(sink) as Box<dyn crate::node::Sink + Send>);
+
+        let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
+        let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        // Send 10 messages then drop sender (EOF)
+        tokio::spawn(async move {
+            for i in 0..10 {
+                source_tx
+                    .send(RuntimeEnvelope::from_string("test", format!("msg-{i}")))
+                    .await
+                    .unwrap();
+            }
+            drop(source_tx);
+        });
+
+        // Drain sink in background
+        tokio::spawn(async move {
+            while sink_rx.recv().await.is_some() {}
+        });
+
+        // run_until_complete should return Ok after source EOF propagates
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            orch.run_until_complete(),
+        )
+        .await
+        .expect("timeout: run_until_complete didn't finish");
+
+        assert!(result.is_ok(), "run_until_complete failed: {:?}", result.err());
         assert!(!orch.is_running());
     }
 }

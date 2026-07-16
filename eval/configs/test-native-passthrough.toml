@@ -1,0 +1,38 @@
+# Native passthrough — test config for the new runtime (no Wasm needed)
+[pipeline]
+name = "test-native-passthrough"
+
+[[nodes]]
+id = "source"
+node_type = "source"
+source_type = "bench-source"
+
+[nodes.config]
+rate = 10000
+total_messages = 100
+warmup_messages = 0
+payload_size = 64
+
+[[nodes]]
+id = "transform"
+node_type = "transform"
+
+[nodes.config]
+function = "passthrough"
+
+[[nodes]]
+id = "sink"
+node_type = "sink"
+sink_type = "bench-sink"
+
+[nodes.config]
+warmup_secs = 0
+track_sequences = false
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

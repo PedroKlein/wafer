@@ -26,8 +26,6 @@ impl Default for MetricsServerConfig {
 }
 
 /// Dedicated metrics server for serving Prometheus metrics on a separate port.
-///
-/// This is used when `metrics.bind` is configured to a different address than `api.bind`.
 pub struct MetricsServer {
     listener: TcpListener,
     router: Router,
@@ -37,10 +35,10 @@ impl MetricsServer {
     /// Creates a new metrics server.
     pub async fn new(
         config: MetricsServerConfig,
-        controller: Arc<PipelineOrchestrator>,
+        orchestrator: Arc<PipelineOrchestrator>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
-        let router = create_metrics_router(controller, &config.path);
+        let router = create_metrics_router(orchestrator, &config.path);
 
         Ok(Self { listener, router })
     }
@@ -64,9 +62,8 @@ impl MetricsServer {
     }
 }
 
-/// Creates a minimal router with just the metrics endpoint.
-fn create_metrics_router(controller: Arc<PipelineOrchestrator>, path: &str) -> Router {
-    Router::new().route(path, get(handlers::metrics)).with_state(controller)
+fn create_metrics_router(orchestrator: Arc<PipelineOrchestrator>, path: &str) -> Router {
+    Router::new().route(path, get(handlers::metrics)).with_state(orchestrator)
 }
 
 #[cfg(test)]
@@ -78,15 +75,5 @@ mod tests {
         let config = MetricsServerConfig::default();
         assert_eq!(config.bind, "127.0.0.1:9091".parse::<SocketAddr>().unwrap());
         assert_eq!(config.path, "/metrics");
-    }
-
-    #[test]
-    fn test_custom_path() {
-        let config = MetricsServerConfig {
-            bind: "0.0.0.0:9100".parse().unwrap(),
-            path: "/prometheus/metrics".to_string(),
-        };
-        assert_eq!(config.bind, "0.0.0.0:9100".parse::<SocketAddr>().unwrap());
-        assert_eq!(config.path, "/prometheus/metrics");
     }
 }

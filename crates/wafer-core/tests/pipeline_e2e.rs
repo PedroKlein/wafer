@@ -22,7 +22,7 @@ use wafer_core::engine::{Capabilities, WaferEngine, WaferState};
 use wafer_core::node::wasm::{WasmFilterNode, WasmTransformNode};
 use wafer_core::node::{Sink, Source};
 use wafer_core::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
-use wafer_core::orchestrator::pipeline::NewPipelineOrchestrator;
+use wafer_core::orchestrator::pipeline::PipelineOrchestrator;
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::testing::channel::{ChannelSink, ChannelSource};
 
@@ -164,7 +164,7 @@ async fn test_100_messages_through_wasm_pipeline() {
 
     // 5. Spawn the orchestrator
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // 6. Send 100 messages through the source
     let message_count = 100;
@@ -262,7 +262,7 @@ async fn test_eof_propagates_cleanly() {
     }
 
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // Send a few messages then immediately signal EOF
     for i in 0..5 {
@@ -330,7 +330,7 @@ async fn test_empty_pipeline_shuts_down_cleanly() {
     }
 
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // Immediately signal EOF (no messages)
     drop(source_tx);
@@ -404,7 +404,7 @@ async fn test_uppercase_transform_pipeline() {
     }
 
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     let messages = vec!["hello world", "wafer pipeline", "test 123"];
     for msg in &messages {
@@ -484,7 +484,7 @@ async fn test_hot_swap_uppercase_to_passthrough() {
     }
 
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // Send first batch (will be uppercased)
     let batch_size = 10;
@@ -646,7 +646,7 @@ async fn test_attack_containment_panic_does_not_crash_pipeline() {
     }
 
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // Send messages — they should trigger traps in the attack plugin
     let message_count = 5;
@@ -891,7 +891,7 @@ async fn test_pipeline_a_multistage_json_parse_and_filter() {
 
     // Spawn the orchestrator
     let mut orch =
-        NewPipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
+        PipelineOrchestrator::from_build_output(build_output, config, Arc::clone(&engine));
 
     // Send 5 JSON messages:
     // 3 should PASS the filter (temperature in [50, 200])

@@ -19,7 +19,7 @@ default = []
 cuda = ["wafer-core/cuda"]
 
 [dependencies]
-wafer-core = { workspace = true, features = ["http-api"] }
+wafer-core = { workspace = true }
 wafer-types = { workspace = true }
 
 # Async runtime
