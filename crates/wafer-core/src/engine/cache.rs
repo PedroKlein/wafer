@@ -5,7 +5,7 @@
 //! Tier 1 (memory): `HashMap<[u8; 32], Arc<Component>>` — instant lookup.
 //! Tier 2 (disk): serialized `.cwasm` files — survives process restarts.
 //!
-//! See docs/decisions/2025-07-12-performance-optimizations.md D1.
+//! See docs/rfcs/RFC-007-performance-optimizations.md D1.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

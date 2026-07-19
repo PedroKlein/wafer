@@ -20,8 +20,10 @@ Use this workflow when:
 
 Read in this order:
 1. `plan_tasks status` — where are we? what's the next phase?
-2. `docs/decisions/2025-07-12-implementation-architecture.md` — module structure for this phase
-3. The relevant decision document(s) in `docs/decisions/` — full specification
+2. `docs/rfcs/RFC-009-implementation-architecture.md` +
+   `docs/architecture/03-building-blocks.md` — module structure for this phase
+3. The relevant RFC(s) under `docs/rfcs/` — full specification
+   (see `docs/rfcs/README.md` for the index)
 
 ### Step 2: Inventory Current State
 
@@ -79,8 +81,9 @@ The planning session produces:
 
 ### Pre-reading (AI must read all before implementing)
 
-**Decision documents:**
-- `docs/decisions/[file].md` — sections [X, Y, Z]
+**RFCs and ADRs (pre-refactor `docs/decisions/` was split into these):**
+- `docs/rfcs/RFC-XXX-[topic].md` — sections [X, Y, Z]
+- `docs/adr/XXXX-[decision].md` — for narrower architectural decisions
 
 **Current source (being replaced):**
 - `crates/[crate]/src/[file].rs` — [what it does today]

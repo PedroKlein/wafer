@@ -31,7 +31,7 @@ unsafe { std::ptr::copy_nonoverlapping(src, dst, len); }
 ### ✅ Design context comment:
 ```rust
 // CONTEXT: Reuse root cert store across subgraphs to avoid duplicate OS calls:
-// [ADR-12](link/to/adr-12): TLS Performance on MacOS
+// ADR-12: TLS Performance on macOS
 ```
 
 ## 8.3 When comments get in the way

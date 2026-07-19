@@ -133,7 +133,7 @@ Clone is correct when ownership must fork. Clone is wrong when it masks a lifeti
 
 ## Enum Dispatch over dyn Trait (Closed Type Sets)
 
-WAFER's node categories (Source, Transform, Router, Joiner, Sink) are a **closed set** —
+WAFER's node categories (Source, Sink, Transform, Filter, Router) are a **closed set** —
 new variants require code changes. Use enum dispatch, not trait objects:
 
 ```rust
@@ -145,16 +145,16 @@ fn process_node(node: &dyn ProcessNode, envelope: &Envelope) -> Result<Output> {
 // GOOD — match compiles to jump table, often inlined entirely
 enum NodeKind {
     Transform(TransformNode),
+    Filter(FilterNode),
     Router(RouterNode),
-    Joiner(JoinerNode),
 }
 
 impl NodeKind {
     fn process(&self, envelope: &Envelope) -> Result<Output> {
         match self {
             Self::Transform(n) => n.process(envelope),
+            Self::Filter(n) => n.evaluate(envelope),
             Self::Router(n) => n.route(envelope),
-            Self::Joiner(n) => n.merge(envelope),
         }
     }
 }

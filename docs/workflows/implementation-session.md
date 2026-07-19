@@ -16,10 +16,12 @@ Before starting an implementation session, generate a prompt that includes ALL c
 [One sentence: what's "done" for this phase]
 
 ## Architecture Reference
-- Implementation architecture: `docs/decisions/2025-07-12-implementation-architecture.md`
-- Decision documents to read (for this phase):
-  - `docs/decisions/[relevant-session].md`
-  - `docs/decisions/[relevant-session].md`
+- Implementation architecture: `docs/rfcs/RFC-009-implementation-architecture.md`
+  + `docs/architecture/03-building-blocks.md` (module map)
+- Specifications to read (for this phase):
+  - `docs/rfcs/RFC-XXX-[topic].md`
+  - `docs/adr/XXXX-[decision].md`
+  See `docs/rfcs/README.md` and `docs/adr/README.md` for the indexes.
 
 ## Current Code (read before implementing)
 [List every file being modified/replaced/created — with full paths]
@@ -57,8 +59,10 @@ Before starting an implementation session, generate a prompt that includes ALL c
 
 **Read EVERYTHING listed in the session prompt.** No shortcuts.
 
-1. Read `docs/decisions/2025-07-12-implementation-architecture.md` — understand module structure
-2. Read the relevant decision document(s) in `docs/decisions/` — understand WHAT to build
+1. Read `docs/rfcs/RFC-009-implementation-architecture.md` +
+   `docs/architecture/03-building-blocks.md` — understand module structure
+2. Read the relevant RFC(s) under `docs/rfcs/` and ADR(s) under `docs/adr/`
+   — understand WHAT to build
 3. Read current source files — understand what exists today
 4. Read reference repo patterns — understand how others solved this
 5. Check `plan_tasks status` — see where we are in the roadmap
@@ -79,7 +83,8 @@ For each subtask:
 ```
 
 **Rules during implementation:**
-- Follow placement rules from `docs/decisions/2025-07-12-implementation-architecture.md` (if it's X, put it in Y)
+- Follow placement rules from `docs/rfcs/RFC-009-implementation-architecture.md`
+  and `docs/architecture/03-building-blocks.md` (if it's X, put it in Y)
 - Use `Box<str>` for immutable string fields (Session 7 C2)
 - Use `foldhash` for internal maps (Session 7 C3)
 - Never `unwrap()` outside tests
@@ -147,13 +152,16 @@ Bad subtask examples (too small):
 
 Between sessions, the following persists:
 - `plan_tasks` — roadmap with completion status
-- `docs/decisions/2025-07-12-implementation-architecture.md` — architecture reference (module map)
-- `docs/decisions/*.md` — decision documents (specifications, never modified)
+- `docs/rfcs/RFC-009-implementation-architecture.md` +
+  `docs/architecture/03-building-blocks.md` — architecture reference (module map)
+- `docs/rfcs/*.md` — RFCs (specifications; amend by adding new RFCs, do not
+  rewrite in place)
+- `docs/adr/*.md` — architectural decisions (append-only)
 - `docs/workflows/*.md` — these workflow guides
 - Git commits — code written so far
 
 At the START of each new session:
 1. `plan_tasks status` — see what's done and what's next
 2. `git log --oneline -10` — see recent commits
-3. Read `docs/decisions/2025-07-12-implementation-architecture.md` (or relevant section)
+3. Read `docs/rfcs/RFC-009-implementation-architecture.md` (or the relevant RFC)
 4. Follow the planning-session workflow OR use existing session prompt

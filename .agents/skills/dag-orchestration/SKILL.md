@@ -165,18 +165,21 @@ fn parse_node_port(key: &str) -> (&str, &str) {
 ```toml
 [[edges]]
 from = "router"
-from_port = "high"    # Router's WASM call_route returns this port name
+port = "high"       # Router's WASM route() returns this port name
 to = "priority-sink"
 
 [[edges]]
 from = "router"
-from_port = "low"
+port = "low"        # router output port (only used when 'from' is a router)
 to = "batch-transform"
 ```
 
-### Fan-In (Joiner)
-Multiple inputs → single merged stream. Joiner receives from all input ports
-using `futures::stream::select_all` over multiple receivers.
+### Fan-In (implicit multi-producer topology)
+Multiple upstream nodes → single downstream node. There is no first-class
+Joiner node type; fan-in is expressed by wiring several upstream senders onto
+the downstream node's single bounded `mpsc` receiver (`mpsc::channel` is
+naturally multi-producer / single-consumer). The graph builder handles this
+automatically when a node has multiple inbound edges.
 
 ---
 

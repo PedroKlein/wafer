@@ -33,7 +33,7 @@ Plugins are identified using standard OCI image references:
 Plugins can be specified in node configuration:
 
 ```toml
-# Local plugin (existing behavior)
+# Local plugin (original proposal — see Amendment below)
 [[nodes]]
 id = "transform"
 node_type = "transform"
@@ -47,6 +47,9 @@ node_type = "transform"
 [nodes.config]
 oci = "ghcr.io/pedroklein/wafer-uppercase:0.0.1"
 ```
+
+> **Note (amended):** The `plugin_path` / `oci` split shown above was superseded
+> by a single `plugin` field with auto-detection — see the [Amendment](#amendment-2026-07-06--plugin_path--single-plugin-field) below.
 
 Global registry configuration:
 
@@ -184,3 +187,21 @@ wafer --config pipeline.toml
 
 - ADR-0001: Wasmtime Runtime
 - ADR-0003: Drain and Flip Hot-swap (future: hot-swap with registry packages)
+
+## Amendment (2026-07-06 — `plugin_path` → single `plugin` field)
+
+RFC-004 (config-schema) unified plugin sourcing: `WasmNodeDef` now
+carries a **single `plugin` field** (no `plugin_path` / `plugin_ref`
+split). The loader auto-detects local path vs OCI reference based on
+the value. Everything else in this ADR — the OCI-based distribution
+model, the local cache, the tag mutability discussion, the cosign
+follow-on — stands unchanged; only the config-surface field name
+changed.
+
+- **Before:** `plugin_path = "..."` for local, `package = "..."; version = "..."` for OCI.
+- **After:** `plugin = "..."` for both.
+
+Migration is a one-line edit in each pipeline TOML. See
+[`docs/interfaces/config-schema.md`](../interfaces/config-schema.md).
+
+See Also: [RFC-004 — Config Schema & Pipeline UX](../rfcs/RFC-004-config-schema.md).

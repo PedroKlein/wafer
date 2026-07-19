@@ -94,97 +94,14 @@ paths:
                     ready: false
                     reason: "draining"
 
-  /api/v1/pipeline:
-    get:
-      tags:
-        - Pipeline
-      summary: Get pipeline status
-      description: Returns current status and summary metrics for the pipeline.
-      operationId: getPipeline
-      responses:
-        '200':
-          description: Pipeline status
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/PipelineStatus'
-              example:
-                name: "my-pipeline"
-                state: "running"
-                uptime_secs: 3600
-                messages_processed: 10000
-                messages_failed: 5
-                node_count: 3
-                swap_in_progress: false
-
-  /api/v1/pipeline/reload:
-    post:
-      tags:
-        - Pipeline
-      summary: Reload configuration
-      description: |
-        Reloads the pipeline configuration and triggers hot-swap for any nodes
-        whose WASM module has changed.
-        
-        **Note:** This operation is not yet implemented and will return 501.
-      operationId: reloadConfig
-      responses:
-        '200':
-          description: Configuration reloaded successfully
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ReloadResult'
-              example:
-                swapped_nodes: ["transform-1", "transform-2"]
-        '400':
-          description: Configuration error
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '409':
-          description: Another operation is in progress
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '501':
-          description: Not implemented
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
-  /api/v1/pipeline/drain:
-    post:
-      tags:
-        - Pipeline
-      summary: Drain pipeline
-      description: |
-        Initiates graceful shutdown by stopping new message ingestion and
-        allowing in-flight messages to complete processing.
-        
-        After draining completes, the pipeline will be in "stopped" state.
-      operationId: drain
-      responses:
-        '200':
-          description: Drain initiated
-        '409':
-          description: Pipeline in invalid state for drain
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-
   /api/v1/pipeline/shutdown:
     post:
       tags:
         - Pipeline
       summary: Shutdown pipeline
       description: |
-        Immediately shuts down the pipeline. In-flight messages may be lost.
-        Use `/api/v1/pipeline/drain` for graceful shutdown.
+        Graceful shutdown — cancels the pipeline supervisor. In-flight
+        messages complete their current node call before the task exits.
       operationId: shutdown
       responses:
         '200':
@@ -473,8 +390,8 @@ components:
       enum:
         - source
         - transform
+        - filter
         - router
-        - joiner
         - sink
       description: Type of node
 

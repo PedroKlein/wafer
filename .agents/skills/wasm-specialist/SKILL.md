@@ -43,8 +43,8 @@ config. Create ONCE at runtime startup, share everywhere.
 **Store**: Owns the WASM instance state (memory, tables, fuel counter). One Store per
 pipeline node. Stores are `Send` but NOT `Sync` — a node's Store lives on ONE tokio task.
 
-**Linker**: Template for wiring imports. Create once per world type (transform, router, joiner),
-reuse across all nodes of that type.
+**Linker**: Template for wiring imports. Create once per world type (transform-node, filter-node,
+inference-node, router-node), reuse across all nodes of that type.
 
 ### The Performance-Critical Pattern (Industry-Confirmed)
 
@@ -212,32 +212,40 @@ a fresh Store. WAFER's design of creating a NEW Store + Instance for replacement
 
 ## WIT Contract Design for WAFER
 
-### Package Structure
+### Package Structure (4 packages)
 ```
-pipeline:transform@0.1.0
-├── types          (envelope, process-result, payload variants)
-├── lifecycle      (validate, init, close — shared by all nodes)
-├── transform      (process: envelope → process-result)
-├── router         (output-ports, route: envelope → route-result)
-├── joiner         (input-ports, process: port + envelope → process-result)
-├── transform-node (world: exports lifecycle + transform)
-├── router-node    (world: exports lifecycle + router)
-├── joiner-node    (world: exports lifecycle + joiner)
-└── inference-node (world: transform-node + imports wasi:nn)
+pipeline:types@0.1.0      — buffer resource, message/output-message, process-error, port-id, log-level
+pipeline:node@0.1.0       — lifecycle + transform + filter interfaces; worlds: transform-node, filter-node, inference-node
+pipeline:routing@0.1.0    — router interface (returns port names, not messages); world: router-node
+pipeline:host@0.1.0       — host-provided capabilities (logging)
 ```
+
+**Key types**:
+- `message` — input with `borrow<buffer>` (host-managed, read-on-demand payload)
+- `output-message` — output with `list<u8>` (component-owned bytes)
+- `process-error` — 5-variant (bad-input, dependency-failed, processing-failed, timed-out, unrecoverable)
+- `buffer` — host resource with `size()`, `read(offset, len)`, `read-all()` methods
+
+**Fan-in is implicit host topology** — no merge/joiner WIT interface. Multiple producers
+write to the same node's input channel.
 
 ### WIT Design Rules for WAFER
 
-- **Records are value types** — every `process()` call copies the envelope across the
-  boundary. This is the serialization cost measured in RQ1. Resources would enable
-  zero-copy but add complexity (future work).
-- **Errors as variants, not exceptions** — `process-result` has `emit | filter | error`.
-  The plugin decides; the host routes accordingly.
-- **Lifecycle is mandatory** — every world exports `lifecycle`. Skipping `validate()` means
-  discovering config errors at runtime instead of startup.
-- **Version your package** — `@0.1.0` in the package name. Breaking changes = major bump.
+- **`borrow<buffer>` enables zero-copy routing** — router/filter plugins never call
+  `read()`, so payload bytes never cross the boundary. Transform plugins call
+  `read-all()` only when they need the data. This is WAFER's primary RQ1 optimization.
+- **Typed return per interface** — `transform.process` returns `result<output-message,
+  process-error>`; `filter.evaluate` returns `result<bool, process-error>`;
+  `router.route` returns `result<list<port-id>, process-error>`. No wrapper enum.
+- **Errors as a 5-variant** — `process-error` categories map to the host error policy
+  engine (retry, DLQ, skip, teardown). The plugin classifies; the host acts.
+- **Lifecycle is mandatory** — every world exports `lifecycle` (validate → init → close).
+  Skipping `validate()` means discovering config errors at runtime instead of startup.
+- **Version your packages** — `@0.1.0` in each package name. Breaking changes = major bump.
+- **Router returns port names only** — routing is a pure decision (`list<port-id>`),
+  not a transformation. Host handles cloning/forwarding (zero-copy).
 
-### Guest Plugin Template
+### Guest Plugin Template (Transform)
 
 ```rust
 wit_bindgen::generate!({
@@ -248,16 +256,49 @@ wit_bindgen::generate!({
 struct MyTransform;
 export!(MyTransform);
 
-impl exports::pipeline::transform::lifecycle::Guest for MyTransform {
+impl exports::pipeline::node::lifecycle::Guest for MyTransform {
     fn validate(_config: NodeConfig) -> Option<String> { None }
     fn init(_config: NodeConfig) -> Result<(), ProcessError> { Ok(()) }
     fn close() {}
 }
 
-impl exports::pipeline::transform::transform::Guest for MyTransform {
-    fn process(input: Envelope) -> ProcessResult {
-        // Transform logic here
-        ProcessResult::Emit(input)
+impl exports::pipeline::node::transform::Guest for MyTransform {
+    fn process(input: Message) -> Result<OutputMessage, ProcessError> {
+        let payload = input.payload.read_all();
+        // Transform payload...
+        Ok(OutputMessage {
+            id: input.id,
+            timestamp: input.timestamp,
+            source: input.source,
+            content_type: input.content_type,
+            metadata: input.metadata,
+            payload: transformed_bytes,
+        })
+    }
+}
+```
+
+### Guest Plugin Template (Filter)
+
+```rust
+wit_bindgen::generate!({
+    path: "../../wit",
+    world: "filter-node",
+});
+
+struct MyFilter;
+export!(MyFilter);
+
+impl exports::pipeline::node::lifecycle::Guest for MyFilter {
+    fn validate(_config: NodeConfig) -> Option<String> { None }
+    fn init(_config: NodeConfig) -> Result<(), ProcessError> { Ok(()) }
+    fn close() {}
+}
+
+impl exports::pipeline::node::filter::Guest for MyFilter {
+    fn evaluate(input: Message) -> Result<bool, ProcessError> {
+        // Inspect metadata only — zero-copy (never reads payload)
+        Ok(input.metadata.iter().any(|(k, _)| k == "important"))
     }
 }
 ```
@@ -325,7 +366,8 @@ the single source of truth shared between them.
 **Key guest-side facts**:
 - `export!(MyPlugin)` is MANDATORY — generates `#[unsafe(no_mangle)]` ABI shims
 - Records with only primitives get `#[repr(C)] + Copy` → zero-copy potential
-- WAFER's envelope has `list<u8>` → forces heap allocation per boundary crossing
+- WAFER's `output-message` has `list<u8>` payload → heap allocation per transform output
+- WAFER's `message` uses `borrow<buffer>` → zero-copy for router/filter (read-on-demand)
 - Resource exports require `&self` (not `&mut self`) — interior mutability needed
 - `WIT_BINDGEN_DEBUG=1` → writes generated code to file for IDE inspection
 

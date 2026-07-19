@@ -15,14 +15,13 @@ The control plane provides:
 |----------|--------|-------------|
 | `/health` | GET | Liveness probe (always 200 if server up) |
 | `/ready` | GET | Readiness probe (200 when pipeline running) |
-| `/api/v1/pipeline` | GET | Get pipeline status and metrics |
-| `/api/v1/pipeline/reload` | POST | Reload configuration and hot-swap changed nodes |
-| `/api/v1/pipeline/drain` | POST | Graceful shutdown |
-| `/api/v1/pipeline/shutdown` | POST | Immediate shutdown |
+| `/api/v1/pipeline/shutdown` | POST | Graceful shutdown |
 | `/api/v1/nodes` | GET | List all nodes |
 | `/api/v1/nodes/{id}` | GET | Get node details |
-| `/api/v1/nodes/{id}/hot-swap` | POST | Hot-swap a node (drain-and-flip) |
+| `/api/v1/nodes/{id}/hot-swap` | POST | Hot-swap a Wasm node (watch-channel, between messages) |
 | `/metrics` | GET | Prometheus metrics |
+
+See [`docs/interfaces/http-api.md`](../interfaces/http-api.md) for the authoritative reference (request/response schemas, error codes).
 
 ## Default Ports
 
@@ -47,12 +46,18 @@ The collection includes a `local` environment with:
 
 ### Running Requests
 
-1. Start a WAFER pipeline with the API enabled:
+> **Current runtime caveat.** `examples/dag-passthrough-with-api.toml` uses the
+> config syntax accepted by the current runtime binary, but the binary does not
+> yet launch the API / metrics servers (gap
+> [`A2`](../status/implementation-gaps.md#a2--http-control-plane-never-launched-by-runtime-binary-)).
+> The Bruno collection is therefore a contract/testing aid until A2 is closed.
+
+1. Start a WAFER pipeline with the API config enabled:
    ```bash
-   wafer-runtime --config examples/simple-pipeline.yaml
+   wafer-runtime --config examples/dag-passthrough-with-api.toml
    ```
 
-2. In Bruno, select a request (e.g., "Health Check")
+2. After A2 is closed, select a Bruno request (e.g., "Health Check")
 3. Click "Send" to execute
 
 ### Requests Included
@@ -62,10 +67,7 @@ The collection includes a `local` environment with:
 - `ready.bru` - Readiness check
 
 **Pipeline/**
-- `get-status.bru` - Get pipeline status
-- `reload.bru` - Reload configuration
-- `drain.bru` - Graceful shutdown
-- `shutdown.bru` - Immediate shutdown
+- `shutdown.bru` — Graceful shutdown via `POST /api/v1/pipeline/shutdown`
 
 **Nodes/**
 - `list-nodes.bru` - List all nodes
@@ -94,18 +96,24 @@ docker run -p 8080:8080 -e SWAGGER_JSON=/api/openapi.yaml \
 
 ## Configuration
 
-Enable the API in your pipeline configuration:
+Current runtime config syntax:
 
-```yaml
-# pipeline.yaml
-api:
-  bind: "0.0.0.0:9090"
+```toml
+# See examples/dag-passthrough-with-api.toml.
+# Parses today, but server launch is blocked by A2.
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
 
-metrics:
-  bind: "0.0.0.0:9091"  # Optional: separate metrics port
+[metrics]
+enabled = true
+bind = "127.0.0.1:9091"
 ```
 
-Or via CLI:
+Equivalent CLI override for the API bind address:
 ```bash
-wafer-runtime --config pipeline.yaml --api-bind 0.0.0.0:9090
+wafer-runtime --config examples/dag-passthrough-with-api.toml --api-bind 127.0.0.1:9090
 ```
+
+For the target operator-facing schema after runtime-migration closes A1, see
+[`../interfaces/config-schema.md`](../interfaces/config-schema.md).

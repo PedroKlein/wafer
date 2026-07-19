@@ -219,5 +219,5 @@ waferctl shutdown
 ## See Also
 
 - [WAFER Runtime Documentation](../../docs/README.md)
-- [API Reference](../../docs/api.md)
-- [Configuration Guide](../../docs/configuration.md)
+- [HTTP API Reference](../../docs/interfaces/http-api.md)
+- [Configuration Guide](../../docs/operations/configuration.md)

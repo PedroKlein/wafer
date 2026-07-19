@@ -3,7 +3,7 @@
 //! Samples resident set size at 1Hz for memory scaling measurements (E-Perf-3/6).
 //! Platform-specific: Linux reads /proc/self/statm, macOS uses `ps`.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D14.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
 
 use std::time::{Duration, Instant};
 

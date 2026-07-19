@@ -40,7 +40,7 @@ interface mqtt-host {
 
 **Option B: Native Rust Sources/Sinks**
 
-Implement sources and sinks as native Rust code in the host runtime. Only transforms, routers, and joiners are WASM components.
+Implement sources and sinks as native Rust code in the host runtime. Only transforms, routers, and joiners are WASM components. *(Joiner was later removed — see [Amendment](#amendment-2026-07-06--filter-added-joiner-removed).)*
 
 - **Pros**: Full async support, direct network access, simpler implementation, leverages mature Rust ecosystem (rumqttc, reqwest, etc.)
 - **Cons**: Sources/sinks not portable as WASM, not polyglot
@@ -70,7 +70,7 @@ Rationale:
 - `Source` trait: Rust async trait in host runtime
 - `Sink` trait: Rust async trait in host runtime  
 - Reference implementations: `FileSource`, `StdinSource`, `FileSink`, `StdoutSink`, `MqttSource`, `MqttSink`, `HttpSource`, `HttpSink`
-- WASM components: Only for `Transform`, `Router`, `Joiner` node types
+- WASM components: Only for `Transform`, `Filter`, and `Router` node types (see [Amendment](#amendment-2026-07-06--filter-added-joiner-removed) below).
 
 ## Consequences
 
@@ -108,3 +108,15 @@ When WASI networking (wasi-sockets, wasi-http) reaches stability:
 - WASI Sockets Proposal: https://github.com/WebAssembly/wasi-sockets
 - WASI HTTP Proposal: https://github.com/WebAssembly/wasi-http
 - rumqttc (async MQTT): https://github.com/bytebeamio/rumqtt
+
+## Amendment (2026-07-06 — Filter added, Joiner removed)
+
+RFC-003 §A1 removed the Joiner WIT world (fan-in is now implicit
+multi-producer `mpsc` — see [ADR-0010](0010-merge-as-host-topology.md))
+and introduced Filter as a first-class Wasm node type (see
+[ADR-0009](0009-filter-as-first-class-node.md)). The list above is
+outdated in that respect. The current Wasm-only categories are
+**Transform, Filter, and Router**. Sources and Sinks remain native, as
+this ADR specifies.
+
+See Also: [RFC-003 — Node Type Architecture](../rfcs/RFC-003-node-types.md).

@@ -1,647 +1,82 @@
-# WAFER
+# WAFER — WebAssembly Flow Execution Runtime
 
-**WebAssembly Flow Execution Runtime**
+**WAFER** is a single-process Rust runtime that executes typed DAGs of
+WebAssembly components on IoT edge gateways. It targets the gap between
+cloud-managed platforms (Kubernetes-based edge stacks) and monolithic
+edge rules engines: typed Wasm nodes give per-stage fault isolation and
+between-messages hot-swap, without leaving the single-process envelope
+of a lightweight gateway.
 
-A high-performance, Rust-based DAG pipeline runtime that executes WebAssembly plugins using [Wasmtime](https://wasmtime.dev/). Designed for building data processing pipelines with hot-swappable transforms, bounded queues with backpressure, and flexible fan-out/fan-in topologies.
+This repository is the experimental artefact for an undergraduate
+thesis at UFRGS (TCC/TG2, Pedro Klein). The runtime IS the
+contribution; the thesis measures its viability against `eKuiper` and a
+native-Rust baseline across three research questions (performance,
+isolation, hot-swap disruption).
 
-[![Rust](https://img.shields.io/badge/rust-stable-orange.svg)](https://www.rust-lang.org/)
-[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE)
-
-## Features
-
-- **DAG-based pipelines** — Define data flows as directed acyclic graphs with TOML configuration
-- **WebAssembly plugins** — Write transforms in any language that compiles to WASM (Rust, Go, C/C++, etc.)
-- **Hot-swappable transforms** — Update WASM plugins at runtime without pipeline restart
-- **Bounded queues** — SPSC queues with configurable capacity, overflow policies (`slow`, `drop`, `dead-letter`), and DLQ support
-- **Fan-out/Fan-in** — Router (1→N) and Joiner (N→1) nodes for complex topologies
-- **Multiple I/O types** — stdin/stdout, files, MQTT pub/sub, HTTP webhooks (all with optional batching)
-- **HTTP Control Plane** — REST API for monitoring and management
-- **Prometheus Metrics** — Built-in metrics export for observability
-- **OCI Registry Support** — Load plugins from container registries (ghcr.io, Docker Hub)
-- **Fuel-based Metering** — Execution limits for untrusted plugins
-- **WASI Preview 2** — Modern WebAssembly System Interface support
-
-## Table of Contents
-
-- [Quick Start](#quick-start)
-- [Installation](#installation)
-- [Project Structure](#project-structure)
-- [Development Setup](#development-setup)
-- [Running Pipelines](#running-pipelines)
-- [Building Plugins](#building-plugins)
-- [Control Plane API](#control-plane-api)
-- [Configuration Reference](#configuration-reference)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
-
-## Quick Start
+## Quickstart
 
 ```bash
-# Clone and build
 git clone https://github.com/PedroKlein/wafer-poc.git
 cd wafer-poc
-cargo build --workspace
 
-# Build example plugins
-just build-plugins
+# Prerequisites: Rust 1.85+ (stable), just, wasm32-wasip2 target,
+# and a C toolchain. See docs/operations/dependencies.md for the
+# full list.
 
-# Run a simple pipeline (stdin → uppercase transform → stdout)
-echo "hello world" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
-# Output: HELLO WORLD
+just build           # build the runtime and workspace crates
+just build-plugins   # cross-compile every plugin to wasm32-wasip2
+
+just run                                    # runs examples/dag-passthrough.toml
+just run examples/dag-uppercase.toml        # or a specific pipeline
 ```
 
-## Installation
-
-### Prerequisites
-
-- **Rust stable** (with `wasm32-wasip2` target)
-- **just** (command runner) — `cargo install just` or `brew install just`
-- **wasm-tools** (optional, for validation) — `cargo install wasm-tools`
-- **wkg** (optional, for OCI publishing) — `cargo install wkg`
-
-### Setup
+The HTTP control plane binds to `127.0.0.1:9090` by default:
 
 ```bash
-# Install Rust (if needed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# The rust-toolchain.toml will automatically configure:
-# - Rust stable (Edition 2024)
-# - wasm32-wasip2 target
-# - rustfmt and clippy
-
-# Verify setup
-rustup show
-cargo --version
+curl -s http://127.0.0.1:9090/health
+curl -s http://127.0.0.1:9090/api/v1/nodes | jq
+curl -s http://127.0.0.1:9090/metrics | head
 ```
 
-## Project Structure
-
-```
-wafer-poc/
-├── crates/
-│   ├── wafer-core/       # Core library: DAG orchestrator, engine, nodes, queues
-│   ├── wafer-runtime/    # Binary: CLI runtime with API server integration
-│   ├── wafer-types/      # Shared types: errors, control messages, metrics
-│   └── waferctl/         # Binary: CLI tool for interacting with running pipelines
-├── plugins/              # WebAssembly plugin examples
-│   ├── pass-through/     # No-op passthrough transform
-│   ├── uppercase/        # ASCII uppercase transform
-│   ├── json-parse/       # JSON validation/pretty-print
-│   ├── filter/           # Pattern-based filtering
-│   ├── content-router/   # Content-based 1→N routing
-│   ├── merge-joiner/     # Stateless N→1 merge
-│   ├── mnist-inference/  # ML inference with WASI-NN
-│   ├── tensor-prep/      # Tensor preprocessing for inference
-│   └── result-format/    # Inference result formatting
-├── examples/             # Example pipeline configurations (TOML)
-├── wit/                  # WIT interface definitions for plugins
-├── docs/                 # Documentation
-│   ├── api/              # OpenAPI spec and Bruno collection
-│   ├── adr/              # Architecture Decision Records
-│   ├── benchmarks/       # Performance benchmark results
-│   └── *.md              # Various docs (SPEC, MVP, API, REGISTRY, etc.)
-├── models/               # ML model files (e.g., MNIST ONNX)
-├── scripts/              # Helper scripts (traffic generation, load testing)
-├── specs/                # Feature specifications (OpenSpec workflow)
-└── tests/                # Integration tests
-```
-
-## Development Setup
-
-### Using just (Recommended)
-
-```bash
-# Show all available commands
-just
-
-# Core development workflow
-just build              # Build entire workspace
-just test               # Run all tests
-just check              # Type-check without building
-just fmt                # Format code
-just clippy             # Run lints
-
-# Build specific components
-just build-runtime      # Build wafer-runtime only
-just build-ctl          # Build waferctl only
-just build-plugins      # Build all WASM plugins
-just build-plugin NAME  # Build specific plugin (e.g., just build-plugin uppercase)
-
-# Run pipelines
-just run                                    # Run default passthrough pipeline
-just run examples/dag-uppercase.toml        # Run specific config
-just run-remote                             # Run with OCI-hosted plugins
-```
-
-### Manual Commands
-
-```bash
-# Build workspace
-cargo build --workspace
-
-# Run tests
-cargo test --workspace
-
-# Run with verbose logging
-RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
-
-# Build a plugin
-cargo build --release --manifest-path plugins/uppercase/Cargo.toml
-
-# Run waferctl
-cargo run -p waferctl -- --help
-```
-
-### Running Tests
-
-```bash
-# All tests
-cargo test --workspace
-
-# Specific crate
-cargo test -p wafer-core
-cargo test -p wafer-runtime
-cargo test -p waferctl
-
-# With feature flags
-cargo test -p wafer-core --features http-api
-
-# Integration tests only
-cargo test -p wafer-runtime --test integration
-
-# With output
-cargo test --workspace -- --nocapture
-```
-
-## Running Pipelines
-
-### Basic Usage
-
-```bash
-# Runtime binary
-cargo run -p wafer-runtime -- --config <path-to-config.toml>
-
-# Or after building
-./target/debug/wafer --config examples/dag-uppercase.toml
-```
-
-### Example Pipelines
-
-```bash
-# Passthrough (stdin → transform → stdout)
-echo "test" | cargo run -p wafer-runtime -- --config examples/dag-passthrough.toml
-
-# Uppercase transform
-echo "hello world" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
-# Output: HELLO WORLD
-
-# JSON validation and pretty-print
-echo '{"key": "value"}' | cargo run -p wafer-runtime -- --config examples/dag-json-parse.toml
-
-# Filter (drops lines matching pattern)
-printf "DEBUG: test\nINFO: keep\nDEBUG: drop" | cargo run -p wafer-runtime -- --config examples/dag-filter.toml
-
-# Chained transforms
-echo "keep this" | cargo run -p wafer-runtime -- --config examples/dag-chain.toml
-
-# File-based I/O
-cargo run -p wafer-runtime -- --config examples/dag-file-io.toml
-
-# Diamond pattern (fan-out/fan-in)
-cargo run -p wafer-runtime -- --config examples/dag-diamond.toml
-
-# Fan-out only
-cargo run -p wafer-runtime -- --config examples/dag-fanout.toml
-
-# HTTP webhook source/sink
-cargo run -p wafer-runtime -- --config examples/dag-http.toml
-
-# MQTT pub/sub
-cargo run -p wafer-runtime -- --config examples/dag-mqtt.toml
-
-# Queue overflow and dead-letter queue demo
-cargo run -p wafer-runtime -- --config examples/dag-overflow-dlq-demo.toml
-
-# Metrics demo
-cargo run -p wafer-runtime -- --config examples/dag-metrics-demo.toml
-
-# With control plane API enabled
-cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
-```
-
-### With Control Plane
-
-```bash
-# Start pipeline with API
-cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
-
-# In another terminal, query the API:
-curl http://localhost:9090/health
-curl http://localhost:9090/api/v1/pipeline
-curl http://localhost:9090/api/v1/nodes
-curl http://localhost:9091/metrics
-
-# Or use waferctl:
-cargo run -p waferctl -- -e http://localhost:9090 status
-cargo run -p waferctl -- -e http://localhost:9090 nodes
-```
-
-## Building Plugins
-
-Plugins are WebAssembly components that implement the WAFER transform interface.
-
-### Build All Plugins
-
-```bash
-just build-plugins
-```
-
-### Build Specific Plugin
-
-```bash
-just build-plugin uppercase
-# Or manually:
-cargo build --release --manifest-path plugins/uppercase/Cargo.toml
-```
-
-### Create a New Plugin
-
-1. Copy an existing plugin as a template:
-   ```bash
-   cp -r plugins/pass-through plugins/my-plugin
-   ```
-
-2. Update `plugins/my-plugin/Cargo.toml`:
-   ```toml
-   [package]
-   name = "my-plugin"
-   
-   [lib]
-   crate-type = ["cdylib"]
-   
-   [dependencies]
-   wit-bindgen = "0.53"
-   ```
-
-3. Implement the transform interface in `src/lib.rs`:
-   ```rust
-   wit_bindgen::generate!({
-       path: "../../wit",
-       world: "transform-node",
-   });
-   
-   struct MyTransform;
-   
-   impl exports::pipeline::transform::lifecycle::Guest for MyTransform {
-       fn validate(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Option<String> {
-           None // Return Some("error") to reject config
-       }
-   
-       fn init(_config: exports::pipeline::transform::lifecycle::NodeConfig) -> Result<(), String> {
-           Ok(())
-       }
-   
-       fn close() {}
-   }
-   
-   impl exports::pipeline::transform::transform::Guest for MyTransform {
-       fn process(
-           input: pipeline::transform::types::Envelope,
-       ) -> pipeline::transform::types::ProcessResult {
-           // Your transformation logic here
-           pipeline::transform::types::ProcessResult::Emit(input)
-       }
-   }
-   
-   export!(MyTransform);
-   ```
-
-4. Build:
-   ```bash
-   cargo build --release --manifest-path plugins/my-plugin/Cargo.toml
-   ```
-
-### Publishing to OCI Registry
-
-```bash
-# Login to GitHub Container Registry
-just registry-login YOUR_USERNAME YOUR_GITHUB_TOKEN
-
-# Publish a plugin
-just publish-plugin uppercase 1.0.0
-
-# Publish all plugins
-just publish-all 1.0.0
-```
-
-## Control Plane API
-
-When `[api]` is enabled in the config, WAFER exposes a REST API for monitoring and control.
-
-### Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Liveness probe |
-| `/ready` | GET | Readiness probe |
-| `/api/v1/pipeline` | GET | Pipeline status and metrics |
-| `/api/v1/pipeline/drain` | POST | Graceful shutdown |
-| `/api/v1/pipeline/shutdown` | POST | Immediate shutdown |
-| `/api/v1/nodes` | GET | List all nodes |
-| `/api/v1/nodes/{id}` | GET | Get node details |
-| `/metrics` | GET | Prometheus metrics |
-
-### Documentation
-
-- **OpenAPI Spec**: [`docs/api/openapi.yaml`](docs/api/openapi.yaml)
-- **Bruno Collection**: [`docs/api/bruno-collection/`](docs/api/bruno-collection/) — Import into [Bruno](https://usebruno.com/) for interactive testing
-
-### waferctl CLI
-
-```bash
-# Check pipeline status
-waferctl -e http://localhost:9090 status
-
-# List nodes
-waferctl -e http://localhost:9090 nodes
-
-# Get specific node
-waferctl -e http://localhost:9090 node transform
-
-# Drain pipeline (graceful shutdown)
-waferctl -e http://localhost:9090 drain
-
-# See all commands
-waferctl --help
-```
-
-## Configuration Reference
-
-Pipeline configurations are TOML files. See [`examples/`](examples/) for complete examples.
-
-### Basic Structure
-
-```toml
-[pipeline]
-name = "my-pipeline"
-description = "Optional description"
-
-# Control plane (optional)
-[api]
-enabled = true
-bind = "127.0.0.1:9090"
-
-[metrics]
-enabled = true
-bind = "127.0.0.1:9091"
-path = "/metrics"
-
-# Default queue capacity for all edges
-default_queue_capacity = 1024
-
-# Nodes
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "stdin"  # stdin, file, mqtt, http
-
-[[nodes]]
-id = "transform"
-node_type = "transform"
-swappable = true  # Enable hot-swap
-[nodes.config]
-plugin_path = "path/to/plugin.wasm"
-# Or from OCI registry:
-# plugin_ref = "ghcr.io/pedroklein/wafer-uppercase:1.0.0"
-
-[[nodes]]
-id = "sink"
-node_type = "sink"
-sink_type = "stdout"  # stdout, file, mqtt, http
-
-# Edges define data flow (with optional overflow policy)
-[[edges]]
-from = "source"
-to = "transform"
-[edges.queue]
-capacity = 1000
-overflow = "slow"  # slow (default), drop, or dead-letter
-
-[[edges]]
-from = "transform"
-to = "sink"
-[edges.queue]
-overflow = "drop"  # Drop messages when queue is full
-
-# Dead Letter Queue (optional - required if any edge uses dead-letter policy)
-[dead_letter]
-enabled = true
-sink_type = "file"
-[dead_letter.config]
-path = "/var/log/wafer/dlq.jsonl"
-```
-
-### Node Types
-
-| Type | Description | Config |
-|------|-------------|--------|
-| `source` | Data ingestion | `source_type`: stdin, file, mqtt, http |
-| `transform` | WASM plugin processing | `plugin_path` or `plugin_ref` |
-| `router` | Fan-out (1→N) | `plugin_path` + multiple outgoing edges |
-| `joiner` | Fan-in (N→1) | `plugin_path` + multiple incoming edges |
-| `sink` | Data output | `sink_type`: stdout, file, mqtt, http; optional `batch_size`, `batch_timeout_ms` |
-
-### Overflow Policies
-
-| Policy | Behavior |
-|--------|----------|
-| `slow` | Block sender until space available (default, backpressure) |
-| `drop` | Discard newest message when queue is full |
-| `dead-letter` | Route dropped messages to DLQ for later inspection |
-
-### Environment Variables
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RUST_LOG` | Log level (error, warn, info, debug, trace) | `info` |
-| `WAFER_REGISTRY` | Default OCI registry | `ghcr.io/pedroklein` |
-| `WAFER_CACHE_DIR` | Plugin cache directory | `~/.cache/wafer` |
-
-### GPU Acceleration (CUDA / Jetson)
-
-WAFER supports CUDA-based GPU inference for NVIDIA devices (Jetson, desktop GPUs). The `--features cuda` flag enables the CUDA execution provider in ONNX Runtime for WASI-NN inference.
-
-#### Setup on Jetson (aarch64)
-
-Tested on JetPack 6 (L4T R36.5.0) with CUDA 12.6 and cuDNN 9.3.
-
-> **Why is this needed?** The `ort` crate's prebuilt binaries for `aarch64-unknown-linux-gnu` do not include CUDA support.
-> When `--features cuda` is used, the build silently falls back to CPU-only ONNX Runtime, causing the
-> `CUDA execution provider is not enabled in this build` error at runtime.
-
-##### Option A: Use pre-built ORT (Recommended)
-
-A pre-built ONNX Runtime 1.22.0 with CUDA for Jetson is available as a [GitHub release asset](https://github.com/PedroKlein/wafer-poc/releases/tag/v0.1.0-ort-jetson).
-
-```bash
-# Download and extract the pre-built library
-gh release download v0.1.0-ort-jetson --repo PedroKlein/wafer-poc
-tar xzf onnxruntime-1.22.0-linux-aarch64-gpu-cuda12.6.tgz -C ~/
-
-# Set environment variables
-export ORT_LIB_LOCATION=~/onnxruntime-jetson-gpu/lib
-export ORT_PREFER_DYNAMIC_LINK=1
-export LD_LIBRARY_PATH=$ORT_LIB_LOCATION:$LD_LIBRARY_PATH
-export PATH=/usr/local/cuda/bin:$PATH
-
-# Build WAFER with CUDA
-cd ~/wafer-poc
-cargo clean -p ort-sys
-cargo build --release --features cuda --bin wafer
-
-# Run
-RUST_LOG=debug cargo run --release --features cuda --bin wafer \
-  -- --config examples/dag-mnist-inference.toml
-```
-
-> **Tip:** Add the `export` lines to your `~/.bashrc` or `~/.zshrc` so you don't have to set them every session.
-
-> **Compatibility:** Requires JetPack 6 with CUDA 12.6 and cuDNN 9.x. Works with `ort` Rust crate v2.0.0-rc.10 (API version 22).
-
-##### Option B: Build ORT from source
-
-If the pre-built library doesn't match your JetPack/CUDA version, build from source.
-
-**Prerequisites:**
-
-- CUDA toolkit (included with JetPack): verify with `/usr/local/cuda/bin/nvcc --version`
-- cuDNN: verify with `ls /usr/lib/aarch64-linux-gnu/libcudnn.so*`
-- GCC 11 (default on JetPack 6): `sudo apt install -y gcc-11 g++-11`
-- Git, CMake, Python 3
-
-> **Version note:** ORT version must match the `ort` Rust crate's expected API version. The `ort v2.0.0-rc.10` crate requires ORT API version 22 (= ORT 1.22.0).
-
-**Step 1: Build ONNX Runtime with CUDA**
-
-```bash
-# Clone ORT v1.22.0
-cd ~
-git clone --branch v1.22.0 --depth 1 --recurse-submodules \
-  https://github.com/microsoft/onnxruntime.git onnxruntime-build
-cd onnxruntime-build
-
-# If GitLab is blocked (Eigen download fails with 403), clone Eigen manually:
-git clone https://gitlab.com/libeigen/eigen.git /tmp/eigen-src
-cd /tmp/eigen-src && git checkout 1d8b82b0740839c0de7f1242a3585e3390ff5f33 && cd ~/onnxruntime-build
-
-# Build (takes 60-90 min on Jetson Orin Nano with --parallel 2)
-# Use --parallel 1 if you have <= 4GB RAM
-./build.sh --config Release --build_shared_lib \
-  --use_cuda --cuda_home /usr/local/cuda \
-  --cudnn_home /usr/lib/aarch64-linux-gnu \
-  --parallel 2 \
-  --skip_tests \
-  --cmake_extra_defines FETCHCONTENT_SOURCE_DIR_EIGEN3=/tmp/eigen-src
-
-# Verify the output
-ls ~/onnxruntime-build/build/Linux/Release/libonnxruntime*.so*
-```
-
-**Step 2: Build and run WAFER**
-
-```bash
-cd ~/wafer-poc
-
-export ORT_LIB_LOCATION=~/onnxruntime-build/build/Linux/Release
-export ORT_PREFER_DYNAMIC_LINK=1
-export LD_LIBRARY_PATH=$ORT_LIB_LOCATION:$LD_LIBRARY_PATH
-export PATH=/usr/local/cuda/bin:$PATH
-
-cargo clean -p ort-sys
-cargo build --release --features cuda --bin wafer
-
-RUST_LOG=debug cargo run --release --features cuda --bin wafer \
-  -- --config examples/dag-mnist-inference.toml
-```
-
-##### Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| `CUDA execution provider is not enabled` | `ORT_LIB_LOCATION` not set or pointing to CPU-only ORT |
-| `requested API version [22] is not available` | ORT version mismatch — must use ORT 1.22.0 (not 1.21.x) |
-| `#error -- unsupported GNU version! gcc > 13` | Use GCC 11-13: `sudo update-alternatives --set gcc /usr/bin/gcc-11` |
-| Eigen download 403 from GitLab | Clone Eigen via git and pass `FETCHCONTENT_SOURCE_DIR_EIGEN3` (see above) |
-| OOM during build | Reduce parallelism: `--parallel 1` and/or add swap: `sudo fallocate -l 4G /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile` |
-
-#### Setup on x86_64 (Desktop/Server)
-
-On x86_64 Linux, prebuilt CUDA binaries are available automatically:
-
-```bash
-# Just build with the cuda feature — no extra setup needed
-cargo build --release --features cuda --bin wafer
-```
-
-If you prefer a system-installed ONNX Runtime, use the same `ORT_LIB_LOCATION` approach as above.
-
-#### Execution Target Configuration
-
-The MNIST inference plugin supports selecting the execution target in the pipeline config:
-
-```toml
-[nodes.config]
-execution_target = "auto"  # auto (default), cpu, gpu, tpu
-```
-
-- `auto` — Tries GPU first, falls back to CPU
-- `gpu` — Forces GPU; fails if CUDA is not available in the build
-- `cpu` — Forces CPU execution
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ORT_LIB_LOCATION` | Path to ONNX Runtime library directory | *(auto-download)* |
-| `ORT_PREFER_DYNAMIC_LINK` | Set to `1` to link `.so` dynamically | `0` |
+For a step-by-step walkthrough including hot-swap and graceful
+shutdown, read
+[`docs/operations/getting-started.md`](docs/operations/getting-started.md).
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| [SPEC.md](docs/SPEC.md) | Complete technical specification |
-| [MVP.md](docs/MVP.md) | Current implementation status |
-| [api.md](docs/api.md) | Control plane API documentation |
-| [REGISTRY.md](docs/REGISTRY.md) | OCI registry integration guide |
-| [mqtt-setup.md](docs/mqtt-setup.md) | MQTT source/sink setup |
-| [AI_WORKFLOW.md](docs/AI_WORKFLOW.md) | AI-assisted development workflow |
-| [ADRs](docs/adr/) | Architecture Decision Records |
+- [Architecture — vision, goals, building blocks, runtime view](docs/architecture/)
+- [Requirements — functional and non-functional](docs/requirements/)
+- [Interfaces — WIT contracts, HTTP API, config schema, plugin SDK](docs/interfaces/)
+- [Operations — getting started, configuration, MQTT, registry, observability](docs/operations/)
+- [Status — implementation status, evaluation progress](docs/status/)
+- [ADRs](docs/adr/) — short Nygard-format decision records.
+- [RFCs](docs/rfcs/) — long-form design decisions with alternatives and implementation notes.
+- [Benchmarks](docs/benchmarks/) — measurement reports.
+- [Workflows](docs/workflows/) — discussion / planning / implementation session recipes.
+
+Start with [`docs/architecture/00-vision.md`](docs/architecture/00-vision.md).
+
+## Repository layout
+
+```
+crates/          Rust workspace: wafer-core, wafer-config, wafer-types,
+                 wafer-plugin, wafer-runtime, wafer-loadgen, waferctl.
+plugins/         WebAssembly plugin sources (Rust + polyglot mirrors).
+wit/             WIT contracts (pipeline:types, pipeline:node,
+                 pipeline:routing, pipeline:host — all @0.1.0).
+examples/        Runtime-schema pipeline TOML examples; read examples/README.md before copying config shape.
+tests/           Integration tests.
+docs/            Documentation (arc42-lite, RFCs, ADRs).
+eval/            Evaluation harness inputs / outputs.
+```
 
 ## Contributing
 
-This project uses AI-assisted development with [pi](https://github.com/mariozechner/pi-coding-agent).
-
-### Development Workflow
-
-1. Fork and clone the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make changes and add tests
-4. Run checks: `just fmt && just clippy && just test`
-5. Commit with conventional commits: `git commit -m "feat: add new feature"`
-6. Push and create a pull request
-
-### Code Style
-
-- Follow Rust conventions and `rustfmt` defaults
-- Use `clippy` with `-D warnings`
-- Add tests for new functionality
-- Update documentation as needed
+Development conventions live in `.agents/AGENTS.md` and the domain
+skills under `.agents/skills/`. The command runner is `just`; run
+`just` with no arguments for the full recipe list. All code must pass
+`cargo fmt`, `cargo clippy -D warnings`, and `cargo test --workspace`.
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+See `LICENSE` (project root).

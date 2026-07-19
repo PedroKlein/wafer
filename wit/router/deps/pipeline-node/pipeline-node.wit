@@ -8,7 +8,7 @@
 // directly — no process-outcome wrapper. Filter is a distinct interface.
 // Amendment A1 (Session 3): Merge is implicit host topology — no merge WIT interface.
 //
-// See docs/decisions/2025-07-05-wit-contracts-envelope-design.md.
+// See docs/rfcs/RFC-001-wit-contracts.md.
 
 package pipeline:node@0.1.0;
 

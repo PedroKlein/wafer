@@ -1,60 +1,112 @@
-# WAFER Documentation Index
+# WAFER Documentation
 
-> Start here to find what you need.
+Navigator for the WAFER documentation tree. The tree follows the
+arc42-lite framework, split into subdirectories by reader intent.
 
----
+## Where to start
 
-## This Repo (wafer-poc)
+- **Never used WAFER before?** →
+  [`operations/getting-started.md`](operations/getting-started.md).
+- **Want the mental model in one page?** →
+  [`architecture/00-vision.md`](architecture/00-vision.md).
+- **Configuring a real pipeline?** →
+  [`operations/configuration.md`](operations/configuration.md) and
+  [`interfaces/config-schema.md`](interfaces/config-schema.md).
+- **Writing a plugin?** →
+  [`interfaces/wit-contracts.md`](interfaces/wit-contracts.md) and
+  [`interfaces/plugin-sdk.md`](interfaces/plugin-sdk.md).
+- **Investigating a design decision?** →
+  [`rfcs/`](rfcs/) for long-form and [`adr/`](adr/) for short summaries.
+- **Checking what is implemented today?** →
+  [`status/implementation-status.md`](status/implementation-status.md).
 
-| Document | Purpose |
-|----------|---------|
-| [`SPEC.md`](SPEC.md) | Full runtime specification: architecture, WIT contracts, queues, hot-swap, security, evaluation scenarios |
-| [`MVP.md`](MVP.md) | Current implementation state (what works, what doesn't) |
-| [`adr/`](adr/README.md) | Architecture Decision Records (6 ADRs: Wasmtime, SPSC queues, drain-and-flip, native I/O, OCI, workspace) |
-| [`api.md`](api.md) | HTTP control plane REST API reference |
-| [`benchmarks/`](benchmarks/hot-swap.md) | Existing benchmark results (hot-swap prepare phase) |
-| [`mqtt-setup.md`](mqtt-setup.md) | Mosquitto setup for development/testing |
-| [`REGISTRY.md`](REGISTRY.md) | OCI registry integration for Wasm plugins |
-| [`../TODO.md`](../TODO.md) | **Implementation task list** — what needs to be built for thesis evaluation |
+## Directory tree
 
----
+```
+docs/
+├── architecture/         arc42 §1–8 + comparators (Explanation)
+│   ├── 00-vision.md
+│   ├── 01-goals-and-constraints.md
+│   ├── 02-solution-strategy.md
+│   ├── 03-building-blocks.md
+│   ├── 04-runtime-view.md
+│   ├── 05-deployment.md
+│   ├── 06-crosscutting-concepts.md
+│   ├── 07-quality-requirements.md
+│   ├── 08-risks.md
+│   └── 09-comparators.md
+├── requirements/         Functional + non-functional (Reference)
+│   ├── functional.md
+│   └── non-functional.md
+├── interfaces/           WIT / HTTP / TOML / SDK (Reference)
+│   ├── wit-contracts.md
+│   ├── http-api.md
+│   ├── config-schema.md
+│   └── plugin-sdk.md
+├── adr/                  Nygard-format decision records
+├── rfcs/                 Long-form design records
+├── operations/           Task-oriented how-tos (How-to)
+│   ├── getting-started.md          (Tutorial)
+│   ├── configuration.md
+│   ├── mqtt-setup.md
+│   ├── registry.md
+│   ├── observability.md
+│   └── dependencies.md
+├── status/               Current state of the world (Reference)
+│   ├── implementation-status.md
+│   └── evaluation-progress.md
+├── benchmarks/           Measurement reports
+│   └── hot-swap.md
+├── workflows/            Session recipes (Explanation)
+│   ├── discussion-session.md
+│   ├── implementation-session.md
+│   └── planning-session.md
+├── api/                  Machine-readable API artefacts
+│   ├── openapi.yaml
+│   └── bruno-collection/
+└── AI_WORKFLOW.md        AI-assisted development workflow
+```
 
-## Thesis Context (tcc-doc repo: `github.com/PedroKlein/tcc-doc`)
+## Reader profiles
 
-The research design, evaluation methodology, and thesis framing live in the sibling `tcc-doc` repo.
+- **Thesis reviewer** — read `architecture/00-vision.md`,
+  `architecture/07-quality-requirements.md`, `architecture/09-comparators.md`,
+  and skim `rfcs/README.md` for the amendments graph.
+- **Edge-gateway operator** — start with
+  `operations/getting-started.md`, then work through
+  `operations/configuration.md` for your pipeline shape, then
+  `operations/observability.md` for scraping metrics.
+- **Plugin author** — `interfaces/wit-contracts.md`,
+  `interfaces/plugin-sdk.md`, and the concrete example in
+  `plugins/pass-through/src/lib.rs`.
+- **Runtime contributor** — walk `architecture/03-building-blocks.md`,
+  `architecture/06-crosscutting-concepts.md`, then the relevant
+  RFC(s) under `rfcs/`. Load the domain skills under
+  `.agents/skills/` when editing code.
 
-| Document | Path (relative to tcc-doc root) | Purpose |
-|----------|--------------------------------|---------|
-| **Sources of Truth** | `SOURCES-OF-TRUTH.md` | Master index — which file is authoritative for each topic |
-| **RQ Version Map** | `RQ-VERSION-MAP.md` | Translates old RQ4/5/6 references to current RQ1–3 |
-| **Evaluation Plan** | `research/analysis/evaluation-plan.md` | Statistical methodology, experiments, hardware, threats to validity |
-| **Research Questions** | `research/analysis/thesis-statement-v3.md` | 3 RQs with pass/fail criteria |
-| **Use Cases** | `context/use-cases.md` | UC1 (telemetry), UC2 (inference) — pipeline topologies |
-| **Contributions** | `research/contributions.md` | What WAFER claims, positioning vs competitors |
-| **Counter-Arguments** | `research/analysis/counter-args-triage.md` | 18 challenges + mitigations |
-| **Comparators** | `findings/source-code-comparators.md` | 9 systems code-reviewed |
+## Historical note (2026-07-18 refactor)
 
----
+The previous monolithic layout (`docs/SPEC.md`, `docs/MVP.md`,
+`docs/api.md`, `docs/REGISTRY.md`, `docs/decisions/`) has been split
+into the arc42-lite tree above. Every legacy topic maps to a section
+in the new tree:
 
-## Knowledge Base (Obsidian vault: `github.com/PedroKlein/obsidian-personal`)
+| Legacy location | New home |
+|-----------------|----------|
+| `SPEC.md` §Architecture / §WIT contracts / §Node categories | `architecture/`, `interfaces/wit-contracts.md`, `interfaces/config-schema.md`. |
+| `SPEC.md` §Hot-swap mechanism | `architecture/04-runtime-view.md`, `adr/0003-hot-swap-mechanism.md`, `adr/0012-watch-channel-hot-swap.md`, `rfcs/RFC-005-orchestrator.md`. |
+| `MVP.md` | `status/implementation-status.md`. |
+| `api.md` | `interfaces/http-api.md`. |
+| `REGISTRY.md` | `operations/registry.md`. |
+| `decisions/` | `rfcs/` (renamed and harmonised into `RFC-NNN-<slug>.md`). |
 
-252 synthesized literature notes live under `TCC/` in the Obsidian vault:
+Legacy files are removed; git history preserves them if needed.
 
-- `TCC/papers/` — 158 paper notes (citekey filenames, e.g., `marcelinoRoadrunnerAcceleratingData2025.md`)
-- `TCC/systems/` — 36 system/spec notes (eKuiper, AIO, Wasmtime, WASI, etc.)
-- `TCC/Fundamentals Map.md` — Chapter-by-chapter citation guide for thesis writing
-- `TCC/WAFER System.md` — Architecture quick-reference
+## Cross-repository pointers
 
----
-
-## Key Framing (from thesis-statement-v3)
-
-- **The runtime IS the contribution** — no single feature is elevated above others
-- **RQ1**: Performance cost of typed Wasm boundaries (within 30% of eKuiper)
-- **RQ2**: Per-stage fault containment (all 6 attack scenarios contained)
-- **RQ3**: Disruption cost of live stage replacement (<100ms pause, zero loss)
-- **Baselines**: Native Rust (isolation tax) · eKuiper (competitive viability)
-- **Scope**: Stateless transforms on Linux edge gateways (≥4GB RAM). Not microcontrollers, not distributed.
-
-> ⚠️ If `SPEC.md` says "hot-swap is primary thesis target" — that's outdated framing.
-> The runtime architecture is the contribution; hot-swap is one of three co-equal properties.
+- `github.com/PedroKlein/tcc-doc` — thesis writing, evaluation plan
+  and RQ definitions.
+- `github.com/PedroKlein/obsidian-personal` — literature notes under
+  `TCC/`.
+- `docs/AI_WORKFLOW.md` and `.agents/AGENTS.md` — how humans and
+  agents collaborate in this repository.

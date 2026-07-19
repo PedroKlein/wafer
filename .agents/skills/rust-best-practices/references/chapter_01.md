@@ -384,7 +384,7 @@ fn q_rsqrt(number: f32 ) -> f32 {
 * Clear code beats comments. However, when the why isn't obvious, say it plainly - or link to where:
 ```rust
 // PERF: Generating the root store per subgraph caused high TLS startup latency on MacOS
-// This works as a caching alternative. See: [ADR-123](link/to/adr-123)
+// This works as a caching alternative. See: ADR-123 (project-specific design note)
 let subgraph_tls_root_store: RootCertStore = configuration
     .tls
     .subgraph

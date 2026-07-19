@@ -10,7 +10,7 @@
 //   - output-message uses list<u8> (output, component-owned bytes).
 //   - process-error categories map to the host error policy engine.
 //
-// See docs/decisions/2025-07-05-wit-contracts-envelope-design.md.
+// See docs/rfcs/RFC-001-wit-contracts.md.
 
 package pipeline:types@0.1.0;
 

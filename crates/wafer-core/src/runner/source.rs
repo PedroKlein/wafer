@@ -2,7 +2,7 @@
 //!
 //! Source::poll() is native Rust I/O (mpsc recv, file read, HTTP accept) —
 //! safe inside select! because there's no Wasm Store to poison on cancellation.
-//! See docs/decisions/2025-07-15-phase4-io-integration.md Decision 1.
+//! See docs/rfcs/RFC-010-io-integration.md Decision 1.
 
 use std::sync::Arc;
 

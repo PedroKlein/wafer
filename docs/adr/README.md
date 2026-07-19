@@ -39,7 +39,9 @@ What becomes easier or more difficult to do because of this change?
 
 ## Historical workflow
 
-ADR creation follows a tracked workflow using beads tasks.
+Historical note: earlier iterations of the project used a `beads` task tracker
+to shepherd ADRs through the Proposed → Accepted lifecycle. The workflow is
+preserved here for reference; day-to-day work no longer requires it.
 
 ### Creating a New ADR
 
@@ -69,8 +71,8 @@ When an ADR is accepted (user changes status):
 # Create implementation tasks
 bd create "Implement <outcome from ADR>" -p 1
 
-# If ADR resolves a SPEC.md Open Question, note it
-# Update docs/SPEC.md Section 18.x with: "Resolved by ADR-NNNN"
+# If the ADR resolves an open question captured in an RFC, update the
+# relevant RFC's Implementation Notes to point at the ADR.
 ```
 
 ### Finding ADR Tasks
@@ -88,12 +90,40 @@ bd query "label=decision AND status=open"
 
 ## Index
 
-| ADR  | Title                           | Status   | Date       | SPEC Reference      |
-| ---- | ------------------------------- | -------- | ---------- | ------------------- |
-| 0001 | Use Wasmtime as WASM Runtime    | Accepted | 2026-02-14 | Section 3.2         |
-| 0002 | SPSC Bounded Queues             | Accepted | 2026-02-14 | Section 8.1         |
-| 0003 | Drain-and-Flip Hot-Swap         | Accepted | 2026-02-14 | Section 10.1        |
-| 0004 | Native Rust Sources and Sinks   | Accepted | 2026-02-17 | Section 4.5, 4.9, 5.1 |
+| ADR  | Title                                              | Status                                   | Date       | Parent RFC |
+| ---- | -------------------------------------------------- | ---------------------------------------- | ---------- | ---------- |
+| 0001 | Use Wasmtime as WASM Runtime                       | Accepted                                 | 2026-02-14 | — |
+| 0002 | SPSC Bounded Queues                                | Amended (2026-07-12 — see RFC-005)        | 2026-02-14 | — |
+| 0003 | Hot-swap mechanism (watch-channel, between-messages) | Accepted (supersedes drain-and-flip)     | 2026-07-12 | [RFC-005](../rfcs/RFC-005-orchestrator.md) |
+| 0004 | Native Rust Sources and Sinks                      | Accepted                                 | 2026-02-17 | — |
+| 0005 | Registry / Package Support                         | Accepted                                 | 2026-04-–  | — |
+| 0006 | Workspace Architecture                             | Accepted                                 | 2026-04-–  | — |
+| 0007 | `borrow<buffer>` Zero-Copy Input                   | Accepted                                 | 2026-07-05 | [RFC-001](../rfcs/RFC-001-wit-contracts.md) |
+| 0008 | Five-Category Error Policy Engine                  | Accepted                                 | 2026-07-06 | [RFC-002](../rfcs/RFC-002-host-runtime.md) |
+| 0009 | Filter as First-Class Node                         | Accepted                                 | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md) |
+| 0010 | Merge as Host Topology (no Joiner world)           | Accepted                                 | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md) |
+| 0011 | `Arc<EnvelopeHeader>` + `Bytes` + `Lineage` Envelope | Accepted                                 | 2026-07-06 | [RFC-003](../rfcs/RFC-003-node-types.md), [RFC-002](../rfcs/RFC-002-host-runtime.md) |
+| 0012 | Watch-Channel Hot-Swap Implementation              | Accepted (amends prior ADR-0003)          | 2026-07-12 | [RFC-005](../rfcs/RFC-005-orchestrator.md) |
+| 0013 | AOT Cache + Per-Node Metering (fuel/epoch/limits)  | Accepted                                 | 2026-07-12 | [RFC-007](../rfcs/RFC-007-performance-optimizations.md) |
+| 0014 | Guest SDK Design (thread_local + macros)           | Accepted                                 | 2026-07-12 | [RFC-006](../rfcs/RFC-006-plugin-sdk.md) |
+| 0015 | Command Runner: mise                               | Accepted                                 | 2026-07-19 | — |
+
+### Notes on recent changes (2026-07-18 doc-refactor)
+
+- **ADR-0002** carries a `## Amendment (2026-07-12 — mpsc after RFC-005)` section
+  at the bottom: the runtime moved from a bespoke `BoundedQueue` wrapper to direct
+  `tokio::sync::mpsc::channel`, and the SPSC framing was superseded by mpsc
+  (multi-producer, single-consumer). Fan-in is implicit via multiple producers on
+  the receiver end — there is no Joiner node.
+- **ADR-0003** was rewritten. The original filename
+  `0003-drain-and-flip-hotswap.md` was replaced by `0003-hot-swap-mechanism.md`.
+  The current mechanism is a `watch::Sender<Option<SwapPayload>>` per Wasm node:
+  the runner selects between the input `mpsc::Receiver` and the swap channel, and
+  the swap happens at the next message boundary. The 4-phase drain-and-flip is
+  historical only.
+- **ADR-0012** documents the specific watch-channel implementation and is a
+  companion to the rewritten ADR-0003. Read ADR-0003 for the higher-level
+  mechanism choice, ADR-0012 for the implementation-level tactic.
 
 ## Naming Convention
 

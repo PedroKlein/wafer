@@ -11,10 +11,8 @@ post {
 }
 
 docs {
-  Immediately shuts down the pipeline. In-flight messages may be lost.
-  Use /api/v1/pipeline/drain for graceful shutdown instead.
-  
-  This is a hard shutdown - use only when you need to stop immediately.
+  Graceful shutdown — cancels the pipeline supervisor. In-flight messages
+  complete their current node call before the task exits.
 }
 
 assert {

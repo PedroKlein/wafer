@@ -1,7 +1,7 @@
 //! Hot-swap support — watch-channel based swap between messages.
 //!
 //! Swap happens atomically between messages (no explicit drain phase needed).
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D6.
+//! See docs/rfcs/RFC-005-orchestrator.md D6.
 
 use std::sync::Arc;
 
@@ -158,7 +158,7 @@ impl From<SwapError> for WaferError {
 /// Used by E-Swap-6 to identify which phase dominates swap cost:
 /// compilation, instantiation, signal propagation, or pipeline convergence.
 ///
-/// See docs/decisions/2025-07-12-evaluation-harness-design.md — D7A.
+/// See docs/rfcs/RFC-008-evaluation-harness.md — D7A.
 #[derive(Debug, Clone)]
 pub struct SwapTimeline {
     /// When the swap request was received (API handler or file-watch trigger).

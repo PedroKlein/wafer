@@ -3,7 +3,7 @@
 //! Publishes JSON messages at a constant arrival rate to an MQTT topic with
 //! embedded timestamps for end-to-end latency measurement.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D3B.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3B.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 

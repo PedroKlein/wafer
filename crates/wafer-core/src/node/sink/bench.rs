@@ -4,7 +4,7 @@
 //! gaps/duplicates via `SequenceTracker`, and monitors hot-swap version boundaries
 //! via `HotSwapRecorder`.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D4, D7, D9.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4, D7, D9.
 
 use std::future::Future;
 use std::io::Write;

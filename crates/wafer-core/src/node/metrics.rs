@@ -4,7 +4,7 @@
 //! the single source of truth for node-level telemetry. The optional
 //! Prometheus exposition layer (behind `http-api` feature) reads from these.
 //!
-//! See docs/decisions/2025-07-12-performance-optimizations.md — "Feature gate
+//! See docs/rfcs/RFC-007-performance-optimizations.md — "Feature gate
 //! only exposition, not measurement."
 
 use std::sync::atomic::{AtomicU64, Ordering};

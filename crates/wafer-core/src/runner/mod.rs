@@ -4,7 +4,7 @@
 //! with watch-channel hot-swap, retry priority, and graceful shutdown.
 //!
 //! CRITICAL: Wasm calls are NEVER inside select! branches (Store poisoning).
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D3.
+//! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 pub mod error_policy;
 pub mod filter;

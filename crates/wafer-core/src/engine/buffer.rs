@@ -4,7 +4,7 @@
 //! One buffer handle is created per `process()`/`evaluate()`/`route()` call
 //! and destroyed immediately after — never held across message boundaries.
 //!
-//! See docs/decisions/2025-07-06-host-runtime-architecture.md D2.
+//! See docs/rfcs/RFC-002-host-runtime.md D2.
 
 use bytes::Bytes;
 

@@ -8,7 +8,7 @@
 //! these histograms capture the full latency distribution — percentiles, min/max,
 //! and outliers per node.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — D1, D15.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — D1, D15.
 
 use std::collections::HashMap;
 use std::io::Write;

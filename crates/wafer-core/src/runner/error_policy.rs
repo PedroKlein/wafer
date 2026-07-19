@@ -1,6 +1,6 @@
 //! Per-node error handling: 5-category dispatch, bounded retry with backoff, DLQ routing.
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D4 + D8.
+//! See docs/rfcs/RFC-005-orchestrator.md D4 + D8.
 
 use std::collections::VecDeque;
 use std::fmt;

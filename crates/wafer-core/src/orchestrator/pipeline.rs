@@ -5,7 +5,7 @@
 //! Hot-swap signals go through `watch::Sender` per Wasm node.
 //! Status queries use atomic reads from `Arc<NodeStateTracker>` + `Arc<NodeMetrics>`.
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D6, D11, D12.
+//! See docs/rfcs/RFC-005-orchestrator.md D6, D11, D12.
 
 use std::collections::HashMap;
 use std::sync::Arc;

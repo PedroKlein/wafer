@@ -3,7 +3,7 @@
 //! Router BORROWS the envelope for port routing decision. Fan-out: clone for
 //! N-1 ports, move original to last port (Session 3 D12).
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D3.
+//! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 use std::sync::Arc;
 use std::time::Instant;

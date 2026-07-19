@@ -5,7 +5,7 @@
 //! Spin's validated pattern: if all Tokio workers are blocked executing Wasm,
 //! a tokio task won't get scheduled to tick the epoch.
 //!
-//! See docs/decisions/2025-07-12-performance-optimizations.md C1.
+//! See docs/rfcs/RFC-007-performance-optimizations.md C1.
 
 use std::path::Path;
 use std::sync::OnceLock;

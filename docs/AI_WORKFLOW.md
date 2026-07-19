@@ -228,10 +228,11 @@ See [ADR README](adr/README.md) for the full template.
 
 ## Spec Reference
 
-The authoritative source of truth for this project is [`docs/SPEC.md`](SPEC.md).
+The authoritative sources of truth are the `docs/` arc42-lite tree, the WIT
+files (`wit/*.wit`), and the always-loaded `wafer-project` skill.
 
 All agents are configured to:
-- Reference relevant SPEC sections for their domain
+- Reference relevant architecture / RFC / ADR docs for their domain
 - Flag conflicts or ambiguities to `@orchestrator`
 - Create ADR tasks when architectural decisions are needed
 

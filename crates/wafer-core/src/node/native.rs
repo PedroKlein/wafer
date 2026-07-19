@@ -4,7 +4,7 @@
 //! direct Rust function calls. The overhead difference between native and Wasm
 //! IS the isolation tax measured in RQ1.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D5.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D5.
 
 use std::future::Future;
 use std::pin::Pin;

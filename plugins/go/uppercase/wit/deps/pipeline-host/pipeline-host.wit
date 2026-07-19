@@ -8,7 +8,7 @@
 // that WASI proposal stabilizes — it follows the same (level, message)
 // signature pattern.
 //
-// See docs/decisions/2025-07-05-wit-contracts-envelope-design.md F9.
+// See docs/rfcs/RFC-001-wit-contracts.md F9.
 
 package pipeline:host@0.1.0;
 

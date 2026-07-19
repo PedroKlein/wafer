@@ -5,11 +5,14 @@
 //! - WASM component loading (prepare phase)
 //! - Component instantiation
 //!
-//! Note: Full hot-swap (with drain) requires a running pipeline. These benchmarks
-//! focus on the preparation phase which is the dominant cost in hot-swap.
+//! Note: Full end-to-end hot-swap requires a running pipeline. These benchmarks
+//! focus on the preparation phase, which is the dominant pre-signal cost in the
+//! watch-channel between-messages model.
 //!
-//! Target: Prepare phase should be < 50ms to leave headroom for drain + flip
-//! within the 100ms total target (SPEC §10.1, ADR-0003).
+//! Target: prepare phase should stay within the NFR-PERF-4 budget in
+//! docs/architecture/07-quality-requirements.md, leaving headroom for the
+//! NFR-SWAP-1 observable pause budget. See ADR-0003 for the current
+//! watch-channel mechanism.
 //!
 //! Run with:
 //! ```bash

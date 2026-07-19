@@ -8,7 +8,7 @@
 //! - Recovery from cached InstancePre (~5µs re-instantiation)
 //!
 //! CRITICAL: These calls MUST run to completion — NEVER inside select! branches.
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D5–D7.
+//! See docs/rfcs/RFC-005-orchestrator.md D5–D7.
 
 use std::sync::Arc;
 

@@ -5,8 +5,8 @@
 //! per-call log buffer for the `pipeline:host/logging` import, per-node memory
 //! limits, and the node identity for structured logging.
 //!
-//! See docs/decisions/2025-07-06-host-runtime-architecture.md D8
-//! and docs/decisions/2025-07-12-performance-optimizations.md (StoreLimits amendment).
+//! See docs/rfcs/RFC-002-host-runtime.md D8
+//! and docs/rfcs/RFC-007-performance-optimizations.md (StoreLimits amendment).
 
 use wasmtime::component::ResourceTable;
 use wasmtime::{StoreLimits, StoreLimitsBuilder};

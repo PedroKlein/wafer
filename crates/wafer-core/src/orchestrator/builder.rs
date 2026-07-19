@@ -4,7 +4,7 @@
 //! spawning into independent tokio tasks. Queue wiring uses the receiver-keyed
 //! algorithm from Session 5 D2.
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md.
+//! See docs/rfcs/RFC-005-orchestrator.md.
 
 use std::collections::HashMap;
 use std::sync::Arc;

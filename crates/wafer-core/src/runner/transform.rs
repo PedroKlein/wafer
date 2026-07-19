@@ -3,7 +3,7 @@
 //! Transform takes ownership of each envelope, produces a new one.
 //! DLQ safety clone BEFORE the Wasm call (~10ns Arc+Bytes bump).
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D3.
+//! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 use std::sync::Arc;
 use std::time::Instant;

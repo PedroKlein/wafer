@@ -6,17 +6,17 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 | What you need | Where to find it |
 |---------------|------------------|
-| **What to build next** | `TODO.md` (repo root) — implementation tasks with cross-references |
+| **What to build next** | `TODO.md` and `ROADMAP.md` (repo root) — implementation tasks and cross-references |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
 | **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` |
 | **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
 | **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
 | **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
-| **Literature on a topic** | Obsidian vault `TCC/papers/` (252 notes) |
+| **Literature on a topic** | Obsidian vault `TCC/papers/` |
 
 **Sibling repos** (pi-repos group `tcc`):
 - `github.com/PedroKlein/tcc-doc` — research, evaluation plan, thesis writing
-- `github.com/PedroKlein/obsidian-personal` — knowledge base (252 notes under `TCC/`)
+- `github.com/PedroKlein/obsidian-personal` — knowledge base (notes under `TCC/`)
 
 **Key framing:** The runtime IS the contribution (not just hot-swap). RQ1=Performance, RQ2=Isolation, RQ3=Hot-swap.
 
@@ -24,94 +24,107 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 ## Project Overview
 
-**WAFER** (WebAssembly Flow Execution Runtime) is a high-performance, Rust-based DAG pipeline runtime that executes WebAssembly plugins using [Wasmtime](https://wasmtime.dev/). It is designed for building data processing pipelines with hot-swappable transforms, bounded queues with backpressure, and flexible fan-out/fan-in topologies.
+**WAFER** (WebAssembly Flow Execution Runtime) is a single-process Rust runtime that executes typed DAGs of WebAssembly components on edge gateways. It uses [Wasmtime](https://wasmtime.dev/) with the Component Model. Pipelines are declared in TOML, connected by bounded `mpsc` queues with backpressure, and individual Wasm nodes can be hot-swapped between messages without pipeline downtime.
 
 ### Key Concepts
 
-- **DAG pipelines** — Data flows are defined as directed acyclic graphs via TOML configuration files
-- **WebAssembly plugins** — Transforms, routers, and joiners are WASM components with WIT-defined interfaces
-- **Bounded queues** — SPSC queues with configurable capacity and overflow policies (`slow`/backpressure, `drop`, `dead-letter`)
-- **Hot-swap** — WASM plugins can be replaced at runtime without stopping the pipeline (drain-and-flip mechanism)
-- **Fan-out/Fan-in** — Router nodes (1→N) and Joiner nodes (N→1) enable complex topologies like diamond patterns and scatter-gather
-- **Multiple I/O** — Sources and sinks support stdin/stdout, files, MQTT pub/sub, and HTTP webhooks
-- **Control plane** — HTTP REST API + Prometheus metrics for monitoring and management
-- **OCI registry** — Load plugins from container registries (ghcr.io, Docker Hub) with local caching
-- **Fuel-based metering** — Execution limits for untrusted plugins via wasmtime fuel
+- **DAG pipelines** — Data flows are declared as directed acyclic graphs via TOML configuration files. Cycles are rejected at build time.
+- **Five node categories** — `Source`, `Sink`, `Transform`, `Filter`, `Router`. Sources and Sinks are native Rust; Transform / Filter / Router are Wasm components.
+- **WIT-typed boundaries** — Every Wasm call goes through one of the four `pipeline:*@0.1.0` WIT packages (`pipeline:types`, `pipeline:node`, `pipeline:routing`, `pipeline:host`). Worlds: `transform-node`, `filter-node`, `inference-node`, `router-node`.
+- **Bounded queues** — Every edge is a bounded tokio `mpsc` channel with a configurable capacity and an overflow policy (`slow`/backpressure, `drop`, `dead-letter`). Backpressure propagates end-to-end.
+- **Fan-out / fan-in** — Fan-out is expressed by Router nodes (1→N) that return output port names. Fan-in (N→1) is an **implicit host topology**: multiple upstream nodes are wired as multi-producer senders on the downstream node's single `mpsc` receiver. There is no first-class Joiner node type; fan-in requires no Wasm.
+- **Hot-swap (watch-channel, between messages)** — Each Wasm node's task holds a `watch::Receiver<Option<SwapPayload>>`. At the top of every runner loop iteration the task polls `swap_rx.has_changed()` — if a swap payload is available it drops the old instance and installs the pre-instantiated replacement, then enters its usual `select!` between cancellation and the input channel. State inside the guest instance is lost by design (see Invariant 7).
+- **Zero-copy envelope** — Messages cross the boundary as an `Arc<EnvelopeHeader>` plus `Bytes` payload plus lineage trail. Guests read the payload via a `borrow<buffer>` resource handle exposed by `pipeline:types`.
+- **Error policy** — Every host-observed guest error maps to one of five categories (`bad-input`, `dependency-failed`, `processing-failed`, `timed-out`, `unrecoverable`) which the policy engine dispatches to `retry` / `dead-letter` / `skip` / `teardown`.
+- **Multiple I/O** — Native sources and sinks support stdin/stdout, files, MQTT pub/sub, and HTTP webhooks.
+- **Control plane** — axum HTTP REST API + Prometheus metrics on a separate port.
+- **OCI registry** — Wasm components can be pulled from container registries (ghcr.io, Docker Hub) via the same `plugin` field used for local paths, with content-addressable local caching.
+- **Fuel + epoch metering** — Untrusted guests are bounded in both computation (fuel) and wall-clock time (epoch interruption on a dedicated OS thread).
 
 ### Tech Stack
 
-- **Rust stable** (toolchain pinned in `rust-toolchain.toml`)
+- **Rust stable** (toolchain pinned in `rust-toolchain.toml`, Edition 2024)
 - **wasmtime** — WebAssembly runtime with WASI Preview 2 / Component Model
 - **wit-bindgen** — Code generation from WIT interface definitions
-- **petgraph** — DAG topology management
-- **tokio** — Async runtime
+- **petgraph** — DAG topology management (toposort + cycle detection)
+- **tokio** — Async runtime (`mpsc`, `watch`, `select!`)
 - **axum** — HTTP control plane server
+- **prometheus-client** — Metrics exposition
 
 ### Workspace Crates
 
 | Crate | Type | Description |
 |-------|------|-------------|
-| `wafer-core` | Library | Core library: DAG orchestrator, engine, node implementations, queues, hot-swap, metrics |
-| `wafer-runtime` | Binary | CLI runtime that loads TOML configs and runs pipelines, integrates the API server |
-| `wafer-types` | Library | Shared types: error definitions, control messages, metric types |
-| `waferctl` | Binary | CLI tool for interacting with running pipelines (status, nodes, drain, hot-swap) |
+| `wafer-core` | Library | Core runtime: DAG orchestrator, engine, node runners, queue wiring, hot-swap, error policy, metrics, HTTP API surface |
+| `wafer-runtime` | Binary | CLI runtime that loads TOML configs and runs pipelines; wires the API server into `wafer-core` |
+| `wafer-types` | Library | Shared types: config schema (`NodeDef`, `WasmNodeDef`, `EdgeDef`, `EngineConfig`, `ErrorPolicyConfig`), control messages, event types, metrics types |
+| `wafer-config` | Library | TOML loading, DAG construction, semantic validation on top of `wafer-types` |
+| `wafer-plugin` | Library | Guest-side SDK (macros, `thread_local!` state pattern, error helpers) that plugin crates depend on |
+| `wafer-loadgen` | Binary | Load generator used by the evaluation harness (open-loop, HdrHistogram) |
+| `waferctl` | Binary | CLI tool for interacting with running pipelines (status, nodes, hot-swap, shutdown) |
 
 ### Key Directories
 
 | Directory | Contents |
 |-----------|----------|
 | `crates/` | Rust workspace crates (see table above) |
-| `plugins/` | WebAssembly plugin source code (pass-through, uppercase, json-parse, filter, content-router, merge-joiner, mnist-inference) |
-| `wit/` | WIT interface definitions for plugin worlds (`transform-node`, `router-node`, `joiner-node`) |
-| `examples/` | Example pipeline TOML configurations (passthrough, uppercase, filter, chain, diamond, file-io, MQTT, etc.) |
+| `plugins/` | Wasm plugin source (e.g. `pass-through`, `uppercase`, `json-parse`, `threshold-filter`, `content-router`, `mnist-inference`, `tensor-prep`, `cayenne-decoder`, `quality-rules`, `anomaly-detector`, `vibration-features`, `result-format`, `attacks/…`) |
+| `wit/` | WIT interface definitions for the four `pipeline:*@0.1.0` packages and the `transform-node` / `filter-node` / `inference-node` / `router-node` worlds |
+| `examples/` | Runtime-schema pipeline TOML examples (passthrough, uppercase, filter, chain, fanout, file-io, mqtt, http, overflow-dlq-demo, metrics-demo, mnist-inference, remote OCI, …). See `examples/README.md` before copying config shape. |
 | `tests/` | Integration tests |
 | `docs/` | Project documentation (see Documentation Map below) |
 | `specs/` | Feature specifications (OpenSpec workflow) |
 | `scripts/` | Helper scripts |
 | `models/` | ML model files (e.g., MNIST ONNX model for inference plugin) |
+| `eval/` | Evaluation harness inputs / outputs |
 
 ---
 
 ## Documentation Map
 
-When you need deeper context on any aspect of the project, consult these files. Each entry includes a summary so you know what to expect before reading.
+When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, status reports, and workflows. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
 
 ### Design & Specification
 
 | Document | Summary |
 |----------|---------|
-| `docs/SPEC.md` | **The authoritative design reference.** Full technical specification covering architecture, WIT contracts, node categories, data types, pipeline configuration, queue/backpressure design, dynamic topology, hot-swap mechanism, inference capability, observability, security model, failure modes, and milestones. Read this first when making architectural decisions. |
-| `docs/MVP.md` | **Current implementation status** (v0.4.0). Documents what's built, what's in progress, and what's next. Check this to understand the gap between the spec and reality — not everything in SPEC.md is implemented yet. |
-| `docs/adr/` | **Architecture Decision Records.** 6 accepted ADRs: (1) wasmtime runtime selection, (2) SPSC bounded queues, (3) drain-and-flip hot-swap, (4) native sources/sinks, (5) OCI registry support, (6) workspace architecture. See `docs/adr/README.md` for the template, index, and conventions. |
-| `specs/` | **Feature specifications directory.** Contains detailed specs for planned features using the OpenSpec workflow. See `specs/README.md` for structure and how to create new specs. |
-| `TODO.md` | **Implementation task list.** Evaluation infrastructure to build, experiments to run, cross-references to thesis methodology in tcc-doc. Start here for what needs to be done. |
+| `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
+| `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
+| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Ten RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, and I/O integration. |
+| `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). See `docs/adr/README.md` for the index and conventions. |
+| `specs/` | Feature specifications directory (OpenSpec workflow). See `specs/README.md`. |
+| `TODO.md` | Tactical implementation task list. |
+| `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
 
 ### API & Integration
 
 | Document | Summary |
 |----------|---------|
-| `docs/api.md` | **HTTP control plane API reference.** Documents all endpoints (health, ready, pipeline status, node info, hot-swap, drain/shutdown) with request/response examples and implementation status. |
-| `docs/api/openapi.yaml` | **OpenAPI 3.0 spec** for the control plane. Machine-readable API definition — useful for generating clients or validating responses. |
-| `docs/api/bruno-collection/` | **Bruno HTTP client collection** for interactive API testing. Import into [Bruno](https://usebruno.com/) to explore the API. |
-| `docs/REGISTRY.md` | **OCI registry integration guide.** How to publish WASM plugins to ghcr.io/Docker Hub, pull them in pipeline configs via `plugin_ref`, configure caching, and use `wkg` CLI tooling. |
-| `docs/mqtt-setup.md` | **Local MQTT broker setup.** Docker-based Mosquitto configuration for developing and testing MQTT sources and sinks. Includes `mosquitto.conf` reference. |
+| `docs/interfaces/http-api.md` | HTTP control plane reference. Current endpoints: `/health`, `/ready`, `/metrics`, `/api/v1/nodes`, `/api/v1/nodes/{id}`, `/api/v1/nodes/{id}/hot-swap`, `/api/v1/pipeline/shutdown`. |
+| `docs/interfaces/wit-contracts.md` | Reference for the four WIT packages and their worlds. |
+| `docs/interfaces/config-schema.md` | TOML config reference. Nodes use a `[nodes.NAME]` map, each `WasmNodeDef` has a single `plugin` field (local path or OCI reference), and each `EdgeDef` has a single optional `port` field (only used for router outputs). |
+| `docs/interfaces/plugin-sdk.md` | Reference for the `wafer-plugin` guest SDK (macros, `thread_local!` + `RefCell` state pattern, error helpers). |
+| `docs/api/openapi.yaml` | OpenAPI 3.0 spec for the control plane (kept in sync with the axum handlers). |
+| `docs/api/bruno-collection/` | Bruno HTTP client collection for interactive API testing. |
+| `docs/operations/registry.md` | OCI registry integration guide — publishing Wasm components to ghcr.io/Docker Hub, pulling via the `plugin` field, configuring caching, and using `wkg` tooling. |
+| `docs/operations/mqtt-setup.md` | Local MQTT broker setup (Docker Mosquitto) for developing and testing MQTT sources and sinks. |
 
 ### Benchmarks & Workflow
 
 | Document | Summary |
 |----------|---------|
-| `docs/benchmarks/hot-swap.md` | **Hot-swap benchmark results.** Measures the prepare phase (load + instantiate new WASM component): ~8.85ms average, well under the SPEC §10.1 target of <50ms. Includes p50/p95/p99 percentiles. |
-| `docs/AI_WORKFLOW.md` | **AI-assisted development workflow** (human-facing). Describes the tasks task tracking system and agent orchestration approach used in this project. |
+| `docs/benchmarks/hot-swap.md` | Hot-swap benchmark reference with per-phase timing (compile, instantiate, signal, ack, convergence) for the watch-channel model. |
+| `docs/AI_WORKFLOW.md` | AI-assisted development workflow (human-facing). Describes the task tracking system and agent orchestration approach used in this project. |
 
 ### Root Files
 
 | File | Summary |
 |------|---------|
-| `README.md` | **Project README.** Quick start, installation prerequisites, project structure, development setup, running pipelines, building plugins, control plane API overview, full configuration reference (node types, overflow policies, env vars), and GPU/CUDA setup for Jetson. The most comprehensive single-file overview. |
-| `justfile` | **Command runner recipes.** All `just` commands for building, testing, running, plugin management, registry operations, and more. Run `just` with no args to see the full list. |
-| `rust-toolchain.toml` | **Pinned Rust toolchain.** Ensures stable Rust channel and targets (`wasm32-wasip2`) across all contributors. |
-| `rustfmt.toml` | **Formatter configuration.** Rust formatting rules for the project. |
-| `Cargo.toml` | **Workspace root.** Defines workspace members, shared dependencies, and profiles. |
+| `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
+| `justfile` | Command runner recipes. Run `just` with no args to see the full list. |
+| `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
+| `rustfmt.toml` | Formatter configuration. |
+| `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
 
 ---
 
@@ -174,7 +187,9 @@ For detailed Rust idioms, patterns, and style guidance, load the relevant skill 
 |-------|-------------|
 | `rust-best-practices` | Writing or reviewing any Rust code — covers idiomatic patterns, borrowing vs cloning, error handling, testing, documentation, and clippy usage |
 | `cargo-expert` | Managing dependencies, workspace configuration, build targets, profiles, or troubleshooting build issues |
-| `wasm-specialist` | Working with wasmtime, WASM plugin architecture, WIT interface definitions, WASI capabilities, or Component Model design |
+| `wasm-specialist` | Working with wasmtime, Wasm plugin architecture, WIT interface definitions, WASI capabilities, or Component Model design |
+| `async-tokio` | Working with `mpsc`, `watch`, `select!`, cancellation, or the hot-swap coordination code |
+| `dag-orchestration` | Working with pipeline topology, petgraph, or fan-in/fan-out wiring |
 
 ### Key Rules
 
@@ -186,21 +201,17 @@ For detailed Rust idioms, patterns, and style guidance, load the relevant skill 
 
 ---
 
-## ADR Workflow
+## ADR & RFC Workflow
+
+Two-tier decision archive:
+
+- **RFCs** (`docs/rfcs/RFC-NNN-<slug>.md`) capture the long-form reasoning: abstract, decision, alternatives considered, related RFCs, implementation notes.
+- **ADRs** (`docs/adr/NNNN-<slug>.md`) are short Nygard-format summaries (Context / Decision / Consequences / See Also) that link back to their parent RFC.
 
 When an architectural decision is needed:
 
 1. **Research** options and document trade-offs
-2. **Write** a proposed ADR in `docs/adr/NNNN-<slug>.md` with Status: **Proposed**
-3. **Follow** the template in `docs/adr/README.md`
-4. **Cross-reference** the relevant SPEC.md section if applicable
-5. **Present** to the user for review — user accepts or rejects
-6. **On acceptance**, update status to **Accepted** and create implementation tasks
-
-Existing ADRs:
-- `0001` — Wasmtime runtime selection
-- `0002` — SPSC bounded queues
-- `0003` — Drain-and-flip hot-swap
-- `0004` — Native sources and sinks
-- `0005` — Registry/package support
-- `0006` — Workspace architecture
+2. **Draft** an RFC under `docs/rfcs/` (or a proposed ADR under `docs/adr/` for narrower decisions)
+3. **Follow** the templates and index entries in `docs/rfcs/README.md` and `docs/adr/README.md`
+4. **Present** to the user for review — user accepts or rejects
+5. **On acceptance**, update status to **Accepted** / **Implemented** and create implementation tasks. When an RFC introduces a distinct decision worth surfacing separately, also add a Nygard ADR that links back.

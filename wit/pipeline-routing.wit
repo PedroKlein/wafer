@@ -7,7 +7,7 @@
 // Amendment A1 (Session 3): Merge is implicit host topology.
 // Merge is implicit host topology (multiple edges to same node).
 //
-// See docs/decisions/2025-07-05-wit-contracts-envelope-design.md D3.
+// See docs/rfcs/RFC-001-wit-contracts.md D3.
 
 package pipeline:routing@0.1.0;
 

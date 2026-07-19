@@ -5,7 +5,7 @@ description: >
   and cancel correctness (including the WASM Store poisoning exception), backpressure with
   bounded channels, graceful shutdown via CancellationToken, select! loop pitfalls,
   Sender::reserve for cancel-safe sends, runtime tuning for edge hardware, and
-  drain-and-flip async coordination. Use when writing or reviewing async code in the
+  watch-channel hot-swap coordination. Use when writing or reviewing async code in the
   runtime: node loops, hot-swap coordination, channel wiring, shutdown sequences, or
   task lifecycle management. Triggers on: select!, CancellationToken, channel, backpressure,
   drain, shutdown, spawn, JoinHandle, timeout, async, cancel safety, mpsc, bounded queue,
@@ -265,14 +265,15 @@ std::thread::spawn(move || {
 
 ---
 
-## Drain-and-Flip (Thesis RQ3: Hot-Swap Disruption Cost)
+## Hot-Swap Coordination (Thesis RQ3: Disruption Cost)
 
 RQ3 asks: "What is the disruption cost of replacing a stage at runtime?"
 Pass criteria: <100ms pause at p95, zero message loss, <5% throughput dip.
-Phases are measured separately: prepare (load+instantiate), drain (wait for queue),
-flip (atomic swap), retire (close old). The drain phase typically dominates.
 
-Protocol: `Running → Draining → [drain complete] → Flip → Retired`
+WAFER uses a **watch-channel model**: the node task `select!`s between its input queue
+and a `watch::Receiver<Option<SwapPayload>>`. When a swap arrives between messages,
+the old instance drops and the pre-instantiated replacement takes over. Phases measured
+separately: prepare (load+instantiate), signal (watch publish), swap (drop old + start new).
 
 Cancel safety design:
 - If cancelled during drain: routing re-enables, old node continues (safe)

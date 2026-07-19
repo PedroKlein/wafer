@@ -14,10 +14,10 @@
 #   2. Send data faster than the sink can process
 #   3. Observe dropped messages going to DLQ file
 #
-# API endpoints:
-#   curl http://localhost:9090/health
-#   curl http://localhost:9090/api/v1/pipeline
-#   curl http://localhost:9090/metrics  # Check overflow/dlq counters
+# API endpoints after runtime gap A2 is closed:
+#   curl http://127.0.0.1:9090/health
+#   curl http://127.0.0.1:9090/api/v1/nodes
+#   curl http://127.0.0.1:9091/metrics  # Check overflow/dlq counters
 
 [pipeline]
 name = "overflow-dlq-demo"

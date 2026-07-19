@@ -4,7 +4,7 @@
 //! Batch timeout support: if `sink.batch_timeout()` is `Some`, a timer arm
 //! triggers periodic flush of buffered messages.
 //!
-//! See docs/decisions/2025-07-15-phase4-io-integration.md Decision 2.
+//! See docs/rfcs/RFC-010-io-integration.md Decision 2.
 
 use std::sync::Arc;
 

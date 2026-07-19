@@ -3,7 +3,7 @@
 //! Filter BORROWS the envelope (evaluate by reference). On Forward, moves the
 //! original downstream (zero-copy). On Drop, discards it.
 //!
-//! See docs/decisions/2025-07-12-orchestrator-runtime-simplification.md D3.
+//! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 use std::sync::Arc;
 use std::time::Instant;

@@ -4,7 +4,7 @@
 //! stamps to prevent coordinated omission (Tene 2012). Each message carries a monotonic
 //! sequence number for gap/duplicate detection at the sink.
 //!
-//! See docs/decisions/2025-07-12-evaluation-harness-design.md — Session 8 D3A.
+//! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3A.
 
 use std::future::Future;
 use std::pin::Pin;

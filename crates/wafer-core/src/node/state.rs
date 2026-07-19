@@ -185,7 +185,7 @@ impl NodeStateTracker {
 /// return between `set_processing(true)` and `set_processing(false)` would
 /// permanently mark the node as processing.
 ///
-/// See docs/decisions/2025-07-12-performance-optimizations.md C4.
+/// See docs/rfcs/RFC-007-performance-optimizations.md C4.
 pub struct ProcessingGuard<'a> {
     tracker: &'a NodeStateTracker,
 }
