@@ -55,7 +55,7 @@ wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", featu
 
 **Why `exclude = ["plugins/*"]`?** Plugins target `wasm32-wasip2`. Including them in the
 workspace means `cargo build --workspace` tries to build them for the host target and fails.
-Plugins are built separately via `just build-plugins`.
+Plugins are built separately via `mise run build-plugins`.
 
 **Why git dependency for wasmtime?** The released crate often lags behind async Component Model
 fixes. Once wasmtime publishes a stable release with full async CM support, switch to crates.io.
@@ -209,7 +209,7 @@ Build on target for final benchmarks (ensures matching LLVM codegen for the actu
 | `duplicate lang item` on wasm build | Two copies of `std` or `alloc` | Only ONE crate can provide allocator; check dep tree |
 | ORT (onnx) fails on aarch64 | Prebuilt binaries don't include CUDA | Set `ORT_LIB_LOCATION` to custom-built ONNX Runtime |
 | Feature flag not propagating | Crate dep missing feature forward | Add `crate/feature` in consuming crate's features |
-| `cargo test --workspace` fails on plugins | Plugins excluded but test tries to link host deps | Plugins in `exclude`; test only with `just test` |
+| `cargo test --workspace` fails on plugins | Plugins excluded but test tries to link host deps | Plugins in `exclude`; test via `mise run test` |
 | Newer Rust toolchain breaks deps | Upstream crate has strict lint probes | Patch with `[patch.crates-io]` (flow-like pattern) |
 
 ### Patching Upstream Dependencies (from Flow-Like)
@@ -236,7 +236,7 @@ jobs:
     - cargo test --workspace
   
   build-plugins:
-    - just build-plugins  # Builds all plugins for wasm32-wasip2
+    - mise run build-plugins  # Builds all plugins for wasm32-wasip2
     - wasm-tools validate plugins/*/target/wasm32-wasip2/release/*.wasm
 
   cross:  # Only on release/main

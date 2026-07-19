@@ -152,10 +152,10 @@ edition = "2024"
 # Build a single plugin
 cargo build --release --manifest-path plugins/my-plugin/Cargo.toml
 
-# Build all plugins (via justfile)
-just build-plugins
+# Build all plugins (via mise)
+mise run build-plugins
 
-# The justfile recipe:
+# The mise task:
 # for plugin in plugins/*/Cargo.toml; do
 #     cargo build --release --manifest-path "$plugin"
 # done

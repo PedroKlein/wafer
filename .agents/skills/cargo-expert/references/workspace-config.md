@@ -11,7 +11,8 @@ project/
 ├── Cargo.toml              # Workspace root
 ├── Cargo.lock              # Shared lockfile
 ├── rust-toolchain.toml     # Pinned Rust version
-├── justfile                # Build automation
+├── mise.toml               # Primary task runner and tool/task config
+├── justfile                # Temporary compatibility task runner
 ├── crates/
 │   ├── wafer-core/         # Core library
 │   │   ├── Cargo.toml

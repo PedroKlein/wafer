@@ -1,13 +1,16 @@
 # Dependencies
 
 Ground truth for the runtime's language, toolchain, and third-party
-dependencies. Sourced from `Cargo.toml` and `rust-toolchain.toml`.
+dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
+`mise.toml`.
 
 ## Language and toolchain
 
-- **Rust** — stable channel, Edition 2024 (`rust-version = "1.85"`).
-  Pinned via `rust-toolchain.toml`; `cargo` picks the right version
-  automatically. Do not change the toolchain without discussion — it
+- **Rust via rustup** — stable channel, Edition 2024 (`rust-version = "1.85"`).
+  Install from <https://rustup.rs/> before running `mise install`; cargo-based
+  mise tools (`cargo:wasm-tools`, `cargo:wkg`, etc.) require `cargo` to already
+  exist. Pinned via `rust-toolchain.toml`; `cargo` picks the right project
+  toolchain automatically. Do not change the toolchain without discussion — it
   affects both the runtime and every plugin build.
 - **Rust targets:**
   - Host: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
@@ -15,10 +18,33 @@ dependencies. Sourced from `Cargo.toml` and `rust-toolchain.toml`.
   - Wasm plugins: `wasm32-wasip2` (Component Model, WASI Preview 2).
     Added automatically by the toolchain file.
 
-## Command runner
+## Development tool manager and command runner
 
-- **`just`** — every recipe in `justfile` at the repo root. Install
-  via `cargo install just` or your package manager.
+- **`mise`** — primary development tool manager and command runner via
+  `mise.toml` at the repo root. Install via <https://mise.jdx.dev/> or your
+  package manager, then run:
+
+  ```bash
+  cargo --version  # if this fails, install Rust first from https://rustup.rs/
+  mise trust       # one-time trust for this repo's mise.toml, if prompted
+  mise run setup   # verify Rust/rustup, then install pinned helper tools
+  ```
+
+  The legacy `justfile` remains temporarily as a compatibility layer, but new
+  docs should use `mise run ...`.
+
+`mise.toml` currently declares these development tools:
+
+| Tool | Purpose |
+|------|---------|
+| `rust-toolchain.toml` | Rust channel/components/targets. Rust is intentionally not double-managed in `mise.toml`; install rustup/Rust before `mise install`. |
+| `python` + `uv` | Evaluation analysis environment under `eval/analysis/`. |
+| `go` + `tinygo` | Go/TinyGo polyglot plugin mirror under `plugins/go/`. |
+| `cargo:wasm-tools` | Component validation and WIT inspection. |
+| `cargo:wkg` | OCI/WIT registry publishing and pulling. |
+| `pipx:componentize-py` | Python polyglot plugin experiments under `plugins/python/`. |
+| `cargo:cargo-deny`, `cargo:cargo-audit` | Dependency policy/security checks. |
+| `cargo:taplo-cli`, `cargo:typos-cli` | TOML formatting/linting and typo checks. |
 
 ## Runtime dependencies
 
@@ -47,7 +73,7 @@ dependencies. Sourced from `Cargo.toml` and `rust-toolchain.toml`.
 | `reqwest` | 0.12 | HTTP sink (native rustls TLS). |
 | `hyper` | 1.x | HTTP source. |
 | `oci-client` | 0.13 | OCI plugin distribution. |
-| `wkg` (dev) | latest | Component-Model registry CLI (installed via `just install-wkg`). |
+| `wkg` (dev) | pinned by `mise.toml` | Component-Model registry CLI (installed via `mise run setup`, or `mise run install-wkg` for only this tool). |
 
 ## Feature flags
 

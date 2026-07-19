@@ -50,7 +50,7 @@ fn plugin_path(name: &str) -> PathBuf {
 async fn test_transform_passthrough() {
     let path = plugin_path("pass-through");
     if !path.exists() {
-        eprintln!("Skipping: build plugins first with `just build-plugins`");
+        eprintln!("Skipping: build plugins first with `mise run build-plugins`");
         return;
     }
     // ... test body
@@ -58,7 +58,7 @@ async fn test_transform_passthrough() {
 ```
 
 **Why not build in tests?** WASM compilation takes 10-30s. Tests would be unusably slow.
-Build once in CI or via justfile, then run tests against the artifacts.
+Build once in CI or via `mise run build-plugins`, then run tests against the artifacts.
 
 ---
 
@@ -265,7 +265,7 @@ benches/                   # Criterion benchmarks
 ## NEVER
 
 - **NEVER build WASM plugins inside test code** — 10-30s compilation per plugin;
-  build in CI/justfile, skip tests if binary missing
+  build in CI/mise task, skip tests if binary missing
 - **NEVER benchmark with debug builds** — `--release` mandatory; debug WASM overhead
   is 10-100x higher and produces meaningless results for thesis evaluation
 - **NEVER create a Tokio runtime per criterion iteration** — use `to_async(&rt)` with

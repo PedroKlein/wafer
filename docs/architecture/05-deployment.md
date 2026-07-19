@@ -70,8 +70,8 @@ native Linux x86 host), 16+ GB RAM, `x86_64-unknown-linux-gnu` or
   functional correctness before the RPi cold-start numbers are
   benchmarked.
 
-**Operational notes.** The `justfile` recipes (`just build`, `just
-build-plugins`, `just run`) target the host by default; cross-compilation
+**Operational notes.** The `mise.toml` tasks (`mise run build`, `mise run
+build-plugins`, `mise run run`) target the host by default; cross-compilation
 recipes exist for the RPi and Jetson targets.
 
 ## Single-process invariant

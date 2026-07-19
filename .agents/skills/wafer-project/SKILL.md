@@ -129,7 +129,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | Plugin structure | `/plugins/{name}/src/lib.rs`, `crate-type = ["cdylib"]` |
 | Workspace crates | `wafer-core` (runtime lib), `wafer-runtime` (bin), `wafer-types` (shared types), `wafer-config` (loader + validation), `wafer-plugin` (guest SDK), `wafer-loadgen` (eval harness), `waferctl` (CLI) |
 | Toolchain | `rust-toolchain.toml` (stable channel, Edition 2024) |
-| Command runner | `just` (justfile at root) |
+| Tool manager / command runner | Rust via rustup + `rust-toolchain.toml`; non-Rust tools/tasks via `mise.toml`; run `mise run setup` for helper tools and `mise tasks ls` for tasks; `justfile` retained temporarily for compatibility |
 | ADRs | `docs/adr/NNNN-<slug>.md`, Michael Nygard format |
 | RFCs | `docs/rfcs/RFC-NNN-<slug>.md` (authoritative long-form decision archive) |
 | Error categories | 5-variant enum: `bad-input`, `dependency-failed`, `processing-failed`, `timed-out`, `unrecoverable` |

@@ -1,6 +1,6 @@
 # Tooling & Plugins
 
-This chapter covers rustfmt, clippy configuration, security auditing, useful cargo plugins, and project automation with just.
+This chapter covers rustfmt, clippy configuration, security auditing, useful cargo plugins, and project automation with mise.
 
 ## 5.1 rustfmt Configuration
 
@@ -211,65 +211,52 @@ cargo bloat --release --crates
 ls -lh target/wasm32-wasip2/release/*.wasm
 ```
 
-## 5.5 Project Automation with `just`
+## 5.5 Project Automation with `mise`
 
-`just` is a command runner (like `make` but simpler). Common recipes for a Rust/WASM project:
+`mise` is WAFER's primary command runner and tool-version manager. Common tasks for a Rust/WASM project:
 
-```just
-# List available commands
-default:
-    @just --list
+```toml
+[tasks.default]
+description = "List tasks"
+run = "mise tasks ls"
 
-# Build the entire workspace
-build:
-    cargo build --workspace
+[tasks.build]
+description = "Build the workspace"
+run = "cargo build --workspace"
 
-# Build in release mode
-build-release:
-    cargo build --workspace --release
+[tasks.test]
+description = "Run workspace tests"
+run = "cargo test --workspace"
 
-# Run all tests
-test:
-    cargo test --workspace
+[tasks.check]
+description = "Type-check the workspace"
+run = "cargo check --workspace"
 
-# Lint
-clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+[tasks.fmt]
+description = "Format Rust code"
+run = "cargo fmt --all"
 
-# Format
-fmt:
-    cargo fmt --all
+[tasks.clippy]
+description = "Run clippy"
+run = "cargo clippy --workspace --all-targets --all-features"
 
-# Build all WASM plugins
-build-plugins:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    for plugin in plugins/*/Cargo.toml; do
-        name=$(dirname "$plugin" | xargs basename)
-        echo "Building plugin: $name"
-        cargo build --release --manifest-path "$plugin"
-    done
-
-# Build a specific plugin
-build-plugin name:
-    cargo build --release --manifest-path plugins/{{name}}/Cargo.toml
-
-# Run with a config file
-run config="examples/default.toml":
-    cargo run -p wafer-runtime -- --config {{config}}
-
-# Full CI check
-ci: fmt clippy test build-plugins
+[tasks.build-plugins]
+description = "Build all plugins for wasm32-wasip2"
+run = '''
+for plugin in plugins/*/Cargo.toml; do
+  cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
+done
+'''
 ```
 
-### Installing just
+### Installing mise
 
 ```bash
 # macOS
-brew install just
+brew install mise
 
-# cargo
-cargo install just
+# installer
+curl https://mise.run | sh
 ```
 
 ## 5.6 CI Pipeline Recommendations
@@ -290,7 +277,7 @@ cargo test --workspace
 cargo build --workspace --release
 
 # 5. Build plugins
-just build-plugins
+mise run build-plugins
 
 # 6. Security audit
 cargo deny check
@@ -301,4 +288,4 @@ cargo deny check
 - [rustfmt configuration](https://rust-lang.github.io/rustfmt/)
 - [Clippy lint list](https://rust-lang.github.io/rust-clippy/master/)
 - [cargo-deny documentation](https://embarkstudios.github.io/cargo-deny/)
-- [just manual](https://just.systems/man/en/)
+- [mise documentation](https://mise.jdx.dev/)

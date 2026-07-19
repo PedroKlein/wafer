@@ -55,7 +55,7 @@ Eliminates the unnecessary `publish.payload.to_vec()` allocation. rumqttc's `Pub
 
 ### Decision 10: Wasm Fixture Build Strategy
 
-Feature-gated pre-built artifact approach. Integration tests require `.wasm` artifacts pre-compiled via `just build-plugin`. Avoids circular dependency issues from cross-compilation inside `build.rs`.
+Feature-gated pre-built artifact approach. Integration tests require `.wasm` artifacts pre-compiled via `mise run build-plugin`. Avoids circular dependency issues from cross-compilation inside `build.rs`.
 
 ### Decision 11: File Organization
 

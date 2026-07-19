@@ -158,7 +158,7 @@ Simple plugins avoid serde (manual JSON parsing, ~5–10KB). Complex plugins use
 
 - The `wafer-plugin` crate is at `crates/wafer-plugin/`. It exports the macros described in D3 (`output_from!`, `output_with_type!`, `payload_bytes!`, `payload_as_str!`, error constructors, state macros, logging macros).
 - Plugins live under `plugins/` with a top-level `Makefile` for building all plugins. Each plugin's `Cargo.toml` uses `crate-type = ["cdylib"]` and depends on `wafer-plugin` via path.
-- The workspace structure slightly differs from the original decision: plugins are not in a separate Cargo workspace with their own `Cargo.toml` workspace root — instead they are listed as workspace members in the root `Cargo.toml` (pending verification). The build target is set via `.cargo/config.toml` or `justfile` recipes (`just build-plugins`).
+- The workspace structure slightly differs from the original decision: plugins are not in a separate Cargo workspace with their own `Cargo.toml` workspace root — instead they are listed as workspace members in the root `Cargo.toml` (pending verification). The build target is set via `.cargo/config.toml` or `mise.toml` tasks (`mise run build-plugins`).
 - All evaluation plugins are implemented: pass-through, json-parse, uppercase, threshold-filter, content-router, tensor-prep, result-format, mnist-inference, cayenne-decoder, anomaly-detector, vibration-features, quality-rules.
 - Attack plugins exist under `plugins/attacks/`.
 - Polyglot plugins exist under `plugins/go/` and `plugins/python/`.

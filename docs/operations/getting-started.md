@@ -6,11 +6,19 @@ first WAFER pipeline. If any step fails, jump to
 
 ## Prerequisites
 
-- **Rust** 1.85+ (stable channel). The workspace is pinned via
-  `rust-toolchain.toml`, so `cargo` picks the right version
-  automatically the first time you run any command.
-- **`just`** — command runner used for every recipe in `justfile`.
-  Install via `cargo install just` or your package manager.
+- **Rust via rustup**. Install from <https://rustup.rs/> before running
+  `mise install`; several mise-managed helper tools are installed through
+  Cargo and require `cargo` to already exist. The workspace is pinned via
+  `rust-toolchain.toml`, so `cargo` picks the project stable channel,
+  `rustfmt`/`clippy` components, and `wasm32-wasip2` target automatically.
+  `Cargo.toml` declares `rust-version = "1.85"` as the minimum supported Rust,
+  not the exact installed toolchain.
+- **`mise`** — primary development tool manager and command runner via
+  `mise.toml`. Install via <https://mise.jdx.dev/> or your package manager.
+  Rust itself remains controlled by `rust-toolchain.toml`. After cloning, run
+  `mise trust` once if mise asks you to trust the local config, then
+  `mise run setup` to verify Rust/rustup and install the pinned
+  Python/Go/Wasm/OCI helper tools.
 - **`wasm32-wasip2` target** — needed for building plugins. The
   toolchain file adds it automatically; verify with `rustup target
   list --installed`.
@@ -27,7 +35,10 @@ first WAFER pipeline. If any step fails, jump to
 ```bash
 git clone https://github.com/PedroKlein/wafer-poc.git
 cd wafer-poc
-just               # list every available recipe
+cargo --version     # if this fails, install Rust first from https://rustup.rs/
+mise trust          # one-time trust for this repo's mise.toml, if prompted
+mise run setup      # verify Rust/rustup, then install pinned helper tools
+mise tasks ls       # list every available task
 ```
 
 The workspace holds seven crates (see
@@ -38,8 +49,8 @@ example TOML configs under `examples/`.
 ## 2 — Build the runtime and the sample plugins
 
 ```bash
-just build                 # entire workspace
-just build-plugins         # every plugin under plugins/
+mise run build             # entire workspace
+mise run build-plugins     # every plugin under plugins/
 ```
 
 The plugin build cross-compiles each crate to `wasm32-wasip2`; the
@@ -49,15 +60,15 @@ resulting `.wasm` artifacts land under
 ## 3 — Run your first pipeline (pass-through)
 
 ```bash
-just run                                  # defaults to examples/dag-passthrough.toml
-just run examples/dag-uppercase.toml     # a slightly-more-useful example
+mise run run                              # defaults to examples/dag-passthrough.toml
+mise run run examples/dag-uppercase.toml  # a slightly-more-useful example
 ```
 
 Both examples use `stdin` as their source and `stdout` as their sink,
 so you can type a line of text, press Enter, and see it echoed
 (passthrough) or upper-cased on the other side.
 
-Under the hood, `just run` shells out to:
+Under the hood, `mise run run` shells out to:
 
 ```bash
 cargo run -p wafer-runtime -- --config <path>
@@ -70,6 +81,11 @@ RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.t
 ```
 
 ## 4 — Explore the control plane
+
+> **Current runtime caveat.** The API/metrics endpoint contract is documented,
+> but the current runtime binary does not yet launch the HTTP server; see
+> [`../status/implementation-gaps.md`](../status/implementation-gaps.md#a2--http-control-plane-never-launched-by-runtime-binary-).
+> Use this section as the target behavior until A2 is closed.
 
 By default the axum control plane binds to `127.0.0.1:9090`. In a
 second terminal:
@@ -101,7 +117,7 @@ Start the uppercase pipeline as above. In a second terminal, build a
 different transform and hot-swap it in:
 
 ```bash
-just build-plugin json-parse
+mise run build-plugin json-parse
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
@@ -135,8 +151,8 @@ runners drain → retry buffers flush to DLQ → sinks close.
 
 ## Troubleshooting
 
-- **`just: command not found`** — install `just` (`cargo install just`
-  or your package manager).
+- **`mise: command not found`** — install `mise` from <https://mise.jdx.dev/>
+  or your package manager.
 - **`error: linker 'cc' not found`** — install a C toolchain
   (`build-essential` on Debian/Ubuntu, `xcode-select --install` on
   macOS).

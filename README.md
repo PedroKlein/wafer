@@ -19,15 +19,17 @@ isolation, hot-swap disruption).
 git clone https://github.com/PedroKlein/wafer-poc.git
 cd wafer-poc
 
-# Prerequisites: Rust 1.85+ (stable), just, wasm32-wasip2 target,
-# and a C toolchain. See docs/operations/dependencies.md for the
-# full list.
+# Prerequisites: rustup/Rust, mise, and a C toolchain.
+# Install Rust first from https://rustup.rs/ if `cargo --version` fails.
+# See docs/operations/dependencies.md for the full list.
 
-just build           # build the runtime and workspace crates
-just build-plugins   # cross-compile every plugin to wasm32-wasip2
+mise trust           # one-time trust for this repo's mise.toml, if prompted
+mise run setup       # verifies Rust, then installs pinned helper tools
+mise run build       # build the runtime and workspace crates
+mise run build-plugins   # cross-compile every plugin to wasm32-wasip2
 
-just run                                    # runs examples/dag-passthrough.toml
-just run examples/dag-uppercase.toml        # or a specific pipeline
+mise run run                                # runs examples/dag-passthrough.toml
+mise run run examples/dag-uppercase.toml    # or a specific pipeline
 ```
 
 The HTTP control plane binds to `127.0.0.1:9090` by default:
@@ -73,9 +75,10 @@ eval/            Evaluation harness inputs / outputs.
 ## Contributing
 
 Development conventions live in `.agents/AGENTS.md` and the domain
-skills under `.agents/skills/`. The command runner is `just`; run
-`just` with no arguments for the full recipe list. All code must pass
-`cargo fmt`, `cargo clippy -D warnings`, and `cargo test --workspace`.
+skills under `.agents/skills/`. The tool manager and command runner is
+`mise`; run `mise run setup` for pinned helper tools and `mise tasks ls` for the
+full task list. All code must pass `mise run fmt`, `mise run clippy`,
+and `mise run test`.
 
 ## License
 

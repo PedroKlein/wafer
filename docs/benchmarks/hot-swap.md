@@ -100,7 +100,7 @@ histogram is on the roadmap (see `ROADMAP.md`).
 cargo bench -p wafer-core --bench hot_swap
 
 # Full E-Swap-6 phase decomposition under load
-just run examples/dag-uppercase.toml &         # start pipeline
+mise run run examples/dag-uppercase.toml &     # start pipeline
 wafer-loadgen --rate 1000 --duration 60s ... & # ramp
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
      -H 'content-type: application/json' \

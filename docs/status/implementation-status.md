@@ -51,7 +51,7 @@ See `docs/interfaces/wit-contracts.md` for the full reference.
 | Polyglot mirrors | 2 | `plugins/go/uppercase/` (TinyGo), `plugins/python/threshold-filter/` (`componentize-py`). |
 
 Total: **12 Rust + 6 attack + 2 polyglot = 20 plugins.** Every Rust
-plugin builds under `just build-plugin <name>`; the polyglot mirrors
+plugin builds under `mise run build-plugin <name>`; the polyglot mirrors
 have their own Makefile targets.
 
 ## Node categories

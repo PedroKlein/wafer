@@ -121,7 +121,8 @@ When you need deeper context on any aspect of the project, consult these files. 
 | File | Summary |
 |------|---------|
 | `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
-| `justfile` | Command runner recipes. Run `just` with no args to see the full list. |
+| `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls` for tasks. |
+| `justfile` | Temporary compatibility recipes retained during the mise migration. Prefer `mise run ...` for new instructions. |
 | `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
 | `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
@@ -130,34 +131,35 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 ## Build & Test Commands
 
-This project uses [`just`](https://github.com/casey/just) as the command runner. All recipes are defined in the `justfile` at the project root.
+This project uses [`mise`](https://mise.jdx.dev/) as the primary non-Rust development tool manager and command runner. Non-Rust helper tools and tasks are defined in `mise.toml`; Rust itself remains controlled by `rust-toolchain.toml` and must be installed through rustup first. The `justfile` remains temporarily for compatibility; prefer `mise run ...` in new instructions. If mise reports that `mise.toml` is not trusted, run `mise trust` once for this repo, then `mise run setup` to verify Rust/rustup and install pinned helper tools.
 
 ### Core Workflow
 
 ```bash
-just                    # List all available commands
-just build              # Build entire workspace
-just test               # Run all tests
-just check              # Type-check without building
-just fmt                # Format code with rustfmt
-just clippy             # Run clippy lints (treats warnings as errors)
+mise run setup          # Verify Rust/rustup, then install pinned helper tools
+mise tasks ls           # List all available tasks
+mise run build          # Build entire workspace
+mise run test           # Run all tests
+mise run check          # Type-check without building
+mise run fmt            # Format code with rustfmt
+mise run clippy         # Run clippy lints
 ```
 
 ### Building Components
 
 ```bash
-just build-runtime      # Build wafer-runtime only
-just build-ctl          # Build waferctl only
-just build-plugins      # Build all WASM plugins
-just build-plugin NAME  # Build a specific plugin (e.g., just build-plugin uppercase)
+mise run build-runtime  # Build wafer-runtime only
+mise run build-ctl      # Build waferctl only
+mise run build-plugins  # Build all WASM plugins
+mise run build-plugin NAME  # Build a specific plugin (e.g., mise run build-plugin uppercase)
 ```
 
 ### Running Pipelines
 
 ```bash
-just run                                    # Run default passthrough pipeline
-just run examples/dag-uppercase.toml        # Run a specific pipeline config
-just run-remote                             # Run with OCI-hosted plugins
+mise run run                                # Run default passthrough pipeline
+mise run run examples/dag-uppercase.toml    # Run a specific pipeline config
+mise run run-remote                         # Run with OCI-hosted plugins
 ```
 
 ### Testing
@@ -196,7 +198,7 @@ For detailed Rust idioms, patterns, and style guidance, load the relevant skill 
 - **Formatting**: All code must pass `rustfmt` (configuration in `rustfmt.toml`)
 - **Linting**: All code must pass `clippy -D warnings` — warnings are treated as errors
 - **Toolchain**: Pinned in `rust-toolchain.toml` — do not change without discussion
-- **Tests**: Add tests for new functionality. Run `just test` before considering work complete
+- **Tests**: Add tests for new functionality. Run `mise run test` before considering work complete
 - **WASM target**: Plugins compile to `wasm32-wasip2`. The toolchain file configures this target automatically
 
 ---

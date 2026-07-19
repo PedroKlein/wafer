@@ -56,9 +56,8 @@ please do not re-import the ROADMAP checkbox lists here.
 
 ## Follow-up 🟡
 
-- [ ] Sweep the 71 `just` / `justfile` references across `README.md`, `docs/`,
-  and `.agents/` after creating `mise.toml`; see ADR-0015
-  (`docs/adr/0015-command-runner-mise.md`).
+No tactical follow-ups are currently tracked here. Use `ROADMAP.md` and the active
+`plan_tasks` plan for larger work.
 
 ---
 

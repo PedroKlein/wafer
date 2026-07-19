@@ -6,10 +6,10 @@
 
 ## Context
 
-WAFER currently documents `just` as the primary command runner, and the repository has a root `justfile` with recipes for building, testing, running pipelines, and building plugins. That works locally, but it leaves two concerns split across tools:
+WAFER previously documented `just` as the primary command runner, with a root `justfile` containing recipes for building, testing, running pipelines, and building plugins. That worked locally, but it left two concerns split across tools:
 
-1. Tool-version pinning lives elsewhere (`rust-toolchain.toml`, docs, local setup notes).
-2. Task orchestration lives in `justfile` recipes, with no shared versioned environment for non-Rust tooling used by the evaluation harness.
+1. Tool-version pinning lived elsewhere (`rust-toolchain.toml`, docs, local setup notes).
+2. Task orchestration lived in `justfile` recipes, with no shared versioned environment for non-Rust tooling used by the evaluation harness.
 
 The project now spans Rust, Wasm plugin builds, MQTT/evaluation tooling, Python analysis notebooks, and edge-device reproduction. A command runner that can also pin tool versions is a better fit for reproducible thesis work.
 
@@ -17,32 +17,32 @@ The project now spans Rust, Wasm plugin builds, MQTT/evaluation tooling, Python 
 
 Adopt [`mise`](https://mise.jdx.dev/) as WAFER's primary project command runner and tool-version manager.
 
-`mise` will become the source of truth for project tasks and developer/evaluation tool versions. The existing `justfile` may remain temporarily as a compatibility layer or as a thin wrapper during migration, but new workflow documentation should target `mise` once the task file exists.
+`mise.toml` is now the source of truth for project tasks and shared non-Rust development tooling. Rust itself remains governed by `rust-toolchain.toml` to avoid double-managing `rustc`, `rustfmt`, `clippy`, and the `wasm32-wasip2` target. `mise.toml` declares the Python/Go/Wasm/OCI helper tools needed for local development and exposes the project task surface through `mise run ...`. The existing `justfile` remains temporarily as a compatibility layer during migration, but new workflow documentation should target `mise install` and `mise run ...`.
 
-This ADR records the decision only. It does **not** create `mise.toml`, delete `justfile`, or rewrite existing docs in this pass.
+This ADR records both the decision and the initial implementation. It creates a task-parity `mise.toml`, declares non-Rust development tools in `[tools]`, and updates active user/agent docs to use `mise`. It does **not** delete `justfile`; removing that compatibility layer is a separate follow-up decision after contributors have migrated.
 
 ## Consequences
 
 ### Positive
 
-- **Single project entrypoint.** Developers and agents can run tasks and install/pin required tools from one file.
-- **Reproducible evaluation environment.** Rust, Python/UV, Wasm tooling, and helper CLIs can be pinned alongside task definitions.
+- **Single project entrypoint.** Developers and agents can install/pin required tools and run tasks from one file.
+- **Reproducible evaluation environment.** Python/UV, Go/TinyGo, Wasm tooling, and helper CLIs can be pinned alongside task definitions, while Rust remains pinned through `rust-toolchain.toml`.
 - **Better cross-language fit.** Evaluation scripts, plugin builds, MQTT tools, and Rust workspace commands can share one task graph.
-- **Agent-friendly task discovery.** A future `mise tasks` list gives agents a stable command surface without scraping prose docs.
+- **Agent-friendly task discovery.** `mise tasks ls` gives agents a stable command surface without scraping prose docs.
 
 ### Negative
 
 - **One more tool to install.** Contributors who already have `just` need to install `mise` too.
-- **Documentation sweep required.** The repo currently contains many `just` / `justfile` references; they must be reviewed and rewritten once `mise.toml` exists.
+- **Temporary duplication.** `mise.toml` and `justfile` coexist for now. They can drift if commands are edited in one file but not the other.
 - **Migration risk.** Rewriting command recipes can subtly change environment variables, working directories, or plugin-build assumptions if done mechanically.
 
 ### Neutral
 
 - `rust-toolchain.toml` remains valid for Rust toolchain pinning. `mise` may duplicate or orchestrate that pin, but this ADR does not require deleting the Rust toolchain file.
-- The existing `justfile` can coexist during migration. Removing it is a separate decision after `mise` tasks reach parity.
+- The existing `justfile` can coexist during migration. Removing it is a separate decision after users and automation have migrated.
 
 ## Follow-up
 
-- Create `mise.toml` with task parity for the current `justfile`.
-- Sweep the documented `just` / `justfile` references across `README.md`, `docs/`, and `.agents/` after `mise.toml` exists.
-- Keep command examples in docs aligned with the new `mise` task names.
+- Keep `mise.toml` and `justfile` in parity while both exist.
+- Consider deleting `justfile` after one stabilization period, or convert it into a thin compatibility wrapper that delegates to `mise run ...`.
+- Add or tighten exact tool-version pins in `mise.toml` as evaluation tooling stabilizes. `rust-toolchain.toml` remains authoritative for Rust components/targets until that change is made explicitly.
