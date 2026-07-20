@@ -89,9 +89,20 @@ pub async fn run_router_loop(
                 tracing::error!(
                     node = router.node_id(),
                     error = %msg,
-                    "unrecoverable error — node needs recovery"
+                    "unrecoverable error — attempting recovery"
                 );
-                break;
+                state.transition_to_error();
+                state.transition_to_recovering();
+                match router.recover_from_cached_pre() {
+                    Ok(()) => {
+                        state.transition_recovering_to_running();
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::error!(node = router.node_id(), %error, "recovery failed");
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 metrics.record_failed();

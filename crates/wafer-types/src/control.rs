@@ -118,10 +118,6 @@ pub enum NodeType {
     Transform,
     /// Router node (routes messages)
     Router,
-    /// Joiner node (merges streams) — kept for backward compatibility.
-    ///
-    /// New pipelines should rely on implicit merge topology (Session 3 A1).
-    Joiner,
     /// Filter node (pure predicate, borrow-only)
     Filter,
     /// Sink node (consumes messages)
@@ -134,7 +130,6 @@ impl std::fmt::Display for NodeType {
             Self::Source => write!(f, "source"),
             Self::Transform => write!(f, "transform"),
             Self::Router => write!(f, "router"),
-            Self::Joiner => write!(f, "joiner"),
             Self::Filter => write!(f, "filter"),
             Self::Sink => write!(f, "sink"),
         }
@@ -465,7 +460,6 @@ mod tests {
             NodeType::Source,
             NodeType::Transform,
             NodeType::Router,
-            NodeType::Joiner,
             NodeType::Filter,
             NodeType::Sink,
         ];

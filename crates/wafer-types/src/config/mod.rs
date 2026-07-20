@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 pub use engine::{
     Capabilities, DeadLetterConfig, EngineConfig, ErrorCategory, ErrorPolicyConfig, FuelBudgets,
-    OverflowPolicy, RetryConfig, SimpleAction,
+    MemoryLimits, OverflowPolicy, RetryConfig, SimpleAction,
 };
 pub use pipeline::{ApiConfig, MetricsConfig, PipelineConfig, RegistryConfig};
 pub use source_sink::{
@@ -109,6 +109,9 @@ pub struct WasmNodeDef {
 
     #[serde(default)]
     pub config: Option<toml::Value>,
+
+    #[serde(default)]
+    pub memory_limit: Option<usize>,
 
     #[serde(default)]
     pub error_policy: Option<ErrorPolicyConfig>,
@@ -411,6 +414,9 @@ queue_capacity = 20000
         assert_eq!(engine.fuel.transform, 10_000_000);
         assert_eq!(engine.fuel.filter, 500_000);
         assert_eq!(engine.fuel.router, 500_000);
+        assert_eq!(engine.memory.transform, 64 * 1024 * 1024);
+        assert_eq!(engine.memory.filter, 16 * 1024 * 1024);
+        assert_eq!(engine.memory.router, 16 * 1024 * 1024);
     }
 
     #[test]

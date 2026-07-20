@@ -62,6 +62,16 @@ impl WaferState {
     /// # COLD PATH — called once per node initialization.
     #[must_use]
     pub fn new(node_id: impl Into<Box<str>>, capabilities: Capabilities) -> Self {
+        Self::new_with_memory_limit(node_id, capabilities, DEFAULT_MEMORY_LIMIT)
+    }
+
+    /// Create a new state with an explicit guest memory limit.
+    #[must_use]
+    pub fn new_with_memory_limit(
+        node_id: impl Into<Box<str>>,
+        capabilities: Capabilities,
+        memory_limit: usize,
+    ) -> Self {
         let mut builder = WasiCtxBuilder::new();
 
         if capabilities.inherit_stdio {
@@ -74,7 +84,7 @@ impl WaferState {
         let ctx = builder.build();
 
         let limits = StoreLimitsBuilder::new()
-            .memory_size(DEFAULT_MEMORY_LIMIT)
+            .memory_size(memory_limit)
             .table_elements(DEFAULT_TABLE_ELEMENTS)
             .trap_on_grow_failure(true)
             .build();

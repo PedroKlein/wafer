@@ -153,7 +153,7 @@ impl Source for BenchSource {
             }
 
             // Compute intended publish time (prevents coordinated omission)
-            let intended_ns = self.sequence * self.interval_ns;
+            let _intended_ns = self.sequence * self.interval_ns;
 
             // Build envelope
             let seq = self.sequence;

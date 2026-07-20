@@ -82,6 +82,35 @@ impl RuntimeEnvelope {
         self
     }
 
+    /// Ensure this envelope has a trace ID, assigning one if absent.
+    pub fn ensure_trace_id(&mut self) {
+        if self.lineage.trace_id.is_none() {
+            self.lineage.trace_id = Some(Uuid::new_v4().to_string().into_boxed_str());
+        }
+    }
+
+    /// Copy lineage from another envelope.
+    pub fn inherit_lineage_from(&mut self, parent: &Self) {
+        self.lineage = parent.lineage.clone();
+    }
+
+    /// Set this envelope's parent ID.
+    pub fn set_parent_id(&mut self, parent_id: impl Into<Box<str>>) {
+        self.lineage.parent_id = Some(parent_id.into());
+    }
+
+    /// Return the current trace ID, if assigned.
+    #[must_use]
+    pub fn trace_id(&self) -> Option<&str> {
+        self.lineage.trace_id.as_deref()
+    }
+
+    /// Return the current parent ID, if assigned.
+    #[must_use]
+    pub fn parent_id(&self) -> Option<&str> {
+        self.lineage.parent_id.as_deref()
+    }
+
     /// Read payload as a UTF-8 string (lossy conversion).
     #[must_use]
     pub fn payload_as_string(&self) -> String {

@@ -82,11 +82,20 @@ pub async fn run_transform_loop(
                 tracing::error!(
                     node = transform.node_id(),
                     error = %msg,
-                    "unrecoverable error — node needs recovery"
+                    "unrecoverable error — attempting recovery"
                 );
-                // TODO: recovery via cached_pre re-instantiation (Phase 7)
-                // For now, break — node is dead
-                break;
+                state.transition_to_error();
+                state.transition_to_recovering();
+                match transform.recover_from_cached_pre() {
+                    Ok(()) => {
+                        state.transition_recovering_to_running();
+                        continue;
+                    }
+                    Err(error) => {
+                        tracing::error!(node = transform.node_id(), %error, "recovery failed");
+                        break;
+                    }
+                }
             }
             Err(e) => {
                 metrics.record_failed();

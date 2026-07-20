@@ -18,7 +18,9 @@ use wasmtime::Store;
 use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::bindings::transform_node::{self, TransformNode, TransformNodePre};
+use crate::engine::Capabilities;
 use crate::engine::state::{LogLevel, WaferState};
+use crate::error::WaferError;
 use crate::node::traits::{FilterOutcome, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::WasmProcessError;
@@ -97,6 +99,22 @@ fn build_wit_message(
     })
 }
 
+fn recovery_store(
+    old_store: &Store<WaferState>,
+    node_id: &str,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    epoch_deadline: u64,
+) -> Store<WaferState> {
+    let engine = old_store.engine().clone();
+    let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
+    let mut store = Store::new(&engine, state);
+    store.limiter(|s| s.limits_mut());
+    store.epoch_deadline_trap();
+    store.set_epoch_deadline(epoch_deadline);
+    store
+}
+
 // =============================================================================
 // WasmTransformNode — takes ownership of envelope, produces new envelope
 // =============================================================================
@@ -110,6 +128,10 @@ pub struct WasmTransformNode {
     bindings: TransformNode,
     cached_pre: Arc<TransformNodePre<WaferState>>,
     fuel_limit: u64,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    epoch_deadline: u64,
+    config_json: String,
 }
 
 impl WasmTransformNode {
@@ -120,7 +142,47 @@ impl WasmTransformNode {
         cached_pre: Arc<TransformNodePre<WaferState>>,
         fuel_limit: u64,
     ) -> Self {
-        Self { store, bindings, cached_pre, fuel_limit }
+        Self {
+            store,
+            bindings,
+            cached_pre,
+            fuel_limit,
+            capabilities: Capabilities::sandbox(),
+            memory_limit: 16 * 1024 * 1024,
+            epoch_deadline: 100,
+            config_json: "{}".to_string(),
+        }
+    }
+
+    pub fn configure_runtime(
+        &mut self,
+        capabilities: Capabilities,
+        memory_limit: usize,
+        epoch_deadline: u64,
+        config_json: String,
+    ) {
+        self.capabilities = capabilities;
+        self.memory_limit = memory_limit;
+        self.epoch_deadline = epoch_deadline;
+        self.config_json = config_json;
+    }
+
+    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+            message: format!("transform '{node_id}' recovery instantiation failed: {e}"),
+        })?;
+        self.store = store;
+        self.bindings = bindings;
+        let config_json = self.config_json.clone();
+        self.validate_and_init(&config_json)
     }
 
     /// Process one message through the Wasm transform.
@@ -154,15 +216,50 @@ impl WasmTransformNode {
         match result {
             Ok(Ok(output)) => {
                 // Build new RuntimeEnvelope from output-message
-                let new_envelope = RuntimeEnvelope::new(
+                let mut new_envelope = RuntimeEnvelope::new(
                     Box::<str>::from(output.source.as_str()),
                     Bytes::from(output.payload),
                 );
+                new_envelope.inherit_lineage_from(&envelope);
                 Ok(new_envelope)
             }
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
             Err(trap) => Err(map_trap(trap)),
         }
+    }
+
+    /// Call guest lifecycle validate() and init() before first message processing.
+    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+        let node_config = transform_node::exports::pipeline::node::lifecycle::NodeConfig {
+            id: self.node_id().to_string(),
+            config: config_json.to_string(),
+        };
+        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+            message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+        })?;
+        if let Some(message) = self
+            .bindings
+            .pipeline_node_lifecycle()
+            .call_validate(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{}' validate() trapped: {e}", self.node_id()),
+            })?
+        {
+            return Err(WaferError::PluginInit {
+                message: format!("transform '{}' validate() rejected config: {message}", self.node_id()),
+            });
+        }
+        self.bindings
+            .pipeline_node_lifecycle()
+            .call_init(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{}' init() trapped: {e}", self.node_id()),
+            })?
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{}' init() failed: {e:?}", self.node_id()),
+            })?;
+        flush_logs(&mut self.store);
+        Ok(())
     }
 
     /// Replace the node's internals for hot-swap. Old Store dropped by RAII.
@@ -210,6 +307,10 @@ pub struct WasmFilterNode {
     bindings: FilterNode,
     cached_pre: Arc<FilterNodePre<WaferState>>,
     fuel_limit: u64,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    epoch_deadline: u64,
+    config_json: String,
 }
 
 impl WasmFilterNode {
@@ -220,7 +321,81 @@ impl WasmFilterNode {
         cached_pre: Arc<FilterNodePre<WaferState>>,
         fuel_limit: u64,
     ) -> Self {
-        Self { store, bindings, cached_pre, fuel_limit }
+        Self {
+            store,
+            bindings,
+            cached_pre,
+            fuel_limit,
+            capabilities: Capabilities::sandbox(),
+            memory_limit: 16 * 1024 * 1024,
+            epoch_deadline: 100,
+            config_json: "{}".to_string(),
+        }
+    }
+
+    pub fn configure_runtime(
+        &mut self,
+        capabilities: Capabilities,
+        memory_limit: usize,
+        epoch_deadline: u64,
+        config_json: String,
+    ) {
+        self.capabilities = capabilities;
+        self.memory_limit = memory_limit;
+        self.epoch_deadline = epoch_deadline;
+        self.config_json = config_json;
+    }
+
+    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+            message: format!("filter '{node_id}' recovery instantiation failed: {e}"),
+        })?;
+        self.store = store;
+        self.bindings = bindings;
+        let config_json = self.config_json.clone();
+        self.validate_and_init(&config_json)
+    }
+
+    /// Call guest lifecycle validate() and init() before first message processing.
+    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+        let node_config = crate::engine::bindings::filter_node::exports::pipeline::node::lifecycle::NodeConfig {
+            id: self.node_id().to_string(),
+            config: config_json.to_string(),
+        };
+        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+            message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+        })?;
+        if let Some(message) = self
+            .bindings
+            .pipeline_node_lifecycle()
+            .call_validate(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{}' validate() trapped: {e}", self.node_id()),
+            })?
+        {
+            return Err(WaferError::PluginInit {
+                message: format!("filter '{}' validate() rejected config: {message}", self.node_id()),
+            });
+        }
+        self.bindings
+            .pipeline_node_lifecycle()
+            .call_init(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{}' init() trapped: {e}", self.node_id()),
+            })?
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{}' init() failed: {e:?}", self.node_id()),
+            })?;
+        flush_logs(&mut self.store);
+        Ok(())
     }
 
     /// Evaluate whether a message should be forwarded.
@@ -304,6 +479,10 @@ pub struct WasmRouterNode {
     bindings: RouterNode,
     cached_pre: Arc<RouterNodePre<WaferState>>,
     fuel_limit: u64,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    epoch_deadline: u64,
+    config_json: String,
 }
 
 impl WasmRouterNode {
@@ -314,7 +493,81 @@ impl WasmRouterNode {
         cached_pre: Arc<RouterNodePre<WaferState>>,
         fuel_limit: u64,
     ) -> Self {
-        Self { store, bindings, cached_pre, fuel_limit }
+        Self {
+            store,
+            bindings,
+            cached_pre,
+            fuel_limit,
+            capabilities: Capabilities::sandbox(),
+            memory_limit: 16 * 1024 * 1024,
+            epoch_deadline: 100,
+            config_json: "{}".to_string(),
+        }
+    }
+
+    pub fn configure_runtime(
+        &mut self,
+        capabilities: Capabilities,
+        memory_limit: usize,
+        epoch_deadline: u64,
+        config_json: String,
+    ) {
+        self.capabilities = capabilities;
+        self.memory_limit = memory_limit;
+        self.epoch_deadline = epoch_deadline;
+        self.config_json = config_json;
+    }
+
+    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+            message: format!("router '{node_id}' recovery instantiation failed: {e}"),
+        })?;
+        self.store = store;
+        self.bindings = bindings;
+        let config_json = self.config_json.clone();
+        self.validate_and_init(&config_json)
+    }
+
+    /// Call guest lifecycle validate() and init() before first message processing.
+    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+        let node_config = crate::engine::bindings::router_node::exports::pipeline::node::lifecycle::NodeConfig {
+            id: self.node_id().to_string(),
+            config: config_json.to_string(),
+        };
+        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+            message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+        })?;
+        if let Some(message) = self
+            .bindings
+            .pipeline_node_lifecycle()
+            .call_validate(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("router '{}' validate() trapped: {e}", self.node_id()),
+            })?
+        {
+            return Err(WaferError::PluginInit {
+                message: format!("router '{}' validate() rejected config: {message}", self.node_id()),
+            });
+        }
+        self.bindings
+            .pipeline_node_lifecycle()
+            .call_init(&mut self.store, &node_config)
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("router '{}' init() trapped: {e}", self.node_id()),
+            })?
+            .map_err(|e| WaferError::PluginInit {
+                message: format!("router '{}' init() failed: {e:?}", self.node_id()),
+            })?;
+        flush_logs(&mut self.store);
+        Ok(())
     }
 
     /// Decide which port(s) the message should be routed to.

@@ -78,6 +78,7 @@ async fn test_bench_sink_warmup_integration() {
         warmup_secs: 0, // immediate recording (no time-based warmup in fast test)
         track_sequences: true,
         track_hotswap: false,
+        output_dir: None,
     };
     let mut sink = BenchSink::new(config);
     sink.init().await.unwrap();

@@ -150,17 +150,25 @@ pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[Dow
         return;
     }
 
+    let parent_id = envelope.header.id.to_string();
+
     if matching.len() == 1 {
-        let _ = matching[0].sender.send(envelope).await;
+        let mut child = envelope;
+        child.set_parent_id(parent_id);
+        let _ = matching[0].sender.send(child).await;
         return;
     }
 
     // Clone for N-1 ports, move for last (Session 3 D12)
     let (last, rest) = matching.split_last().expect("checked non-empty above");
     for sender in rest {
-        let _ = sender.sender.send(envelope.clone()).await;
+        let mut child = envelope.clone();
+        child.set_parent_id(parent_id.clone());
+        let _ = sender.sender.send(child).await;
     }
-    let _ = last.sender.send(envelope).await;
+    let mut child = envelope;
+    child.set_parent_id(parent_id);
+    let _ = last.sender.send(child).await;
 }
 
 #[cfg(test)]
@@ -225,7 +233,10 @@ mod tests {
             DownstreamSender { sender: tx_a, port: "port-a".into() },
             DownstreamSender { sender: tx_b, port: "port-b".into() },
         ];
-        let envelope = RuntimeEnvelope::from_string("src", "fan");
+        let mut envelope = RuntimeEnvelope::from_string("src", "fan");
+        envelope.ensure_trace_id();
+        let parent_id = envelope.header.id.to_string();
+        let trace_id = envelope.trace_id().map(ToOwned::to_owned);
 
         fan_out(&["port-a".to_string(), "port-b".to_string()], envelope, &senders).await;
 
@@ -233,6 +244,10 @@ mod tests {
         let b = rx_b.recv().await.expect("b");
         assert_eq!(a.payload_as_string(), "fan");
         assert_eq!(b.payload_as_string(), "fan");
+        assert_eq!(a.parent_id(), Some(parent_id.as_str()));
+        assert_eq!(b.parent_id(), Some(parent_id.as_str()));
+        assert_eq!(a.trace_id(), trace_id.as_deref());
+        assert_eq!(b.trace_id(), trace_id.as_deref());
     }
 
     #[tokio::test]

@@ -36,7 +36,8 @@ pub async fn run_source_loop(
             () = cancel.cancelled() => break,
             result = source.poll() => {
                 match result {
-                    Ok(Some(envelope)) => {
+                    Ok(Some(mut envelope)) => {
+                        envelope.ensure_trace_id();
                         // Sources don't "process" — 0ns duration
                         metrics.record_processed(0);
                         send_downstream(&senders, envelope).await;
@@ -105,6 +106,7 @@ mod tests {
         assert_eq!(received.len(), 10);
         for (i, env) in received.iter().enumerate() {
             assert_eq!(env.payload_as_string(), format!("msg-{i}"));
+            assert!(env.trace_id().is_some(), "source ingress should assign trace_id");
         }
         assert_eq!(metrics.processed(), 10);
         assert_eq!(metrics.failed(), 0);

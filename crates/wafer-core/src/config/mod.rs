@@ -1,14 +1,11 @@
-//! TOML configuration parsing for DAG pipelines.
+//! Configuration domain types shared by the runtime.
+//!
+//! Parsing and validation live in `wafer-config`; `wafer-core` consumes the
+//! validated `wafer-types` schema directly.
 
-pub mod diff;
-pub mod loader;
-mod schema;
+pub use wafer_types::config::*;
 
-pub use diff::{ConfigDiff, diff_configs};
-pub use loader::load_config;
-pub use schema::{
-    ApiServerConfig, Config, DEFAULT_API_BIND, DEFAULT_DLQ_QUEUE_CAPACITY, DEFAULT_EPOCH_DEADLINE,
-    DEFAULT_EPOCH_TICK_MS, DEFAULT_FUEL_LIMIT, DEFAULT_METRICS_BIND, DEFAULT_QUEUE_CAPACITY,
-    DagConfig, DeadLetterConfig, EdgeDefinition, EngineConfig, MetricsConfig, NodeConfig,
-    NodeDefinition, NodeType, OverflowPolicy, PipelineConfig,
-};
+pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
+pub const DEFAULT_EPOCH_DEADLINE: u64 = 100;
+pub const DEFAULT_EPOCH_TICK_MS: u64 = 10;
+pub const DEFAULT_FUEL_LIMIT: u64 = 10_000_000;

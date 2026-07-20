@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 
+use crate::config;
 use crate::queue::RuntimeEnvelope;
 
 // Maximum backoff duration — prevents runaway retry delays.
@@ -141,17 +142,66 @@ impl RetryBuffer {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedSimpleAction {
+    Skip,
+    Dlq,
+    Teardown,
+}
+
+impl From<config::SimpleAction> for ResolvedSimpleAction {
+    fn from(value: config::SimpleAction) -> Self {
+        match value {
+            config::SimpleAction::Skip => Self::Skip,
+            config::SimpleAction::Dlq => Self::Dlq,
+            config::SimpleAction::Teardown => Self::Teardown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedRetryConfig {
+    pub retries: u32,
+    pub backoff_ms: u64,
+    pub exhausted: ResolvedSimpleAction,
+}
+
+impl From<config::RetryConfig> for ResolvedRetryConfig {
+    fn from(value: config::RetryConfig) -> Self {
+        Self {
+            retries: value.retries,
+            backoff_ms: value.backoff_ms,
+            exhausted: value.exhausted.into(),
+        }
+    }
+}
+
 /// Resolved error policy configuration (pipeline defaults merged with per-node overrides).
 #[derive(Debug, Clone)]
 pub struct ResolvedErrorPolicy {
-    pub max_retries: u32,
-    pub backoff_base_ms: u64,
+    pub bad_input: ResolvedSimpleAction,
+    pub dependency_failed: ResolvedRetryConfig,
+    pub processing_failed: ResolvedRetryConfig,
+    pub timed_out: ResolvedSimpleAction,
     pub retry_buffer_capacity: usize,
 }
 
 impl Default for ResolvedErrorPolicy {
     fn default() -> Self {
-        Self { max_retries: 3, backoff_base_ms: 100, retry_buffer_capacity: 100 }
+        let config = config::ErrorPolicyConfig::default();
+        Self::from(config)
+    }
+}
+
+impl From<config::ErrorPolicyConfig> for ResolvedErrorPolicy {
+    fn from(value: config::ErrorPolicyConfig) -> Self {
+        Self {
+            bad_input: value.bad_input.into(),
+            dependency_failed: value.dependency_failed.into(),
+            processing_failed: value.processing_failed.into(),
+            timed_out: value.timed_out.into(),
+            retry_buffer_capacity: value.retry_buffer_capacity,
+        }
     }
 }
 
@@ -183,7 +233,17 @@ impl ErrorPolicyExecutor {
     pub fn handle(&mut self, error: WasmProcessError, envelope: RuntimeEnvelope) -> bool {
         match &error {
             WasmProcessError::BadInput(msg) => {
-                self.send_to_dlq(envelope, ErrorCategory::BadInput, msg.clone(), 0, DlqReason::BadInput);
+                match self.config.bad_input {
+                    ResolvedSimpleAction::Skip => {}
+                    ResolvedSimpleAction::Dlq => self.send_to_dlq(
+                        envelope,
+                        ErrorCategory::BadInput,
+                        msg.clone(),
+                        0,
+                        DlqReason::BadInput,
+                    ),
+                    ResolvedSimpleAction::Teardown => return false,
+                }
                 true
             }
             WasmProcessError::DependencyFailed(msg) => {
@@ -195,7 +255,17 @@ impl ErrorPolicyExecutor {
                 true
             }
             WasmProcessError::TimedOut => {
-                // Skip — epoch interrupt fired, message is abandoned. Log handled by caller.
+                match self.config.timed_out {
+                    ResolvedSimpleAction::Skip => {}
+                    ResolvedSimpleAction::Dlq => self.send_to_dlq(
+                        envelope,
+                        ErrorCategory::TimedOut,
+                        "timed out".to_string(),
+                        0,
+                        DlqReason::RetriesExhausted { max_retries: 0 },
+                    ),
+                    ResolvedSimpleAction::Teardown => return false,
+                }
                 true
             }
             WasmProcessError::Unrecoverable(_) => {
@@ -248,14 +318,23 @@ impl ErrorPolicyExecutor {
         }
 
         let retry_count = 0; // First retry attempt for this envelope
-        let backoff = self.compute_backoff(retry_count);
+        let backoff = self.compute_backoff(category, retry_count);
         let next_attempt_at = Instant::now() + backoff;
 
         self.retry_buffer.push(RetryEntry { envelope, category, retry_count, next_attempt_at });
     }
 
-    fn compute_backoff(&self, retry_count: u32) -> Duration {
-        let ms = self.config.backoff_base_ms.saturating_mul(1u64 << retry_count.min(20));
+    fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
+        match category {
+            ErrorCategory::DependencyFailed => self.config.dependency_failed,
+            ErrorCategory::ProcessingFailed => self.config.processing_failed,
+            _ => self.config.processing_failed,
+        }
+    }
+
+    fn compute_backoff(&self, category: ErrorCategory, retry_count: u32) -> Duration {
+        let retry = self.retry_config(category);
+        let ms = retry.backoff_ms.saturating_mul(1u64 << retry_count.min(20));
         Duration::from_millis(ms.min(MAX_BACKOFF_MS))
     }
 
@@ -303,15 +382,27 @@ mod tests {
         RuntimeEnvelope::from_string("test-source", payload)
     }
 
+
+    fn test_policy(retries: u32, backoff_ms: u64, capacity: usize) -> ResolvedErrorPolicy {
+        let retry = ResolvedRetryConfig {
+            retries,
+            backoff_ms,
+            exhausted: ResolvedSimpleAction::Dlq,
+        };
+        ResolvedErrorPolicy {
+            bad_input: ResolvedSimpleAction::Dlq,
+            dependency_failed: retry,
+            processing_failed: retry,
+            timed_out: ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: capacity,
+        }
+    }
+
     fn make_executor_with_dlq(
         capacity: usize,
     ) -> (ErrorPolicyExecutor, mpsc::Receiver<DlqEnvelope>) {
         let (tx, rx) = mpsc::channel(100);
-        let config = ResolvedErrorPolicy {
-            max_retries: 3,
-            backoff_base_ms: 100,
-            retry_buffer_capacity: capacity,
-        };
+        let config = test_policy(3, 100, capacity);
         let executor = ErrorPolicyExecutor::new(config, Some(tx), "test-node");
         (executor, rx)
     }
@@ -469,11 +560,7 @@ mod tests {
 
     #[test]
     fn test_next_ready_retry_returns_none_when_not_due() {
-        let config = ResolvedErrorPolicy {
-            max_retries: 3,
-            backoff_base_ms: 60_000, // 60 seconds — won't expire during test
-            retry_buffer_capacity: 100,
-        };
+        let config = test_policy(3, 60_000, 100);
         let (tx, _rx) = mpsc::channel(100);
         let mut executor = ErrorPolicyExecutor::new(config, Some(tx), "test-node");
 
@@ -491,23 +578,19 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_capped_at_30s() {
-        let config = ResolvedErrorPolicy {
-            max_retries: 100,
-            backoff_base_ms: 1000,
-            retry_buffer_capacity: 100,
-        };
+        let config = test_policy(100, 1000, 100);
         let executor = ErrorPolicyExecutor::new(config, None, "node");
 
         // retry_count=0: 1000 * 2^0 = 1000ms
-        assert_eq!(executor.compute_backoff(0), Duration::from_millis(1000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 0), Duration::from_millis(1000));
         // retry_count=1: 1000 * 2^1 = 2000ms
-        assert_eq!(executor.compute_backoff(1), Duration::from_millis(2000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 1), Duration::from_millis(2000));
         // retry_count=4: 1000 * 2^4 = 16000ms
-        assert_eq!(executor.compute_backoff(4), Duration::from_millis(16000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 4), Duration::from_millis(16000));
         // retry_count=5: 1000 * 2^5 = 32000ms → capped at 30000
-        assert_eq!(executor.compute_backoff(5), Duration::from_millis(30000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 5), Duration::from_millis(30000));
         // retry_count=20: would overflow but capped
-        assert_eq!(executor.compute_backoff(20), Duration::from_millis(30000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 20), Duration::from_millis(30000));
     }
 
     #[test]

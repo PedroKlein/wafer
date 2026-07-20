@@ -7,4 +7,4 @@ pub mod pipeline;
 
 pub use hotswap::{SwapError, SwapTimeline, TimedSwapResult};
 pub use launcher::launch_pipeline;
-pub use pipeline::PipelineOrchestrator;
+pub use pipeline::{PipelineHandle, PipelineOrchestrator};

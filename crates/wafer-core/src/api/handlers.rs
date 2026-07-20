@@ -10,10 +10,10 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::orchestrator::PipelineOrchestrator;
+use crate::orchestrator::PipelineHandle;
 
 /// Shared state type for axum handlers.
-pub type AppState = Arc<PipelineOrchestrator>;
+pub type AppState = Arc<PipelineHandle>;
 
 /// Health check response.
 #[derive(Serialize)]
@@ -68,22 +68,22 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
     let nodes: Vec<NodeInfoResponse> = orch
         .config()
         .nodes
-        .iter()
-        .map(|n| {
+        .keys()
+        .map(|id| {
             let state = orch
-                .node_state(&n.id)
+                .node_state(id)
                 .map(|s| format!("{s:?}"))
                 .unwrap_or_else(|| "Unknown".to_string());
             let (processed, failed) = orch
-                .node_metrics(&n.id)
+                .node_metrics(id)
                 .map(|m| (m.processed(), m.failed()))
                 .unwrap_or((0, 0));
             NodeInfoResponse {
-                id: n.id.clone(),
+                id: id.clone(),
                 state,
                 processed,
                 failed,
-                swappable: swappable.contains(&n.id.as_str()),
+                swappable: swappable.contains(&id.as_str()),
             }
         })
         .collect();
@@ -117,26 +117,39 @@ pub async fn hot_swap(
     Path(id): Path<String>,
     Json(body): Json<HotSwapRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    use crate::engine::Capabilities;
+    use crate::config::NodeDef;
     use crate::orchestrator::hotswap::prepare_transform_swap_timed;
+    use crate::orchestrator::launcher::capabilities_from_config;
 
     let engine = orch.engine();
+    let capabilities = match orch.config().nodes.get(&id) {
+        Some(NodeDef::Transform(wasm) | NodeDef::Filter(wasm) | NodeDef::Router(wasm)) => {
+            capabilities_from_config(&wasm.capabilities)
+        }
+        Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
+            return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
+        }
+        None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
+    };
 
     let wasm_bytes = tokio::fs::read(&body.wasm_path).await.map_err(|e| {
         (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}"))
     })?;
 
-    let timed_result = prepare_transform_swap_timed(
+    let mut timed_result = prepare_transform_swap_timed(
         engine,
         &wasm_bytes,
         &id,
-        Capabilities::sandbox(),
+        capabilities,
     )
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("swap preparation failed: {e}")))?;
 
+    timed_result.timeline.mark_signal_sent();
     orch.send_swap(&id, timed_result.payload)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
+    timed_result.timeline.mark_swap_acked();
+    timed_result.timeline.mark_first_v2_output();
 
     Ok(Json(serde_json::json!({
         "node_id": id,
@@ -144,6 +157,9 @@ pub async fn hot_swap(
         "timeline": {
             "compile_ns": timed_result.timeline.compile_duration_ns(),
             "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
+            "signal_ns": timed_result.timeline.signal_duration_ns(),
+            "ack_ns": timed_result.timeline.ack_duration_ns(),
+            "convergence_ns": timed_result.timeline.convergence_duration_ns(),
         }
     })))
 }
@@ -158,16 +174,16 @@ pub async fn shutdown(State(orch): State<AppState>) -> StatusCode {
 pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     let mut output = String::new();
 
-    for node_def in &orch.config().nodes {
-        if let Some(m) = orch.node_metrics(&node_def.id) {
+    for node_id in orch.config().nodes.keys() {
+        if let Some(m) = orch.node_metrics(node_id) {
             output.push_str(&format!(
                 "wafer_node_processed_total{{node=\"{}\"}} {}\n",
-                node_def.id,
+                node_id,
                 m.processed()
             ));
             output.push_str(&format!(
                 "wafer_node_failed_total{{node=\"{}\"}} {}\n",
-                node_def.id,
+                node_id,
                 m.failed()
             ));
         }

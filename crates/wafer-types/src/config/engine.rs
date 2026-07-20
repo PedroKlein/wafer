@@ -23,6 +23,9 @@ pub struct EngineConfig {
 
     #[serde(default)]
     pub fuel: FuelBudgets,
+
+    #[serde(default)]
+    pub memory: MemoryLimits,
 }
 
 impl Default for EngineConfig {
@@ -32,6 +35,7 @@ impl Default for EngineConfig {
             epoch_tick_ms: default_epoch_tick_ms(),
             default_queue_capacity: default_queue_capacity(),
             fuel: FuelBudgets::default(),
+            memory: MemoryLimits::default(),
         }
     }
 }
@@ -54,6 +58,28 @@ impl Default for FuelBudgets {
             transform: default_fuel_transform(),
             filter: default_fuel_filter(),
             router: default_fuel_router(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MemoryLimits {
+    #[serde(default = "default_memory_transform")]
+    pub transform: usize,
+
+    #[serde(default = "default_memory_filter")]
+    pub filter: usize,
+
+    #[serde(default = "default_memory_router")]
+    pub router: usize,
+}
+
+impl Default for MemoryLimits {
+    fn default() -> Self {
+        Self {
+            transform: default_memory_transform(),
+            filter: default_memory_filter(),
+            router: default_memory_router(),
         }
     }
 }
@@ -232,6 +258,18 @@ const fn default_fuel_filter() -> u64 {
 
 const fn default_fuel_router() -> u64 {
     500_000
+}
+
+const fn default_memory_transform() -> usize {
+    64 * 1024 * 1024
+}
+
+const fn default_memory_filter() -> usize {
+    16 * 1024 * 1024
+}
+
+const fn default_memory_router() -> usize {
+    16 * 1024 * 1024
 }
 
 const fn default_bad_input_action() -> SimpleAction {

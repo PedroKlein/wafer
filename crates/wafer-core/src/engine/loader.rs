@@ -64,7 +64,7 @@ impl WaferEngine {
 
         Ok(Self {
             engine,
-            fuel_limit: engine_config.fuel_limit,
+            fuel_limit: engine_config.fuel.transform,
             epoch_deadline: engine_config.epoch_deadline,
             epoch_tick_ms: engine_config.epoch_tick_ms,
             epoch_started: OnceLock::new(),
@@ -272,7 +272,7 @@ impl WaferEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DEFAULT_EPOCH_DEADLINE, DEFAULT_EPOCH_TICK_MS, DEFAULT_FUEL_LIMIT};
+    use crate::config::{DEFAULT_EPOCH_DEADLINE, DEFAULT_EPOCH_TICK_MS, DEFAULT_FUEL_LIMIT, FuelBudgets};
 
     #[test]
     fn engine_creation_default() {
@@ -284,9 +284,11 @@ mod tests {
     #[test]
     fn engine_from_engine_config() {
         let cfg = EngineConfig {
-            fuel_limit: 500_000,
+            fuel: FuelBudgets { transform: 500_000, ..Default::default() },
             epoch_deadline: 50,
             epoch_tick_ms: DEFAULT_EPOCH_TICK_MS,
+            default_queue_capacity: 1024,
+            memory: Default::default(),
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
         assert_eq!(engine.fuel_limit(), 500_000);

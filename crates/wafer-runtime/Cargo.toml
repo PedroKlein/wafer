@@ -13,12 +13,14 @@ name = "wafer"
 path = "src/main.rs"
 
 [features]
-default = []
+default = ["http-api"]
+http-api = ["wafer-core/http-api"]
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wafer-core/cuda"]
 
 [dependencies]
+wafer-config = { workspace = true }
 wafer-core = { workspace = true }
 wafer-types = { workspace = true }
 

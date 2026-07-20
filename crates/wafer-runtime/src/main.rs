@@ -12,10 +12,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tokio::signal;
+use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
-use wafer_core::config::load_config;
+use wafer_config::{load_config, validate};
+use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::engine::Capabilities;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::orchestrator::launch_pipeline;
@@ -95,11 +97,21 @@ async fn main() -> Result<()> {
     info!("WAFER Runtime starting...");
     info!(config = %args.config.display(), "Loading configuration");
 
-    let config = load_config(&args.config)
-        .await
-        .context("Failed to load configuration")?;
+    let config = load_config(&args.config).context("Failed to load configuration")?;
+    validate(&config).map_err(|errors| {
+        let messages = errors
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::anyhow!("configuration validation failed: {messages}")
+    })?;
 
-    let pipeline_name = config.pipeline.name.clone();
+    let pipeline_name = config
+        .pipeline
+        .as_ref()
+        .and_then(|pipeline| pipeline.name.as_deref())
+        .unwrap_or("wafer-pipeline");
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
     // Launch pipeline (engine, plugins, sources, sinks, topology)
@@ -112,6 +124,8 @@ async fn main() -> Result<()> {
         wasm_nodes = orchestrator.wasm_node_count(),
         "Pipeline running"
     );
+
+    let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
 
     // Spawn timed swap trigger if configured (RQ3 benchmark mode)
     if let Some(delay_secs) = args.swap_after_secs {
@@ -189,6 +203,8 @@ async fn main() -> Result<()> {
 
         // Custom run loop that also handles swap delivery
         run_with_swap(&mut orchestrator, rx).await;
+        orchestrator.cancel();
+        wait_control_plane(control_plane_tasks).await;
 
         info!("WAFER Runtime stopped");
         return Ok(());
@@ -206,6 +222,9 @@ async fn main() -> Result<()> {
         Ok(()) => info!("Pipeline completed"),
         Err(e) => error!(error = %e, "Pipeline exited with error"),
     }
+
+    orchestrator.cancel();
+    wait_control_plane(control_plane_tasks).await;
 
     info!("WAFER Runtime stopped");
     Ok(())
@@ -248,6 +267,79 @@ async fn run_with_swap(
             Err(e) => error!(error = %e, "Pipeline exited with error"),
         }
         break;
+    }
+}
+
+async fn launch_control_plane(
+    args: &Args,
+    orchestrator: &PipelineOrchestrator,
+) -> Result<Vec<JoinHandle<()>>> {
+    let mut tasks = Vec::new();
+    let handle = Arc::new(orchestrator.handle());
+
+    let api_config = orchestrator.config().api.clone().unwrap_or_default();
+    let metrics_config = orchestrator.config().metrics.clone().unwrap_or_default();
+    let metrics_enabled = metrics_config.enabled;
+
+    if api_config.enabled && !args.no_api {
+        let bind = match args.api_bind {
+            Some(bind) => bind,
+            None => api_config
+                .bind
+                .parse::<SocketAddr>()
+                .with_context(|| format!("invalid api bind address '{}'", api_config.bind))?,
+        };
+
+        let serve_metrics = metrics_enabled && args.metrics_bind.is_none();
+        let server = ApiServer::new(
+            CoreApiConfig { bind, serve_metrics },
+            Arc::clone(&handle),
+        )
+        .await
+        .with_context(|| format!("failed to bind API server at {bind}"))?;
+        let local_addr = server.local_addr().context("failed to read API server bind address")?;
+        info!(addr = %local_addr, serve_metrics, "HTTP API server listening");
+
+        let cancel = orchestrator.cancel_token().clone();
+        tasks.push(tokio::spawn(async move {
+            if let Err(error) = server
+                .run_with_shutdown(async move { cancel.cancelled().await })
+                .await
+            {
+                error!(%error, "HTTP API server exited with error");
+            }
+        }));
+    }
+
+    if metrics_enabled && let Some(bind) = args.metrics_bind {
+        let server = MetricsServer::new(
+            MetricsServerConfig { bind, path: metrics_config.path },
+            handle,
+        )
+        .await
+        .with_context(|| format!("failed to bind metrics server at {bind}"))?;
+        let local_addr = server.local_addr().context("failed to read metrics server bind address")?;
+        info!(addr = %local_addr, "metrics server listening");
+
+        let cancel = orchestrator.cancel_token().clone();
+        tasks.push(tokio::spawn(async move {
+            if let Err(error) = server
+                .run_with_shutdown(async move { cancel.cancelled().await })
+                .await
+            {
+                error!(%error, "metrics server exited with error");
+            }
+        }));
+    }
+
+    Ok(tasks)
+}
+
+async fn wait_control_plane(tasks: Vec<JoinHandle<()>>) {
+    for task in tasks {
+        if let Err(error) = task.await {
+            error!(%error, "control-plane task panicked");
+        }
     }
 }
 

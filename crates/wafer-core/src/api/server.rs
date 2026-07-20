@@ -10,7 +10,7 @@ use axum::{
 use tokio::net::TcpListener;
 use tower_http::trace::TraceLayer;
 
-use crate::orchestrator::PipelineOrchestrator;
+use crate::orchestrator::PipelineHandle;
 
 use super::handlers;
 
@@ -39,7 +39,7 @@ impl ApiServer {
     /// Creates a new API server.
     pub async fn new(
         config: ApiConfig,
-        orchestrator: Arc<PipelineOrchestrator>,
+        orchestrator: Arc<PipelineHandle>,
     ) -> std::io::Result<Self> {
         let listener = TcpListener::bind(config.bind).await?;
         let router = create_router(orchestrator, config.serve_metrics);
@@ -67,7 +67,7 @@ impl ApiServer {
 }
 
 /// Creates the Axum router with all routes.
-fn create_router(orchestrator: Arc<PipelineOrchestrator>, serve_metrics: bool) -> Router {
+fn create_router(orchestrator: Arc<PipelineHandle>, serve_metrics: bool) -> Router {
     let mut router = Router::new()
         .route("/health", get(handlers::health))
         .route("/ready", get(handlers::ready))
