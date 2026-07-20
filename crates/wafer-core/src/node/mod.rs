@@ -8,7 +8,6 @@ mod sink;
 mod source;
 mod state;
 mod traits;
-mod transform;
 pub mod wasm;
 
 pub use router::{RouterInstance, WasmRouter};
@@ -22,7 +21,6 @@ pub use traits::{
     ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError,
     ProcessResult, RouteOutcome, RouteResult, Router, Transform,
 };
-pub use transform::WasmTransform;
 
 use crate::error::Result;
 use std::fmt;

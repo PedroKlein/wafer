@@ -56,14 +56,28 @@ impl PluginTestHarness {
     /// Returns error if the file cannot be read, doesn't compile, or doesn't
     /// implement the transform-node world.
     pub fn load_transform(&self, wasm_path: impl AsRef<Path>) -> Result<TransformHarness> {
+        self.load_transform_with_memory_limit(wasm_path, 64 * 1024 * 1024)
+    }
+
+    /// Same as `load_transform` but with a caller-chosen store memory limit.
+    /// Useful for benchmarks that push a large number of messages through a
+    /// long-lived Store.
+    pub fn load_transform_with_memory_limit(
+        &self,
+        wasm_path: impl AsRef<Path>,
+        memory_limit: usize,
+    ) -> Result<TransformHarness> {
         let component = self.engine.load_component(wasm_path)?;
         let pre = self.engine.pre_instantiate_transform(&component)?;
         let pre = Arc::new(pre);
 
-        let state = WaferState::new("harness-transform", Capabilities::sandbox());
+        let state = WaferState::new_with_memory_limit(
+            "harness-transform",
+            Capabilities::sandbox(),
+            memory_limit,
+        );
         let mut store = Store::new(self.engine.inner(), state);
         store.limiter(|s| s.limits_mut());
-        // Set epoch deadline so tests don't hang on infinite loops
         store.epoch_deadline_trap();
         store.set_epoch_deadline(self.engine.epoch_deadline());
 

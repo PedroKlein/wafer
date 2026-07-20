@@ -4,11 +4,7 @@
 //! decouple tests from real I/O (MQTT, files, HTTP).
 
 pub mod channel;
-
-#[cfg(feature = "integration-tests")]
 pub mod harness;
 
 pub use channel::{ChannelSink, ChannelSource};
-
-#[cfg(feature = "integration-tests")]
 pub use harness::{PluginTestHarness, TransformHarness};
