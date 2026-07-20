@@ -13,115 +13,13 @@ use crate::engine::Capabilities;
 use crate::error::{Result, WaferError};
 use crate::runner::{HotSwapProgress, SwapPayload};
 
-/// Prepare a transform swap payload from a compiled component.
+/// Prepare a transform/filter/router swap payload.
 ///
-/// Compiles, pre-instantiates, instantiates, and packages into a `SwapPayload`
+/// The timed variants (`prepare_transform_swap_timed`, etc.) below are the
+/// production path used by both the runtime API handler and RQ3 benchmarks.
+/// Compile, pre-instantiate, instantiate, and package into a `SwapPayload`
 /// ready to send via watch channel.
 ///
-/// # Errors
-///
-/// Returns error if compilation or instantiation fails.
-pub async fn prepare_transform_swap(
-    engine: &WaferEngine,
-    wasm_bytes: &[u8],
-    node_id: &str,
-    capabilities: Capabilities,
-    progress: Arc<HotSwapProgress>,
-) -> Result<SwapPayload> {
-    let component = engine.compile_cached(wasm_bytes)?;
-    let pre = engine.pre_instantiate_transform(&component)?;
-    let pre = Arc::new(pre);
-
-    // Instantiate a fresh Store + bindings from the pre
-    let mut store = Store::new(
-        engine.inner(),
-        WaferState::new(node_id, capabilities),
-    );
-    store.set_fuel(engine.fuel_limit()).map_err(|e| {
-        WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
-
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
-        WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-    })?;
-
-    Ok(SwapPayload::Transform {
-        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
-        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
-        new_pre: pre,
-        progress,
-    })
-}
-
-/// Prepare a filter swap payload from a compiled component.
-pub async fn prepare_filter_swap(
-    engine: &WaferEngine,
-    wasm_bytes: &[u8],
-    node_id: &str,
-    capabilities: Capabilities,
-    progress: Arc<HotSwapProgress>,
-) -> Result<SwapPayload> {
-    let component = engine.compile_cached(wasm_bytes)?;
-    let pre = engine.pre_instantiate_filter(&component)?;
-    let pre = Arc::new(pre);
-
-    let mut store = Store::new(
-        engine.inner(),
-        WaferState::new(node_id, capabilities),
-    );
-    store.set_fuel(engine.fuel_limit()).map_err(|e| {
-        WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
-
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
-        WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-    })?;
-
-    Ok(SwapPayload::Filter {
-        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
-        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
-        new_pre: pre,
-        progress,
-    })
-}
-
-/// Prepare a router swap payload from a compiled component.
-pub async fn prepare_router_swap(
-    engine: &WaferEngine,
-    wasm_bytes: &[u8],
-    node_id: &str,
-    capabilities: Capabilities,
-    progress: Arc<HotSwapProgress>,
-) -> Result<SwapPayload> {
-    let component = engine.compile_cached(wasm_bytes)?;
-    let pre = engine.pre_instantiate_router(&component)?;
-    let pre = Arc::new(pre);
-
-    let mut store = Store::new(
-        engine.inner(),
-        WaferState::new(node_id, capabilities),
-    );
-    store.set_fuel(engine.fuel_limit()).map_err(|e| {
-        WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
-
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
-        WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-    })?;
-
-    Ok(SwapPayload::Router {
-        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
-        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
-        new_pre: pre,
-        progress,
-    })
-}
 
 // =============================================================================
 // Legacy hot-swap coordinator — feature-gated for old tests

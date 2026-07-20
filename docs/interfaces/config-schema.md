@@ -52,7 +52,7 @@ The default `retry_buffer_capacity` is 1000.
 | `dependency_failed` | `RetryConfig` | `{retries=3, backoff_ms=100, exhausted="dlq"}` | Retry with backoff, then fall back. |
 | `processing_failed` | `RetryConfig` | `{retries=2, backoff_ms=100, exhausted="dlq"}` | Same shape. |
 | `timed_out` | `SimpleAction` | `"skip"` | Fuel / epoch interrupt. |
-| `retry_buffer_capacity` | `usize` | `100` | Bounded VecDeque; overflow → DLQ with `RetryBufferFull`. |
+| `retry_buffer_capacity` | `usize` | `1000` | Bounded VecDeque; overflow → DLQ with `RetryBufferFull`. |
 
 `SimpleAction` values (`#[serde(rename_all = "kebab-case")]`): `skip | dlq | teardown`.
 

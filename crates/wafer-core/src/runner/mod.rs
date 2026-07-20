@@ -228,43 +228,6 @@ impl SwapPayload {
         }
         Ok(())
     }
-
-    /// Apply this swap payload to a transform node, replacing its internals.
-    ///
-    /// # Panics
-    /// Panics if the payload variant doesn't match (wrong node type) or
-    /// if the inner values have already been taken.
-    pub fn apply_transform(self, node: &mut WasmTransformNode) {
-        if let SwapPayload::Transform { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload bindings already consumed");
-            node.replace(store, bindings, new_pre);
-        }
-    }
-
-    /// Apply this swap payload to a filter node.
-    pub fn apply_filter(self, node: &mut WasmFilterNode) {
-        if let SwapPayload::Filter { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload bindings already consumed");
-            node.replace(store, bindings, new_pre);
-        }
-    }
-
-    /// Apply this swap payload to a router node.
-    pub fn apply_router(self, node: &mut WasmRouterNode) {
-        if let SwapPayload::Router { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
-                .expect("swap payload bindings already consumed");
-            node.replace(store, bindings, new_pre);
-        }
-    }
 }
 
 // =============================================================================
