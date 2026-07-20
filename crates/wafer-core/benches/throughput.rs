@@ -20,7 +20,45 @@ use tokio::runtime::Runtime;
 use wafer_core::queue::{BoundedQueue, RuntimeEnvelope};
 use wafer_core::testing::PluginTestHarness;
 
+/// Compile-time snapshots of the module files that used to expose the retired
+/// stub types (`TransformInstance`, `WasmTransform`). If a future refactor
+/// re-adds those modules, the guard below fires.
+const ENGINE_MOD_SRC: &str = include_str!("../src/engine/mod.rs");
+const NODE_MOD_SRC: &str = include_str!("../src/node/mod.rs");
+
 const STUB_MARKER: &str = "pending Phase 2 rewrite";
+
+/// Sanity guard: any benchmark that measures a re-introduced stub path must fail
+/// before producing numbers, so RQ1/RQ3 evidence cannot silently regress to the
+/// old `TransformInstance::call_process` stub or friends.
+///
+/// The guard inspects the actual `wafer_core::engine::mod` / `wafer_core::node::mod`
+/// source at compile time via `include_str!`, so it catches the invariant that
+/// matters (“the legacy stub modules are gone and stay gone”) instead of the
+/// runtime `module_path!()` value.
+fn assert_no_stub_backed_evidence() {
+    for (name, src) in [
+        ("crates/wafer-core/src/engine/mod.rs", ENGINE_MOD_SRC),
+        ("crates/wafer-core/src/node/mod.rs", NODE_MOD_SRC),
+    ] {
+        assert!(
+            !src.contains("pub mod instance;") && !src.contains("mod instance;"),
+            "benchmark refuses to run: legacy stub module `engine::instance` re-declared in {name}",
+        );
+        assert!(
+            !src.contains("pub mod transform;") && !src.contains("mod transform;"),
+            "benchmark refuses to run: legacy stub module `node::transform` re-declared in {name}",
+        );
+        assert!(
+            !src.contains("TransformInstance"),
+            "benchmark refuses to run: legacy stub type `TransformInstance` re-exported in {name}",
+        );
+        assert!(
+            !src.contains(STUB_MARKER),
+            "benchmark refuses to run: stub-backed evidence marker '{STUB_MARKER}' present in {name}",
+        );
+    }
+}
 
 /// Path to a simple pass-through WASM plugin.
 fn passthrough_wasm() -> PathBuf {
@@ -47,15 +85,6 @@ fn create_test_envelope(size: usize) -> RuntimeEnvelope {
     RuntimeEnvelope::new("bench-source", bytes::Bytes::from(payload))
 }
 
-/// Sanity guard: any benchmark that carries the stub marker must fail before
-/// producing numbers, so RQ1/RQ3 evidence cannot silently regress to the old
-/// `TransformInstance::call_process` stub path.
-fn assert_no_stub_backed_evidence(source: &str) {
-    assert!(
-        !source.contains(STUB_MARKER),
-        "benchmark refuses to run: stub-backed evidence marker '{STUB_MARKER}' present in {source}",
-    );
-}
 
 /// Baseline: raw queue throughput (no Wasm on the hot path).
 fn bench_queue_throughput(c: &mut Criterion) {
@@ -96,7 +125,7 @@ fn bench_queue_throughput(c: &mut Criterion) {
 
 /// Production Wasm transform throughput via `WasmTransformNode::process`.
 fn bench_transform_throughput(c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let passthrough = passthrough_wasm();
 
     if !passthrough.exists() {
@@ -181,7 +210,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
 
 /// Message-size sensitivity through the same production path.
 fn bench_transform_message_sizes(c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let passthrough = passthrough_wasm();
 
     if !passthrough.exists() {
@@ -228,7 +257,7 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
 
 /// Per-message latency percentiles through the production path.
 fn bench_transform_latency(c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let passthrough = passthrough_wasm();
 
     if !passthrough.exists() {
