@@ -29,14 +29,14 @@ waferctl node transform-1
 
 ## Configuration
 
-waferctl looks for endpoints in `~/.config/waferctl/config.toml` or uses `http://localhost:8080` by default.
+waferctl looks for endpoints in `~/.config/waferctl/config.toml` or uses `http://localhost:9090` by default.
 
 ### Managing Endpoints
 
 ```bash
 # Add a named endpoint
-waferctl config set-endpoint local http://localhost:8080
-waferctl config set-endpoint prod http://prod-runtime:8080
+waferctl config set-endpoint local http://localhost:9090
+waferctl config set-endpoint prod http://prod-runtime:9090
 
 # Switch default endpoint
 waferctl config use prod
@@ -84,21 +84,18 @@ waferctl nodes --wide
 # Show specific node details
 waferctl node <node-id>
 
-# Trigger hot-swap on a node (reload WASM module)
-waferctl hot-swap <node-id>
+# Trigger hot-swap on a node with a replacement component path
+waferctl hot-swap <node-id> --wasm-path <path-to-component.wasm>
 ```
 
 ### Pipeline Control
 
 ```bash
-# Reload configuration and hot-swap changed nodes
-waferctl reload
-
-# Drain pipeline (stop accepting new messages, finish in-flight)
-waferctl drain
-
 # Graceful shutdown
 waferctl shutdown
+
+`reload` and standalone `drain` are not exposed by the runtime HTTP API.
+Use per-node `hot-swap` or restart the runtime for config changes.
 ```
 
 ### Metrics
@@ -197,21 +194,13 @@ cargo build --manifest-path plugins/my-transform/Cargo.toml \
     --target wasm32-wasip2 --release
 
 # Trigger hot-swap
-waferctl hot-swap my-transform
+waferctl hot-swap my-transform --wasm-path target/wasm32-wasip2/release/my_transform.wasm
 ```
 
 ### Graceful Shutdown Script
 
 ```bash
 #!/bin/bash
-echo "Draining pipeline..."
-waferctl drain
-
-echo "Waiting for drain to complete..."
-while [ "$(waferctl --json status | jq -r '.state')" != "stopped" ]; do
-    sleep 1
-done
-
 echo "Shutting down..."
 waferctl shutdown
 ```

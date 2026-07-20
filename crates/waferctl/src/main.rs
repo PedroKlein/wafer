@@ -55,6 +55,9 @@ enum Commands {
     HotSwap {
         /// Node ID to hot-swap
         node_id: String,
+        /// Path to the replacement .wasm component on the runtime host
+        #[arg(long, value_name = "PATH")]
+        wasm_path: String,
     },
 
     /// Reload configuration and hot-swap changed nodes
@@ -131,7 +134,9 @@ async fn run(cli: Cli) -> error::Result<()> {
         Commands::Status => cmd_status(&client, cli.json).await,
         Commands::Nodes { wide } => cmd_nodes(&client, cli.json, wide).await,
         Commands::Node { id } => cmd_node(&client, &id, cli.json).await,
-        Commands::HotSwap { node_id } => cmd_hot_swap(&client, &node_id, cli.json).await,
+        Commands::HotSwap { node_id, wasm_path } => {
+            cmd_hot_swap(&client, &node_id, &wasm_path, cli.json).await
+        }
         Commands::Reload => cmd_reload(&client, cli.json).await,
         Commands::Drain => cmd_drain(&client, cli.json).await,
         Commands::Shutdown => cmd_shutdown(&client, cli.json).await,
@@ -239,12 +244,17 @@ async fn cmd_node(client: &WaferClient, id: &str, json: bool) -> error::Result<(
     Ok(())
 }
 
-async fn cmd_hot_swap(client: &WaferClient, node_id: &str, json: bool) -> error::Result<()> {
+async fn cmd_hot_swap(
+    client: &WaferClient,
+    node_id: &str,
+    wasm_path: &str,
+    json: bool,
+) -> error::Result<()> {
     if !json {
         println!("Triggering hot-swap for node '{node_id}'...");
     }
 
-    let result = client.hot_swap(node_id).await.classify()?;
+    let result = client.hot_swap(node_id, wasm_path).await.classify()?;
 
     if json {
         println!("{}", serde_json::to_string_pretty(&result).user_err()?);
@@ -254,34 +264,18 @@ async fn cmd_hot_swap(client: &WaferClient, node_id: &str, json: bool) -> error:
     Ok(())
 }
 
-async fn cmd_reload(client: &WaferClient, json: bool) -> error::Result<()> {
-    if !json {
-        println!("Reloading configuration...");
-    }
-
-    let result = client.reload().await.classify()?;
-
-    if json {
-        println!("{}", serde_json::to_string_pretty(&result).user_err()?);
-    } else {
-        output::print_reload_result(&result);
-    }
-    Ok(())
+async fn cmd_reload(_client: &WaferClient, _json: bool) -> error::Result<()> {
+    Err(CliError::user(anyhow::anyhow!(
+        "configuration reload is not exposed by the runtime HTTP API"
+    ))
+    .with_hint("Restart the runtime or hot-swap a specific node."))
 }
 
-async fn cmd_drain(client: &WaferClient, json: bool) -> error::Result<()> {
-    if !json {
-        println!("Draining pipeline...");
-    }
-
-    client.drain().await.classify()?;
-
-    if json {
-        println!(r#"{{"ok": true, "message": "Pipeline drained"}}"#);
-    } else {
-        println!("✓ Pipeline drained");
-    }
-    Ok(())
+async fn cmd_drain(_client: &WaferClient, _json: bool) -> error::Result<()> {
+    Err(CliError::user(anyhow::anyhow!(
+        "standalone drain is not exposed by the runtime HTTP API"
+    ))
+    .with_hint("Use 'waferctl shutdown' to trigger graceful pipeline shutdown."))
 }
 
 async fn cmd_shutdown(client: &WaferClient, json: bool) -> error::Result<()> {
@@ -356,9 +350,19 @@ mod tests {
 
     #[test]
     fn test_cli_parses_hot_swap() {
-        let cli = Cli::try_parse_from(["waferctl", "hot-swap", "my-node"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "waferctl",
+            "hot-swap",
+            "my-node",
+            "--wasm-path",
+            "/tmp/new.wasm",
+        ])
+        .unwrap();
         match cli.command {
-            Commands::HotSwap { node_id } => assert_eq!(node_id, "my-node"),
+            Commands::HotSwap { node_id, wasm_path } => {
+                assert_eq!(node_id, "my-node");
+                assert_eq!(wasm_path, "/tmp/new.wasm");
+            }
             _ => panic!("Expected HotSwap command"),
         }
     }
@@ -495,6 +499,9 @@ mod tests {
     #[test]
     fn test_cli_hot_swap_requires_node_id() {
         let result = Cli::try_parse_from(["waferctl", "hot-swap"]);
+        assert!(result.is_err());
+
+        let result = Cli::try_parse_from(["waferctl", "hot-swap", "node"]);
         assert!(result.is_err());
     }
 }

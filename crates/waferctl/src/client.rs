@@ -2,11 +2,9 @@
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use wafer_types::{
-    ErrorResponse, HotSwapResult, MetricsSnapshot, NodeInfo, PipelineStatus, ReloadResult,
-};
+use wafer_types::{ErrorResponse, MetricsSnapshot};
 
 /// HTTP client for WAFER runtime.
 pub struct WaferClient {
@@ -14,9 +12,53 @@ pub struct WaferClient {
     base_url: String,
 }
 
-#[derive(Deserialize, serde::Serialize)]
+#[derive(Deserialize, Serialize)]
 pub struct HealthResponse {
     pub status: String,
+}
+
+#[derive(Deserialize)]
+struct ReadyResponse {
+    ready: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PipelineStatus {
+    pub name: String,
+    pub state: String,
+    pub node_count: usize,
+    pub messages_processed: u64,
+    pub messages_failed: u64,
+    pub ready_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeInfo {
+    pub id: String,
+    pub state: String,
+    pub processed: u64,
+    pub failed: u64,
+    pub swappable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotSwapTimeline {
+    pub compile_ns: Option<u64>,
+    pub instantiate_ns: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HotSwapResult {
+    pub node_id: String,
+    pub status: String,
+    pub timeline: HotSwapTimeline,
+}
+
+#[derive(Serialize)]
+struct HotSwapRequest<'a> {
+    wasm_path: &'a str,
 }
 
 impl WaferClient {
@@ -35,9 +77,18 @@ impl WaferClient {
         self.get("/health").await
     }
 
-    /// Get pipeline status.
+    /// Get pipeline status inferred from the documented readiness and nodes endpoints.
     pub async fn status(&self) -> Result<PipelineStatus> {
-        self.get("/api/v1/pipeline").await
+        let ready: ReadyResponse = self.get("/ready").await?;
+        let nodes = self.nodes().await?;
+        Ok(PipelineStatus {
+            name: "wafer-pipeline".to_string(),
+            state: if ready.ready { "running" } else { "not-ready" }.to_string(),
+            node_count: nodes.len(),
+            messages_processed: nodes.iter().map(|node| node.processed).sum(),
+            messages_failed: nodes.iter().map(|node| node.failed).sum(),
+            ready_reason: ready.reason,
+        })
     }
 
     /// List all nodes.
@@ -47,22 +98,16 @@ impl WaferClient {
 
     /// Get a specific node.
     pub async fn node(&self, id: &str) -> Result<NodeInfo> {
-        self.get(&format!("/api/v1/nodes/{}", id)).await
+        self.get(&format!("/api/v1/nodes/{id}")).await
     }
 
     /// Trigger hot-swap.
-    pub async fn hot_swap(&self, node_id: &str) -> Result<HotSwapResult> {
-        self.post(&format!("/api/v1/nodes/{}/hot-swap", node_id)).await
-    }
-
-    /// Reload configuration.
-    pub async fn reload(&self) -> Result<ReloadResult> {
-        self.post("/api/v1/pipeline/reload").await
-    }
-
-    /// Drain pipeline.
-    pub async fn drain(&self) -> Result<()> {
-        self.post_empty("/api/v1/pipeline/drain").await
+    pub async fn hot_swap(&self, node_id: &str, wasm_path: &str) -> Result<HotSwapResult> {
+        self.post_json(
+            &format!("/api/v1/nodes/{node_id}/hot-swap"),
+            &HotSwapRequest { wasm_path },
+        )
+        .await
     }
 
     /// Shutdown pipeline.
@@ -72,8 +117,6 @@ impl WaferClient {
 
     /// Get metrics as structured data.
     pub async fn metrics(&self) -> Result<MetricsSnapshot> {
-        // Note: This would need a JSON metrics endpoint or parsing
-        // For now, return empty snapshot
         Ok(MetricsSnapshot::default())
     }
 
@@ -98,9 +141,9 @@ impl WaferClient {
         Self::handle_response(response).await
     }
 
-    async fn post<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+    async fn post_json<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
-        let response = self.client.post(&url).send().await?;
+        let response = self.client.post(&url).json(body).send().await?;
 
         Self::handle_response(response).await
     }

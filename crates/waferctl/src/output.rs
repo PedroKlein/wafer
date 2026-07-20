@@ -1,23 +1,23 @@
 //! Output formatting for waferctl.
 
 use tabled::{Table, Tabled};
-use wafer_types::{HotSwapResult, MetricsSnapshot, NodeInfo, PipelineStatus, ReloadResult};
+use wafer_types::MetricsSnapshot;
 
+use crate::client::{HotSwapResult, NodeInfo, PipelineStatus};
 use crate::config::CtlConfig;
 
 /// Prints pipeline status in human-readable format.
 pub fn print_status(status: &PipelineStatus) {
     println!("Pipeline: {}", status.name);
     println!("State:    {}", status.state);
-    println!("Uptime:   {}s", status.uptime_secs);
     println!("Nodes:    {}", status.node_count);
     println!();
     println!("Messages:");
     println!("  Processed: {}", status.messages_processed);
     println!("  Failed:    {}", status.messages_failed);
-    if status.swap_in_progress {
+    if let Some(reason) = &status.ready_reason {
         println!();
-        println!("⚠ Hot-swap in progress");
+        println!("Not ready: {reason}");
     }
 }
 
@@ -67,13 +67,13 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .iter()
             .map(|n| NodeRowWide {
                 id: n.id.clone(),
-                node_type: n.node_type.to_string(),
-                state: n.state.to_string(),
+                node_type: if n.swappable { "wasm" } else { "native" }.to_string(),
+                state: n.state.clone(),
                 swappable: if n.swappable { "yes" } else { "no" }.to_string(),
-                processed: n.messages_processed,
-                failed: n.messages_failed,
-                avg_ms: format!("{:.2}", n.avg_process_us as f64 / 1000.0),
-                queue: n.queue_depth.map(|d| d.to_string()).unwrap_or_else(|| "-".to_string()),
+                processed: n.processed,
+                failed: n.failed,
+                avg_ms: "-".to_string(),
+                queue: "-".to_string(),
             })
             .collect();
 
@@ -84,10 +84,10 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .iter()
             .map(|n| NodeRow {
                 id: n.id.clone(),
-                node_type: n.node_type.to_string(),
-                state: n.state.to_string(),
-                processed: n.messages_processed,
-                avg_ms: format!("{:.2}", n.avg_process_us as f64 / 1000.0),
+                node_type: if n.swappable { "wasm" } else { "native" }.to_string(),
+                state: n.state.clone(),
+                processed: n.processed,
+                avg_ms: "-".to_string(),
             })
             .collect();
 
@@ -99,42 +99,26 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
 /// Prints detailed node information.
 pub fn print_node_detail(node: &NodeInfo) {
     println!("Node: {}", node.id);
-    println!("Type:       {}", node.node_type);
+    println!("Type:       {}", if node.swappable { "wasm" } else { "native" });
     println!("State:      {}", node.state);
     println!("Swappable:  {}", if node.swappable { "yes" } else { "no" });
     println!();
     println!("Metrics:");
-    println!("  Processed: {}", node.messages_processed);
-    println!("  Failed:    {}", node.messages_failed);
-    println!("  Avg Time:  {:.2}ms", node.avg_process_us as f64 / 1000.0);
-    if let Some(depth) = node.queue_depth {
-        println!("  Queue:     {}", depth);
-    }
+    println!("  Processed: {}", node.processed);
+    println!("  Failed:    {}", node.failed);
 }
 
 /// Prints hot-swap result.
 pub fn print_hot_swap_result(result: &HotSwapResult) {
-    println!("✓ Hot-swap completed for node '{}'", result.node_id);
+    println!("✓ Hot-swap request sent for node '{}'", result.node_id);
+    println!("Status: {}", result.status);
     println!();
     println!("Timing:");
-    println!("  Drain:  {:?}", result.drain_duration);
-    println!("  Load:   {:?}", result.load_duration);
-    println!("  Total:  {:?}", result.total_duration);
-    println!();
-    println!("Messages drained: {}", result.messages_drained);
-}
-
-/// Prints reload result.
-pub fn print_reload_result(result: &ReloadResult) {
-    if result.swapped_nodes.is_empty() {
-        println!("No changes detected");
-    } else {
-        println!("✓ Configuration reloaded");
-        println!();
-        println!("Nodes hot-swapped:");
-        for node in &result.swapped_nodes {
-            println!("  - {}", node);
-        }
+    if let Some(compile_ns) = result.timeline.compile_ns {
+        println!("  Compile:     {} ns", compile_ns);
+    }
+    if let Some(instantiate_ns) = result.timeline.instantiate_ns {
+        println!("  Instantiate: {} ns", instantiate_ns);
     }
 }
 
