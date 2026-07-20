@@ -212,7 +212,7 @@ and architecture claims assume the rewire happened; it did not.
 - **Fix:** After A1, read `FuelBudgets` from `wafer-types::config::EngineConfig`
   and dispatch per-`NodeKind` in the launcher. Add a `store_limits` field to
   `EngineConfig` (or nested under `[engine.memory]`) and thread it through.
-- **Closed by:** runtime-migration plan A8 — `wafer_types::config::EngineConfig` now carries `[engine.fuel]` per-kind budgets and `[engine.memory]` per-kind limits (defaults 64 MiB transform, 16 MiB filter/router) plus per-node `fuel` / `memory_limit` overrides; launcher passes type-specific defaults into `WasmTransformNode`/`WasmFilterNode`/`WasmRouterNode`; `WaferState::new_with_memory_limit` applies `StoreLimitsBuilder::memory_size`. Residual: attack-plugin memory-exhaust integration test not run.
+- **Closed by:** runtime-migration plan A8 — `wafer_types::config::EngineConfig` now carries `[engine.fuel]` per-kind budgets and `[engine.memory]` per-kind limits (defaults 64 MiB transform, 16 MiB filter/router) plus per-node `fuel` / `memory_limit` overrides; launcher passes type-specific defaults into `WasmTransformNode`/`WasmFilterNode`/`WasmRouterNode`; `WaferState::new_with_memory_limit` applies `StoreLimitsBuilder::memory_size` and enables it via `store.limiter(|s| s.limits_mut())`. Hot-swap replacement Stores in `orchestrator/hotswap.rs::prepare_{transform,filter,router}_swap_timed` also thread the configured memory limit and call `store.limiter(...)` so the swapped-in instance stays within `[engine.memory].{kind}` bounds. Residual: attack-plugin memory-exhaust integration test not run.
 
 ## A9 — Capabilities not preserved across swap (Closed 2026-07-20) 🟢
 
@@ -266,7 +266,7 @@ and architecture claims assume the rewire happened; it did not.
   emit the `wasm_path` payload for hot-swap.
 - **Closed by:** runtime-migration plan A11 (commit `3dbad39 fix waferctl control routes`) — `waferctl` now calls `/health`, `/ready`, `/api/v1/nodes`, `/api/v1/nodes/{id}`, `/api/v1/nodes/{id}/hot-swap` with `{ "wasm_path": ... }` body, `/api/v1/pipeline/shutdown`, and `/metrics`; stale `/pipeline`, `/reload`, `/drain` methods deleted; 33 unit tests pass and real-runtime smoke exercised nodes, node, hot-swap, and shutdown against a live wafer binary.
 
-## A12 — `wit-contracts.md` documents a nonexistent field path 🟢
+## A12 — `wit-contracts.md` documents a nonexistent field path (Closed 2026-07-18) 🟢
 
 - **Documented in:** `docs/interfaces/wit-contracts.md:153-155`
 - **Target state:** Routing decision docs refer to `content-type` field
@@ -275,6 +275,7 @@ and architecture claims assume the rewire happened; it did not.
   `message` record (`wit/pipeline-types.wit:42-49`) has no `header` field;
   `content-type` is a direct field on the record.
 - **Fix:** Edit doc to say `message.content-type`.
+- **Closed by:** `doc-refactor` plan verification cleanup on 2026-07-18 — `grep -rn 'header.content-type' docs/` returns zero hits.
 
 <a id="a13"></a>
 

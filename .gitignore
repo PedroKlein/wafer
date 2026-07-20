@@ -128,3 +128,4 @@ docker-compose.override.yml
 /.delegation-runner
 /.pi
 /.a5c
+.plan-verify/

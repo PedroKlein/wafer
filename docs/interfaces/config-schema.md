@@ -41,11 +41,10 @@ Fuel budgets are the pipeline-level defaults; `[nodes.NAME.fuel]` overrides per 
 
 ## `[error_policy]`
 
-Pipeline-wide default. Per-node overrides in `[nodes.NAME.error_policy]` are
-defined in the schema but **not yet merged by the current builder** — the
-resolved policy is always `ResolvedErrorPolicy::default()` today
-(`crates/wafer-core/src/orchestrator/builder.rs`). Full merge behaviour is
-planned; see `docs/rfcs/RFC-002-host-runtime.md` for the target semantics.
+Pipeline-wide default. `[nodes.NAME.error_policy]` overrides the pipeline-level
+table for a specific node; the runner reads the resolved policy at pipeline
+start via `resolve_error_policy` in `crates/wafer-core/src/orchestrator/builder.rs`.
+The default `retry_buffer_capacity` is 1000.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -125,7 +124,7 @@ Struct `WasmNodeDef`:
 | `fuel` | `Option<u64>` | Overrides the pipeline default for this node. |
 | `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
-| `error_policy` | `Option<ErrorPolicyConfig>` | Per-node override; schema is present but merge is not yet wired (see `[error_policy]` note above). |
+| `error_policy` | `Option<ErrorPolicyConfig>` | Per-node override that replaces the pipeline-level table for this node when present. |
 
 Example:
 
