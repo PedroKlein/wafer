@@ -15,7 +15,7 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::node::wasm::WasmTransformNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, SwapPayload, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
 
 /// Run the transform processing loop until cancellation or channel close.
 ///
@@ -34,13 +34,37 @@ pub async fn run_transform_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
             if let Some(payload) = swap_rx.borrow_and_update().clone() {
                 policy.flush_to_dlq("hot_swap_drain");
-                payload.apply_transform(&mut transform);
-                metrics.record_swap();
+                let progress = payload.progress();
+                let result = match payload {
+                    SwapPayload::Reconfigure { ref new_config_json, .. } => {
+                        transform.try_reconfigure(new_config_json)
+                    }
+                    SwapPayload::Transform { .. } => payload.try_apply_transform(&mut transform),
+                    _ => Err(crate::error::WaferError::Runtime(
+                        "transform node received non-transform swap payload".to_string(),
+                    )),
+                };
+                match result {
+                    Ok(()) => {
+                        progress.mark_ack();
+                        pending_swap_progress = Some(progress);
+                        metrics.record_swap();
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            node = transform.node_id(),
+                            %err,
+                            "hot-swap init failed; keeping v1"
+                        );
+                        progress.report_init_failed(err.to_string());
+                    }
+                }
                 continue;
             }
         }
@@ -76,6 +100,9 @@ pub async fn run_transform_loop(
             Ok(output) => {
                 metrics.record_processed(duration_ns);
                 send_downstream(&senders, output).await;
+                if let Some(progress) = pending_swap_progress.take() {
+                    progress.mark_first_v2();
+                }
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {
                 metrics.record_failed();

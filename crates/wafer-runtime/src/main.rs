@@ -164,8 +164,9 @@ async fn main() -> Result<()> {
                 }
             };
 
+            let (progress, _completion_rx) = wafer_core::runner::HotSwapProgress::channel();
             let result = prepare_transform_swap_timed(
-                &engine, &wasm_bytes, &node_id, Capabilities::sandbox(),
+                &engine, &wasm_bytes, &node_id, Capabilities::sandbox(), progress,
             ).await;
 
             match result {

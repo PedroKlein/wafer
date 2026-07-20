@@ -74,7 +74,8 @@ fn create_router(orchestrator: Arc<PipelineHandle>, serve_metrics: bool) -> Rout
         .route("/api/v1/pipeline/shutdown", post(handlers::shutdown))
         .route("/api/v1/nodes", get(handlers::list_nodes))
         .route("/api/v1/nodes/{id}", get(handlers::get_node))
-        .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap));
+        .route("/api/v1/nodes/{id}/hot-swap", post(handlers::hot_swap))
+        .route("/api/v1/nodes/{id}/reconfigure", post(handlers::reconfigure));
 
     if serve_metrics {
         router = router.route("/metrics", get(handlers::metrics));

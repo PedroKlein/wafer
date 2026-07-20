@@ -11,7 +11,7 @@ use crate::engine::WaferEngine;
 use crate::engine::state::WaferState;
 use crate::engine::Capabilities;
 use crate::error::{Result, WaferError};
-use crate::runner::SwapPayload;
+use crate::runner::{HotSwapProgress, SwapPayload};
 
 /// Prepare a transform swap payload from a compiled component.
 ///
@@ -26,6 +26,7 @@ pub async fn prepare_transform_swap(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
 ) -> Result<SwapPayload> {
     let component = engine.compile_cached(wasm_bytes)?;
     let pre = engine.pre_instantiate_transform(&component)?;
@@ -50,6 +51,7 @@ pub async fn prepare_transform_swap(
         new_store: Arc::new(std::sync::Mutex::new(Some(store))),
         new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
         new_pre: pre,
+        progress,
     })
 }
 
@@ -59,6 +61,7 @@ pub async fn prepare_filter_swap(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
 ) -> Result<SwapPayload> {
     let component = engine.compile_cached(wasm_bytes)?;
     let pre = engine.pre_instantiate_filter(&component)?;
@@ -82,6 +85,7 @@ pub async fn prepare_filter_swap(
         new_store: Arc::new(std::sync::Mutex::new(Some(store))),
         new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
         new_pre: pre,
+        progress,
     })
 }
 
@@ -91,6 +95,7 @@ pub async fn prepare_router_swap(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
 ) -> Result<SwapPayload> {
     let component = engine.compile_cached(wasm_bytes)?;
     let pre = engine.pre_instantiate_router(&component)?;
@@ -114,6 +119,7 @@ pub async fn prepare_router_swap(
         new_store: Arc::new(std::sync::Mutex::new(Some(store))),
         new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
         new_pre: pre,
+        progress,
     })
 }
 
@@ -307,6 +313,7 @@ pub async fn prepare_transform_swap_timed(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
 
@@ -335,6 +342,83 @@ pub async fn prepare_transform_swap_timed(
         new_store: Arc::new(std::sync::Mutex::new(Some(store))),
         new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
         new_pre: pre,
+        progress,
+    };
+
+    Ok(TimedSwapResult { payload, timeline })
+}
+
+/// Prepare a filter swap with timeline instrumentation.
+pub async fn prepare_filter_swap_timed(
+    engine: &WaferEngine,
+    wasm_bytes: &[u8],
+    node_id: &str,
+    capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
+) -> Result<TimedSwapResult> {
+    let mut timeline = SwapTimeline::start();
+
+    let component = engine.compile_cached(wasm_bytes)?;
+    timeline.mark_compile_done();
+
+    let pre = engine.pre_instantiate_filter(&component)?;
+    let pre = Arc::new(pre);
+
+    let mut store = Store::new(engine.inner(), WaferState::new(node_id, capabilities));
+    store.set_fuel(engine.fuel_limit()).map_err(|e| WaferError::PluginInit {
+        message: format!("failed to set fuel: {e}"),
+    })?;
+    store.epoch_deadline_trap();
+    store.set_epoch_deadline(engine.epoch_deadline());
+
+    let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
+        message: format!("instantiation failed: {e}"),
+    })?;
+    timeline.mark_instantiate_done();
+
+    let payload = SwapPayload::Filter {
+        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
+        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
+        new_pre: pre,
+        progress,
+    };
+
+    Ok(TimedSwapResult { payload, timeline })
+}
+
+/// Prepare a router swap with timeline instrumentation.
+pub async fn prepare_router_swap_timed(
+    engine: &WaferEngine,
+    wasm_bytes: &[u8],
+    node_id: &str,
+    capabilities: Capabilities,
+    progress: Arc<HotSwapProgress>,
+) -> Result<TimedSwapResult> {
+    let mut timeline = SwapTimeline::start();
+
+    let component = engine.compile_cached(wasm_bytes)?;
+    timeline.mark_compile_done();
+
+    let pre = engine.pre_instantiate_router(&component)?;
+    let pre = Arc::new(pre);
+
+    let mut store = Store::new(engine.inner(), WaferState::new(node_id, capabilities));
+    store.set_fuel(engine.fuel_limit()).map_err(|e| WaferError::PluginInit {
+        message: format!("failed to set fuel: {e}"),
+    })?;
+    store.epoch_deadline_trap();
+    store.set_epoch_deadline(engine.epoch_deadline());
+
+    let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
+        message: format!("instantiation failed: {e}"),
+    })?;
+    timeline.mark_instantiate_done();
+
+    let payload = SwapPayload::Router {
+        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
+        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
+        new_pre: pre,
+        progress,
     };
 
     Ok(TimedSwapResult { payload, timeline })

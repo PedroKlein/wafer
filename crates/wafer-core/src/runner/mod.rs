@@ -13,7 +13,7 @@ pub mod sink;
 pub mod source;
 pub mod transform;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use wasmtime::Store;
 
 use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
@@ -23,7 +23,110 @@ use crate::engine::state::WaferState;
 use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::queue::RuntimeEnvelope;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+
+// =============================================================================
+// Hot-swap progress (A3b): runner-reported ACK and first-v2 convergence
+// =============================================================================
+
+/// Error surfaces when a hot-swap fails after signal but before ACK.
+#[derive(Debug, Clone)]
+pub enum HotSwapError {
+    /// The replacement instance's validate() or init() failed. v1 is preserved.
+    InitFailed(String),
+}
+
+impl std::fmt::Display for HotSwapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HotSwapError::InitFailed(msg) => write!(f, "hot-swap init failed: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for HotSwapError {}
+
+/// Outcome the runner reports back to the API for a hot-swap request.
+pub type HotSwapOutcome = Result<HotSwapReport, HotSwapError>;
+
+/// Report returned by the runner loop after a hot-swap completes both
+/// phases: ACK (payload applied to node) and first v2 output produced.
+#[derive(Debug, Clone, Copy)]
+pub struct HotSwapReport {
+    pub ack_at: std::time::Instant,
+    pub first_v2_at: std::time::Instant,
+}
+
+/// Shared progress marker installed by the hot-swap API path and updated
+/// by the target runner loop.
+///
+/// Concurrency: both marks are set exactly once via `OnceLock`, and the
+/// oneshot sender is taken from the mutex the moment both timestamps are
+/// available or when `report_init_failed` is called. If the runner loop
+/// exits early (drop of `HotSwapProgress`), the API caller's
+/// `oneshot::Receiver` observes a channel-closed error and reports a
+/// clear failure instead of fabricating timings.
+#[derive(Debug)]
+pub struct HotSwapProgress {
+    ack: OnceLock<std::time::Instant>,
+    first_v2: OnceLock<std::time::Instant>,
+    tx: Mutex<Option<oneshot::Sender<HotSwapOutcome>>>,
+}
+
+impl HotSwapProgress {
+    /// Create a new progress handle paired with a receiver for the API caller.
+    #[must_use]
+    pub fn channel() -> (Arc<Self>, oneshot::Receiver<HotSwapOutcome>) {
+        let (tx, rx) = oneshot::channel();
+        let progress = Arc::new(Self {
+            ack: OnceLock::new(),
+            first_v2: OnceLock::new(),
+            tx: Mutex::new(Some(tx)),
+        });
+        (progress, rx)
+    }
+
+    /// Called by the runner loop the moment the swap payload has been
+    /// applied to the target node (store/bindings/pre replaced and init OK).
+    pub fn mark_ack(&self) {
+        let _ = self.ack.set(std::time::Instant::now());
+        self.try_complete();
+    }
+
+    /// Called by the runner loop after the first successful post-swap
+    /// output was produced by the new instance.
+    pub fn mark_first_v2(&self) {
+        let _ = self.first_v2.set(std::time::Instant::now());
+        self.try_complete();
+    }
+
+    /// Called by the runner loop when init on the replacement instance
+    /// failed. v1 remains active. Consumes the sender so the API caller
+    /// receives the failure instead of a channel-closed timeout.
+    pub fn report_init_failed(&self, msg: impl Into<String>) {
+        if let Some(tx) = self.take_sender() {
+            let _ = tx.send(Err(HotSwapError::InitFailed(msg.into())));
+        }
+    }
+
+    fn take_sender(&self) -> Option<oneshot::Sender<HotSwapOutcome>> {
+        match self.tx.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(poisoned) => poisoned.into_inner().take(),
+        }
+    }
+
+    fn try_complete(&self) {
+        let (Some(ack_at), Some(first_v2_at)) =
+            (self.ack.get().copied(), self.first_v2.get().copied())
+        else {
+            return;
+        };
+        if let Some(tx) = self.take_sender() {
+            let _ = tx.send(Ok(HotSwapReport { ack_at, first_v2_at }));
+        }
+    }
+}
 
 // =============================================================================
 // Shared Types
@@ -54,27 +157,85 @@ pub enum SwapPayload {
         new_store: Arc<std::sync::Mutex<Option<Store<WaferState>>>>,
         new_bindings: Arc<std::sync::Mutex<Option<TransformNode>>>,
         new_pre: Arc<TransformNodePre<WaferState>>,
+        progress: Arc<HotSwapProgress>,
     },
     Filter {
         new_store: Arc<std::sync::Mutex<Option<Store<WaferState>>>>,
         new_bindings: Arc<std::sync::Mutex<Option<FilterNode>>>,
         new_pre: Arc<FilterNodePre<WaferState>>,
+        progress: Arc<HotSwapProgress>,
     },
     Router {
         new_store: Arc<std::sync::Mutex<Option<Store<WaferState>>>>,
         new_bindings: Arc<std::sync::Mutex<Option<RouterNode>>>,
         new_pre: Arc<RouterNodePre<WaferState>>,
+        progress: Arc<HotSwapProgress>,
+    },
+    /// Config-only warm reconfigure: reuses the node's own cached `InstancePre`
+    /// and only re-runs `validate() + init()` with new configuration.
+    Reconfigure {
+        new_config_json: String,
+        progress: Arc<HotSwapProgress>,
     },
 }
 
 impl SwapPayload {
+    /// Return the hot-swap progress handle shared with the API caller.
+    pub fn progress(&self) -> Arc<HotSwapProgress> {
+        match self {
+            Self::Transform { progress, .. }
+            | Self::Filter { progress, .. }
+            | Self::Router { progress, .. }
+            | Self::Reconfigure { progress, .. } => progress.clone(),
+        }
+    }
+
+    /// Apply this swap payload to a transform node, replacing its internals
+    /// only after `validate() + init()` succeed on the replacement.
+    ///
+    /// On failure the target node keeps its v1 store/bindings/pre unchanged.
+    pub fn try_apply_transform(self, node: &mut WasmTransformNode) -> Result<(), crate::error::WaferError> {
+        if let SwapPayload::Transform { new_store, new_bindings, new_pre, .. } = self {
+            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload store already consumed");
+            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload bindings already consumed");
+            node.try_hot_swap(store, bindings, new_pre)?;
+        }
+        Ok(())
+    }
+
+    /// Apply this swap payload to a filter node with rollback-on-init-failure.
+    pub fn try_apply_filter(self, node: &mut WasmFilterNode) -> Result<(), crate::error::WaferError> {
+        if let SwapPayload::Filter { new_store, new_bindings, new_pre, .. } = self {
+            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload store already consumed");
+            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload bindings already consumed");
+            node.try_hot_swap(store, bindings, new_pre)?;
+        }
+        Ok(())
+    }
+
+    /// Apply this swap payload to a router node with rollback-on-init-failure.
+    pub fn try_apply_router(self, node: &mut WasmRouterNode) -> Result<(), crate::error::WaferError> {
+        if let SwapPayload::Router { new_store, new_bindings, new_pre, .. } = self {
+            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload store already consumed");
+            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+                .expect("swap payload bindings already consumed");
+            node.try_hot_swap(store, bindings, new_pre)?;
+        }
+        Ok(())
+    }
+
     /// Apply this swap payload to a transform node, replacing its internals.
     ///
     /// # Panics
     /// Panics if the payload variant doesn't match (wrong node type) or
     /// if the inner values have already been taken.
     pub fn apply_transform(self, node: &mut WasmTransformNode) {
-        if let SwapPayload::Transform { new_store, new_bindings, new_pre } = self {
+        if let SwapPayload::Transform { new_store, new_bindings, new_pre, .. } = self {
             let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload store already consumed");
             let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
@@ -85,7 +246,7 @@ impl SwapPayload {
 
     /// Apply this swap payload to a filter node.
     pub fn apply_filter(self, node: &mut WasmFilterNode) {
-        if let SwapPayload::Filter { new_store, new_bindings, new_pre } = self {
+        if let SwapPayload::Filter { new_store, new_bindings, new_pre, .. } = self {
             let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload store already consumed");
             let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
@@ -96,7 +257,7 @@ impl SwapPayload {
 
     /// Apply this swap payload to a router node.
     pub fn apply_router(self, node: &mut WasmRouterNode) {
-        if let SwapPayload::Router { new_store, new_bindings, new_pre } = self {
+        if let SwapPayload::Router { new_store, new_bindings, new_pre, .. } = self {
             let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload store already consumed");
             let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
@@ -174,6 +335,60 @@ pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[Dow
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn hot_swap_progress_reports_init_failure() {
+        let (progress, rx) = HotSwapProgress::channel();
+        progress.report_init_failed("validate returned unrecoverable");
+        let outcome = rx.await.expect("progress reports failure");
+        match outcome {
+            Err(HotSwapError::InitFailed(msg)) => {
+                assert!(msg.contains("validate returned unrecoverable"));
+            }
+            other => panic!("expected InitFailed, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn hot_swap_progress_completes_only_after_both_marks() {
+        let (progress, mut rx) = HotSwapProgress::channel();
+
+        // Neither mark yet: receiver must not have a value ready.
+        assert!(rx.try_recv().is_err(), "progress must not report before ack");
+
+        progress.mark_ack();
+        assert!(rx.try_recv().is_err(), "progress must not report on ack alone");
+
+        progress.mark_first_v2();
+        let outcome = rx.await.expect("progress completes");
+        let report = outcome.expect("outcome should be Ok");
+        assert!(report.first_v2_at >= report.ack_at);
+    }
+
+    #[tokio::test]
+    async fn hot_swap_progress_receiver_sees_close_when_dropped() {
+        let (progress, rx) = HotSwapProgress::channel();
+        drop(progress);
+        assert!(
+            rx.await.is_err(),
+            "dropped progress must surface as a receiver error, not a fabricated report",
+        );
+    }
+
+    #[tokio::test]
+    async fn hot_swap_progress_ignores_late_marks() {
+        let (progress, rx) = HotSwapProgress::channel();
+        progress.mark_ack();
+        progress.mark_first_v2();
+        let outcome = rx.await.expect("first report");
+        let first = outcome.expect("first report should be Ok");
+
+        // Late marks must not panic or corrupt the report.
+        progress.mark_ack();
+        progress.mark_first_v2();
+        // Nothing to receive after the sender was consumed.
+        assert!(first.first_v2_at >= first.ack_at);
+    }
 
     #[tokio::test]
     async fn test_send_downstream_single() {

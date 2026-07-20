@@ -500,11 +500,13 @@ async fn test_hot_swap_uppercase_to_passthrough() {
 
     // Hot-swap: replace uppercase with pass-through
     let pass_through_bytes = std::fs::read(PASS_THROUGH_WASM).expect("read pass-through.wasm");
+    let (progress, _completion_rx) = wafer_core::runner::HotSwapProgress::channel();
     let swap_payload = wafer_core::orchestrator::hotswap::prepare_transform_swap(
         &engine,
         &pass_through_bytes,
         "transform",
         Capabilities::sandbox(),
+        progress,
     )
     .await
     .expect("prepare swap");

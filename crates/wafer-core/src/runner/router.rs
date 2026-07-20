@@ -15,7 +15,7 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::node::wasm::WasmRouterNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, SwapPayload, fan_out};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, fan_out};
 
 /// Run the router processing loop until cancellation or channel close.
 ///
@@ -34,13 +34,37 @@ pub async fn run_router_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
             if let Some(payload) = swap_rx.borrow_and_update().clone() {
                 policy.flush_to_dlq("hot_swap_drain");
-                payload.apply_router(&mut router);
-                metrics.record_swap();
+                let progress = payload.progress();
+                let result = match payload {
+                    SwapPayload::Reconfigure { ref new_config_json, .. } => {
+                        router.try_reconfigure(new_config_json)
+                    }
+                    SwapPayload::Router { .. } => payload.try_apply_router(&mut router),
+                    _ => Err(crate::error::WaferError::Runtime(
+                        "router node received non-router swap payload".to_string(),
+                    )),
+                };
+                match result {
+                    Ok(()) => {
+                        progress.mark_ack();
+                        pending_swap_progress = Some(progress);
+                        metrics.record_swap();
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            node = router.node_id(),
+                            %err,
+                            "hot-swap init failed; keeping v1"
+                        );
+                        progress.report_init_failed(err.to_string());
+                    }
+                }
                 continue;
             }
         }
@@ -73,10 +97,16 @@ pub async fn run_router_loop(
             Ok(RouteOutcome::Ports(ref ports)) if ports.is_empty() => {
                 // Empty ports list = intentional drop
                 metrics.record_processed(duration_ns);
+                if let Some(progress) = pending_swap_progress.take() {
+                    progress.mark_first_v2();
+                }
             }
             Ok(RouteOutcome::Ports(ports)) => {
                 metrics.record_processed(duration_ns);
                 fan_out(&ports, envelope, &senders).await;
+                if let Some(progress) = pending_swap_progress.take() {
+                    progress.mark_first_v2();
+                }
             }
             Ok(RouteOutcome::Error(e)) => {
                 // Router returned a logical routing error (not a Wasm trap)

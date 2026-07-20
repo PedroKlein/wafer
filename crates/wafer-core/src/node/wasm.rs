@@ -185,6 +185,35 @@ impl WasmTransformNode {
         self.validate_and_init(&config_json)
     }
 
+    /// Warm reconfigure: re-instantiate from the cached `InstancePre` and
+    /// call `validate() + init()` with `new_config_json`. No compile/instantiate
+    /// of a new plugin binary. On failure, roll back to v1 state.
+    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut new_store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+            message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
+        })?;
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
+        match self.validate_and_init(new_config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.config_json = old_config;
+                Err(err)
+            }
+        }
+    }
+
     /// Process one message through the Wasm transform.
     ///
     /// MUST run to completion — never place in a select! branch.
@@ -272,6 +301,28 @@ impl WasmTransformNode {
         self.store = new_store;
         self.bindings = new_bindings;
         self.cached_pre = new_pre;
+    }
+
+    /// Replace transform internals with rollback if `validate()`/`init()` fails.
+    pub fn try_hot_swap(
+        &mut self,
+        new_store: Store<WaferState>,
+        new_bindings: TransformNode,
+        new_pre: Arc<TransformNodePre<WaferState>>,
+    ) -> Result<(), WaferError> {
+        let config_json = self.config_json.clone();
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_pre = std::mem::replace(&mut self.cached_pre, new_pre);
+        match self.validate_and_init(&config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.cached_pre = old_pre;
+                Err(err)
+            }
+        }
     }
 
     /// Get the node identity from the Store state.
@@ -364,6 +415,34 @@ impl WasmFilterNode {
         self.validate_and_init(&config_json)
     }
 
+    /// Warm reconfigure: re-instantiate from cached InstancePre and re-run
+    /// `validate() + init()` with `new_config_json`; roll back on failure.
+    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut new_store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+            message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
+        })?;
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
+        match self.validate_and_init(new_config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.config_json = old_config;
+                Err(err)
+            }
+        }
+    }
+
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_config = crate::engine::bindings::filter_node::exports::pipeline::node::lifecycle::NodeConfig {
@@ -444,6 +523,28 @@ impl WasmFilterNode {
         self.store = new_store;
         self.bindings = new_bindings;
         self.cached_pre = new_pre;
+    }
+
+    /// Replace filter internals with rollback if `validate()`/`init()` fails.
+    pub fn try_hot_swap(
+        &mut self,
+        new_store: Store<WaferState>,
+        new_bindings: FilterNode,
+        new_pre: Arc<FilterNodePre<WaferState>>,
+    ) -> Result<(), WaferError> {
+        let config_json = self.config_json.clone();
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_pre = std::mem::replace(&mut self.cached_pre, new_pre);
+        match self.validate_and_init(&config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.cached_pre = old_pre;
+                Err(err)
+            }
+        }
     }
 
     /// Get the node identity.
@@ -536,6 +637,34 @@ impl WasmRouterNode {
         self.validate_and_init(&config_json)
     }
 
+    /// Warm reconfigure: re-instantiate from cached InstancePre and re-run
+    /// `validate() + init()` with `new_config_json`; roll back on failure.
+    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+        let node_id = self.node_id().to_string();
+        let mut new_store = recovery_store(
+            &self.store,
+            &node_id,
+            self.capabilities,
+            self.memory_limit,
+            self.epoch_deadline,
+        );
+        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+            message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
+        })?;
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
+        match self.validate_and_init(new_config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.config_json = old_config;
+                Err(err)
+            }
+        }
+    }
+
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_config = crate::engine::bindings::router_node::exports::pipeline::node::lifecycle::NodeConfig {
@@ -615,6 +744,28 @@ impl WasmRouterNode {
         self.store = new_store;
         self.bindings = new_bindings;
         self.cached_pre = new_pre;
+    }
+
+    /// Replace router internals with rollback if `validate()`/`init()` fails.
+    pub fn try_hot_swap(
+        &mut self,
+        new_store: Store<WaferState>,
+        new_bindings: RouterNode,
+        new_pre: Arc<RouterNodePre<WaferState>>,
+    ) -> Result<(), WaferError> {
+        let config_json = self.config_json.clone();
+        let old_store = std::mem::replace(&mut self.store, new_store);
+        let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
+        let old_pre = std::mem::replace(&mut self.cached_pre, new_pre);
+        match self.validate_and_init(&config_json) {
+            Ok(()) => Ok(()),
+            Err(err) => {
+                self.store = old_store;
+                self.bindings = old_bindings;
+                self.cached_pre = old_pre;
+                Err(err)
+            }
+        }
     }
 
     /// Get the node identity.

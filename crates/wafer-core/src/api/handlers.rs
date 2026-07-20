@@ -39,6 +39,13 @@ pub struct NodeInfoResponse {
     pub swappable: bool,
 }
 
+/// Reconfigure request body.
+#[derive(Deserialize)]
+pub struct ReconfigureRequest {
+    /// New node configuration as an arbitrary JSON object.
+    pub config: serde_json::Value,
+}
+
 /// Hot-swap request body.
 #[derive(Deserialize)]
 pub struct HotSwapRequest {
@@ -118,13 +125,29 @@ pub async fn hot_swap(
     Json(body): Json<HotSwapRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     use crate::config::NodeDef;
-    use crate::orchestrator::hotswap::prepare_transform_swap_timed;
+    use crate::orchestrator::hotswap::{
+        prepare_filter_swap_timed, prepare_router_swap_timed, prepare_transform_swap_timed,
+    };
     use crate::orchestrator::launcher::capabilities_from_config;
+    use crate::runner::HotSwapProgress;
+
+    #[derive(Clone, Copy)]
+    enum SwapKind {
+        Transform,
+        Filter,
+        Router,
+    }
 
     let engine = orch.engine();
-    let capabilities = match orch.config().nodes.get(&id) {
-        Some(NodeDef::Transform(wasm) | NodeDef::Filter(wasm) | NodeDef::Router(wasm)) => {
-            capabilities_from_config(&wasm.capabilities)
+    let (kind, capabilities) = match orch.config().nodes.get(&id) {
+        Some(NodeDef::Transform(wasm)) => {
+            (SwapKind::Transform, capabilities_from_config(&wasm.capabilities))
+        }
+        Some(NodeDef::Filter(wasm)) => {
+            (SwapKind::Filter, capabilities_from_config(&wasm.capabilities))
+        }
+        Some(NodeDef::Router(wasm)) => {
+            (SwapKind::Router, capabilities_from_config(&wasm.capabilities))
         }
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
@@ -136,30 +159,145 @@ pub async fn hot_swap(
         (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}"))
     })?;
 
-    let mut timed_result = prepare_transform_swap_timed(
-        engine,
-        &wasm_bytes,
-        &id,
-        capabilities,
-    )
-    .await
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("swap preparation failed: {e}")))?;
+    let (progress, completion_rx) = HotSwapProgress::channel();
+    let timed_result = match kind {
+        SwapKind::Transform => {
+            prepare_transform_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+        }
+        SwapKind::Filter => {
+            prepare_filter_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+        }
+        SwapKind::Router => {
+            prepare_router_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+        }
+    };
+    let mut timed_result = timed_result.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("swap preparation failed: {e}"))
+    })?;
 
+    let signal_at = std::time::Instant::now();
     timed_result.timeline.mark_signal_sent();
     orch.send_swap(&id, timed_result.payload)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
-    timed_result.timeline.mark_swap_acked();
-    timed_result.timeline.mark_first_v2_output();
+
+    let completion = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        completion_rx,
+    )
+    .await;
+    let report = match completion {
+        Ok(Ok(Ok(report))) => report,
+        Ok(Ok(Err(err))) => {
+            return Err((StatusCode::CONFLICT, err.to_string()));
+        }
+        Ok(Err(_)) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "hot-swap runner exited before acknowledgement".to_string(),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::GATEWAY_TIMEOUT,
+                "hot-swap did not converge within 5s (no post-swap message?)".to_string(),
+            ));
+        }
+    };
+
+    let ack_ns = report.ack_at.duration_since(signal_at).as_nanos() as u64;
+    let convergence_ns = report
+        .first_v2_at
+        .duration_since(report.ack_at)
+        .as_nanos() as u64;
 
     Ok(Json(serde_json::json!({
         "node_id": id,
-        "status": "swap_sent",
+        "status": "swap_converged",
         "timeline": {
             "compile_ns": timed_result.timeline.compile_duration_ns(),
             "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
             "signal_ns": timed_result.timeline.signal_duration_ns(),
-            "ack_ns": timed_result.timeline.ack_duration_ns(),
-            "convergence_ns": timed_result.timeline.convergence_duration_ns(),
+            "ack_ns": ack_ns,
+            "convergence_ns": convergence_ns,
+        }
+    })))
+}
+
+/// POST /api/v1/nodes/:id/reconfigure — warm reconfigure via cached InstancePre
+pub async fn reconfigure(
+    State(orch): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<ReconfigureRequest>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    use crate::config::NodeDef;
+    use crate::runner::{HotSwapProgress, SwapPayload};
+
+    // Confirm the node exists and is a Wasm node.
+    match orch.config().nodes.get(&id) {
+        Some(NodeDef::Transform(_) | NodeDef::Filter(_) | NodeDef::Router(_)) => {}
+        Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                format!("node '{id}' does not support reconfigure"),
+            ));
+        }
+        None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
+    }
+
+    let new_config_json = serde_json::to_string(&body.config)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid config json: {e}")))?;
+
+    let (progress, completion_rx) = HotSwapProgress::channel();
+    let payload = SwapPayload::Reconfigure { new_config_json, progress };
+
+    let signal_at = std::time::Instant::now();
+    orch.send_swap(&id, payload)
+        .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
+
+    let completion = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        completion_rx,
+    )
+    .await;
+    let report = match completion {
+        Ok(Ok(Ok(report))) => report,
+        Ok(Ok(Err(err))) => {
+            return Err((StatusCode::CONFLICT, err.to_string()));
+        }
+        Ok(Err(_)) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "reconfigure runner exited before acknowledgement".to_string(),
+            ));
+        }
+        Err(_) => {
+            return Err((
+                StatusCode::GATEWAY_TIMEOUT,
+                "reconfigure did not converge within 5s (no post-swap message?)".to_string(),
+            ));
+        }
+    };
+
+    let ack_ns = report.ack_at.duration_since(signal_at).as_nanos() as u64;
+    let convergence_ns = report
+        .first_v2_at
+        .duration_since(report.ack_at)
+        .as_nanos() as u64;
+
+    // Reconfigure reuses the cached InstancePre; compile is unused and
+    // instantiation is the tiny cached-pre `.instantiate()` inside try_reconfigure,
+    // which happens between signal and ack. Report compile_ns=0 and
+    // instantiate_ns=0 so evaluation code can distinguish reconfigure from
+    // full hot-swap.
+    Ok(Json(serde_json::json!({
+        "node_id": id,
+        "status": "reconfigured",
+        "timeline": {
+            "compile_ns": 0u64,
+            "instantiate_ns": 0u64,
+            "signal_ns": 0u64,
+            "ack_ns": ack_ns,
+            "convergence_ns": convergence_ns,
         }
     })))
 }
