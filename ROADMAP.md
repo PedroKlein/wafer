@@ -87,8 +87,10 @@ The `clean-runtime` refactor extracted the new config + types into
 legacy `wafer-core::config` schema. Every entry in
 `docs/status/implementation-gaps.md` is a scheduled follow-up here.
 
-Executable backlog: `plan_tasks --plan-name runtime-migration` (12 tasks,
-one per gap A1–A12).
+Executable backlog: `plan_tasks --plan-name runtime-migration` (33 tasks,
+covering gaps A1–A15, verification gates, and commit checkpoints).
+
+Open follow-ups:
 
 - **A1 🔴** — rewire `wafer-runtime/src/main.rs` onto `wafer-config`;
   delete `wafer-core/src/config/schema.rs`.
@@ -96,6 +98,12 @@ one per gap A1–A12).
   binary when the config enables them.
 - **A11 🔴** — rewrite `waferctl/src/client.rs` against the real route
   table (unblocks the CLI once A2 lands).
+- **A13 🟡** — assign `RuntimeEnvelope` lineage in production so DLQ
+  and evaluation traces carry `trace_id` / `parent_id`.
+- **A14 🔴** — call guest lifecycle `validate()` / `init()` in the
+  production Wasm path and call `init()` on swapped-in instances.
+- **A15 🔴** — move throughput and hot-swap benchmarks off the stub
+  `TransformInstance` path and onto the production Wasm path.
 - **A3–A10 🟡** — wire the remaining features described in RFC-005 /
   ADR-0003 / ADR-0008 / ADR-0013 / arch chapters (SwapTimeline export,
   hot-swap `init()`, warm swap, error-policy cascade, retry exhaustion,
