@@ -25,13 +25,42 @@ use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::runner::HotSwapProgress;
 use wafer_core::testing::PluginTestHarness;
 
+/// Matches the launcher default for transform nodes (see `[engine.memory].transform`).
+const BENCH_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// Compile-time snapshots of the module files that used to expose the retired
+/// stub types. Re-adding either would flip these back to visible declarations.
+const ENGINE_MOD_SRC: &str = include_str!("../src/engine/mod.rs");
+const NODE_MOD_SRC: &str = include_str!("../src/node/mod.rs");
+
 const STUB_MARKER: &str = "pending Phase 2 rewrite";
 
-fn assert_no_stub_backed_evidence(source: &str) {
-    assert!(
-        !source.contains(STUB_MARKER),
-        "benchmark refuses to run: stub-backed evidence marker '{STUB_MARKER}' present in {source}",
-    );
+/// Sanity guard: refuse to produce RQ3 evidence if the retired stub paths
+/// (`engine::instance::TransformInstance`, `node::transform::WasmTransform`)
+/// have been re-declared. Checks the actual `mod.rs` sources via `include_str!`
+/// at compile time so the invariant holds against real code, not `module_path!()`.
+fn assert_no_stub_backed_evidence() {
+    for (name, src) in [
+        ("crates/wafer-core/src/engine/mod.rs", ENGINE_MOD_SRC),
+        ("crates/wafer-core/src/node/mod.rs", NODE_MOD_SRC),
+    ] {
+        assert!(
+            !src.contains("pub mod instance;") && !src.contains("mod instance;"),
+            "benchmark refuses to run: legacy stub module `engine::instance` re-declared in {name}",
+        );
+        assert!(
+            !src.contains("pub mod transform;") && !src.contains("mod transform;"),
+            "benchmark refuses to run: legacy stub module `node::transform` re-declared in {name}",
+        );
+        assert!(
+            !src.contains("TransformInstance"),
+            "benchmark refuses to run: legacy stub type `TransformInstance` re-exported in {name}",
+        );
+        assert!(
+            !src.contains(STUB_MARKER),
+            "benchmark refuses to run: stub-backed evidence marker '{STUB_MARKER}' present in {name}",
+        );
+    }
 }
 
 fn passthrough_wasm() -> PathBuf {
@@ -55,7 +84,7 @@ fn uppercase_wasm() -> PathBuf {
 /// Measure the full hot-swap prepare cost (compile + pre-instantiate + instantiate)
 /// through the same async path used by the runtime API.
 fn bench_wasm_loading(c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let rt = Runtime::new().unwrap();
 
     let passthrough = passthrough_wasm();
@@ -89,6 +118,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
                         &bytes,
                         "bench-transform",
                         Capabilities::sandbox(),
+                        BENCH_MEMORY_LIMIT,
                         progress,
                     )
                     .await
@@ -121,6 +151,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
                         &bytes,
                         "bench-transform",
                         Capabilities::sandbox(),
+                        BENCH_MEMORY_LIMIT,
                         progress,
                     )
                     .await
@@ -141,7 +172,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
 /// Track prepare-phase latencies against a soft target and fail-loud if the
 /// production path regresses.
 fn bench_prepare_target(c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let rt = Runtime::new().unwrap();
     let uppercase = uppercase_wasm();
     if !uppercase.exists() {
@@ -173,6 +204,7 @@ fn bench_prepare_target(c: &mut Criterion) {
                         &bytes,
                         "bench-transform",
                         Capabilities::sandbox(),
+                        BENCH_MEMORY_LIMIT,
                         progress,
                     )
                     .await
@@ -235,7 +267,7 @@ fn bench_prepare_target(c: &mut Criterion) {
 /// long criterion warmup loops on the same Store surface pre-existing
 /// resource-lifetime bugs unrelated to the RQ1/RQ3 evidence path.
 fn bench_production_sanity(_c: &mut Criterion) {
-    assert_no_stub_backed_evidence(module_path!());
+    assert_no_stub_backed_evidence();
     let passthrough = passthrough_wasm();
     if !passthrough.exists() {
         eprintln!("Skipping production_sanity: pass-through plugin not built");

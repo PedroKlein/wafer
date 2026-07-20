@@ -313,6 +313,7 @@ pub async fn prepare_transform_swap_timed(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    memory_limit: usize,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
@@ -325,8 +326,11 @@ pub async fn prepare_transform_swap_timed(
 
     let mut store = Store::new(
         engine.inner(),
-        WaferState::new(node_id, capabilities),
+        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
     );
+    // Activate configured StoreLimits (A8): without this, `memory_size` is ignored
+    // and the swapped-in instance can outgrow the launcher-enforced budget.
+    store.limiter(|s| s.limits_mut());
     store.set_fuel(engine.fuel_limit()).map_err(|e| {
         WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
     })?;
@@ -354,6 +358,7 @@ pub async fn prepare_filter_swap_timed(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    memory_limit: usize,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
@@ -364,7 +369,11 @@ pub async fn prepare_filter_swap_timed(
     let pre = engine.pre_instantiate_filter(&component)?;
     let pre = Arc::new(pre);
 
-    let mut store = Store::new(engine.inner(), WaferState::new(node_id, capabilities));
+    let mut store = Store::new(
+        engine.inner(),
+        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
+    );
+    store.limiter(|s| s.limits_mut());
     store.set_fuel(engine.fuel_limit()).map_err(|e| WaferError::PluginInit {
         message: format!("failed to set fuel: {e}"),
     })?;
@@ -392,6 +401,7 @@ pub async fn prepare_router_swap_timed(
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
+    memory_limit: usize,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
@@ -402,7 +412,11 @@ pub async fn prepare_router_swap_timed(
     let pre = engine.pre_instantiate_router(&component)?;
     let pre = Arc::new(pre);
 
-    let mut store = Store::new(engine.inner(), WaferState::new(node_id, capabilities));
+    let mut store = Store::new(
+        engine.inner(),
+        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
+    );
+    store.limiter(|s| s.limits_mut());
     store.set_fuel(engine.fuel_limit()).map_err(|e| WaferError::PluginInit {
         message: format!("failed to set fuel: {e}"),
     })?;

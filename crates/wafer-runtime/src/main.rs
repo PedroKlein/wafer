@@ -165,8 +165,14 @@ async fn main() -> Result<()> {
             };
 
             let (progress, _completion_rx) = wafer_core::runner::HotSwapProgress::channel();
+            // CLI-driven prepare-only smoke path: use the default transform memory limit.
             let result = prepare_transform_swap_timed(
-                &engine, &wasm_bytes, &node_id, Capabilities::sandbox(), progress,
+                &engine,
+                &wasm_bytes,
+                &node_id,
+                Capabilities::sandbox(),
+                64 * 1024 * 1024,
+                progress,
             ).await;
 
             match result {

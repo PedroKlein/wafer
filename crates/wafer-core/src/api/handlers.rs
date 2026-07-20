@@ -139,16 +139,23 @@ pub async fn hot_swap(
     }
 
     let engine = orch.engine();
-    let (kind, capabilities) = match orch.config().nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => {
-            (SwapKind::Transform, capabilities_from_config(&wasm.capabilities))
-        }
-        Some(NodeDef::Filter(wasm)) => {
-            (SwapKind::Filter, capabilities_from_config(&wasm.capabilities))
-        }
-        Some(NodeDef::Router(wasm)) => {
-            (SwapKind::Router, capabilities_from_config(&wasm.capabilities))
-        }
+    let engine_config = orch.config();
+    let (kind, capabilities, memory_limit) = match engine_config.nodes.get(&id) {
+        Some(NodeDef::Transform(wasm)) => (
+            SwapKind::Transform,
+            capabilities_from_config(&wasm.capabilities),
+            wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
+        ),
+        Some(NodeDef::Filter(wasm)) => (
+            SwapKind::Filter,
+            capabilities_from_config(&wasm.capabilities),
+            wasm.memory_limit.unwrap_or(engine_config.engine.memory.filter),
+        ),
+        Some(NodeDef::Router(wasm)) => (
+            SwapKind::Router,
+            capabilities_from_config(&wasm.capabilities),
+            wasm.memory_limit.unwrap_or(engine_config.engine.memory.router),
+        ),
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
         }
@@ -162,13 +169,13 @@ pub async fn hot_swap(
     let (progress, completion_rx) = HotSwapProgress::channel();
     let timed_result = match kind {
         SwapKind::Transform => {
-            prepare_transform_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+            prepare_transform_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
         }
         SwapKind::Filter => {
-            prepare_filter_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+            prepare_filter_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
         }
         SwapKind::Router => {
-            prepare_router_swap_timed(engine, &wasm_bytes, &id, capabilities, progress).await
+            prepare_router_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
         }
     };
     let mut timed_result = timed_result.map_err(|e| {
