@@ -31,7 +31,7 @@ and architecture claims assume the rewire happened; it did not.
 
 ---
 
-## A1 — Two config schemas coexist; runtime uses the legacy one 🔴
+## A1 — Two config schemas coexist; runtime uses the legacy one (Closed 2026-07-19) 🟢
 
 - **Documented in:**
   - `docs/rfcs/RFC-004-config-schema.md` (Status: "Implemented")
@@ -58,8 +58,9 @@ and architecture claims assume the rewire happened; it did not.
   delete `crates/wafer-core/src/config/schema.rs` and its loader.
 - **Blocker for:** A5–A9 (most of the other drift entries stem from A1 —
   their target state assumes the new schema).
+- **Closed by:** runtime-migration plan A1 (commit `534f9c2 migrate runtime foundations`) — `wafer-runtime/src/main.rs` now imports `wafer_config::{load_config, validate}` and `crates/wafer-core/src/config/` re-exports only `wafer_types::config`; legacy `schema.rs`, `loader.rs`, `diff.rs`, and `NodeType::Joiner` were deleted.
 
-## A2 — HTTP control plane never launched by runtime binary 🔴
+## A2 — HTTP control plane never launched by runtime binary (Closed 2026-07-19) 🟢
 
 - **Documented in:**
   - `docs/interfaces/http-api.md:3-6` — claims wafer-runtime exposes an axum control plane by default
@@ -79,8 +80,9 @@ and architecture claims assume the rewire happened; it did not.
 - **Fix:** Wire `ApiServer::new(...).run().await` and `MetricsServer::new(...).run().await`
   into `wafer-runtime/src/main.rs` when the config enables them.
 - **Blocker for:** A11 (waferctl endpoints).
+- **Closed by:** runtime-migration plan A2 (commit `534f9c2`) — runtime spawns `ApiServer` and same-port metrics by default with graceful shutdown; smoke: `curl http://127.0.0.1:9090/health` → `200 OK`, `/api/v1/nodes` JSON, `/metrics` Prometheus text. Regression covered by `crates/wafer-runtime/tests/runtime_control_plane.rs`.
 
-## A3 — SwapTimeline phases not wired to production 🟡
+## A3 — SwapTimeline phases not wired to production (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `docs/adr/0003-hot-swap-mechanism.md:29-44, 74-77`
@@ -103,8 +105,9 @@ and architecture claims assume the rewire happened; it did not.
   returns a new payload, `swap_acked` when the store/bindings/pre are
   replaced, and `first_v2_output` when the first envelope produced by the new
   instance leaves the node. Plumb the enriched `SwapTimeline` back to the API.
+- **Closed by:** runtime-migration plan A3 + A3b — API `/api/v1/nodes/{id}/hot-swap` now returns runner-reported `compile_ns`, `instantiate_ns`, `signal_ns`, `ack_ns`, `convergence_ns`; ACK and first-v2 convergence are marked by transform/filter/router runner loops via `HotSwapProgress` and delivered to the API through a `tokio::sync::oneshot`. Real-runtime smoke returned `{"status":"swap_converged","timeline":{"ack_ns":600541,"compile_ns":116346250,"convergence_ns":68042,"instantiate_ns":822542,"signal_ns":1208}}`. Residual: `hot_swap_phase_ns` histogram on `/metrics` is not yet exposed and remains a follow-up.
 
-## A4 — Hot-swap `init()` not called on new instance 🟡
+## A4 — Hot-swap `init()` not called on new instance (Closed 2026-07-20) 🟢
 
 - **Documented in:** `docs/adr/0003-hot-swap-mechanism.md:38-41`
 - **Target state:** During the ACK phase, the runner calls `init()` on the
@@ -119,8 +122,9 @@ and architecture claims assume the rewire happened; it did not.
   hot-swap will silently fail.
 - **Fix:** Add `bindings.init(&node_config).call().await?` after the store
   replacement inside the swap helper.
+- **Closed by:** runtime-migration plan A4 — `WasmTransformNode::try_hot_swap` (and filter/router equivalents) runs `validate_and_init(self.config_json)` on the replacement before treating the swap as ACKed, restores the old store/bindings/pre on failure, and reports the failure to the API as `409 CONFLICT` with a `HotSwapError::InitFailed` message; smoke test with bogus wasm returned 500 at prepare and `hot_swap_progress_reports_init_failure` unit test covers the rollback surface.
 
-## A5 — Config-only warm swap path not consumed 🟡
+## A5 — Config-only warm swap path not consumed (Closed 2026-07-20) 🟢
 
 - **Documented in:** `docs/adr/0003-hot-swap-mechanism.md:92-95`
 - **Target state:** When only the plugin's TOML `[config]` changes, reuse the
@@ -136,8 +140,9 @@ and architecture claims assume the rewire happened; it did not.
   overload of `/hot-swap` when only `config` is supplied) that reuses
   `cached_pre()` and produces a `SwapPayload` with the old `InstancePre`
   and the new node-config.
+- **Closed by:** runtime-migration plan A5 — added `SwapPayload::Reconfigure { new_config_json, progress }`, `try_reconfigure` on all three Wasm node types (re-instantiates from the node's own cached `InstancePre` and re-runs `validate()`/`init()` with rollback on failure), and `POST /api/v1/nodes/{id}/reconfigure`. Smoke: valid reconfigure returned `{"status":"reconfigured","timeline":{"compile_ns":0,"instantiate_ns":0,"signal_ns":0,"ack_ns":697375,"convergence_ns":35833}}`; invalid config returned `409` with `validate() rejected config`. Residual: no explicit plugin-hash guard on reconfigure.
 
-## A6 — Error-policy cascade ignored 🟡
+## A6 — Error-policy cascade ignored (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `docs/adr/0008-error-policy-engine.md:15-17, 25, 29, 39, 49`
@@ -154,8 +159,9 @@ and architecture claims assume the rewire happened; it did not.
 - **Impact:** Every `[error_policy]` block in every config file is a no-op.
 - **Fix:** Blocked on A1 (the legacy schema has no `error_policy` field to
   read from). Once A1 lands, thread the resolved config through the builder.
+- **Closed by:** runtime-migration plan A6 — `resolve_error_policy` in `orchestrator/builder.rs` reads top-level `[error_policy]` and per-node overrides; `ResolvedErrorPolicy::default()` now derives from `wafer_types::config::ErrorPolicyConfig::default()` so `retry_buffer_capacity` defaults to 1000; runner honors `bad_input`/`timed_out` action variants and per-category retry backoff; 13 `runner::error_policy` unit tests pass.
 
-## A7 — Retry exhaustion + Recovery state unimplemented 🟡
+## A7 — Retry exhaustion + Recovery state unimplemented (Partial 2026-07-20) 🟡
 
 - **Documented in:**
   - `docs/adr/0008-error-policy-engine.md:15-17, 29-35, 41`
@@ -180,8 +186,9 @@ and architecture claims assume the rewire happened; it did not.
   emit `RetriesExhausted` on drop. (b) On unrecoverable, transition state to
   `Recovering`, call the state.rs helper, `bindings.init()`, transition back to
   `Running`.
+- **Partially closed by:** runtime-migration plan A7 — (b) fully done: transform/filter/router loops transition `Error → Recovering` and call `recover_from_cached_pre()` (fresh Store from same Engine + cached `InstancePre`, then `validate_and_init` with the retained lifecycle config JSON); success transitions back to `Running`. (a) not yet done: `try_retry` still uses `retry_count = 0` per envelope; `DlqReason::RetriesExhausted` is emitted only on `TimedOut` or when the retry buffer is full. `wafer_node_recovery_duration_ms` histogram is not exposed. Follow-up: per-envelope retry-count persistence and the recovery-duration metric.
 
-## A8 — Per-type fuel + StoreLimits not honored 🟡
+## A8 — Per-type fuel + StoreLimits not honored (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `docs/adr/0013-aot-cache-and-metering.md:23, 25, 30, 33, 40`
@@ -205,8 +212,9 @@ and architecture claims assume the rewire happened; it did not.
 - **Fix:** After A1, read `FuelBudgets` from `wafer-types::config::EngineConfig`
   and dispatch per-`NodeKind` in the launcher. Add a `store_limits` field to
   `EngineConfig` (or nested under `[engine.memory]`) and thread it through.
+- **Closed by:** runtime-migration plan A8 — `wafer_types::config::EngineConfig` now carries `[engine.fuel]` per-kind budgets and `[engine.memory]` per-kind limits (defaults 64 MiB transform, 16 MiB filter/router) plus per-node `fuel` / `memory_limit` overrides; launcher passes type-specific defaults into `WasmTransformNode`/`WasmFilterNode`/`WasmRouterNode`; `WaferState::new_with_memory_limit` applies `StoreLimitsBuilder::memory_size`. Residual: attack-plugin memory-exhaust integration test not run.
 
-## A9 — Capabilities not preserved across swap 🟡
+## A9 — Capabilities not preserved across swap (Closed 2026-07-20) 🟢
 
 - **Documented in:** `docs/architecture/06-crosscutting-concepts.md:62-72`
 - **Target state:** Configured capabilities from `[nodes.X.capabilities]`
@@ -221,8 +229,9 @@ and architecture claims assume the rewire happened; it did not.
   or `inherit_env` is denied.
 - **Fix:** Blocked on A1 (config carries capabilities). Thread
   `wafer_types::config::Capabilities` through the launcher and swap paths.
+- **Closed by:** runtime-migration plan A9 — launcher uses `capabilities_from_config(&wasm.capabilities)` for transform/filter/router instantiation; hot-swap API path looks up the target node's `wasm.capabilities` and passes them to `prepare_*_swap_timed`; `grep Capabilities::sandbox crates/wafer-core/src/{orchestrator,api}` returns no matches. Residual: wasi-nn integration test with a model on hardware remains successor-plan work.
 
-## A10 — Hot-swap endpoint is transform-specific, documented as generic 🟡
+## A10 — Hot-swap endpoint is transform-specific, documented as generic (Closed 2026-07-20) 🟢
 
 - **Documented in:** `docs/architecture/04-runtime-view.md:78-115`
 - **Target state:** `POST /api/v1/nodes/{id}/hot-swap` dispatches on node type
@@ -237,8 +246,9 @@ and architecture claims assume the rewire happened; it did not.
   the E2E test's direct-API path exercises those code paths.
 - **Fix:** Look up `NodeKind` for `{id}`, dispatch to the appropriate
   `prepare_*_swap_timed` helper.
+- **Closed by:** runtime-migration plan A10 — added `prepare_filter_swap_timed` and `prepare_router_swap_timed`; API `hot_swap` handler pattern-matches `NodeDef::Transform/Filter/Router` and dispatches to the matching helper. Real-runtime smoke returned `swap_converged` with all five phase timings for transform (pass-through), filter (threshold-filter), and router (content-router).
 
-## A11 — waferctl calls endpoints that do not exist 🔴
+## A11 — waferctl calls endpoints that do not exist (Closed 2026-07-19) 🟢
 
 - **Documented in:** `docs/status/implementation-status.md:18` — "CLI mirror
   for the HTTP control plane".
@@ -254,6 +264,7 @@ and architecture claims assume the rewire happened; it did not.
   on A2 anyway; independently broken by this).
 - **Fix:** Rewrite `client.rs` against the actual `server.rs` route table;
   emit the `wasm_path` payload for hot-swap.
+- **Closed by:** runtime-migration plan A11 (commit `3dbad39 fix waferctl control routes`) — `waferctl` now calls `/health`, `/ready`, `/api/v1/nodes`, `/api/v1/nodes/{id}`, `/api/v1/nodes/{id}/hot-swap` with `{ "wasm_path": ... }` body, `/api/v1/pipeline/shutdown`, and `/metrics`; stale `/pipeline`, `/reload`, `/drain` methods deleted; 33 unit tests pass and real-runtime smoke exercised nodes, node, hot-swap, and shutdown against a live wafer binary.
 
 ## A12 — `wit-contracts.md` documents a nonexistent field path 🟢
 
@@ -267,7 +278,7 @@ and architecture claims assume the rewire happened; it did not.
 
 <a id="a13"></a>
 
-## A13 — RuntimeEnvelope lineage is never assigned in production 🟡
+## A13 — RuntimeEnvelope lineage is never assigned in production (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `docs/rfcs/RFC-002-host-runtime.md` — lineage is part of the queue-layer
@@ -299,10 +310,11 @@ and architecture claims assume the rewire happened; it did not.
   populated by production code.
 - **Blocker-chain:** Blocks trustworthy lineage/trace claims in RQ3b and any
   DLQ debugging workflow that depends on parent/trace IDs.
+- **Closed by:** runtime-migration plan A13 — source loop calls `RuntimeEnvelope::ensure_trace_id()` before forwarding; transform outputs inherit lineage via `inherit_lineage_from(&input)`; router fan-out sets each child's `parent_id` to the routed envelope ID while preserving `trace_id`; `DlqEnvelope` reads lineage. Regression: `test_source_loop_messages_flow` and `test_fan_out_multiple_ports` now assert lineage without manual envelope mutation.
 
 <a id="a14"></a>
 
-## A14 — Guest lifecycle `validate()` / `init()` are not called in production Wasm path 🔴
+## A14 — Guest lifecycle `validate()` / `init()` are not called in production Wasm path (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `wit/pipeline-node.wit:19-38` — lifecycle interface declares
@@ -340,10 +352,11 @@ and architecture claims assume the rewire happened; it did not.
   actual production Wasm path.
 - **Blocker-chain:** Blocks correct stateful-plugin behavior and compounds A4
   (hot-swap `init()` not called on replacement instances).
+- **Closed by:** runtime-migration plan A14 — `WasmTransformNode`, `WasmFilterNode`, and `WasmRouterNode` expose `validate_and_init(config_json)`; the orchestrator launcher serializes each node's `config` to JSON and calls `validate_and_init` before returning the node. Smoke: threshold-filter with invalid config failed startup with `validate() rejected config: missing or invalid 'max' in config`; valid config processed a message end-to-end. A4 hot-swap init also flows through the same helper via `try_hot_swap`.
 
 <a id="a15"></a>
 
-## A15 — Throughput and hot-swap benchmarks measure stub `TransformInstance` 🔴
+## A15 — Throughput and hot-swap benchmarks measure stub `TransformInstance` (Closed 2026-07-20) 🟢
 
 - **Documented in:**
   - `docs/rfcs/RFC-007-performance-optimizations.md` — benchmark-first
@@ -354,26 +367,16 @@ and architecture claims assume the rewire happened; it did not.
 - **Target state:** Criterion benchmarks exercise the production Wasm path used
   by the runtime (`WasmTransformNode` / generated bindgen wrappers), so RQ1
   overhead and RQ3 hot-swap numbers measure real Component Model execution.
-- **Current state:**
-  - `crates/wafer-core/benches/throughput.rs:22, 237-249, 279-295, 349-361,
-    402-417, 436-442` — throughput benchmarks instantiate
-    `TransformInstance` and repeatedly call `call_process(...)`.
-  - `crates/wafer-core/benches/hot_swap.rs:26, 88-116, 167` — hot-swap
-    benchmarks instantiate `TransformInstance`.
-  - `crates/wafer-core/src/engine/instance.rs:1, 14-20, 36-39` —
-    `TransformInstance` is explicitly marked `STUB pending Phase 2 rewrite`;
-    `call_process` returns `"transform instance pending Phase 2 rewrite"`.
-- **Impact:** RQ1/RQ3 benchmark numbers from these files are not meaningful as
-  Wasm boundary or hot-swap measurements. They time a stubbed path or
-  instantiation scaffolding, not production message processing.
-- **Fix:** Rewrite `throughput.rs` and `hot_swap.rs` to use the same bindgen
-  wrapper path as production (`WasmTransformNode` / `WaferEngine::pre_instantiate_*`)
-  or delete/disable these benchmarks until runtime-migration replaces the stub.
-  Add a benchmark sanity assertion that fails if `pending Phase 2 rewrite` is
-  returned.
-- **Severity:** 🔴 **Severe** — thesis-critical performance evidence is invalid
-  until the benchmarks use the production path.
-- **Blocker-chain:** Blocks trustworthy RQ1 overhead and RQ3 hot-swap results.
+- **Closed by:** runtime-migration plan A15 — rewrote `throughput.rs` and
+  `hot_swap.rs` to run against `PluginTestHarness::load_transform` and
+  `prepare_transform_swap_timed`, deleted the stub `TransformInstance` and
+  `WasmTransform`, and added an `assert_no_stub_backed_evidence` guard that
+  fails if the marker `pending Phase 2 rewrite` reappears in the source path.
+  Bench smoke: `cargo bench --package wafer-core --bench hot_swap -- hot_swap_prepare/full`
+  produced `~7.7 ms mean` for engine + compile + pre-instantiate + instantiate
+  on the production pass-through plugin.
+- **Severity:** 🟢 **Closed** — RQ1/RQ3 benchmarks now measure the production
+  path; RPi hardware evaluation remains successor-plan work.
 
 ---
 

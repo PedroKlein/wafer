@@ -1,16 +1,6 @@
 # Config Schema Reference
 
-> **⚠ Aspirational reference.** The schema described here is fully implemented
-> in `crates/wafer-types/src/config/` and `crates/wafer-config/`, but
-> `crates/wafer-runtime/src/main.rs:18` still calls
-> `wafer_core::config::load_config` — the **legacy** schema with
-> `[[nodes]]` array, `plugin_path`/`oci` fields, `from_port`/`to_port` on
-> edges, and `NodeType::Joiner`. Every example below fails against today's
-> `wafer` binary. See gap **A1** in
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md).
-> Once the runtime is rewired, this banner comes down.
-
-Reference for the TOML pipeline configuration consumed by `wafer-runtime --config <path>`. The domain types live in `crates/wafer-types/src/config/`; the loader / validator / DAG builder live in `crates/wafer-config/`.
+Reference for the TOML pipeline configuration consumed by `wafer-runtime --config <path>`. The domain types live in `crates/wafer-types/src/config/`; the loader / validator / DAG builder live in `crates/wafer-config/`, and the runtime binary imports them directly (gap **A1** — Closed 2026-07-19).
 
 Every top-level section is optional. Every field marked *default* has a sensible fallback so a minimal pipeline is a few lines of TOML.
 

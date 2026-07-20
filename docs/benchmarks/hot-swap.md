@@ -1,10 +1,12 @@
 # Hot-swap Benchmark
 
-> **⚠ Aspirational benchmark.** The phase model is the intended RQ3
-> measurement contract, but production `SwapTimeline` export is only partially
-> wired (gap **A3**) and `crates/wafer-core/benches/hot_swap.rs` currently
-> measures the stub `TransformInstance` path (gap [**A15**](../status/implementation-gaps.md#a15)). See
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md).
+> **Status.** Post-runtime-migration (A3, A3b, A4, A5, A10, A15): the runtime
+> now exports the full five-phase `SwapTimeline` via runner-reported ACK and
+> first-v2-output convergence (see A3/A3b), and
+> `crates/wafer-core/benches/hot_swap.rs` exercises the production
+> `prepare_transform_swap_timed` path plus a sanity guard against the retired
+> stub `TransformInstance`. Prior benchmark numbers from before this migration
+> measured the stub path and must not be used as RQ3 evidence.
 
 Per-phase latency decomposition of the WAFER hot-swap. Ground truth
 for `NFR-PERF-4` and the RQ3 pass criterion (`NFR-SWAP-1`, node pause

@@ -42,12 +42,14 @@
 
 ---
 
-## Evaluation phases — see ROADMAP.md
+## Evaluation and thesis — see successor plans
 
-Detailed Phase 1 (evaluation infrastructure), Phase 2 (experiment
-execution on RPi 4 / Jetson), and Phase 3 (polish) task lists live in
-`ROADMAP.md` at the repo root. This TODO stays for tactical, in-flight
-items only.
+Detailed evaluation-infrastructure and thesis-writing work now lives in dedicated `plan_tasks` plans:
+
+- **evaluation-infrastructure** (`plan_tasks --plan-name evaluation-infrastructure`) — native Rust baseline (E1), eKuiper comparator (E2), shared payload/config fixtures (E3), attack plugin finalization (E4), RPi 4/Jetson automation (E5), analysis notebooks (E6), formal experiment execution (E7).
+- **thesis-writing** (`plan_tasks --plan-name thesis-writing`) — advisor feedback tracking (T1), BibTeX consolidation (T2), LaTeX build (T3), chapter drafts (T4–T7), figures/tables (T6), defense-day materials (T8). Executor is `user` for these tasks.
+
+`ROADMAP.md` provides the high-level narrative; the successor plans hold the executable tasks. This TODO stays for tactical, in-flight items only.
 
 Current tactical items go under the next section as one-off notes;
 please do not re-import the ROADMAP checkbox lists here.

@@ -7,78 +7,22 @@ decisions that these items would build on are captured in
 
 ## Near-term — evaluation infrastructure
 
-Items required to close out the thesis evaluation (RQ1 / RQ2 / RQ3).
-Priorities: 🔴 critical, 🟡 important, 🟢 nice-to-have.
+Executable backlog for the RQ1/RQ2/RQ3 evaluation lives in the
+`evaluation-infrastructure` plan (`plan_tasks --plan-name evaluation-infrastructure`).
+Its seven tasks cover the native Rust baseline (E1), eKuiper comparator (E2),
+shared payload/config fixtures (E3), attack plugin finalization (E4),
+RPi 4/Jetson automation (E5), analysis notebooks (E6), and formal experiment
+execution (E7). This ROADMAP section is a summary; do not duplicate task
+tables here.
 
-### Phase 1 — Evaluation infrastructure (extend what exists)
+High-level priorities:
 
-#### 🔴 Load generator and baseline
-
-- Payload templates in `wafer-loadgen` for 120 B / 1 KB / 10 KB /
-  100 KB (E-Perf-4 variable-payload sweep).
-- Native Rust baseline (Pipeline D) — same channels, same envelope,
-  no WIT boundary. `ProcessNode` trait abstraction lands with this.
-- eKuiper native install on Raspberry Pi 4 with matching MQTT topics
-  and an equivalent SQL rule.
-
-#### 🔴 Attack plugins
-
-- Finalise the six attack plugins under `plugins/attacks/` so
-  E-Iso-1 … E-Iso-6 run end-to-end (buffer overflow, cross-read,
-  fs-access, infinite-loop, memory-exhaust, panic).
-- E-Iso-7: parallel-branch topology with one branch failing.
-- E-Iso-8: recovery-time measurement (trap → `Recovering` →
-  `Running`). Depends on gap **A7** (`docs/status/implementation-gaps.md#a7`).
-
-#### 🟡 Instrumentation extensions
-
-- Additional pipeline configs: 1 / 5 / 10-node chains (E-Perf-3,
-  E-Perf-6, E-Perf-8).
-- Full `SwapTimeline` export on the `/api/v1/nodes/{id}/hot-swap`
-  response (currently only `compile_ns` and `instantiate_ns` are
-  returned). See gap **A3**.
-- `SwapTimeline` histogram metric under `/metrics`.
-- Message accounting counters exposed at graceful-shutdown time
-  (`emitted` / `delivered` / `dlq` / `retried`) so tail-latency
-  correlation with hot-swap events is straightforward.
-
-### Phase 2 — Experiment execution (run on real hardware)
-
-#### 🔴 Environment automation
-
-- RPi 4 environment setup: pinned kernel, `performance` CPU
-  governor, dedicated MQTT-broker core (`taskset`), documented
-  firmware version.
-- Ansible playbook (or setup script) for reproducibility.
-- `eval/` directory: fixture configs, orchestration scripts, raw-data
-  layout.
-- Python analysis notebooks (Mann-Whitney U + Bootstrap CI95 +
-  Cliff's Delta).
-
-#### 🔴 Experiment runs (in evaluation-plan order)
-
-- E-Val-1 (methodology validation) → E-Perf-1..6 → E-Swap-1..6 →
-  E-Iso-1..8 → E-Density-1..3. Detailed methodology lives in
-  `tcc-doc/research/analysis/evaluation-plan.md`.
-
-#### 🟡 Jetson inference benchmarks
-
-- MobileNetV2 inference pipeline (UC2 narrative strengthening).
-- MNIST micro-benchmark: wasi-nn overhead isolation.
-- CPU vs GPU comparison on same binary.
-
-### Phase 3 — Polish (after experiments)
-
-#### 🟡 Benchmarks
-
-- OCI registry benchmark (cold pull vs warm cache) for E-Density-1.
-- Multi-pipeline memory isolation test (if the runtime later
-  supports multi-pipeline hosting).
-
-#### 🟢 Reproducibility
-
-- Zenodo-style raw-data publication of every eval run.
-- Cross-architecture cross-validation (E-Perf-5) on x86 host.
+- Load generator + native baseline + eKuiper comparator so RQ1 has three sides.
+- Attack plugin suite finalization and matched containment tests for RQ2.
+- Environment automation + notebooks + formal experiment matrix for RQ3 (and
+  RQ1/RQ2 archived runs).
+- Reproducibility polish (Zenodo-style raw-data publication, cross-architecture
+  validation).
 
 ## Runtime migration — close documentation drift
 
@@ -87,28 +31,22 @@ The `clean-runtime` refactor extracted the new config + types into
 legacy `wafer-core::config` schema. Every entry in
 `docs/status/implementation-gaps.md` is a scheduled follow-up here.
 
-Executable backlog: `plan_tasks --plan-name runtime-migration` (33 tasks,
+Executable backlog: `plan_tasks --plan-name runtime-migration` (34 tasks,
 covering gaps A1–A15, verification gates, and commit checkpoints).
+
+Status (2026-07-20): A1–A6, A8–A11, A12–A15 closed; A7 partial (recovery
+transitions done, retry-exhaustion counting pending). Remaining open work is
+now scoped to A7 residual observability plus successor evaluation and thesis
+plans.
 
 Open follow-ups:
 
-- **A1 🔴** — rewire `wafer-runtime/src/main.rs` onto `wafer-config`;
-  delete `wafer-core/src/config/schema.rs`.
-- **A2 🔴** — launch `ApiServer` + `MetricsServer` from the runtime
-  binary when the config enables them.
-- **A11 🔴** — rewrite `waferctl/src/client.rs` against the real route
-  table (unblocks the CLI once A2 lands).
-- **A13 🟡** — assign `RuntimeEnvelope` lineage in production so DLQ
-  and evaluation traces carry `trace_id` / `parent_id`.
-- **A14 🔴** — call guest lifecycle `validate()` / `init()` in the
-  production Wasm path and call `init()` on swapped-in instances.
-- **A15 🔴** — move throughput and hot-swap benchmarks off the stub
-  `TransformInstance` path and onto the production Wasm path.
-- **A3–A10 🟡** — wire the remaining features described in RFC-005 /
-  ADR-0003 / ADR-0008 / ADR-0013 / arch chapters (SwapTimeline export,
-  hot-swap `init()`, warm swap, error-policy cascade, retry exhaustion,
-  per-type fuel / StoreLimits, capability preservation, node-type
-  dispatch on hot-swap).
+- **A7 residual 🟡** — per-envelope retry-attempt counting so
+  `DlqReason::RetriesExhausted { max_retries }` is emitted after `N` failed
+  attempts, plus a `wafer_node_recovery_duration_ms` histogram on `/metrics`.
+- **A3/A15 residual 🟡** — expose `hot_swap_phase_ns` as a labeled histogram
+  on `/metrics`, and run the rewritten benchmarks on RPi 4 / Jetson hardware
+  as part of the successor evaluation plan.
 - **A12 🟢** — fix `wit-contracts.md` field-path (done in
   doc-refactor cleanup).
 

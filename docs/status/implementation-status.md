@@ -1,29 +1,28 @@
 # Implementation Status
 
-Current implementation state of WAFER as of the 2026-07-15 refactor.
-Replaces the legacy `docs/MVP.md`. Factual: what is built, what is
-tested. Aspirational items and future work live in `ROADMAP.md` at
+Current implementation state of WAFER after the `runtime-migration` plan
+(2026-07-20). Replaces the legacy `docs/MVP.md`. Factual: what is built,
+what is tested. Aspirational items and future work live in `ROADMAP.md` at
 the repo root; documented-but-not-yet-wired items are catalogued in
 [`implementation-gaps.md`](./implementation-gaps.md).
 
-> **⚠ Read `implementation-gaps.md` alongside this file.** Several rows
-> below say "Implemented" because the *types and interfaces* exist; the
-> **runtime binary** may not yet consume them. Specifically: `wafer-config`
-> is not wired into `wafer-runtime` (gap **A1**); the axum control plane is
-> not launched by the binary today (gap **A2**); `waferctl` calls
-> endpoints that do not exist on the server (gap **A11**).
+> **Post-runtime-migration.** A1–A6, A8–A11, A13–A15 are closed with
+> evidence and A7 is partial (recovery transitions land, retry-exhaustion
+> counting still pending). `wafer-config` is now the runtime loader, the
+> axum control plane launches by default, and `waferctl` calls only the
+> routes that exist on the server.
 
 ## Runtime crates (7 workspace members)
 
 | Crate | Kind | Status |
 |-------|------|--------|
-| `wafer-core` | library | Implemented. Public API stable; internal modules undergo refactor. |
-| `wafer-config` | library | Types + validator implemented and unit-tested; **not consumed by the runtime binary yet** (gap **A1**). |
+| `wafer-core` | library | Implemented. Public API stable; production Wasm nodes call guest `validate()`/`init()` before first message (A14). |
+| `wafer-config` | library | Types + validator implemented and unit-tested; now the runtime binary loader (A1 closed). |
 | `wafer-types` | library | Implemented. Domain types shared by every other crate. |
 | `wafer-plugin` | library | Implemented. Guest-side SDK: `macro_rules!` only, no proc macros. |
-| `wafer-runtime` | binary | Loads TOML via the legacy `wafer-core::config` loader, builds pipeline, waits for graceful shutdown. **Does not launch the axum control plane in `main.rs`** (gap **A2**). |
+| `wafer-runtime` | binary | Loads TOML via `wafer-config`, launches the axum control plane and same-port metrics by default, and shuts down gracefully on SIGTERM (A1, A2 closed). |
 | `wafer-loadgen` | binary | Implemented (baseline). Open-loop generator with HdrHistogram sink; sequence-number tracker for hot-swap loss detection. |
-| `waferctl` | binary | Compiles and ships; **calls endpoints that do not exist on the server** and posts an empty body on hot-swap (gap **A11**). Non-functional against a running binary. |
+| `waferctl` | binary | Calls the real HTTP route table (`/health`, `/api/v1/nodes[/{id}[/hot-swap]]`, `/api/v1/pipeline/shutdown`, `/metrics`) and requires `--wasm-path` for hot-swap (A11 closed). |
 
 ## WIT contracts
 
@@ -78,41 +77,55 @@ Wired endpoints (see `docs/interfaces/http-api.md`):
 - `GET /metrics`
 - `GET /api/v1/nodes`
 - `GET /api/v1/nodes/{id}`
-- `POST /api/v1/nodes/{id}/hot-swap`
+- `POST /api/v1/nodes/{id}/hot-swap` — dispatches on `NodeKind` (transform, filter, router).
+- `POST /api/v1/nodes/{id}/reconfigure` — warm config-only swap via cached `InstancePre` (A5).
 - `POST /api/v1/pipeline/shutdown`
 
 ## Hot-swap
 
 Implemented via `watch::Sender<Option<SwapPayload>>` per Wasm node
 (RFC-005, ADR-0003, ADR-0012). The `SwapTimeline` records per-phase
-timing (`compile`, `instantiate`, `signal`, `ack`, `convergence`);
-only `compile_ns` and `instantiate_ns` are returned via the HTTP
-response today, the rest are captured for the benchmarks.
+timing (`compile`, `instantiate`, `signal`, `ack`, `convergence`) and
+all five values are returned via the HTTP response (A3, A3b, A10). The
+runner marks `ack` after replacing store/bindings/pre and running guest
+`validate()`/`init()` on the replacement (A4); init failure rolls back
+to v1 and returns HTTP `409` with the guest error message. Config-only
+reconfigure via `POST /api/v1/nodes/{id}/reconfigure` reuses the cached
+`InstancePre` and reports `compile_ns=0`, `instantiate_ns=0` (A5).
 
 ## Error policy
 
 Five-category dispatch (`ErrorPolicyExecutor` in
 `crates/wafer-core/src/runner/error_policy.rs`) implementing:
 
-- Pipeline-wide default policy + per-node override cascade.
+- Pipeline-wide `[error_policy]` default policy + per-node override cascade (A6).
 - Bounded retry buffer (default 1000 entries) with exponential
   backoff capped at 30 s.
-- Structured `DlqEnvelope` written to MQTT or file DLQ.
+- Structured `DlqEnvelope` written to MQTT or file DLQ, carrying
+  production-generated `trace_id`/`parent_id` lineage (A13).
 - Hot-swap and shutdown flush retry buffers to DLQ with the
   appropriate `DlqReason`.
+- On unrecoverable errors the runner transitions `Error → Recovering`,
+  re-instantiates from the cached `InstancePre`, re-runs
+  `validate()`/`init()`, and returns to `Running` (A7 recovery half).
+- Retry exhaustion counting per envelope and a
+  `wafer_node_recovery_duration_ms` metric are pending (A7 residual).
 
 ## Metering and isolation
 
 - **Fuel** — per-category defaults in `[engine.fuel]`; per-node
-  overrides on `WasmNodeDef`. Exhaustion traps as
+  overrides on `WasmNodeDef` (A8). Exhaustion traps as
   `WasmProcessError::TimedOut`.
 - **Epoch** — OS-thread ticker (`std::thread::spawn`), ticks every
   `epoch_tick_ms` (default 10 ms); interrupt after `epoch_deadline`
   ticks (default 100 → 1000 ms wall clock).
-- **`StoreLimits`** — per-node memory cap (Transform 64 MB,
-  Filter/Router 16 MB by default).
+- **`StoreLimits`** — per-category memory defaults in `[engine.memory]`
+  (Transform 64 MiB, Filter/Router 16 MiB) with per-node
+  `memory_limit` override (A8).
 - **Capabilities** — deny-by-default (`inherit_stdio`,
-  `inherit_env`, `allow_inference` — all `false` unless granted).
+  `inherit_env`, `allow_inference` — all `false` unless granted);
+  configured capabilities are applied at initial instantiation and
+  preserved across transform hot-swap (A9).
 
 ## AOT cache
 
