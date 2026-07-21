@@ -1,0 +1,18 @@
+[package]
+name = "wafer-delay-injector"
+version = "0.1.0"
+edition = "2024"
+description = "Fixed-delay transform plugin used by E-Val-1 methodology validation"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

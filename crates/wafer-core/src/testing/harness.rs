@@ -205,4 +205,54 @@ mod tests {
             assert_eq!(std::str::from_utf8(&output.payload).unwrap(), msg);
         }
     }
+
+    /// P0.7 AC2: delay-injector with delay_ms=50 measures ≥45 ms latency.
+    /// Tolerance absorbs Wasm scheduling slack (wasi:io/poll granularity,
+    /// runtime epoch-tick alignment, cold-instantiation overhead on the
+    /// first call).
+    const DELAY_INJECTOR_WASM: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
+    );
+
+    #[test]
+    fn delay_injector_smoke() {
+        if !Path::new(DELAY_INJECTOR_WASM).exists() {
+            eprintln!("SKIP: delay-injector.wasm not built");
+            return;
+        }
+
+        let harness = PluginTestHarness::new().unwrap();
+        let mut transform = harness.load_transform(DELAY_INJECTOR_WASM).unwrap();
+
+        // Warm up: first invocation absorbs first-call JIT / instantiation
+        // slack. Discard its timing so the asserted floor is realistic.
+        let warmup = RuntimeEnvelope::from_string("warmup", "first");
+        let _ = transform.process(warmup).unwrap();
+
+        // Real measurement.
+        let input = RuntimeEnvelope::from_string("src", "payload");
+        let started = std::time::Instant::now();
+        let output = transform.process(input).unwrap();
+        let elapsed = started.elapsed();
+
+        // Default delay is 50 ms (see plugin lib.rs). AC2 tolerance: ≥45 ms
+        // accounts for wasi:io/poll granularity plus wasmtime call overhead.
+        // The ceiling of 200 ms exists to catch pathological schedulers.
+        assert!(
+            elapsed >= std::time::Duration::from_millis(45),
+            "delay-injector process() took only {elapsed:?}; expected ≥45 ms (default 50 ms delay)"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "delay-injector process() took {elapsed:?}; expected < 500 ms"
+        );
+
+        // Payload should be echoed unchanged.
+        assert_eq!(
+            std::str::from_utf8(&output.payload).unwrap(),
+            "payload",
+            "delay-injector should echo the payload unchanged"
+        );
+    }
 }

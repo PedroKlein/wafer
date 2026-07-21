@@ -4,7 +4,7 @@
 
 PLUGINS := pass-through uppercase json-parse threshold-filter content-router \
            tensor-prep result-format anomaly-detector cayenne-decoder \
-           vibration-features quality-rules
+           vibration-features quality-rules delay-injector
 ATTACKS := attacks/buffer-overflow attacks/cross-read attacks/infinite-loop \
            attacks/memory-exhaust attacks/fs-access attacks/panic
 
