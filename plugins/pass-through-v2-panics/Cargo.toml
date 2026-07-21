@@ -1,0 +1,18 @@
+[package]
+name = "wafer-pass-through-v2-panics"
+version = "2.0.0-panic"
+edition = "2024"
+description = "Fault-injection variant of pass-through v2. Traps on first process() call — for E-Swap-5 rollback verification only. NEVER RUN IN PRODUCTION."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

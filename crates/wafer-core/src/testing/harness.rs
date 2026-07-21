@@ -255,4 +255,51 @@ mod tests {
             "delay-injector should echo the payload unchanged"
         );
     }
+
+    /// P0.6 AC1: pass-through-v2-panics traps on the first process() call.
+    /// The exact trap reason is left opaque to the caller (wasmtime maps
+    /// panics through several possible reasons depending on codegen and
+    /// wasi bindings); the invariant is that `process()` returns an error
+    /// on the very first invocation.
+    const PASS_THROUGH_V2_PANICS_WASM: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../plugins/pass-through-v2-panics/target/wasm32-wasip2/release/wafer_pass_through_v2_panics.wasm"
+    );
+
+    #[test]
+    fn pass_through_v2_panics_traps_on_first_call() {
+        if !Path::new(PASS_THROUGH_V2_PANICS_WASM).exists() {
+            eprintln!("SKIP: pass-through-v2-panics.wasm not built");
+            return;
+        }
+
+        let harness = PluginTestHarness::new().unwrap();
+        // load_transform runs validate() + init(). Both must succeed —
+        // E-Swap-5 requires the trap to surface during process(), not
+        // earlier at stage-and-instantiate.
+        let mut transform = harness
+            .load_transform(PASS_THROUGH_V2_PANICS_WASM)
+            .expect("pass-through-v2-panics init() must succeed; only process() should trap");
+
+        let input = RuntimeEnvelope::from_string("src", "any-payload");
+        let result = transform.process(input);
+        assert!(
+            result.is_err(),
+            "pass-through-v2-panics.process() must trap on first call, got Ok"
+        );
+
+        // The captured error should surface the intentional-trap message so
+        // reviewers reading logs immediately understand this is fault
+        // injection, not a genuine bug. We do not pin the exact wording
+        // because wasmtime prefixes the trap frame text differently across
+        // versions — we just want the sentinel visible.
+        let err = result.unwrap_err().to_string().to_lowercase();
+        assert!(
+            err.contains("panic")
+                || err.contains("unreachable")
+                || err.contains("trap")
+                || err.contains("e-swap-5"),
+            "trap error should reference panic/trap/unreachable or the E-Swap-5 sentinel; got: {err}"
+        );
+    }
 }
