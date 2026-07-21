@@ -133,7 +133,7 @@ mod tests {
     /// Path to the pre-built pass-through plugin.
     const PASS_THROUGH_WASM: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+        "/../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
     );
 
     #[test]
@@ -203,6 +203,45 @@ mod tests {
             let input = RuntimeEnvelope::from_string("src", &msg);
             let output = transform.process(input).unwrap();
             assert_eq!(std::str::from_utf8(&output.payload).unwrap(), msg);
+        }
+    }
+
+    /// Regression test for the E-Perf-4 shakedown investigation (2026-07-21).
+    ///
+    /// Root cause: `Store::set_epoch_deadline` in wasmtime 38 is relative to
+    /// the engine's CURRENT epoch counter, not absolute. The previous runtime
+    /// set the deadline once at store construction and never refreshed it,
+    /// so after ~1 second of wall time (100 ticks × 10 ms) every subsequent
+    /// guest call trapped with `wasm trap: interrupt` at the first epoch
+    /// check point — typically inside `cabi_realloc`. The failure mode
+    /// looked like a guest OOM but was actually a host-side timing bug.
+    ///
+    /// This test drives the harness (which shares the same per-call epoch
+    /// reset codepath as the runtime after the fix) for well over 1 s of
+    /// wall time with a `std::thread::sleep` between calls, then asserts
+    /// every call succeeded. Before the fix this test failed by the 100th
+    /// iteration; after the fix it must run to completion.
+    #[test]
+    fn pass_through_survives_epoch_deadline_wraparound() {
+        if !Path::new(PASS_THROUGH_WASM).exists() {
+            eprintln!("SKIP: pass-through.wasm not built");
+            return;
+        }
+
+        let harness = PluginTestHarness::new().unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+
+        // 150 calls with a 10 ms sleep totals ~1.5 s wall time, well past
+        // the 100-tick default epoch deadline. Any trap here means the
+        // per-call `set_epoch_deadline` reset regressed.
+        for i in 0..150 {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            let payload = format!("epoch-soak-{i}");
+            let input = RuntimeEnvelope::from_string("src", &payload);
+            let out = transform.process(input).unwrap_or_else(|e| {
+                panic!("iteration {i} trapped after >{} ms: {e}", i * 10)
+            });
+            assert_eq!(std::str::from_utf8(&out.payload).unwrap(), payload);
         }
     }
 
@@ -301,5 +340,36 @@ mod tests {
                 || err.contains("e-swap-5"),
             "trap error should reference panic/trap/unreachable or the E-Swap-5 sentinel; got: {err}"
         );
+    }
+
+    /// Isolation harness for the `cabi_realloc` trap observed in the
+    /// pipeline-c-passthrough dry run (E-Perf-4 shakedown). Loads the real
+    /// production `wafer_pass_through.wasm`, feeds it 5 progressively larger
+    /// payloads mimicking the exact envelope shape `BenchSource` produces
+    /// (payload + two metadata KV pairs), and reports which sizes trap.
+    /// Left ignored so it never runs in CI — invoke with
+    /// `cargo test --release -p wafer-core --lib -- --ignored --nocapture pass_through_bench_shapes`.
+    #[test]
+    #[ignore = "E-Perf-4 diagnostic; opt-in"]
+    fn pass_through_bench_shapes() {
+        use bytes::Bytes;
+
+        if !Path::new(PASS_THROUGH_WASM).exists() {
+            eprintln!("SKIP: pass-through.wasm not built");
+            return;
+        }
+        let harness = PluginTestHarness::new().unwrap();
+        let mut t = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+
+        for size in [16_usize, 128, 1024, 10_240, 102_400] {
+            let payload = Bytes::from(vec![0x42u8; size]);
+            let env = RuntimeEnvelope::new("bench-source", payload)
+                .with_metadata("bench.sequence", "0")
+                .with_metadata("bench.intended_ns", "1234567890123456789");
+            match t.process(env) {
+                Ok(out) => eprintln!("size={size:>6}: OK payload_len={}", out.payload.len()),
+                Err(e) => eprintln!("size={size:>6}: FAIL {e}"),
+            }
+        }
     }
 }

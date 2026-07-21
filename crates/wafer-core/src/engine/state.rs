@@ -161,7 +161,10 @@ impl WaferState {
     /// Push a `WaferBuffer` into the ResourceTable and return its handle.
     ///
     /// Called once per Wasm call to make the message payload available to the
-    /// guest via `borrow<buffer>`. The handle is deleted after the call returns.
+    /// guest via `borrow<buffer>`. The caller MUST invoke [`Self::delete_buffer`]
+    /// after the guest call returns — otherwise the ResourceTable and the
+    /// underlying `Bytes` clones accumulate indefinitely (see the E-Perf-4
+    /// shakedown investigation, 2026-07-21).
     ///
     /// # Errors
     ///
@@ -173,6 +176,29 @@ impl WaferState {
         let buffer = super::WaferBuffer::new(data);
         let resource = self.table.push(buffer)?;
         Ok(resource)
+    }
+
+    /// Remove a buffer resource from the ResourceTable, freeing its slot and
+    /// dropping the underlying `WaferBuffer` (and its `Bytes` clone).
+    ///
+    /// MUST be called after every guest call that used a buffer produced by
+    /// [`Self::push_buffer`]. Failure to do so leaks host-side memory and,
+    /// worse, causes the guest's dlmalloc to fragment (each `read_all` copy
+    /// stays live longer than expected via reference-count semantics),
+    /// eventually triggering a guest-side `cabi_realloc` trap once linear
+    /// memory exhausts — exactly the symptom reproduced on the 2026-07-21
+    /// shakedown before this pair was wired up.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource handle is invalid (already deleted or
+    /// belongs to another table). Should never happen in the runtime; a
+    /// programmer error if it does.
+    pub fn delete_buffer(
+        &mut self,
+        resource: wasmtime::component::Resource<super::WaferBuffer>,
+    ) -> wasmtime::Result<()> {
+        self.table.delete(resource).map(|_| ()).map_err(Into::into)
     }
 }
 

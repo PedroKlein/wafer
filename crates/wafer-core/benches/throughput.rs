@@ -67,7 +67,7 @@ fn passthrough_wasm() -> PathBuf {
         .unwrap()
         .parent()
         .unwrap()
-        .join("plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm")
+        .join("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm")
 }
 
 /// Path to the uppercase WASM plugin.
