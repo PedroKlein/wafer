@@ -11,10 +11,11 @@ use std::pin::Pin;
 
 use bytes::Bytes;
 
-use crate::error::Result;
-use crate::node::traits::{FilterOutcome, Lifecycle, ProcessError, ProcessResult};
-use crate::node::{Filter, Transform};
+use crate::error::{Result, WaferError};
+use crate::node::traits::{FilterOutcome, Lifecycle, ProcessError, ProcessResult, RouteResult};
+use crate::node::{Filter, Router, Transform};
 use crate::queue::RuntimeEnvelope;
+use crate::runner::error_policy::WasmProcessError;
 
 // =============================================================================
 // NativeTransform
@@ -53,6 +54,13 @@ impl NativeTransform {
     #[must_use]
     pub fn passthrough(id: impl Into<String>) -> Self {
         Self::new(id, functions::passthrough)
+    }
+
+    /// Convenience: JSON temperature-extraction transform (matches the
+    /// canonical Pipeline A json-parse Wasm plugin).
+    #[must_use]
+    pub fn json_parse(id: impl Into<String>) -> Self {
+        Self::new(id, functions::json_parse)
     }
 }
 
@@ -174,6 +182,211 @@ impl Filter for NativeFilter {
 // Built-in functions (same logic as Wasm plugins, without isolation)
 // =============================================================================
 
+// =============================================================================
+// NativeRouter
+// =============================================================================
+
+/// Native Rust content-based router — same interface as Wasm router, zero
+/// isolation overhead.
+///
+/// Given a routing function `Fn(&RuntimeEnvelope) -> Vec<String>`, the router
+/// invokes it per envelope and multicasts to the returned port names. An
+/// empty vec means drop; port names not in `ports` are silently ignored
+/// (matching the WIT-guarded Wasm behaviour where the runtime discards
+/// unknown-port routes).
+pub struct NativeRouter {
+    id: String,
+    ports: Vec<String>,
+    route_fn: Box<dyn Fn(&RuntimeEnvelope) -> Vec<String> + Send>,
+}
+
+impl NativeRouter {
+    /// Create with a custom routing function.
+    pub fn new(
+        id: impl Into<String>,
+        ports: Vec<String>,
+        route_fn: impl Fn(&RuntimeEnvelope) -> Vec<String> + Send + 'static,
+    ) -> Self {
+        Self { id: id.into(), ports, route_fn: Box::new(route_fn) }
+    }
+
+    /// Convenience: route by the first byte of the payload matching a
+    /// prefix character to a port name; useful for the RFC-008 Pipeline A
+    /// baseline where inputs already carry a type discriminator.
+    ///
+    /// `rules` maps each prefix byte → port name. Any envelope whose first
+    /// byte is not in `rules` is dropped.
+    #[must_use]
+    pub fn by_first_byte(
+        id: impl Into<String>,
+        rules: Vec<(u8, String)>,
+    ) -> Self {
+        let ports: Vec<String> = rules.iter().map(|(_, p)| p.clone()).collect();
+        Self::new(id, ports.clone(), move |env| {
+            let Some(&first) = env.payload.first() else {
+                return Vec::new();
+            };
+            rules
+                .iter()
+                .filter(|(b, _)| *b == first)
+                .map(|(_, p)| p.clone())
+                .collect()
+        })
+    }
+
+    /// Convenience: content-router matching the `content-router` Wasm plugin.
+    /// Routes envelopes with a `"level"` JSON field to `high` or `low` port
+    /// based on the numeric value crossing `threshold`.
+    #[must_use]
+    pub fn content_router(
+        id: impl Into<String>,
+        threshold: f64,
+        high_port: impl Into<String>,
+        low_port: impl Into<String>,
+    ) -> Self {
+        let high = high_port.into();
+        let low = low_port.into();
+        let ports = vec![high.clone(), low.clone()];
+        Self::new(id, ports, move |env| {
+            let Ok(s) = std::str::from_utf8(&env.payload) else {
+                return Vec::new();
+            };
+            match functions::extract_json_number(s, "level") {
+                Some(v) if v >= threshold => vec![high.clone()],
+                Some(_) => vec![low.clone()],
+                None => Vec::new(),
+            }
+        })
+    }
+}
+
+impl Lifecycle for NativeRouter {
+    fn id(&self) -> &str {
+        &self.id
+    }
+
+    fn node_type(&self) -> &'static str {
+        "native-router"
+    }
+
+    fn validate(&self) -> Result<()> {
+        Ok(())
+    }
+
+    fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+impl Router for NativeRouter {
+    fn output_ports(&self) -> Vec<String> {
+        self.ports.clone()
+    }
+
+    fn route(
+        &mut self,
+        envelope: RuntimeEnvelope,
+    ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>> {
+        let ports = (self.route_fn)(&envelope);
+        Box::pin(async move {
+            if let Some(first) = ports.into_iter().next() {
+                Ok(RouteResult::Route(first, envelope))
+            } else {
+                Ok(RouteResult::Filter)
+            }
+        })
+    }
+}
+
+// =============================================================================
+// ProcessNode trait — sync boundary matching WasmTransformNode::process
+// =============================================================================
+
+/// Sync process-node contract that unifies WasmTransformNode and
+/// NativeTransformShim under one trait for orchestrator wire-up.
+///
+/// This is the surface the transform runner loop consumes. The async
+/// [`Transform`] trait above is the historical shape used by unit tests
+/// and the async bench_pipeline harness; both surfaces coexist because
+/// they answer different questions (async-friendly composition vs
+/// isolation-tax measurement).
+///
+/// Wasm nodes carry hot-swap, reconfigure, and recover semantics.
+/// Native nodes reject those with a stable error message so the runner
+/// can log and continue with the untouched node.
+pub trait ProcessNode: Send {
+    /// Node identifier (matches `Config.nodes` key).
+    fn node_id(&self) -> &str;
+
+    /// Process one envelope and return the transformed envelope or a
+    /// `WasmProcessError` variant so the runner can drive its state
+    /// machine identically across Wasm and native.
+    fn process(
+        &mut self,
+        envelope: RuntimeEnvelope,
+    ) -> std::result::Result<RuntimeEnvelope, WasmProcessError>;
+
+    /// Hot-swap: replace the underlying computation. Native nodes return
+    /// `Err` so the API returns 400 to any hot-swap attempt on a native
+    /// baseline (the baseline is by construction not swappable).
+    fn try_apply_swap_payload(
+        &mut self,
+        _payload: &crate::runner::SwapPayload,
+    ) -> Result<()> {
+        Err(WaferError::Runtime(
+            "native baseline nodes do not support hot-swap".into(),
+        ))
+    }
+
+    /// Config reload. Native nodes reject the call.
+    fn try_reconfigure(&mut self, _new_config_json: &str) -> Result<()> {
+        Err(WaferError::Runtime(
+            "native baseline nodes do not support reconfigure".into(),
+        ))
+    }
+
+    /// Recovery via cached `InstancePre`. Native nodes are stateless
+    /// pure functions; recovery is a no-op success.
+    fn recover_from_cached_pre(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl ProcessNode for NativeTransform {
+    fn node_id(&self) -> &str {
+        &self.id
+    }
+
+    fn process(
+        &mut self,
+        envelope: RuntimeEnvelope,
+    ) -> std::result::Result<RuntimeEnvelope, WasmProcessError> {
+        match (self.process_fn)(&envelope.payload) {
+            Ok(bytes) => {
+                let mut out = envelope.clone();
+                out.payload = Bytes::from(bytes);
+                Ok(out)
+            }
+            Err(e) => {
+                // Map the generic native ProcessError into a
+                // WasmProcessError variant the runner already handles.
+                // Retriable errors become ProcessingFailed (so retry
+                // budget applies uniformly); non-retriable become
+                // BadInput.
+                if e.retriable {
+                    Err(WasmProcessError::ProcessingFailed(e.message))
+                } else {
+                    Err(WasmProcessError::BadInput(e.message))
+                }
+            }
+        }
+    }
+}
+
 /// Native implementations matching Wasm plugin behavior.
 pub mod functions {
     use super::*;
@@ -202,18 +415,49 @@ pub mod functions {
 
     /// Simple manual JSON temperature extraction (no serde dependency).
     fn extract_temperature(json: &str) -> Option<f64> {
-        // Find "temperature" key and extract the numeric value after the colon
-        let key = "\"temperature\"";
-        let idx = json.find(key)?;
+        extract_json_number(json, "temperature")
+    }
+
+    /// Extract a numeric field from a flat JSON string, no serde dependency.
+    ///
+    /// Matches `"<field>"\s*:\s*<number>` and parses the number up to the
+    /// first non-numeric character. Handles negative numbers and decimal
+    /// points. Not a full JSON parser — mirrors the equivalent Wasm
+    /// plugin logic (see plugins/threshold-filter and plugins/content-router).
+    #[must_use]
+    pub fn extract_json_number(json: &str, field: &str) -> Option<f64> {
+        let key = format!("\"{field}\"");
+        let idx = json.find(&key)?;
         let after_key = &json[idx + key.len()..];
-        // Skip whitespace and colon
         let after_colon = after_key.trim_start().strip_prefix(':')?;
         let value_str = after_colon.trim_start();
-        // Parse the number (stops at first non-numeric char)
         let end = value_str
             .find(|c: char| !c.is_ascii_digit() && c != '.' && c != '-')
             .unwrap_or(value_str.len());
         value_str[..end].parse().ok()
+    }
+
+    /// Native json-parse transform (matches wafer-json-parse-like plugins).
+    ///
+    /// Parses a `"temperature"` field from the input JSON and re-emits a
+    /// canonical single-field JSON object. Mirrors the Wasm plugin's
+    /// behaviour of validating structure without allocating a full DOM.
+    /// Returns a retriable ProcessError when the field is missing (so the
+    /// error policy can decide) and a non-retriable one when the input
+    /// isn't UTF-8.
+    pub fn json_parse(payload: &[u8]) -> std::result::Result<Vec<u8>, ProcessError> {
+        let s = std::str::from_utf8(payload).map_err(|e| ProcessError::new(
+            "json.parse.non-utf8",
+            format!("payload is not UTF-8: {e}"),
+        ))?;
+        let temp = extract_json_number(s, "temperature").ok_or_else(|| {
+            ProcessError::new(
+                "json.parse.missing-field",
+                "payload has no numeric `temperature` field",
+            )
+            .retriable()
+        })?;
+        Ok(format!("{{\"temperature\":{temp}}}").into_bytes())
     }
 }
 
@@ -226,7 +470,7 @@ mod tests {
         let mut transform = NativeTransform::uppercase("test-upper");
 
         let input = RuntimeEnvelope::from_string("src", "hello world");
-        let result = transform.process(input).await.unwrap();
+        let result = Transform::process(&mut transform, input).await.unwrap();
 
         match result {
             ProcessResult::Emit(env) => {
@@ -241,7 +485,7 @@ mod tests {
         let mut transform = NativeTransform::passthrough("test-pass");
 
         let input = RuntimeEnvelope::from_string("src", "unchanged");
-        let result = transform.process(input).await.unwrap();
+        let result = Transform::process(&mut transform, input).await.unwrap();
 
         match result {
             ProcessResult::Emit(env) => {
