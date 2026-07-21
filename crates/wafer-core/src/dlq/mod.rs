@@ -35,6 +35,13 @@ pub struct SerializableEnvelope {
     pub metadata: HashMap<String, String>,
     #[serde(with = "base64_serde")]
     pub payload: Vec<u8>,
+    /// Number of retry attempts already burned by this envelope before it
+    /// landed in the DLQ. Preserved across DLQ round-trips (persistence,
+    /// re-injection) so a re-attempted poison message cannot re-enter the
+    /// pipeline with a fresh retry budget. Defaults to 0 for envelopes
+    /// persisted before this field existed (backwards-compat via serde).
+    #[serde(default)]
+    pub retry_count: u32,
 }
 
 impl From<RuntimeEnvelope> for SerializableEnvelope {
@@ -45,6 +52,7 @@ impl From<RuntimeEnvelope> for SerializableEnvelope {
             source: env.header.source.to_string(),
             metadata: env.header.metadata.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
             payload: env.payload.to_vec(),
+            retry_count: env.retry_count,
         }
     }
 }
@@ -66,7 +74,10 @@ impl From<SerializableEnvelope> for RuntimeEnvelope {
             header: Arc::new(header),
             payload: Bytes::from(env.payload),
             lineage: Lineage::default(),
-            retry_count: 0,
+            // Preserve the retry_count history across the DLQ round-trip so
+            // an operator re-injecting a poison message cannot silently
+            // reset its budget (see safety review 2026-07-21).
+            retry_count: env.retry_count,
         }
     }
 }
@@ -141,3 +152,55 @@ mod base64_serde {
     }
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::queue::RuntimeEnvelope;
+
+    /// Regression test for the P0-verify safety finding: DLQ round-trip
+    /// must preserve retry_count so a re-injected poison message cannot
+    /// silently reset its exhausted retry budget.
+    #[test]
+    fn dlq_roundtrip_preserves_retry_count() {
+        let mut envelope = RuntimeEnvelope::from_string("src", "poison");
+        envelope.retry_count = 7;
+
+        let serial: SerializableEnvelope = envelope.into();
+        assert_eq!(serial.retry_count, 7, "SerializableEnvelope must carry retry_count");
+
+        let round_trip: RuntimeEnvelope = serial.into();
+        assert_eq!(
+            round_trip.retry_count, 7,
+            "RuntimeEnvelope reconstructed from SerializableEnvelope must preserve retry_count"
+        );
+    }
+
+    /// JSON serialization must include retry_count and the reverse must
+    /// restore it exactly — proves the fix survives the actual DLQ sink
+    /// path (which serialises to JSON before writing).
+    #[test]
+    fn dlq_json_roundtrip_preserves_retry_count() {
+        let mut envelope = RuntimeEnvelope::from_string("src", "poison");
+        envelope.retry_count = 3;
+        let serial: SerializableEnvelope = envelope.into();
+
+        let json = serde_json::to_string(&serial).unwrap();
+        assert!(
+            json.contains("\"retry_count\":3"),
+            "serialized JSON must expose retry_count; got: {json}"
+        );
+
+        let decoded: SerializableEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.retry_count, 3);
+
+        // Backward-compat: an envelope persisted BEFORE this field
+        // existed must still deserialize with retry_count = 0.
+        let legacy_json = json.replace(",\"retry_count\":3", "");
+        let legacy: SerializableEnvelope = serde_json::from_str(&legacy_json).unwrap();
+        assert_eq!(
+            legacy.retry_count, 0,
+            "legacy DLQ records (no retry_count field) must default to 0"
+        );
+    }
+}

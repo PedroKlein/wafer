@@ -167,11 +167,27 @@ pub async fn hot_swap(
     };
 
     let (kind, capabilities, memory_limit) = match engine_config.nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => (
-            SwapKind::Transform,
-            capabilities_from_config(&wasm.capabilities),
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
-        ),
+        Some(NodeDef::Transform(wasm)) => {
+            // Reject hot-swap attempts on native baseline transforms with a
+            // 400 Bad Request. Native nodes are by construction not
+            // swappable (RFC-008 §D5) and a 500 Internal Server Error would
+            // wrongly imply a runtime bug when the caller supplied an
+            // invalid target.
+            if wasm.plugin.is_native() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "node '{id}' is a native baseline transform (plugin.kind = 'native'); \
+                         native transforms do not support hot-swap"
+                    ),
+                ));
+            }
+            (
+                SwapKind::Transform,
+                capabilities_from_config(&wasm.capabilities),
+                wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
+            )
+        },
         Some(NodeDef::Filter(wasm)) => (
             SwapKind::Filter,
             capabilities_from_config(&wasm.capabilities),
@@ -293,7 +309,21 @@ pub async fn reconfigure(
 
     // Confirm the node exists and is a Wasm node.
     match orch.config().nodes.get(&id) {
-        Some(NodeDef::Transform(_) | NodeDef::Filter(_) | NodeDef::Router(_)) => {}
+        Some(NodeDef::Transform(wasm)) => {
+            // Reject reconfigure on native baseline transforms with a
+            // 400 Bad Request. Same rationale as /hot-swap: native nodes
+            // are by construction not swappable/reconfigurable.
+            if wasm.plugin.is_native() {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "node '{id}' is a native baseline transform (plugin.kind = 'native'); \
+                         native transforms do not support reconfigure"
+                    ),
+                ));
+            }
+        }
+        Some(NodeDef::Filter(_) | NodeDef::Router(_)) => {}
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((
                 StatusCode::NOT_FOUND,
