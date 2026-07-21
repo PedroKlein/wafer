@@ -62,6 +62,13 @@ pub struct PipelineHandle {
     /// every successful swap via [`record_hotswap_phase`](Self::record_hotswap_phase)
     /// and rendered by the /metrics handler.
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
+    /// P0.12 (A5 residual): per-node cached SHA-256 (hex) of the currently
+    /// loaded plugin bytes. Populated by the hot-swap handler on
+    /// successful convergence. Consumed by
+    /// [`verify_plugin_hash`](Self::verify_plugin_hash) so `/reconfigure`
+    /// can reject callers whose mental model has diverged from the
+    /// actually-running binary.
+    plugin_hashes: Arc<std::sync::RwLock<HashMap<Box<str>, String>>>,
 }
 
 /// RAII guard returned by [`PipelineHandle::try_begin_swap`]. Dropping
@@ -149,6 +156,40 @@ impl PipelineHandle {
         }
     }
 
+    /// P0.12 (A5 residual): register the SHA-256 (hex) of the plugin bytes
+    /// currently loaded on `node_id`. Called on every successful hot-swap.
+    pub fn record_plugin_hash(&self, node_id: &str, hex_hash: impl Into<String>) {
+        if let Ok(mut guard) = self.plugin_hashes.write() {
+            guard.insert(node_id.into(), hex_hash.into());
+        }
+    }
+
+    /// P0.12 (A5 residual): verify that `expected_hex` matches the cached
+    /// hash for `node_id`. Returns:
+    /// - `Ok(())` when the node has no cached hash yet (backward compat
+    ///   with the initial-launcher path, which does not yet register).
+    /// - `Ok(())` when the expected hash exactly matches the cached one.
+    /// - `Err(WaferError::Runtime("plugin-hash-mismatch…"))` otherwise.
+    ///
+    /// The API handler maps the `"plugin-hash-mismatch"` prefix to HTTP
+    /// 409 CONFLICT.
+    ///
+    /// # Errors
+    ///
+    /// See variants above.
+    pub fn verify_plugin_hash(&self, node_id: &str, expected_hex: &str) -> Result<()> {
+        let guard = self.plugin_hashes.read().map_err(|e| {
+            WaferError::Runtime(format!("plugin_hashes lock poisoned: {e}"))
+        })?;
+        match guard.get(node_id) {
+            Some(cached) if cached.eq_ignore_ascii_case(expected_hex) => Ok(()),
+            Some(cached) => Err(WaferError::Runtime(format!(
+                "plugin-hash-mismatch: node '{node_id}' has hash {cached} but caller supplied {expected_hex}"
+            ))),
+            None => Ok(()),
+        }
+    }
+
     /// Read-only handle to the hot-swap metrics store for use by the
     /// /metrics HTTP handler.
     #[must_use]
@@ -175,6 +216,7 @@ impl PipelineHandle {
             running: Arc::new(AtomicBool::new(true)),
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
+            plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
         }
     }
 
@@ -264,6 +306,8 @@ pub struct PipelineOrchestrator {
     swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
     /// Shared hot-swap metrics store, held for the /metrics handler.
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
+    /// Shared plugin-hash registry, populated on every successful hot-swap.
+    plugin_hashes: Arc<std::sync::RwLock<HashMap<Box<str>, String>>>,
 }
 
 impl PipelineOrchestrator {
@@ -298,6 +342,7 @@ impl PipelineOrchestrator {
             running: Arc::new(AtomicBool::new(true)),
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
+            plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
         };
 
         // Spawn DLQ sink task if configured
@@ -326,6 +371,7 @@ impl PipelineOrchestrator {
             running: Arc::clone(&self.running),
             swap_in_progress: self.swap_in_progress.clone(),
             hotswap_metrics: Arc::clone(&self.hotswap_metrics),
+            plugin_hashes: Arc::clone(&self.plugin_hashes),
         }
     }
 
@@ -1034,5 +1080,59 @@ mod tests {
                 "phase {phase} sum_ns must be non-zero",
             );
         }
+    }
+
+    // ========================================================================
+    // P0.12 (A5 residual) tests
+    // ========================================================================
+
+    /// AC1: `verify_plugin_hash` short-circuits when the node has no
+    /// cached hash (initial-launcher path). After a hot-swap-shaped hash
+    /// registration, a mismatched supplied hash yields the exact
+    /// `plugin-hash-mismatch` error prefix so the handler can map it to
+    /// 409 CONFLICT. A matching hash yields `Ok(())`.
+    #[test]
+    fn plugin_hash_guard_rejects_mismatch() {
+        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+
+        // No hash cached yet — pass-through so the initial-launcher path
+        // stays backward compatible.
+        assert!(
+            handle.verify_plugin_hash("transform", "abcdef").is_ok(),
+            "empty registry must fall through"
+        );
+
+        // Register a canonical hash (from a hot-swap).
+        handle.record_plugin_hash(
+            "transform",
+            "a".repeat(64), // 32-byte SHA-256 in hex; content-neutral for the test.
+        );
+
+        // Mismatch → error whose message starts with the sentinel string
+        // the API handler maps to 409 CONFLICT.
+        let err = handle
+            .verify_plugin_hash("transform", "deadbeef")
+            .expect_err("mismatch must fail");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("plugin-hash-mismatch"),
+            "error must start with plugin-hash-mismatch, got: {msg}"
+        );
+
+        // Case-insensitive match — hex encoders differ on case.
+        assert!(
+            handle
+                .verify_plugin_hash("transform", &"A".repeat(64))
+                .is_ok(),
+            "hash match must be case-insensitive (hex encoders vary)"
+        );
+
+        // Exact-case match still works.
+        assert!(
+            handle
+                .verify_plugin_hash("transform", &"a".repeat(64))
+                .is_ok(),
+            "exact-case hash match must pass"
+        );
     }
 }

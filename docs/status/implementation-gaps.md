@@ -147,6 +147,13 @@ and architecture claims assume the rewire happened; it did not.
   and the new node-config.
 - **Closed by:** runtime-migration plan A5 — added `SwapPayload::Reconfigure { new_config_json, progress }`, `try_reconfigure` on all three Wasm node types (re-instantiates from the node's own cached `InstancePre` and re-runs `validate()`/`init()` with rollback on failure), and `POST /api/v1/nodes/{id}/reconfigure`. Smoke: valid reconfigure returned `{"status":"reconfigured","timeline":{"compile_ns":0,"instantiate_ns":0,"signal_ns":0,"ack_ns":697375,"convergence_ns":35833}}`; invalid config returned `409` with `validate() rejected config`. Residual: no explicit plugin-hash guard on reconfigure.
 
+  **P0.12 residual closure (evaluation-infrastructure plan):**
+  - `PipelineHandle` now owns a per-node SHA-256 registry populated on every successful hot-swap by the API handler (`sha2::Sha256::digest(&wasm_bytes)` → hex, stored via `record_plugin_hash`).
+  - `ReconfigureRequest` grew an optional `expected_plugin_hash: Option<String>` field. When set and non-empty, the handler calls `PipelineHandle::verify_plugin_hash(node_id, expected)`. A mismatch returns 409 CONFLICT with a body starting `plugin-hash-mismatch: node '…' has hash … but caller supplied …`. An absent expected hash falls through (backward-compat, so long-standing E-Swap-5 fixtures that pre-date this field keep working).
+  - Match is case-insensitive on the hex encoding to survive uppercase/lowercase encoder differences.
+  - Unit-tested by `orchestrator::pipeline::tests::plugin_hash_guard_rejects_mismatch`: empty registry → pass; matched hash → pass (case-insensitive); mismatched hash → error whose message contains the `plugin-hash-mismatch` sentinel the handler maps to 409.
+  - Initial-launcher path does not yet register a hash; that is a follow-up (annotated: needs the launcher to return the loaded bytes so we can hash them at build time). Not blocking E-Swap-5 because that scenario begins with a hot-swap, which populates the registry.
+
 ## A6 — Error-policy cascade ignored (Closed 2026-07-20) 🟢
 
 - **Documented in:**

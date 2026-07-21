@@ -44,6 +44,12 @@ pub struct NodeInfoResponse {
 pub struct ReconfigureRequest {
     /// New node configuration as an arbitrary JSON object.
     pub config: serde_json::Value,
+    /// P0.12 (A5 residual): optional SHA-256 (hex) of the plugin bytes the
+    /// caller believes are currently loaded. When set and non-empty, the
+    /// server compares this against the cached hash from the last
+    /// successful hot-swap. Mismatch → 409 CONFLICT.
+    #[serde(default)]
+    pub expected_plugin_hash: Option<String>,
 }
 
 /// Hot-swap request body.
@@ -254,6 +260,15 @@ pub async fn hot_swap(
     orch.record_hotswap_phase("first_v2", &id, first_v2_ns);
     orch.record_hotswap_phase("convergence", &id, convergence_ns);
 
+    // P0.12 AC1: cache the SHA-256 of the plugin bytes so `/reconfigure`
+    // can reject callers whose mental model has diverged from the
+    // actually-running binary.
+    {
+        use sha2::{Digest, Sha256};
+        let hash = Sha256::digest(&wasm_bytes);
+        orch.record_plugin_hash(&id, hex::encode(hash));
+    }
+
     Ok(Json(serde_json::json!({
         "node_id": id,
         "status": "swap_converged",
@@ -286,6 +301,22 @@ pub async fn reconfigure(
             ));
         }
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
+    }
+
+    // P0.12 AC1: verify the caller-supplied plugin hash matches the
+    // cached hash for this node. When the caller does not supply one,
+    // fall through (backward-compat). When they do and it mismatches,
+    // 409 CONFLICT with a body starting `plugin-hash-mismatch`.
+    if let Some(expected) = body.expected_plugin_hash.as_deref().filter(|s| !s.is_empty()) {
+        if let Err(e) = orch.verify_plugin_hash(&id, expected) {
+            let msg = e.to_string();
+            let status = if msg.starts_with("plugin-hash-mismatch") {
+                StatusCode::CONFLICT
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return Err((status, msg));
+        }
     }
 
     let new_config_json = serde_json::to_string(&body.config)
