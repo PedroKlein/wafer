@@ -485,6 +485,11 @@ impl BenchSink {
     /// Creates:
     /// - `latency.hdr` — HdrHistogram interval log
     /// - `throughput.csv` — periodic throughput samples
+    /// - `sequence.csv` — gap and duplicate accounting (only when the
+    ///   sink was constructed with `track_sequences = true`)
+    /// - `swap_timeline.json` — per-transition timeline for hot-swap
+    ///   experiments (only when `track_hotswap = true` and at least one
+    ///   transition has been observed)
     ///
     /// # Errors
     /// Returns IO errors from directory creation or file writing.
@@ -500,6 +505,56 @@ impl BenchSink {
         let csv_content = self.throughput_csv();
         let mut csv_file = std::fs::File::create(dir.join("throughput.csv"))?;
         csv_file.write_all(csv_content.as_bytes())?;
+
+        // Write sequence.csv when the sink was configured to track sequences.
+        // Absence of the file signals "not tracked" — the P1.1 result contract
+        // treats sequence.csv as conditional-on-configuration.
+        if let Some(tracker) = &self.sequence_tracker {
+            let total_expected = tracker.expected_next;
+            let mut seq_file = std::fs::File::create(dir.join("sequence.csv"))?;
+            writeln!(
+                seq_file,
+                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count"
+            )?;
+            writeln!(
+                seq_file,
+                "{},{},{},{},{}",
+                total_expected,
+                tracker.total_received(),
+                tracker.gaps().len(),
+                tracker.total_gaps(),
+                tracker.total_duplicates(),
+            )?;
+        }
+
+        // Write swap_timeline.json when the hot-swap recorder observed a
+        // transition. Even a single-transition dataset is worth emitting so
+        // downstream analysis notebooks can compute pause statistics without
+        // scraping stdout.
+        if let Some(recorder) = &self.hotswap_recorder
+            && !recorder.transitions().is_empty()
+        {
+            let mut swap_file = std::fs::File::create(dir.join("swap_timeline.json"))?;
+            let transitions_json: Vec<String> = recorder
+                .transitions()
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{{\"from\":\"{}\",\"to\":\"{}\",\"pause_ns\":{}}}",
+                        t.from.replace('"', "\\\""),
+                        t.to.replace('"', "\\\""),
+                        t.pause_ns,
+                    )
+                })
+                .collect();
+            writeln!(
+                swap_file,
+                "{{\"transitions\":[{}],\"first_v2_ns\":{},\"last_v1_ns\":{}}}",
+                transitions_json.join(","),
+                recorder.first_v2_ns().map_or(String::from("null"), |v| v.to_string()),
+                recorder.last_v1_ns().map_or(String::from("null"), |v| v.to_string()),
+            )?;
+        }
 
         Ok(())
     }

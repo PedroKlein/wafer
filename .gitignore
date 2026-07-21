@@ -129,3 +129,9 @@ docker-compose.override.yml
 /.pi
 /.a5c
 .plan-verify/
+
+# eval/results/ — experiment artifacts. Individual result dirs are large
+# and generated. Commit only fixture-style examples that are explicitly
+# `git add -f`'d for documentation purposes.
+eval/results/*/
+!eval/results/e-density-1/

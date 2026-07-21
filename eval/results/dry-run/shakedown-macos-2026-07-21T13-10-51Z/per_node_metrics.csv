@@ -1,0 +1,2 @@
+node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count
+# per_node_metrics.csv: runtime shut down before scrape (or endpoint disabled). See stdout.log.

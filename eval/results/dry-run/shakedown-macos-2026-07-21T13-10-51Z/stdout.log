@@ -1,0 +1,12 @@
+[2m2026-07-21T13:10:52.136400Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m WAFER Runtime starting...
+[2m2026-07-21T13:10:52.136564Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Loading configuration [3mconfig[0m[2m=[0meval/configs/pipeline-shakedown.toml
+[2m2026-07-21T13:10:52.137110Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Configuration loaded [3mpipeline[0m[2m=[0mshakedown
+[2m2026-07-21T13:10:52.156880Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Pipeline running [3mtasks[0m[2m=[0m3 [3mwasm_nodes[0m[2m=[0m1
+[2m2026-07-21T13:10:52.157043Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m HTTP API server listening [3maddr[0m[2m=[0m127.0.0.1:9090 [3mserve_metrics[0m[2m=[0mtrue
+[2m2026-07-21T13:10:53.331761Z[0m [31mERROR[0m [2mwafer_core::runner::transform[0m[2m:[0m unrecoverable error — attempting recovery [3mnode[0m[2m=[0m"transform" [3merror[0m[2m=[0merror while executing at wasm backtrace:
+    0:   0x422d - wafer_pass_through.wasm!cabi_realloc
+[2m2026-07-21T13:10:54.505711Z[0m [31mERROR[0m [2mwafer_core::runner::transform[0m[2m:[0m unrecoverable error — attempting recovery [3mnode[0m[2m=[0m"transform" [3merror[0m[2m=[0merror while executing at wasm backtrace:
+    0:   0x422d - wafer_pass_through.wasm!cabi_realloc
+[2m2026-07-21T13:10:55.159302Z[0m [32m INFO[0m [2mwafer_core::node::sink::bench[0m[2m:[0m BenchSink exported results to "<repo>/eval/results/dry-run/shakedown-macos-2026-07-21T13-10-51Z" (latency.hdr + throughput.csv)
+[2m2026-07-21T13:10:55.159340Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Pipeline completed
+[2m2026-07-21T13:10:55.159454Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m WAFER Runtime stopped

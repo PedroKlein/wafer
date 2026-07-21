@@ -21,7 +21,7 @@ payload_size = 128
 
 [nodes.transform]
 type = "transform"
-plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 
 [nodes.sink]
 type = "sink"

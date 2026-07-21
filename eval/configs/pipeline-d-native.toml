@@ -23,7 +23,7 @@ payload_size = 128
 [nodes.transform]
 type = "transform"
 # TODO(P0.4): swap to a native-transform kind once the ProcessNode trait lands.
-plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 
 [nodes.sink]
 type = "sink"

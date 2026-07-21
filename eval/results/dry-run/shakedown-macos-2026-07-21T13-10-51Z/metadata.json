@@ -1,0 +1,22 @@
+{
+  "experiment": "dry-run",
+  "host_tag": "shakedown-macos",
+  "generated_at": "2026-07-21T13:10:55Z",
+  "started_at": "2026-07-21T13:10:51Z",
+  "finished_at": "2026-07-21T13:10:55Z",
+  "duration_ns": 4091805184,
+  "git_sha": "fb0edeac9481b1694c7d0a4848861980e7e2c605",
+  "hostname": "KVNX37VXR4",
+  "kernel": "25.5.0",
+  "arch": "arm64",
+  "os": "darwin",
+  "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)",
+  "wasmtime_version_declared": "https://github.com/bytecodealliance/wasmtime",
+  "config_path": "eval/configs/pipeline-shakedown.toml",
+  "config_sha256": "ce1b9e40748a15f0cf3ce93e6c8f9b6315468846a5981172ebc8444aecb73531",
+  "loadgen": null,
+  "mosquitto": null,
+  "exit_codes": {
+    "wafer_runtime": 0
+  }
+}
