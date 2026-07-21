@@ -11,7 +11,7 @@
 
 use clap::{Parser, Subcommand};
 
-use wafer_loadgen::{run_publisher, run_subscriber, PublishArgs, SubscribeArgs};
+use wafer_loadgen::{run_hdr_summary, run_publisher, run_subscriber, HdrSummaryArgs, PublishArgs, SubscribeArgs};
 
 #[derive(Parser, Debug)]
 #[command(name = "wafer-loadgen", about = "MQTT load generator + subscriber for WAFER evaluation")]
@@ -27,6 +27,13 @@ enum Command {
     /// Subscribe to an MQTT topic and record end-to-end latency into
     /// latency.hdr + sequence.csv + subscriber-metadata.json.
     Subscribe(SubscribeArgs),
+    /// Read a `latency.hdr` interval log and emit p50/p95/p99/p999 as JSON.
+    ///
+    /// Used by the E-Perf-4 shakedown runner and the canonical-runs
+    /// analysis notebooks (RFC-008 §D9). Bypasses the Python `hdrh`
+    /// library, which mis-decodes the V2 cookie the Rust `hdrhistogram`
+    /// crate emits.
+    HdrSummary(HdrSummaryArgs),
 }
 
 #[tokio::main]
@@ -39,6 +46,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Subscribe(args) => {
             run_subscriber(args).await?;
+        }
+        Command::HdrSummary(args) => {
+            run_hdr_summary(args)?;
         }
     }
     Ok(())

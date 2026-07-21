@@ -130,51 +130,11 @@ fi
 # ---------------------------------------------------------------------------
 # hdr-summary via cargo (renders p50/p95/p99 from a latency.hdr file)
 # ---------------------------------------------------------------------------
-# We don't have a standalone binary for this. Percentile aggregation is done
-# per-run by parsing throughput.csv (which BenchSink also emits) with awk;
-# for the HdrHistogram we rely on hdrhistogram-cli if the operator has it,
-# else fall back to a minimal Python parser. Not a canonical parser — the
-# canonical analysis lives in eval/analysis/notebooks/02-per-hop-overhead.ipynb.
-
-_hdr_percentiles() {
-    local hdr="$1"
-    # Try hdr-histogram-cli first
-    if command -v hdr-histogram-cli >/dev/null 2>&1; then
-        hdr-histogram-cli --input "$hdr" --percentiles 50,95,99 --format json 2>/dev/null && return
-    fi
-    # Fallback: python parser using the hdrhistogram library if installed,
-    # else emit a placeholder record explaining the miss.
-    python3 - "$hdr" <<'PY'
-import json, sys
-path = sys.argv[1]
-try:
-    from hdrh.histogram import HdrHistogram
-    from hdrh.log import HistogramLogReader
-    reader = HistogramLogReader(path, HdrHistogram(1, 60_000_000_000, 3))
-    agg = HdrHistogram(1, 60_000_000_000, 3)
-    while True:
-        h = reader.get_next_interval_histogram()
-        if h is None:
-            break
-        agg.add(h)
-    total = agg.get_total_count()
-    print(json.dumps({
-        "hdr_path": path,
-        "total_count": total,
-        "p50_ns": agg.get_value_at_percentile(50) if total else 0,
-        "p95_ns": agg.get_value_at_percentile(95) if total else 0,
-        "p99_ns": agg.get_value_at_percentile(99) if total else 0,
-        "p999_ns": agg.get_value_at_percentile(99.9) if total else 0,
-        "max_ns": agg.get_max_value() if total else 0,
-        "min_ns": agg.get_min_value() if total else 0,
-    }))
-except ImportError:
-    print(json.dumps({
-        "hdr_path": path,
-        "error": "hdrh Python module not installed; run `pip install hdrhistogram` for shakedown summary parsing",
-    }))
-PY
-}
+# Percentile aggregation across latency.hdr files lives in the analysis
+# notebook, which uses the Rust HdrHistogram crate to decode the interval
+# log (Python's hdrh library does not accept the V2 cookie the Rust crate
+# emits). This script only performs presence + recorded-values audits
+# on the per-run artefacts.
 
 # ---------------------------------------------------------------------------
 # Per-run driver
@@ -224,12 +184,15 @@ _run_one() {
 }
 META
     # Detect trap+recovery events in stdout — a real shakedown run must be zero.
+    # `grep -c` exits 1 when there are zero matches; the `|| true` and the
+    # explicit `${traps:-0}` guarantee `traps` ends up as a clean integer
+    # string even when set -e is in effect.
     local traps
-    traps=$(grep -c "unrecoverable error" "$out_dir/stdout.log" 2>/dev/null | tr -d '[:space:]' || echo 0)
+    traps=$(grep -c "unrecoverable error" "$out_dir/stdout.log" 2>/dev/null || true)
     traps=${traps:-0}
     printf '%s|run-%02d|exit=%s|traps=%s|dur_ns=%s\n' \
         "$size_label" "$run_idx" "$runtime_exit" "$traps" "$duration_ns" >&2
-    if [ "$runtime_exit" -ne 0 ] || [ "$traps" != "0" ]; then
+    if [ "$runtime_exit" -ne 0 ] || [ "$traps" -ne 0 ]; then
         _log "  ↳ non-clean run — investigate $out_dir/stdout.log before trusting these numbers"
     fi
 }
@@ -246,66 +209,56 @@ for size_label in "${sizes_arr[@]}"; do
         _run_one "$size_label" "$i"
     done
 
-    # Aggregate p50/p95/p99 across runs into size-summary.json.
-    _log "aggregating percentiles for $size_label"
+    # Emit a placeholder size-summary.json. Percentile aggregation across
+    # latency.hdr files happens in the analysis notebook
+    # (eval/analysis/notebooks/02-per-hop-overhead.ipynb) which uses the
+    # authoritative Rust HdrHistogram crate to parse the interval log —
+    # avoiding the Python hdrh library's known incompatibility with the
+    # Rust HdrHistogram V2 interval-log cookie format. The notebook is the
+    # single source of percentile truth; this file records only the run
+    # inventory, host provenance, and file presence for downstream
+    # smoke-checking.
+    _log "emitting size-summary.json for $size_label"
     python3 - "$OUT_ROOT/$size_label" "$runs" <<'PY' > "$OUT_ROOT/$size_label/size-summary.json"
-import json, os, sys, statistics, subprocess
+import json, os, sys
 root = sys.argv[1]
 runs = int(sys.argv[2])
-per_run = []
+run_inventory = []
 for i in range(1, runs + 1):
     rdir = os.path.join(root, f"run-{i:02d}")
     hdr = os.path.join(rdir, "latency.hdr")
     meta = os.path.join(rdir, "metadata.json")
-    if not (os.path.isfile(hdr) and os.path.isfile(meta)):
+    if not (os.path.isdir(rdir) and os.path.isfile(hdr) and os.path.isfile(meta)):
+        run_inventory.append({"run": i, "ok": False, "reason": "missing files"})
         continue
+    # Read the Recorded-values header line the Rust hdrhistogram crate emits.
+    recorded = 0
+    total = 0
     try:
-        from hdrh.histogram import HdrHistogram
-        from hdrh.log import HistogramLogReader
-        reader = HistogramLogReader(hdr, HdrHistogram(1, 60_000_000_000, 3))
-        agg = HdrHistogram(1, 60_000_000_000, 3)
-        while True:
-            h = reader.get_next_interval_histogram()
-            if h is None:
-                break
-            agg.add(h)
-        total = agg.get_total_count()
-        per_run.append({
-            "run": i,
-            "total_count": total,
-            "p50_ns": agg.get_value_at_percentile(50) if total else 0,
-            "p95_ns": agg.get_value_at_percentile(95) if total else 0,
-            "p99_ns": agg.get_value_at_percentile(99) if total else 0,
-            "p999_ns": agg.get_value_at_percentile(99.9) if total else 0,
-            "max_ns": agg.get_max_value() if total else 0,
-        })
-    except ImportError:
-        per_run.append({"run": i, "error": "hdrh Python module not installed"})
-
-def _agg(field):
-    vals = [r[field] for r in per_run if field in r and r[field] > 0]
-    if not vals:
-        return None
-    return {
-        "n": len(vals),
-        "median": statistics.median(vals),
-        "mean": statistics.fmean(vals),
-        "stdev": statistics.stdev(vals) if len(vals) > 1 else 0,
-        "min": min(vals),
-        "max": max(vals),
-    }
-
+        with open(hdr) as f:
+            for line in f:
+                if line.startswith("#Recorded values:"):
+                    recorded = int(line.split(":")[1].strip())
+                elif line.startswith("#Total messages:"):
+                    total = int(line.split(":")[1].strip())
+                if not line.startswith("#"):
+                    break
+    except Exception as e:
+        run_inventory.append({"run": i, "ok": False, "reason": str(e)})
+        continue
+    run_inventory.append({
+        "run": i,
+        "ok": recorded > 0,
+        "total_messages": total,
+        "recorded_values": recorded,
+    })
+ok_count = sum(1 for r in run_inventory if r.get("ok"))
 print(json.dumps({
     "payload_size_label": os.path.basename(root),
-    "runs_recorded": len(per_run),
     "runs_requested": runs,
-    "per_run": per_run,
-    "aggregate_over_runs": {
-        "p50_ns": _agg("p50_ns"),
-        "p95_ns": _agg("p95_ns"),
-        "p99_ns": _agg("p99_ns"),
-        "p999_ns": _agg("p999_ns"),
-    },
+    "runs_ok": ok_count,
+    "per_run": run_inventory,
+    "note": "Percentiles are computed by the analysis notebook — this file only records run inventory and per-run recorded-value counts. If runs_ok < runs_requested the shakedown must be re-run before publishing figures.",
 }, indent=2))
 PY
 done

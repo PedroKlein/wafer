@@ -4,8 +4,8 @@
 # structure, only the BenchSource's payload_size varies. All metering
 # enabled (fuel + epoch + memory limits) — see RFC-008 §D3.
 #
-# Rate: 1000 msg/s. total_messages: 30 000 (~30 s wall time per run).
-# Sink warmup: 10 s (10 000 warmup msgs before histogram recording).
+# Rate: 1000 msg/s. total_messages: 5 000 (~5 s wall time per run — shakedown density).
+# Sink warmup: 1 s (1 000 warmup msgs). Canonical runs will use 30k msgs / 10s warmup.
 
 [pipeline]
 name = "e-perf-4-1kb"
@@ -15,8 +15,8 @@ description = "per-hop overhead — payload 1kb"
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 30000
-warmup_messages = 10000
+total_messages = 5000
+warmup_messages = 1000
 payload_size = 1024
 
 [nodes.transform]
@@ -26,7 +26,7 @@ plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
-warmup_secs = 10
+warmup_secs = 1
 track_sequences = true
 track_hotswap = false
 

@@ -6,12 +6,14 @@
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3B / D4 / D9.
 
+pub mod hdr_summary;
 pub mod payload;
 pub mod profile;
 pub mod publish;
 pub mod recorder;
 pub mod sub;
 
+pub use hdr_summary::{run as run_hdr_summary, HdrSummaryArgs};
 pub use payload::{CANONICAL_SEQ, CANONICAL_TS_NS, PayloadTemplate};
 pub use profile::{LoadShape, Scheduler};
 pub use publish::{PublishArgs, run_publisher};
