@@ -310,6 +310,15 @@ impl WasmTransformNode {
                     Box::<str>::from(output.source.as_str()),
                     Bytes::from(output.payload),
                 );
+                // Propagate the guest's metadata into the new envelope so
+                // downstream nodes (and BenchSink for latency measurement)
+                // see the `bench.intended_ns`/`bench.sequence` markers that
+                // the source stamped. Without this the sink observes zero
+                // recordable messages because there is no intended
+                // timestamp to compute a latency against.
+                for (k, v) in output.metadata {
+                    new_envelope = new_envelope.with_metadata(k, v);
+                }
                 new_envelope.inherit_lineage_from(&envelope);
                 Ok(new_envelope)
             }

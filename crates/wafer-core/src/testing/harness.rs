@@ -208,6 +208,51 @@ mod tests {
 
     /// Regression test for the E-Perf-4 shakedown investigation (2026-07-21).
     ///
+    /// `WasmTransformNode::process` previously constructed the output
+    /// envelope with `RuntimeEnvelope::new(source, payload)` and
+    /// `inherit_lineage_from(...)` — but never copied the guest's
+    /// `output.metadata` back onto the envelope. As a result the sink
+    /// received messages with an empty metadata list and could not
+    /// extract `bench.intended_ns` / `bench.sequence`, so
+    /// `HdrHistogram` recorded zero values despite thousands of
+    /// messages successfully flowing through the pipeline.
+    ///
+    /// This test drives the pass-through plugin with an input that
+    /// carries `bench.sequence` and `bench.intended_ns`, then asserts
+    /// both keys survive the guest round-trip on the returned envelope.
+    #[test]
+    fn pass_through_propagates_metadata() {
+        if !Path::new(PASS_THROUGH_WASM).exists() {
+            eprintln!("SKIP: pass-through.wasm not built");
+            return;
+        }
+
+        let harness = PluginTestHarness::new().unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+
+        let input = RuntimeEnvelope::from_string("src", "hello")
+            .with_metadata("bench.sequence", "42")
+            .with_metadata("bench.intended_ns", "1234567890123");
+        let out = transform.process(input).expect("transform must succeed");
+
+        let md: Vec<(&str, &str)> = out
+            .header
+            .metadata
+            .iter()
+            .map(|(k, v)| (k.as_ref(), v.as_ref()))
+            .collect();
+        assert!(
+            md.contains(&("bench.sequence", "42")),
+            "transform dropped bench.sequence; metadata = {md:?}"
+        );
+        assert!(
+            md.contains(&("bench.intended_ns", "1234567890123")),
+            "transform dropped bench.intended_ns; metadata = {md:?}"
+        );
+    }
+
+    /// Regression test for the E-Perf-4 shakedown investigation (2026-07-21).
+    ///
     /// Root cause: `Store::set_epoch_deadline` in wasmtime 38 is relative to
     /// the engine's CURRENT epoch counter, not absolute. The previous runtime
     /// set the deadline once at store construction and never refreshed it,

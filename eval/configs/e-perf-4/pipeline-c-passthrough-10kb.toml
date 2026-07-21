@@ -1,0 +1,39 @@
+# E-Perf-4 per-hop overhead — payload size sweep (P2.1 shakedown).
+#
+# Derived from eval/configs/pipeline-c-passthrough.toml — same pipeline
+# structure, only the BenchSource's payload_size varies. All metering
+# enabled (fuel + epoch + memory limits) — see RFC-008 §D3.
+#
+# Rate: 1000 msg/s. total_messages: 30 000 (~30 s wall time per run).
+# Sink warmup: 10 s (10 000 warmup msgs before histogram recording).
+
+[pipeline]
+name = "e-perf-4-10kb"
+description = "per-hop overhead — payload 10kb"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 30000
+warmup_messages = 10000
+payload_size = 10240
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 10
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

@@ -135,3 +135,4 @@ docker-compose.override.yml
 # `git add -f`'d for documentation purposes.
 eval/results/*/
 !eval/results/e-density-1/
+.venv-eval/
