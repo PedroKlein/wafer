@@ -1,16 +1,24 @@
-# Hot-swap trigger configuration for E-Swap experiments
-# Defines when to trigger a plugin swap during a benchmark run
+# WAFER load profile: steady load + a hot-swap POST at a fixed offset.
+# Drives E-Swap-1..5.
+#
+# Publisher runs at 1000 msg/s for 120s; at trigger_after_secs a companion
+# task POSTs to the runtime hot-swap API with the new plugin path. Timing
+# accuracy is ±100 ms of the target offset (unit tested).
+
 [loadgen]
 rate = 1000
 duration_secs = 120
-payload_size = 128
 warmup_secs = 30
 topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
+profile = "hotswap-trigger"
 
 [hotswap]
-# Trigger swap after this many seconds into the run (post-warmup)
+# Seconds after the loadgen starts publishing (post-warmup).
 trigger_after_secs = 60
-# New plugin to swap to
-new_plugin = "pass-through-v2"
-# Node to perform swap on
+# Wafer-runtime node id to swap on.
 target_node = "transform"
+# Path to the replacement .wasm on the runtime host. Absolute paths recommended.
+new_plugin_path = "plugins/target/wasm32-wasip2/release/pass_through_v2.wasm"
+# Wafer-runtime HTTP API base URL (no trailing slash).
+api_url = "http://localhost:9090"

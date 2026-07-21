@@ -71,6 +71,7 @@ fn ensure_docker_host() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
     clippy::panic_in_result_fn,
+    clippy::too_many_lines,
     reason = "integration test uses assert_eq! for AC3 verification; failing an assertion should terminate the test even though it returns Result"
 )]
 async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyhow::Result<()> {
@@ -129,6 +130,17 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         client_id: format!("wafer-loadgen-pub-{}", std::process::id()),
         profile_file: None,
         dry_run: false,
+        burst_multiplier: 2,
+        burst_on_secs: 10,
+        burst_cycle_secs: 60,
+        ramp_start_rate: 100,
+        ramp_step_rate: 100,
+        ramp_step_interval_secs: 10,
+        ramp_max_rate: 10_000,
+        hotswap_target_node: None,
+        hotswap_wasm_path: None,
+        hotswap_swap_at_secs: 30.0,
+        hotswap_api_url: "http://localhost:9090".into(),
     };
     let pub_report = run_publisher(pub_args).await?;
     assert_eq!(

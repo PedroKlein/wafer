@@ -1,8 +1,16 @@
+# WAFER load profile: 2× burst every 60s. Drives E-Backpressure + E-Swap-4.
+#
+# 1000 msg/s baseline; during the first 10s of each 60s cycle the rate
+# doubles to 2000 msg/s. The `wafer_loadgen::LoadShape::Burst` scheduler
+# is open-loop (Tene 2012) — falling behind does not cause catch-up bursts.
+
 [loadgen]
 rate = 1000
 duration_secs = 120
-payload_size = 128
 warmup_secs = 30
 topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
 profile = "burst"
-# Burst: 2x rate for 10s every 60s
+burst_multiplier = 2
+burst_on_secs = 10
+burst_cycle_secs = 60

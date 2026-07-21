@@ -4778,10 +4778,12 @@ name = "wafer-loadgen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "axum",
  "blake3",
  "clap",
  "hdrhistogram",
  "hex",
+ "reqwest 0.12.28",
  "rumqttc",
  "serde",
  "serde_json",

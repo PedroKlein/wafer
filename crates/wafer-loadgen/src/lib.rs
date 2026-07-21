@@ -7,11 +7,13 @@
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3B / D4 / D9.
 
 pub mod payload;
+pub mod profile;
 pub mod publish;
 pub mod recorder;
 pub mod sub;
 
 pub use payload::{CANONICAL_SEQ, CANONICAL_TS_NS, PayloadTemplate};
+pub use profile::{LoadShape, Scheduler};
 pub use publish::{PublishArgs, run_publisher};
 pub use recorder::{LatencyRecorder, RecordOutcome, SequenceReport, SequenceTracker, SubscriberMetadata};
 pub use sub::{SubscribeArgs, run_subscriber};
