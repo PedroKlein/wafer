@@ -14,6 +14,8 @@ pub use router::{RouterInstance, WasmRouter};
 pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition, ThroughputSample};
 pub use source::{BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use native::{NativeFilter, NativeRouter, NativeTransform, ProcessNode};
+// Re-export the runner-side TransformNode enum near the top.
+// (Full definition below in this module.)
 pub use kind::{Node, NodeKind};
 pub use metrics::NodeMetrics;
 pub use state::{NodeStateTracker, ProcessingGuard};
@@ -187,5 +189,99 @@ impl fmt::Display for AnyNode {
             AnyNode::Router(r, _) => r.node_type(),
         };
         write!(f, "{name}")
+    }
+}
+
+// =============================================================================
+// TransformNode — unified runner-side type covering both Wasm and native.
+// =============================================================================
+
+use crate::error::WaferError;
+use crate::node::wasm::WasmTransformNode;
+use crate::queue::RuntimeEnvelope;
+use crate::runner::error_policy::WasmProcessError;
+
+/// Runner-side wrapper distinguishing a Wasm transform (full lifecycle
+/// with hot-swap/reconfigure/recover) from a native baseline
+/// transform (pure Rust function, no lifecycle beyond process).
+///
+/// The runner in `crates/wafer-core/src/runner/transform.rs` matches on
+/// this enum in the paths that would otherwise depend on Wasm-specific
+/// methods. Native transforms report an error for hot-swap operations;
+/// recovery is a no-op success (native code is stateless).
+pub enum TransformNode {
+    /// Full Wasm transform with sandboxing, hot-swap, and recovery.
+    Wasm(Box<WasmTransformNode>),
+    /// Native Rust baseline (RFC-008 §D5 Layer 1). No sandbox, no
+    /// hot-swap, no recovery.
+    Native(NativeTransform),
+}
+
+impl TransformNode {
+    /// Node identifier.
+    #[must_use]
+    pub fn node_id(&self) -> &str {
+        match self {
+            Self::Wasm(w) => w.node_id(),
+            Self::Native(n) => ProcessNode::node_id(n),
+        }
+    }
+
+    /// Process one envelope, returning the transformed envelope or a
+    /// `WasmProcessError` variant the runner already handles.
+    pub fn process(
+        &mut self,
+        envelope: RuntimeEnvelope,
+    ) -> std::result::Result<RuntimeEnvelope, WasmProcessError> {
+        match self {
+            Self::Wasm(w) => w.process(envelope),
+            Self::Native(n) => ProcessNode::process(n, envelope),
+        }
+    }
+
+    /// Config reload (Wasm only — native transforms reject).
+    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
+        match self {
+            Self::Wasm(w) => w.try_reconfigure(new_config_json),
+            Self::Native(_) => Err(WaferError::Runtime(
+                "native baseline transforms do not support reconfigure".into(),
+            )),
+        }
+    }
+
+    /// Recover via cached InstancePre (Wasm) / no-op (Native).
+    pub fn recover_from_cached_pre(&mut self) -> Result<()> {
+        match self {
+            Self::Wasm(w) => w.recover_from_cached_pre(),
+            Self::Native(_) => Ok(()),
+        }
+    }
+
+    /// Access the inner Wasm node if this is a Wasm transform.
+    /// Used by SwapPayload::try_apply_transform which needs the
+    /// concrete type to move new_store/new_bindings into.
+    pub fn as_wasm_mut(&mut self) -> Option<&mut WasmTransformNode> {
+        match self {
+            Self::Wasm(w) => Some(w),
+            Self::Native(_) => None,
+        }
+    }
+
+    /// True when this is a native baseline transform.
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+}
+
+impl From<WasmTransformNode> for TransformNode {
+    fn from(w: WasmTransformNode) -> Self {
+        Self::Wasm(Box::new(w))
+    }
+}
+
+impl From<NativeTransform> for TransformNode {
+    fn from(n: NativeTransform) -> Self {
+        Self::Native(n)
     }
 }

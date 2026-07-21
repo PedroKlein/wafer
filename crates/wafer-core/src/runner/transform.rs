@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
-use crate::node::wasm::WasmTransformNode;
+use crate::node::TransformNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
@@ -25,7 +25,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstr
 /// Only `receiver.recv()` is inside `select!` — which is documented cancel-safe.
 /// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
 pub async fn run_transform_loop(
-    mut transform: WasmTransformNode,
+    mut transform: TransformNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
     senders: Vec<DownstreamSender>,
     mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,

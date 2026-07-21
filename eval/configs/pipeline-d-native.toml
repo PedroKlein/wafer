@@ -1,16 +1,15 @@
 # Native baseline (no Wasm — direct Rust function calls).
 #
-# PLACEHOLDER: this config exercises the `native-transform` node kind, which
-# is authored by P0.4 in the evaluation-infrastructure plan. Until P0.4
-# lands, the config parses+validates (via the schema-reconcile P0.13) but
-# uses a Wasm pass-through as a stand-in for the native transform.
-#
-# P0.4 will replace `plugin = "..."` with a native node declaration that
-# uses the same NodeDef mapping mechanism.
+# P0.4 wires "plugin.kind = native" into the schema so `wafer` can
+# execute the RFC-008 §D5 Layer-1 baseline through the same DAG,
+# channels, and BenchSink measurement path as any Wasm pipeline.
+# The confounder we're isolating in RQ1 is therefore the
+# fuel/epoch/StoreLimits/WIT-crossing machinery, not envelope shape
+# or task scheduling.
 
 [pipeline]
 name = "bench-native-baseline"
-description = "Native baseline placeholder — final wiring by P0.4"
+description = "Native Rust baseline for RQ1 (P0.4 AC2)."
 
 [nodes.source]
 type = "source"
@@ -22,8 +21,9 @@ payload_size = 128
 
 [nodes.transform]
 type = "transform"
-# TODO(P0.4): swap to a native-transform kind once the ProcessNode trait lands.
-plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+# Native baseline transform — passthrough by default.
+# Swap `function = "json-parse"` to exercise the JSON-parsing baseline.
+plugin = { kind = "native", function = "passthrough" }
 
 [nodes.sink]
 type = "sink"

@@ -236,6 +236,7 @@ fn check_no_cycles(config: &Config, errors: &mut Vec<ValidationError>) {
 mod tests {
     use super::*;
     use wafer_types::config::{
+        PluginSpec,
         Config, EdgeDef, NodeDef, OverflowPolicy, SourceDef, SinkDef,
         StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
@@ -253,15 +254,15 @@ mod tests {
     }
 
     fn transform(plugin: &str) -> NodeDef {
-        NodeDef::Transform(WasmNodeDef { plugin: plugin.to_string(), ..Default::default() })
+        NodeDef::Transform(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
     }
 
     fn filter(plugin: &str) -> NodeDef {
-        NodeDef::Filter(WasmNodeDef { plugin: plugin.to_string(), ..Default::default() })
+        NodeDef::Filter(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
     }
 
     fn router(plugin: &str) -> NodeDef {
-        NodeDef::Router(WasmNodeDef { plugin: plugin.to_string(), ..Default::default() })
+        NodeDef::Router(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
     }
 
     fn edge(from: &str, to: &str) -> EdgeDef {

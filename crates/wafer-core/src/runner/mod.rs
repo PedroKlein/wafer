@@ -194,13 +194,25 @@ impl SwapPayload {
     /// only after `validate() + init()` succeed on the replacement.
     ///
     /// On failure the target node keeps its v1 store/bindings/pre unchanged.
-    pub fn try_apply_transform(self, node: &mut WasmTransformNode) -> Result<(), crate::error::WaferError> {
+    ///
+    /// Native transforms reject the swap with a stable
+    /// `WaferError::Runtime` message (the baseline is by construction
+    /// not swappable).
+    pub fn try_apply_transform(
+        self,
+        node: &mut crate::node::TransformNode,
+    ) -> Result<(), crate::error::WaferError> {
         if let SwapPayload::Transform { new_store, new_bindings, new_pre, .. } = self {
+            let wasm = node.as_wasm_mut().ok_or_else(|| {
+                crate::error::WaferError::Runtime(
+                    "native baseline transforms do not support hot-swap".into(),
+                )
+            })?;
             let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload store already consumed");
             let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload bindings already consumed");
-            node.try_hot_swap(store, bindings, new_pre)?;
+            wasm.try_hot_swap(store, bindings, new_pre)?;
         }
         Ok(())
     }

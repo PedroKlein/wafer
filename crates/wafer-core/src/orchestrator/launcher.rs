@@ -79,7 +79,7 @@ pub async fn launch_pipeline(
 
         match (&mut bundle.kind, node_def) {
             (NodeBundleKind::Transform { node, .. }, NodeDef::Transform(wasm)) => {
-                *node = Some(load_transform_node(
+                *node = Some(load_transform_node_dispatch(
                     &bundle.node_id,
                     wasm,
                     config.engine.fuel.transform,
@@ -194,6 +194,45 @@ fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
 // =============================================================================
 // Wasm Node Loading
 // =============================================================================
+
+/// Dispatch: build a Wasm or Native transform depending on `wasm.plugin`.
+/// This is where the `plugin.kind = "native"` schema variant is honoured
+/// (P0.4 AC2). Wasm construction still goes through the original
+/// `load_transform_node` helper unchanged.
+async fn load_transform_node_dispatch(
+    node_id: &str,
+    wasm: &WasmNodeDef,
+    default_fuel: u64,
+    default_memory: usize,
+    engine: &Arc<WaferEngine>,
+    registry: &WaferRegistry,
+    config_path: Option<&Path>,
+) -> Result<crate::node::TransformNode> {
+    if let Some(function) = wasm.plugin.native_function() {
+        let native = build_native_transform(node_id, function)?;
+        return Ok(crate::node::TransformNode::Native(native));
+    }
+    let wasm_node = load_transform_node(
+        node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
+    )
+    .await?;
+    Ok(crate::node::TransformNode::from(wasm_node))
+}
+
+/// Build a native transform from a function name declared in the TOML
+/// (`plugin.kind = "native"`, `plugin.function = "…"`).
+fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::NativeTransform> {
+    use crate::node::NativeTransform;
+    match function {
+        "passthrough" => Ok(NativeTransform::passthrough(node_id)),
+        "uppercase" => Ok(NativeTransform::uppercase(node_id)),
+        "json-parse" | "json_parse" => Ok(NativeTransform::json_parse(node_id)),
+        other => Err(WaferError::Config(ConfigError::Message(format!(
+            "unknown native transform function '{other}' on node '{node_id}' \
+             (valid: passthrough, uppercase, json-parse)"
+        )))),
+    }
+}
 
 async fn load_transform_node(
     node_id: &str,
@@ -320,7 +359,12 @@ async fn resolve_and_load_component(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
 ) -> Result<wasmtime::component::Component> {
-    let mut source = plugin_source(&wasm.plugin)?;
+    let plugin_path = wasm.plugin.wasm_path().ok_or_else(|| {
+        WaferError::Runtime(format!(
+            "resolve_and_load_component called on non-Wasm plugin for node '{node_id}'"
+        ))
+    })?;
+    let mut source = plugin_source(plugin_path)?;
 
     if let PluginSource::Local(ref path) = source
         && path.is_relative()

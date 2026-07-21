@@ -97,9 +97,97 @@ impl fmt::Display for NodeCategory {
     }
 }
 
+/// Plugin binding for a transform/filter/router node.
+///
+/// Two forms are accepted at the TOML surface:
+///
+/// * **Bare string shorthand.** `plugin = "path/to/plugin.wasm"` —
+///   backward-compatible with every existing config. Parses as
+///   [`PluginSpec::Wasm`].
+/// * **Structured with `kind`.** `plugin.kind = "wasm"` (with
+///   `plugin.path`) or `plugin.kind = "native"` (with
+///   `plugin.function`). Selects between the Wasm sandbox and the
+///   RFC-008 §D5 native Rust baseline.
+///
+/// The two forms are distinguished by serde's `untagged` mechanism
+/// on the outer enum, and by `serde(tag = "kind")` on the inner
+/// structured enum.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(untagged)]
+pub enum PluginSpec {
+    /// `plugin = "path"` shorthand — implies `kind = "wasm"`.
+    WasmPath(String),
+    /// `plugin = { kind = "…", … }` structured form.
+    Structured(PluginSpecStructured),
+}
+
+/// Structured variants of [`PluginSpec`]. Serde discriminates on the
+/// `kind` field.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum PluginSpecStructured {
+    /// Explicit Wasm form: `plugin = { kind = "wasm", path = "…" }`.
+    /// Equivalent to the bare-string shorthand.
+    Wasm {
+        /// Filesystem path or OCI reference to the .wasm component.
+        path: String,
+    },
+    /// Native baseline (RFC-008 §D5 Layer 1). No Wasm boundary, same
+    /// envelope/channels. `function` selects a built-in native routine
+    /// from `wafer_core::node::native::functions`.
+    Native {
+        /// Name of the native function: `passthrough`, `uppercase`,
+        /// `json-parse` (transform); `threshold` (filter, uses
+        /// `config.threshold`); `content-router` (router, uses
+        /// `config.threshold` and `config.high_port`/`low_port`).
+        function: String,
+    },
+}
+
+impl PluginSpec {
+    /// Returns the Wasm path if this spec is a Wasm binding.
+    #[must_use]
+    pub fn wasm_path(&self) -> Option<&str> {
+        match self {
+            Self::WasmPath(p) => Some(p.as_str()),
+            Self::Structured(PluginSpecStructured::Wasm { path }) => Some(path.as_str()),
+            Self::Structured(PluginSpecStructured::Native { .. }) => None,
+        }
+    }
+
+    /// Returns the native function name if this spec is a native binding.
+    #[must_use]
+    pub fn native_function(&self) -> Option<&str> {
+        match self {
+            Self::Structured(PluginSpecStructured::Native { function }) => Some(function.as_str()),
+            _ => None,
+        }
+    }
+
+    /// True when this plugin binding is native (no Wasm boundary).
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        self.native_function().is_some()
+    }
+}
+
+impl Default for PluginSpec {
+    fn default() -> Self {
+        Self::WasmPath(String::new())
+    }
+}
+
+/// Legacy alias so callers that read a Wasm path directly do not
+/// have to pattern-match. Returns `""` for native plugins.
+impl From<PluginSpec> for String {
+    fn from(spec: PluginSpec) -> Self {
+        spec.wasm_path().unwrap_or_default().to_owned()
+    }
+}
+
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct WasmNodeDef {
-    pub plugin: String,
+    pub plugin: PluginSpec,
 
     #[serde(default)]
     pub fuel: Option<u64>,

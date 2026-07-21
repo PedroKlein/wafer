@@ -106,6 +106,7 @@ impl DagGraph {
 mod tests {
     use super::*;
     use wafer_types::config::{
+        PluginSpec,
         Config, EdgeDef, NodeDef, SourceDef, SinkDef,
         StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
@@ -119,7 +120,7 @@ mod tests {
     }
 
     fn transform_node() -> NodeDef {
-        NodeDef::Transform(WasmNodeDef { plugin: "t.wasm".to_string(), ..Default::default() })
+        NodeDef::Transform(WasmNodeDef { plugin: PluginSpec::WasmPath("t.wasm".to_string()), ..Default::default() })
     }
 
     fn edge(from: &str, to: &str) -> EdgeDef {

@@ -793,7 +793,7 @@ mod tests {
                 (
                     "t1".to_string(),
                     NodeDef::Transform(WasmNodeDef {
-                        plugin: "test.wasm".to_string(),
+                        plugin: wafer_types::config::PluginSpec::WasmPath("test.wasm".to_string()),
                         ..Default::default()
                     }),
                 ),
