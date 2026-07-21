@@ -306,22 +306,46 @@ impl ErrorPolicyExecutor {
     }
 
     /// Attempt to add an envelope to the retry buffer. If buffer is full, send to DLQ.
-    fn try_retry(&mut self, envelope: RuntimeEnvelope, category: ErrorCategory, error_msg: String) {
-        // Check if we've exceeded max retries (based on how many times this message has been retried)
-        // Since we don't track per-message retry counts externally, we use a simple approach:
-        // The first time a message enters retry, retry_count=0. Each subsequent retry increments.
-        // We count current buffer occupancy for this simple implementation.
+    /// If we've already exhausted our retry budget for this envelope, send it
+    /// to the DLQ with `DlqReason::RetriesExhausted` instead of requeuing.
+    fn try_retry(&mut self, mut envelope: RuntimeEnvelope, category: ErrorCategory, error_msg: String) {
+        // P0.11 (A7 residual): persist per-envelope retry_count on the envelope
+        // itself so a retry that succeeds partially then fails again keeps
+        // its history. Previously we hard-coded retry_count = 0 for every
+        // retry, so envelopes could loop forever without hitting
+        // RetriesExhausted.
+        let retry_config = self.retry_config(category);
+        let max_retries = retry_config.retries;
+        let current = envelope.retry_count;
 
-        if self.retry_buffer.is_full() {
-            self.send_to_dlq(envelope, category, error_msg, 0, DlqReason::RetryBufferFull);
+        if current >= max_retries {
+            // Budget exhausted — straight to DLQ.
+            self.send_to_dlq(
+                envelope,
+                category,
+                error_msg,
+                current,
+                DlqReason::RetriesExhausted { max_retries },
+            );
             return;
         }
 
-        let retry_count = 0; // First retry attempt for this envelope
-        let backoff = self.compute_backoff(category, retry_count);
+        if self.retry_buffer.is_full() {
+            self.send_to_dlq(envelope, category, error_msg, current, DlqReason::RetryBufferFull);
+            return;
+        }
+
+        let next_retry_count = current + 1;
+        envelope.retry_count = next_retry_count;
+        let backoff = self.compute_backoff(category, next_retry_count);
         let next_attempt_at = Instant::now() + backoff;
 
-        self.retry_buffer.push(RetryEntry { envelope, category, retry_count, next_attempt_at });
+        self.retry_buffer.push(RetryEntry {
+            envelope,
+            category,
+            retry_count: next_retry_count,
+            next_attempt_at,
+        });
     }
 
     fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
@@ -635,5 +659,61 @@ mod tests {
         let dlq = rx.try_recv().expect("dlq entry");
         assert_eq!(dlq.trace_id.as_deref(), Some("trace-abc"));
         assert_eq!(dlq.parent_id.as_deref(), Some("parent-xyz"));
+    }
+
+    // ========================================================================
+    // P0.11 (A7 residual) tests
+    // ========================================================================
+
+    /// AC1: try_retry reads envelope.retry_count, increments it, re-enqueues.
+    /// After max_retries is exceeded, the envelope goes to DLQ with
+    /// DlqReason::RetriesExhausted { max_retries } instead of being requeued.
+    #[test]
+    fn retry_count_increments() {
+        let (mut executor, _rx) = make_executor_with_dlq(100);
+        let envelope = test_envelope("a");
+        assert_eq!(envelope.retry_count, 0, "fresh envelope starts at 0");
+
+        executor.handle(WasmProcessError::ProcessingFailed("fail 1".into()), envelope);
+
+        // First failure schedules a retry with retry_count = 1.
+        assert_eq!(executor.pending_retries(), 1);
+        // Peek: drain the entry (waiting past the backoff window).
+        // Backoff is exponential: 100 ms << retry_count. First retry has
+        // retry_count=1 → 200 ms backoff. Sleep well past it.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let requeued = executor.next_ready_retry().expect("one retry expected");
+        assert_eq!(
+            requeued.retry_count, 1,
+            "retry_count must be incremented before requeue"
+        );
+    }
+
+    /// AC1: on the (retries + 1)th failure, envelope goes to DLQ with
+    /// DlqReason::RetriesExhausted rather than being pushed into the retry
+    /// buffer again.
+    #[test]
+    fn retries_exhausted_dlq_reason() {
+        let (mut executor, mut rx) = make_executor_with_dlq(100);
+
+        // Configured retries = 3. Simulate an envelope that has already
+        // burned all three retries.
+        let mut envelope = test_envelope("exhausted");
+        envelope.retry_count = 3;
+
+        executor.handle(
+            WasmProcessError::ProcessingFailed("final fail".into()),
+            envelope,
+        );
+
+        assert_eq!(executor.pending_retries(), 0, "exhausted envelope must NOT be requeued");
+        let dlq = rx.try_recv().expect("envelope must land in DLQ");
+        match dlq.reason {
+            DlqReason::RetriesExhausted { max_retries } => {
+                assert_eq!(max_retries, 3, "max_retries in DLQ reason mirrors config");
+            }
+            other => panic!("expected RetriesExhausted, got {other:?}"),
+        }
+        assert_eq!(dlq.retry_count, 3, "DLQ envelope preserves retry_count history");
     }
 }

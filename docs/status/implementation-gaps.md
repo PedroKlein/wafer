@@ -166,7 +166,7 @@ and architecture claims assume the rewire happened; it did not.
   read from). Once A1 lands, thread the resolved config through the builder.
 - **Closed by:** runtime-migration plan A6 — `resolve_error_policy` in `orchestrator/builder.rs` reads top-level `[error_policy]` and per-node overrides; `ResolvedErrorPolicy::default()` now derives from `wafer_types::config::ErrorPolicyConfig::default()` so `retry_buffer_capacity` defaults to 1000; runner honors `bad_input`/`timed_out` action variants and per-category retry backoff; 13 `runner::error_policy` unit tests pass.
 
-## A7 — Retry exhaustion + Recovery state unimplemented (Partial 2026-07-20) 🟡
+## A7 — Retry exhaustion + Recovery state unimplemented (Closed 2026-07-21) 🟢
 
 - **Documented in:**
   - `docs/adr/0008-error-policy-engine.md:15-17, 29-35, 41`
@@ -192,6 +192,11 @@ and architecture claims assume the rewire happened; it did not.
   `Recovering`, call the state.rs helper, `bindings.init()`, transition back to
   `Running`.
 - **Partially closed by:** runtime-migration plan A7 — (b) fully done: transform/filter/router loops transition `Error → Recovering` and call `recover_from_cached_pre()` (fresh Store from same Engine + cached `InstancePre`, then `validate_and_init` with the retained lifecycle config JSON); success transitions back to `Running`. (a) not yet done: `try_retry` still uses `retry_count = 0` per envelope; `DlqReason::RetriesExhausted` is emitted only on `TimedOut` or when the retry buffer is full. `wafer_node_recovery_duration_ms` histogram is not exposed. Follow-up: per-envelope retry-count persistence and the recovery-duration metric.
+
+  **P0.11 residual closure (evaluation-infrastructure plan):**
+  - `RuntimeEnvelope` now carries `retry_count: u32`. `error_policy::try_retry` reads the count, increments it before requeue, and emits `DlqReason::RetriesExhausted { max_retries }` when it reaches the configured `ResolvedRetryConfig.retries`. Unit-tested by `runner::error_policy::tests::retry_count_increments` and `retries_exhausted_dlq_reason`.
+  - `NodeStateTracker` now records the wall-clock nanoseconds elapsed from the first `Running → Error` transition until `Recovering → Running` succeeds. `transition_recovering_to_running_timed()` returns the duration; the three runners (transform/filter/router) call it and feed the value into `NodeMetrics::record_recovery(duration_ns)`. Unit-tested by `node::state::tests::recovery_duration_measured_from_error_to_running` — asserts ≥ 20 ms after a 20 ms sleep and that consecutive Error→Recovering cycles re-stamp the marker.
+  - `/metrics` exposes `wafer_node_recovery_duration_ms{node_id=…}` as a Prometheus summary (`_count`, `_sum`, `quantile="max"`) derived from the per-node atomics. A histogram-shape surface is also plumbed in `HotSwapMetrics.recovery_duration` for tests that call `PipelineHandle::record_recovery_duration` directly, but production writes only populate the summary.
 
 ## A8 — Per-type fuel + StoreLimits not honored (Closed 2026-07-20) 🟢
 

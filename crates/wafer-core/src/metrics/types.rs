@@ -96,6 +96,14 @@ pub struct HotSwapMetrics {
     pub phase_histogram: std::sync::RwLock<
         std::collections::HashMap<(String, String), PhaseHistogram>,
     >,
+    /// P0.11 (A7 residual): per-node recovery-duration histogram in
+    /// nanoseconds, populated on every Recovering → Running transition.
+    /// Rendered as `wafer_node_recovery_duration_ms` at scrape time
+    /// (buckets in ms; nanosecond samples are divided by 1_000_000 for
+    /// display, source of truth remains ns).
+    pub recovery_duration: std::sync::RwLock<
+        std::collections::HashMap<String, PhaseHistogram>,
+    >,
 }
 
 /// Fixed-bucket histogram tuned for hot-swap phase durations.
@@ -165,6 +173,7 @@ impl Default for HotSwapMetrics {
             retire_time_ns: AtomicU64::new(0),
             messages_drained_total: AtomicU64::new(0),
             phase_histogram: std::sync::RwLock::new(std::collections::HashMap::new()),
+            recovery_duration: std::sync::RwLock::new(std::collections::HashMap::new()),
         }
     }
 }

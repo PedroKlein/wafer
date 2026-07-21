@@ -66,6 +66,7 @@ impl From<SerializableEnvelope> for RuntimeEnvelope {
             header: Arc::new(header),
             payload: Bytes::from(env.payload),
             lineage: Lineage::default(),
+            retry_count: 0,
         }
     }
 }

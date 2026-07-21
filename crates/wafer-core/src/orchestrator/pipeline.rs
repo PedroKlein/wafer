@@ -131,6 +131,24 @@ impl PipelineHandle {
         }
     }
 
+    /// P0.11 (A7 residual): record a single Recovering → Running duration
+    /// (nanoseconds) on the shared per-node recovery histogram.
+    pub fn record_recovery_duration(&self, node_id: &str, ns: u64) {
+        let key = node_id.to_owned();
+        if let Ok(guard) = self.hotswap_metrics.recovery_duration.read()
+            && let Some(h) = guard.get(&key)
+        {
+            h.record(ns);
+            return;
+        }
+        if let Ok(mut guard) = self.hotswap_metrics.recovery_duration.write() {
+            let h = guard
+                .entry(key)
+                .or_insert_with(crate::metrics::types::PhaseHistogram::new);
+            h.record(ns);
+        }
+    }
+
     /// Read-only handle to the hot-swap metrics store for use by the
     /// /metrics HTTP handler.
     #[must_use]

@@ -119,7 +119,9 @@ pub async fn run_filter_loop(
                 state.transition_to_recovering();
                 match filter.recover_from_cached_pre() {
                     Ok(()) => {
-                        state.transition_recovering_to_running();
+                        if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                            metrics.record_recovery(duration_ns);
+                        }
                         continue;
                     }
                     Err(error) => {

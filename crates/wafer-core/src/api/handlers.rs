@@ -401,5 +401,65 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         }
     }
 
+    // P0.11 AC2: wafer_node_recovery_duration_ms per-node summary
+    // (count + sum + max). Runners record durations into NodeMetrics on
+    // every Recovering → Running transition; a fuller HdrHistogram-shaped
+    // dataset lives in HotSwapMetrics.recovery_duration when explicit
+    // record_recovery_duration() calls are made (currently only from
+    // tests, since the runners write directly into NodeMetrics). Both
+    // surfaces render below — whichever is populated for a given node
+    // ID.
+    output.push_str(
+        "# HELP wafer_node_recovery_duration_ms Node Error → Recovering → Running duration (P0.11).\n",
+    );
+    output.push_str("# TYPE wafer_node_recovery_duration_ms summary\n");
+    for node_id in orch.config().nodes.keys() {
+        if let Some(m) = orch.node_metrics(node_id) {
+            let count = m.recovery_count();
+            if count > 0 {
+                let sum_ms = m.recovery_ns_total() / 1_000_000;
+                let max_ms = m.recovery_max_ns() / 1_000_000;
+                output.push_str(&format!(
+                    "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {count}\n"
+                ));
+                output.push_str(&format!(
+                    "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}\n"
+                ));
+                output.push_str(&format!(
+                    "wafer_node_recovery_duration_ms{{node_id=\"{node_id}\",quantile=\"max\"}} {max_ms}\n"
+                ));
+            }
+        }
+    }
+    // Full histogram (bucketed) is available when record_recovery_duration
+    // was called explicitly; preserved for symmetry with hot_swap_phase_ns.
+    if let Ok(guard) = hotswap.recovery_duration.read()
+        && !guard.is_empty()
+    {
+        output.push_str(
+            "# TYPE wafer_node_recovery_duration_ms_bucket histogram\n",
+        );
+        for (node_id, hist) in guard.iter() {
+            for (i, upper_ns) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
+                let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
+                let upper_ms = upper_ns / 1_000_000;
+                output.push_str(&format!(
+                    "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"{upper_ms}\"}} {count}\n"
+                ));
+            }
+            let total = hist.count.load(std::sync::atomic::Ordering::Relaxed);
+            let sum_ms = hist.sum_ns.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
+            output.push_str(&format!(
+                "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"+Inf\"}} {total}\n"
+            ));
+            output.push_str(&format!(
+                "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}\n"
+            ));
+            output.push_str(&format!(
+                "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {total}\n"
+            ));
+        }
+    }
+
     ([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], output)
 }

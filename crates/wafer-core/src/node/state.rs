@@ -5,7 +5,7 @@
 //!                    ↘ Error → Recovering → Running
 //! ```
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use wafer_types::NodeState;
 
 /// Thread-safe state tracker for node lifecycle during hot-swap.
@@ -15,6 +15,18 @@ pub struct NodeStateTracker {
     /// Used for drain detection: drain is complete when queue empty AND not processing.
     processing: AtomicBool,
     routing_enabled: AtomicBool,
+    /// P0.11 (A7 residual): monotonic-clock nanoseconds captured on the
+    /// Running → Error transition. Read on Recovering → Running and cleared
+    /// afterwards. 0 means "no recovery in flight". Populated using
+    /// `std::time::Instant::now()` via a UNIX-epoch reference held elsewhere
+    /// is impractical from AtomicU64; we store the raw nanoseconds elapsed
+    /// since the process started using a per-tracker anchor.
+    recovery_started_ns: AtomicU64,
+    /// Anchor for `recovery_started_ns`. `Instant` is not `Copy`-into-u64
+    /// friendly, so we snapshot the anchor here and compute deltas via
+    /// `Instant::elapsed()` at read time. The atomic stores the anchored
+    /// delta in nanoseconds.
+    epoch: std::time::Instant,
 }
 
 impl Default for NodeStateTracker {
@@ -30,6 +42,8 @@ impl NodeStateTracker {
             state: AtomicU8::new(Self::state_to_u8(NodeState::Starting)),
             processing: AtomicBool::new(false),
             routing_enabled: AtomicBool::new(true),
+            recovery_started_ns: AtomicU64::new(0),
+            epoch: std::time::Instant::now(),
         }
     }
 
@@ -40,6 +54,8 @@ impl NodeStateTracker {
             state: AtomicU8::new(Self::state_to_u8(NodeState::Running)),
             processing: AtomicBool::new(false),
             routing_enabled: AtomicBool::new(true),
+            recovery_started_ns: AtomicU64::new(0),
+            epoch: std::time::Instant::now(),
         }
     }
 
@@ -107,6 +123,19 @@ impl NodeStateTracker {
                 .compare_exchange_weak(current, error_val, Ordering::AcqRel, Ordering::Acquire)
                 .is_ok()
             {
+                // P0.11: mark the start of recovery so the eventual
+                // Recovering → Running transition can compute duration.
+                // We only stamp the FIRST Running → Error transition; if
+                // multiple errors chain (Error → Recovering → Error), the
+                // original timestamp is preserved so recovery duration
+                // reflects the whole outage, not just the last attempt.
+                let now_ns = self.epoch.elapsed().as_nanos() as u64;
+                let _ = self.recovery_started_ns.compare_exchange(
+                    0,
+                    now_ns.max(1),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 return true;
             }
             // CAS failed, retry
@@ -119,13 +148,27 @@ impl NodeStateTracker {
     }
 
     /// Transition from Recovering back to Running (re-instantiation succeeded).
-    pub fn transition_recovering_to_running(&self) -> bool {
+    /// Returns the recovery duration in nanoseconds when a recovery was in
+    /// flight, or `Some(0)` if the transition succeeded but no start marker
+    /// existed (defensive), or `None` if the transition itself failed.
+    #[must_use]
+    pub fn transition_recovering_to_running_timed(&self) -> Option<u64> {
         if self.try_transition(NodeState::Recovering, NodeState::Running) {
             self.routing_enabled.store(true, Ordering::Release);
-            true
+            let started = self.recovery_started_ns.swap(0, Ordering::AcqRel);
+            if started == 0 {
+                return Some(0);
+            }
+            let now = self.epoch.elapsed().as_nanos() as u64;
+            Some(now.saturating_sub(started))
         } else {
-            false
+            None
         }
+    }
+
+    /// Back-compat shim for callers that don't need timing.
+    pub fn transition_recovering_to_running(&self) -> bool {
+        self.transition_recovering_to_running_timed().is_some()
     }
 
     fn try_transition(&self, from: NodeState, to: NodeState) -> bool {
@@ -426,5 +469,33 @@ mod tests {
 
         // After guard drops → ready again
         assert!(tracker.is_drain_ready());
+    }
+
+    /// P0.11 (A7): Recovering → Running measures elapsed time; returns 0
+    /// when no start marker existed (defensive path).
+    #[test]
+    fn recovery_duration_measured_from_error_to_running() {
+        let tracker = NodeStateTracker::running();
+        assert!(tracker.transition_to_error());
+        assert!(tracker.transition_to_recovering());
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let duration = tracker
+            .transition_recovering_to_running_timed()
+            .expect("transition must succeed");
+        assert!(
+            duration >= 20_000_000,
+            "recovery duration {duration}ns must be ≥ 20ms"
+        );
+        assert!(
+            duration < 500_000_000,
+            "recovery duration {duration}ns must be < 500ms in a unit test"
+        );
+
+        // A second recovery cycle stamps a fresh marker.
+        assert!(tracker.transition_to_error());
+        assert!(tracker.transition_to_recovering());
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let d2 = tracker.transition_recovering_to_running_timed().unwrap();
+        assert!(d2 >= 10_000_000, "second recovery must be re-timed; got {d2}ns");
     }
 }

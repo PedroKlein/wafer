@@ -28,6 +28,13 @@ pub struct NodeMetrics {
     dlq: AtomicU64,
     /// Total hot-swap operations completed on this node.
     swaps: AtomicU64,
+    /// P0.11 (A7 residual): cumulative Recovering → Running time in
+    /// nanoseconds and total recovery events. Runners populate this from
+    /// [`NodeStateTracker::transition_recovering_to_running_timed`].
+    /// Exposed on /metrics as `wafer_node_recovery_duration_ms`.
+    recovery_ns_total: AtomicU64,
+    recovery_count: AtomicU64,
+    recovery_max_ns: AtomicU64,
 }
 
 impl Default for NodeMetrics {
@@ -47,6 +54,9 @@ impl NodeMetrics {
             retries: AtomicU64::new(0),
             dlq: AtomicU64::new(0),
             swaps: AtomicU64::new(0),
+            recovery_ns_total: AtomicU64::new(0),
+            recovery_count: AtomicU64::new(0),
+            recovery_max_ns: AtomicU64::new(0),
         }
     }
 
@@ -79,6 +89,49 @@ impl NodeMetrics {
     #[inline]
     pub fn record_swap(&self) {
         self.swaps.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// P0.11 (A7 residual): record one Recovering → Running duration.
+    /// Called by every runner (transform/filter/router) after a successful
+    /// re-instantiation from the cached `InstancePre`.
+    #[inline]
+    pub fn record_recovery(&self, duration_ns: u64) {
+        self.recovery_ns_total.fetch_add(duration_ns, Ordering::Relaxed);
+        self.recovery_count.fetch_add(1, Ordering::Relaxed);
+        // Track max so /metrics can report worst-case without keeping a
+        // full histogram per NodeMetrics (the shared histogram in
+        // HotSwapMetrics.recovery_duration is the source of truth for
+        // percentile analysis).
+        let mut cur = self.recovery_max_ns.load(Ordering::Relaxed);
+        while duration_ns > cur {
+            match self.recovery_max_ns.compare_exchange_weak(
+                cur,
+                duration_ns,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(observed) => cur = observed,
+            }
+        }
+    }
+
+    /// Total recovery events (Recovering → Running).
+    #[inline]
+    pub fn recovery_count(&self) -> u64 {
+        self.recovery_count.load(Ordering::Relaxed)
+    }
+
+    /// Cumulative recovery duration in nanoseconds.
+    #[inline]
+    pub fn recovery_ns_total(&self) -> u64 {
+        self.recovery_ns_total.load(Ordering::Relaxed)
+    }
+
+    /// Max observed recovery duration in nanoseconds.
+    #[inline]
+    pub fn recovery_max_ns(&self) -> u64 {
+        self.recovery_max_ns.load(Ordering::Relaxed)
     }
 
     // --- Read accessors (exposition layer reads these) ---

@@ -93,6 +93,7 @@ impl Transform for NativeTransform {
                         header: input.header.clone(),
                         payload: Bytes::from(output_bytes),
                         lineage: input.lineage,
+                        retry_count: input.retry_count,
                     };
                     Ok(ProcessResult::Emit(output))
                 }
