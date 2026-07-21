@@ -1,0 +1,64 @@
+# Diamond (parallel-branch) topology for E-Iso-7 fault-isolation.
+#
+#            source ─┬─→ branch-a (healthy pass-through) ─┐
+#                    │                                    ├─→ sink
+#                    └─→ branch-b (attack node) ──────────┘
+#
+# When branch-b traps, RQ2 requires branch-a's throughput to drop <1%. The
+# runtime's fault isolation must contain the failure inside branch-b without
+# stalling the parallel branch or the fan-in at the sink.
+#
+# BenchSink tracks per-source throughput via the envelope's `source` field
+# and the sequence tracker, so branch-a and branch-b attribution shows up
+# independently in per_node_metrics.csv (populated by the eval harness).
+#
+# Attack: infinite-loop plugin. Traps via epoch deadline; the runtime's
+# error-policy engine then transitions branch-b to Error/Recovering while
+# branch-a keeps running. See RFC-008 D8 and docs/adr/0008-error-policy-engine.md.
+
+[pipeline]
+name = "bench-diamond"
+description = "Diamond topology for E-Iso-7: healthy pass-through vs infinite-loop attack, fan-in at sink"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 128
+
+# ─── Healthy branch ─────────────────────────────────────────────
+[nodes.branch_a]
+type = "transform"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+# ─── Attack branch ──────────────────────────────────────────────
+[nodes.branch_b]
+type = "transform"
+plugin = "../../plugins/attacks/infinite-loop/target/wasm32-wasip2/release/wafer_attack_infinite_loop.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+# ─── Fan-out from source ────────────────────────────────────────
+[[edges]]
+from = "source"
+to = "branch_a"
+
+[[edges]]
+from = "source"
+to = "branch_b"
+
+# ─── Fan-in at sink ─────────────────────────────────────────────
+[[edges]]
+from = "branch_a"
+to = "sink"
+
+[[edges]]
+from = "branch_b"
+to = "sink"
