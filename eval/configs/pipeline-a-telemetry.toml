@@ -1,43 +1,50 @@
-# Full telemetry pipeline: MQTT source → JSON parse → threshold filter → sink
-# Matches the E2E evaluation topology (E-Perf-1, E-Perf-2)
+# Pipeline A telemetry: MQTT source → JSON parse → threshold filter → MQTT sink.
+#
+# Drives the E2E evaluation (E-Perf-1, E-Perf-2). Same schema and topology
+# is used for eKuiper and the native baseline so comparisons are apples-to-
+# apples per RFC-008 D6.
+
 [pipeline]
 name = "bench-telemetry"
+description = "Pipeline A: MQTT → json-parse → threshold-filter → MQTT (E-Perf-1, E-Perf-2)"
 
-[pipeline.source]
-type = "bench-source"
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/input"
+qos = 1
+client_id = "wafer-runtime-in"
 
-[pipeline.source.config]
-rate = 1000
-total_messages = 60000
-warmup_messages = 30000
-payload_size = 256
-
-[[pipeline.nodes]]
-id = "parser"
+[nodes.parser]
 type = "transform"
-plugin = "wafer-json-parse"
+plugin = "../../plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
 
-[[pipeline.nodes]]
-id = "filter"
+[nodes.filter]
 type = "filter"
-plugin = "wafer-threshold-filter"
+plugin = "../../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
 
-[pipeline.nodes.config]
+[nodes.filter.config]
 threshold = 50.0
 
-[pipeline.sink]
-type = "bench-sink"
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/output"
+qos = 1
+client_id = "wafer-runtime-out"
 
-[pipeline.sink.config]
-warmup_secs = 30
-track_sequences = true
-track_hotswap = false
+[[edges]]
+from = "mqtt-in"
+to = "parser"
 
-[pipeline.edges]
-source = ["parser"]
-parser = ["filter"]
-filter = ["sink"]
+[[edges]]
+from = "parser"
+to = "filter"
 
-[pipeline.metering]
-fuel = true
-epoch = true
+[[edges]]
+from = "filter"
+to = "mqtt-out"

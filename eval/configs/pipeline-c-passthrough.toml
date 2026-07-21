@@ -1,28 +1,39 @@
-# Minimal passthrough pipeline for benchmarking (both metering enabled)
+# Passthrough micro-benchmark. Bench source → pass-through Wasm transform → bench sink.
+#
+# All metering enabled (default engine config). Baseline for E-Perf-4 /
+# E-Perf-7 / E-Perf-8. Also serves as the reference for the pipeline-c-*.toml
+# variants that ablate metering.
+#
+# See docs/rfcs/RFC-008-evaluation-harness.md and the P0.13 schema-reconcile
+# task in the evaluation-infrastructure plan.
+
 [pipeline]
 name = "bench-passthrough"
+description = "Minimal in-process bench: bench-source → pass-through (Wasm) → bench-sink"
 
-[pipeline.source]
-type = "bench-source"
-
-[pipeline.source.config]
-rate = 1000
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
 total_messages = 60000
 warmup_messages = 30000
 payload_size = 128
 
-[[pipeline.nodes]]
-id = "transform"
+[nodes.transform]
 type = "transform"
-plugin = "pass-through"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[pipeline.sink]
-type = "bench-sink"
-
-[pipeline.sink.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 30
 track_sequences = true
+track_hotswap = false
 
-[pipeline.metering]
-fuel = true
-epoch = true
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

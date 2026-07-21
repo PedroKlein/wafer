@@ -1,0 +1,7 @@
+#WAFER BenchSink latency histogram (nanoseconds)
+#Total messages: 2998
+#Recorded values: 0
+#Warmup: 0s
+#[StartTime: 1784635185.305 (seconds since epoch)]
+#[BaseTime: 1784635185.305 (seconds since epoch)]
+Tag=latency_ns,0.000,2.999,0.000,HISTEwAAAAEAAAAAAAAAAwAAAAAAAAPoAAAAAlQL5AA/8AAAAAAAAAA=

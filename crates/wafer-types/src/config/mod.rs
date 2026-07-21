@@ -17,9 +17,9 @@ pub use engine::{
 };
 pub use pipeline::{ApiConfig, MetricsConfig, PipelineConfig, RegistryConfig};
 pub use source_sink::{
-    AuthConfig, FileSinkConfig, FileSourceConfig, HttpSinkConfig, HttpSourceConfig,
-    MqttSinkConfig, MqttSourceConfig, SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig,
-    TlsConfig,
+    AuthConfig, BenchSinkConfigToml, BenchSourceConfigToml, FileSinkConfig, FileSourceConfig,
+    HttpSinkConfig, HttpSourceConfig, MqttSinkConfig, MqttSourceConfig, SinkDef, SourceDef,
+    StdinSourceConfig, StdoutSinkConfig, TlsConfig,
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -462,5 +462,51 @@ kind = "stdout"
         assert_eq!(config.nodes["xfm"].category(), NodeCategory::Transform);
         assert_eq!(config.nodes["rtr"].category(), NodeCategory::Router);
         assert_eq!(config.nodes["snk"].category(), NodeCategory::Sink);
+    }
+
+    /// Bench source and sink kinds round-trip through TOML.
+    #[test]
+    fn bench_source_sink_kinds_roundtrip() {
+        let toml_str = r#"
+[nodes.src]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 60000
+warmup_messages = 30000
+payload_size = 256
+
+[nodes.snk]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "src"
+to = "snk"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let NodeDef::Source(SourceDef::BenchSource(src_cfg)) = &config.nodes["src"] else {
+            panic!("expected BenchSource");
+        };
+        assert!((src_cfg.rate - 1000.0).abs() < 1e-9);
+        assert_eq!(src_cfg.total_messages, 60_000);
+        assert_eq!(src_cfg.warmup_messages, 30_000);
+        assert_eq!(src_cfg.payload_size, 256);
+
+        let NodeDef::Sink(SinkDef::BenchSink(snk_cfg)) = &config.nodes["snk"] else {
+            panic!("expected BenchSink");
+        };
+        assert_eq!(snk_cfg.warmup_secs, 30);
+        assert!(snk_cfg.track_sequences);
+        assert!(!snk_cfg.track_hotswap);
+
+        // Re-serialize and re-parse to verify round-trip fidelity.
+        let round_trip = toml::to_string(&config).unwrap();
+        let reparsed: Config = toml::from_str(&round_trip).unwrap();
+        assert_eq!(reparsed.nodes.len(), 2);
+        assert_eq!(reparsed.edges.len(), 1);
     }
 }

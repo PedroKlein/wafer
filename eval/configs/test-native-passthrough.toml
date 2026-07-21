@@ -1,31 +1,29 @@
-# Native passthrough — test config for the new runtime (no Wasm needed)
+# Native passthrough — placeholder for the P0.4 native baseline.
+#
+# The runtime does not yet support `native-transform` node kinds; P0.4
+# introduces the ProcessNode trait and the NodeDef mapping. Until then, this
+# config uses the Wasm pass-through so tests validating "all eval configs
+# load" (P0.13) pass.
+
 [pipeline]
 name = "test-native-passthrough"
+description = "Native passthrough placeholder — P0.4 will replace the transform"
 
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "bench-source"
-
-[nodes.config]
-rate = 10000
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 10000.0
 total_messages = 100
 warmup_messages = 0
 payload_size = 64
 
-[[nodes]]
-id = "transform"
-node_type = "transform"
+[nodes.transform]
+type = "transform"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[nodes.config]
-function = "passthrough"
-
-[[nodes]]
-id = "sink"
-node_type = "sink"
-sink_type = "bench-sink"
-
-[nodes.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 0
 track_sequences = false
 

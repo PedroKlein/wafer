@@ -9,6 +9,11 @@ pub enum SourceDef {
     File(FileSourceConfig),
     Stdin(StdinSourceConfig),
     Http(HttpSourceConfig),
+    /// Deterministic in-process benchmark source. Emits `total_messages`
+    /// envelopes at `rate` msg/s, with the first `warmup_messages` treated
+    /// as warm-up by downstream `BenchSink`s. See
+    /// `wafer_core::node::source::BenchSource`.
+    BenchSource(BenchSourceConfigToml),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -18,6 +23,10 @@ pub enum SinkDef {
     File(FileSinkConfig),
     Stdout(StdoutSinkConfig),
     Http(HttpSinkConfig),
+    /// Evaluation-grade measurement sink with [`HdrHistogram`], sequence
+    /// tracking, hot-swap boundary detection, and auto-export on close.
+    /// See `wafer_core::node::sink::BenchSink`.
+    BenchSink(BenchSinkConfigToml),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -131,4 +140,60 @@ fn default_http_source_path() -> String {
 
 fn default_http_method() -> String {
     "POST".to_owned()
+}
+
+/// Config-file form of `wafer_core::node::source::BenchSourceConfig`.
+///
+/// Kept as a distinct type so the TOML schema stays stable when the runtime
+/// side adds internal knobs. `From<BenchSourceConfigToml>` in wafer-core
+/// bridges the two.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BenchSourceConfigToml {
+    /// Target emission rate (msg/s).
+    pub rate: f64,
+
+    /// Total number of messages to emit. When reached, the source signals EOF.
+    pub total_messages: u64,
+
+    /// Number of leading messages tagged as warm-up (`bench.warmup=true` in
+    /// envelope metadata). Defaults to zero — use for [`BenchSink`] warmup
+    /// exclusion.
+    #[serde(default)]
+    pub warmup_messages: u64,
+
+    /// Payload size in bytes. The source emits `payload_size` bytes of a
+    /// deterministic filler pattern (see `BenchSource::with_payload_size`).
+    #[serde(default = "default_bench_payload_size")]
+    pub payload_size: usize,
+}
+
+/// Config-file form of `wafer_core::node::sink::BenchSinkConfig`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BenchSinkConfigToml {
+    /// Seconds to discard at start (warm-up exclusion). Applied on the
+    /// receiving side of the sink.
+    #[serde(default = "default_warmup_secs")]
+    pub warmup_secs: u64,
+
+    /// Enable sequence gap/duplicate tracking.
+    #[serde(default = "default_true")]
+    pub track_sequences: bool,
+
+    /// Enable hot-swap version transition recording (`plugin.version`
+    /// metadata).
+    #[serde(default)]
+    pub track_hotswap: bool,
+
+    /// Output directory for `latency.hdr` + `throughput.csv` on `close()`.
+    /// Left `None` means no auto-export; the eval scripts provide this.
+    #[serde(default)]
+    pub output_dir: Option<String>,
+}
+
+const fn default_bench_payload_size() -> usize {
+    128
+}
+
+const fn default_warmup_secs() -> u64 {
+    30
 }

@@ -1,26 +1,40 @@
-# Native baseline (no Wasm — direct Rust function calls)
+# Native baseline (no Wasm — direct Rust function calls).
+#
+# PLACEHOLDER: this config exercises the `native-transform` node kind, which
+# is authored by P0.4 in the evaluation-infrastructure plan. Until P0.4
+# lands, the config parses+validates (via the schema-reconcile P0.13) but
+# uses a Wasm pass-through as a stand-in for the native transform.
+#
+# P0.4 will replace `plugin = "..."` with a native node declaration that
+# uses the same NodeDef mapping mechanism.
+
 [pipeline]
 name = "bench-native-baseline"
+description = "Native baseline placeholder — final wiring by P0.4"
 
-[pipeline.source]
-type = "bench-source"
-
-[pipeline.source.config]
-rate = 1000
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
 total_messages = 60000
 warmup_messages = 30000
 payload_size = 128
 
-[[pipeline.nodes]]
-id = "transform"
-type = "native-transform"
+[nodes.transform]
+type = "transform"
+# TODO(P0.4): swap to a native-transform kind once the ProcessNode trait lands.
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[pipeline.nodes.config]
-function = "passthrough"
-
-[pipeline.sink]
-type = "bench-sink"
-
-[pipeline.sink.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 30
 track_sequences = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

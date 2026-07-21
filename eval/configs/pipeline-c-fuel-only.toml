@@ -1,28 +1,41 @@
-# Passthrough with fuel metering only (epoch disabled)
+# Passthrough with fuel metering only (epoch disabled).
+#
+# Ablation for E-Perf-7 metering-overhead decomposition. Epoch ticker is
+# effectively disabled by setting epoch_deadline = 0; fuel budgets stay at
+# their EngineConfig defaults.
+#
+# NOTE: the runtime interpretation of epoch_deadline=0 will be dialed in by
+# P2.3 (E-Perf-7 execute) — for now the config parses and validates.
+
 [pipeline]
 name = "bench-passthrough-fuel-only"
+description = "Passthrough with fuel metering only (epoch disabled)"
 
-[pipeline.source]
-type = "bench-source"
+[engine]
+epoch_deadline = 0        # disable epoch trap (0 = no deadline)
 
-[pipeline.source.config]
-rate = 1000
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
 total_messages = 60000
 warmup_messages = 30000
 payload_size = 128
 
-[[pipeline.nodes]]
-id = "transform"
+[nodes.transform]
 type = "transform"
-plugin = "pass-through"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[pipeline.sink]
-type = "bench-sink"
-
-[pipeline.sink.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 30
 track_sequences = true
 
-[pipeline.metering]
-fuel = true
-epoch = false
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

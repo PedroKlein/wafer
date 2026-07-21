@@ -1,28 +1,43 @@
-# Passthrough with no metering (raw Wasm overhead only)
+# Passthrough with no metering (raw Wasm overhead only).
+#
+# Ablation for E-Perf-7 metering-overhead decomposition. Both fuel and epoch
+# are disabled — the closest we can get to "just Wasm execution cost" from
+# the config layer. P2.3 (E-Perf-7 execute) will confirm the semantics.
+
 [pipeline]
 name = "bench-passthrough-no-metering"
+description = "Passthrough with no metering — reference for E-Perf-7"
 
-[pipeline.source]
-type = "bench-source"
+[engine]
+epoch_deadline = 0
 
-[pipeline.source.config]
-rate = 1000
+[engine.fuel]
+transform = 0
+filter = 0
+router = 0
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
 total_messages = 60000
 warmup_messages = 30000
 payload_size = 128
 
-[[pipeline.nodes]]
-id = "transform"
+[nodes.transform]
 type = "transform"
-plugin = "pass-through"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[pipeline.sink]
-type = "bench-sink"
-
-[pipeline.sink.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 30
 track_sequences = true
 
-[pipeline.metering]
-fuel = false
-epoch = false
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

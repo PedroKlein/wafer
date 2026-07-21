@@ -1,28 +1,40 @@
-# Passthrough with epoch metering only (fuel disabled)
+# Passthrough with epoch metering only (fuel disabled).
+#
+# Ablation for E-Perf-7 metering-overhead decomposition. Fuel is set to 0
+# for all node categories; the runtime interpretation of `fuel = 0` will be
+# dialed in by P2.3 (E-Perf-7 execute).
+
 [pipeline]
 name = "bench-passthrough-epoch-only"
+description = "Passthrough with epoch metering only (fuel disabled)"
 
-[pipeline.source]
-type = "bench-source"
+[engine.fuel]
+transform = 0
+filter = 0
+router = 0
 
-[pipeline.source.config]
-rate = 1000
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
 total_messages = 60000
 warmup_messages = 30000
 payload_size = 128
 
-[[pipeline.nodes]]
-id = "transform"
+[nodes.transform]
 type = "transform"
-plugin = "pass-through"
+plugin = "../../plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
-[pipeline.sink]
-type = "bench-sink"
-
-[pipeline.sink.config]
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
 warmup_secs = 30
 track_sequences = true
 
-[pipeline.metering]
-fuel = false
-epoch = true
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

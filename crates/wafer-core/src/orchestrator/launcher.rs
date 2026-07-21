@@ -9,11 +9,17 @@ use std::sync::Arc;
 
 use wasmtime::Store;
 
-use crate::config::{Capabilities as ConfigCapabilities, Config, NodeDef, SinkDef, SourceDef, WasmNodeDef};
+use crate::config::{
+    BenchSinkConfigToml, BenchSourceConfigToml, Capabilities as ConfigCapabilities, Config,
+    NodeDef, SinkDef, SourceDef, WasmNodeDef,
+};
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{ConfigError, Result, WaferError};
+use crate::node::{
+    BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink, FileSource, HttpSink,
+    HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink,
+};
 use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
-use crate::node::{FileSink, FileSource, HttpSink, HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink};
 use crate::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
 use crate::orchestrator::pipeline::PipelineOrchestrator;
 use crate::registry::{OciReference, PluginSource, RegistryConfig, WaferRegistry};
@@ -132,7 +138,15 @@ fn create_source(node_id: &str, source_def: &SourceDef) -> Box<dyn Source + Send
             ))
         }
         SourceDef::Http(cfg) => Box::new(HttpSource::new(node_id, &cfg.bind, &cfg.path)),
+        SourceDef::BenchSource(cfg) => Box::new(bench_source_from_toml(node_id, cfg)),
     }
+}
+
+fn bench_source_from_toml(node_id: &str, cfg: &BenchSourceConfigToml) -> BenchSource {
+    let core = BenchSourceConfig::new(cfg.rate, cfg.total_messages)
+        .with_warmup(cfg.warmup_messages)
+        .with_payload_size(cfg.payload_size);
+    BenchSource::new(core).with_id(node_id.to_owned())
 }
 
 // =============================================================================
@@ -155,7 +169,26 @@ fn create_sink(node_id: &str, sink_def: &SinkDef) -> Box<dyn Sink + Send> {
             ))
         }
         SinkDef::Http(cfg) => Box::new(HttpSink::new(node_id, &cfg.url)),
+        SinkDef::BenchSink(cfg) => Box::new(bench_sink_from_toml(node_id, cfg)),
     }
+}
+
+fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
+    let mut core = BenchSinkConfig {
+        warmup_secs: cfg.warmup_secs,
+        track_sequences: cfg.track_sequences,
+        track_hotswap: cfg.track_hotswap,
+        output_dir: cfg.output_dir.as_ref().map(std::path::PathBuf::from),
+    };
+    // If the environment (eval scripts) supplied a WAFER_BENCH_OUTPUT_DIR,
+    // let it override the TOML value — same convention used by other
+    // eval-facing knobs. Keeps configs portable across hosts.
+    if let Ok(env_dir) = std::env::var("WAFER_BENCH_OUTPUT_DIR") {
+        if !env_dir.is_empty() {
+            core.output_dir = Some(std::path::PathBuf::from(env_dir));
+        }
+    }
+    BenchSink::new(core).with_id(node_id.to_owned())
 }
 
 // =============================================================================
@@ -343,4 +376,37 @@ fn plugin_source(plugin: &str) -> Result<PluginSource> {
     }
 
     Ok(PluginSource::Local(PathBuf::from(plugin)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{BenchSinkConfigToml, BenchSourceConfigToml};
+    use crate::node::Lifecycle;
+
+    #[test]
+    fn launch_bench_source_and_sink() {
+        // Verify the TOML → concrete node conversion for BenchSource/BenchSink.
+        // This is a pure factory test; full pipeline wiring is exercised by
+        // the smoke test in tests/end_to_end.rs.
+        let src_cfg = BenchSourceConfigToml {
+            rate: 1000.0,
+            total_messages: 100,
+            warmup_messages: 10,
+            payload_size: 200,
+        };
+        let src = bench_source_from_toml("my-src", &src_cfg);
+        assert_eq!(src.id(), "my-src");
+        assert_eq!(src.node_type(), "bench-source");
+
+        let snk_cfg = BenchSinkConfigToml {
+            warmup_secs: 5,
+            track_sequences: true,
+            track_hotswap: false,
+            output_dir: None,
+        };
+        let snk = bench_sink_from_toml("my-snk", &snk_cfg);
+        assert_eq!(snk.id(), "my-snk");
+        assert_eq!(snk.node_type(), "bench-sink");
+    }
 }
