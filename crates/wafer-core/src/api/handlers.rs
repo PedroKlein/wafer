@@ -140,6 +140,26 @@ pub async fn hot_swap(
 
     let engine = orch.engine();
     let engine_config = orch.config();
+
+    // Acquire the per-node swap slot before doing ANY preparation. This is
+    // the P0.10 overlapping-swap guard: a concurrent second call for the
+    // same node id short-circuits here with 409 CONFLICT instead of
+    // overwriting the pending watch value.
+    let _swap_guard = match orch.try_begin_swap(&id) {
+        Ok(g) => g,
+        Err(e) => {
+            let msg = e.to_string();
+            let status = if msg.starts_with("swap-in-progress") {
+                StatusCode::CONFLICT
+            } else if msg.starts_with("node-not-swappable") {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            return Err((status, msg));
+        }
+    };
+
     let (kind, capabilities, memory_limit) = match engine_config.nodes.get(&id) {
         Some(NodeDef::Transform(wasm)) => (
             SwapKind::Transform,
@@ -216,6 +236,23 @@ pub async fn hot_swap(
         .first_v2_at
         .duration_since(report.ack_at)
         .as_nanos() as u64;
+    let first_v2_ns = report
+        .first_v2_at
+        .duration_since(signal_at)
+        .as_nanos() as u64;
+
+    // P0.10 AC1: record every phase into the hot_swap_phase_ns histogram
+    // labelled {phase, node_id}. Six phases total — curl :9090/metrics | rg
+    // hot_swap_phase_ns must show six series after this call.
+    let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
+    let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
+    let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
+    orch.record_hotswap_phase("compile", &id, compile_ns);
+    orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
+    orch.record_hotswap_phase("signal", &id, signal_ns);
+    orch.record_hotswap_phase("ack", &id, ack_ns);
+    orch.record_hotswap_phase("first_v2", &id, first_v2_ns);
+    orch.record_hotswap_phase("convergence", &id, convergence_ns);
 
     Ok(Json(serde_json::json!({
         "node_id": id,
@@ -330,6 +367,36 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
                 "wafer_node_failed_total{{node=\"{}\"}} {}\n",
                 node_id,
                 m.failed()
+            ));
+        }
+    }
+
+    // P0.10 AC1: hot_swap_phase_ns histogram, one series set per
+    // (phase, node_id). Emitted whenever the /metrics endpoint is
+    // scraped; empty when no swaps have happened yet.
+    let hotswap = orch.hotswap_metrics();
+    if let Ok(guard) = hotswap.phase_histogram.read() {
+        output.push_str(
+            "# HELP hot_swap_phase_ns Nanoseconds per hot-swap phase (P0.10, RFC-008 E-Swap-6).\n",
+        );
+        output.push_str("# TYPE hot_swap_phase_ns histogram\n");
+        for ((phase, node_id), hist) in guard.iter() {
+            for (i, upper) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
+                let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
+                output.push_str(&format!(
+                    "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"{upper}\"}} {count}\n"
+                ));
+            }
+            let total = hist.count.load(std::sync::atomic::Ordering::Relaxed);
+            let sum = hist.sum_ns.load(std::sync::atomic::Ordering::Relaxed);
+            output.push_str(&format!(
+                "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"+Inf\"}} {total}\n"
+            ));
+            output.push_str(&format!(
+                "hot_swap_phase_ns_sum{{phase=\"{phase}\",node_id=\"{node_id}\"}} {sum}\n"
+            ));
+            output.push_str(&format!(
+                "hot_swap_phase_ns_count{{phase=\"{phase}\",node_id=\"{node_id}\"}} {total}\n"
             ));
         }
     }

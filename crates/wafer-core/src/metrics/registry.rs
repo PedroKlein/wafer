@@ -278,6 +278,29 @@ impl MetricsRegistry {
         self.hotswap_metrics.failure_total.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// P0.10 (A3 residual): record one phase timing sample.
+    ///
+    /// `phase` is one of {compile, instantiate, signal, ack, first_v2,
+    /// convergence}. `node_id` is the swappable-node id. Duplicate
+    /// `(phase, node_id)` calls accumulate into the same histogram.
+    pub fn record_hotswap_phase(&self, phase: &str, node_id: &str, ns: u64) {
+        let key = (phase.to_owned(), node_id.to_owned());
+        // Fast path: read lock, existing entry.
+        if let Ok(guard) = self.hotswap_metrics.phase_histogram.read()
+            && let Some(h) = guard.get(&key)
+        {
+            h.record(ns);
+            return;
+        }
+        // Slow path: create histogram, drop read lock, take write lock.
+        if let Ok(mut guard) = self.hotswap_metrics.phase_histogram.write() {
+            let h = guard
+                .entry(key)
+                .or_insert_with(super::types::PhaseHistogram::new);
+            h.record(ns);
+        }
+    }
+
     // Snapshot and encoding
 
     pub fn snapshot(&self) -> MetricsSnapshot {

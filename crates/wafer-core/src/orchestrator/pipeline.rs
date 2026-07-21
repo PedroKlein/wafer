@@ -52,9 +52,114 @@ pub struct PipelineHandle {
     metrics: HashMap<Box<str>, Arc<NodeMetrics>>,
     engine: Arc<WaferEngine>,
     running: Arc<AtomicBool>,
+    /// P0.10 (A3 residual): per-node compare-and-swap guards preventing
+    /// two concurrent swap requests for the same node from both winning
+    /// the watch-channel race. Populated at build time for every
+    /// swappable node. Independent of `watch_senders` so that internal
+    /// (non-API) swap paths can also participate.
+    swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
+    /// P0.10 (A3 residual): shared hot-swap-metrics store, populated on
+    /// every successful swap via [`record_hotswap_phase`](Self::record_hotswap_phase)
+    /// and rendered by the /metrics handler.
+    hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
+}
+
+/// RAII guard returned by [`PipelineHandle::try_begin_swap`]. Dropping
+/// the guard releases the corresponding node's swap-in-progress flag so
+/// the next API call can succeed.
+#[must_use = "drop the guard once the swap has converged or failed"]
+pub struct SwapGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl std::fmt::Debug for SwapGuard {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SwapGuard")
+            .field("held", &self.flag.load(Ordering::Acquire))
+            .finish()
+    }
+}
+
+impl Drop for SwapGuard {
+    fn drop(&mut self) {
+        // Release is enough: any subsequent `try_begin_swap` uses an
+        // Acquire compare_exchange which synchronises with this store.
+        self.flag.store(false, Ordering::Release);
+    }
 }
 
 impl PipelineHandle {
+    /// Attempt to acquire the swap slot for `node_id`. Returns `Ok(guard)`
+    /// on success. Returns `Err(WaferError::Runtime("swap-in-progress"))`
+    /// when another swap request is already in flight for the same node.
+    ///
+    /// The guard MUST be held for the lifetime of the swap (from
+    /// preparation through to completion or timeout). Dropping the guard
+    /// releases the slot.
+    ///
+    /// # Errors
+    ///
+    /// - `WaferError::Runtime("node-not-swappable")` when the node id does
+    ///   not correspond to a Wasm node (Source/Sink cannot swap).
+    /// - `WaferError::Runtime("swap-in-progress")` when a concurrent swap
+    ///   is already in flight for this node.
+    pub fn try_begin_swap(&self, node_id: &str) -> Result<SwapGuard> {
+        let flag = self.swap_in_progress.get(node_id).ok_or_else(|| {
+            WaferError::Runtime(format!("node-not-swappable: {node_id}"))
+        })?;
+        flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .map_err(|_| WaferError::Runtime(format!("swap-in-progress: {node_id}")))?;
+        Ok(SwapGuard { flag: Arc::clone(flag) })
+    }
+
+    /// P0.10 (A3 residual): record a single hot-swap phase timing on the
+    /// shared `hot_swap_phase_ns` histogram. Phase label is one of
+    /// {compile, instantiate, signal, ack, first_v2, convergence}.
+    pub fn record_hotswap_phase(&self, phase: &str, node_id: &str, ns: u64) {
+        let key = (phase.to_owned(), node_id.to_owned());
+        if let Ok(guard) = self.hotswap_metrics.phase_histogram.read()
+            && let Some(h) = guard.get(&key)
+        {
+            h.record(ns);
+            return;
+        }
+        if let Ok(mut guard) = self.hotswap_metrics.phase_histogram.write() {
+            let h = guard
+                .entry(key)
+                .or_insert_with(crate::metrics::types::PhaseHistogram::new);
+            h.record(ns);
+        }
+    }
+
+    /// Read-only handle to the hot-swap metrics store for use by the
+    /// /metrics HTTP handler.
+    #[must_use]
+    pub fn hotswap_metrics(&self) -> &Arc<crate::metrics::types::HotSwapMetrics> {
+        &self.hotswap_metrics
+    }
+
+    /// Test-only constructor for P0.10 unit tests. Populates just the
+    /// fields needed to exercise `try_begin_swap` and
+    /// `record_hotswap_phase`; everything else is defaulted.
+    #[cfg(test)]
+    pub(crate) fn for_p0_10_test(swappable_ids: &[&str]) -> Self {
+        let swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>> = swappable_ids
+            .iter()
+            .map(|id| ((*id).into(), Arc::new(AtomicBool::new(false))))
+            .collect();
+        Self {
+            watch_senders: HashMap::new(),
+            cancel_token: CancellationToken::new(),
+            config: Config::default(),
+            state_trackers: HashMap::new(),
+            metrics: HashMap::new(),
+            engine: Arc::new(WaferEngine::new().expect("test engine")),
+            running: Arc::new(AtomicBool::new(true)),
+            swap_in_progress,
+            hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
+        }
+    }
+
     /// Send a hot-swap payload to a specific node via its watch channel.
     ///
     /// # Errors
@@ -137,6 +242,10 @@ pub struct PipelineOrchestrator {
     dlq_handle: Option<tokio::task::JoinHandle<()>>,
     /// Shared running flag used by API handles.
     running: Arc<AtomicBool>,
+    /// Per-node in-progress-swap flags (see [`PipelineHandle::try_begin_swap`]).
+    swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
+    /// Shared hot-swap metrics store, held for the /metrics handler.
+    hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
 }
 
 impl PipelineOrchestrator {
@@ -153,6 +262,12 @@ impl PipelineOrchestrator {
         config: Config,
         engine: Arc<WaferEngine>,
     ) -> Self {
+        let swap_in_progress = build_output
+            .watch_senders
+            .keys()
+            .map(|k| (k.clone(), Arc::new(AtomicBool::new(false))))
+            .collect::<HashMap<_, _>>();
+
         let mut orchestrator = Self {
             tasks: JoinSet::new(),
             watch_senders: build_output.watch_senders,
@@ -163,6 +278,8 @@ impl PipelineOrchestrator {
             engine,
             dlq_handle: None,
             running: Arc::new(AtomicBool::new(true)),
+            swap_in_progress,
+            hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
         };
 
         // Spawn DLQ sink task if configured
@@ -189,6 +306,8 @@ impl PipelineOrchestrator {
             metrics: self.metrics.clone(),
             engine: Arc::clone(&self.engine),
             running: Arc::clone(&self.running),
+            swap_in_progress: self.swap_in_progress.clone(),
+            hotswap_metrics: Arc::clone(&self.hotswap_metrics),
         }
     }
 
@@ -821,5 +940,81 @@ mod tests {
 
         assert!(result.is_ok(), "run_until_complete failed: {:?}", result.err());
         assert!(!orch.is_running());
+    }
+
+    // ========================================================================
+    // P0.10 (A3 residual) unit tests
+    // ========================================================================
+
+    /// AC2: overlapping same-node swap requests return "swap-in-progress";
+    /// serialised requests succeed one after another.
+    #[test]
+    fn swap_guard_prevents_overlapping_swap() {
+        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+
+        let first = handle.try_begin_swap("transform").expect("first must acquire");
+        let err = handle
+            .try_begin_swap("transform")
+            .expect_err("concurrent second must be rejected");
+        assert!(
+            err.to_string().contains("swap-in-progress"),
+            "expected swap-in-progress error, got: {err}"
+        );
+
+        // Drop first guard — slot is released.
+        drop(first);
+        let _third = handle
+            .try_begin_swap("transform")
+            .expect("after guard dropped, next request must succeed");
+    }
+
+    /// Non-swappable / unknown node yields node-not-swappable, distinct
+    /// from the in-progress error so the API handler can map it to 404
+    /// instead of 409.
+    #[test]
+    fn swap_guard_reports_unknown_node() {
+        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let err = handle
+            .try_begin_swap("does-not-exist")
+            .expect_err("unknown node id must fail");
+        assert!(
+            err.to_string().contains("node-not-swappable"),
+            "expected node-not-swappable error, got: {err}"
+        );
+    }
+
+    /// AC1: recording every phase populates six independent series in
+    /// the phase histogram. The Prometheus emitter reads from this map.
+    #[test]
+    fn phase_histogram_records_six_phases() {
+        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+
+        for (phase, ns) in [
+            ("compile",       50_000_000_u64),
+            ("instantiate",    5_000_000_u64),
+            ("signal",             1_000_u64),
+            ("ack",               50_000_u64),
+            ("first_v2",         200_000_u64),
+            ("convergence",   10_000_000_u64),
+        ] {
+            handle.record_hotswap_phase(phase, "transform", ns);
+        }
+
+        let hs = handle.hotswap_metrics();
+        let guard = hs.phase_histogram.read().unwrap();
+        assert_eq!(guard.len(), 6, "expected exactly six (phase, node) series");
+        for phase in ["compile", "instantiate", "signal", "ack", "first_v2", "convergence"] {
+            let key = (phase.to_owned(), "transform".to_owned());
+            let h = guard.get(&key).unwrap_or_else(|| panic!("missing phase: {phase}"));
+            assert_eq!(
+                h.count.load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "phase {phase} must have exactly one sample",
+            );
+            assert!(
+                h.sum_ns.load(std::sync::atomic::Ordering::Relaxed) > 0,
+                "phase {phase} sum_ns must be non-zero",
+            );
+        }
     }
 }
