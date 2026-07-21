@@ -124,8 +124,11 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         rate: 5_000,             // 10k msgs / 2s
         duration_secs: 2,
         payload_size: 120,       // Approximate telemetry-120b shape (P0.2 will formalise).
+        payload_template: None,  // Legacy 'x' filler path; template validation lives in payload tests.
         profile: "steady".into(),
         client_id: format!("wafer-loadgen-pub-{}", std::process::id()),
+        profile_file: None,
+        dry_run: false,
     };
     let pub_report = run_publisher(pub_args).await?;
     assert_eq!(

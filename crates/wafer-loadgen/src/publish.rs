@@ -2,18 +2,23 @@
 //! library entrypoint so the integration test can drive it in-process.
 //!
 //! Publisher CLI flags are preserved verbatim from the pre-refactor binary; see
-//! `crates/wafer-loadgen/src/main.rs` for the CLI surface.
+//! `crates/wafer-loadgen/src/main.rs` for the CLI surface. P0.2 adds
+//! `--payload-template`, `--profile`, and `--dry-run` on top.
 //!
-//! NOTE: P0.2 (payload templates) and P0.3 (burst/ramp/hotswap-trigger profile
-//! fixes) will replace parts of this module. The current implementation
-//! reproduces the pre-refactor semantics so the P0.1 refactor stays behaviour-
-//! preserving.
+//! NOTE: P0.3 (burst/ramp/hotswap-trigger profile fixes) will replace the
+//! profile-selection logic in this module. The current implementation
+//! reproduces the pre-refactor semantics so the P0.1/P0.2 refactor stays
+//! behaviour-preserving for `--profile steady`.
 
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Args;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
+use serde::Deserialize;
 use tracing::{error, info, warn};
+
+use crate::payload::PayloadTemplate;
 
 /// Arguments for the `publish` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -38,10 +43,15 @@ pub struct PublishArgs {
     #[arg(long, default_value_t = 60)]
     pub duration_secs: u64,
 
-    /// Payload size in bytes (padded with 'x'). NOTE: superseded by
-    /// `--payload-template` once P0.2 lands; kept for pre-refactor compat.
+    /// Payload size in bytes (padded with 'x'). Ignored when
+    /// `--payload-template` is set. Kept for pre-refactor CLI compat.
     #[arg(long, default_value_t = 128)]
     pub payload_size: usize,
+
+    /// Deterministic payload template. Preferred over `--payload-size`.
+    /// Templates: `telemetry-120b`, `generic-1kb`, `generic-10kb`, `generic-100kb`.
+    #[arg(long)]
+    pub payload_template: Option<PayloadTemplate>,
 
     /// Load profile: steady, burst, ramp. NOTE: `burst`/`ramp` will be fixed by
     /// P0.3; this crate currently reproduces pre-refactor behaviour verbatim.
@@ -51,6 +61,122 @@ pub struct PublishArgs {
     /// Client ID used for the MQTT session.
     #[arg(long, default_value = "wafer-loadgen-pub")]
     pub client_id: String,
+
+    /// Path to a TOML profile that pre-fills any of the above flags. Explicit
+    /// CLI flags override profile values (following the `clap` default logic).
+    #[arg(long)]
+    pub profile_file: Option<PathBuf>,
+
+    /// Print the resolved configuration + template info and exit without
+    /// contacting the broker. Verify AC3 for P0.2 by combining with `--profile`.
+    #[arg(long, default_value_t = false)]
+    pub dry_run: bool,
+}
+
+/// A subset of `PublishArgs` deserialised from a `[loadgen]` TOML table.
+///
+/// Fields are optional so a profile can fill in only what it needs; CLI flags
+/// then override on top.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ProfileFile {
+    pub loadgen: LoadgenProfile,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LoadgenProfile {
+    pub broker_host: Option<String>,
+    pub broker_port: Option<u16>,
+    pub topic: Option<String>,
+    pub rate: Option<u32>,
+    pub duration_secs: Option<u64>,
+    pub payload_size: Option<usize>,
+    pub payload_template: Option<String>,
+    pub profile: Option<String>,
+    pub warmup_secs: Option<u64>,
+    pub client_id: Option<String>,
+}
+
+impl PublishArgs {
+    /// Fold a `--profile-file` TOML into `self`. Values set on `self` via the
+    /// CLI take precedence over profile values, EXCEPT for defaulted fields
+    /// (which are indistinguishable from unset on the CLI without extra
+    /// bookkeeping). For P0.2 shakedown scope we prefer profile when set,
+    /// unless the CLI value diverges from the compile-time default.
+    ///
+    /// # Errors
+    /// Returns an error if the TOML cannot be parsed or if
+    /// `payload_template` names an unknown template.
+    pub fn apply_profile_file(&mut self) -> anyhow::Result<()> {
+        let Some(path) = self.profile_file.clone() else {
+            return Ok(());
+        };
+        let text = std::fs::read_to_string(&path)
+            .map_err(|e| anyhow::anyhow!("read profile {}: {e}", path.display()))?;
+        let cfg: ProfileFile = toml::from_str(&text)
+            .map_err(|e| anyhow::anyhow!("parse profile {}: {e}", path.display()))?;
+        let lg = cfg.loadgen;
+        // Only apply when the CLI still holds its compile-time default.
+        if self.broker_host == "localhost" {
+            if let Some(v) = lg.broker_host { self.broker_host = v; }
+        }
+        if self.broker_port == 1883 {
+            if let Some(v) = lg.broker_port { self.broker_port = v; }
+        }
+        if self.topic == "wafer/bench/input" {
+            if let Some(v) = lg.topic { self.topic = v; }
+        }
+        if self.rate == 1000 {
+            if let Some(v) = lg.rate { self.rate = v; }
+        }
+        if self.duration_secs == 60 {
+            if let Some(v) = lg.duration_secs { self.duration_secs = v; }
+        }
+        if self.payload_size == 128 {
+            if let Some(v) = lg.payload_size { self.payload_size = v; }
+        }
+        if self.profile == "steady" {
+            if let Some(v) = lg.profile { self.profile = v; }
+        }
+        if self.client_id == "wafer-loadgen-pub" {
+            if let Some(v) = lg.client_id { self.client_id = v; }
+        }
+        if self.payload_template.is_none() {
+            if let Some(name) = lg.payload_template {
+                self.payload_template = Some(
+                    name.parse::<PayloadTemplate>()
+                        .map_err(|e| anyhow::anyhow!("{e}"))?,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Human-readable summary used by `--dry-run` and by tests. Includes the
+    /// template fingerprint so an operator can eyeball reproducibility.
+    #[must_use]
+    pub fn dry_run_report(&self) -> String {
+        use std::fmt::Write as _;
+        let mut out = String::new();
+        let _r = writeln!(out, "wafer-loadgen publish (dry-run)");
+        let _r = writeln!(out, "  broker         = {}:{}", self.broker_host, self.broker_port);
+        let _r = writeln!(out, "  topic          = {}", self.topic);
+        let _r = writeln!(out, "  rate           = {} msg/s", self.rate);
+        let _r = writeln!(out, "  duration_secs  = {}", self.duration_secs);
+        let _r = writeln!(out, "  profile        = {}", self.profile);
+        if let Some(tpl) = self.payload_template {
+            let bytes = tpl.render(crate::payload::CANONICAL_TS_NS, crate::payload::CANONICAL_SEQ);
+            let _r = writeln!(out, "  payload        = template `{}` ({} bytes at canonical ts/seq)", tpl.name(), bytes.len());
+            let _r = writeln!(out, "  fingerprint    = sha256:{}", tpl.fingerprint_hex());
+        } else {
+            let _r = writeln!(out, "  payload        = size {} (legacy 'x' filler)", self.payload_size);
+        }
+        if let Some(pf) = &self.profile_file {
+            let _r = writeln!(out, "  profile_file   = {}", pf.display());
+        }
+        out
+    }
 }
 
 fn now_ns() -> u64 {
@@ -67,7 +193,24 @@ fn now_ns() -> u64 {
 /// # Errors
 /// Returns an error if the MQTT connection cannot be established at all. Once
 /// connected, transient publish errors are logged and counted but not returned.
-pub async fn run_publisher(args: PublishArgs) -> anyhow::Result<PublisherReport> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "single-function driver mirrors pre-refactor structure; P0.3 splits burst/ramp into a profile module and this will shrink naturally"
+)]
+pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherReport> {
+    args.apply_profile_file()?;
+    if args.dry_run {
+        // The workspace bans print_stdout; go through tracing::info so the
+        // report is captured in structured logs (grep-friendly for the eval
+        // scripts). Using a multi-line info! keeps it as one span.
+        info!(target: "wafer_loadgen::publish::dry_run", "{}", args.dry_run_report());
+        return Ok(PublisherReport {
+            published: 0,
+            errors: 0,
+            elapsed_ms: 0,
+            actual_rate: 0.0,
+        });
+    }
     info!(
         broker = %args.broker_host,
         port = args.broker_port,
@@ -104,8 +247,12 @@ pub async fn run_publisher(args: PublishArgs) -> anyhow::Result<PublisherReport>
     let total_messages = u64::from(args.rate) * args.duration_secs;
     let base_interval = Duration::from_secs_f64(1.0 / f64::from(args.rate));
 
-    // Padding: keep the byte layout of the pre-refactor payload exactly.
+    // Padding: keep the byte layout of the pre-refactor payload exactly when
+    // no template is set. When `--payload-template` is set, the template is
+    // the source of truth and `--payload-size` is ignored (already logged via
+    // dry-run above).
     let padding: String = "x".repeat(args.payload_size.saturating_sub(80));
+    let payload_template = args.payload_template;
     let mut seq: u64 = 0;
     let mut errors: u64 = 0;
     let start = tokio::time::Instant::now();
@@ -144,12 +291,16 @@ pub async fn run_publisher(args: PublishArgs) -> anyhow::Result<PublisherReport>
         }
 
         let ts = now_ns();
-        let payload = format!(
-            r#"{{"ts":{ts},"seq":{seq},"device_id":"bench","temperature":42.5,"pad":"{padding}"}}"#
+        let payload_vec: Vec<u8> = payload_template.map_or_else(
+            || format!(
+                r#"{{"ts":{ts},"seq":{seq},"device_id":"bench","temperature":42.5,"pad":"{padding}"}}"#
+            )
+            .into_bytes(),
+            |tpl| tpl.render(ts, seq),
         );
 
         if let Err(e) = client
-            .publish(&args.topic, QoS::AtLeastOnce, false, payload.as_bytes())
+            .publish(&args.topic, QoS::AtLeastOnce, false, payload_vec.as_slice())
             .await
         {
             warn!("Publish error (seq={seq}): {e}");

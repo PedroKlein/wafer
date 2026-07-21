@@ -1,0 +1,19 @@
+# WAFER load profile: Pipeline A telemetry — 120-byte deterministic payload.
+#
+# Referenced by RFC-008 E-Perf-4 / E-Perf-5 / E-Perf-1 (Pipeline A drivers).
+# Rendered by `wafer_loadgen::PayloadTemplate::Telemetry120b` — the schema is
+# {device_id, temperature, humidity, ts, seq} exactly (Pipeline A).
+#
+# SHA-256 of the canonical rendering (ts=1_800_000_000_000_000_000, seq=999_999_999):
+#   d39c713ac4c27e23dc8ffed24d28ef4f8cd5ffb731ffa2cea29cb4765189ed54
+# Total byte length at canonical inputs: 120.
+#
+# Verify: `wafer-loadgen publish --profile-file eval/loadgen/telemetry-120b.toml --dry-run`.
+
+[loadgen]
+rate = 1000
+duration_secs = 60
+warmup_secs = 30
+topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
+profile = "steady"

@@ -1,0 +1,15 @@
+# WAFER load profile: 10 KiB deterministic payload for E-Perf-4 payload sweep.
+#
+# Rendered by `wafer_loadgen::PayloadTemplate::Generic10kb`. Schema is telemetry
+# + a `pad` field of BLAKE3-derived hex. Deterministic across runs.
+#
+# SHA-256 of the canonical rendering: 74c2bbd54a50bfa3425ef12772934d95f02ca058a3632d10c73edc5e71e605b0
+# Total byte length: 10_240 bytes exact at any (ts, seq).
+
+[loadgen]
+rate = 1000
+duration_secs = 60
+warmup_secs = 30
+topic = "wafer/bench/input"
+payload_template = "generic-10kb"
+profile = "steady"

@@ -4778,15 +4778,19 @@ name = "wafer-loadgen"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blake3",
  "clap",
  "hdrhistogram",
+ "hex",
  "rumqttc",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "testcontainers",
  "testcontainers-modules",
  "tokio",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
 ]
