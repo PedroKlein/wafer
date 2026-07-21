@@ -1,0 +1,13 @@
+plugin,wasm_bytes,wasm_kb,container_base,container_min_mb,ratio_min,container_rationale
+pass-through,57972,56.6,alpine + static Rust binary,50,904,"alpine (~7 MB) + ~40 MB Rust MUSL toolchain artefacts; scratch cannot exec musl"
+uppercase,58787,57.4,alpine + static Rust binary,50,891,"same shape as pass-through"
+json-parse,64747,63.2,alpine + static Rust binary + serde_json,60,971,"serde_json adds ~5 MB of stripped release code"
+threshold-filter,94170,92.0,alpine + static Rust binary,50,556,"no external deps beyond the WAFER SDK"
+content-router,85711,83.7,alpine + static Rust binary,50,611,"routing logic is regex-free"
+tensor-prep,97006,94.7,alpine + static Rust binary + ndarray,70,756,"ndarray + linalg pulls ~15 MB into a stripped image"
+result-format,99678,97.3,alpine + static Rust binary,50,525,"shape identical to pass-through"
+anomaly-detector,147892,144.4,alpine + static Rust binary + serde,60,425,"serde bytecodes ~10 MB into a stripped image"
+cayenne-decoder,158850,155.1,alpine + static Rust binary,55,363,"LPP decoder + serde_json; slightly larger than uppercase"
+vibration-features,375309,366.5,alpine + static Rust binary + rustfft,120,335,"rustfft's FFT tables + planner add ~60 MB of stripped release code"
+quality-rules,134584,131.4,alpine + static Rust binary + serde,60,467,"rule engine + serde; comparable to anomaly-detector"
+delay-injector,74715,73.0,alpine + static Rust binary,50,701,"trivial sleep loop; alpine floor dominates"

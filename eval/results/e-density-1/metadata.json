@@ -1,0 +1,8 @@
+{
+  "experiment": "E-Density-1",
+  "host_tag": "shakedown-macos",
+  "generated_at": "2026-07-21T12:59:44Z",
+  "git_sha": "38252494da5f39ce1e02e5a642fae85d0791a527",
+  "methodology": "Measure Wasm component bytes (stat) and quote the smallest realistic container image (Docker Hub, 2025-Q1) that could host an equivalent worker.",
+  "notes": "Container floors are lower bounds. Production images are 2-5x larger once observability, health probes, and CI provenance are added."
+}

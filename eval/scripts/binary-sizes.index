@@ -1,0 +1,19 @@
+# eval/scripts/binary-sizes.index — first-party WAFER plugins for E-Density-1
+#
+# Format: name|wasm_path|container_base|container_min_mb|container_rationale
+#
+# container_min_mb is a documented lower bound derived from the smallest
+# realistic Docker Hub image (2025-Q1) hosting an equivalent Rust worker.
+# Rationale strings cite the delta drivers per plugin.
+pass-through|plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm|alpine + static Rust binary|50|alpine (~7 MB) + ~40 MB Rust MUSL toolchain artefacts; scratch cannot exec musl
+uppercase|plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm|alpine + static Rust binary|50|same shape as pass-through
+json-parse|plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm|alpine + static Rust binary + serde_json|60|serde_json adds ~5 MB of stripped release code
+threshold-filter|plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm|alpine + static Rust binary|50|no external deps beyond the WAFER SDK
+content-router|plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm|alpine + static Rust binary|50|routing logic is regex-free
+tensor-prep|plugins/tensor-prep/target/wasm32-wasip2/release/wafer_tensor_prep.wasm|alpine + static Rust binary + ndarray|70|ndarray + linalg pulls ~15 MB into a stripped image
+result-format|plugins/result-format/target/wasm32-wasip2/release/wafer_result_format.wasm|alpine + static Rust binary|50|shape identical to pass-through
+anomaly-detector|plugins/anomaly-detector/target/wasm32-wasip2/release/wafer_anomaly_detector.wasm|alpine + static Rust binary + serde|60|serde bytecodes ~10 MB into a stripped image
+cayenne-decoder|plugins/cayenne-decoder/target/wasm32-wasip2/release/wafer_cayenne_decoder.wasm|alpine + static Rust binary|55|LPP decoder + serde_json; slightly larger than uppercase
+vibration-features|plugins/vibration-features/target/wasm32-wasip2/release/wafer_vibration_features.wasm|alpine + static Rust binary + rustfft|120|rustfft's FFT tables + planner add ~60 MB of stripped release code
+quality-rules|plugins/quality-rules/target/wasm32-wasip2/release/wafer_quality_rules.wasm|alpine + static Rust binary + serde|60|rule engine + serde; comparable to anomaly-detector
+delay-injector|plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm|alpine + static Rust binary|50|trivial sleep loop; alpine floor dominates
