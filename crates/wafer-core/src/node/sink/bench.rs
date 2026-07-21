@@ -175,6 +175,31 @@ impl HotSwapRecorder {
     pub fn transitions(&self) -> &[SwapTransition] {
         &self.transitions
     }
+
+    /// Timestamp of the LAST v1 observation before the most recent transition.
+    ///
+    /// Combined with [`first_v2_ns`](Self::first_v2_ns), lets E-Swap-1 compute
+    /// the pause window as `first_v2 - last_v1`.
+    #[must_use]
+    pub fn last_v1_ns(&self) -> Option<u64> {
+        // `last_v1_time_ns` is refreshed on every observation of the current
+        // version. When a transition occurs, `record()` snapshots the OLD
+        // `last_v1_time_ns` into `SwapTransition.pause_ns` and then updates it
+        // to the new-version timestamp. The most recent transition's
+        // `pause_ns = first_v2 - last_v1_before_transition`, so we reconstruct
+        // `last_v1` from `first_v2 - pause_ns`.
+        match (self.first_v2_time_ns, self.transitions.last()) {
+            (Some(first_v2), Some(t)) => Some(first_v2.saturating_sub(t.pause_ns)),
+            _ => None,
+        }
+    }
+
+    /// Timestamp of the FIRST v2 observation (the message where the version
+    /// transition was first observed).
+    #[must_use]
+    pub const fn first_v2_ns(&self) -> Option<u64> {
+        self.first_v2_time_ns
+    }
 }
 
 impl Default for HotSwapRecorder {
@@ -759,6 +784,54 @@ mod tests {
 
         assert!(recorder.transitions().is_empty());
         assert_eq!(recorder.pause_duration_ns(), None);
+    }
+
+    /// P0.5 AC3: BenchSink's HotSwapRecorder detects the v1 → v2 transition
+    /// via envelope metadata `plugin.version`, and both `first_v2_ns()` and
+    /// `last_v1_ns()` are accessible and ordered.
+    #[tokio::test]
+    async fn swap_boundary_detection() {
+        use crate::queue::RuntimeEnvelope;
+
+        let config = BenchSinkConfig {
+            warmup_secs: 0,
+            track_sequences: false,
+            track_hotswap: true,
+            output_dir: None,
+        };
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        // Twenty v1 messages, then twenty v2 messages. The version stamp is
+        // envelope metadata `plugin.version`, exactly what pass-through-v1
+        // and pass-through-v2 emit at runtime.
+        for seq in 0..20 {
+            let env = RuntimeEnvelope::from_string("bench-source", "payload")
+                .with_metadata("bench.sequence", seq.to_string())
+                .with_metadata("plugin.version", "1.0.0");
+            sink.collect(env).await.unwrap();
+        }
+        // Give the recorder a monotonic gap between phases so first_v2_ns
+        // is strictly greater than last_v1_ns even at sub-ns clock resolution.
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        for seq in 20..40 {
+            let env = RuntimeEnvelope::from_string("bench-source", "payload")
+                .with_metadata("bench.sequence", seq.to_string())
+                .with_metadata("plugin.version", "2.0.0");
+            sink.collect(env).await.unwrap();
+        }
+
+        let recorder = sink.hotswap_recorder().expect("track_hotswap=true set on config");
+        assert_eq!(recorder.transitions().len(), 1, "exactly one v1→v2 transition");
+        let last_v1 = recorder.last_v1_ns().expect("last_v1_ns must be populated after a transition");
+        let first_v2 = recorder.first_v2_ns().expect("first_v2_ns must be populated after a transition");
+        assert!(
+            first_v2 > last_v1,
+            "first_v2_ns ({first_v2}) must strictly exceed last_v1_ns ({last_v1})"
+        );
+        // Pause duration matches (first_v2 - last_v1) definition.
+        let pause = recorder.pause_duration_ns().unwrap();
+        assert_eq!(pause, first_v2 - last_v1, "pause = first_v2 - last_v1");
     }
 
     #[tokio::test]

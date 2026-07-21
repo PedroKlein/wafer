@@ -115,6 +115,16 @@ pub struct WasmNodeDef {
 
     #[serde(default)]
     pub error_policy: Option<ErrorPolicyConfig>,
+
+    /// Opaque version string for this plugin instance.
+    ///
+    /// Passed to the guest via `NodeConfig.plugin-version` at init time and
+    /// stamped by the host into every outgoing envelope's `plugin.version`
+    /// metadata. Enables `BenchSink::HotSwapRecorder` to detect the v1 → v2
+    /// transition boundary during hot-swap experiments (E-Swap-1). Defaults
+    /// to `""` when unset; the runtime does not enforce semver.
+    #[serde(default)]
+    pub plugin_version: Option<String>,
 }
 
 

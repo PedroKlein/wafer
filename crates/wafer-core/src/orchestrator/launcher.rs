@@ -229,6 +229,7 @@ async fn load_transform_node(
         engine.epoch_deadline(),
         config_json.clone(),
     );
+    node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
     Ok(node)
 }
@@ -267,6 +268,7 @@ async fn load_filter_node(
         engine.epoch_deadline(),
         config_json.clone(),
     );
+    node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
     Ok(node)
 }
@@ -305,6 +307,7 @@ async fn load_router_node(
         engine.epoch_deadline(),
         config_json.clone(),
     );
+    node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
     Ok(node)
 }

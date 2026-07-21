@@ -1,0 +1,18 @@
+[package]
+name = "wafer-pass-through-v1"
+version = "0.1.0"
+edition = "2024"
+description = "Pass-through v1 for hot-swap experiments (E-Swap-1..6). Stamps plugin.version=1.0.0."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

@@ -132,6 +132,9 @@ pub struct WasmTransformNode {
     memory_limit: usize,
     epoch_deadline: u64,
     config_json: String,
+    /// Operator-supplied version string, passed to guest via `NodeConfig.
+    /// plugin-version`. Empty string when unset in TOML.
+    plugin_version: String,
 }
 
 impl WasmTransformNode {
@@ -151,6 +154,7 @@ impl WasmTransformNode {
             memory_limit: 16 * 1024 * 1024,
             epoch_deadline: 100,
             config_json: "{}".to_string(),
+            plugin_version: String::new(),
         }
     }
 
@@ -165,6 +169,19 @@ impl WasmTransformNode {
         self.memory_limit = memory_limit;
         self.epoch_deadline = epoch_deadline;
         self.config_json = config_json;
+    }
+
+    /// Set the plugin version string passed to the guest at `init()`.
+    /// Must be called before `validate_and_init`.
+    pub fn set_plugin_version(&mut self, version: impl Into<String>) {
+        self.plugin_version = version.into();
+    }
+
+    /// Read the plugin version string. Empty when the operator did not
+    /// supply `[nodes.<id>].plugin_version` in TOML.
+    #[must_use]
+    pub fn plugin_version(&self) -> &str {
+        &self.plugin_version
     }
 
     pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
@@ -262,6 +279,7 @@ impl WasmTransformNode {
         let node_config = transform_node::exports::pipeline::node::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
+            plugin_version: self.plugin_version.clone(),
         };
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
@@ -362,6 +380,7 @@ pub struct WasmFilterNode {
     memory_limit: usize,
     epoch_deadline: u64,
     config_json: String,
+    plugin_version: String,
 }
 
 impl WasmFilterNode {
@@ -381,6 +400,7 @@ impl WasmFilterNode {
             memory_limit: 16 * 1024 * 1024,
             epoch_deadline: 100,
             config_json: "{}".to_string(),
+            plugin_version: String::new(),
         }
     }
 
@@ -395,6 +415,11 @@ impl WasmFilterNode {
         self.memory_limit = memory_limit;
         self.epoch_deadline = epoch_deadline;
         self.config_json = config_json;
+    }
+
+    /// Set the plugin version string passed to the guest at `init()`.
+    pub fn set_plugin_version(&mut self, version: impl Into<String>) {
+        self.plugin_version = version.into();
     }
 
     pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
@@ -448,6 +473,7 @@ impl WasmFilterNode {
         let node_config = crate::engine::bindings::filter_node::exports::pipeline::node::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
+            plugin_version: self.plugin_version.clone(),
         };
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
@@ -584,6 +610,7 @@ pub struct WasmRouterNode {
     memory_limit: usize,
     epoch_deadline: u64,
     config_json: String,
+    plugin_version: String,
 }
 
 impl WasmRouterNode {
@@ -603,6 +630,7 @@ impl WasmRouterNode {
             memory_limit: 16 * 1024 * 1024,
             epoch_deadline: 100,
             config_json: "{}".to_string(),
+            plugin_version: String::new(),
         }
     }
 
@@ -617,6 +645,11 @@ impl WasmRouterNode {
         self.memory_limit = memory_limit;
         self.epoch_deadline = epoch_deadline;
         self.config_json = config_json;
+    }
+
+    /// Set the plugin version string passed to the guest at `init()`.
+    pub fn set_plugin_version(&mut self, version: impl Into<String>) {
+        self.plugin_version = version.into();
     }
 
     pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
@@ -670,6 +703,7 @@ impl WasmRouterNode {
         let node_config = crate::engine::bindings::router_node::exports::pipeline::node::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
+            plugin_version: self.plugin_version.clone(),
         };
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),

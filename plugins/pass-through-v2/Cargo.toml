@@ -1,0 +1,18 @@
+[package]
+name = "wafer-pass-through-v2"
+version = "0.2.0"
+edition = "2024"
+description = "Pass-through v2 for hot-swap experiments. Stamps plugin.version=2.0.0 and swapped=true."
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"
