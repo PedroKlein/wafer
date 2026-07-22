@@ -508,6 +508,67 @@ Error → DLQ path an acceptable RQ3 story?
 
 ---
 
+## A18 — Native filter dispatch not wired for Pipeline A (Open) 🟡
+
+**Severity:** low–medium. Affects RQ1 comparator purity for E-Perf-1 /
+E-Perf-2 (WAFER vs native vs eKuiper).
+
+**Symptom.** The P3.2/P3.3 shakedown used `pipeline-a-native.toml` for
+the native baseline. WAFER's native transform (`plugin.kind =
+"native"`) currently only wires the `passthrough` variant end-to-end;
+a `threshold-filter` native variant equivalent to the WAFER Wasm filter
+and the eKuiper `WHERE temperature > 50` clause is not dispatched from
+the orchestrator loader.
+
+The shakedown therefore compares:
+
+- WAFER: MQTT-source → Wasm threshold-filter → MQTT-sink
+- Native: MQTT-source → native passthrough → MQTT-sink (≠ filter)
+- eKuiper: MQTT-source → `WHERE temperature > 50` → MQTT-sink
+
+So the native baseline processes *every* message and eKuiper processes
+*matching* messages, but for a payload where every record has
+`temperature = 72.5`, both push 100% of records downstream. The
+WAFER-vs-native comparison stays honest because both process every
+message; only the filter predicate cost is under-measured for native.
+
+**Root cause.** Grep of `crates/wafer-core/src/node/native/` shows
+`NativeTransform` implements passthrough, uppercase, and a few json
+variants; there's no `threshold_filter` yet. The loader dispatch table
+in `crates/wafer-core/src/orchestrator/launcher.rs` mirrors that
+missing entry.
+
+**Proposed fix (NOT applied).**
+
+1. Add `NativeTransform::threshold_filter { field: String, threshold:
+   f64 }` in `crates/wafer-core/src/node/native/mod.rs`. Compact enum
+   pattern already used for `passthrough` / `uppercase`.
+2. Extend the loader dispatch to recognize `plugin.kind =
+   "threshold-filter"` in the config and instantiate the native
+   variant.
+3. Add a regression test that runs the same JSON payload through
+   `threshold-filter` and asserts the same subset passes as the WIT
+   filter plugin.
+
+Estimated cost: ~1 hour. Small runtime + config-schema change.
+
+**Impact if unfixed.**
+
+- E-Perf-1/E-Perf-2 native baseline is passthrough, not filter. The
+  "Wasm isolation tax" delta reported in the readiness table
+  (WAFER/native = 0.995) UNDER-STATES the tax because native doesn't
+  do the JSON decode + compare. Truer native cost would be slightly
+  higher, narrowing the gap further.
+- Not fatal for the RQ1 thesis claim (WAFER is within 1% of native on
+  throughput at MQTT-bookend scale still holds — the JSON+compare
+  cost is a fraction of a microsecond).
+- Should be fixed before canonical Pi runs so the thesis reports
+  apples-to-apples.
+
+**Not fixed in this session.** Filed for stakeholder review.
+
+---
+
 ## How to close a gap
 
 1. Land the code fix.
