@@ -123,6 +123,57 @@ microseconds, macOS M-series):
 
 ⚪ shakedown pending. See `plans/evaluation-infrastructure/` task queue.
 
+### E-Val-1 — methodology validation (P3.1)
+
+- **Status**: 🟢 honesty gate holds on macOS.
+- **Shakedown**: `eval/results/e-val-1/shakedown-macos-2026-07-22T16-19-29Z/`
+  (5 runs, 250 recorded samples each).
+- **Config**: `eval/configs/pipeline-c-with-delay.toml`
+  (10 msg/s source, 50 ms delay-injector transform).
+- **Detailed writeup**: `docs/benchmarks/methodology-validation.md`.
+
+Shakedown numbers (macOS M-series, milliseconds):
+
+| statistic                  | value                |
+| -------------------------- | -------------------- |
+| injected delay             | 50.00 ms             |
+| observed p50 (across runs) | 52.10 – 52.26 ms     |
+| observed p99 (across runs) | 52.99 – 53.35 ms     |
+| honesty gate [45, 55] ms   | PASS (5/5 runs)      |
+| overhead (p50 − injected)  | ~2.2 ms              |
+
+**What this proves.**
+
+Every downstream RQ1 / RQ2 / RQ3 number is anchored on this: if the
+measurement rig can correctly recover a known 50 ms delay from a Wasm
+plugin, it can be trusted to report tail latency honestly for less
+contrived experiments. A regression in this gate (say a rewrite of
+`BenchSink` that started using arrival timestamps instead of
+`bench.intended_ns`) would silently poison all thesis numbers; the
+integration test `crates/wafer-core/tests/wasi_async_runner.rs`
+catches this at CI time.
+
+**Runtime bugs surfaced by this shakedown.**
+
+- A16 (WASI async panic in Tokio runner tasks) — closed by P0.14
+  commit `40ab46b`. Without E-Val-1 this would have shipped to Pi
+  undetected because pass-through never exercises the WASI async
+  path.
+
+**Pi tuning notes.**
+
+- Source rate must stay below sink capacity (`rate < 1000/delay_ms`) or
+  queue back-pressure inflates p99. macOS shakedown started at
+  100 msg/s (5× over capacity) and reported 4.7 s p99; corrected to
+  10 msg/s. Same rule applies at every rate/delay ratio.
+- `EngineConfig.epoch_deadline` default (200 × 20 ms = 4 s per call)
+  has plenty of headroom for a 50 ms sleep. Canonical Pi can drop to
+  `100 × 20 ms = 2 s` if we want tighter tail bounds.
+- macOS p99 range was 0.36 ms wide; expect Pi with CPU pinning to
+  narrow further (target: ~100 µs). If Pi widens the range, suspect
+  jitter contamination from co-resident processes and rerun with
+  `isolcpus` + `taskset`.
+
 ### E-Swap-1..6 — not yet started
 
 ⚪ shakedown pending.
