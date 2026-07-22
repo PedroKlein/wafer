@@ -1,0 +1,44 @@
+# E-Val-1: methodology validation.
+#
+# Injects a known 50 ms delay via delay-injector; a p99 measurement outside
+# the [45,55] ms window means the measurement rig is lying about tail
+# latency (or coordinated omission is being ignored somewhere).
+#
+# See docs/rfcs/RFC-008-evaluation-harness.md §D9 and
+# plans/evaluation-infrastructure/execution-playbook.md.
+
+[pipeline]
+name = "e-val-1-methodology"
+description = "50 ms injected delay + honest p99 gate"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+# Modest rate + count keeps the shakedown under a minute on macOS. Canonical
+# Pi runs will bump rate to 200/s and total to 6000 to stress the tail.
+rate = 100.0
+total_messages = 3000
+warmup_messages = 500
+payload_size = 128
+
+[nodes.delay]
+type = "transform"
+plugin = "../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
+
+[nodes.delay.config]
+delay_ms = 50
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 5
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "delay"
+
+[[edges]]
+from = "delay"
+to = "sink"

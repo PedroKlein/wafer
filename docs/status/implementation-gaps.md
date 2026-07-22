@@ -374,9 +374,7 @@ and architecture claims assume the rewire happened; it did not.
 
 <a id="a15"></a>
 
-## A15 — Throughput and hot-swap benchmarks measure stub `TransformInstance` (Closed 2026-07-20) 🟢
-
-- **Documented in:**
+## A15 — Throughput and hot-swap benchmarks measure stub `TransformInstance` (Closed 2026-07-20) 🟢- **Documented in:**
   - `docs/rfcs/RFC-007-performance-optimizations.md` — benchmark-first
     strategy for optimization work.
   - `docs/rfcs/RFC-008-evaluation-harness.md` — thesis evaluation harness for
@@ -395,6 +393,80 @@ and architecture claims assume the rewire happened; it did not.
   on the production pass-through plugin.
 - **Severity:** 🟢 **Closed** — RQ1/RQ3 benchmarks now measure the production
   path; RPi hardware evaluation remains successor-plan work.
+
+---
+
+## A16 — WASI async host calls panic inside Tokio runner tasks (Open) 🔴
+
+**Severity:** high. Blocks E-Val-1 methodology validation and every future
+plugin that uses any WASI async primitive (clock waits, blocking I/O,
+sleeps, socket reads). Surfaced during the P3.1 shakedown on macOS.
+
+**Symptom.** With `eval/configs/pipeline-c-with-delay.toml`, the runtime
+panics on the first message:
+
+```
+thread 'tokio-runtime-worker' panicked at
+  wasmtime-wasi/src/runtime.rs:108:
+Cannot start a runtime from within a runtime.
+```
+
+BenchSink writes an empty `latency.hdr` (recorded_count = 0); runtime
+exits with `runtime error: one or more tasks panicked during pipeline run`.
+Evidence artefact preserved at
+`eval/results/e-val-1/shakedown-macos-2026-07-22T16-04-12Z/`.
+
+**Root cause.** The runtime uses `wasmtime_wasi::p2::add_to_linker_sync`
+(`crates/wafer-core/src/engine/loader.rs:160`). The sync WASI shim
+implements async host calls via `wasmtime_wasi::runtime::in_tokio(...)`,
+which does `Handle::current().block_on(...)`. The runner drives guest
+calls synchronously from a Tokio worker thread
+(`crates/wafer-core/src/runner/{transform,filter,router}.rs`). `block_on`
+inside a Tokio worker without permission to block panics by design.
+
+The pass-through plugin never exercises this path because its guest
+code is pure computation; the moment a plugin touches
+`wasi:clocks/monotonic-clock.subscribe-duration` (which `std::thread::sleep`
+lowers to on wasip2) the runner task dies.
+
+**Reproduction.**
+
+```sh
+cargo build --release -p wafer-runtime -p wafer-loadgen
+./eval/scripts/run-e-val-1-shakedown.sh --runs 1 --skip-build
+# Observe empty latency.hdr and the panic in stdout.log.
+```
+
+**Proposed fixes (none applied — pending stakeholder decision).**
+
+1. Wrap each sync guest call in `tokio::task::block_in_place(|| ...)`
+   at the three call sites in `crates/wafer-core/src/runner/`. Small,
+   local, backwards-compatible. Signals to Tokio that the worker
+   thread will block so it can migrate other tasks; permits the
+   nested `block_on` inside WASI. Requires the multi-thread Tokio
+   runtime (currently used).
+2. Migrate the runtime to `wasmtime_wasi::p2::add_to_linker_async` and
+   convert all guest bindings + runner call sites to `.call_process_async`
+   / `.call_evaluate_async` / `.call_route_async`. Semantically cleaner
+   but a cascading refactor; changes the fuel/epoch
+   `set_epoch_deadline`/`set_fuel` cadence (which currently runs on the
+   sync call boundary).
+3. Change plugins to spin-wait on `wasi:clocks/monotonic-clock.now`
+   instead of sleeping. Burns CPU during the wait and would distort the
+   very measurement E-Val-1 is validating (introduces host-scheduler
+   jitter into the injected delay).
+
+**Impact if unfixed.**
+- E-Val-1 (methodology validation) cannot produce a p99. The honesty
+  gate that anchors every downstream RQ1/RQ2/RQ3 number stays
+  unverified.
+- Any future guest plugin using WASI async I/O (MQTT-inside-guest
+  scenarios, HTTP source-plugins, timer-driven filters) inherits the
+  same panic.
+
+**Not fixed in this session.** Runtime edits require an explicit
+re-scope of P3.1 or a new P0.14-style task; see the ORCHESTRATOR-PLAYBOOK
+delegation-policy section.
 
 ---
 
