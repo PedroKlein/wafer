@@ -1,18 +1,17 @@
-# Passthrough with fuel metering only (epoch disabled).
+# Passthrough with fuel metering only (epoch effectively disabled).
 #
-# Ablation for E-Perf-7 metering-overhead decomposition. Epoch ticker is
-# effectively disabled by setting epoch_deadline = 0; fuel budgets stay at
-# their EngineConfig defaults.
-#
-# NOTE: the runtime interpretation of epoch_deadline=0 will be dialed in by
-# P2.3 (E-Perf-7 execute) — for now the config parses and validates.
+# Ablation for E-Perf-7 metering-overhead decomposition. Epoch is set to a
+# 1 s wall-clock deadline (100× the typical per-hop latency budget) so the
+# ticker never fires within a call; fuel budgets stay at their EngineConfig
+# defaults. The runtime does NOT treat 0 as "unlimited" — that would trap
+# on the first check — hence the large sentinel.
 
 [pipeline]
 name = "bench-passthrough-fuel-only"
-description = "Passthrough with fuel metering only (epoch disabled)"
+description = "Passthrough with fuel metering only (epoch effectively disabled)"
 
 [engine]
-epoch_deadline = 0        # disable epoch trap (0 = no deadline)
+epoch_deadline = 1000000000   # 1e9 ticks ≈ unlimited under typical rates
 
 [nodes.source]
 type = "source"

@@ -1,17 +1,19 @@
-# Passthrough with epoch metering only (fuel disabled).
+# Passthrough with epoch metering only (fuel effectively disabled).
 #
-# Ablation for E-Perf-7 metering-overhead decomposition. Fuel is set to 0
-# for all node categories; the runtime interpretation of `fuel = 0` will be
-# dialed in by P2.3 (E-Perf-7 execute).
+# Ablation for E-Perf-7 metering-overhead decomposition. Fuel is set to a
+# 1e12 sentinel per node category — far above any real single-call cost —
+# so `set_fuel` still runs (its cost lands in the ablation) but the budget
+# never trips. The runtime does NOT treat `fuel = 0` as unlimited; that
+# would trap the first hop.
 
 [pipeline]
 name = "bench-passthrough-epoch-only"
-description = "Passthrough with epoch metering only (fuel disabled)"
+description = "Passthrough with epoch metering only (fuel effectively disabled)"
 
 [engine.fuel]
-transform = 0
-filter = 0
-router = 0
+transform = 999999999999
+filter = 999999999999
+router = 999999999999
 
 [nodes.source]
 type = "source"
