@@ -1,0 +1,58 @@
+# eKuiper 2.1.x LTS + mosquitto for the WAFER comparator experiments.
+#
+# Runs the two services as a single wafer-harness-owned stack so
+# `run-experiment.sh --broker <auto>` and equivalent scripts can either
+# discover an existing broker or bring one up. eKuiper is pinned to the
+# 2.1.0 LTS Alpine image; mosquitto matches the image used by
+# `run-experiment.sh`.
+#
+# See docs/benchmarks/ekuiper-comparator.md and RFC-008 §D6.
+#
+# Usage:
+#   docker compose -f eval/ekuiper/docker-compose.yml up -d
+#   ./eval/ekuiper/seed-pipeline-a.sh      # register stream + rule
+#   curl -s :9081/streams   # verify
+#   docker compose -f eval/ekuiper/docker-compose.yml down
+
+name: wafer-ekuiper
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:2
+    container_name: wafer-ekuiper-mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    labels:
+      wafer-harness: "1"
+      wafer-role: "broker"
+    healthcheck:
+      # mosquitto:2 image ships a mosquitto_sub client we can probe with.
+      test: ["CMD-SHELL", "mosquitto_sub -h 127.0.0.1 -p 1883 -t healthcheck -C 1 -W 1 || true"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  ekuiper:
+    image: lfedge/ekuiper:2.1.0-alpine
+    container_name: wafer-ekuiper
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_started
+    ports:
+      - "9081:9081"    # REST API for stream/rule management
+    environment:
+      # Point the eKuiper builtin MQTT connection at the broker on the
+      # docker-compose bridge network (service name = DNS name).
+      MQTT_SOURCE__DEFAULT__SERVER: "tcp://mosquitto:1883"
+    labels:
+      wafer-harness: "1"
+      wafer-role: "comparator"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9081/"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
