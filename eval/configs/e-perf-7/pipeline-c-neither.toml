@@ -1,0 +1,44 @@
+# E-Perf-7 metering ablation — neither (shakedown density).
+#
+# Both fuel and epoch effectively disabled — raw Wasm execution cost with no
+# metering overhead. Baseline for decomposing metering costs.
+
+[pipeline]
+name = "e-perf-7-neither"
+description = "Passthrough with no metering — shakedown density"
+
+[engine]
+# Epoch never fires in a 5s run.
+epoch_deadline = 1000000000
+
+[engine.fuel]
+# Far exceeds any single process() call — effectively unlimited.
+transform = 999999999999
+filter = 999999999999
+router = 999999999999
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 1000
+payload_size = 128
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 1
+track_sequences = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

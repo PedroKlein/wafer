@@ -1,0 +1,35 @@
+# E-Perf-6/8 depth scaling — 1 hop (shakedown density).
+#
+# Linear pipeline: bench-source → 1× pass-through → bench-sink.
+# Reduced message count for shakedown speed (5s per run).
+# Canonical configs at eval/configs/pipeline-depth-1.toml use 60k msgs.
+
+[pipeline]
+name = "e-perf-6-depth-1"
+description = "1 pass-through hop — shakedown density"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 1000
+payload_size = 128
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 1
+track_sequences = true
+
+[[edges]]
+from = "source"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "sink"

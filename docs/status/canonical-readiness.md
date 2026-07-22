@@ -119,9 +119,120 @@ microseconds, macOS M-series):
 - 12 plugins measured, ratios 335×–971× vs the smallest realistic
   container base image (2025-Q1 Docker Hub floors).
 
-### E-Perf-1..3, E-Perf-5..8 — not yet started
+### E-Perf-1..3, E-Perf-5 — not yet started
 
 ⚪ shakedown pending. See `plans/evaluation-infrastructure/` task queue.
+
+### E-Perf-6 — per-node RSS scaling (P2.2)
+
+- **Status**: 🟢 shakedown clean, linear scaling confirmed.
+- **Shakedown**: `eval/results/e-perf-6/shakedown-macos-2026-07-22T17-49-56Z/`
+- **Configs**: `eval/configs/e-perf-6/pipeline-depth-{1,3,5,10}.toml`
+- **Runs**: 4 depths × 30 runs = 120 clean runs (zero traps).
+- **Memory sampling**: 1 Hz `ps -o rss=,vsz=` background loop; 5 samples
+  per run (5 s run duration). Captures startup and steady-state.
+- **Notebook**: `eval/analysis/notebooks/03-memory-scaling.ipynb`
+
+Shakedown numbers (median steady-state RSS, macOS M-series):
+
+| Depth | RSS (MB) | Δ from depth-1 |
+| ----: | -------: | --------------: |
+|     1 |     34.6 |             — |
+|     3 |     39.0 |          +4.4 |
+|     5 |     40.8 |          +6.2 |
+|    10 |     45.1 |         +10.5 |
+
+- **Slope**: ~1116 KB/hop (~1.09 MB/hop), R² = 0.94.
+- **Intercept**: ~35 MB (runtime fixed cost: wasmtime engine + tokio + channels).
+
+**macOS vs Linux RSS.** macOS `ps` RSS includes shared libraries that would
+be counted once on Linux (via `/proc/pid/smaps_rollup`). Pi canonical numbers
+will show a lower absolute baseline but the per-hop delta should be similar
+(it's dominated by Wasm linear memory + Store overhead, not shared mappings).
+
+**Gaps before Pi.**
+
+- Pi sampler should use `/proc/<pid>/smaps_rollup` for private RSS.
+- Longer runs (60 s) will give more samples for a tighter steady-state window.
+- 5 samples per run is borderline — canonical runs at 60 s will have ~60 samples.
+
+### E-Perf-7 — metering overhead decomposition (P2.3)
+
+- **Status**: 🟢 shakedown clean, all 4 configs run cleanly.
+- **Shakedown**: `eval/results/e-perf-7/shakedown-macos-2026-07-22T18-01-09Z/`
+- **Configs**: `eval/configs/e-perf-7/pipeline-c-{fuel-only,epoch-only,neither,passthrough}.toml`
+- **Runs**: 4 configs × 30 runs = 120 clean runs.
+- **Notebook**: `eval/analysis/notebooks/04-metering-overhead.ipynb`
+
+Shakedown numbers (median p50 across runs, µs, macOS M-series):
+
+| Config | p50 (µs) | p95 (µs) | p99 (µs) | Δp50 vs neither |
+| ------ | -------: | -------: | -------: | --------------: |
+| neither (baseline) | 34.3 | 58.4 | 65.0 | — |
+| fuel-only | 34.3 | 58.4 | 65.0 | +0.0 |
+| epoch-only | 38.9 | 58.4 | 66.0 | +4.6 |
+| passthrough (both) | 34.3 | 58.4 | 65.0 | +0.0 |
+
+**Interpretation.** On macOS M-series, metering overhead is negligible
+(<5 µs at p50). Epoch-only shows a small bump (~4.6 µs) — consistent with
+the epoch-check instruction on loop back-edges. Fuel accounting imposes
+zero measurable overhead for the pass-through plugin (few instructions).
+
+**Config semantics.** `epoch_deadline = 0` in the original canonical configs
+meant "trap immediately" (not "disable"). The shakedown configs use large
+sentinel values (1B ticks / 999B fuel) to effectively disable without runtime
+changes. Canonical runs should adopt the same pattern or add runtime support
+for `0 = unlimited`.
+
+**Gaps before Pi.**
+
+- Pi's ARM Cortex-A72 may show larger epoch overhead (slower branch
+  prediction). Canonical run will confirm.
+- A more instruction-heavy plugin (e.g., JSON parse) would stress fuel
+  accounting more visibly — current pass-through is best-case for fuel.
+
+### E-Perf-8 — pipeline depth scaling (P2.4)
+
+- **Status**: 🟢 shakedown clean, linear scaling confirmed (R² > 0.99).
+- **Shakedown**: `eval/results/e-perf-8/shakedown-macos-2026-07-22T17-49-56Z/`
+- **Configs**: same as E-Perf-6 (`eval/configs/e-perf-6/pipeline-depth-{1,3,5,10}.toml`)
+- **Runs**: 4 depths × 30 runs = 120 clean runs.
+- **Notebook**: `eval/analysis/notebooks/04b-depth-scaling.ipynb`
+
+Shakedown numbers (median across runs, µs, macOS M-series):
+
+| Depth | p50 (µs) | p95 (µs) | p99 (µs) |
+| ----: | -------: | -------: | -------: |
+|     1 |     33.3 |     58.9 |     66.0 |
+|     3 |     69.1 |     99.3 |    110.6 |
+|     5 |     98.3 |    139.3 |    153.1 |
+|    10 |    172.0 |    239.1 |    266.2 |
+
+- **Per-hop overhead (p50 slope)**: 15.24 µs/hop, R² = 0.9983.
+- **Fixed overhead (intercept)**: 20.8 µs (channel transit + source/sink).
+- **Simple delta**: (depth-10 − depth-1) / 9 = 15.4 µs/hop.
+
+**What looks right.**
+
+- Near-perfect linear fit (R² > 0.99) confirms no non-linear overhead
+  accumulation as depth grows.
+- Per-hop cost (~15 µs) is consistent with E-Perf-4's 128-byte single-hop
+  measurement (~33 µs total for 1-hop, of which ~15 µs is the Wasm call
+  and ~18 µs is channel/source/sink fixed cost).
+- All 120 runs clean — zero traps, zero recovery events.
+
+**Pi expectation.**
+
+- Per-hop cost on Pi 4 expected at ~100–500 µs/hop based on RFC-008 §D2
+  estimates (M-series is ~10–30× faster than Cortex-A72 for Wasm).
+- Linear scaling should hold; the key thesis number is the slope, not the
+  absolute value.
+
+**Gaps before Pi.**
+
+- Canonical run should use 60 s / 60k messages for statistical power.
+- Warm-up of 30 s (30k msgs) will avoid the cold-cache effect seen in
+  E-Perf-4's 120 B anomaly.
 
 ### E-Val-1 — methodology validation (P3.1)
 

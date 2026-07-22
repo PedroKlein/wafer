@@ -1,0 +1,39 @@
+# E-Perf-7 metering ablation — fuel-only (shakedown density).
+#
+# Epoch effectively disabled (deadline large enough to never fire in a 5s run).
+# Fuel at default (10M per call). This measures the cost of fuel accounting
+# without epoch ticker interference.
+
+[pipeline]
+name = "e-perf-7-fuel-only"
+description = "Passthrough with fuel metering only — shakedown density"
+
+[engine]
+# 1B ticks × 20ms = ~5.8 hours. Never fires in a 5s run.
+epoch_deadline = 1000000000
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 1000
+payload_size = 128
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 1
+track_sequences = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

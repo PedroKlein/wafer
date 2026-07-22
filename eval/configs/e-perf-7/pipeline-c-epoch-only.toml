@@ -1,0 +1,40 @@
+# E-Perf-7 metering ablation — epoch-only (shakedown density).
+#
+# Fuel effectively disabled (set to 999B — far exceeds any single process()
+# call). Epoch at default (100 ticks × 20ms = 2s). This measures the cost of
+# epoch interruption checks without fuel accounting overhead.
+
+[pipeline]
+name = "e-perf-7-epoch-only"
+description = "Passthrough with epoch metering only — shakedown density"
+
+[engine.fuel]
+transform = 999999999999
+filter = 999999999999
+router = 999999999999
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 1000
+payload_size = 128
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 1
+track_sequences = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
