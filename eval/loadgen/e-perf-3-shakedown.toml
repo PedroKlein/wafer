@@ -1,0 +1,12 @@
+# E-Perf-3 MQTT-bookend loadgen profile (shakedown density).
+#
+# 1000 msg/s × 5 s = 5000 messages per run. Matches E-Perf-4/8 shakedown
+# density for comparability. Warmup 1 s handled at subscriber level.
+
+[loadgen]
+rate = 1000
+duration_secs = 5
+warmup_secs = 0
+topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
+profile = "steady"

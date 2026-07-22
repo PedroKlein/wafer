@@ -1,0 +1,109 @@
+# E-Perf-3: per-hop overhead with MQTT bookends — 10 hops.
+#
+# Topology: mqtt-source → 10× pass-through → mqtt-sink.
+
+[pipeline]
+name = "e-perf-3-depth-10"
+description = "MQTT-bookend depth scaling — 10 pass-through hops"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/input"
+qos = 1
+client_id = "wafer-perf3-in"
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t2]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t3]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t4]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t5]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t6]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t7]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t8]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t9]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t10]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/output"
+qos = 1
+client_id = "wafer-perf3-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "t2"
+
+[[edges]]
+from = "t2"
+to = "t3"
+
+[[edges]]
+from = "t3"
+to = "t4"
+
+[[edges]]
+from = "t4"
+to = "t5"
+
+[[edges]]
+from = "t5"
+to = "t6"
+
+[[edges]]
+from = "t6"
+to = "t7"
+
+[[edges]]
+from = "t7"
+to = "t8"
+
+[[edges]]
+from = "t8"
+to = "t9"
+
+[[edges]]
+from = "t9"
+to = "t10"
+
+[[edges]]
+from = "t10"
+to = "mqtt-out"

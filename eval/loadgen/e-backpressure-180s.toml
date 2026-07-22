@@ -1,0 +1,15 @@
+# E-Backpressure loadgen profile: 180s with 2× bursts.
+#
+# Baseline 1000 msg/s, spikes to 2000 msg/s for 10s every 60s.
+# 180s total captures 3 burst events.
+
+[loadgen]
+rate = 1000
+duration_secs = 180
+warmup_secs = 0
+topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
+profile = "burst"
+burst_multiplier = 2
+burst_on_secs = 10
+burst_cycle_secs = 60

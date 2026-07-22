@@ -1,0 +1,38 @@
+# E-Perf-3: per-hop overhead with MQTT bookends — 1 hop.
+#
+# Topology: mqtt-source → 1× pass-through → mqtt-sink.
+# Isolates MQTT bookend cost by comparison with E-Perf-8 (in-process).
+
+[pipeline]
+name = "e-perf-3-depth-1"
+description = "MQTT-bookend depth scaling — 1 pass-through hop"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/input"
+qos = 1
+client_id = "wafer-perf3-in"
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/output"
+qos = 1
+client_id = "wafer-perf3-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "mqtt-out"

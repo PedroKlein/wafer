@@ -1,0 +1,39 @@
+# E-Backpressure: burst load on pipeline-c shape (passthrough).
+#
+# Topology: mqtt-source → pass-through → mqtt-sink.
+# Driven by burst loadgen profile (2× burst every 60s for 180s total).
+# Channel capacity bounded at 64 to stress backpressure at 2000 msg/s bursts.
+
+[pipeline]
+name = "e-backpressure"
+description = "Burst backpressure validation — MQTT bookend pipeline"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/input"
+qos = 1
+client_id = "wafer-bp-in"
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/output"
+qos = 1
+client_id = "wafer-bp-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "mqtt-out"

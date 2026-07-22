@@ -1,0 +1,31 @@
+# E-Perf-9 AOT cold/warm — medium tier (tensor-prep, ~97 KB .wasm).
+
+[pipeline]
+name = "e-perf-9-tier-medium"
+description = "AOT startup measurement — medium plugin (tensor-prep, 97 KB)"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 50
+warmup_messages = 0
+payload_size = 128
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/tensor-prep/target/wasm32-wasip2/release/wafer_tensor_prep.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = true
+
+[[edges]]
+from = "source"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "sink"

@@ -1,0 +1,53 @@
+# E-Perf-3: per-hop overhead with MQTT bookends — 3 hops.
+#
+# Topology: mqtt-source → 3× pass-through → mqtt-sink.
+
+[pipeline]
+name = "e-perf-3-depth-3"
+description = "MQTT-bookend depth scaling — 3 pass-through hops"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/input"
+qos = 1
+client_id = "wafer-perf3-in"
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t2]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t3]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/bench/output"
+qos = 1
+client_id = "wafer-perf3-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "t2"
+
+[[edges]]
+from = "t2"
+to = "t3"
+
+[[edges]]
+from = "t3"
+to = "mqtt-out"
