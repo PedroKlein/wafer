@@ -1,0 +1,43 @@
+# E-Swap-4 pipeline: same topology but with burst load profile.
+#
+# Uses 2× rate for BenchSource to simulate burst. Total messages bumped to
+# accommodate the higher rate over the same duration window. API enabled
+# for mid-burst swap trigger.
+
+[pipeline]
+name = "e-swap-4-burst"
+description = "Hotswap under 2x burst load (E-Swap-4)"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 2000.0
+total_messages = 240000
+warmup_messages = 10000
+payload_size = 128
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 5
+track_sequences = true
+track_hotswap = true
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[metrics]
+enabled = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

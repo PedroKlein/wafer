@@ -1,0 +1,44 @@
+# E-Swap-5 pipeline: hot-swap with panic plugin for rollback testing.
+#
+# Starts with pass-through-v1 (working). The shakedown script will swap to
+# pass-through-v2-panics (traps on first message). The runtime must detect
+# the trap and roll back to v1's InstancePre. Sequence tracking verifies
+# no messages are lost during the rollback.
+
+[pipeline]
+name = "e-swap-5-rollback"
+description = "Failed swap recovery: v2-panics triggers rollback to v1 (E-Swap-5)"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 120000
+warmup_messages = 5000
+payload_size = 128
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 5
+track_sequences = true
+track_hotswap = true
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[metrics]
+enabled = true
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

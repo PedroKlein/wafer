@@ -174,9 +174,108 @@ catches this at CI time.
   jitter contamination from co-resident processes and rerun with
   `isolcpus` + `taskset`.
 
-### E-Swap-1..6 — not yet started
+### E-Swap-6 — phase decomposition (P5.1)
 
-⚪ shakedown pending.
+- **Status**: 🟢 shakedown clean, all 5 phases populated.
+- **Shakedown**: `eval/results/e-swap-6/shakedown-macos-<ts>/`
+- **Config**: `eval/configs/e-swap/pipeline-hotswap.toml`
+- **Script**: `eval/scripts/run-e-swap-shakedown.sh --swap unified`
+- **Notebook**: `eval/analysis/notebooks/05-hotswap-timeline.ipynb`
+
+51 swaps at 1000 msg/s (alternating v1↔v2 every 2s). All 5 phases
+non-zero on every swap event. Dominant phase: **convergence** (ack + first_v2
+output latency).
+
+| Phase | p50 (ms) | p95 (ms) | Notes |
+| ----- | -------: | -------: | ----- |
+| Compile | 0.053 | 0.065 | AOT cache hit after first swap |
+| Instantiate | 0.192 | 0.276 | InstancePre → Instance |
+| Signal | 0.000 | 0.001 | Watch-channel send |
+| Ack | 1.067 | 1.148 | Node loop picks up swap |
+| Convergence | 1.258 | 1.321 | First v2 output at sink |
+
+Compile dominates only the first cold swap (~14 ms); warm swaps are
+dominated by ack + convergence (~1 ms each, pipeline message interval at
+1000 msg/s).
+
+### E-Swap-1 — pause duration (P5.2)
+
+- **Status**: 🟢 p95 well under 100 ms target.
+- **Shakedown**: `eval/results/e-swap-1/shakedown-macos-<ts>/`
+- **Script**: same unified run as E-Swap-6.
+
+51 swap transitions. Pause measured as time between last v1 output and
+first v2 output at the BenchSink (version boundary detection via
+`plugin.version` metadata).
+
+| Metric | Value |
+| ------ | ----- |
+| p50 pause | 1.28 ms |
+| p95 pause | 1.33 ms |
+| Target <100 ms | ✓ PASS |
+
+macOS M-series is fast; Pi numbers will be higher but sub-100 ms
+remains achievable given the phase decomposition shows no phase >2 ms.
+
+### E-Swap-2 — zero-loss zero-duplication (P5.3)
+
+- **Status**: 🟢 invariant holds.
+- **Shakedown**: `eval/results/e-swap-2/shakedown-macos-<ts>/`
+- **Script**: same unified run.
+
+51 swaps with zero swap-induced message gaps and zero duplicates.
+BenchSink's SequenceTracker counts sequence numbers across the
+measurement window (post-warmup). The initial 5001 "gaps" correspond
+exactly to the warmup-excluded region — no messages lost during any
+of the 51 hot-swap events.
+
+| Metric | Value |
+| ------ | ----- |
+| Swap-induced gaps | 0 |
+| Sequence duplicates | 0 |
+| Post-warmup received | 114,999 |
+
+### E-Swap-4 — swap under 2× burst (P5.5)
+
+- **Status**: 🟢 all swaps converge under burst.
+- **Shakedown**: `eval/results/e-swap-4/shakedown-macos-<ts>/`
+- **Config**: `eval/configs/e-swap/pipeline-hotswap-burst.toml`
+- **Script**: `eval/scripts/run-e-swap-shakedown.sh --swap burst`
+
+52 swaps at 2000 msg/s. All converged successfully. Pause duration is
+not significantly higher than normal load — the pipeline's bounded
+channels absorb the burst.
+
+| Metric | Value |
+| ------ | ----- |
+| Source rate | 2000 msg/s |
+| Successful swaps | 52 |
+| p95 burst pause | 1.17 ms |
+
+### E-Swap-5 — failed swap recovery (P5.6)
+
+- **Status**: 🟡 runtime detects failure but does NOT auto-rollback.
+- **Shakedown**: `eval/results/e-swap-5/shakedown-macos-<ts>/`
+- **Config**: `eval/configs/e-swap/pipeline-hotswap-rollback.toml`
+- **Script**: `eval/scripts/run-e-swap-shakedown.sh --swap rollback`
+
+The v2-panics plugin deliberately passes `init()` (by design — see
+`plugins/pass-through-v2-panics/src/lib.rs` line 24) so the A4
+init-failure rollback path is NOT triggered. The runtime's recovery
+loop re-instantiates from the CURRENT InstancePre (v2-panics), leading
+to perpetual traps. The handler returns 504 GATEWAY_TIMEOUT.
+
+| Metric | Value |
+| ------ | ----- |
+| Swap attempts | 6 |
+| Traps post-swap | ~93,000 |
+| A4 init-rollback | 0 |
+| Auto rollback to v1 | No |
+| Runtime panic | No |
+
+**Gap**: Process-time rollback to previous InstancePre is not
+implemented. A4 covers init-time failures only. See
+`docs/status/implementation-gaps.md` if escalated.
 
 ### E-Iso-1..6 — attack containment shakedown (P4.1–P4.6)
 
