@@ -160,15 +160,14 @@ impl WaferState {
 
     /// Push a `WaferBuffer` into the ResourceTable and return its handle.
     ///
-    /// Called once per Wasm call to make the message payload available to the
-    /// guest via `borrow<buffer>`. The caller MUST invoke [`Self::delete_buffer`]
-    /// after the guest call returns — otherwise the ResourceTable and the
-    /// underlying `Bytes` clones accumulate indefinitely (see the E-Perf-4
-    /// shakedown investigation, 2026-07-21).
+    /// The `borrow<buffer>` WIT semantic leaves ownership with the host;
+    /// the caller MUST invoke [`Self::delete_buffer`] once the guest returns
+    /// or the table grows one Bytes-clone entry per call.
     ///
     /// # Errors
     ///
-    /// Returns error if the ResourceTable is full (extremely unlikely — 2^32 slots).
+    /// Returns error if the ResourceTable is full (2^32 slots — unreachable
+    /// in practice).
     pub fn push_buffer(
         &mut self,
         data: bytes::Bytes,
@@ -178,22 +177,16 @@ impl WaferState {
         Ok(resource)
     }
 
-    /// Remove a buffer resource from the ResourceTable, freeing its slot and
-    /// dropping the underlying `WaferBuffer` (and its `Bytes` clone).
+    /// Remove a buffer resource from the ResourceTable.
     ///
-    /// MUST be called after every guest call that used a buffer produced by
-    /// [`Self::push_buffer`]. Failure to do so leaks host-side memory and,
-    /// worse, causes the guest's dlmalloc to fragment (each `read_all` copy
-    /// stays live longer than expected via reference-count semantics),
-    /// eventually triggering a guest-side `cabi_realloc` trap once linear
-    /// memory exhausts — exactly the symptom reproduced on the 2026-07-21
-    /// shakedown before this pair was wired up.
+    /// Pair of [`Self::push_buffer`] — must be called after every guest
+    /// call that used a buffer produced by push_buffer. See push_buffer
+    /// for the leak-behaviour rationale.
     ///
     /// # Errors
     ///
-    /// Returns error if the resource handle is invalid (already deleted or
-    /// belongs to another table). Should never happen in the runtime; a
-    /// programmer error if it does.
+    /// Returns error if the handle is invalid (already deleted or from
+    /// another table) — always a host-side programmer error.
     pub fn delete_buffer(
         &mut self,
         resource: wasmtime::component::Resource<super::WaferBuffer>,

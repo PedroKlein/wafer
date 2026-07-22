@@ -168,11 +168,9 @@ pub async fn hot_swap(
 
     let (kind, capabilities, memory_limit) = match engine_config.nodes.get(&id) {
         Some(NodeDef::Transform(wasm)) => {
-            // Reject hot-swap attempts on native baseline transforms with a
-            // 400 Bad Request. Native nodes are by construction not
-            // swappable (RFC-008 §D5) and a 500 Internal Server Error would
-            // wrongly imply a runtime bug when the caller supplied an
-            // invalid target.
+            // Native transforms are not swappable (RFC-008 §D5); reject at
+            // the boundary so the caller sees a 400 instead of a 500 from
+            // a downstream WaferError::Runtime.
             if wasm.plugin.is_native() {
                 return Err((
                     StatusCode::BAD_REQUEST,
@@ -310,9 +308,8 @@ pub async fn reconfigure(
     // Confirm the node exists and is a Wasm node.
     match orch.config().nodes.get(&id) {
         Some(NodeDef::Transform(wasm)) => {
-            // Reject reconfigure on native baseline transforms with a
-            // 400 Bad Request. Same rationale as /hot-swap: native nodes
-            // are by construction not swappable/reconfigurable.
+            // Native transforms are not reconfigurable (see hot_swap for
+            // the same 400-vs-500 mapping rationale).
             if wasm.plugin.is_native() {
                 return Err((
                     StatusCode::BAD_REQUEST,

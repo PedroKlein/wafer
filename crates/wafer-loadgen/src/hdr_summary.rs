@@ -1,14 +1,10 @@
-//! `hdr-summary` — read a `latency.hdr` interval log and emit p50/p95/p99/p999 as JSON.
+//! `hdr-summary` — read a `latency.hdr` interval log and emit
+//! p50/p95/p99/p999 as JSON.
 //!
-//! Wired into `wafer-loadgen` as a subcommand so eval scripts (P2.1
-//! shakedown runner, canonical-runs analysis) can aggregate percentiles
-//! across many runs without depending on the Python `hdrh` library
-//! (whose V2-cookie handling is incompatible with the Rust
-//! `hdrhistogram` crate's serialiser).
-//!
-//! Emits one JSON object per invocation, aggregating all interval-log
-//! entries in the file into a single histogram before extracting
-//! percentiles. See docs/rfcs/RFC-008-evaluation-harness.md §D9.
+//! Bypasses the Python `hdrh` library (its V2-cookie handling is
+//! incompatible with the Rust `hdrhistogram` crate's serialiser); the
+//! shakedown runner + canonical-run notebooks call this instead.
+//! See RFC-008 §D9.
 
 use std::path::PathBuf;
 
@@ -36,10 +32,9 @@ pub struct HdrSummaryArgs {
     pub pretty: bool,
 }
 
-/// JSON schema emitted by `hdr-summary`. Every field is `_ns` unless the
-/// name says otherwise. `total_count` is the count of RECORDED values
-/// (post-warmup); `intervals_read` is the number of interval-log entries
-/// aggregated into that histogram.
+/// JSON schema emitted by `hdr-summary`. `_ns` suffixed fields are
+/// nanoseconds. `total_count` counts recorded (post-warmup) values;
+/// `intervals_read` is the number of interval-log entries aggregated.
 #[derive(Debug, Serialize)]
 struct Summary {
     hdr_path: String,
@@ -63,11 +58,9 @@ pub fn run(args: HdrSummaryArgs) -> Result<()> {
     let text = std::str::from_utf8(&bytes)
         .context("latency.hdr is not UTF-8 (interval logs are text-framed)")?;
 
-    // Aggregate every interval histogram into one so tail percentiles
-    // reflect the entire post-warmup run. Ceiling matches the BenchSink
-    // + loadgen ceiling (10 s in nanoseconds); if the crate rejects a
-    // shorter/longer bound we retry with a wider one so cross-version
-    // logs still parse.
+    // Aggregate every interval entry into one histogram so tail
+    // percentiles reflect the whole post-warmup run. Bounds match the
+    // BenchSink + loadgen ceiling (1µs–10s).
     let mut agg = Histogram::<u64>::new_with_bounds(1_000, 10_000_000_000, 3)
         .map_err(|e| anyhow!("failed to create aggregator histogram: {e:?}"))?;
     let mut deserializer = Deserializer::new();
@@ -93,9 +86,8 @@ pub fn run(args: HdrSummaryArgs) -> Result<()> {
     }
 
     if agg.len() == 0 {
-        // Empty histogram (no recorded values): still emit a valid summary
-        // so downstream JSON tooling never gets a null. Callers must
-        // check `total_count` before drawing conclusions.
+        // Empty run — still emit a valid summary so downstream tooling
+        // never sees `null`. Callers must gate on `total_count`.
         let summary = Summary {
             hdr_path: args.hdr.display().to_string(),
             intervals_read: intervals,
@@ -148,10 +140,8 @@ fn write_summary(summary: &Summary, output: Option<&std::path::Path>, pretty: bo
     Ok(())
 }
 
-/// Minimal base64 decoder — the crate does not re-export `base64::engine`
-/// through its public API, so we vendor a tiny STANDARD decoder here to
-/// avoid pulling in yet another workspace dependency. STANDARD is what
-/// the Rust HdrHistogram serialiser emits.
+/// Minimal STANDARD base64 decoder — avoids a workspace-dep on
+/// `base64` here; the Rust HdrHistogram serialiser emits STANDARD.
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;

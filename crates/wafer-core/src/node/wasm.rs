@@ -41,15 +41,10 @@ fn map_process_error(err: transform_node::pipeline::types::types::ProcessError) 
 ///
 /// Epoch interruption → TimedOut; all others → Unrecoverable.
 fn map_trap(err: wasmtime::Error) -> WasmProcessError {
-    // Check if this is an epoch interruption by inspecting the error chain.
-    // wasmtime encodes the underlying trap kind in the `Caused by:` chain,
-    // not in the top-level Display. We check both the display string and
-    // the debug repr (which includes the chain) so both `epoch` mentions
-    // in a message and a `wasm trap: interrupt` in the chain map to
-    // TimedOut. Without the debug fallback an epoch trap would be
-    // classified as Unrecoverable and routed to recovery instead of retry
-    // (the exact misdiagnosis that made the E-Perf-4 shakedown look like
-    // a `cabi_realloc` OOM leak; see the 2026-07-21 investigation).
+    // Debug repr surfaces the `Caused by:` chain (which carries the trap
+    // variant); Display shows only the top frame. Missing the chain would
+    // misclassify epoch interrupts as Unrecoverable and route them to
+    // recovery instead of retry.
     let msg = err.to_string();
     let dbg = format!("{err:?}");
     if msg.contains("epoch") || msg.contains("interrupt") || dbg.contains("wasm trap: interrupt") {
@@ -247,51 +242,32 @@ impl WasmTransformNode {
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> Result<RuntimeEnvelope, WasmProcessError> {
-        // 1. Clear log buffer
         self.store.data_mut().clear_log_buffer();
 
-        // 2. Reset fuel budget
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
 
-        // 2a. Reset epoch deadline. `Store::set_epoch_deadline` takes a
-        // value relative to the engine's CURRENT epoch counter (wasmtime
-        // 38 stores it as an absolute `current + delta`). Without this
-        // per-call reset the initial deadline set in
-        // `new_transform_store` expires after `epoch_deadline` ticks of
-        // wall time (default 100 ticks × 10ms = 1s), after which every
-        // subsequent guest call traps with `wasm trap: interrupt` at the
-        // first epoch check point — typically inside `cabi_realloc`.
-        // This was the root cause of the pipeline-c-passthrough dry-run
-        // failure investigated during the E-Perf-4 shakedown (2026-07-21).
+        // set_epoch_deadline is relative to the engine's current epoch; without
+        // a per-call reset the store's absolute deadline lapses after
+        // `epoch_deadline` ticks and every subsequent call traps with
+        // `wasm trap: interrupt` at the first check point.
         self.store.set_epoch_deadline(self.epoch_deadline);
 
-        // 3. Build WIT message (pushes buffer resource)
         let wit_msg = build_wit_message(&mut self.store, &envelope)?;
-        // Capture the resource handle so we can free it after the guest
-        // returns. `payload: borrow<buffer>` in WIT means the host retains
-        // ownership; without this explicit delete the ResourceTable grows
-        // by one entry per message and each entry keeps a Bytes clone of
-        // the payload alive, exhausting the guest's linear memory
-        // budget within a few thousand messages (E-Perf-4 shakedown
-        // 2026-07-21). See engine::state::WaferState::delete_buffer.
+        // `borrow<buffer>` keeps host ownership; we must delete the resource
+        // ourselves after the guest returns or the ResourceTable grows one
+        // Bytes-clone entry per message.
         let payload_rep = wit_msg.payload.rep();
 
-        // 4. Call guest transform::process()
         let result = self
             .bindings
             .pipeline_node_transform()
             .call_process(&mut self.store, &wit_msg);
 
-        // 5. Drain logs
         flush_logs(&mut self.store);
 
-        // 6. Free the host-owned buffer resource whether the call succeeded
-        //    or trapped — leaking on error would starve subsequent recovery
-        //    attempts. Failure to delete is treated as an unrecoverable
-        //    host bug (delete never fails for a valid handle we just
-        //    pushed).
+        // Free even on trap; leaks would starve recovery.
         let delete_res = self
             .store
             .data_mut()
@@ -302,20 +278,14 @@ impl WasmTransformNode {
             )));
         }
 
-        // 7. Map result
         match result {
             Ok(Ok(output)) => {
-                // Build new RuntimeEnvelope from output-message
                 let mut new_envelope = RuntimeEnvelope::new(
                     Box::<str>::from(output.source.as_str()),
                     Bytes::from(output.payload),
                 );
-                // Propagate the guest's metadata into the new envelope so
-                // downstream nodes (and BenchSink for latency measurement)
-                // see the `bench.intended_ns`/`bench.sequence` markers that
-                // the source stamped. Without this the sink observes zero
-                // recordable messages because there is no intended
-                // timestamp to compute a latency against.
+                // Guest metadata must reach the sink or BenchSink cannot find
+                // `bench.intended_ns` and records zero latency samples.
                 for (k, v) in output.metadata {
                     new_envelope = new_envelope.with_metadata(k, v);
                 }
@@ -337,8 +307,6 @@ impl WasmTransformNode {
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        // Reset the epoch deadline for the lifecycle call (see the note in
-        // `process` for the full rationale).
         self.store.set_epoch_deadline(self.epoch_deadline);
         if let Some(message) = self
             .bindings
@@ -534,7 +502,6 @@ impl WasmFilterNode {
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        // Reset epoch deadline for the lifecycle call.
         self.store.set_epoch_deadline(self.epoch_deadline);
         if let Some(message) = self
             .bindings
@@ -568,33 +535,24 @@ impl WasmFilterNode {
         &mut self,
         envelope: &RuntimeEnvelope,
     ) -> Result<FilterOutcome, WasmProcessError> {
-        // 1. Clear log buffer
         self.store.data_mut().clear_log_buffer();
 
-        // 2. Reset fuel
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
-
-        // 2a. Reset epoch deadline (see WasmTransformNode::process).
+        // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
         self.store.set_epoch_deadline(self.epoch_deadline);
 
-        // 3. Build WIT message (pushes buffer resource)
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
-        // See WasmTransformNode::process for the rationale behind the
-        // explicit buffer resource release.
         let payload_rep = wit_msg.payload.rep();
 
-        // 4. Call guest filter::evaluate()
         let result = self
             .bindings
             .pipeline_node_filter()
             .call_evaluate(&mut self.store, &wit_msg);
 
-        // 5. Drain logs
         flush_logs(&mut self.store);
 
-        // 6. Free the host-owned buffer resource (E-Perf-4 leak fix).
         let delete_res = self
             .store
             .data_mut()
@@ -605,7 +563,6 @@ impl WasmFilterNode {
             )));
         }
 
-        // 7. Map result
         match result {
             Ok(Ok(true)) => Ok(FilterOutcome::Forward),
             Ok(Ok(false)) => Ok(FilterOutcome::Drop),
@@ -783,7 +740,6 @@ impl WasmRouterNode {
         self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
             message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        // Reset epoch deadline for the lifecycle call.
         self.store.set_epoch_deadline(self.epoch_deadline);
         if let Some(message) = self
             .bindings
@@ -817,33 +773,24 @@ impl WasmRouterNode {
         &mut self,
         envelope: &RuntimeEnvelope,
     ) -> Result<RouteOutcome, WasmProcessError> {
-        // 1. Clear log buffer
         self.store.data_mut().clear_log_buffer();
 
-        // 2. Reset fuel
         self.store
             .set_fuel(self.fuel_limit)
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
-
-        // 2a. Reset epoch deadline (see WasmTransformNode::process).
+        // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
         self.store.set_epoch_deadline(self.epoch_deadline);
 
-        // 3. Build WIT message
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
-        // See WasmTransformNode::process for the rationale behind the
-        // explicit buffer resource release.
         let payload_rep = wit_msg.payload.rep();
 
-        // 4. Call guest router::route()
         let result = self
             .bindings
             .pipeline_routing_router()
             .call_route(&mut self.store, &wit_msg);
 
-        // 5. Drain logs
         flush_logs(&mut self.store);
 
-        // 6. Free the host-owned buffer resource (E-Perf-4 leak fix).
         let delete_res = self
             .store
             .data_mut()
@@ -854,7 +801,6 @@ impl WasmRouterNode {
             )));
         }
 
-        // 7. Map result
         match result {
             Ok(Ok(ports)) => Ok(RouteOutcome::Ports(ports)),
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),

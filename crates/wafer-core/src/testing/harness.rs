@@ -206,20 +206,8 @@ mod tests {
         }
     }
 
-    /// Regression test for the E-Perf-4 shakedown investigation (2026-07-21).
-    ///
-    /// `WasmTransformNode::process` previously constructed the output
-    /// envelope with `RuntimeEnvelope::new(source, payload)` and
-    /// `inherit_lineage_from(...)` — but never copied the guest's
-    /// `output.metadata` back onto the envelope. As a result the sink
-    /// received messages with an empty metadata list and could not
-    /// extract `bench.intended_ns` / `bench.sequence`, so
-    /// `HdrHistogram` recorded zero values despite thousands of
-    /// messages successfully flowing through the pipeline.
-    ///
-    /// This test drives the pass-through plugin with an input that
-    /// carries `bench.sequence` and `bench.intended_ns`, then asserts
-    /// both keys survive the guest round-trip on the returned envelope.
+    /// Regression: guest metadata must reach the runtime envelope, or the
+    /// sink cannot observe `bench.intended_ns` and records zero samples.
     #[test]
     fn pass_through_propagates_metadata() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
@@ -251,21 +239,11 @@ mod tests {
         );
     }
 
-    /// Regression test for the E-Perf-4 shakedown investigation (2026-07-21).
-    ///
-    /// Root cause: `Store::set_epoch_deadline` in wasmtime 38 is relative to
-    /// the engine's CURRENT epoch counter, not absolute. The previous runtime
-    /// set the deadline once at store construction and never refreshed it,
-    /// so after ~1 second of wall time (100 ticks × 10 ms) every subsequent
-    /// guest call trapped with `wasm trap: interrupt` at the first epoch
-    /// check point — typically inside `cabi_realloc`. The failure mode
-    /// looked like a guest OOM but was actually a host-side timing bug.
-    ///
-    /// This test drives the harness (which shares the same per-call epoch
-    /// reset codepath as the runtime after the fix) for well over 1 s of
-    /// wall time with a `std::thread::sleep` between calls, then asserts
-    /// every call succeeded. Before the fix this test failed by the 100th
-    /// iteration; after the fix it must run to completion.
+    /// Regression: `Store::set_epoch_deadline` is relative to the engine's
+    /// current epoch, so it must be reset per call. 150 iterations × 10 ms
+    /// sleep spans ~1.5 s wall time, well past the 100-tick default; a
+    /// missing reset traps at the first check point (typically
+    /// `cabi_realloc`) around iteration 100.
     #[test]
     fn pass_through_survives_epoch_deadline_wraparound() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
@@ -276,9 +254,6 @@ mod tests {
         let harness = PluginTestHarness::new().unwrap();
         let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
 
-        // 150 calls with a 10 ms sleep totals ~1.5 s wall time, well past
-        // the 100-tick default epoch deadline. Any trap here means the
-        // per-call `set_epoch_deadline` reset regressed.
         for i in 0..150 {
             std::thread::sleep(std::time::Duration::from_millis(10));
             let payload = format!("epoch-soak-{i}");
@@ -387,12 +362,9 @@ mod tests {
         );
     }
 
-    /// Isolation harness for the `cabi_realloc` trap observed in the
-    /// pipeline-c-passthrough dry run (E-Perf-4 shakedown). Loads the real
-    /// production `wafer_pass_through.wasm`, feeds it 5 progressively larger
-    /// payloads mimicking the exact envelope shape `BenchSource` produces
-    /// (payload + two metadata KV pairs), and reports which sizes trap.
-    /// Left ignored so it never runs in CI — invoke with
+    /// E-Perf-4 diagnostic: soak the real pass-through plugin at five
+    /// payload sizes and report which — if any — trap. Ignored so it
+    /// never runs in CI. Invoke with
     /// `cargo test --release -p wafer-core --lib -- --ignored --nocapture pass_through_bench_shapes`.
     #[test]
     #[ignore = "E-Perf-4 diagnostic; opt-in"]
