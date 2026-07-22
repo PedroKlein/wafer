@@ -458,6 +458,56 @@ plugin-level delay tests use safe rate/delay ratios.
 
 ---
 
+## A17 — Process-time hot-swap rollback not implemented (Open) 🟡
+
+**Severity:** medium. Downgrades the RQ3 hot-swap safety story from
+"automatic rollback on any failure" to "automatic rollback only on
+init() failure". Surfaced by E-Swap-5 (P5.6).
+
+**Symptom.** E-Swap-5 shakedown drives a `/hot-swap` from v1 to
+`pass-through-v2-panics`. v2-panics deliberately passes `init()` and
+traps on the first `process()` call. Expected per RFC-008 §D5: runtime
+rolls back to v1 via the A4 mechanism. Actual: runtime enters a
+permanent trap loop; sequence tracker records 5001 gaps and 0
+recoveries; handler returns 504 GATEWAY_TIMEOUT.
+
+Evidence: `eval/results/e-swap-5/shakedown-macos-<ts>/shakedown.json`
+(`auto_rollback_to_v1: false`, `sequence_continues_after_rollback: false`).
+
+**Root cause.** A4 (§A4 closed 2026-07-20) covers `init()` failure at
+the /hot-swap handler boundary. Plugins whose `init()` returns Ok and
+whose `process()` traps only after a successful swap have no rollback
+path — the runner enters the error-policy loop, retries, exhausts,
+and ends in permanent Error.
+
+**Proposed fix (NOT applied — stakeholder decision required).**
+
+1. Canary window: hot-swap handler retains v1's InstancePre for N s
+   after ack. If the new node enters Error within that window, swap
+   back automatically. Runtime change in
+   `crates/wafer-core/src/orchestrator/pipeline.rs`.
+2. Metric: `wafer_hot_swap_rollbacks_total{trigger="canary"}`.
+3. RFC-008 §D5 clarification of "failure" semantics.
+4. New plugin variant `pass-through-v2-slow-panic` (passes init,
+   processes N messages, then traps) as regression fixture.
+
+**Alternative view.** Current behaviour may be intentional: a plugin
+that passes validate/init but traps on process is a plugin bug, and
+the DLQ + error policy already handle poison messages. Decision:
+does the thesis need canary semantics, or is the current permanent-
+Error → DLQ path an acceptable RQ3 story?
+
+**Impact if unfixed.**
+- E-Swap-5 shakedown row stays 🟡 (not 🔴 — no runtime panic).
+- RQ3 thesis claim must be phrased as "rollback on init failure", not
+  "rollback on any failure".
+- Canonical Pi run reproduces the same behaviour — not a macOS
+  artefact.
+
+**Not fixed in this session.** Filed for stakeholder review.
+
+---
+
 ## How to close a gap
 
 1. Land the code fix.
