@@ -14,11 +14,12 @@ description = "50 ms injected delay + honest p99 gate"
 [nodes.source]
 type = "source"
 kind = "bench-source"
-# Modest rate + count keeps the shakedown under a minute on macOS. Canonical
-# Pi runs will bump rate to 200/s and total to 6000 to stress the tail.
-rate = 100.0
-total_messages = 3000
-warmup_messages = 500
+# Rate must sit well below sink capacity (1000/50 ms = 20 msg/s) or the queue
+# back-pressures and observed p99 reports queue-wait + processing, not just
+# processing. 10 msg/s gives 50% headroom on the 20 msg/s ceiling.
+rate = 10.0
+total_messages = 300
+warmup_messages = 50
 payload_size = 128
 
 [nodes.delay]

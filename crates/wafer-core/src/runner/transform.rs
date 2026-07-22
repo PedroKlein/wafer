@@ -88,10 +88,14 @@ pub async fn run_transform_loop(
         // 4. DLQ safety clone BEFORE process (Arc + Bytes refcount ~10ns)
         let safety = envelope.clone();
 
-        // 5. Wasm call OUTSIDE select! — runs to completion, never cancelled
+        // 5. Wasm call OUTSIDE select! — runs to completion, never cancelled.
+        // `block_in_place` signals the multi-thread runtime that this worker
+        // is about to block synchronously, so it can migrate other tasks and
+        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
+        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
-        let result = transform.process(envelope);
+        let result = tokio::task::block_in_place(|| transform.process(envelope));
         let duration_ns = start.elapsed().as_nanos() as u64;
         drop(_guard);
 

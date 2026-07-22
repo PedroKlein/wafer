@@ -85,10 +85,11 @@ pub async fn run_router_loop(
             }
         };
 
-        // 4. Wasm call OUTSIDE select! — borrow envelope for routing decision
+        // 4. Wasm call OUTSIDE select! — see transform.rs for the
+        // `block_in_place` rationale (A16).
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
-        let result = router.route(&envelope);
+        let result = tokio::task::block_in_place(|| router.route(&envelope));
         let duration_ns = start.elapsed().as_nanos() as u64;
         drop(_guard);
 

@@ -396,9 +396,9 @@ and architecture claims assume the rewire happened; it did not.
 
 ---
 
-## A16 — WASI async host calls panic inside Tokio runner tasks (Open) 🔴
+## A16 — WASI async host calls panic inside Tokio runner tasks (Closed 2026-07-22) 🟢
 
-**Severity:** high. Blocks E-Val-1 methodology validation and every future
+**Severity:** high. Blocked E-Val-1 methodology validation and every future
 plugin that uses any WASI async primitive (clock waits, blocking I/O,
 sleeps, socket reads). Surfaced during the P3.1 shakedown on macOS.
 
@@ -429,44 +429,32 @@ code is pure computation; the moment a plugin touches
 `wasi:clocks/monotonic-clock.subscribe-duration` (which `std::thread::sleep`
 lowers to on wasip2) the runner task dies.
 
-**Reproduction.**
+**Fix applied (option 1).** Wrapped each sync guest call in
+`tokio::task::block_in_place(|| ...)` at the three call sites in
+`crates/wafer-core/src/runner/{transform,filter,router}.rs`. This tells
+the multi-thread Tokio runtime that the worker thread will block
+synchronously, allowing it to migrate other tasks and permitting the
+nested `block_on` inside WASI. Minimal, backwards-compatible, no API
+surface changes.
 
-```sh
-cargo build --release -p wafer-runtime -p wafer-loadgen
-./eval/scripts/run-e-val-1-shakedown.sh --runs 1 --skip-build
-# Observe empty latency.hdr and the panic in stdout.log.
-```
+**Regression coverage.** New integration test
+`crates/wafer-core/tests/wasi_async_runner.rs`
+(`delay_injector_runs_without_wasi_runtime_panic`) drives the real
+runner (not the harness) with the delay-injector plugin end-to-end,
+asserts (a) no panic and (b) p99 lands in the E-Val-1 honesty window
+[45, 55] ms. FAILS on `main` before the fix, PASSES after.
 
-**Proposed fixes (none applied — pending stakeholder decision).**
+**Related methodology finding (not a runtime bug).** The initial P3.1
+config generated at 100 msg/s through a 20 msg/s sink (50 ms delay);
+queue back-pressure inflated recorded p99 to ~4700 ms even after the
+runner fix. Corrected `eval/configs/pipeline-c-with-delay.toml` and
+the regression test to generate at 10 msg/s (below sink capacity), so
+recorded p99 reflects only injected delay. This is the exact class of
+methodology error E-Val-1 exists to catch — documenting here so future
+plugin-level delay tests use safe rate/delay ratios.
 
-1. Wrap each sync guest call in `tokio::task::block_in_place(|| ...)`
-   at the three call sites in `crates/wafer-core/src/runner/`. Small,
-   local, backwards-compatible. Signals to Tokio that the worker
-   thread will block so it can migrate other tasks; permits the
-   nested `block_on` inside WASI. Requires the multi-thread Tokio
-   runtime (currently used).
-2. Migrate the runtime to `wasmtime_wasi::p2::add_to_linker_async` and
-   convert all guest bindings + runner call sites to `.call_process_async`
-   / `.call_evaluate_async` / `.call_route_async`. Semantically cleaner
-   but a cascading refactor; changes the fuel/epoch
-   `set_epoch_deadline`/`set_fuel` cadence (which currently runs on the
-   sync call boundary).
-3. Change plugins to spin-wait on `wasi:clocks/monotonic-clock.now`
-   instead of sleeping. Burns CPU during the wait and would distort the
-   very measurement E-Val-1 is validating (introduces host-scheduler
-   jitter into the injected delay).
-
-**Impact if unfixed.**
-- E-Val-1 (methodology validation) cannot produce a p99. The honesty
-  gate that anchors every downstream RQ1/RQ2/RQ3 number stays
-  unverified.
-- Any future guest plugin using WASI async I/O (MQTT-inside-guest
-  scenarios, HTTP source-plugins, timer-driven filters) inherits the
-  same panic.
-
-**Not fixed in this session.** Runtime edits require an explicit
-re-scope of P3.1 or a new P0.14-style task; see the ORCHESTRATOR-PLAYBOOK
-delegation-policy section.
+**Closed by:** commit landing this file. See
+`plans/evaluation-infrastructure/plan.json` task P0.14.
 
 ---
 

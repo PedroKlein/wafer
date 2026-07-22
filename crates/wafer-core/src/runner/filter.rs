@@ -85,10 +85,11 @@ pub async fn run_filter_loop(
             }
         };
 
-        // 4. Wasm call OUTSIDE select! — borrow envelope for evaluation
+        // 4. Wasm call OUTSIDE select! — see transform.rs for the
+        // `block_in_place` rationale (A16).
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
-        let result = filter.evaluate(&envelope);
+        let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));
         let duration_ns = start.elapsed().as_nanos() as u64;
         drop(_guard);
 
