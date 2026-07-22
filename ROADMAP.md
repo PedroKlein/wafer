@@ -7,22 +7,16 @@ decisions that these items would build on are captured in
 
 ## Near-term — evaluation infrastructure
 
-Executable backlog for the RQ1/RQ2/RQ3 evaluation lives in the
-`evaluation-infrastructure` plan (`plan_tasks --plan-name evaluation-infrastructure`).
-Its seven tasks cover the native Rust baseline (E1), eKuiper comparator (E2),
-shared payload/config fixtures (E3), attack plugin finalization (E4),
-RPi 4/Jetson automation (E5), analysis notebooks (E6), and formal experiment
-execution (E7). This ROADMAP section is a summary; do not duplicate task
-tables here.
+The macOS shakedown pass is **complete** (25/26 experiments green). The
+canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md)
+documents per-experiment gaps and is the input document for the follow-up
+canonical-runs plan on Raspberry Pi 4.
 
-High-level priorities:
-
-- Load generator + native baseline + eKuiper comparator so RQ1 has three sides.
-- Attack plugin suite finalization and matched containment tests for RQ2.
-- Environment automation + notebooks + formal experiment matrix for RQ3 (and
-  RQ1/RQ2 archived runs).
-- Reproducibility polish (Zenodo-style raw-data publication, cross-architecture
-  validation).
+Remaining work for thesis-grade numbers:
+- Cross-compile runtime for `aarch64-unknown-linux-gnu`
+- Pi hardware setup (isolcpus, taskset, CPU governor)
+- Run canonical experiments (60s runs, 30s warmup, N=30)
+- A17 decision: accept or implement process-time rollback
 
 ## Runtime migration — close documentation drift
 

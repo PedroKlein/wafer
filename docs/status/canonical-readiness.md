@@ -22,6 +22,66 @@ Legend:
 - 🔴 shakedown blocked or produced obviously wrong numbers
 - ⚪ shakedown not yet attempted
 
+## Summary matrix
+
+| Experiment | RQ | Status | Shakedown evidence | Canonical gaps | macOS confounders |
+|---|---|---|---|---|---|
+| E-Val-1 | All | 🟢 | `e-val-1/shakedown-macos-2026-07-22T16-19-29Z/` | Longer warmup (30 s), ADF test on Pi | Non-realtime OS jitter in p99 |
+| E-Perf-1 | RQ1 | 🟢 | `e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/` | Longer runs (60 s), native filter dispatch | Docker Desktop overhead on eKuiper |
+| E-Perf-2 | RQ1 | 🟢 | `e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/` | Same as E-Perf-1 | Docker Desktop overhead on eKuiper |
+| E-Perf-3 | RQ1 | 🟢 | `e-perf-3/shakedown-macos-2026-07-22T18-29-39Z/` | 60 s runs for statistical power | Localhost MQTT faster than cross-device |
+| E-Perf-4 | RQ1 | 🟢 | `e-perf-4/shakedown-macos-2026-07-21T20-08-17Z/` | Prime run, shuffle order, 60 s | Mach kernel scheduling noise at p999 |
+| E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86 Linux cross-run | N/A (inherently multi-platform) |
+| E-Perf-6 | RQ1 | 🟢 | `e-perf-6/shakedown-macos-2026-07-22T17-49-56Z/` | `/proc/pid/smaps_rollup` on Linux | macOS RSS includes shared libs |
+| E-Perf-7 | RQ1 | 🟢 | `e-perf-7/shakedown-macos-2026-07-22T18-01-09Z/` | Instruction-heavy plugin, true disable | M-series branch prediction hides cost |
+| E-Perf-8 | RQ1 | 🟢 | `e-perf-8/shakedown-macos-2026-07-22T17-49-56Z/` | 60 s, 30 s warmup | M-series ~10–30× faster than Pi |
+| E-Perf-9 | RQ1 | 🟢 | `e-perf-9/shakedown-macos-2026-07-22T18-56-42Z/` | `drop_caches` on Linux for true cold | macOS page cache not purgeable w/o sudo |
+| E-Backpressure | RQ1 | 🟢 | `e-backpressure/shakedown-macos-2026-07-22T18-51-59Z/` | Longer burst windows | Pipeline never saturates on M-series |
+| E-Iso-1 | RQ2 | 🟢 | `e-iso-1/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack (minutes) | None significant |
+| E-Iso-2 | RQ2 | 🟢 | `e-iso-2/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack | None significant |
+| E-Iso-3 | RQ2 | 🟢 | `e-iso-3/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack | None significant |
+| E-Iso-4 | RQ2 | 🟢 | `e-iso-4/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack | None significant |
+| E-Iso-5 | RQ2 | 🟢 | `e-iso-5/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack | None significant |
+| E-Iso-6 | RQ2 | 🟢 | `e-iso-6/shakedown-macos-2026-07-22T16-44-43Z/` | Sustained attack | None significant |
+| E-Iso-7 | RQ2 | 🟢 | `e-iso-7/shakedown-macos-2026-07-22T16-59-31Z/` | Multi-minute sustained fault | None significant |
+| E-Iso-8 | RQ2 | 🟢 | `e-iso-8/shakedown-macos-2026-07-22T16-59-31Z/` | HdrHistogram sub-ms precision | Integer division in `/metrics` endpoint |
+| E-Swap-1 | RQ3 | 🟢 | `e-swap-1/shakedown-macos-2026-07-22T17-13-47Z/` | 50 swaps for p95 confidence | M-series faster than Pi |
+| E-Swap-2 | RQ3 | 🟢 | `e-swap-2/shakedown-macos-2026-07-22T17-13-47Z/` | Same as E-Swap-1 | None significant |
+| E-Swap-3 | RQ3 | 🟢 | `e-swap-3/shakedown-macos-2026-07-22T20-11-05Z/` | 30 runs per strategy | Docker Desktop overhead on eKuiper |
+| E-Swap-4 | RQ3 | 🟢 | `e-swap-4/shakedown-macos-2026-07-22T17-15-59Z/` | Higher burst rate on Pi | Pipeline never saturates on M-series |
+| E-Swap-5 | RQ3 | 🟡 | `e-swap-5/shakedown-macos-2026-07-22T17-27-47Z/` | A17: process-time rollback | None significant |
+| E-Swap-6 | RQ3 | 🟢 | `e-swap-6/shakedown-macos-2026-07-22T17-13-47Z/` | Phase timing at Pi speed | AOT compile phase larger on ARM |
+| E-Density-1 | All | 🟢 | `e-density-1/binary-sizes.csv` | None (static measurement) | None (portable) |
+
+## Cross-cutting readiness
+
+### macOS-vs-Linux confounders
+
+| Confounder | Impact | Mitigation for canonical runs |
+|---|---|---|
+| **Docker Desktop overhead** | eKuiper runs inside Docker Desktop VM on macOS, adding ~0.5–1 ms latency vs native Linux Docker. Inflates eKuiper numbers relative to WAFER. | On Pi: eKuiper runs in native Docker (no VM layer). Report Docker version. |
+| **Mach kernel scheduling** | macOS does not support `SCHED_FIFO`, `isolcpus`, or `taskset`. Background processes (Spotlight, Time Machine, WindowServer) inject jitter at p999. | On Pi: `isolcpus=2,3` + `taskset -c 2` for SUT; `taskset -c 3` for loadgen. Pin CPU governor to `performance`. |
+| **Memory reporting (`ps` vs `/proc`)** | macOS `ps -o rss=` includes shared library pages counted once per framework. Over-reports absolute RSS. Per-hop *delta* is valid because shared libs don't grow with depth. | On Pi: use `/proc/<pid>/smaps_rollup` Private_Dirty for accurate per-process RSS. |
+| **Page cache behavior** | macOS Unified Buffer Cache doesn't support `drop_caches`. Cold-start measurements (E-Perf-9) rely on binary rebuild as a proxy for cache invalidation. | On Pi: `echo 3 > /proc/sys/vm/drop_caches` before cold runs. |
+| **MQTT localhost latency** | macOS mosquitto on localhost has lower latency than cross-device MQTT on Pi (USB Ethernet + kernel network stack). | On Pi: loadgen on separate device or isolated core. Report network topology. |
+
+### What needs to change to book Pi time
+
+1. **Cross-compile the runtime**: `cargo build --release --target aarch64-unknown-linux-gnu` with musl or glibc toolchain. Plugins are already `wasm32-wasip2` (portable).
+2. **Linux memory sampler**: Replace `ps -o rss=` with `/proc/<pid>/smaps_rollup` reader in the shakedown scripts.
+3. **CPU isolation**: Boot Pi with `isolcpus=2,3` kernel parameter. Run SUT on core 2, loadgen on core 3.
+4. **Longer runs**: Bump `total_messages` from 5000→60000 and `warmup_secs` from 1→30 for canonical statistical power (N=30 runs × 60s each).
+5. **eKuiper native Docker**: Verify `lfedge/ekuiper:2.1.0-alpine` runs on `linux/arm64` without emulation.
+6. **HdrHistogram sub-ms precision**: The `/metrics` endpoint uses integer ms. For E-Iso-8 canonical, export raw histogram buckets from the Prometheus scrape.
+
+### A16/A17/A18 impact on canonical RQ claims
+
+| Gap | Impact | RQ claim modification |
+|---|---|---|
+| **A16** (WASI async panic) | CLOSED. Fixed in commit `40ab46b`. | None — regression test covers this. |
+| **A17** (process-time rollback) | OPEN. `E-Swap-5` shows runtime survives but does not auto-rollback to v1 after process-time traps. | RQ3 claim downgrades from "rollback on any failure" to "rollback on init-time failure; process-time failures are contained but require manual intervention." |
+| **A18** (not filed) | N/A | N/A |
+
 ## Experiments
 
 ### E-Perf-4 — per-hop overhead × payload size (P2.1)

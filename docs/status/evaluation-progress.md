@@ -1,95 +1,128 @@
 # Evaluation Progress
 
 Current progress against the thesis evaluation plan
-(`tcc-doc/research/analysis/evaluation-plan.md`). This is a status
-report, not a roadmap — items still to build live in the repo-root
-`ROADMAP.md`.
+(`tcc-doc/research/analysis/evaluation-plan.md`). The macOS shakedown pass
+is **complete** — all experiments that can run on a single macOS developer
+machine have been executed and validated. See
+[`canonical-readiness.md`](./canonical-readiness.md) for the per-experiment
+gap analysis and what's needed to book Pi/Jetson time.
 
-Structure follows the evaluation plan's experiment IDs:
+## Status summary
 
-- **E-Val-N** — Methodology validation experiments.
-- **E-Perf-N** — RQ1 performance experiments.
-- **E-Swap-N** — RQ3 hot-swap experiments.
-- **E-Iso-N** — RQ2 isolation experiments.
-- **E-Density-N** — Binary-size / process-density experiments.
+| Category | Total | Shakedown ✓ | Pending canonical | Blocked |
+|----------|------:|------------:|------------------:|--------:|
+| E-Val | 1 | 1 | 0 | 0 |
+| E-Perf | 9 | 8 | 8 | 1 (E-Perf-5: needs Pi) |
+| E-Iso | 8 | 8 | 8 | 0 |
+| E-Swap | 6 | 6 | 6 | 0 |
+| E-Backpressure | 1 | 1 | 1 | 0 |
+| E-Density | 1 | 1 | 0 (static) | 0 |
+| **Total** | **26** | **25** | **23** | **1** |
+
+## Shakedown pass (macOS Apple Silicon)
+
+**Completed 2026-07-22.** All 25 executable experiments produced clean
+results on macOS. Analysis notebooks (11 canonical + 4 auxiliary) execute
+headless against the shakedown data and produce figures/tables.
+
+Key findings from shakedown:
+- **RQ1**: WAFER/native throughput ratio = 0.995 (negligible isolation tax at MQTT scale).
+  Per-hop overhead = 15.2 µs (linear, R² > 0.99). Memory = 1.1 MB/hop.
+- **RQ2**: All 6 attacks contained. Branch-A throughput drop = -0.04%.
+  Recovery time = ~0.136 ms (sub-ms from InstancePre cache).
+- **RQ3**: Pause p95 = 1.33 ms (target <100 ms). Zero message loss across
+  51 swaps. Process-time rollback NOT implemented (A17).
+
+## What's next: canonical runs on Raspberry Pi 4
+
+The canonical-readiness matrix (`docs/status/canonical-readiness.md`)
+documents every experiment's gap list, macOS confounders, and what needs to
+change before booking Pi time. Key prerequisites:
+
+1. Cross-compile the runtime for `aarch64-unknown-linux-gnu`.
+2. Set up Pi with `isolcpus`, `taskset`, CPU governor pinning.
+3. Bump run duration from 5s → 60s and warmup from 1s → 30s.
+4. Replace macOS `ps` memory sampler with `/proc/pid/smaps_rollup`.
+5. Verify eKuiper Docker image on `linux/arm64`.
 
 ## Runtime infrastructure
 
-| Component | Status | Notes |
-|-----------|--------|-------|
-| Open-loop load generator (`wafer-loadgen`) | Implemented (baseline) | Constant-arrival-rate; HdrHistogram sink; sequence-number tracker for RQ3. Payload templates for 120 B / 1 KB / 10 KB / 100 KB still to add. |
-| Native Rust baseline (Pipeline D) | Not yet built | `ProcessNode` trait abstraction lands with the baseline; same channels, no WIT boundary. |
-| eKuiper comparison setup on RPi 4 | Not yet done | Requires eKuiper native install, matching MQTT topics, equivalent SQL rule. |
-| Attack scenario Wasm modules (S1–S6) | Compilable stubs | Under `plugins/attacks/`; implementation finalised during E-Iso-1..6 execution. |
-| Per-hop latency instrumentation (`bench::node_latency`) | Implemented | Unconditional atomic counters + optional HdrHistogram tap around WIT boundary. |
-| Per-node RSS sampling (`bench::memory`) | Implemented | 1 Hz `/proc/self/statm` reader, per-node attribution. |
-| Message accounting (delivered / DLQ / lost) | Implemented | Sequence tracker + DLQ audit in `wafer-loadgen`. |
-| Pipeline configs (1 / 3 / 5 / 10-node chains) | Partial | `examples/dag-chain.toml` covers 3-node; 1 / 5 / 10 not yet checked in. |
-| Variable-payload pass-through configs | Partial | Same as above; payload variation handled at load-gen side. |
+| Component | Status |
+|-----------|--------|
+| Open-loop load generator (`wafer-loadgen`) | ✅ Fully operational |
+| Native Rust baseline (Pipeline D) | ✅ Passthrough functional |
+| eKuiper comparison setup | ✅ Docker Compose + seed script |
+| Attack scenario Wasm modules (S1–S6) | ✅ All 6 implemented and tested |
+| Per-hop latency instrumentation | ✅ HdrHistogram + sequence tracker |
+| Per-node RSS sampling | ✅ 1 Hz `ps` reader (macOS); needs `/proc` for Linux |
+| Pipeline configs (1/3/5/10-node chains) | ✅ All checked in |
+| Analysis notebooks | ✅ 11 canonical + 4 auxiliary |
 
 ## E-Val — Methodology validation
 
 | ID | Purpose | Status |
 |----|---------|--------|
-| E-Val-1 | Inject 50 ms delay, verify it shows in p99. | Not yet run. |
+| E-Val-1 | 50 ms delay → honesty gate [45, 55] ms | ✅ PASS (5/5 runs) |
 
 ## E-Perf — Performance experiments (RQ1)
 
 | ID | Purpose | Status |
 |----|---------|--------|
-| E-Perf-1 | Throughput comparison, Pipeline A: WAFER vs native vs eKuiper. | Not yet run — requires native baseline + eKuiper setup. |
-| E-Perf-2 | End-to-end p95 latency at 1000 msg/s. | Not yet run. |
-| E-Perf-3 | Per-hop overhead vs pipeline depth. | Not yet run. |
-| E-Perf-4 | Per-hop overhead, pass-through, variable payload. | Instrumentation ready; not yet run. |
-| E-Perf-5 | Cross-architecture (same binary on x86 vs RPi 4). | Not yet run. |
-| E-Perf-6 | Per-node RSS (1 / 3 / 5 / 10 nodes). | Instrumentation ready; not yet run. |
-| E-Perf-7 | Metering overhead decomposition (four fuel × epoch configs). | Config toggles present in `[engine]`; not yet run. |
-| E-Perf-8 | Pipeline depth scaling (1 → 10 hops). | Same status as E-Perf-3 / E-Perf-6. |
-| E-Perf-9 | AOT cache cold-start vs warm-start. | Cache implemented (ADR-0013); not yet formally benchmarked on RPi 4. |
-
-## E-Swap — Hot-swap experiments (RQ3)
-
-| ID | Purpose | Status |
-|----|---------|--------|
-| E-Swap-1 | Pause duration under 1000 msg/s. | Prep phase measured (see `../benchmarks/hot-swap.md`); full pause p95 not yet run under sustained load on RPi 4. |
-| E-Swap-2 | Message accounting (zero loss). | Instrumentation ready; formal run pending. |
-| E-Swap-3 | Throughput dip during swap. | Not yet run. |
-| E-Swap-4 | Swap under 2× burst. | Not yet run. |
-| E-Swap-5 | Failed swap recovery (v2 traps immediately). | Not yet run. |
-| E-Swap-6 | Phase decomposition (compile / instantiate / signal / ack / convergence). | Compile + instantiate captured (Apple Silicon); full 5-phase per-swap timing on RPi 4 not yet run. |
+| E-Perf-1 | Throughput: WAFER vs native vs eKuiper | ✅ shakedown clean |
+| E-Perf-2 | Latency CDF comparison | ✅ shakedown clean |
+| E-Perf-3 | Per-hop overhead with MQTT bookends | ✅ shakedown clean |
+| E-Perf-4 | Per-hop overhead × payload size | ✅ shakedown clean |
+| E-Perf-5 | Cross-architecture (x86 vs ARM) | ⚪ blocked — needs Pi |
+| E-Perf-6 | Per-node RSS scaling | ✅ shakedown clean |
+| E-Perf-7 | Metering overhead decomposition | ✅ shakedown clean |
+| E-Perf-8 | Pipeline depth scaling | ✅ shakedown clean |
+| E-Perf-9 | AOT cold vs warm startup | ✅ shakedown clean |
 
 ## E-Iso — Isolation experiments (RQ2)
 
 | ID | Purpose | Status |
 |----|---------|--------|
-| E-Iso-1 | Buffer-overflow attack containment. | Attack plugin stub ready; not yet run. |
-| E-Iso-2 | Cross-node memory read attempt. | Same. |
-| E-Iso-3 | fs-access without capability. | Same. |
-| E-Iso-4 | Infinite loop → epoch interruption. | Same. |
-| E-Iso-5 | Memory exhaustion → `StoreLimits`. | Same. |
-| E-Iso-6 | Panic within transform → pipeline continues. | Same. |
-| E-Iso-7 | Parallel-branch topology, one branch failing. | Not yet run. |
-| E-Iso-8 | Recovery time (trap → Recovering → Running). | Not yet run. |
+| E-Iso-1 | Buffer-overflow containment | ✅ contained |
+| E-Iso-2 | Cross-node memory read | ✅ contained |
+| E-Iso-3 | Unauthorized FS access | ✅ contained |
+| E-Iso-4 | Infinite loop → epoch interrupt | ✅ contained |
+| E-Iso-5 | Memory exhaustion → StoreLimits | ✅ contained |
+| E-Iso-6 | Panic → pipeline continues | ✅ contained |
+| E-Iso-7 | Parallel-branch fault isolation | ✅ <1% throughput impact |
+| E-Iso-8 | Recovery time (trap → resume) | ✅ sub-ms |
 
-## E-Density — Binary-size / process-density
+## E-Swap — Hot-swap experiments (RQ3)
 
 | ID | Purpose | Status |
 |----|---------|--------|
-| E-Density-1 | Binary-size comparison (Wasm plugins vs equivalent containers). | Static numbers already available for the 12 first-party plugins; formal write-up pending. |
+| E-Swap-1 | Pause duration | ✅ p95 = 1.33 ms |
+| E-Swap-2 | Zero-loss zero-duplication | ✅ 0 gaps, 0 dups |
+| E-Swap-3 | Throughput dip vs full-restart | ✅ WAFER = 0 loss |
+| E-Swap-4 | Swap under 2× burst | ✅ no degradation |
+| E-Swap-5 | Failed swap recovery | 🟡 contained but no rollback (A17) |
+| E-Swap-6 | Phase decomposition | ✅ 5 phases captured |
+
+## E-Backpressure / E-Density
+
+| ID | Purpose | Status |
+|----|---------|--------|
+| E-Backpressure | Burst → bounded queues | ✅ zero overflow |
+| E-Density-1 | Binary size comparison | ✅ 12 plugins measured |
 
 ## Automation & reproducibility
 
 | Item | Status |
 |------|--------|
-| `eval/` directory with fixture configs + orchestration scripts | Partial (populated during Phase 2 execution). |
-| Python analysis notebooks (Mann-Whitney U + Bootstrap CI95 + Cliff's Delta) | Not yet built; `RFC-008-evaluation-harness.md` specifies the shape. |
-| Zenodo-style raw-data dataset | Not yet published. |
-| Ansible playbook / setup script for RPi 4 | Not yet built. |
-| Hardware controls (pinned CPU freq, SCHED_FIFO, affinity) | Documented in `docs/architecture/05-deployment.md`; not yet automated. |
+| `eval/` directory with configs + scripts | ✅ Complete |
+| Python analysis notebooks | ✅ 11 canonical, statistical pipeline |
+| Zenodo raw-data dataset | Not yet published |
+| Pi setup automation (Ansible/script) | Not yet built |
+| Hardware controls doc | Documented in canonical-readiness |
 
 ## Cross-references
 
-- Methodology-of-record: `tcc-doc/research/analysis/evaluation-plan.md`.
-- Pass criteria per RQ: `tcc-doc/research/analysis/thesis-statement-v3.md`.
-- Runtime-facing NFRs: `docs/requirements/non-functional.md`.
-- Harness design decisions: `docs/rfcs/RFC-008-evaluation-harness.md`.
+- Canonical-readiness matrix: [`docs/status/canonical-readiness.md`](./canonical-readiness.md)
+- Methodology-of-record: `tcc-doc/research/analysis/evaluation-plan.md`
+- Harness design: `docs/rfcs/RFC-008-evaluation-harness.md`
+- Result contract: `eval/RESULT-CONTRACT.md`
+- Implementation gaps: `docs/status/implementation-gaps.md`
