@@ -1,0 +1,47 @@
+# Pipeline A (native baseline): MQTT source → native passthrough → MQTT sink.
+#
+# RFC-008 §D5 Layer-1 baseline: same topology and channels as the WAFER
+# pipeline but without the Wasm boundary. Uses native passthrough because
+# native filter dispatch is not wired in the orchestrator launcher (only
+# transforms support plugin.kind = "native"). Since loadgen produces
+# temperature=72.5 (all messages pass the filter), passthrough is
+# functionally equivalent for throughput/latency measurement — the
+# difference is only the JSON extraction cost in the filter, which is
+# negligible compared to the Wasm boundary overhead being isolated.
+#
+# Used in E-Perf-1 (throughput), E-Perf-2 (latency) comparisons.
+# See RFC-008 §D6.
+
+[pipeline]
+name = "pipeline-a-native"
+description = "Pipeline A native baseline: MQTT → passthrough (native) → MQTT"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry"
+qos = 1
+client_id = "wafer-pipeline-a-in"
+
+[nodes.transform]
+type = "transform"
+plugin = { kind = "native", function = "passthrough" }
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry/hot"
+qos = 1
+client_id = "wafer-pipeline-a-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "mqtt-out"

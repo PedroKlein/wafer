@@ -1,0 +1,42 @@
+# E-Swap-3: MQTT pipeline with pass-through transform for hot-swap measurement.
+# Same topology as Pipeline A but uses a swappable transform instead of filter.
+# API enabled for hot-swap REST calls.
+
+[pipeline]
+name = "e-swap-3-hotswap"
+description = "E-Swap-3: MQTT → pass-through (v1, swappable) → MQTT"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry"
+qos = 1
+client_id = "wafer-swap3-in"
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
+plugin_version = "v1"
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry/hot"
+qos = 1
+client_id = "wafer-swap3-out"
+
+[api]
+enabled = true
+bind = "127.0.0.1:9090"
+
+[[edges]]
+from = "mqtt-in"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "mqtt-out"

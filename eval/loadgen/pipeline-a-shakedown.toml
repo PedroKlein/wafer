@@ -1,0 +1,11 @@
+# Pipeline A loadgen profile: 1000 msg/s steady, 10s per run.
+# Drives E-Perf-1/E-Perf-2 shakedown (30 runs × 3 systems).
+# Short duration keeps the total experiment time manageable on macOS.
+
+[loadgen]
+rate = 1000
+duration_secs = 10
+warmup_secs = 1
+topic = "wafer/telemetry"
+payload_template = "telemetry-120b"
+profile = "steady"

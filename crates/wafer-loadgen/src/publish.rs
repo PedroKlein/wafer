@@ -474,7 +474,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         let ts = now_ns();
         let payload_vec: Vec<u8> = payload_template.map_or_else(
             || format!(
-                r#"{{"ts":{ts},"seq":{seq},"device_id":"bench","temperature":42.5,"pad":"{padding}"}}"#
+                r#"{{"ts":{ts},"seq":{seq},"device_id":"bench","temperature":72.5,"pad":"{padding}"}}"#
             )
             .into_bytes(),
             |tpl| tpl.render(ts, seq),

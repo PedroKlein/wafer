@@ -71,9 +71,9 @@ docker run --rm --network wafer-ekuiper_default eclipse-mosquitto:2 \
 # Terminal B — publish two messages, one filtered, one passing
 docker run --rm --network wafer-ekuiper_default eclipse-mosquitto:2 sh -c '
     mosquitto_pub -h mosquitto -t wafer/telemetry \
-        -m "{\"sequence\":1,\"intended_ns\":100,\"temperature\":30}"
+        -m "{\"seq\":1,\"ts\":100,\"temperature\":30}"
     mosquitto_pub -h mosquitto -t wafer/telemetry \
-        -m "{\"sequence\":2,\"intended_ns\":200,\"temperature\":80}"'
+        -m "{\"seq\":2,\"ts\":200,\"temperature\":80}"'
 ```
 
 Terminal A should show only the `temperature=80` message.
@@ -81,7 +81,7 @@ Terminal A should show only the `temperature=80` message.
 Actual observed during P1.4 shakedown:
 
 ```
-{"intended_ns":200,"sequence":2,"temperature":80}
+{"ts":200,"seq":2,"temperature":80}
 ```
 
 The `temperature=30` record is correctly dropped by the filter; the

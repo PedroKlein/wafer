@@ -1,0 +1,45 @@
+# Pipeline A (WAFER): MQTT source → Wasm threshold-filter → MQTT sink.
+#
+# Mirrors eKuiper's Pipeline A semantics: pass messages where temperature > 50.
+# Driven by wafer-loadgen (payload template telemetry-120b, temperature=72.5).
+# Used in E-Perf-1 (throughput), E-Perf-2 (latency), E-Swap-3 comparisons.
+# See RFC-008 §D6.
+
+[pipeline]
+name = "pipeline-a-wafer"
+description = "Pipeline A: MQTT → threshold-filter (Wasm) → MQTT"
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry"
+qos = 1
+client_id = "wafer-pipeline-a-in"
+
+[nodes.filter]
+type = "filter"
+plugin = "../../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
+
+[nodes.filter.config]
+field = "temperature"
+min = 50.0
+max = 99999.0
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry/hot"
+qos = 1
+client_id = "wafer-pipeline-a-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "mqtt-out"

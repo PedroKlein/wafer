@@ -439,7 +439,7 @@ mod tests {
         let intended = 42_000_000_000_u64;
         let receive = intended + 250_000; // 250 µs
         let payload = format!(
-            r#"{{"ts":{intended},"seq":7,"device_id":"bench","temperature":42.5,"pad":"xxx"}}"#
+            r#"{{"ts":{intended},"seq":7,"device_id":"bench","temperature":72.5,"pad":"xxx"}}"#
         );
         let mut rec = LatencyRecorder::new();
         let outcome = rec.record_json(payload.as_bytes(), receive);

@@ -152,17 +152,20 @@ impl FromStr for PayloadTemplate {
 fn render_telemetry_120b(ts_ns: u64, seq: u64) -> Vec<u8> {
     // Pipeline A schema exactly: {device_id, temperature, humidity, ts, seq}.
     // No pad field — size is achieved by DEVICE_ID length.
+    // Temperature 72.5 ensures messages pass eKuiper's `WHERE temperature > 50`
+    // filter in Pipeline A comparator experiments (E-Perf-1/2, E-Swap-3).
     format!(
-        r#"{{"device_id":"{DEVICE_ID}","temperature":42.5,"humidity":37.2,"ts":{ts_ns},"seq":{seq}}}"#
+        r#"{{"device_id":"{DEVICE_ID}","temperature":72.5,"humidity":37.2,"ts":{ts_ns},"seq":{seq}}}"#
     )
     .into_bytes()
 }
 
 fn render_generic(tpl: PayloadTemplate, ts_ns: u64, seq: u64) -> Vec<u8> {
-    // Schema: telemetry + `pad` field. `pad` is a hex-encoded deterministic
+    // Schema: telemetry + `pad` field. Temperature matches Pipeline A filter.
+    // `pad` is a hex-encoded deterministic
     // stream that fills the remainder to reach exact target_size().
     let prefix = format!(
-        r#"{{"device_id":"{DEVICE_ID}","temperature":42.5,"humidity":37.2,"ts":{ts_ns},"seq":{seq},"pad":""#
+        r#"{{"device_id":"{DEVICE_ID}","temperature":72.5,"humidity":37.2,"ts":{ts_ns},"seq":{seq},"pad":""#
     );
     let suffix = "\"}";
     let base_len = prefix.len() + suffix.len();
@@ -204,13 +207,13 @@ fn deterministic_pad_hex(template_name: &str, hex_chars: usize) -> String {
 // mismatch) to update. Do not paste values without verifying the test.
 // -----------------------------------------------------------------------------
 const TELEMETRY_120B_FINGERPRINT: &str =
-    "d39c713ac4c27e23dc8ffed24d28ef4f8cd5ffb731ffa2cea29cb4765189ed54";
+    "fffb14064f8d7956b5ce410c8298ab5c511bd46e5dffcde8389975337a0e38d1";
 const GENERIC_1KB_FINGERPRINT: &str =
-    "b34447bd0a92c0481da43839eb2a62a8cacdac096d33995e8ae86234794cd17a";
+    "ed8e293d8fc536309a543c68c940dbf19b2d707c117d0f3e85b4329ecb62785c";
 const GENERIC_10KB_FINGERPRINT: &str =
-    "74c2bbd54a50bfa3425ef12772934d95f02ca058a3632d10c73edc5e71e605b0";
+    "2cf7734e4e53cf5326d617265115efa4d0bac7fc7a6260af1b140c3a3903ee40";
 const GENERIC_100KB_FINGERPRINT: &str =
-    "5504f0abd0e19f76d805cca6ae87538596826381101764fd880fa4c70704cce5";
+    "770ce4bf5ecf4bf2a6474149f19cf3458368701239ff84d125edad96aa0ab41b";
 
 // -----------------------------------------------------------------------------
 // Tests

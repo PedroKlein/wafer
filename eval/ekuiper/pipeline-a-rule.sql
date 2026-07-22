@@ -13,8 +13,8 @@
 -- SHARED=true so multiple rules can attach without duplicating the
 -- MQTT subscription.
 CREATE STREAM wafer_telemetry (
-    sequence   BIGINT,
-    intended_ns BIGINT,
+    seq        BIGINT,
+    ts         BIGINT,
     temperature FLOAT
 ) WITH (
     TYPE       = "mqtt",
@@ -24,8 +24,8 @@ CREATE STREAM wafer_telemetry (
 );
 
 -- Rule: temperature > 50 → publish to wafer/telemetry/hot.
--- Passes sequence + intended_ns through unchanged so the loadgen
--- subscriber can compute latency the same way it does against WAFER.
-SELECT sequence, intended_ns, temperature
+-- Passes ts + seq through unchanged so the loadgen subscriber can
+-- compute latency identically to the WAFER path.
+SELECT ts, seq, temperature
   FROM wafer_telemetry
   WHERE temperature > 50;
