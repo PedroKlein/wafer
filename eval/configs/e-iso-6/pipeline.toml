@@ -1,0 +1,35 @@
+# E-Iso-6: panic containment shakedown.
+#
+# Linear pipeline: bench-source → attack (panic) → bench-sink.
+# Attack calls panic!(). Under wasm32-wasip2 this compiles to `unreachable`.
+
+[pipeline]
+name = "e-iso-6-panic"
+description = "Panic attack in position 2 of 3-node linear pipeline"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 200
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = "../../../plugins/attacks/panic/target/wasm32-wasip2/release/wafer_attack_panic.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"

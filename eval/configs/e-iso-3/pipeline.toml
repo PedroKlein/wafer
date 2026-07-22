@@ -1,0 +1,35 @@
+# E-Iso-3: fs-access containment shakedown.
+#
+# Linear pipeline: bench-source → attack (fs-access) → bench-sink.
+# Attack attempts to read /etc/passwd without WASI FS capabilities.
+
+[pipeline]
+name = "e-iso-3-fs-access"
+description = "FS-access attack in position 2 of 3-node linear pipeline"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 200
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = "../../../plugins/attacks/fs-access/target/wasm32-wasip2/release/wafer_attack_fs_access.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"

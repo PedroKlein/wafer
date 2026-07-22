@@ -178,12 +178,45 @@ catches this at CI time.
 
 ⚪ shakedown pending.
 
-### E-Iso-1..6 — attack containment (P0.8 complete)
+### E-Iso-1..6 — attack containment shakedown (P4.1–P4.6)
 
-- **Status**: 🟢 runtime harness proven. `crates/wafer-core/tests/attack_containment.rs`
-  runs 6 in-process containment cases (buffer overflow, cross-read,
-  fs-access, infinite loop, memory exhaust, panic). Canonical Pi run
-  reruns the same tests + captures per-attack log fingerprints.
+- **Status**: 🟢 all 6 attacks contained on macOS.
+- **Shakedown**: `eval/results/e-iso-{1..6}/shakedown-macos-2026-07-22T16-44-43Z/`
+- **Configs**: `eval/configs/e-iso-{1..6}/pipeline.toml`
+- **Script**: `eval/scripts/run-e-iso-shakedown.sh --all`
+- **Notebook**: `eval/analysis/notebooks/06-fault-injection.ipynb`
+
+Topology: linear `bench-source (100 msg/s, 200 msgs)` → `attack-transform` → `bench-sink`.
+Channel buffer (1024) > total messages (200), so source never back-pressures.
+
+| Attack | E-Iso-N | Contained | Source Thr % | Attacker State | Other Healthy | Evidence |
+| ------ | ------- | --------- | ------------ | -------------- | ------------- | -------- |
+| buffer-overflow | 1 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-1/shakedown-macos-2026-07-22T16-44-43Z/` |
+| cross-read      | 2 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-2/shakedown-macos-2026-07-22T16-44-43Z/` |
+| fs-access       | 3 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-3/shakedown-macos-2026-07-22T16-44-43Z/` |
+| infinite-loop   | 4 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-4/shakedown-macos-2026-07-22T16-44-43Z/` |
+| memory-exhaust  | 5 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-5/shakedown-macos-2026-07-22T16-44-43Z/` |
+| panic           | 6 | ✓ | 100.0 | Error/Recovering | ✓ | `eval/results/e-iso-6/shakedown-macos-2026-07-22T16-44-43Z/` |
+
+**What this proves.**
+
+Every attack traps on every `process()` call (200/200). The source emits
+all 200 messages at the configured 100 msg/s rate without backpressure
+(channel buffer 1024 >> 200 messages). The attack node transitions to
+Error/Recovering on each trap and successfully re-instantiates from
+`InstancePre` cache. The runtime does NOT panic and shuts down gracefully
+after source EOF propagates.
+
+**What's NOT proven yet.**
+
+- Infinite-loop is classified as `Unrecoverable` (not `TimedOut`) by the
+  runtime because wasmtime's error Display doesn't surface "epoch" in the
+  message. The harness-level test `attack_containment.rs` accepts both
+  classifications — the containment property holds regardless.
+- Pi canonical numbers (latency-to-recover, throughput under sustained
+  attack) require the canonical-runs plan.
+- Source throughput % is 100% by construction (buffer >> messages) — the
+  real stress test requires sustained attack for minutes, not 2 seconds.
 
 ### E-Density-2..3, E-Mig-1..3 — not yet started
 

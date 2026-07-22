@@ -1,0 +1,36 @@
+# E-Iso-1: buffer-overflow containment shakedown.
+#
+# Linear pipeline: bench-source → attack (buffer-overflow) → bench-sink.
+# Attack traps on every process() call via OOB write. Proves source throughput
+# is unaffected by downstream trap storm (isolation invariant).
+
+[pipeline]
+name = "e-iso-1-buffer-overflow"
+description = "Buffer-overflow attack in position 2 of 3-node linear pipeline"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 200
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = "../../../plugins/attacks/buffer-overflow/target/wasm32-wasip2/release/wafer_attack_buffer_overflow.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"
