@@ -1,0 +1,44 @@
+# E-Iso-8: recovery time measurement.
+#
+# Linear pipeline: bench-source → panic-attack → bench-sink.
+# Each trap triggers Recovering → Running; the per-node recovery_duration
+# histogram records each cycle. 500 messages at 200 msg/s produces enough
+# recovery samples for p50/p99 computation.
+
+[pipeline]
+name = "e-iso-8-recovery"
+description = "Linear pipeline with panic attack for recovery-time histogram population"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 200.0
+total_messages = 500
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = "../../../plugins/attacks/panic/target/wasm32-wasip2/release/wafer_attack_panic.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[api]
+enabled = true
+bind = "127.0.0.1:8099"
+
+[metrics]
+enabled = true
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"

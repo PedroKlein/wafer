@@ -1,0 +1,51 @@
+# E-Iso-7: parallel-branch fault isolation (diamond topology).
+#
+# Diamond: source → {branch_a (pass-through), branch_b (panic)} → sink.
+# When branch_b traps, branch_a throughput must drop <1% vs a control run
+# with pass-through in both branches. Proves task-per-node isolation across
+# parallel DAG branches.
+
+[pipeline]
+name = "e-iso-7-diamond-attack"
+description = "Diamond topology: healthy branch-A vs panic attack branch-B, fan-in at sink"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 0
+payload_size = 128
+
+# Healthy branch — receives and forwards all messages
+[nodes.branch_a]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+# Attack branch — traps on every process() call
+[nodes.branch_b]
+type = "transform"
+plugin = "../../../plugins/attacks/panic/target/wasm32-wasip2/release/wafer_attack_panic.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "branch_a"
+
+[[edges]]
+from = "source"
+to = "branch_b"
+
+[[edges]]
+from = "branch_a"
+to = "sink"
+
+[[edges]]
+from = "branch_b"
+to = "sink"

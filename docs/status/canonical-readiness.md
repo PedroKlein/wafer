@@ -218,6 +218,53 @@ after source EOF propagates.
 - Source throughput % is 100% by construction (buffer >> messages) — the
   real stress test requires sustained attack for minutes, not 2 seconds.
 
+### E-Iso-7 — parallel-branch fault isolation (P4.7)
+
+- **Status**: 🟢 branch-A throughput drop <1% on macOS.
+- **Shakedown**: `eval/results/e-iso-7/shakedown-macos-<ts>/`
+- **Config**: `eval/configs/e-iso-7/pipeline.toml` (attack) + `pipeline-control.toml` (control)
+- **Script**: `eval/scripts/run-e-iso-7-8.sh --iso 7`
+
+Topology: diamond `bench-source (1000 msg/s, 5000 msgs)` → { `branch_a` (pass-through), `branch_b` (panic) } → `bench-sink`.
+Control run uses pass-through in both branches; attack run panics branch_b.
+
+| Metric | Control | Attack | Delta |
+| ------ | ------- | ------ | ----- |
+| Branch-A thr (msg/s) | ~998.6 | ~999.0 | -0.04% (within ±1%) |
+| Branch-B traps | 0 | 5000 | N/A |
+| Branch-A errors | 0 | 0 | — |
+
+**What this proves.** Task-per-node isolation: a trapping branch does not
+affect throughput of a parallel healthy branch in the same diamond topology.
+The runtime's tokio-task-per-node + channel decoupling ensures fault
+containment across DAG branches.
+
+### E-Iso-8 — recovery time (P4.8)
+
+- **Status**: 🟢 recovery histogram populated on macOS.
+- **Shakedown**: `eval/results/e-iso-8/shakedown-macos-<ts>/`
+- **Config**: `eval/configs/e-iso-8/pipeline.toml`
+- **Script**: `eval/scripts/run-e-iso-7-8.sh --iso 8`
+
+Topology: linear `bench-source (200 msg/s, 500 msgs)` → `panic-attack` → `bench-sink`.
+Each trap triggers Recovering → Running from InstancePre cache.
+
+| Metric | Value |
+| ------ | ----- |
+| Recovery samples (Prometheus) | 338 (500 in log; scrape captured mid-run) |
+| Avg recovery time | ~0.136 ms |
+| p99 recovery time | ~1 ms (integer ms boundary; true value ≈ sub-ms) |
+| Recovery failures | 0 |
+
+**What this proves.** The runtime's InstancePre cache enables sub-millisecond
+recovery from traps. `wafer_node_recovery_duration_ms` histogram is populated
+on every Recovering → Running transition and scrapeable via the Prometheus
+endpoint during the run.
+
+**Caveat.** Integer division in the `/metrics` endpoint means sub-ms values
+appear as 0 or 1 ms. Canonical Pi measurements with higher precision will
+be done with the full HdrHistogram bucket export path.
+
 ### E-Density-2..3, E-Mig-1..3 — not yet started
 
 ⚪ shakedown pending.

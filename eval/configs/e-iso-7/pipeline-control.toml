@@ -1,0 +1,48 @@
+# E-Iso-7 control: both branches use pass-through (no attack).
+#
+# Identical topology to the attack config but with pass-through in both
+# branches. Branch-A throughput here is the baseline for the <1% drop
+# assertion.
+
+[pipeline]
+name = "e-iso-7-diamond-control"
+description = "Diamond topology control: pass-through in both branches"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 5000
+warmup_messages = 0
+payload_size = 128
+
+[nodes.branch_a]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.branch_b]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "branch_a"
+
+[[edges]]
+from = "source"
+to = "branch_b"
+
+[[edges]]
+from = "branch_a"
+to = "sink"
+
+[[edges]]
+from = "branch_b"
+to = "sink"
