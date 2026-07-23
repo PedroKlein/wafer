@@ -23,6 +23,16 @@ runs=5
 config="eval/configs/pipeline-c-with-delay.toml"
 skip_build=0
 
+# Kill the last-launched runtime on Ctrl-C so orphaned wafer processes
+# don't hold onto BenchSource threads for the next invocation.
+_last_wafer_pid=""
+_cleanup_val() {
+    local rc=$?
+    [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
+    exit "$rc"
+}
+trap _cleanup_val EXIT INT TERM
+
 while [ $# -gt 0 ]; do
     case "$1" in
         --runs) runs="${2:?}"; shift 2 ;;
@@ -68,8 +78,15 @@ for i in $(seq -w 1 "$runs"); do
     cp "$config" "$run_dir/config.toml"
 
     _log "run $i / $runs"
+    # `|| true` is intentional: pipeline-c-with-delay terminates when the
+    # BenchSource emits its total_messages, causing a normal-but-non-zero
+    # exit code. Removing `|| true` would break `set -e`. Track the PID so
+    # the trap can kill orphans on Ctrl-C. See P-Followup-4.
     WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" \
-        >"$run_dir/stdout.log" 2>&1 || true
+        >"$run_dir/stdout.log" 2>&1 &
+    _last_wafer_pid=$!
+    wait "$_last_wafer_pid" || true
+    _last_wafer_pid=""
 
     if [ ! -f "$run_dir/latency.hdr" ]; then
         _log "  MISSING latency.hdr — recording as failure"

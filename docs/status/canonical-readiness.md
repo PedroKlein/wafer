@@ -27,8 +27,8 @@ Legend:
 | Experiment | RQ | Status | Shakedown evidence | Canonical gaps | macOS confounders |
 |---|---|---|---|---|---|
 | E-Val-1 | All | 🟢 | `e-val-1/shakedown-macos-2026-07-22T16-19-29Z/` | Longer warmup (30 s), ADF test on Pi | Non-realtime OS jitter in p99 |
-| E-Perf-1 | RQ1 | 🟢 | `e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/` | Longer runs (60 s), native filter dispatch | Docker Desktop overhead on eKuiper |
-| E-Perf-2 | RQ1 | 🟢 | `e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/` | Same as E-Perf-1 | Docker Desktop overhead on eKuiper |
+| E-Perf-1 | RQ1 | 🟡 | `e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/` | **A18 native filter dispatch (blocks apples-to-apples)**; longer runs (60 s) | Docker Desktop overhead on eKuiper |
+| E-Perf-2 | RQ1 | 🟡 | `e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/` | Same as E-Perf-1 (A18) | Docker Desktop overhead on eKuiper |
 | E-Perf-3 | RQ1 | 🟢 | `e-perf-3/shakedown-macos-2026-07-22T18-29-39Z/` | 60 s runs for statistical power | Localhost MQTT faster than cross-device |
 | E-Perf-4 | RQ1 | 🟢 | `e-perf-4/shakedown-macos-2026-07-21T20-08-17Z/` | Prime run, shuffle order, 60 s | Mach kernel scheduling noise at p999 |
 | E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86 Linux cross-run | N/A (inherently multi-platform) |

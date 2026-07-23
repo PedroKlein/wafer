@@ -85,8 +85,11 @@ pub async fn run_filter_loop(
             }
         };
 
-        // 4. Wasm call OUTSIDE select! — see transform.rs for the
-        // `block_in_place` rationale (A16).
+        // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
+        // `block_in_place` signals the multi-thread runtime that this worker
+        // is about to block synchronously, so it can migrate other tasks and
+        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
+        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
         let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));

@@ -21,12 +21,26 @@ eKuiper; per-hop <50 µs on Pi; per-node RSS <10 MB.
 | Metric | Shakedown result | Pass? | Notes |
 |--------|-----------------|-------|-------|
 | Throughput ratio (WAFER/eKuiper) | 0.905 | ✅ within 30% | MQTT dominates; Wasm boundary invisible |
-| Throughput ratio (WAFER/native) | 0.995 | ✅ | Isolation tax negligible at MQTT scale |
+| Throughput ratio (WAFER/native) | 0.995 | ⚠️ **NOT apples-to-apples** | See A18 below |
 | Latency p95 ratio (WAFER/eKuiper) | 1.45× | ✅ within 2× | Higher tails from Store+epoch reset |
 | Per-hop overhead | 15.2 µs/hop | TBD on Pi | macOS M-series; Pi expected 100–500 µs |
 | Per-node RSS | 1.1 MB/hop | ✅ <10 MB | macOS over-reports shared libs |
 | Depth scaling linearity | R² = 0.998 | ✅ | Overhead is additive, not multiplicative |
 | Metering overhead (fuel+epoch) | <5 µs at p50 | ✅ negligible | Pass-through plugin; instruction-heavy may differ |
+
+> **⚠️ A18 caveat on WAFER/native.** The native baseline in
+> `pipeline-a-native.toml` currently uses `NativeTransform::passthrough`,
+> not a `threshold_filter`, because native filter dispatch is not wired
+> (see `docs/status/implementation-gaps.md` A18). This means:
+>
+> - **WAFER** does: JSON decode + `temperature > 50` compare + forward.
+> - **native** does: byte forward (no decode, no compare).
+> - **eKuiper** does: JSON decode + `WHERE temperature > 50` + forward.
+>
+> The 0.995 ratio thus UNDER-STATES the isolation tax by the cost of one
+> JSON decode + one float compare (≤ 1 µs at MQTT scale). The
+> apples-to-apples comparison must land before canonical Pi runs. See
+> `plans/eval-followups.md` P-Followup-1.
 
 **Key finding**: At MQTT-bookend scale (~1 ms round-trip), the Wasm
 boundary overhead (~15 µs) is invisible in throughput numbers. The

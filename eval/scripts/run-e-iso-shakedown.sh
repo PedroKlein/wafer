@@ -19,6 +19,20 @@ cd "$REPO_ROOT"
 WAFER_BIN="target/release/wafer"
 [ -x "$WAFER_BIN" ] || { echo "ERROR: runtime binary missing at $WAFER_BIN" >&2; exit 3; }
 
+# Kill any wafer-runtime child on Ctrl-C or unexpected exit. Without this,
+# a Ctrl-C between iterations leaves the last runtime + its BenchSource
+# thread alive on the port, and the next run either 409-conflicts or writes
+# results into a stale process. See P-Followup-4.
+_wafer_pids=()
+_cleanup_iso() {
+    local rc=$?
+    for p in "${_wafer_pids[@]:-}"; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+    done
+    exit "$rc"
+}
+trap _cleanup_iso EXIT INT TERM
+
 ALL_ATTACKS="buffer-overflow cross-read fs-access infinite-loop memory-exhaust panic"
 
 # Maps attack name to iso number (bash 3.2 compatible)
@@ -75,8 +89,14 @@ for attack in $attacks; do
 
     # Run the pipeline — capture all output
     start_epoch=$(date +%s)
+    # `|| true` on `wait` is intentional: attack plugins deliberately trap
+    # and cause the runtime to exit non-zero. Removing it would break
+    # `set -e`. The trap above kills the child on Ctrl-C. See P-Followup-4.
     WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" --no-api \
-        >"$run_dir/stdout.log" 2>&1 || true
+        >"$run_dir/stdout.log" 2>&1 &
+    wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
+    wait "$wafer_pid" || true
     end_epoch=$(date +%s)
     duration=$((end_epoch - start_epoch))
 
