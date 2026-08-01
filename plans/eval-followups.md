@@ -159,15 +159,15 @@ Decide before canonical Pi runs.
 narrowly scoped to `wait` (with explicit reasoning comment).
 
 **Remaining scripts to harden:**
-- `run-e-perf-1-2-shakedown.sh`
-- `run-e-swap-shakedown.sh`
-- `run-e-swap-3-shakedown.sh`
-- `run-e-perf-3-shakedown.sh`
-- `run-e-perf-6-8-shakedown.sh`
-- `run-e-perf-7-shakedown.sh`
-- `run-e-bp-perf9-shakedown.sh`
-- `run-e-iso-7-8.sh`
-- `run-e-perf-4-shakedown.sh`
+- ~~`run-e-perf-1-2-shakedown.sh`~~ — done (trap `_cleanup_perf12`, ARRAY pattern)
+- ~~`run-e-swap-shakedown.sh`~~ — done (trap `_cleanup_swap`, SCALAR pattern)
+- ~~`run-e-swap-3-shakedown.sh`~~ — done (trap `_cleanup_swap3`, ARRAY pattern)
+- ~~`run-e-perf-3-shakedown.sh`~~ — done (trap `_cleanup_perf3`, merged with mosquitto)
+- ~~`run-e-perf-6-8-shakedown.sh`~~ — done (trap `_cleanup_perf68`, ARRAY pattern)
+- ~~`run-e-perf-7-shakedown.sh`~~ — done (trap `_cleanup_perf7`, SCALAR/foreground)
+- ~~`run-e-bp-perf9-shakedown.sh`~~ — done (trap `_cleanup_bpperf9`, merged with mosquitto)
+- ~~`run-e-iso-7-8.sh`~~ — done (trap `_cleanup_iso78`, SCALAR pattern)
+- ~~`run-e-perf-4-shakedown.sh`~~ — done (trap `_cleanup_perf4`, SCALAR/foreground)
 - `run-e-val-1-shakedown.sh` — done
 - `run-e-iso-shakedown.sh` — done
 

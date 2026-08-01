@@ -15,6 +15,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Kill any wafer-runtime child on Ctrl-C or unexpected exit. Without this,
+# an interrupt during the swap-at-t=10s wait leaves the runtime holding
+# the MQTT subscriptions, breaking subsequent runs.
+_wafer_pids=()
+_cleanup_swap3() {
+    local rc=$?
+    for p in "${_wafer_pids[@]:-}"; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+    done
+    exit "$rc"
+}
+trap _cleanup_swap3 EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -107,6 +120,7 @@ _run_hotswap() {
         --swap-output-dir "$out_dir" \
         >"$out_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
     sleep 2
 
     if ! kill -0 "$wafer_pid" 2>/dev/null; then
@@ -165,6 +179,7 @@ _run_restart() {
     "$WAFER_BIN" --config "$REPO_ROOT/eval/configs/e-swap/pipeline-swap3-mqtt.toml" --no-api \
         >"$out_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
     sleep 2
 
     # Subscriber (runs for full duration)
@@ -194,6 +209,7 @@ _run_restart() {
     "$WAFER_BIN" --config "$REPO_ROOT/eval/configs/e-swap/pipeline-swap3-mqtt.toml" --no-api \
         >>"$out_dir/stdout.log" 2>&1 &
     wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
     local restart_ns; restart_ns=$(_now_ns)
     printf '%s\n' "$restart_ns" > "$out_dir/restart_timestamp_ns.txt"
 

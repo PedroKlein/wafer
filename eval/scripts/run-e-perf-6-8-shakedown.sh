@@ -16,6 +16,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Kill any wafer-runtime child on Ctrl-C or unexpected exit. Without this,
+# an interrupt during memory sampling leaves the runtime + sampler alive,
+# skewing RSS numbers for subsequent runs.
+_wafer_pids=()
+_cleanup_perf68() {
+    local rc=$?
+    for p in "${_wafer_pids[@]:-}"; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+    done
+    exit "$rc"
+}
+trap _cleanup_perf68 EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -107,6 +120,7 @@ _run_one() {
     WAFER_BENCH_OUTPUT_DIR="$out_6" "$WAFER_BIN" --config "$cfg" \
         >"$out_6/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
 
     # Memory sampler: 1 Hz ps polling in background subshell
     printf 'sample_ns,rss_kb,vsz_kb\n' > "$out_6/memory.csv"

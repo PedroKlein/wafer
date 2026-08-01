@@ -22,6 +22,16 @@ cd "$REPO_ROOT"
 WAFER_BIN="target/release/wafer"
 [ -x "$WAFER_BIN" ] || { echo "ERROR: runtime binary missing at $WAFER_BIN" >&2; exit 3; }
 
+# Kill the last-launched runtime on Ctrl-C so orphaned wafer processes
+# don't hold the API port for the next invocation.
+_last_wafer_pid=""
+_cleanup_swap() {
+    local rc=$?
+    [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
+    exit "$rc"
+}
+trap _cleanup_swap EXIT INT TERM
+
 V1_PLUGIN="$REPO_ROOT/plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
 V2_PLUGIN="$REPO_ROOT/plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
 V2_PANICS="$REPO_ROOT/plugins/pass-through-v2-panics/target/wasm32-wasip2/release/wafer_pass_through_v2_panics.wasm"
@@ -101,10 +111,12 @@ run_unified() {
     WAFER_BENCH_OUTPUT_DIR="$out_dir" "$WAFER_BIN" --config "$config" \
         >"$out_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _last_wafer_pid=$wafer_pid
 
     if ! wait_api_ready; then
         _log "  BLOCKER: API did not become ready"
         kill "$wafer_pid" 2>/dev/null; wait "$wafer_pid" 2>/dev/null || true
+        _last_wafer_pid=""
         fail_count=$((fail_count+1)); return
     fi
     _log "  API ready, starting swap loop"
@@ -168,8 +180,10 @@ except:
 
     _log "  Swap loop done: $swap_count swaps"
 
-    # Let pipeline finish naturally
+    # Pipeline exits non-zero when BenchSource exhausts total_messages;
+    # this is expected completion, not a crash.
     wait "$wafer_pid" 2>/dev/null || true
+    _last_wafer_pid=""
 
     # Check for Tokio panics
     if grep -q "thread.*panicked" "$out_dir/stdout.log" 2>/dev/null; then
@@ -394,10 +408,12 @@ run_burst() {
     WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" \
         >"$run_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _last_wafer_pid=$wafer_pid
 
     if ! wait_api_ready; then
         _log "  BLOCKER: API did not become ready"
         kill "$wafer_pid" 2>/dev/null; wait "$wafer_pid" 2>/dev/null || true
+        _last_wafer_pid=""
         fail_count=$((fail_count+1)); return
     fi
 
@@ -449,7 +465,10 @@ except:
         sleep 2
     done
 
+    # Pipeline exits non-zero when BenchSource exhausts total_messages;
+    # this is expected completion, not a crash.
     wait "$wafer_pid" 2>/dev/null || true
+    _last_wafer_pid=""
 
     if grep -q "thread.*panicked" "$run_dir/stdout.log" 2>/dev/null; then
         _log "  BLOCKER: Tokio-level panic"
@@ -541,10 +560,12 @@ run_rollback() {
     WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" \
         >"$run_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _last_wafer_pid=$wafer_pid
 
     if ! wait_api_ready; then
         _log "  BLOCKER: API did not become ready"
         kill "$wafer_pid" 2>/dev/null; wait "$wafer_pid" 2>/dev/null || true
+        _last_wafer_pid=""
         fail_count=$((fail_count+1)); return
     fi
 
@@ -598,7 +619,10 @@ run_rollback() {
     sleep 3
     # Graceful shutdown
     curl -sf -X POST "$API_BASE/api/v1/pipeline/shutdown" >/dev/null 2>&1 || true
+    # Pipeline exits non-zero after receiving shutdown signal while
+    # processing trap-recovery cycles; expected behavior.
     wait "$wafer_pid" 2>/dev/null || true
+    _last_wafer_pid=""
 
     if grep -q "thread.*panicked" "$run_dir/stdout.log" 2>/dev/null; then
         _log "  BLOCKER: Tokio-level panic"

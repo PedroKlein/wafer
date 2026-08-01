@@ -38,6 +38,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Preserve exit code on Ctrl-C. Wafer runs in foreground so the signal
+# propagates naturally; the trap exists for convention parity with other
+# shakedown scripts and to cleanly reap if future changes background it.
+_last_wafer_pid=""
+_cleanup_perf4() {
+    local rc=$?
+    [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
+    exit "$rc"
+}
+trap _cleanup_perf4 EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------

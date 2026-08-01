@@ -14,6 +14,19 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Kill any wafer-runtime child on Ctrl-C or unexpected exit. Without this,
+# an interrupt mid-run leaves the runtime + MQTT subscribers alive on ports,
+# causing bind conflicts on the next invocation.
+_wafer_pids=()
+_cleanup_perf12() {
+    local rc=$?
+    for p in "${_wafer_pids[@]:-}"; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+    done
+    exit "$rc"
+}
+trap _cleanup_perf12 EXIT INT TERM
+
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -110,6 +123,7 @@ _run_one() {
         "$WAFER_BIN" --config "$REPO_ROOT/eval/configs/pipeline-a-wafer.toml" --no-api \
             >"$perf1_dir/stdout.log" 2>&1 &
         wafer_pid=$!
+        _wafer_pids+=("$wafer_pid")
         sleep 1
         if ! kill -0 "$wafer_pid" 2>/dev/null; then
             _log "  [$system/$run_label] runtime died on startup"
@@ -119,6 +133,7 @@ _run_one() {
         "$WAFER_BIN" --config "$REPO_ROOT/eval/configs/pipeline-a-native.toml" --no-api \
             >"$perf1_dir/stdout.log" 2>&1 &
         wafer_pid=$!
+        _wafer_pids+=("$wafer_pid")
         sleep 1
         if ! kill -0 "$wafer_pid" 2>/dev/null; then
             _log "  [$system/$run_label] runtime died on startup"

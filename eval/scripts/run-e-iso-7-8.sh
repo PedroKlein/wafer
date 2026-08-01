@@ -16,6 +16,17 @@ cd "$REPO_ROOT"
 WAFER_BIN="target/release/wafer"
 [ -x "$WAFER_BIN" ] || { echo "ERROR: runtime binary missing at $WAFER_BIN" >&2; exit 3; }
 
+# Kill the last-launched runtime on Ctrl-C or unexpected exit. Without this,
+# an interrupt during the iso-8 recovery scrape leaves the runtime holding
+# the metrics port.
+_last_wafer_pid=""
+_cleanup_iso78() {
+    local rc=$?
+    [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
+    exit "$rc"
+}
+trap _cleanup_iso78 EXIT INT TERM
+
 isos=""
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -56,6 +67,8 @@ run_iso_7() {
     mkdir -p "$control_dir"
     cp "$config_control" "$control_dir/config.toml"
 
+    # Pipeline exits non-zero when BenchSource finishes; both branches are
+    # pass-through so this is expected normal completion.
     WAFER_BENCH_OUTPUT_DIR="$control_dir" "$WAFER_BIN" --config "$config_control" --no-api \
         >"$control_dir/stdout.log" 2>&1 || true
 
@@ -91,6 +104,8 @@ print(total)
     mkdir -p "$attack_dir"
     cp "$config_attack" "$attack_dir/config.toml"
 
+    # Pipeline exits non-zero: branch_b (panic attack) causes unrecoverable
+    # errors; runtime shuts down after BenchSource completes.
     WAFER_BENCH_OUTPUT_DIR="$attack_dir" "$WAFER_BIN" --config "$config_attack" --no-api \
         >"$attack_dir/stdout.log" 2>&1 || true
 
@@ -252,6 +267,7 @@ run_iso_8() {
     WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" \
         >"$run_dir/stdout.log" 2>&1 &
     wafer_pid=$!
+    _last_wafer_pid=$wafer_pid
 
     # Wait for API to be ready (poll for up to 5s)
     api_ready="false"
@@ -281,8 +297,10 @@ run_iso_8() {
         sleep 0.1
     done
 
-    # Wait for pipeline to finish
+    # Wait for pipeline to finish. Non-zero exit expected: the attack plugin
+    # panics repeatedly, triggering unrecoverable-error recovery cycles.
     wait "$wafer_pid" 2>/dev/null || true
+    _last_wafer_pid=""
 
     # Check for Tokio panics
     if grep -q "thread.*panicked" "$run_dir/stdout.log" 2>/dev/null; then

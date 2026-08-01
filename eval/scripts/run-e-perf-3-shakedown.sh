@@ -98,7 +98,19 @@ _start_mosquitto() {
     exit 4
 }
 
-trap '_stop_mosquitto' EXIT INT TERM
+# Kill any wafer-runtime child + stop mosquitto on Ctrl-C or unexpected exit.
+# Without this, an interrupt during a run leaves both the runtime and the
+# broker alive on their ports.
+_wafer_pids=()
+_cleanup_perf3() {
+    local rc=$?
+    for p in "${_wafer_pids[@]:-}"; do
+        [ -n "$p" ] && kill -TERM "$p" 2>/dev/null || true
+    done
+    _stop_mosquitto
+    exit "$rc"
+}
+trap _cleanup_perf3 EXIT INT TERM
 
 _start_mosquitto
 
@@ -141,6 +153,7 @@ _run_one() {
     "$WAFER_BIN" --config "$cfg" --no-api \
         >"$out_dir/stdout.log" 2>&1 &
     local wafer_pid=$!
+    _wafer_pids+=("$wafer_pid")
     sleep 1
 
     if ! kill -0 "$wafer_pid" 2>/dev/null; then

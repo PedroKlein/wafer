@@ -97,7 +97,17 @@ _start_mosquitto() {
     exit 4
 }
 
-trap '_stop_mosquitto' EXIT INT TERM
+# Kill the last-launched runtime + stop mosquitto on Ctrl-C or unexpected exit.
+# Without this, an interrupt during the 180s burst leaves both the runtime
+# and broker alive on their ports.
+_last_wafer_pid=""
+_cleanup_bpperf9() {
+    local rc=$?
+    [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
+    _stop_mosquitto
+    exit "$rc"
+}
+trap _cleanup_bpperf9 EXIT INT TERM
 
 TS="$(date -u +'%Y-%m-%dT%H-%M-%SZ')"
 
@@ -127,6 +137,7 @@ if [ "$skip_backpressure" -eq 0 ]; then
     "$WAFER_BIN" --config "$BP_CFG" \
         >"$BP_OUT/stdout.log" 2>&1 &
     RUNTIME_PID=$!
+    _last_wafer_pid=$RUNTIME_PID
     _log "runtime pid=$RUNTIME_PID"
     sleep 2
 
@@ -181,6 +192,7 @@ if [ "$skip_backpressure" -eq 0 ]; then
     kill -TERM "$RUNTIME_PID" 2>/dev/null || true
     runtime_exit=0
     wait "$RUNTIME_PID" 2>/dev/null || runtime_exit=$?
+    _last_wafer_pid=""
 
     finished_ns=$(_now_ns)
     duration_ns=$(( finished_ns - started_ns ))
@@ -278,6 +290,8 @@ if [ "$skip_perf9" -eq 0 ]; then
             cp "$cfg" "$out_dir/config.toml"
 
             started_ns=$(_now_ns)
+            # Pipeline exits non-zero after BenchSource exhausts total_messages
+            # (short 50-msg run for startup timing); this is normal completion.
             WAFER_BENCH_OUTPUT_DIR="$out_dir" "$WAFER_BIN" --config "$cfg" --no-api \
                 >"$out_dir/stdout.log" 2>&1 || true
             finished_ns=$(_now_ns)
@@ -317,6 +331,8 @@ print(json.dumps({
             cp "$cfg" "$out_dir/config.toml"
 
             started_ns=$(_now_ns)
+            # Pipeline exits non-zero after BenchSource exhausts total_messages
+            # (short 50-msg run for startup timing); this is normal completion.
             WAFER_BENCH_OUTPUT_DIR="$out_dir" "$WAFER_BIN" --config "$cfg" --no-api \
                 >"$out_dir/stdout.log" 2>&1 || true
             finished_ns=$(_now_ns)
