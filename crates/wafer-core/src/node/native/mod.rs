@@ -133,10 +133,51 @@ impl NativeFilter {
         }
     }
 
-    /// Convenience: threshold filter on "temperature" field (matches wafer-threshold-filter plugin).
+    /// Convenience: strict `>` threshold on `temperature`.
+    ///
+    /// Kept for existing call sites; new configs should use [`range`],
+    /// which mirrors the WIT threshold-filter plugin exactly.
     #[must_use]
     pub fn threshold(id: impl Into<String>, threshold: f64) -> Self {
         Self::new(id, functions::threshold_filter(threshold))
+    }
+
+    /// Range filter matching `plugins/threshold-filter` semantics:
+    /// forward when `value >= min && value <= max` on `field`, drop on
+    /// missing / non-UTF8 / unparsable input.
+    ///
+    /// Used by `plugin = { kind = "native", function = "threshold" }` in
+    /// the launcher; keep in sync with `plugins/threshold-filter/src/lib.rs`
+    /// or `tests/native_threshold_filter.rs` will fail.
+    #[must_use]
+    pub fn range(
+        id: impl Into<String>,
+        field: impl Into<String>,
+        min: f64,
+        max: f64,
+    ) -> Self {
+        Self::new(id, functions::range_filter(field.into(), min, max))
+    }
+
+    /// Sync surface matching `WasmFilterNode::evaluate` so [`FilterNode`]
+    /// dispatches uniformly. Native predicates cannot trap, hence the
+    /// unused `WasmProcessError` slot.
+    pub fn evaluate_sync(
+        &mut self,
+        envelope: &RuntimeEnvelope,
+    ) -> std::result::Result<FilterOutcome, WasmProcessError> {
+        Ok(if (self.predicate_fn)(envelope) {
+            FilterOutcome::Forward
+        } else {
+            FilterOutcome::Drop
+        })
+    }
+
+    /// Sync mirror of `Lifecycle::id` so [`FilterNode`] avoids the
+    /// async lifecycle borrow.
+    #[must_use]
+    pub fn node_id(&self) -> &str {
+        &self.id
     }
 }
 
@@ -401,7 +442,7 @@ pub mod functions {
         Ok(payload.to_vec())
     }
 
-    /// Temperature threshold filter factory (matches wafer-threshold-filter plugin).
+    /// Strict `>` on `temperature`. Retained for `NativeFilter::threshold`.
     pub fn threshold_filter(
         threshold: f64,
     ) -> impl Fn(&RuntimeEnvelope) -> bool + Send + 'static {
@@ -413,7 +454,21 @@ pub mod functions {
         }
     }
 
-    /// Simple manual JSON temperature extraction (no serde dependency).
+    /// WIT-plugin-equivalent range predicate. Deviations break the RQ1
+    /// apples-to-apples invariant (see `tests/native_threshold_filter.rs`).
+    pub fn range_filter(
+        field: String,
+        min: f64,
+        max: f64,
+    ) -> impl Fn(&RuntimeEnvelope) -> bool + Send + 'static {
+        move |envelope: &RuntimeEnvelope| {
+            let Ok(s) = std::str::from_utf8(&envelope.payload) else {
+                return false;
+            };
+            extract_json_number(s, &field).is_some_and(|v| v >= min && v <= max)
+        }
+    }
+
     fn extract_temperature(json: &str) -> Option<f64> {
         extract_json_number(json, "temperature")
     }

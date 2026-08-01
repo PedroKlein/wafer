@@ -285,3 +285,85 @@ impl From<NativeTransform> for TransformNode {
         Self::Native(n)
     }
 }
+
+// =============================================================================
+// FilterNode — unified runner-side type covering both Wasm and native.
+// =============================================================================
+
+use crate::node::wasm::WasmFilterNode;
+
+/// Runner-side wrapper unifying Wasm and native filters, mirroring
+/// [`TransformNode`]. Unblocks the RQ1 apples-to-apples native filter
+/// path (`docs/status/implementation-gaps.md` A18).
+pub enum FilterNode {
+    /// Full Wasm filter with sandboxing, hot-swap, and recovery.
+    Wasm(Box<WasmFilterNode>),
+    /// Native baseline (RFC-008 §D5). No sandbox, no hot-swap.
+    Native(NativeFilter),
+}
+
+impl FilterNode {
+    #[must_use]
+    pub fn node_id(&self) -> &str {
+        match self {
+            Self::Wasm(w) => w.node_id(),
+            Self::Native(n) => n.node_id(),
+        }
+    }
+
+    /// Native predicates cannot trap, so their `WasmProcessError` slot is
+    /// unused; the Wasm path preserves the full trap taxonomy.
+    pub fn evaluate(
+        &mut self,
+        envelope: &RuntimeEnvelope,
+    ) -> std::result::Result<FilterOutcome, WasmProcessError> {
+        match self {
+            Self::Wasm(w) => w.evaluate(envelope),
+            Self::Native(n) => n.evaluate_sync(envelope),
+        }
+    }
+
+    /// Reject reconfigure on native filters — they have no config-driven
+    /// guest state to replace.
+    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
+        match self {
+            Self::Wasm(w) => w.try_reconfigure(new_config_json),
+            Self::Native(_) => Err(WaferError::Runtime(
+                "native baseline filters do not support reconfigure".into(),
+            )),
+        }
+    }
+
+    /// Native filters are stateless — recovery is a no-op success.
+    pub fn recover_from_cached_pre(&mut self) -> Result<()> {
+        match self {
+            Self::Wasm(w) => w.recover_from_cached_pre(),
+            Self::Native(_) => Ok(()),
+        }
+    }
+
+    /// Concrete access for hot-swap payload application; None on native.
+    pub fn as_wasm_mut(&mut self) -> Option<&mut WasmFilterNode> {
+        match self {
+            Self::Wasm(w) => Some(w),
+            Self::Native(_) => None,
+        }
+    }
+
+    #[must_use]
+    pub fn is_native(&self) -> bool {
+        matches!(self, Self::Native(_))
+    }
+}
+
+impl From<WasmFilterNode> for FilterNode {
+    fn from(w: WasmFilterNode) -> Self {
+        Self::Wasm(Box::new(w))
+    }
+}
+
+impl From<NativeFilter> for FilterNode {
+    fn from(n: NativeFilter) -> Self {
+        Self::Native(n)
+    }
+}

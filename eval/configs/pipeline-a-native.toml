@@ -1,20 +1,16 @@
-# Pipeline A (native baseline): MQTT source → native passthrough → MQTT sink.
+# Pipeline A (native baseline): MQTT source → native threshold-filter → MQTT sink.
 #
-# RFC-008 §D5 Layer-1 baseline: same topology and channels as the WAFER
-# pipeline but without the Wasm boundary. Uses native passthrough because
-# native filter dispatch is not wired in the orchestrator launcher (only
-# transforms support plugin.kind = "native"). Since loadgen produces
-# temperature=72.5 (all messages pass the filter), passthrough is
-# functionally equivalent for throughput/latency measurement — the
-# difference is only the JSON extraction cost in the filter, which is
-# negligible compared to the Wasm boundary overhead being isolated.
-#
-# Used in E-Perf-1 (throughput), E-Perf-2 (latency) comparisons.
-# See RFC-008 §D6.
+# RFC-008 §D5 Layer-1 baseline: same topology + channels as Pipeline A
+# WAFER (pipeline-a-wafer.toml), same JSON-decode + range-compare work as
+# the eKuiper comparator, but no Wasm boundary. Closes A18: the native
+# filter dispatch is wired through `plugin.kind = "native"` +
+# `function = "threshold"`, using the WIT-plugin-equivalent
+# `NativeFilter::range` factory. Semantics stay in lockstep with
+# `plugins/threshold-filter` per `tests/native_threshold_filter.rs`.
 
 [pipeline]
 name = "pipeline-a-native"
-description = "Pipeline A native baseline: MQTT → passthrough (native) → MQTT"
+description = "Pipeline A native baseline: MQTT → threshold-filter (native) → MQTT"
 
 [nodes.mqtt-in]
 type = "source"
@@ -25,9 +21,14 @@ topic = "wafer/telemetry"
 qos = 1
 client_id = "wafer-pipeline-a-in"
 
-[nodes.transform]
-type = "transform"
-plugin = { kind = "native", function = "passthrough" }
+[nodes.filter]
+type = "filter"
+plugin = { kind = "native", function = "threshold" }
+
+[nodes.filter.config]
+field = "temperature"
+min = 50.0
+max = 99999.0
 
 [nodes.mqtt-out]
 type = "sink"
@@ -40,8 +41,8 @@ client_id = "wafer-pipeline-a-out"
 
 [[edges]]
 from = "mqtt-in"
-to = "transform"
+to = "filter"
 
 [[edges]]
-from = "transform"
+from = "filter"
 to = "mqtt-out"

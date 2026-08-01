@@ -20,7 +20,7 @@ use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::bindings::transform_node::{TransformNode, TransformNodePre};
 use crate::engine::state::WaferState;
-use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
+use crate::node::wasm::WasmRouterNode;
 use crate::queue::RuntimeEnvelope;
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -217,14 +217,19 @@ impl SwapPayload {
         Ok(())
     }
 
-    /// Apply this swap payload to a filter node with rollback-on-init-failure.
-    pub fn try_apply_filter(self, node: &mut WasmFilterNode) -> Result<(), crate::error::WaferError> {
+    /// Native filters have no InstancePre — a swap payload targeting one
+    /// returns an error so the runner logs `hot-swap init failed; keeping
+    /// v1` (parallel to the native-transform contract in [`TransformNode`]).
+    pub fn try_apply_filter(self, node: &mut crate::node::FilterNode) -> Result<(), crate::error::WaferError> {
         if let SwapPayload::Filter { new_store, new_bindings, new_pre, .. } = self {
+            let wasm = node.as_wasm_mut().ok_or_else(|| crate::error::WaferError::Runtime(
+                "native baseline filters do not support hot-swap".into(),
+            ))?;
             let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload store already consumed");
             let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
                 .expect("swap payload bindings already consumed");
-            node.try_hot_swap(store, bindings, new_pre)?;
+            wasm.try_hot_swap(store, bindings, new_pre)?;
         }
         Ok(())
     }

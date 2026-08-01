@@ -11,8 +11,7 @@ use std::time::Instant;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
-use crate::node::wasm::WasmFilterNode;
+use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
@@ -25,7 +24,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstr
 /// Filter borrows the envelope — no safety clone needed. If the evaluation
 /// errors, we still own the envelope and can pass it to the error policy.
 pub async fn run_filter_loop(
-    mut filter: WasmFilterNode,
+    mut filter: FilterNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
     senders: Vec<DownstreamSender>,
     mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,

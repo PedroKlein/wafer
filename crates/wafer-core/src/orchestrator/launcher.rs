@@ -90,7 +90,7 @@ pub async fn launch_pipeline(
                 ).await?);
             }
             (NodeBundleKind::Filter { node, .. }, NodeDef::Filter(wasm)) => {
-                *node = Some(load_filter_node(
+                *node = Some(load_filter_node_dispatch(
                     &bundle.node_id,
                     wasm,
                     config.engine.fuel.filter,
@@ -271,6 +271,86 @@ async fn load_transform_node(
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
     Ok(node)
+}
+
+/// Build a native filter from a function name declared in the TOML
+/// (`plugin.kind = "native", plugin.function = "threshold"`).
+///
+/// `threshold` reads `field`, `min`, `max` from the node config so pipeline
+/// authors can swap `plugin.kind` between `wasm` and `native` without
+/// touching the config schema. Missing keys default to the WIT plugin's
+/// documented range (`field="temperature", min=0, max=+∞`).
+fn build_native_filter(
+    node_id: &str,
+    function: &str,
+    wasm: &WasmNodeDef,
+) -> Result<crate::node::NativeFilter> {
+    use crate::node::NativeFilter;
+    match function {
+        "threshold" | "threshold-filter" | "range" => {
+            let (field, min, max) = threshold_native_config(node_id, wasm)?;
+            Ok(NativeFilter::range(node_id, field, min, max))
+        }
+        other => Err(WaferError::Config(ConfigError::Message(format!(
+            "unknown native filter function '{other}' on node '{node_id}' \
+             (valid: threshold)"
+        )))),
+    }
+}
+
+/// Read `field/min/max` from the node's optional `config` table. Matches
+/// the `plugins/threshold-filter` schema exactly so a `plugin.kind` swap
+/// is a one-line config edit.
+fn threshold_native_config(node_id: &str, wasm: &WasmNodeDef) -> Result<(String, f64, f64)> {
+    let table = wasm.config.as_ref().and_then(|v| v.as_table());
+    let field = table
+        .and_then(|t| t.get("field"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("temperature")
+        .to_owned();
+    let min = table
+        .and_then(|t| t.get("min"))
+        .and_then(as_f64)
+        .unwrap_or(0.0);
+    let max = table
+        .and_then(|t| t.get("max"))
+        .and_then(as_f64)
+        .unwrap_or(f64::INFINITY);
+    if min > max {
+        return Err(WaferError::Config(ConfigError::Message(format!(
+            "native filter '{node_id}': min ({min}) > max ({max})"
+        ))));
+    }
+    Ok((field, min, max))
+}
+
+/// TOML `Value` numeric coercion accepting both `1` (integer) and `1.0`
+/// (float) so config authors don't have to remember which one serde picks.
+fn as_f64(v: &toml::Value) -> Option<f64> {
+    v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
+}
+
+/// Dispatch: build a Wasm or Native filter depending on `wasm.plugin`.
+/// Mirrors [`load_transform_node_dispatch`] so the native baseline can
+/// implement `type = "filter"` (RQ1 apples-to-apples — A18).
+async fn load_filter_node_dispatch(
+    node_id: &str,
+    wasm: &WasmNodeDef,
+    default_fuel: u64,
+    default_memory: usize,
+    engine: &Arc<WaferEngine>,
+    registry: &WaferRegistry,
+    config_path: Option<&Path>,
+) -> Result<crate::node::FilterNode> {
+    if let Some(function) = wasm.plugin.native_function() {
+        let native = build_native_filter(node_id, function, wasm)?;
+        return Ok(crate::node::FilterNode::Native(native));
+    }
+    let wasm_node = load_filter_node(
+        node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
+    )
+    .await?;
+    Ok(crate::node::FilterNode::from(wasm_node))
 }
 
 async fn load_filter_node(

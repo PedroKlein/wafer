@@ -508,7 +508,7 @@ Error → DLQ path an acceptable RQ3 story?
 
 ---
 
-## A18 — Native filter dispatch not wired for Pipeline A (Open) 🟡
+## A18 — Native filter dispatch not wired for Pipeline A (Closed 2026-08-01) 🟢
 
 **Severity:** low–medium. Affects RQ1 comparator purity for E-Perf-1 /
 E-Perf-2 (WAFER vs native vs eKuiper).
@@ -565,7 +565,24 @@ Estimated cost: ~1 hour. Small runtime + config-schema change.
 - Should be fixed before canonical Pi runs so the thesis reports
   apples-to-apples.
 
-**Not fixed in this session.** Filed for stakeholder review.
+**Resolution.** Introduced a `FilterNode` enum mirroring the existing
+`TransformNode` (Wasm + native variants), refactored `run_filter_loop`
+to dispatch through it, wired native filter dispatch in the launcher
+(`plugin.kind = "native", function = "threshold"`), and rewrote
+`eval/configs/pipeline-a-native.toml` to `type = "filter"` with
+the WIT-plugin-equivalent `NativeFilter::range` (`field=temperature,
+min=50.0, max=99999.0`). Semantics are pinned to
+`plugins/threshold-filter/src/lib.rs` by
+`crates/wafer-core/tests/native_threshold_filter.rs`, which asserts
+predicate equivalence across 1000 mixed-temperature records plus
+boundary and malformed-input cases.
+
+Shakedown re-run confirmed the WAFER/native ratio moved from 0.995
+(passthrough baseline) to ~0.996 (JSON-decode + range-compare
+baseline) — a shift well inside the noise floor, consistent with the
+RQ1 finding that MQTT-bookend throughput is dominated by broker RTT.
+
+- Closed by: commit `<pending>` (F1 in `plans/eval-followups`).
 
 ---
 

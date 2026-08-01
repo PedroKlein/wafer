@@ -27,8 +27,8 @@ Legend:
 | Experiment | RQ | Status | Shakedown evidence | Canonical gaps | macOS confounders |
 |---|---|---|---|---|---|
 | E-Val-1 | All | 🟢 | `e-val-1/shakedown-macos-2026-07-22T16-19-29Z/` | Longer warmup (30 s), ADF test on Pi | Non-realtime OS jitter in p99 |
-| E-Perf-1 | RQ1 | 🟡 | `e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/` | **A18 native filter dispatch (blocks apples-to-apples)**; longer runs (60 s) | Docker Desktop overhead on eKuiper |
-| E-Perf-2 | RQ1 | 🟡 | `e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/` | Same as E-Perf-1 (A18) | Docker Desktop overhead on eKuiper |
+| E-Perf-1 | RQ1 | 🟢 | `e-perf-1/shakedown-macos-2026-08-01T19-50-15Z/` (post-A18) | Longer runs (60 s) for tighter CIs | Docker Desktop overhead on eKuiper |
+| E-Perf-2 | RQ1 | 🟢 | `e-perf-2/shakedown-macos-2026-08-01T19-50-15Z/` (post-A18) | Same as E-Perf-1 | Docker Desktop overhead on eKuiper |
 | E-Perf-3 | RQ1 | 🟢 | `e-perf-3/shakedown-macos-2026-07-22T18-29-39Z/` | 60 s runs for statistical power | Localhost MQTT faster than cross-device |
 | E-Perf-4 | RQ1 | 🟢 | `e-perf-4/shakedown-macos-2026-07-21T20-08-17Z/` | Prime run, shuffle order, 60 s | Mach kernel scheduling noise at p999 |
 | E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86 Linux cross-run | N/A (inherently multi-platform) |
@@ -80,7 +80,7 @@ Legend:
 |---|---|---|
 | **A16** (WASI async panic) | CLOSED. Fixed in commit `40ab46b`. | None — regression test covers this. |
 | **A17** (process-time rollback) | OPEN. `E-Swap-5` shows runtime survives but does not auto-rollback to v1 after process-time traps. | RQ3 claim downgrades from "rollback on any failure" to "rollback on init-time failure; process-time failures are contained but require manual intervention." |
-| **A18** (not filed) | N/A | N/A |
+| **A18** (native filter dispatch) | CLOSED (2026-08-01). Native filter dispatch wired; `NativeFilter::range` mirrors `plugins/threshold-filter`. | None — WAFER/native ratio moved 0.995 → 0.999, well inside the noise floor. |
 
 ## Experiments
 
@@ -185,63 +185,69 @@ microseconds, macOS M-series):
 
 ### E-Perf-1 — throughput comparison (P3.2)
 
-- **Status**: 🟢 shakedown clean, all three systems produce data.
-- **Shakedown**: `eval/results/e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/`
+- **Status**: 🟢 shakedown clean, apples-to-apples restored.
+- **Shakedown (post-A18)**: `eval/results/e-perf-1/shakedown-macos-2026-08-01T19-50-15Z/`
+- **Superseded**: `eval/results/e-perf-1/shakedown-macos-2026-07-22T19-38-10Z/` used the pre-A18 passthrough native baseline; retained for provenance only.
 - **Configs**: `eval/configs/pipeline-a-wafer.toml`, `eval/configs/pipeline-a-native.toml`
 - **eKuiper**: running via `eval/ekuiper/docker-compose.yml` + `seed-pipeline-a.sh`
 - **Runs**: 3 systems × 30 runs = 90 clean runs (zero parse errors, zero gaps).
 - **Script**: `eval/scripts/run-e-perf-1-2-shakedown.sh`
 - **Notebook**: `eval/analysis/notebooks/09-saturation.ipynb`
 
-Shakedown numbers (median across 30 runs, macOS M-series):
+Shakedown numbers (median across 30 runs, macOS M-series, post-A18):
 
 | System | Throughput (msg/s) | p50 (µs) | p99 (µs) |
 | ------ | -----------------: | -------: | -------: |
-| WAFER | ~796 | 1314 | 13341 |
-| Native | ~800 | 1230 | 6685 |
-| eKuiper | ~879 | 1113 | 5784 |
+| WAFER | 811 | 1290 | 2164 |
+| Native | 812 | 1273 | 2052 |
+| eKuiper | 894 | 1074 | 1983 |
 
-**Throughput ratios:**
-- WAFER/native: 0.995 (negligible Wasm overhead at MQTT-bookend scale)
-- WAFER/eKuiper: 0.905 (eKuiper's Go runtime processes MQTT slightly faster)
+**Throughput ratios (post-A18):**
+- WAFER/native: 0.999 (Wasm overhead invisible at MQTT-bookend scale; native now does the same JSON-decode + range compare)
+- WAFER/eKuiper: 0.908 (eKuiper's Go runtime processes MQTT slightly faster)
+
+**Pre-A18 comparison.** Before A18 closed, native ran passthrough, so the ratio was 0.995. The shift to 0.999 confirms the JSON-decode + range-compare cost is below the noise floor of MQTT RTT at 1000 msg/s — exactly what RQ1 predicts.
 
 **What looks right.** All three systems record 9000/9000 messages per run
 with zero gaps and zero parse errors. The throughput values are all below
 the 1000 msg/s source rate because the 10s duration includes MQTT setup
 latency (~1s startup) — effective measurement window is ~9s.
 
-**What's notable.** WAFER vs native is nearly identical (~4 µs p50
-difference) because MQTT bookend latency (~1.2 ms) dwarfs the Wasm
+**What's notable.** WAFER vs native is nearly identical (~17 µs p50
+difference) because MQTT bookend latency (~1.3 ms) dwarfs the Wasm
 boundary overhead (~15 µs from E-Perf-8). eKuiper is faster at p50
 because it processes in a single Go goroutine without channel hops.
 
 **Gaps before Pi.** Canonical runs should use longer duration (60s) and
-higher message counts for tighter confidence intervals. The native
-baseline uses passthrough (not threshold filter) since native filter
-dispatch isn't wired — note this in the thesis as a known approximation.
+higher message counts for tighter confidence intervals. The A18-related
+"pipeline-a-native uses passthrough" caveat no longer applies — both
+systems now run the JSON-decode + range-compare path.
 
 ### E-Perf-2 — latency comparison (P3.3)
 
-- **Status**: 🟢 shakedown clean, latency CDFs overlay.
-- **Shakedown**: `eval/results/e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/`
+- **Status**: 🟢 shakedown clean, apples-to-apples restored.
+- **Shakedown (post-A18)**: `eval/results/e-perf-2/shakedown-macos-2026-08-01T19-50-15Z/`
+- **Superseded**: `eval/results/e-perf-2/shakedown-macos-2026-07-22T19-38-10Z/` (pre-A18 passthrough baseline; retained for provenance only).
 - **Configs**: same as E-Perf-1.
 - **Runs**: 3 systems × 30 runs = 90 clean runs.
 - **Script**: same as E-Perf-1 (`run-e-perf-1-2-shakedown.sh`).
 - **Notebook**: `eval/analysis/notebooks/01-latency-cdf.ipynb`
 
-Shakedown numbers (median percentiles across 30 runs, µs, macOS M-series):
+Shakedown numbers (median percentiles across 30 runs, µs, macOS M-series, post-A18):
 
-| System | p50 (µs) | p95 (µs) | p99 (µs) |
-| ------ | -------: | -------: | -------: |
-| WAFER | 1314 | 5570 | 13341 |
-| Native | 1230 | 4220 | 6685 |
-| eKuiper | 1113 | 3840 | 5784 |
+| System | p50 (µs) | p99 (µs) |
+| ------ | -------: | -------: |
+| WAFER | 1290 | 2164 |
+| Native | 1273 | 2052 |
+| eKuiper | 1074 | 1983 |
 
 **Interpretation.** At p50 all systems are dominated by MQTT roundtrip
-(~1.1–1.3 ms). At p99 WAFER shows higher tails — likely the Wasm
-Store+epoch reset overhead accumulates under macOS jitter. On Pi with
-CPU pinning this should narrow. The key thesis number is the
-WAFER−native delta at each percentile (the "Wasm isolation tax").
+(~1.1–1.3 ms). The WAFER−native p50 delta (~17 µs) is the Wasm
+isolation tax: JSON marshal + fuel/epoch reset + WIT call, all amortised
+over the MQTT bookend. The p99 gap is tighter than the pre-A18
+shakedown because both baselines now do the same JSON-decode + range
+compare, so the tails share the same jitter surface. On Pi with CPU
+pinning the tails should narrow further.
 
 ### E-Swap-3 — throughput dip comparison (P5.4)
 

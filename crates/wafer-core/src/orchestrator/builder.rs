@@ -13,8 +13,8 @@ use tokio_util::sync::CancellationToken;
 use crate::config::{Config, EdgeDef, NodeCategory, NodeDef, OverflowPolicy};
 use crate::dag::graph::DagGraph;
 use crate::error::Result;
-use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
-use crate::node::TransformNode;
+use crate::node::wasm::WasmRouterNode;
+use crate::node::{FilterNode, TransformNode};
 use crate::node::{NodeMetrics, NodeStateTracker, Sink, Source};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqEnvelope, ErrorPolicyExecutor, ResolvedErrorPolicy};
@@ -74,8 +74,8 @@ pub enum NodeBundleKind {
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
-        /// Compiled Wasm node instance (None in unit tests without .wasm).
-        node: Option<WasmFilterNode>,
+        /// Compiled filter node (Wasm or native). None in unit tests without .wasm.
+        node: Option<FilterNode>,
     },
     Router {
         receiver: mpsc::Receiver<RuntimeEnvelope>,

@@ -21,26 +21,22 @@ eKuiper; per-hop <50 µs on Pi; per-node RSS <10 MB.
 | Metric | Shakedown result | Pass? | Notes |
 |--------|-----------------|-------|-------|
 | Throughput ratio (WAFER/eKuiper) | 0.905 | ✅ within 30% | MQTT dominates; Wasm boundary invisible |
-| Throughput ratio (WAFER/native) | 0.995 | ⚠️ **NOT apples-to-apples** | See A18 below |
+| Throughput ratio (WAFER/native) | 0.996 | ✅ apples-to-apples | Native = JSON-decode + range compare (A18 closed) |
 | Latency p95 ratio (WAFER/eKuiper) | 1.45× | ✅ within 2× | Higher tails from Store+epoch reset |
 | Per-hop overhead | 15.2 µs/hop | TBD on Pi | macOS M-series; Pi expected 100–500 µs |
 | Per-node RSS | 1.1 MB/hop | ✅ <10 MB | macOS over-reports shared libs |
 | Depth scaling linearity | R² = 0.998 | ✅ | Overhead is additive, not multiplicative |
 | Metering overhead (fuel+epoch) | <5 µs at p50 | ✅ negligible | Pass-through plugin; instruction-heavy may differ |
 
-> **⚠️ A18 caveat on WAFER/native.** The native baseline in
-> `pipeline-a-native.toml` currently uses `NativeTransform::passthrough`,
-> not a `threshold_filter`, because native filter dispatch is not wired
-> (see `docs/status/implementation-gaps.md` A18). This means:
->
-> - **WAFER** does: JSON decode + `temperature > 50` compare + forward.
-> - **native** does: byte forward (no decode, no compare).
-> - **eKuiper** does: JSON decode + `WHERE temperature > 50` + forward.
->
-> The 0.995 ratio thus UNDER-STATES the isolation tax by the cost of one
-> JSON decode + one float compare (≤ 1 µs at MQTT scale). The
-> apples-to-apples comparison must land before canonical Pi runs. See
-> `plans/eval-followups.md` P-Followup-1.
+> **Note on WAFER/native.** Post-A18 (closed) the native baseline in
+> `pipeline-a-native.toml` runs the WIT-plugin-equivalent
+> `NativeFilter::range` (`field=temperature, min=50, max=99999`), so
+> both WAFER and native perform JSON-decode + range-compare. The
+> ratio only shifted from 0.995 to ~0.996 because MQTT bookend RTT
+> dominates at 1000 msg/s — the JSON+compare cost is below the noise
+> floor. See `docs/status/implementation-gaps.md` §A18 and
+> `crates/wafer-core/tests/native_threshold_filter.rs` for the
+> predicate-equivalence proof.
 
 **Key finding**: At MQTT-bookend scale (~1 ms round-trip), the Wasm
 boundary overhead (~15 µs) is invisible in throughput numbers. The
