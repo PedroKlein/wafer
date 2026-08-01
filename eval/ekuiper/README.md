@@ -17,10 +17,12 @@ docker compose up -d
 - `mosquitto.conf` — anonymous auth, all-interfaces listener.
 - `pipeline-a-rule.sql` — human-readable Pipeline A definition.
 - `seed-pipeline-a.sh` — idempotent stream + rule registration.
+- `smoke-test.sh` — pass + drop assertion smoke test (exit 0 = healthy).
 
 ## Verification
 
 ```sh
+./smoke-test.sh                  # pass + drop assertion
 curl -s :9081/streams | jq       # ["wafer_telemetry"]
 curl -s :9081/rules   | jq       # pipeline_a running
 ```

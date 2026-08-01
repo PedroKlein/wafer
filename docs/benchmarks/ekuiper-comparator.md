@@ -60,33 +60,17 @@ apples-to-apples.
 
 ## Smoke test
 
-The compose stack ships with mosquitto on the same bridge network as
-eKuiper. Verify end-to-end plumbing:
+Source of truth: [`eval/ekuiper/smoke-test.sh`](../../eval/ekuiper/smoke-test.sh).
 
 ```sh
-# Terminal A — subscribe on the sink topic
-docker run --rm --network wafer-ekuiper_default eclipse-mosquitto:2 \
-    mosquitto_sub -h mosquitto -t wafer/telemetry/hot
-
-# Terminal B — publish two messages, one filtered, one passing
-docker run --rm --network wafer-ekuiper_default eclipse-mosquitto:2 sh -c '
-    mosquitto_pub -h mosquitto -t wafer/telemetry \
-        -m "{\"seq\":1,\"ts\":100,\"temperature\":30}"
-    mosquitto_pub -h mosquitto -t wafer/telemetry \
-        -m "{\"seq\":2,\"ts\":200,\"temperature\":80}"'
+./eval/ekuiper/smoke-test.sh
 ```
 
-Terminal A should show only the `temperature=80` message.
-
-Actual observed during P1.4 shakedown:
-
-```
-{"ts":200,"seq":2,"temperature":80}
-```
-
-The `temperature=30` record is correctly dropped by the filter; the
-`temperature=80` record passes through with all three fields
-preserved. Comparator plumbing works end-to-end.
+The script asserts **both** the pass case (temperature=80 forwards)
+and the drop case (temperature=30 is filtered). If the eKuiper rule
+regressed to passing everything, the script exits non-zero with a
+clear message. See the script header for manual regression-toggle
+instructions.
 
 ## Driving comparators
 

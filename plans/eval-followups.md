@@ -209,24 +209,23 @@ migration + regression test).
 
 ---
 
-## P-Followup-6 — eKuiper smoke test drop-case assertion
+## P-Followup-6 — eKuiper smoke test drop-case assertion ✅ Closed
 
 **Priority:** P2 — negation-blindness footgun.
 **Origin:** correctness-reviewer.
+**Closed by:** commit 486df87.
 
 **Problem.** `eval/ekuiper/seed-pipeline-a.sh` smoke section only
 verifies that `{temperature:80}` passes through. The drop case
 (`{temperature:30}` filtered out) is asserted by absence, which the
 review pass flags as a weak negation criterion.
 
-**Fix.** Add an explicit CI-friendly smoke test script that:
-
-1. Publishes both records with distinct sequence numbers.
-2. Subscribes with a short timeout.
-3. Asserts exactly one record received with the expected sequence.
-4. Fails if the filtered record leaks through.
-
-**Estimated cost.** 30 minutes.
+**Fix.** `eval/ekuiper/smoke-test.sh` publishes both records (seq=1
+temperature=30, seq=2 temperature=80), subscribes for 3 s, asserts
+exactly one record arrives with seq=2 and temperature=80. Verified
+regression detection by temporarily toggling the rule to
+`WHERE temperature > 20` — script exits non-zero. Restored via
+`seed-pipeline-a.sh`.
 
 ---
 
