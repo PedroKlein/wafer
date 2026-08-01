@@ -231,6 +231,8 @@ regression detection by temporarily toggling the rule to
 
 ## P-Followup-7 — Notebook path discovery (soft; nice-to-have)
 
+**Status: ✅ Closed** — commit `0f01ba5` (F7).
+
 **Priority:** P2 — reduces notebook rot.
 **Origin:** eval-harness reviewer (partial).
 
@@ -238,9 +240,9 @@ regression detection by temporarily toggling the rule to
 hardcode shakedown-macos-<timestamp> paths. As new shakedown runs
 land, notebooks pinned to old timestamps produce stale figures.
 
-**Fix.** Standardise a `find_latest_shakedown(experiment_id)` helper
-in a shared `eval/analysis/utils.py` (or notebook init cell) that
-globs `eval/results/{exp}/shakedown-macos-*` and returns the newest.
+**Fix.** `eval/analysis/utils.py` exports `find_latest_shakedown()`.
+All 7 affected notebooks migrated; `grep -l 'shakedown-macos-20'`
+returns nothing. Unit tests in `eval/analysis/test_utils.py`.
 
 **Estimated cost.** 1 hour.
 

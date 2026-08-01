@@ -21,3 +21,8 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/wafer_analysis"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
