@@ -23,6 +23,8 @@ use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::orchestrator::PipelineOrchestrator;
 
+mod metadata;
+
 /// Log output format.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
 enum LogFormat {
@@ -124,6 +126,16 @@ async fn main() -> Result<()> {
         wasm_nodes = orchestrator.wasm_node_count(),
         "Pipeline running"
     );
+
+    // Emit runtime provenance BEFORE the run loop so the file exists even if
+    // the runtime traps mid-run — canonical-runs reproducibility depends on
+    // seeing which wasmtime + rustc + plugin bytes were live at launch.
+    if let Some(provenance_path) = metadata::resolve_output_path() {
+        match metadata::write_provenance(&provenance_path, &orchestrator, &args.config) {
+            Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
+            Err(e) => warn!(path = %provenance_path.display(), error = %e, "provenance write failed"),
+        }
+    }
 
     let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
 

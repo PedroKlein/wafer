@@ -72,6 +72,10 @@ pub async fn launch_pipeline(
 
     let mut build_output = build_pipeline_with_io(&config, sources, sinks)?;
 
+    // Seed with the SHA256 of every Wasm plugin loaded at launch so the P0.12
+    // hot-swap guard and metadata.json provenance share one source of truth.
+    let mut plugin_hashes: HashMap<Box<str>, String> = HashMap::new();
+
     for bundle in &mut build_output.node_bundles {
         let Some(node_def) = config.nodes.get(&*bundle.node_id) else {
             continue;
@@ -87,6 +91,7 @@ pub async fn launch_pipeline(
                     &engine,
                     &registry,
                     config_path,
+                    &mut plugin_hashes,
                 ).await?);
             }
             (NodeBundleKind::Filter { node, .. }, NodeDef::Filter(wasm)) => {
@@ -98,6 +103,7 @@ pub async fn launch_pipeline(
                     &engine,
                     &registry,
                     config_path,
+                    &mut plugin_hashes,
                 ).await?);
             }
             (NodeBundleKind::Router { node, .. }, NodeDef::Router(wasm)) => {
@@ -109,13 +115,19 @@ pub async fn launch_pipeline(
                     &engine,
                     &registry,
                     config_path,
+                    &mut plugin_hashes,
                 ).await?);
             }
             _ => {}
         }
     }
 
-    Ok(PipelineOrchestrator::from_build_output(build_output, config, engine))
+    let orchestrator = PipelineOrchestrator::from_build_output(build_output, config, engine);
+    let handle = orchestrator.handle();
+    for (node_id, hash) in plugin_hashes {
+        handle.record_plugin_hash(&node_id, hash);
+    }
+    Ok(orchestrator)
 }
 
 // =============================================================================
@@ -207,6 +219,7 @@ async fn load_transform_node_dispatch(
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
+    plugin_hashes: &mut HashMap<Box<str>, String>,
 ) -> Result<crate::node::TransformNode> {
     if let Some(function) = wasm.plugin.native_function() {
         let native = build_native_transform(node_id, function)?;
@@ -214,6 +227,7 @@ async fn load_transform_node_dispatch(
     }
     let wasm_node = load_transform_node(
         node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
+        plugin_hashes,
     )
     .await?;
     Ok(crate::node::TransformNode::from(wasm_node))
@@ -242,8 +256,11 @@ async fn load_transform_node(
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
+    plugin_hashes: &mut HashMap<Box<str>, String>,
 ) -> Result<WasmTransformNode> {
-    let component = resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    let (component, plugin_hash) =
+        resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    plugin_hashes.insert(node_id.into(), plugin_hash);
     let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -341,6 +358,7 @@ async fn load_filter_node_dispatch(
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
+    plugin_hashes: &mut HashMap<Box<str>, String>,
 ) -> Result<crate::node::FilterNode> {
     if let Some(function) = wasm.plugin.native_function() {
         let native = build_native_filter(node_id, function, wasm)?;
@@ -348,6 +366,7 @@ async fn load_filter_node_dispatch(
     }
     let wasm_node = load_filter_node(
         node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
+        plugin_hashes,
     )
     .await?;
     Ok(crate::node::FilterNode::from(wasm_node))
@@ -361,8 +380,11 @@ async fn load_filter_node(
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
+    plugin_hashes: &mut HashMap<Box<str>, String>,
 ) -> Result<WasmFilterNode> {
-    let component = resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    let (component, plugin_hash) =
+        resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    plugin_hashes.insert(node_id.into(), plugin_hash);
     let pre = Arc::new(engine.pre_instantiate_filter(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -400,8 +422,11 @@ async fn load_router_node(
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
+    plugin_hashes: &mut HashMap<Box<str>, String>,
 ) -> Result<WasmRouterNode> {
-    let component = resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    let (component, plugin_hash) =
+        resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    plugin_hashes.insert(node_id.into(), plugin_hash);
     let pre = Arc::new(engine.pre_instantiate_router(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -431,14 +456,17 @@ async fn load_router_node(
     Ok(node)
 }
 
-/// Resolve plugin source from the unified `plugin` field and load the Wasm component.
+/// Resolve plugin source, read bytes, compute SHA256, and load the Wasm
+/// component. Returning the hash lets the launcher seed
+/// `PipelineHandle::plugin_hashes` with the same value the P0.12 guard
+/// checks on hot-swap — single source of truth (metadata.json AC2).
 async fn resolve_and_load_component(
     node_id: &str,
     wasm: &WasmNodeDef,
     engine: &WaferEngine,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
-) -> Result<wasmtime::component::Component> {
+) -> Result<(wasmtime::component::Component, String)> {
     let plugin_path = wasm.plugin.wasm_path().ok_or_else(|| {
         WaferError::Runtime(format!(
             "resolve_and_load_component called on non-Wasm plugin for node '{node_id}'"
@@ -455,10 +483,19 @@ async fn resolve_and_load_component(
 
     let resolved = registry.resolve(&source).await.map_err(WaferError::Registry)?;
 
-    match &resolved.source {
+    // Always read bytes so we can hash once and reuse for both metering the
+    // guest and building metadata.json provenance. Doubling I/O for local
+    // plugins is negligible (< 1 MB) and keeps a single load path.
+    let (bytes, source_tag) = match &resolved.source {
         PluginSource::Local(path) => {
             tracing::debug!(node = %node_id, path = %path.display(), "loading local plugin");
-            engine.load_component(path)
+            let bytes = std::fs::read(path).map_err(|e| {
+                WaferError::Config(ConfigError::Message(format!(
+                    "failed to read local plugin for '{node_id}' at {}: {e}",
+                    path.display()
+                )))
+            })?;
+            (bytes, path.display().to_string())
         }
         PluginSource::Oci(oci_ref) => {
             tracing::info!(
@@ -472,9 +509,16 @@ async fn resolve_and_load_component(
                     "failed to read cached plugin for '{node_id}': {e}"
                 )))
             })?;
-            engine.load_component_from_bytes(&bytes, oci_ref.as_str())
+            (bytes, oci_ref.to_string())
         }
-    }
+    };
+
+    let plugin_hash = {
+        use sha2::Digest;
+        hex::encode(sha2::Sha256::digest(&bytes))
+    };
+    let component = engine.load_component_from_bytes(&bytes, &source_tag)?;
+    Ok((component, plugin_hash))
 }
 
 fn node_config_json(wasm: &WasmNodeDef) -> Result<String> {

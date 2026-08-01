@@ -30,7 +30,12 @@ tokio-util = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 toml = { workspace = true }
+
+# Provenance hashing (metadata.json config_sha256 + wafer_runtime_sha256)
+sha2 = { workspace = true }
+hex = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }

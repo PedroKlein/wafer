@@ -157,11 +157,26 @@ impl PipelineHandle {
     }
 
     /// P0.12 (A5 residual): register the SHA-256 (hex) of the plugin bytes
-    /// currently loaded on `node_id`. Called on every successful hot-swap.
+    /// currently loaded on `node_id`. Called by the launcher for every Wasm
+    /// plugin at initial load, and by the API handler on every successful
+    /// hot-swap. Shared with F2 provenance emission.
     pub fn record_plugin_hash(&self, node_id: &str, hex_hash: impl Into<String>) {
         if let Ok(mut guard) = self.plugin_hashes.write() {
             guard.insert(node_id.into(), hex_hash.into());
         }
+    }
+
+    /// Snapshot of `node_id -> sha256_hex` for every Wasm plugin currently
+    /// loaded. Empty when the pipeline has no Wasm nodes (all-native
+    /// baseline) or when the launcher has not yet registered any hashes.
+    /// Reader‑facing single source of truth for the F2 metadata.json
+    /// `wafer_plugin_hashes` field (AC2).
+    #[must_use]
+    pub fn plugin_hashes_snapshot(&self) -> HashMap<String, String> {
+        self.plugin_hashes
+            .read()
+            .map(|g| g.iter().map(|(k, v)| (k.to_string(), v.clone())).collect())
+            .unwrap_or_default()
     }
 
     /// P0.12 (A5 residual): verify that `expected_hex` matches the cached

@@ -472,34 +472,61 @@ _write_metadata() {
         mosq_json=$(printf '{"broker": "%s", "managed_by_harness": false}' "$broker")
     fi
 
-    local wasmtime_ver
-    wasmtime_ver=$(grep -m1 '^wasmtime' Cargo.toml 2>/dev/null | awk -F'"' '{print $2}' || echo 'unknown')
-    local rustc_ver; rustc_ver="$(rustc --version 2>/dev/null || echo unknown)"
+    # Merge runtime-owned provenance (wasmtime_version, config_sha256,
+    # wafer_plugin_hashes, wafer_runtime_sha256, rustc_version, kernel)
+    # emitted by wafer-runtime under $OUT_DIR/runtime-provenance.json.
+    # Falls back to `null` when the file is missing so metadata.json stays
+    # well-formed on hosts that skipped provenance emission.
+    local provenance_json="null"
+    if [ -f "$OUT_DIR/runtime-provenance.json" ]; then
+        provenance_json=$(cat "$OUT_DIR/runtime-provenance.json")
+    fi
 
-    cat > "$OUT_DIR/metadata.json" <<META
-{
-  "experiment": "$experiment",
-  "host_tag": "$host",
-  "generated_at": "$FINISHED_AT",
-  "started_at": "$STARTED_AT",
-  "finished_at": "$FINISHED_AT",
-  "duration_ns": $duration_ns,
-  "git_sha": "$(git rev-parse HEAD 2>/dev/null || echo unknown)",
-  "hostname": "$(hostname)",
-  "kernel": "$(uname -r)",
-  "arch": "$(uname -m)",
-  "os": "$(uname -s | tr '[:upper:]' '[:lower:]')",
-  "rustc": "$rustc_ver",
-  "wasmtime_version_declared": "$wasmtime_ver",
-  "config_path": "$config",
-  "config_sha256": "$CONFIG_SHA256",
-  "loadgen": $loadgen_json,
-  "mosquitto": $mosq_json,
-  "exit_codes": {
-    "wafer_runtime": $runtime_exit
-  }
+    python3 - "$OUT_DIR/metadata.json" "$experiment" "$host" "$FINISHED_AT" \
+        "$STARTED_AT" "$duration_ns" "$config" "$CONFIG_SHA256" \
+        "$loadgen_json" "$mosq_json" "$runtime_exit" "$provenance_json" <<'PY'
+import json, os, subprocess, sys
+
+(out, experiment, host, finished, started, duration_ns, config,
+ cfg_sha, loadgen, mosq, rc, provenance) = sys.argv[1:]
+
+def _sh(cmd):
+    try:
+        return subprocess.check_output(cmd, text=True).strip()
+    except Exception:
+        return "unknown"
+
+meta = {
+    "experiment": experiment,
+    "host_tag": host,
+    "generated_at": finished,
+    "started_at": started,
+    "finished_at": finished,
+    "duration_ns": int(duration_ns),
+    "git_sha": _sh(["git", "rev-parse", "HEAD"]),
+    "hostname": _sh(["hostname"]),
+    "kernel": _sh(["uname", "-r"]),
+    "arch": _sh(["uname", "-m"]),
+    "os": _sh(["uname", "-s"]).lower(),
+    "rustc_version": _sh(["rustc", "--version"]),
+    "config_path": config,
+    "config_sha256": cfg_sha,
+    "loadgen": json.loads(loadgen),
+    "mosquitto": json.loads(mosq),
+    "exit_codes": {"wafer_runtime": int(rc)},
 }
-META
+# The runtime's provenance is authoritative for wasmtime_version and
+# the plugin/runtime hash fields: it observed the actual bytes loaded.
+if provenance != "null":
+    p = json.loads(provenance)
+    for key in ("wasmtime_version", "rustc_version", "wafer_runtime_version",
+                "wafer_runtime_sha256", "wafer_plugin_hashes", "kernel",
+                "config_sha256"):
+        if key in p:
+            meta[key] = p[key]
+with open(out, "w") as fh:
+    json.dump(meta, fh, indent=2)
+PY
 }
 _write_metadata
 

@@ -56,41 +56,73 @@ hyphens so the path is `mv`-safe on every filesystem.
 
 ## `metadata.json` schema
 
+`metadata.json` merges two sources: **run-experiment.sh** stamps run
+metadata and per-invocation context (git_sha, timestamps, loadgen /
+mosquitto blocks, exit codes) while **wafer-runtime** emits a
+`runtime-provenance.json` sidecar with the fields only the runtime can
+produce authoritatively (`wasmtime_version` from the resolved lockfile,
+`config_sha256`, `wafer_plugin_hashes` sharing the P0.12 hot-swap guard
+cache, `wafer_runtime_sha256`, `rustc_version`, `kernel`). `_write_metadata`
+prefers the runtime's values for those keys so provenance stays
+authoritative through cross-compilation.
+
 ```json
 {
   "experiment": "e-perf-4",
   "host_tag": "shakedown-macos",
   "generated_at": "2026-07-21T14:30:15Z",
+  "started_at": "2026-07-21T14:30:15Z",
+  "finished_at": "2026-07-21T14:32:47Z",
+  "duration_ns": 152000000000,
   "git_sha": "38252494da5f39ce1e02e5a642fae85d0791a527",
   "hostname": "pkleins-mbp.local",
   "kernel": "24.5.0",
   "arch": "arm64",
   "os": "darwin",
-  "rustc": "rustc 1.85.0 (unknown)",
+  "rustc_version": "rustc 1.85.0 (unknown)",
   "wafer_runtime_version": "0.1.0",
-  "wafer_loadgen_version": "0.1.0",
-  "wasmtime_version": "38.0.2",
+  "wafer_runtime_sha256": "…",
+  "wasmtime_version": "43.0.0",
+  "wafer_plugin_hashes": {
+    "parser": "…",
+    "filter": "…"
+  },
   "config_path": "eval/configs/pipeline-c-passthrough.toml",
   "config_sha256": "…",
-  "started_at": "2026-07-21T14:30:15Z",
-  "finished_at": "2026-07-21T14:32:47Z",
-  "duration_seconds": 152,
   "loadgen": {
     "profile_path": "eval/loadgen/generic-1kb.toml",
-    "publish_command": ["…"],
-    "subscribe_command": ["…"]
+    "subscribe_topic": "wafer/bench/output"
   },
   "mosquitto": {
     "container_id": "docker-container-id",
     "image": "eclipse-mosquitto:2.0.18"
   },
   "exit_codes": {
-    "wafer_runtime": 0,
-    "loadgen_publish": 0,
-    "loadgen_subscribe": 0
+    "wafer_runtime": 0
   }
 }
 ```
+
+### Runtime-owned fields
+
+| Field | Producer | Rationale |
+| --- | --- | --- |
+| `wasmtime_version` | `wafer-runtime` build.rs, parsed from workspace `Cargo.lock` | The resolved dep version differs from the Cargo.toml declaration when wasmtime is pulled from git; this captures what actually ran. |
+| `rustc_version` | `wafer-runtime` build.rs, `rustc --version` at compile time | Cross-compilation drops the host rustc; build-time capture keeps provenance intact. |
+| `wafer_runtime_version` | `env!("CARGO_PKG_VERSION")` | Semver of the binary that ran, not the workspace. |
+| `wafer_runtime_sha256` | `std::env::current_exe()` + SHA256 | Exact binary bytes so a canonical-run number can be tied to the exact build artefact. |
+| `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch AND after every hot-swap by `PipelineHandle::record_plugin_hash`; the P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). |
+| `config_sha256` | Runtime `Sha256` of the effective config file at load time | Notebook cross-references use this as the provenance root. |
+| `kernel` | `uname -r` via subprocess from the runtime | Kept in both the runtime provenance and the shell metadata; the runtime version wins on merge. |
+
+### Sidecar file
+
+- Path: `runtime-provenance.json` inside the result directory.
+- Written by `wafer-runtime` on successful launch when either
+  `WAFER_METADATA_OUTPUT` (explicit path) or `WAFER_BENCH_OUTPUT_DIR`
+  (existing convention) is set. `run-experiment.sh` sets the latter.
+- The runtime emits the sidecar even if the run subsequently traps, so
+  post-mortem analysis retains provenance.
 
 Fields are omitted when not applicable:
 
@@ -98,9 +130,11 @@ Fields are omitted when not applicable:
 - `mosquitto` is absent when the harness reuses an already-running broker
   (see the `WAFER_HARNESS_MQTT` environment variable in
   [`eval/scripts/run-experiment.sh`](./scripts/run-experiment.sh)).
+- `wafer_plugin_hashes` is present but empty (`{}`) for all-native
+  pipelines (RFC-008 §D5 baselines).
 
-`config_sha256` is the digest of `config.toml` — reproducibility hinge for
-notebook cross-references.
+`config_sha256` is the digest of the effective `config.toml` bytes as
+loaded by the runtime — reproducibility hinge for notebook cross-references.
 
 ## Idempotency and safety
 
