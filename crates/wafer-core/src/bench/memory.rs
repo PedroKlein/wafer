@@ -1,7 +1,8 @@
 //! Process RSS memory sampling for evaluation experiments.
 //!
 //! Samples resident set size at 1Hz for memory scaling measurements (E-Perf-3/6).
-//! Platform-specific: Linux reads /proc/self/statm, macOS uses `ps`.
+//! Uses the `memory-stats` crate for uniform cross-platform behavior (macOS +
+//! Linux) without subprocess overhead.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
 
@@ -83,38 +84,31 @@ impl Default for MemoryRecorder {
     }
 }
 
-/// Read current process RSS in bytes. Platform-specific.
-#[cfg(target_os = "linux")]
+/// Read current process RSS in bytes using the `memory-stats` crate.
+///
+/// Cross-platform (macOS + Linux) without subprocess overhead. Returns
+/// `None` only when the underlying OS API is unavailable (e.g., WASI).
 pub fn read_rss_bytes() -> Option<u64> {
-    let statm = std::fs::read_to_string("/proc/self/statm").ok()?;
-    let resident_pages: u64 = statm.split_whitespace().nth(1)?.parse().ok()?;
-    // Standard page size on Linux
-    Some(resident_pages * 4096)
-}
-
-#[cfg(target_os = "macos")]
-pub fn read_rss_bytes() -> Option<u64> {
-    use std::process::Command;
-    let pid = std::process::id();
-    let output = Command::new("ps")
-        .args(["-o", "rss=", "-p", &pid.to_string()])
-        .output()
-        .ok()?;
-    let rss_kb: u64 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()?;
-    Some(rss_kb * 1024)
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub fn read_rss_bytes() -> Option<u64> {
-    None
+    memory_stats::memory_stats().map(|s| s.physical_mem as u64)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_stats_source() {
+        // AC1: read_rss_bytes uses `memory_stats` crate on macOS + Linux.
+        let rss = read_rss_bytes();
+        assert!(rss.is_some(), "memory-stats crate should return Some on this platform");
+        let rss = rss.unwrap();
+        assert!(rss > 0, "RSS should be non-zero for a running process");
+        // Sanity: a Rust test process should use at least 1 MB
+        assert!(
+            rss > 1_000_000,
+            "RSS {rss} bytes is suspiciously low for a Rust test process"
+        );
+    }
 
     #[test]
     fn read_rss_returns_some() {

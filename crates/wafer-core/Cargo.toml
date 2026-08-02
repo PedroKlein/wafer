@@ -57,6 +57,7 @@ uuid = { workspace = true }
 bytes = { workspace = true }
 blake3 = { workspace = true }
 foldhash = { workspace = true }
+memory-stats = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 oci-client = { workspace = true }
 semver = { workspace = true }
