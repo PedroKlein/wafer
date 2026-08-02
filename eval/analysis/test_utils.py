@@ -1,15 +1,12 @@
-"""Tests for eval/analysis/utils.py path-discovery helper."""
+"""Tests for eval/analysis/src/wafer_analysis/paths.py."""
 
 from __future__ import annotations
 
 import pathlib
-import sys
 
 import pytest
 
-# Ensure utils.py is importable from any working directory.
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-import utils  # noqa: E402
+from wafer_analysis import paths as utils
 
 
 @pytest.fixture

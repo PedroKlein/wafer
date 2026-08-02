@@ -47,16 +47,13 @@ uv run jupyter execute notebooks/10-summary-stats.ipynb
 
 ## Path discovery helper
 
-All notebooks import `find_latest_shakedown` from `eval/analysis/utils.py`
-to resolve the newest result directory for a given experiment.  This
-eliminates hardcoded timestamps that rot as new shakedown runs land.
+All notebooks import `find_latest_shakedown` from the `wafer_analysis`
+package (`eval/analysis/src/wafer_analysis/paths.py`) to resolve the
+newest result directory for a given experiment. This eliminates
+hardcoded timestamps that rot as new shakedown runs land.
 
 ```python
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent if '__file__' in dir() else Path.cwd().parent))
-from utils import find_latest_shakedown
+from wafer_analysis.paths import find_latest_shakedown
 
 # Automatically picks the newest shakedown result (lex sort on ISO-8601 timestamps)
 RESULT_DIR = find_latest_shakedown('e-val-1')
@@ -68,6 +65,9 @@ RESULT_DIR = find_latest_shakedown('e-val-1', pinned='eval/results/e-val-1/shake
 import os
 RESULT_DIR = find_latest_shakedown('e-perf-4', pinned=os.environ.get('SHAKEDOWN_DIR'))
 ```
+
+The helper is also re-exported at the package root:
+`from wafer_analysis import find_latest_shakedown`.
 
 The `pinned` parameter accepts an absolute path or a repo-relative path.
 When `None` (the default), the helper globs and returns the lexicographically
