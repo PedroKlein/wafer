@@ -384,6 +384,24 @@ async fn load_filter_node_dispatch(
     Ok(crate::node::FilterNode::from(wasm_node))
 }
 
+/// Test helper: build a native FilterNode from a `WasmNodeDef` as parsed
+/// from TOML. Exposes the launcher's native-dispatch branch so integration
+/// tests can prove the wiring without spinning up the async pipeline.
+/// Errors when the plugin is not a native kind. Not part of the stable API.
+#[doc(hidden)]
+pub fn build_native_filter_from_def(
+    node_id: &str,
+    wasm: &WasmNodeDef,
+) -> Result<crate::node::FilterNode> {
+    let function = wasm.plugin.native_function().ok_or_else(|| {
+        WaferError::Config(ConfigError::Message(format!(
+            "build_native_filter_from_def: node '{node_id}' is not a native plugin"
+        )))
+    })?;
+    let native = build_native_filter(node_id, function, wasm)?;
+    Ok(crate::node::FilterNode::Native(native))
+}
+
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,

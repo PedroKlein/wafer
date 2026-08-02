@@ -21,7 +21,9 @@
 //! resolve identically on the native side.
 
 use wafer_core::node::{FilterNode, FilterOutcome, NativeFilter};
+use wafer_core::orchestrator::launcher::build_native_filter_from_def;
 use wafer_core::queue::RuntimeEnvelope;
+use wafer_types::config::NodeDef;
 
 /// Deterministic corpus generator. LCG parameters chosen so the sequence
 /// spans `[0.0, 100.0]` roughly uniformly across 1000 samples; test
@@ -121,4 +123,46 @@ fn native_threshold_filter_malformed_drops() {
     assert_eq!(filter.evaluate(&missing_field).unwrap(), FilterOutcome::Drop);
     assert_eq!(filter.evaluate(&non_utf8).unwrap(), FilterOutcome::Drop);
     assert_eq!(filter.evaluate(&non_numeric).unwrap(), FilterOutcome::Drop);
+}
+
+/// AC F1 launcher-wired regression: loading `eval/configs/pipeline-a-native.toml`
+/// via the real config loader + launcher dispatch produces a working native
+/// FilterNode. If someone reverts the `load_filter_node_dispatch` native
+/// branch in `crates/wafer-core/src/orchestrator/launcher.rs`, this test
+/// fails at `build_native_filter_from_def` — catching the exact regression
+/// the direct-construction tests above cannot.
+#[test]
+fn pipeline_a_native_config_wires_launcher_dispatch() {
+    let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .expect("resolve repo root from crates/wafer-core");
+    let config_path = repo_root.join("eval/configs/pipeline-a-native.toml");
+    let config = wafer_config::load_config(&config_path).expect("load pipeline-a-native.toml");
+
+    // Locate the `filter` node exactly as `launch_pipeline` walks the config,
+    // then reproduce the launcher's native-dispatch branch. If plugin.kind
+    // stops being recognized as native or `build_native_filter` drops the
+    // "threshold" alias, this expect() fails loudly.
+    let (node_id, wasm) = config
+        .nodes
+        .iter()
+        .find_map(|(id, def)| match def {
+            NodeDef::Filter(w) if w.plugin.native_function().is_some() => Some((id.as_str(), w)),
+            _ => None,
+        })
+        .expect("pipeline-a-native.toml must declare a native filter");
+    assert_eq!(node_id, "filter", "launcher-wired test relies on canonical node id");
+
+    let mut filter =
+        build_native_filter_from_def(node_id, wasm).expect("launcher dispatch builds NativeFilter");
+
+    // Config values in pipeline-a-native.toml: field="temperature", min=50.0,
+    // max=99999.0. Hot record forwards, cold drops. Boundary at 50 forwards.
+    let hot = envelope_with_temperature(72.5);
+    let cold = envelope_with_temperature(30.0);
+    let boundary = envelope_with_temperature(50.0);
+    assert_eq!(filter.evaluate(&hot).unwrap(), FilterOutcome::Forward);
+    assert_eq!(filter.evaluate(&cold).unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&boundary).unwrap(), FilterOutcome::Forward);
 }

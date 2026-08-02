@@ -4767,6 +4767,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "uuid",
+ "wafer-config",
  "wafer-types",
  "wasmtime",
  "wasmtime-wasi",
