@@ -1,0 +1,29 @@
+% T9 (thesis-hardening plan, 2026-08-02): minimal LaTeX embed dry-run for
+% the canonical PDF figure pipeline. Verifies pdflatex accepts our
+% matplotlib-produced PDF without font substitution warnings.
+%
+% Build: pdflatex -interaction=nonstopmode embed.tex
+% Grep the log for 'Font shape .* undefined' or 'substituted' \u2014 both
+% MUST be absent for the T9 AC to pass.
+
+\documentclass[10pt,a4paper]{article}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{caption}
+
+\begin{document}
+\section*{T9 embed dry-run}
+
+Figure~\ref{fig:embed} shows the per-hop overhead PDF, exported by
+\texttt{eval/analysis/notebooks/02-per-hop-overhead.ipynb} via
+\texttt{wafer\_analysis.plots.save\_figure()}.
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.85\textwidth]{../e-perf-4/per_hop_overhead.pdf}
+  \caption{Per-hop overhead across payload sizes (E-Perf-4).}
+  \label{fig:embed}
+\end{figure}
+
+\end{document}
