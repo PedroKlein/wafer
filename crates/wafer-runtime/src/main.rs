@@ -18,12 +18,19 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use wafer_config::{load_config, validate};
 use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
+use wafer_core::bench::MemoryRecorder;
 use wafer_core::engine::Capabilities;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::orchestrator::PipelineOrchestrator;
 
 mod metadata;
+
+/// Global handle to the background `MemoryRecorder` so `flush_bench_artifacts`
+/// can retrieve samples after cancellation. Only populated when
+/// `WAFER_BENCH_OUTPUT_DIR` is set.
+static BENCH_RECORDER: std::sync::OnceLock<Arc<tokio::sync::Mutex<MemoryRecorder>>> =
+    std::sync::OnceLock::new();
 
 /// Log output format.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -137,6 +144,23 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set (A19).
+    let bench_output_dir = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from);
+    let bench_cancel = tokio_util::sync::CancellationToken::new();
+    if bench_output_dir.is_some() {
+        let cancel = bench_cancel.clone();
+        // MemoryRecorder is !Send across the spawn boundary because it
+        // holds &mut self. Wrap in an Arc<Mutex> so the spawned task
+        // owns the recorder and we can retrieve samples after cancel.
+        let recorder = Arc::new(tokio::sync::Mutex::new(MemoryRecorder::new()));
+        let rec_clone = Arc::clone(&recorder);
+        tokio::spawn(async move {
+            rec_clone.lock().await.sample_loop(cancel).await;
+        });
+        // Stash the handle so flush_bench_artifacts can retrieve samples.
+        BENCH_RECORDER.get_or_init(|| recorder);
+    }
+
     let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
 
     // Spawn timed swap trigger if configured (RQ3 benchmark mode)
@@ -222,6 +246,7 @@ async fn main() -> Result<()> {
 
         // Custom run loop that also handles swap delivery
         run_with_swap(&mut orchestrator, rx).await;
+        flush_bench_artifacts(&orchestrator, &bench_cancel).await;
         orchestrator.cancel();
         wait_control_plane(control_plane_tasks).await;
 
@@ -242,6 +267,7 @@ async fn main() -> Result<()> {
         Err(e) => error!(error = %e, "Pipeline exited with error"),
     }
 
+    flush_bench_artifacts(&orchestrator, &bench_cancel).await;
     orchestrator.cancel();
     wait_control_plane(control_plane_tasks).await;
 
@@ -359,6 +385,41 @@ async fn wait_control_plane(tasks: Vec<JoinHandle<()>>) {
         if let Err(error) = task.await {
             error!(%error, "control-plane task panicked");
         }
+    }
+}
+
+/// Flush benchmark artifacts (memory.csv + per_node_metrics.csv) on graceful
+/// shutdown when `WAFER_BENCH_OUTPUT_DIR` is set. Cancel-safe: fires the
+/// sampler's cancellation token, then drains collected samples to disk.
+async fn flush_bench_artifacts(
+    orchestrator: &PipelineOrchestrator,
+    bench_cancel: &tokio_util::sync::CancellationToken,
+) {
+    let Some(dir) = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from) else {
+        return;
+    };
+
+    // 1. Stop the memory sampler task.
+    bench_cancel.cancel();
+    // Give the spawned task a moment to observe cancellation and exit.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // 2. Flush memory.csv.
+    if let Some(recorder) = BENCH_RECORDER.get() {
+        let guard = recorder.lock().await;
+        let csv = guard.to_csv();
+        let path = dir.join("memory.csv");
+        match std::fs::write(&path, csv) {
+            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written"),
+            Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
+        }
+    }
+
+    // 3. Flush per_node_metrics.csv.
+    let metrics_path = dir.join("per_node_metrics.csv");
+    match orchestrator.export_per_node_metrics(&dir) {
+        Ok(()) => info!(path = %metrics_path.display(), "per_node_metrics.csv written"),
+        Err(e) => warn!(error = %e, "failed to write per_node_metrics.csv"),
     }
 }
 

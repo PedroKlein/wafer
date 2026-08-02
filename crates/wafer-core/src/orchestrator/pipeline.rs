@@ -697,6 +697,47 @@ impl PipelineOrchestrator {
     pub fn engine(&self) -> &Arc<WaferEngine> {
         &self.engine
     }
+
+    /// Export per-node metrics as CSV to `dir/per_node_metrics.csv`.
+    ///
+    /// Schema: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`
+    ///
+    /// Only emitted on graceful shutdown. `messages_in` = processed + failed
+    /// (every attempt counts as an incoming message). `error_state_seconds`
+    /// is derived from cumulative recovery duration (time from Error entry to
+    /// Running re-entry).
+    ///
+    /// # Errors
+    ///
+    /// Returns I/O errors from file creation/writing.
+    pub fn export_per_node_metrics(&self, dir: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Write;
+
+        let path = dir.join("per_node_metrics.csv");
+        let mut f = std::fs::File::create(&path)?;
+        writeln!(f, "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count")?;
+
+        // Sort by node_id for deterministic output
+        let mut node_ids: Vec<&str> = self.metrics.keys().map(|k| &**k).collect();
+        node_ids.sort_unstable();
+
+        for node_id in node_ids {
+            let m = &self.metrics[node_id];
+            let messages_out = m.processed();
+            let traps_total = m.failed();
+            let messages_in = messages_out + traps_total;
+            let recovery_count = m.recovery_count();
+            // error_state_seconds: cumulative time in Error/Recovering states.
+            // recovery_ns_total accumulates the full Error→Recovering→Running
+            // duration for each recovery cycle.
+            let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
+            writeln!(
+                f,
+                "{node_id},{messages_in},{messages_out},{traps_total},{error_state_secs:.6},{recovery_count}"
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Identity passthrough loop for native nodes without Wasm instances.
