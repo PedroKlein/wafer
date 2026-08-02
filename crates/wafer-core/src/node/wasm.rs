@@ -10,6 +10,7 @@
 //! CRITICAL: These calls MUST run to completion — NEVER inside select! branches.
 //! See docs/rfcs/RFC-005-orchestrator.md D5–D7.
 
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use bytes::Bytes;
@@ -108,14 +109,14 @@ fn recovery_store(
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
-    epoch_deadline: u64,
+    epoch_deadline: Option<NonZeroU64>,
 ) -> Store<WaferState> {
     let engine = old_store.engine().clone();
     let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
     let mut store = Store::new(&engine, state);
     store.limiter(|s| s.limits_mut());
     store.epoch_deadline_trap();
-    store.set_epoch_deadline(epoch_deadline);
+    store.set_epoch_deadline(epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
     store
 }
 
@@ -131,10 +132,10 @@ pub struct WasmTransformNode {
     store: Store<WaferState>,
     bindings: TransformNode,
     cached_pre: Arc<TransformNodePre<WaferState>>,
-    fuel_limit: u64,
+    fuel_limit: Option<NonZeroU64>,
     capabilities: Capabilities,
     memory_limit: usize,
-    epoch_deadline: u64,
+    epoch_deadline: Option<NonZeroU64>,
     config_json: String,
     /// Operator-supplied version string, passed to guest via `NodeConfig.
     /// plugin-version`. Empty string when unset in TOML.
@@ -147,7 +148,7 @@ impl WasmTransformNode {
         store: Store<WaferState>,
         bindings: TransformNode,
         cached_pre: Arc<TransformNodePre<WaferState>>,
-        fuel_limit: u64,
+        fuel_limit: Option<NonZeroU64>,
     ) -> Self {
         Self {
             store,
@@ -156,7 +157,7 @@ impl WasmTransformNode {
             fuel_limit,
             capabilities: Capabilities::sandbox(),
             memory_limit: 16 * 1024 * 1024,
-            epoch_deadline: 100,
+            epoch_deadline: None,
             config_json: "{}".to_string(),
             plugin_version: String::new(),
         }
@@ -166,7 +167,7 @@ impl WasmTransformNode {
         &mut self,
         capabilities: Capabilities,
         memory_limit: usize,
-        epoch_deadline: u64,
+        epoch_deadline: Option<NonZeroU64>,
         config_json: String,
     ) {
         self.capabilities = capabilities;
@@ -245,14 +246,14 @@ impl WasmTransformNode {
         self.store.data_mut().clear_log_buffer();
 
         self.store
-            .set_fuel(self.fuel_limit)
+            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
 
         // set_epoch_deadline is relative to the engine's current epoch; without
         // a per-call reset the store's absolute deadline lapses after
         // `epoch_deadline` ticks and every subsequent call traps with
         // `wasm trap: interrupt` at the first check point.
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
 
         let wit_msg = build_wit_message(&mut self.store, &envelope)?;
         // `borrow<buffer>` keeps host ownership; we must delete the resource
@@ -304,10 +305,10 @@ impl WasmTransformNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
             message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -399,10 +400,10 @@ pub struct WasmFilterNode {
     store: Store<WaferState>,
     bindings: FilterNode,
     cached_pre: Arc<FilterNodePre<WaferState>>,
-    fuel_limit: u64,
+    fuel_limit: Option<NonZeroU64>,
     capabilities: Capabilities,
     memory_limit: usize,
-    epoch_deadline: u64,
+    epoch_deadline: Option<NonZeroU64>,
     config_json: String,
     plugin_version: String,
 }
@@ -413,7 +414,7 @@ impl WasmFilterNode {
         store: Store<WaferState>,
         bindings: FilterNode,
         cached_pre: Arc<FilterNodePre<WaferState>>,
-        fuel_limit: u64,
+        fuel_limit: Option<NonZeroU64>,
     ) -> Self {
         Self {
             store,
@@ -422,7 +423,7 @@ impl WasmFilterNode {
             fuel_limit,
             capabilities: Capabilities::sandbox(),
             memory_limit: 16 * 1024 * 1024,
-            epoch_deadline: 100,
+            epoch_deadline: None,
             config_json: "{}".to_string(),
             plugin_version: String::new(),
         }
@@ -432,7 +433,7 @@ impl WasmFilterNode {
         &mut self,
         capabilities: Capabilities,
         memory_limit: usize,
-        epoch_deadline: u64,
+        epoch_deadline: Option<NonZeroU64>,
         config_json: String,
     ) {
         self.capabilities = capabilities;
@@ -499,10 +500,10 @@ impl WasmFilterNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
             message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -538,10 +539,10 @@ impl WasmFilterNode {
         self.store.data_mut().clear_log_buffer();
 
         self.store
-            .set_fuel(self.fuel_limit)
+            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
 
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
@@ -637,10 +638,10 @@ pub struct WasmRouterNode {
     store: Store<WaferState>,
     bindings: RouterNode,
     cached_pre: Arc<RouterNodePre<WaferState>>,
-    fuel_limit: u64,
+    fuel_limit: Option<NonZeroU64>,
     capabilities: Capabilities,
     memory_limit: usize,
-    epoch_deadline: u64,
+    epoch_deadline: Option<NonZeroU64>,
     config_json: String,
     plugin_version: String,
 }
@@ -651,7 +652,7 @@ impl WasmRouterNode {
         store: Store<WaferState>,
         bindings: RouterNode,
         cached_pre: Arc<RouterNodePre<WaferState>>,
-        fuel_limit: u64,
+        fuel_limit: Option<NonZeroU64>,
     ) -> Self {
         Self {
             store,
@@ -660,7 +661,7 @@ impl WasmRouterNode {
             fuel_limit,
             capabilities: Capabilities::sandbox(),
             memory_limit: 16 * 1024 * 1024,
-            epoch_deadline: 100,
+            epoch_deadline: None,
             config_json: "{}".to_string(),
             plugin_version: String::new(),
         }
@@ -670,7 +671,7 @@ impl WasmRouterNode {
         &mut self,
         capabilities: Capabilities,
         memory_limit: usize,
-        epoch_deadline: u64,
+        epoch_deadline: Option<NonZeroU64>,
         config_json: String,
     ) {
         self.capabilities = capabilities;
@@ -737,10 +738,10 @@ impl WasmRouterNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit).map_err(|e| WaferError::PluginInit {
+        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
             message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
         })?;
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -776,10 +777,10 @@ impl WasmRouterNode {
         self.store.data_mut().clear_log_buffer();
 
         self.store
-            .set_fuel(self.fuel_limit)
+            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
             .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
-        self.store.set_epoch_deadline(self.epoch_deadline);
+        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
 
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();

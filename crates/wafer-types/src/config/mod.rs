@@ -189,8 +189,10 @@ impl From<PluginSpec> for String {
 pub struct WasmNodeDef {
     pub plugin: PluginSpec,
 
-    #[serde(default)]
-    pub fuel: Option<u64>,
+    /// Per-node fuel override. `None` = use engine default for this node type.
+    /// NonZeroU64: `0` would trap on the first fuel check (P0.13 lesson).
+    #[serde(default, deserialize_with = "engine::deserialize_metering_limit", serialize_with = "engine::serialize_metering_limit")]
+    pub fuel: Option<std::num::NonZeroU64>,
 
     #[serde(default)]
     pub capabilities: Capabilities,
@@ -355,8 +357,8 @@ port = "default"
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.pipeline.as_ref().unwrap().name.as_deref(), Some("test-pipeline"));
-        assert_eq!(config.engine.epoch_deadline, 200);
-        assert_eq!(config.engine.fuel.transform, 20_000_000);
+        assert_eq!(config.engine.epoch_deadline, std::num::NonZeroU64::new(200));
+        assert_eq!(config.engine.fuel.transform, std::num::NonZeroU64::new(20_000_000));
         assert_eq!(config.error_policy.bad_input, SimpleAction::Skip);
         assert_eq!(config.error_policy.dependency_failed.retries, 5);
         assert!(config.dead_letter.is_some());
@@ -367,7 +369,7 @@ port = "default"
             assert!(wasm.capabilities.inherit_stdio);
             assert!(wasm.capabilities.allow_inference);
             assert!(!wasm.capabilities.inherit_env);
-            assert_eq!(wasm.fuel, Some(50_000_000));
+            assert_eq!(wasm.fuel, std::num::NonZeroU64::new(50_000_000));
         } else {
             panic!("Expected Transform node");
         }
@@ -453,7 +455,7 @@ batch_size = 32
             assert!(wasm.capabilities.inherit_stdio);
             assert!(!wasm.capabilities.inherit_env);
             assert!(wasm.capabilities.allow_inference);
-            assert_eq!(wasm.fuel, Some(100_000_000));
+            assert_eq!(wasm.fuel, std::num::NonZeroU64::new(100_000_000));
             assert!(wasm.config.is_some());
         } else {
             panic!("Expected Transform node");
@@ -506,12 +508,12 @@ queue_capacity = 20000
     #[test]
     fn test_engine_config_defaults() {
         let engine = EngineConfig::default();
-        assert_eq!(engine.epoch_deadline, 100);
+        assert_eq!(engine.epoch_deadline, None);
         assert_eq!(engine.epoch_tick_ms, 10);
         assert_eq!(engine.default_queue_capacity, 1024);
-        assert_eq!(engine.fuel.transform, 10_000_000);
-        assert_eq!(engine.fuel.filter, 500_000);
-        assert_eq!(engine.fuel.router, 500_000);
+        assert_eq!(engine.fuel.transform, None);
+        assert_eq!(engine.fuel.filter, None);
+        assert_eq!(engine.fuel.router, None);
         assert_eq!(engine.memory.transform, 64 * 1024 * 1024);
         assert_eq!(engine.memory.filter, 16 * 1024 * 1024);
         assert_eq!(engine.memory.router, 16 * 1024 * 1024);
@@ -606,5 +608,43 @@ to = "snk"
         let reparsed: Config = toml::from_str(&round_trip).unwrap();
         assert_eq!(reparsed.nodes.len(), 2);
         assert_eq!(reparsed.edges.len(), 1);
+    }
+
+    /// AC1 guard: `epoch_deadline = 0` is rejected at deserialization time
+    /// because NonZeroU64 does not accept zero. Prevents the P0.13 footgun
+    /// where a typo silently traps every Wasm call on first epoch check.
+    #[test]
+    fn config_epoch_zero_rejected() {
+        let toml_str = r#"epoch_deadline = 0"#;
+        let result: Result<EngineConfig, _> = toml::from_str(toml_str);
+        let err = result.expect_err("epoch_deadline = 0 must fail deserialization");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("0") || msg.contains("zero") || msg.contains("trap"),
+            "error should mention zero/trap: {msg}"
+        );
+    }
+
+    /// AC1 guard: `fuel.transform = 0` is rejected at deserialization time.
+    #[test]
+    fn config_fuel_zero_rejected() {
+        let toml_str = r#"
+[fuel]
+transform = 0
+"#;
+        let result: Result<EngineConfig, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "fuel = 0 must fail deserialization");
+    }
+
+    /// AC1 guard: missing fields deserialize to None (unlimited).
+    #[test]
+    fn config_missing_means_none() {
+        let toml_str = r#"epoch_tick_ms = 5"#;
+        let config: EngineConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.epoch_deadline, None);
+        assert_eq!(config.fuel.transform, None);
+        assert_eq!(config.fuel.filter, None);
+        assert_eq!(config.fuel.router, None);
+        assert_eq!(config.epoch_tick_ms, 5);
     }
 }

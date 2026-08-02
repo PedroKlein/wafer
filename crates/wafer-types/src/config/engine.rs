@@ -1,6 +1,38 @@
-use serde::{Deserialize, Serialize};
+use std::num::NonZeroU64;
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::source_sink::{AuthConfig, TlsConfig};
+
+/// Custom deserializer for metering fields: missing → None (unlimited),
+/// positive integer → Some(NonZeroU64), zero → hard error.
+///
+/// Standard `Option<NonZeroU64>` silently maps `0` to `None` (TOML trait
+/// semantics). We reject it instead so the P0.13 footgun stays impossible.
+pub(crate) fn deserialize_metering_limit<'de, D>(deserializer: D) -> Result<Option<NonZeroU64>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let v = Option::<u64>::deserialize(deserializer)?;
+    match v {
+        None => Ok(None),
+        Some(0) => Err(serde::de::Error::custom(
+            "metering value must not be 0 (would trap immediately); omit the field for unlimited",
+        )),
+        Some(n) => Ok(Some(NonZeroU64::new(n).unwrap())),
+    }
+}
+
+/// Serialize helper: unwrap the NonZeroU64 back to a plain u64 for TOML.
+pub(crate) fn serialize_metering_limit<S>(value: &Option<NonZeroU64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        None => serializer.serialize_none(),
+        Some(n) => serializer.serialize_u64(n.get()),
+    }
+}
 
 pub(super) const fn default_mqtt_port() -> u16 {
     1883
@@ -12,8 +44,13 @@ pub(super) const fn default_true() -> bool {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EngineConfig {
-    #[serde(default = "default_epoch_deadline")]
-    pub epoch_deadline: u64,
+    /// Epoch ticks before a Wasm call traps. `None` = no epoch interrupt.
+    ///
+    /// NonZeroU64 prevents the `0 = trap immediately` footgun (P0.13 lesson:
+    /// a typo or off-by-one silently makes every Wasm call trap on first
+    /// epoch check, indistinguishable from a plugin bug).
+    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    pub epoch_deadline: Option<NonZeroU64>,
 
     #[serde(default = "default_epoch_tick_ms")]
     pub epoch_tick_ms: u64,
@@ -31,7 +68,7 @@ pub struct EngineConfig {
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            epoch_deadline: default_epoch_deadline(),
+            epoch_deadline: None,
             epoch_tick_ms: default_epoch_tick_ms(),
             default_queue_capacity: default_queue_capacity(),
             fuel: FuelBudgets::default(),
@@ -40,24 +77,29 @@ impl Default for EngineConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub struct FuelBudgets {
-    #[serde(default = "default_fuel_transform")]
-    pub transform: u64,
+    /// Fuel per transform process() call. `None` = unlimited (set_fuel skipped).
+    ///
+    /// NonZeroU64: `0` would trap on the first fuel check (P0.13 lesson).
+    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    pub transform: Option<NonZeroU64>,
 
-    #[serde(default = "default_fuel_filter")]
-    pub filter: u64,
+    /// Fuel per filter apply() call. `None` = unlimited.
+    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    pub filter: Option<NonZeroU64>,
 
-    #[serde(default = "default_fuel_router")]
-    pub router: u64,
+    /// Fuel per router route() call. `None` = unlimited.
+    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    pub router: Option<NonZeroU64>,
 }
 
 impl Default for FuelBudgets {
     fn default() -> Self {
         Self {
-            transform: default_fuel_transform(),
-            filter: default_fuel_filter(),
-            router: default_fuel_router(),
+            transform: None,
+            filter: None,
+            router: None,
         }
     }
 }
@@ -236,10 +278,6 @@ pub struct Capabilities {
     pub allow_inference: bool,
 }
 
-const fn default_epoch_deadline() -> u64 {
-    100
-}
-
 const fn default_epoch_tick_ms() -> u64 {
     10
 }
@@ -248,17 +286,7 @@ const fn default_queue_capacity() -> usize {
     1024
 }
 
-const fn default_fuel_transform() -> u64 {
-    10_000_000
-}
 
-const fn default_fuel_filter() -> u64 {
-    500_000
-}
-
-const fn default_fuel_router() -> u64 {
-    500_000
-}
 
 const fn default_memory_transform() -> usize {
     64 * 1024 * 1024

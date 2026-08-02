@@ -6,6 +6,4 @@
 pub use wafer_types::config::*;
 
 pub const DEFAULT_QUEUE_CAPACITY: usize = 1024;
-pub const DEFAULT_EPOCH_DEADLINE: u64 = 100;
 pub const DEFAULT_EPOCH_TICK_MS: u64 = 10;
-pub const DEFAULT_FUEL_LIMIT: u64 = 10_000_000;

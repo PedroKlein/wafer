@@ -7,6 +7,7 @@
 //!
 //! See docs/rfcs/RFC-007-performance-optimizations.md C1.
 
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -27,8 +28,8 @@ use crate::error::{Result, WaferError};
 /// component cache. Create once at startup, pass by reference everywhere.
 pub struct WaferEngine {
     engine: Engine,
-    fuel_limit: u64,
-    epoch_deadline: u64,
+    fuel_limit: Option<NonZeroU64>,
+    epoch_deadline: Option<NonZeroU64>,
     epoch_tick_ms: u64,
     /// Epoch ticker is started lazily on first use.
     epoch_started: OnceLock<()>,
@@ -256,15 +257,15 @@ impl WaferEngine {
         &self.engine
     }
 
-    /// Configured fuel limit per process() call.
+    /// Configured fuel limit per process() call. `None` = unlimited.
     #[inline]
-    pub fn fuel_limit(&self) -> u64 {
+    pub fn fuel_limit(&self) -> Option<NonZeroU64> {
         self.fuel_limit
     }
 
-    /// Configured epoch deadline (number of ticks before timeout).
+    /// Configured epoch deadline (number of ticks before timeout). `None` = no epoch trap.
     #[inline]
-    pub fn epoch_deadline(&self) -> u64 {
+    pub fn epoch_deadline(&self) -> Option<NonZeroU64> {
         self.epoch_deadline
     }
 }
@@ -272,27 +273,41 @@ impl WaferEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DEFAULT_EPOCH_DEADLINE, DEFAULT_EPOCH_TICK_MS, DEFAULT_FUEL_LIMIT, FuelBudgets};
+    use crate::config::{DEFAULT_EPOCH_TICK_MS, FuelBudgets};
 
     #[test]
     fn engine_creation_default() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), DEFAULT_FUEL_LIMIT);
-        assert_eq!(engine.epoch_deadline(), DEFAULT_EPOCH_DEADLINE);
+        assert_eq!(engine.fuel_limit(), None);
+        assert_eq!(engine.epoch_deadline(), None);
     }
 
     #[test]
     fn engine_from_engine_config() {
         let cfg = EngineConfig {
-            fuel: FuelBudgets { transform: 500_000, ..Default::default() },
-            epoch_deadline: 50,
+            fuel: FuelBudgets { transform: NonZeroU64::new(500_000), ..Default::default() },
+            epoch_deadline: NonZeroU64::new(50),
             epoch_tick_ms: DEFAULT_EPOCH_TICK_MS,
             default_queue_capacity: 1024,
             memory: Default::default(),
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), 500_000);
-        assert_eq!(engine.epoch_deadline(), 50);
+        assert_eq!(engine.fuel_limit(), NonZeroU64::new(500_000));
+        assert_eq!(engine.epoch_deadline(), NonZeroU64::new(50));
+    }
+
+    /// AC2: when epoch_deadline is None, the engine accessor returns None
+    /// so callers know to skip `store.epoch_deadline_trap()` + `set_epoch_deadline`.
+    #[test]
+    fn epoch_none_means_wasmtime_untouched() {
+        let cfg = EngineConfig {
+            epoch_deadline: None,
+            fuel: FuelBudgets { transform: None, ..Default::default() },
+            ..Default::default()
+        };
+        let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
+        assert_eq!(engine.epoch_deadline(), None, "None epoch_deadline → no epoch trap");
+        assert_eq!(engine.fuel_limit(), None, "None fuel → no fuel limit");
     }
 
     #[test]

@@ -78,8 +78,11 @@ impl PluginTestHarness {
         );
         let mut store = Store::new(self.engine.inner(), state);
         store.limiter(|s| s.limits_mut());
+        // Fuel + epoch must be set before instantiation — start functions
+        // consume fuel and the epoch ticker is running.
+        store.set_fuel(self.engine.fuel_limit().map_or(u64::MAX, |n| n.get())).unwrap();
         store.epoch_deadline_trap();
-        store.set_epoch_deadline(self.engine.epoch_deadline());
+        store.set_epoch_deadline(self.engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
 
         let bindings = pre
             .instantiate(&mut store)

@@ -4,6 +4,7 @@
 //! Wasm compilation, source/sink construction, and topology wiring.
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -214,7 +215,7 @@ fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
 async fn load_transform_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: u64,
+    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -251,7 +252,7 @@ fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::
 async fn load_transform_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: u64,
+    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -270,15 +271,19 @@ async fn load_transform_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
+    // Fuel + epoch must be set before instantiation — start functions consume
+    // fuel, and the epoch ticker is running from engine init.
+    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
+        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
+    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("transform '{node_id}' instantiation failed: {e}"),
     })?;
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmTransformNode::new(store, bindings, pre, wasm.fuel.unwrap_or(default_fuel));
+    let mut node = WasmTransformNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
         capabilities_from_config(&wasm.capabilities),
         wasm.memory_limit.unwrap_or(default_memory),
@@ -353,7 +358,7 @@ fn as_f64(v: &toml::Value) -> Option<f64> {
 async fn load_filter_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: u64,
+    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -375,7 +380,7 @@ async fn load_filter_node_dispatch(
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: u64,
+    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -394,15 +399,19 @@ async fn load_filter_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
+    // Fuel + epoch must be set before instantiation — start functions consume
+    // fuel, and the epoch ticker is running from engine init.
+    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
+        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
+    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("filter '{node_id}' instantiation failed: {e}"),
     })?;
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmFilterNode::new(store, bindings, pre, wasm.fuel.unwrap_or(default_fuel));
+    let mut node = WasmFilterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
         capabilities_from_config(&wasm.capabilities),
         wasm.memory_limit.unwrap_or(default_memory),
@@ -417,7 +426,7 @@ async fn load_filter_node(
 async fn load_router_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: u64,
+    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -436,15 +445,19 @@ async fn load_router_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
+    // Fuel + epoch must be set before instantiation — start functions consume
+    // fuel, and the epoch ticker is running from engine init.
+    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
+        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline());
+    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("router '{node_id}' instantiation failed: {e}"),
     })?;
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmRouterNode::new(store, bindings, pre, wasm.fuel.unwrap_or(default_fuel));
+    let mut node = WasmRouterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
         capabilities_from_config(&wasm.capabilities),
         wasm.memory_limit.unwrap_or(default_memory),
