@@ -64,8 +64,8 @@ before reading. The matrix below is authoritative:
 | `latency.hdr` | Every experiment with a BenchSink or `wafer-loadgen subscribe` (E-Val-1, E-Perf-1..9, E-Backpressure, E-Iso-*, E-Swap-*) | `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2 latency in nanoseconds. In-process: per-hop source-to-sink. E2E: MQTT publish → MQTT consume with intended-publish timestamp (avoids coordinated omission). |
 | `throughput.csv` | Same as `latency.hdr` | `BenchSink` or `wafer-loadgen subscribe` | Periodic throughput samples: `timestamp_ns,messages_per_sec,total_messages`. |
 | `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
-| `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and `run-experiment.sh` external sampler by default) | `run-experiment.sh` external sampler; per-experiment scripts write their own via 1 Hz `ps` polling | 1 Hz process-RSS timeline of `wafer-runtime`: `timestamp_ns,rss_bytes,vsz_bytes` (or `sample_ns,rss_kb,vsz_kb` in the per-experiment scripts). macOS uses `ps -o rss=,vsz= -p <PID>` today; Linux prefers `/proc/self/statm`. See `docs/decisions/eval-result-contract-scope.md` for the pending option-A migration to a runtime-side sampler using the `memory-stats` crate. |
-| `per_node_metrics.csv` | E-Iso-1..8 (explicit script emitters); `run-experiment.sh` best-effort scrape when the Prometheus endpoint is reachable | Shakedown scripts / `run-experiment.sh` scrapes `/metrics` at shutdown | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Best-effort — if the HTTP server is disabled, the file is either absent or contains a `# metrics endpoint unreachable` header. |
+| `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and any run with `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `MemoryRecorder::sample_loop` (1 Hz, cross-platform via `memory-stats` crate). Flush on graceful shutdown. | 1 Hz process-RSS timeline of `wafer-runtime`: `elapsed_ms,rss_bytes`. Runtime-owned since A19 closure (thesis-hardening T4). Legacy harness `ps` polling removed. |
+| `per_node_metrics.csv` | All experiments (emitted on graceful shutdown when `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Runtime-owned since A19 closure (thesis-hardening T4). |
 | `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `wafer-runtime` orchestrator's `SwapTimeline` emitter | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
 | `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
 
@@ -73,15 +73,13 @@ before reading. The matrix below is authoritative:
 
 - `wafer-runtime` owns `runtime-provenance.json`, `latency.hdr` (via
   `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
-  (via `BenchSink` when `track_sequences=true`), and
-  `swap_timeline.json`.
+  (via `BenchSink` when `track_sequences=true`),
+  `swap_timeline.json`, `memory.csv` (via `MemoryRecorder`), and
+  `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
   `latency.hdr` (E2E path), `sequence.csv`.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
-  `metadata.json`, `config.toml`, `stdout.log`, `memory.csv`, and
-  `per_node_metrics.csv`. The option-A migration filed alongside
-  this decision would move `memory.csv` and `per_node_metrics.csv`
-  to `wafer-runtime`.
+  `metadata.json`, `config.toml`, and `stdout.log`.
 
 ## `metadata.json` schema
 

@@ -186,7 +186,10 @@ Choose between (a) shell-swap `ps` → `/proc/pid/smaps_rollup` in harness scrip
 
 **Executor:** `inline`.
 
-### M2a — Linux memory sampler shell swap (P1, only if M1 = option a)
+### M2a — Linux memory sampler shell swap (P1, only if M1 = option a) — SKIPPED
+
+**Status:** Skipped. thesis-hardening T4 executed M2b (option b) instead.
+See commits `1a2bce6`, `11f757d`, `90775ef`, `2e2139c`.
 
 Replace `ps -o rss=` with a Linux-aware helper.
 
@@ -201,7 +204,11 @@ Replace `ps -o rss=` with a Linux-aware helper.
 
 **Executor:** `inline`. **Depends on:** M1 = option a.
 
-### M2b — Runtime-side memory_stats sampler (P1, only if M1 = option b)
+### M2b — Runtime-side memory_stats sampler (P1, only if M1 = option b) — CLOSED
+
+**Status:** Closed by thesis-hardening T4 (2026-08-02). All ACs verified.
+Commits: `1a2bce6` (dep + read_rss_bytes), `11f757d` (runtime spawn +
+per_node_metrics), `90775ef` (script cleanup), `2e2139c` (bench).
 
 Wire `MemoryRecorder::sample_loop` in the runtime; replace macOS `ps` shell in `read_rss_bytes` with `memory_stats` crate. Emit `memory.csv` from runtime.
 
