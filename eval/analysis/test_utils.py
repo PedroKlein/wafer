@@ -34,14 +34,37 @@ def test_single_dir(fake_results: pathlib.Path):
 
 
 def test_multiple_dirs_returns_newest(fake_results: pathlib.Path):
+    """Regression: prove the helper uses LEX sort on the directory name,
+    not filesystem mtime. Creates dirs in reverse chronological order and
+    stamps each with an mtime that inverts creation order, so a mtime-
+    based sort would return the wrong (oldest-named) directory.
+
+    Reviewer flagged the previous version (which created `(mid, old, new)`)
+    as insufficient because mtime and lex sort both returned `new`.
+    """
+    import os
+    import time
+
     base = fake_results / "eval" / "results" / "e-val-1"
     old = base / "shakedown-macos-2026-07-01T10-00-00Z"
     mid = base / "shakedown-macos-2026-07-15T12-00-00Z"
     new = base / "shakedown-macos-2026-08-01T20-47-01Z"
-    for d in (mid, old, new):  # create out of order
+    # Create newest-first so the filesystem's implicit mtime ordering
+    # inverts the lex ordering.
+    for d in (new, mid, old):
         d.mkdir()
+    # Force mtime inversion explicitly — mkdir mtimes on fast SSDs collide
+    # inside the same millisecond and macOS HFS+ has 1s granularity.
+    now = time.time()
+    os.utime(new, (now - 3, now - 3))  # oldest mtime
+    os.utime(mid, (now - 2, now - 2))
+    os.utime(old, (now - 1, now - 1))  # newest mtime
+
     result = utils.find_latest_shakedown("e-val-1")
-    assert result == new
+    assert result == new, (
+        f"expected lex-newest {new.name}, got {result.name} — "
+        "helper is using mtime sort instead of lex sort"
+    )
 
 
 def test_pinned_bypasses_glob(fake_results: pathlib.Path):

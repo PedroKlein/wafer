@@ -322,7 +322,7 @@ fn build_native_filter(
         }
         other => Err(WaferError::Config(ConfigError::Message(format!(
             "unknown native filter function '{other}' on node '{node_id}' \
-             (valid: threshold)"
+             (valid: threshold, threshold-filter, range)"
         )))),
     }
 }

@@ -142,7 +142,9 @@ Decide before canonical Pi runs.
 
 ---
 
-## P-Followup-4 — Shell script exit-code discipline
+## P-Followup-4 — Shell script exit-code discipline ✅ Closed
+
+**Status: ✅ Closed** — F4, commit `223d83f` (9 shakedown scripts hardened with trap handlers; narrow `|| true` audit passed).
 
 **Priority:** P1 — masks catastrophic runtime startup failures.
 **Origin:** eval-harness reviewer.
