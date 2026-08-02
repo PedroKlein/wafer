@@ -113,6 +113,8 @@ Missing per `eval/RESULT-CONTRACT.md` and RFC-008 D10:
 
 ## P-Followup-3 — `memory.csv` + `per_node_metrics.csv` collection
 
+**Status: ✅ Closed** (option B) — F3, commit `PENDING_SHA`.
+
 **Priority:** P1 — result-dir contract violation; blocks E-Perf-6 (RSS)
 and E-Iso-1..8 (per-node throughput) canonical claims.
 **Origin:** eval-harness reviewer.
@@ -249,6 +251,12 @@ returns nothing. Unit tests in `eval/analysis/test_utils.py`.
 ---
 
 ## P-Followup-8 — Skill drift audit
+
+**Status: ✅ Closed** (partial) — F8, commit `PENDING_SHA`. Root cause
+documented (empty quality-reviewer output is a independent model cold-start /
+rate-limit artefact; complements are captured in `memory_remember`
+category `wafer-verify`). No prompt or agent-config change needed;
+future runs should retry once before escalating.
 
 **Priority:** P2 — documentation-only.
 **Origin:** internal.

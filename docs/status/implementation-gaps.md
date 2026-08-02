@@ -586,6 +586,48 @@ RQ1 finding that MQTT-bookend throughput is dominated by broker RTT.
 
 ---
 
+## A19 — Runtime-side memory sampler + per-node metrics emitter (Open) 🟡
+
+**Severity:** low. Affects canonical-run harness hygiene, not thesis
+numbers. Filed by F3 (`fcd855d` line of work) as the deferred half of
+the result-dir contract split (option A migration).
+
+**Symptom.** `memory.csv` and `per_node_metrics.csv` are produced by
+different per-experiment scripts (E-Perf-6/7/8/9, E-Iso-7/8) rather
+than by the runtime itself. `crates/wafer-core/src/bench/memory.rs`
+has a `MemoryRecorder::sample_loop` at 1 Hz but it is unused; the
+macOS path still shells out to `ps -o rss=` instead of using the
+`memory-stats` crate.
+
+**Proposed fix (deferred to canonical-runs plan).**
+
+1. Add `memory-stats = "0.1"` to the workspace deps, replace
+   `crates/wafer-core/src/bench/memory.rs::read_rss_bytes` (macOS
+   path) with the crate.
+2. Wire `MemoryRecorder::sample_loop` in `crates/wafer-runtime/src/main.rs`
+   as an always-on task gated on `WAFER_BENCH_OUTPUT_DIR`; write
+   `memory.csv` on cancellation. Use the CancellationToken pattern
+   already established in the runner loops (see async-tokio skill).
+3. Emit `per_node_metrics.csv` from `PipelineOrchestrator` on shutdown
+   using `NodeMetrics` atomic counters (no HTTP scrape needed).
+4. Ship a `cargo bench --bench overhead_of_memory_sampling` asserting
+   < 0.1 % throughput hit vs a control run (per plan constraint).
+5. Delete the per-experiment sampler blocks in `run-e-perf-6-8`,
+   `run-e-perf-7`, `run-e-bp-perf9`, and `run-e-iso-*` scripts once
+   the runtime path is authoritative.
+
+**Impact if unfixed.**
+- Canonical Pi harness keeps two sources of RSS numbers with slightly
+  different sampling semantics (ps vs memory-stats).
+- E-Val-1 and pipeline-shakedown result dirs still lack `memory.csv`
+  — fine for those experiments, but the contract has to keep
+  documenting the split.
+
+**Not fixed here.** Documented in F3 as the deferred option A. See
+`docs/decisions/eval-result-contract-scope.md`.
+
+---
+
 ## How to close a gap
 
 1. Land the code fix.

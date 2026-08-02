@@ -35,24 +35,53 @@ hyphens so the path is `mv`-safe on every filesystem.
 
 ## Manifest
 
-### Always-present (every experiment)
+The result-directory contract is split into **core artefacts**
+(mandatory on every run) and **per-experiment optional artefacts**
+(present only when the experiment's semantics require them). See
+`docs/decisions/eval-result-contract-scope.md` for the option A vs B
+rationale.
+
+### Core artefacts (mandatory)
+
+Every `run-experiment.sh` invocation produces these regardless of
+experiment:
 
 | File | Producer | Description |
 | --- | --- | --- |
 | `config.toml` | `run-experiment.sh` copies the input file | Verbatim copy of the pipeline config used for this run. |
-| `metadata.json` | `run-experiment.sh` | Run-provenance JSON — see [metadata.json schema](#metadatajson-schema) below. |
+| `metadata.json` | `run-experiment.sh` + wafer-runtime provenance merge | Run-provenance JSON — see [metadata.json schema](#metadatajson-schema). |
+| `runtime-provenance.json` | `wafer-runtime` (F2) | Runtime-owned provenance sidecar (wasmtime, plugin hashes, config sha256, rustc, kernel, runtime sha). Merged into `metadata.json` by `_write_metadata`. |
 | `stdout.log` | `run-experiment.sh` tees runtime output | Complete stdout+stderr of `wafer-runtime` including trap traces and hot-swap events. |
-| `latency.hdr` | Either `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2-serialised latency in nanoseconds. In-process runs measure per-hop end-to-end from source enqueue to sink dequeue; E2E runs measure MQTT publish → MQTT consume with the intended-publish timestamp stamped in payload (avoids coordinated omission). |
-| `throughput.csv` | `BenchSink` or `wafer-loadgen subscribe` | Periodic throughput samples: `timestamp_ns,messages_per_sec,total_messages`. |
-| `memory.csv` | `run-experiment.sh` external sampler | 1 Hz process-RSS timeline of `wafer-runtime`: `timestamp_ns,rss_bytes,vsz_bytes`. macOS uses `ps -o rss=,vsz= -p <PID>` (KiB × 1024); Linux is expected to prefer `/proc/self/statm` when the canonical-runs plan wires it up. |
-| `per_node_metrics.csv` | `run-experiment.sh` scrapes Prometheus `/metrics` at shutdown | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Columns are best-effort — if the runtime's HTTP server was disabled, this file exists but contains only the header + a `# metrics endpoint unreachable` comment. |
 
-### Conditional (produced by specific experiment shapes)
+### Per-experiment optional artefacts
 
-| File | Present when | Producer | Description |
+Present only when the experiment's script writes them; consumers
+(notebooks, canonical-run analysis) MUST guard on `os.path.exists`
+before reading. The matrix below is authoritative:
+
+| File | Experiments | Producer | Description |
 | --- | --- | --- | --- |
-| `sequence.csv` | Loadgen subscribe ran with sequence tracking, or `BenchSink` had `track_sequences = true`. | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
-| `swap_timeline.json` | Config exercised at least one hot-swap (RFC-008 E-Swap-1..6). | `wafer-runtime` orchestrator's `SwapTimeline` serialiser (planned by P5.1). | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
+| `latency.hdr` | Every experiment with a BenchSink or `wafer-loadgen subscribe` (E-Val-1, E-Perf-1..9, E-Backpressure, E-Iso-*, E-Swap-*) | `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2 latency in nanoseconds. In-process: per-hop source-to-sink. E2E: MQTT publish → MQTT consume with intended-publish timestamp (avoids coordinated omission). |
+| `throughput.csv` | Same as `latency.hdr` | `BenchSink` or `wafer-loadgen subscribe` | Periodic throughput samples: `timestamp_ns,messages_per_sec,total_messages`. |
+| `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
+| `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and `run-experiment.sh` external sampler by default) | `run-experiment.sh` external sampler; per-experiment scripts write their own via 1 Hz `ps` polling | 1 Hz process-RSS timeline of `wafer-runtime`: `timestamp_ns,rss_bytes,vsz_bytes` (or `sample_ns,rss_kb,vsz_kb` in the per-experiment scripts). macOS uses `ps -o rss=,vsz= -p <PID>` today; Linux prefers `/proc/self/statm`. See `docs/decisions/eval-result-contract-scope.md` for the pending option-A migration to a runtime-side sampler using the `memory-stats` crate. |
+| `per_node_metrics.csv` | E-Iso-1..8 (explicit script emitters); `run-experiment.sh` best-effort scrape when the Prometheus endpoint is reachable | Shakedown scripts / `run-experiment.sh` scrapes `/metrics` at shutdown | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Best-effort — if the HTTP server is disabled, the file is either absent or contains a `# metrics endpoint unreachable` header. |
+| `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `wafer-runtime` orchestrator's `SwapTimeline` emitter | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
+| `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
+
+### Ownership summary
+
+- `wafer-runtime` owns `runtime-provenance.json`, `latency.hdr` (via
+  `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
+  (via `BenchSink` when `track_sequences=true`), and
+  `swap_timeline.json`.
+- `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
+  `latency.hdr` (E2E path), `sequence.csv`.
+- `run-experiment.sh` and the per-experiment shakedown scripts own
+  `metadata.json`, `config.toml`, `stdout.log`, `memory.csv`, and
+  `per_node_metrics.csv`. The option-A migration filed alongside
+  this decision would move `memory.csv` and `per_node_metrics.csv`
+  to `wafer-runtime`.
 
 ## `metadata.json` schema
 
