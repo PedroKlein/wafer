@@ -456,3 +456,49 @@ for b in wafer wafer-loadgen waferctl; do
 done
 [ "$missing" -eq 0 ] || { echo "cross-build-pi-check FAILED: $missing binary/binaries missing or wrong arch" >&2; exit 1; }
 '''
+
+[tasks.notebooks]
+description = "Open all analysis notebooks in JupyterLab (browser)"
+run = '''
+set -euo pipefail
+cd eval/analysis
+uv run jupyter lab --notebook-dir=notebooks
+'''
+
+[tasks.notebooks-view]
+description = "Open a specific notebook read-only in the browser (renders inline)"
+run = '''
+set -euo pipefail
+if [ -z "${1:-}" ]; then
+  echo "usage: mise run notebooks-view <notebook-stem>" >&2
+  echo "  e.g. mise run notebooks-view 05-hotswap-timeline" >&2
+  echo "  available:" >&2
+  ls eval/analysis/notebooks/*.ipynb | xargs -n1 basename | sed 's/\.ipynb$//; s/^/    /' >&2
+  exit 2
+fi
+cd eval/analysis
+out=$(mktemp -d)/$1.html
+uv run jupyter nbconvert --to html --output-dir "$(dirname "$out")" "notebooks/$1.ipynb"
+open "$out"
+'''
+
+[tasks.notebooks-execute]
+description = "Re-execute all analysis notebooks against fresh eval/results/ data"
+run = '''
+set -euo pipefail
+cd eval/analysis
+for nb in notebooks/*.ipynb; do
+  echo "=== executing $(basename "$nb") ==="
+  uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
+done
+'''
+
+[tasks.figures]
+description = "Regenerate all thesis PDF/PNG figures under eval/analysis/figures/"
+depends = ["notebooks-execute"]
+run = '''
+set -euo pipefail
+count=$(find eval/analysis/figures -name '*.pdf' | wc -l | tr -d ' ')
+echo "generated $count PDFs under eval/analysis/figures/"
+find eval/analysis/figures -name '*.pdf' | sort
+'''

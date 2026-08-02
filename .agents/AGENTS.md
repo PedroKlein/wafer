@@ -187,6 +187,17 @@ mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `
 
 See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job runs `cross-build-pi` on push + PR to guard the recipe.
 
+### Analysis Notebooks
+
+```bash
+mise run notebooks                          # Open all 15 analysis notebooks in JupyterLab (browser)
+mise run notebooks-view 05-hotswap-timeline # Render one notebook to HTML + open in browser (read-only)
+mise run notebooks-execute                  # Re-execute all notebooks against current eval/results/ data
+mise run figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
+```
+
+Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) pins JupyterLab, matplotlib, pandas, HdrHistogram, statsmodels, scipy. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook ↔ experiment ↔ RQ mapping.
+
 ### Running Pipelines
 
 ```bash
