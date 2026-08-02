@@ -109,13 +109,16 @@ _sha256() {
     fi
 }
 
-# BSD/macOS ps prints KB; multiply by 1024 to get bytes.
+# A19 (thesis-hardening T4): runtime writes memory.csv via MemoryRecorder
+# when WAFER_BENCH_OUTPUT_DIR is set. This helper is a no-op stub retained
+# for interface compatibility. SIGKILL fallback (external re-sample) is
+# documented but not implemented here — manual recovery only.
 _ps_rss_vsz_bytes() {
     local pid=$1
-    local out
-    out=$(ps -o rss=,vsz= -p "$pid" 2>/dev/null || true)
-    [ -z "$out" ] && { printf '\n'; return; }
-    echo "$out" | awk '{printf "%d,%d", $1 * 1024, $2 * 1024}'
+    # Runtime owns memory.csv on graceful shutdown (A19). If the runtime is
+    # SIGKILLed before flushing, external re-sampling would need a dedicated
+    # script. This stub returns empty to signal "no data from harness."
+    printf '\n'
 }
 
 _config_has_kind() {

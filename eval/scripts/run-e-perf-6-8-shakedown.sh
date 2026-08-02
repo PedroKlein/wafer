@@ -122,29 +122,13 @@ _run_one() {
     local wafer_pid=$!
     _wafer_pids+=("$wafer_pid")
 
-    # Memory sampler: 1 Hz ps polling in background subshell
-    printf 'sample_ns,rss_kb,vsz_kb\n' > "$out_6/memory.csv"
-    (
-        while kill -0 "$wafer_pid" 2>/dev/null; do
-            ns=$(python3 -c 'import time; print(int(time.time()*1e9))')
-            mem=$(ps -o rss=,vsz= -p "$wafer_pid" 2>/dev/null | tr -s ' ')
-            if [ -n "$mem" ]; then
-                rss=$(echo "$mem" | awk '{print $1}')
-                vsz=$(echo "$mem" | awk '{print $2}')
-                printf '%s,%s,%s\n' "$ns" "$rss" "$vsz" >> "$out_6/memory.csv"
-            fi
-            sleep 1
-        done
-    ) &
-    local sampler_pid=$!
+    # Memory sampler: runtime writes memory.csv via MemoryRecorder when
+    # WAFER_BENCH_OUTPUT_DIR is set (A19, thesis-hardening T4). The harness
+    # no longer polls externally; the previous ps-based polling was removed.
 
     # Wait for runtime to finish
     local runtime_exit=0
     wait "$wafer_pid" || runtime_exit=$?
-
-    # Stop sampler gracefully
-    kill "$sampler_pid" 2>/dev/null || true
-    wait "$sampler_pid" 2>/dev/null || true
 
     local finished_ns; finished_ns=$(_now_ns)
     local duration_ns=$(( finished_ns - started_ns ))
