@@ -115,8 +115,13 @@ fn recovery_store(
     let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
     let mut store = Store::new(&engine, state);
     store.limiter(|s| s.limits_mut());
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: None skips the setter entirely — engine construction leaves
+    // consume_fuel/epoch_interruption off when the limit is None, so the
+    // store's default 0 deadline never triggers a trap.
+    if let Some(n) = epoch_deadline {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
     store
 }
 
@@ -245,15 +250,20 @@ impl WasmTransformNode {
     ) -> Result<RuntimeEnvelope, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        self.store
-            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
-            .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
-
+        // AC F5.AC2: None means unlimited — engine has consume_fuel disabled
+        // in that case, so calling set_fuel would return an error.
+        if let Some(n) = self.fuel_limit {
+            self.store
+                .set_fuel(n.get())
+                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+        }
         // set_epoch_deadline is relative to the engine's current epoch; without
         // a per-call reset the store's absolute deadline lapses after
         // `epoch_deadline` ticks and every subsequent call traps with
         // `wasm trap: interrupt` at the first check point.
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
 
         let wit_msg = build_wit_message(&mut self.store, &envelope)?;
         // `borrow<buffer>` keeps host ownership; we must delete the resource
@@ -305,10 +315,16 @@ impl WasmTransformNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
-            message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
-        })?;
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        // AC F5.AC2: None → unlimited; engine has metering disabled at Config
+        // level so the setter must be skipped, not called with a sentinel.
+        if let Some(n) = self.fuel_limit {
+            self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+            })?;
+        }
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -500,10 +516,15 @@ impl WasmFilterNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
-            message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
-        })?;
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        // AC F5.AC2: skip metering setters when unlimited; see transform path.
+        if let Some(n) = self.fuel_limit {
+            self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+            })?;
+        }
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -538,11 +559,16 @@ impl WasmFilterNode {
     ) -> Result<FilterOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        self.store
-            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
-            .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+        // AC F5.AC2: skip metering setters when unlimited.
+        if let Some(n) = self.fuel_limit {
+            self.store
+                .set_fuel(n.get())
+                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+        }
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
 
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
@@ -738,10 +764,15 @@ impl WasmRouterNode {
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
         };
-        self.store.set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
-            message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
-        })?;
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        // AC F5.AC2: skip metering setters when unlimited; see transform path.
+        if let Some(n) = self.fuel_limit {
+            self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+                message: format!("router '{}' lifecycle fuel reset failed: {e}", self.node_id()),
+            })?;
+        }
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
         if let Some(message) = self
             .bindings
             .pipeline_node_lifecycle()
@@ -776,11 +807,16 @@ impl WasmRouterNode {
     ) -> Result<RouteOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
-        self.store
-            .set_fuel(self.fuel_limit.map_or(u64::MAX, |n| n.get()))
-            .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+        // AC F5.AC2: skip metering setters when unlimited.
+        if let Some(n) = self.fuel_limit {
+            self.store
+                .set_fuel(n.get())
+                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+        }
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
-        self.store.set_epoch_deadline(self.epoch_deadline.map_or(u64::MAX / 2, |n| n.get()));
+        if let Some(n) = self.epoch_deadline {
+            self.store.set_epoch_deadline(n.get());
+        }
 
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();

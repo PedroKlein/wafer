@@ -271,12 +271,19 @@ async fn load_transform_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
-    // Fuel + epoch must be set before instantiation — start functions consume
-    // fuel, and the epoch ticker is running from engine init.
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
-        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: None → unlimited; engine construction leaves consume_fuel /
+    // epoch_interruption off in that case, so calling the setter would trap
+    // or error. Fuel + epoch must be set before instantiation — start functions
+    // consume fuel, and the epoch ticker is running from engine init.
+    if let Some(n) = engine.fuel_limit() {
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("transform '{node_id}' instantiation failed: {e}"),
@@ -399,12 +406,16 @@ async fn load_filter_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
-    // Fuel + epoch must be set before instantiation — start functions consume
-    // fuel, and the epoch ticker is running from engine init.
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
-        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: skip metering setters when unlimited; see transform loader.
+    if let Some(n) = engine.fuel_limit() {
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("filter '{node_id}' instantiation failed: {e}"),
@@ -445,12 +456,16 @@ async fn load_router_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
-    // Fuel + epoch must be set before instantiation — start functions consume
-    // fuel, and the epoch ticker is running from engine init.
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get()))
-        .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: skip metering setters when unlimited; see transform loader.
+    if let Some(n) = engine.fuel_limit() {
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
         message: format!("router '{node_id}' instantiation failed: {e}"),

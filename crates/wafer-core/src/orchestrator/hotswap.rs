@@ -229,11 +229,18 @@ pub async fn prepare_transform_swap_timed(
     // Activate configured StoreLimits (A8): without this, `memory_size` is ignored
     // and the swapped-in instance can outgrow the launcher-enforced budget.
     store.limiter(|s| s.limits_mut());
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get())).map_err(|e| {
-        WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: skip metering setters when unlimited; consume_fuel and
+    // epoch_interruption are gated at Config level so calling the setter
+    // would return Err when the limit is None.
+    if let Some(n) = engine.fuel_limit() {
+        store.set_fuel(n.get()).map_err(|e| {
+            WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
+        })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
         WaferError::PluginInit { message: format!("instantiation failed: {e}") }
@@ -272,11 +279,16 @@ pub async fn prepare_filter_swap_timed(
         WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
     );
     store.limiter(|s| s.limits_mut());
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
-        message: format!("failed to set fuel: {e}"),
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
+    if let Some(n) = engine.fuel_limit() {
+        store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+            message: format!("failed to set fuel: {e}"),
+        })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
         message: format!("instantiation failed: {e}"),
@@ -315,11 +327,16 @@ pub async fn prepare_router_swap_timed(
         WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
     );
     store.limiter(|s| s.limits_mut());
-    store.set_fuel(engine.fuel_limit().map_or(u64::MAX, |n| n.get())).map_err(|e| WaferError::PluginInit {
-        message: format!("failed to set fuel: {e}"),
-    })?;
-    store.epoch_deadline_trap();
-    store.set_epoch_deadline(engine.epoch_deadline().map_or(u64::MAX / 2, |n| n.get()));
+    // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
+    if let Some(n) = engine.fuel_limit() {
+        store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+            message: format!("failed to set fuel: {e}"),
+        })?;
+    }
+    if let Some(n) = engine.epoch_deadline() {
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(n.get());
+    }
 
     let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
         message: format!("instantiation failed: {e}"),

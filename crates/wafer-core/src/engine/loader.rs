@@ -55,10 +55,17 @@ impl WaferEngine {
     /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
     #[must_use = "creating an engine without using it is expensive"]
     pub fn from_engine_config(engine_config: &EngineConfig) -> Result<Self> {
+        // AC F5.AC2: enable metering at engine level only when at least one
+        // limit is Some. Skipping consume_fuel/epoch_interruption when all
+        // limits are None is what lets per-store set_fuel/set_epoch_deadline
+        // be skipped without wasm traps on the first instruction.
+        let any_fuel = engine_config.fuel.transform.is_some()
+            || engine_config.fuel.filter.is_some()
+            || engine_config.fuel.router.is_some();
         let mut config = Config::new();
-        config.consume_fuel(true);
+        config.consume_fuel(any_fuel);
         config.wasm_component_model(true);
-        config.epoch_interruption(true);
+        config.epoch_interruption(engine_config.epoch_deadline.is_some());
 
         let engine =
             Engine::new(&config).map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
@@ -296,18 +303,63 @@ mod tests {
         assert_eq!(engine.epoch_deadline(), NonZeroU64::new(50));
     }
 
-    /// AC2: when epoch_deadline is None, the engine accessor returns None
-    /// so callers know to skip `store.epoch_deadline_trap()` + `set_epoch_deadline`.
+    /// AC F5.AC2: when epoch_deadline is None, wasmtime Config leaves
+    /// epoch_interruption off; when fuel_limit is None, consume_fuel stays
+    /// off. Store::get_fuel returns Err iff consume_fuel is disabled, which
+    /// is the closest observable proof that the setter can be skipped without
+    /// a trap-on-first-instruction regression.
     #[test]
     fn epoch_none_means_wasmtime_untouched() {
+        use wasmtime::Store;
+        use crate::engine::Capabilities;
+
         let cfg = EngineConfig {
             epoch_deadline: None,
-            fuel: FuelBudgets { transform: None, ..Default::default() },
+            fuel: FuelBudgets {
+                transform: None,
+                filter: None,
+                router: None,
+            },
             ..Default::default()
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
         assert_eq!(engine.epoch_deadline(), None, "None epoch_deadline → no epoch trap");
         assert_eq!(engine.fuel_limit(), None, "None fuel → no fuel limit");
+
+        // Behavioral proof: engine construction skipped consume_fuel(true), so
+        // a fresh Store has fuel metering disabled and get_fuel returns Err.
+        // If a future change re-enables consume_fuel unconditionally this test
+        // fails, catching the AC F5.AC2 regression.
+        let state = WaferState::new("test-node", Capabilities::default());
+        let store: Store<WaferState> = Store::new(engine.inner(), state);
+        assert!(
+            store.get_fuel().is_err(),
+            "consume_fuel must be off at Config level when all fuel budgets are None"
+        );
+    }
+
+    /// AC F5.AC2 (positive path): with Some(fuel) the engine enables
+    /// consume_fuel at Config level; get_fuel returns Ok on a fresh Store.
+    #[test]
+    fn some_fuel_means_wasmtime_fuel_metering_enabled() {
+        use wasmtime::Store;
+        use crate::engine::Capabilities;
+
+        let cfg = EngineConfig {
+            fuel: FuelBudgets {
+                transform: NonZeroU64::new(100_000),
+                ..Default::default()
+            },
+            epoch_deadline: None,
+            ..Default::default()
+        };
+        let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
+        let state = WaferState::new("test-node", Capabilities::default());
+        let store: Store<WaferState> = Store::new(engine.inner(), state);
+        assert!(
+            store.get_fuel().is_ok(),
+            "consume_fuel must be on when any fuel budget is Some"
+        );
     }
 
     #[test]
