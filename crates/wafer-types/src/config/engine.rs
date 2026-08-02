@@ -81,7 +81,7 @@ impl Default for EngineConfig {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub struct FuelBudgets {
     /// Fuel per transform process() call. `None` = unlimited (set_fuel skipped).
     ///
@@ -96,16 +96,6 @@ pub struct FuelBudgets {
     /// Fuel per router route() call. `None` = unlimited.
     #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
     pub router: Option<NonZeroU64>,
-}
-
-impl Default for FuelBudgets {
-    fn default() -> Self {
-        Self {
-            transform: None,
-            filter: None,
-            router: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
