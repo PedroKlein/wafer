@@ -27,7 +27,7 @@ use crate::runner::{DownstreamSender, send_downstream};
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::source::run_source_loop;
 use crate::runner::sink::run_sink_loop;
-use crate::runner::transform::{run_transform_loop, run_transform_loop_with_config};
+use crate::runner::transform::run_transform_loop_with_config;
 use crate::runner::filter::run_filter_loop;
 use crate::runner::router::run_router_loop;
 
