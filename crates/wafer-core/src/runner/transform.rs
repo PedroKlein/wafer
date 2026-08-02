@@ -61,7 +61,7 @@ pub async fn run_transform_loop_with_config(
             if c.window_expired() {
                 tracing::debug!(
                     node = transform.node_id(),
-                    successes = c.success_count,
+                    successes = c.counters.success_count,
                     "canary window closed — rollback snapshot dropped"
                 );
                 canary = None;
@@ -180,8 +180,8 @@ pub async fn run_transform_loop_with_config(
                         tracing::warn!(
                             node = transform.node_id(),
                             error = %msg,
-                            trap_count = c.trap_count,
-                            max_rollback_retries = c.config.max_rollback_retries,
+                            trap_count = c.counters.trap_count,
+                            max_rollback_retries = c.counters.config.max_rollback_retries,
                             "process-time trap during canary window — rolling back to v1"
                         );
                         state.transition_to_error();
@@ -197,8 +197,8 @@ pub async fn run_transform_loop_with_config(
                                 tracing::info!(
                                     node = transform.node_id(),
                                     rollback_time_ns = rollback_ns,
-                                    trap_count = c.trap_count,
-                                    max_rollback_retries = c.config.max_rollback_retries,
+                                    trap_count = c.counters.trap_count,
+                                    max_rollback_retries = c.counters.config.max_rollback_retries,
                                     "process-time rollback to v1 succeeded"
                                 );
                                 state.transition_to_recovering();
@@ -231,7 +231,7 @@ pub async fn run_transform_loop_with_config(
                                 tracing::error!(
                                     node = transform.node_id(),
                                     %error,
-                                    trap_count = c.trap_count,
+                                    trap_count = c.counters.trap_count,
                                     "process-time rollback failed — escalating to recovery"
                                 );
                                 // B1: rollback attempt itself failed —
@@ -253,8 +253,8 @@ pub async fn run_transform_loop_with_config(
                         tracing::error!(
                             node = transform.node_id(),
                             error = %msg,
-                            trap_count = c.trap_count,
-                            max_rollback_retries = c.config.max_rollback_retries,
+                            trap_count = c.counters.trap_count,
+                            max_rollback_retries = c.counters.config.max_rollback_retries,
                             "canary rollback retries exhausted — escalating to recovery"
                         );
                         // B1: also notify the API caller that the swap did
@@ -264,7 +264,7 @@ pub async fn run_transform_loop_with_config(
                                 0,
                                 format!(
                                     "canary budget exhausted after {} traps (max={}): {}",
-                                    c.trap_count, c.config.max_rollback_retries, msg
+                                    c.counters.trap_count, c.counters.config.max_rollback_retries, msg
                                 ),
                             );
                         }

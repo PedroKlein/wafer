@@ -18,17 +18,43 @@ use wafer_types::config::Config;
 
 /// RAII guard to clean up the WAFER_BENCH_OUTPUT_DIR env var on test exit
 /// so parallel tests don't leak state to each other.
-struct BenchDirEnv;
+///
+/// L-2 fix (2026-08-02): tests in this file previously used
+/// `unsafe std::env::set_var` and `remove_var` unguarded. The Rust 2024
+/// edition marks these APIs `unsafe` because they mutate a process-global
+/// resource shared across all threads. When the test binary runs tests in
+/// parallel (the default for cargo test) two `BenchDirEnv::set` calls
+/// could interleave, causing one test to see the other's directory.
+///
+/// The static mutex below serialises access. `BenchDirEnv::set` acquires
+/// the lock inside the guard and holds it for the guard's lifetime, so
+/// only one test in this file mutates the env at a time. Any test that
+/// panics while holding the guard poisons the lock; subsequent tests
+/// recover via `.into_inner()`.
+struct BenchDirEnv {
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+static BENCH_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl BenchDirEnv {
     fn set(dir: &Path) -> Self {
-        // SAFETY: tests are single-threaded per #[tokio::test] task; the env
-        // guard exists only to prevent cross-test leakage inside this file.
+        let lock = match BENCH_DIR_ENV_LOCK.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        // SAFETY: we hold BENCH_DIR_ENV_LOCK for the entire lifetime of
+        // the returned guard, so no other test in this file can concurrently
+        // observe or mutate WAFER_BENCH_OUTPUT_DIR. This is the discipline
+        // Rust 2024's `unsafe { set_var }` requires.
         unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir); }
-        Self
+        Self { _lock: lock }
     }
 }
 impl Drop for BenchDirEnv {
     fn drop(&mut self) {
+        // SAFETY: still holding the lock, so no other test can race the
+        // removal. See BenchDirEnv::set for the invariant.
         unsafe { std::env::remove_var("WAFER_BENCH_OUTPUT_DIR"); }
     }
 }
@@ -229,12 +255,21 @@ async fn hotswap_process_time_rollback() {
 ///   - Rollback succeeds; canary is retained (B2 fix) with trap_count = 1.
 ///   - No subsequent v2 traps because v1 is now live and doesn't trap.
 ///
-/// This test verifies the happy-path with a single trap. To exercise budget
-/// EXHAUSTION we'd need a fixture where v1 also traps (impossible with
-/// `pass-through` v1), so the state-machine invariant is covered by the
-/// unit tests `canary_state_bounds_trap_count` and
-/// `canary_state_record_trap_semantics_matches_model` in
-/// `crates/wafer-core/src/runner/mod.rs`.
+/// This test verifies the happy-path with a single trap. Budget EXHAUSTION
+/// itself is not reachable through this integration test because a swap to
+/// `v2-panics` after rollback creates a fresh canary (trap_count resets)
+/// and v1 (`pass-through`) never traps. Instead the exhaustion boundary is
+/// exercised directly on the production `CanaryCounters` state machine in
+/// the unit tests:
+///
+///   - `canary_counters_bounds_trap_count`
+///   - `canary_counters_record_trap_matches_spec_across_budgets`
+///   - `canary_counters_record_success_and_window_expiry`
+///
+/// (see `crates/wafer-core/src/runner/mod.rs`). Post-BL-4, those tests
+/// invoke the production `CanaryCounters::record_trap` directly rather
+/// than modelling it, so a refactor breaking the state machine will
+/// surface immediately.
 ///
 /// See B2 in the T1 verify review notes:
 /// docs/decisions/hotswap-canary-budget.md

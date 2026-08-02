@@ -181,7 +181,7 @@ impl HotSwapProgress {
 /// If v2 traps during `process()` within the canary window, the runner uses
 /// this snapshot to roll back to v1. The snapshot is consumed on rollback
 /// (single-shot) and dropped when the canary window closes.
-pub struct TransformRollbackSnapshot {
+pub(crate) struct TransformRollbackSnapshot {
     pub pre: Arc<TransformNodePre<WaferState>>,
 }
 
@@ -193,34 +193,28 @@ impl std::fmt::Debug for TransformRollbackSnapshot {
     }
 }
 
-/// Tracks the canary window state for process-time hot-swap rollback.
+/// State-machine slice of `TransformCanaryState` — the counters and config
+/// that determine whether a trap triggers rollback or exhausts the retry
+/// budget. Split out from the parent so unit tests can exercise the
+/// production `record_trap` / `record_success` / `retries_exhausted` /
+/// `window_expired` semantics without fabricating a real
+/// `Arc<TransformNodePre<WaferState>>` (which requires a compiled
+/// component + linker).
 ///
-/// Exists only while the canary window is open (between swap ACK and either
-/// `canary_success_count` successes OR `canary_window_ms` expiry).
-pub struct TransformCanaryState {
-    pub snapshot: TransformRollbackSnapshot,
+/// `TransformCanaryState` embeds one of these by value and delegates all
+/// state-machine methods to it, so the code path exercised in tests is
+/// byte-for-byte the code path executed at runtime.
+#[derive(Debug)]
+pub(crate) struct CanaryCounters {
     pub success_count: u32,
     pub trap_count: u32,
     pub window_start: Instant,
     pub config: HotSwapConfig,
 }
 
-impl std::fmt::Debug for TransformCanaryState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TransformCanaryState")
-            .field("success_count", &self.success_count)
-            .field("trap_count", &self.trap_count)
-            .field("window_start", &self.window_start)
-            .field("config", &self.config)
-            .finish()
-    }
-}
-
-impl TransformCanaryState {
-    /// Create a new canary state from the v1 InstancePre retained before swap.
-    pub fn new(pre: Arc<TransformNodePre<WaferState>>, config: HotSwapConfig) -> Self {
+impl CanaryCounters {
+    pub fn new(config: HotSwapConfig) -> Self {
         Self {
-            snapshot: TransformRollbackSnapshot { pre },
             success_count: 0,
             trap_count: 0,
             window_start: Instant::now(),
@@ -228,18 +222,15 @@ impl TransformCanaryState {
         }
     }
 
-    /// Check if the canary window has expired (either by success count or wall-clock).
     pub fn window_expired(&self) -> bool {
         self.success_count >= self.config.canary_success_count
             || self.window_start.elapsed().as_millis() as u64 >= self.config.canary_window_ms
     }
 
-    /// Check if the rollback retry budget is exhausted.
     pub fn retries_exhausted(&self) -> bool {
         self.trap_count > self.config.max_rollback_retries
     }
 
-    /// Record a successful process() call.
     pub fn record_success(&mut self) {
         self.success_count += 1;
     }
@@ -249,6 +240,58 @@ impl TransformCanaryState {
     pub fn record_trap(&mut self) -> bool {
         self.trap_count += 1;
         !self.retries_exhausted()
+    }
+}
+
+/// Tracks the canary window state for process-time hot-swap rollback.
+///
+/// Exists only while the canary window is open (between swap ACK and either
+/// `canary_success_count` successes OR `canary_window_ms` expiry).
+///
+/// The trap/success counters live in a nested `CanaryCounters` so unit
+/// tests can exercise the state machine directly. The `snapshot` here is
+/// what makes this struct impractical to construct in a unit test.
+pub(crate) struct TransformCanaryState {
+    pub snapshot: TransformRollbackSnapshot,
+    pub counters: CanaryCounters,
+}
+
+impl std::fmt::Debug for TransformCanaryState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransformCanaryState")
+            .field("counters", &self.counters)
+            .finish()
+    }
+}
+
+impl TransformCanaryState {
+    /// Create a new canary state from the v1 InstancePre retained before swap.
+    pub fn new(pre: Arc<TransformNodePre<WaferState>>, config: HotSwapConfig) -> Self {
+        Self {
+            snapshot: TransformRollbackSnapshot { pre },
+            counters: CanaryCounters::new(config),
+        }
+    }
+
+    /// Check if the canary window has expired.
+    pub fn window_expired(&self) -> bool {
+        self.counters.window_expired()
+    }
+
+    /// Check if the rollback retry budget is exhausted.
+    pub fn retries_exhausted(&self) -> bool {
+        self.counters.retries_exhausted()
+    }
+
+    /// Record a successful process() call.
+    pub fn record_success(&mut self) {
+        self.counters.record_success();
+    }
+
+    /// Record a trap and return whether rollback should fire.
+    /// Returns true if we should roll back, false if retries exhausted.
+    pub fn record_trap(&mut self) -> bool {
+        self.counters.record_trap()
     }
 }
 
@@ -527,59 +570,89 @@ mod tests {
     }
 
     // ---- A17: canary state machine invariants (B2 unit-level cover) ----
+    //
+    // BL-4 fix (2026-08-02): these tests now exercise the production
+    // `CanaryCounters` methods directly (see runner/mod.rs
+    // `TransformCanaryState::record_trap` delegates to `counters.record_trap`).
+    // A refactor changing the record_trap semantics will surface here.
 
     #[test]
-    fn canary_state_bounds_trap_count() {
-        // The `TransformCanaryState::record_trap()` invariant is that after
-        // `max_rollback_retries` in-budget calls, one more call flips the
-        // return value to false (retries exhausted). We can't cheaply
-        // fabricate a real `Arc<TransformNodePre>` in a unit test, so we
-        // model the pure state-machine arithmetic here. The integration
-        // test `hotswap_process_time_rollback` covers the wired-up path.
+    fn canary_counters_bounds_trap_count() {
+        // AC: after M in-budget traps, trap M+1 must flip record_trap to
+        // false (retries exhausted). Test the production CanaryCounters.
         let config = wafer_types::config::HotSwapConfig {
             canary_success_count: 32,
             canary_window_ms: 10_000,
             max_rollback_retries: 3,
         };
-
-        // Pure model of `record_trap`: trap_count += 1; return trap_count <= max.
-        fn record_trap(trap_count: &mut u32, max: u32) -> bool {
-            *trap_count += 1;
-            *trap_count <= max
-        }
-
         let max = config.max_rollback_retries;
-        let mut trap_count = 0u32;
-        // First M traps must return true (still within budget).
+        let mut counters = CanaryCounters::new(config);
+
         for i in 1..=max {
-            let within = record_trap(&mut trap_count, max);
+            let within = counters.record_trap();
             assert!(within, "trap #{i} must be within budget of M={max}");
+            assert_eq!(counters.trap_count, i);
+            assert!(!counters.retries_exhausted());
         }
         // Trap M+1 must exhaust the budget.
-        let within = record_trap(&mut trap_count, max);
+        let within = counters.record_trap();
         assert!(!within, "trap #{} must exhaust budget of M={max}", max + 1);
-        assert_eq!(trap_count, max + 1);
+        assert_eq!(counters.trap_count, max + 1);
+        assert!(counters.retries_exhausted());
     }
 
     #[test]
-    fn canary_state_record_trap_semantics_matches_model() {
-        // Sanity: exercise `retries_exhausted` boundary explicitly across a
-        // range of budgets. See `canary_state_bounds_trap_count` for why
-        // we test the state machine as a pure model rather than through a
-        // live `TransformCanaryState`.
+    fn canary_counters_record_trap_matches_spec_across_budgets() {
+        // Sanity: exercise `retries_exhausted` boundary across a range of
+        // budgets. For a budget M, the first M calls to record_trap must
+        // return true; every subsequent call must return false.
         for max in [0u32, 1, 3, 10] {
-            let mut trap_count = 0u32;
+            let config = wafer_types::config::HotSwapConfig {
+                canary_success_count: 32,
+                canary_window_ms: 10_000,
+                max_rollback_retries: max,
+            };
+            let mut counters = CanaryCounters::new(config);
             let mut escalations = 0u32;
             for _ in 0..(max + 5) {
-                trap_count += 1;
-                if trap_count > max {
+                let within = counters.record_trap();
+                if !within {
                     escalations += 1;
                 }
             }
             // With `max+5` traps, exactly 5 escalations should have been
             // observed once trap_count crossed the budget.
             assert_eq!(escalations, 5, "escalation count wrong for max={max}");
+            assert_eq!(counters.trap_count, max + 5);
+            assert!(counters.retries_exhausted());
         }
+    }
+
+    #[test]
+    fn canary_counters_record_success_and_window_expiry() {
+        // AC: record_success increments success_count. window_expired
+        // returns true once success_count >= canary_success_count.
+        let config = wafer_types::config::HotSwapConfig {
+            canary_success_count: 3,
+            canary_window_ms: 10_000,
+            max_rollback_retries: 3,
+        };
+        let mut counters = CanaryCounters::new(config);
+
+        assert_eq!(counters.success_count, 0);
+        assert!(!counters.window_expired());
+
+        counters.record_success();
+        counters.record_success();
+        assert_eq!(counters.success_count, 2);
+        assert!(!counters.window_expired());
+
+        counters.record_success();
+        assert_eq!(counters.success_count, 3);
+        assert!(
+            counters.window_expired(),
+            "window should expire once success_count reaches canary_success_count"
+        );
     }
 
     #[tokio::test]
