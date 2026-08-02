@@ -10,6 +10,23 @@
 # Reports throughput_dip_pct per strategy.
 #
 # Pre-reqs: release binaries, eKuiper stack running, plugins built.
+#
+# Metadata provenance (T8, thesis-hardening plan, 2026-08-02):
+#   This legacy shakedown script writes a bespoke per-experiment `metadata.json`
+#   with only the fields its analysis notebook needs. It does NOT source
+#   `eval/scripts/lib/write_metadata.py` (which merges the runtime-emitted
+#   `runtime-provenance.json` sidecar to produce keys like `wasmtime_version`,
+#   `wafer_runtime_sha256`, `wafer_plugin_hashes`).
+#
+#   Rationale: shakedowns exist to sanity-check RFC-008 experiment claims on
+#   macOS before the canonical Pi runs. Full-provenance metadata belongs in
+#   the canonical harness (`eval/scripts/run-experiment.sh`) which always
+#   sources the merger. Retro-fitting the merger into this script would
+#   require re-running every shakedown baseline (out of T8 scope by design).
+#
+#   `verify-result-contract.py` emits a WARN (not a violation) when a
+#   shakedown `metadata.json` lacks the merged provenance keys, so the gap
+#   is surfaced without breaking existing baseline dirs.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

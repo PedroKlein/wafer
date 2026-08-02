@@ -38,6 +38,18 @@ from pathlib import Path
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
 
+# Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
+# when it merges `runtime-provenance.json` (emitted by wafer-runtime) into
+# `metadata.json`. T8 (thesis-hardening): shakedown dirs lacking these keys
+# get a WARN, not a violation — legacy shakedown scripts write bespoke
+# minimal metadata by design (see script header comments). Canonical
+# `run-experiment.sh` runs always merge these keys.
+MERGED_PROVENANCE_KEYS = (
+    "wasmtime_version",
+    "wafer_runtime_sha256",
+    "wafer_plugin_hashes",
+)
+
 # Optional-artefact expectations per experiment. Match on the experiment
 # prefix embedded in the shakedown path. `must_have`: files whose absence
 # is a violation for THIS experiment. `may_have`: files legitimately
@@ -81,10 +93,11 @@ def experiment_of(path: Path) -> str | None:
     return None
 
 
-def check_leaf(leaf: Path, experiment: str) -> list[str]:
-    """Return a list of violation strings; empty list = conformant."""
+def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
+    """Return (violations, warnings). Empty lists = fully conformant."""
     files = {f.name for f in leaf.iterdir() if f.is_file()}
     violations: list[str] = []
+    warnings: list[str] = []
 
     for core in CORE_FILES:
         if core in files:
@@ -96,9 +109,31 @@ def check_leaf(leaf: Path, experiment: str) -> list[str]:
             continue
         violations.append(f"missing core artefact: {core}")
 
+    # T8: warn (don't fail) when metadata.json is present but lacks the
+    # provenance keys that `write_metadata.py` merges from
+    # `runtime-provenance.json`. Legacy shakedown scripts write bespoke
+    # per-experiment metadata schemas by design and are documented as
+    # such in their headers; the WARN surfaces the gap without breaking
+    # existing baseline dirs.
+    meta_path = leaf / "metadata.json"
+    if meta_path.is_file():
+        try:
+            import json as _json
+            with meta_path.open() as fh:
+                meta = _json.load(fh)
+            missing = [k for k in MERGED_PROVENANCE_KEYS if k not in meta]
+            if missing:
+                warnings.append(
+                    f"metadata.json lacks merged provenance keys: {sorted(missing)} "
+                    f"(legacy shakedown script; canonical runs source "
+                    f"eval/scripts/lib/write_metadata.py)"
+                )
+        except (OSError, ValueError) as exc:
+            warnings.append(f"metadata.json unreadable: {exc}")
+
     matrix = OPTIONAL_MATRIX.get(experiment)
     if matrix is None:
-        return violations  # Unknown experiment id — core-only check.
+        return violations, warnings  # Unknown experiment id — core-only check.
 
     for f in matrix["must_have"]:
         if f not in files:
@@ -106,7 +141,7 @@ def check_leaf(leaf: Path, experiment: str) -> list[str]:
     for f in matrix.get("must_not_have", set()):
         if f in files:
             violations.append(f"unexpected artefact for {experiment}: {f}")
-    return violations
+    return violations, warnings
 
 
 def main() -> int:
@@ -115,6 +150,7 @@ def main() -> int:
     args = parser.parse_args()
 
     all_violations: list[tuple[Path, str]] = []
+    all_warnings: list[tuple[Path, str]] = []
     checked = 0
 
     for root in args.dirs:
@@ -131,16 +167,26 @@ def main() -> int:
             continue
         for leaf in leaves:
             checked += 1
-            for v in check_leaf(leaf, experiment):
+            violations, warnings = check_leaf(leaf, experiment)
+            for v in violations:
                 all_violations.append((leaf, v))
+            for w in warnings:
+                all_warnings.append((leaf, w))
+
+    for leaf, w in all_warnings:
+        print(f"WARN       {leaf}: {w}")
 
     if all_violations:
         for leaf, v in all_violations:
             print(f"VIOLATION  {leaf}: {v}")
-        print(f"\n{len(all_violations)} violation(s) across {checked} leaf run(s).")
+        print(f"\n{len(all_violations)} violation(s), {len(all_warnings)} warning(s) across {checked} leaf run(s).")
         return 1
 
-    print(f"OK: {checked} leaf run(s) conform to split RESULT-CONTRACT")
+    warn_count = len(all_warnings)
+    if warn_count:
+        print(f"OK: {checked} leaf run(s) conform to split RESULT-CONTRACT ({warn_count} warning(s) — non-fatal)")
+    else:
+        print(f"OK: {checked} leaf run(s) conform to split RESULT-CONTRACT")
     return 0
 
 
