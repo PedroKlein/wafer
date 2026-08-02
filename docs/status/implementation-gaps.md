@@ -544,6 +544,69 @@ T1 landing; all four fixed in one patch:
 - `cargo test -p wafer-core --lib runner::tests` (canary state machine
   + rollback progress reporting)
 
+**Second post-verify pass (2026-08-02, commits `ba17d0f` + `5fe58a5`).**
+A follow-up cross-family review (hai-proxy/independent-model x 4) surfaced four
+additional issues; all fixed:
+
+- **BL-1.** `eval/scripts/run-e-swap-shakedown.sh` fired two POSTs
+  per iteration (one via `do_swap`, one via an instrumented `curl`
+  that captured the response body), inflating observed rollback
+  counts to n=24 for 12 user-initiated swaps. Collapsed to one
+  instrumented POST per iteration. Renamed the misleading JSON field
+  `http_409_or_504_responses` to `http_error_or_rollback_responses`
+  since it now counts both pre-B1 (409/504) and post-B1 (HTTP 200
+  `rolled_back`) rollback signals. Regenerated E-Swap-5 shakedown:
+  new stats p50=74 µs, p99=98 µs, max=96 µs, n=12. Commit `ba17d0f`.
+- **BL-4 (test hardening).** The previous unit tests
+  `canary_state_bounds_trap_count` and
+  `canary_state_record_trap_semantics_matches_model` modelled the
+  state machine as a pure local function — a refactor of the
+  production `record_trap` would leave them green. Split the trap/
+  success counters into a nested `CanaryCounters` struct owned by
+  `TransformCanaryState`. Three new unit tests
+  (`canary_counters_bounds_trap_count`,
+  `canary_counters_record_trap_matches_spec_across_budgets`,
+  `canary_counters_record_success_and_window_expiry`) now exercise
+  the production `CanaryCounters::record_trap` /
+  `record_success` / `retries_exhausted` / `window_expired` methods
+  directly. Also narrowed `TransformRollbackSnapshot` +
+  `TransformCanaryState` to `pub(crate)`. Commit `5fe58a5`.
+
+---
+
+## A17-B — harness overwrote runtime-owned A19 files (Closed 2026-08-02) 🟢
+
+`eval/scripts/run-experiment.sh` retained the pre-A19 external memory
+sampler (`_launch_memory_sampler` writing `sample_ns,rss_bytes,vsz_bytes`
+via `ps -o rss=`) and header-only `per_node_metrics.csv` write, both of
+which clobbered the runtime-owned artefacts introduced by A19. Also,
+`eval/analysis/notebooks/03-memory-scaling.ipynb` still parsed the old
+`sample_ns,rss_kb,vsz_kb` schema and would have crashed on fresh A19
+shakedown data.
+
+**Fix (commits `9f6acd9` + `0f8a7bc`):**
+
+1. Removed `_launch_memory_sampler` and `_ps_rss_vsz_bytes` from
+   `run-experiment.sh`; runtime owns `memory.csv` unconditionally.
+2. Removed the header-only `per_node_metrics.csv` write; harness
+   keeps whatever the runtime emitted.
+3. `03-memory-scaling.ipynb` now uses a dual-schema parser
+   (`_read_rss_bytes`) that detects `rss_bytes` vs `rss_kb` and
+   normalises to bytes.
+4. `docs/interfaces/http-api.md` + `docs/operations/getting-started.md`
+   HotSwapResponse examples updated to reflect the real API response
+   (`swap_converged` | `rolled_back` with full timeline, not
+   `swap_sent`).
+5. `docs/benchmarks/rq-summary.md` narrative catches up on A19 being
+   closed — only remaining observability gap is A20.
+
+**Tests:** `03-memory-scaling.ipynb` re-executed against existing
+pre-A19 data via the compat path; 1.09 MB/hop, R²=0.94.
+
+Also added `read_rss_bytes_within_1hz_overhead_budget` unit test
+asserting per-call cost < 1 ms (the < 0.1% AC boundary at 1 Hz
+sampling), so `cargo test` now gates against A19 overhead regressions.
+
 ---
 
 ## A18 — Native filter dispatch not wired for Pipeline A (Closed 2026-08-01) 🟢
