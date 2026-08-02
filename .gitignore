@@ -136,3 +136,4 @@ docker-compose.override.yml
 eval/results/*/
 !eval/results/e-density-1/
 .venv-eval/
+target/docker-aarch64-linux/

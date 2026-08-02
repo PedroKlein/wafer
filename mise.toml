@@ -387,3 +387,72 @@ run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/da
 [tasks.run-remote-nocache]
 description = "Run sample pipeline with remote plugins, bypassing cache"
 run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-remote.toml --no-cache'
+
+# =============================================================================
+# Cross-compile for aarch64-linux (Pi / Jetson / ARM64 servers)
+# =============================================================================
+#
+# C1 (canonical-runs plan, 2026-08-02): cross-compile wafer, wafer-loadgen,
+# and waferctl for aarch64-unknown-linux-gnu using a `linux/arm64` Docker
+# container. On macOS aarch64 hosts (M-series) the `--platform linux/arm64`
+# flag runs the container natively (no qemu emulation) so build times are
+# comparable to a bare-metal Pi build.
+#
+# See docs/eval/cross-compile.md for the alternative paths tried
+# (`cross` crate, homebrew `aarch64-linux-gnu-gcc`) and why the Docker
+# path was chosen (reproducibility + no host toolchain drift).
+
+[tasks.cross-build-pi]
+description = "Cross-build wafer, wafer-loadgen, waferctl for aarch64-linux (Docker)"
+run = '''
+set -euo pipefail
+if ! command -v docker >/dev/null 2>&1; then
+  echo "error: docker is required for cross-build-pi" >&2
+  exit 1
+fi
+mkdir -p target/docker-aarch64-linux
+docker run --rm --platform linux/arm64 \
+  -v "$PWD:/work" \
+  -v "$PWD/target/docker-aarch64-linux:/work/target" \
+  -w /work \
+  rust:1-slim-bookworm \
+  bash -c '
+    apt-get update -q >/dev/null
+    apt-get install -y -q pkg-config libssl-dev g++ >/dev/null
+    cargo build --release -p wafer-runtime -p wafer-loadgen -p waferctl
+  '
+echo
+echo "Cross-build outputs:"
+for b in wafer wafer-loadgen waferctl; do
+  f=target/docker-aarch64-linux/release/$b
+  if [ -x "$f" ]; then
+    file "$f" | sed "s|$PWD/||"
+  else
+    echo "MISSING: $f" >&2
+    exit 1
+  fi
+done
+'''
+
+[tasks.cross-build-pi-check]
+description = "Verify cross-build outputs are ARM aarch64 ELF binaries"
+run = '''
+set -euo pipefail
+missing=0
+for b in wafer wafer-loadgen waferctl; do
+  f=target/docker-aarch64-linux/release/$b
+  if [ ! -x "$f" ]; then
+    echo "MISSING: $f" >&2
+    missing=$((missing+1))
+    continue
+  fi
+  if ! file "$f" | grep -q "ARM aarch64"; then
+    echo "WRONG ARCH: $f is not ARM aarch64" >&2
+    file "$f" >&2
+    missing=$((missing+1))
+    continue
+  fi
+  echo "OK   $f ($(du -h "$f" | cut -f1))"
+done
+[ "$missing" -eq 0 ] || { echo "cross-build-pi-check FAILED: $missing binary/binaries missing or wrong arch" >&2; exit 1; }
+'''

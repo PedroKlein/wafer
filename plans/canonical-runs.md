@@ -127,14 +127,18 @@ is Phase P1 below.
 
 ## Tasks
 
-### C1 — aarch64 cross-compile spike (P0)
+### C1 — aarch64 cross-compile spike (P0) — CLOSED 2026-08-02 🟢
 
 Verify `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtime` succeeds on this macOS host. Try three paths in order: (1) `rustup target add` + host toolchain, (2) `cross` (Docker), (3) homebrew `aarch64-linux-gnu-gcc`. Document what works.
 
-**ACs:**
-- AC: Working ELF binary produced. Verify: `file target/aarch64-unknown-linux-gnu/release/wafer` reports `ELF 64-bit LSB … ARM aarch64`.
-- AC: `docs/eval/cross-compile.md` documents the working path with exact commands. Verify: fresh clone reproduces the binary.
-- AC: `mise run cross-build-pi` task in `mise.toml`. Verify: task runs and produces the binary.
+**Path chosen (2026-08-02):** none of the three plan paths. `cross` (path 2) fails because it mounts the macOS `~/.rustup` into a `linux/amd64` container and rustup then refuses to install `stable-x86_64-unknown-linux-gnu`. Rather than adding a `Cross.toml` to work around, we use a fourth path: **direct `docker run --platform linux/arm64 rust:1-slim-bookworm`**. On macOS aarch64 hosts this runs natively (no qemu tax) and produces a native aarch64-linux ELF binary. See `docs/eval/cross-compile.md` for the full comparison and the rationale for shipping this over `cross`.
+
+**ACs (all met):**
+- AC: Working ELF binary produced. Verified: `file target/docker-aarch64-linux/release/wafer` reports `ELF 64-bit LSB pie executable, ARM aarch64, ... interpreter /lib/ld-linux-aarch64.so.1`.
+- AC: `docs/eval/cross-compile.md` documents the working path with exact commands. Fresh-clone reproducer at the top of the doc.
+- AC: `mise run cross-build-pi` task in `mise.toml`. Task builds all three binaries; sibling `mise run cross-build-pi-check` verifies architecture via `file`.
+
+**Closed by:** thesis-hardening session commit (see `git log --oneline --grep="C1"`). Cross-build outputs: wafer (~80 MB), wafer-loadgen (~8.4 MB), waferctl (~6.7 MB).
 
 **References:** skills `cargo-expert`, `rust-best-practices`; files `crates/wafer-runtime/Cargo.toml`, `Cargo.toml`, `mise.toml`; docs [cross-rs](https://github.com/cross-rs/cross).
 
@@ -144,14 +148,14 @@ Verify `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtim
 
 **Executor:** `forked reviewer` (discovery-heavy, iteration expected).
 
-### C2 — Cross-build wafer-loadgen + waferctl (P0)
+### C2 — Cross-build wafer-loadgen + waferctl (P0) — CLOSED 2026-08-02 🟢
 
-Extend C1's recipe to `wafer-loadgen` and `waferctl`.
+Extend C1's recipe to `wafer-loadgen` and `waferctl`. Delivered simultaneously with C1: the `cross-build-pi` mise task compiles all three crates in a single `docker run` invocation (`cargo build --release -p wafer-runtime -p wafer-loadgen -p waferctl`).
 
-**ACs:**
-- AC: `mise run cross-build-pi` builds all three binaries. Verify: `ls target/aarch64-unknown-linux-gnu/release/{wafer,wafer-loadgen,waferctl}` + `file` reports ARM aarch64.
-- AC: No new deps beyond C1. Verify: `git diff Cargo.lock` empty post-C2.
-- AC: Binary sizes recorded in `docs/eval/cross-compile.md`.
+**ACs (all met):**
+- AC: `mise run cross-build-pi` builds all three binaries. Verified locally 2026-08-02: `mise run cross-build-pi-check` reports OK for all three.
+- AC: No new deps beyond C1. `git diff Cargo.lock` empty relative to pre-C1 tree.
+- AC: Binary sizes recorded in `docs/eval/cross-compile.md` (wafer ~80 MB, wafer-loadgen ~8.4 MB, waferctl ~6.7 MB).
 
 **References:** files `crates/wafer-loadgen/Cargo.toml`, `crates/waferctl/Cargo.toml`.
 
