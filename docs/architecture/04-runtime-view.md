@@ -8,14 +8,16 @@ traverse, see [03-building-blocks.md](./03-building-blocks.md).
 
 > **Implementation status.** The scenarios below describe the current
 > production behavior. Historical drift banners (A3, A4, A7, A9, A10,
-> A13, A14, A15) are closed — hot-swap phase telemetry, ACK-phase
+> A13, A14, A15, A17) are closed — hot-swap phase telemetry, ACK-phase
 > `init()`, production Wasm lifecycle `validate()` / `init()`, source /
 > fan-out lineage assignment, per-node-type `/hot-swap` dispatch,
-> retry-exhaustion + `Recovering` state transitions, and
-> capability-aware instantiation are all wired. See
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md)
-> for the full history; residual runtime gap **A17** (process-time
-> hot-swap rollback) is tracked there.
+> retry-exhaustion + `Recovering` state transitions,
+> capability-aware instantiation, and process-time hot-swap rollback
+> (canary window + bounded retry, A17 closed 2026-08-02) are all
+> wired. See [`../status/implementation-gaps.md`](../status/implementation-gaps.md)
+> for the full history; only observability follow-up **A20**
+> (Prometheus rollback counter) is still open, and it does not affect
+> runtime semantics.
 
 ---
 

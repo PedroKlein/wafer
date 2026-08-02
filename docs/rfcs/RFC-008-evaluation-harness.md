@@ -1,6 +1,6 @@
 # RFC-008: Evaluation Harness Design
 
-- **Status:** Implemented — production-path harness. RQ1/RQ3 benchmarks now measure the real Wasm path (A15 closed 2026-07-20; A16 closed 2026-07-22; A18 closed 2026-08-01). Residual gaps at time of writing: **A17** (process-time hot-swap rollback) and **A19** (runtime-side memory sampler + per-node metrics emitter) — see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — production-path harness. RQ1/RQ3 benchmarks measure the real Wasm path (A15 closed 2026-07-20; A16 closed 2026-07-22; A17 closed 2026-08-02 with post-verify polish; A18 closed 2026-08-01; A19 closed 2026-08-02). Only residual gap at time of writing: **A20** (Prometheus `wafer_hot_swap_rollbacks_total` counter, observability follow-up, not blocking thesis) — see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-12
 - **Depends on:** RFC-001 through RFC-007 (all prior architecture decisions)
 

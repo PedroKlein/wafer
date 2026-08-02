@@ -9,13 +9,13 @@ Every request is traced via `TraceLayer::new_for_http` and appears in
 the `tracing` output. Metrics can be served on the same port
 (`[api].serve_metrics = true`, default) or separately.
 
-> **⚠ Not launched by the runtime binary today.** `crates/wafer-runtime/src/main.rs`
-> only loads the config and starts the pipeline. `ApiServer::new(...).run()`
-> is called only from integration tests, so the endpoints below are
-> unreachable when running the `wafer` binary. See gap **A2** in
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md). The
-> route table itself is correct; only the launch wiring is missing.
-
+> **Runtime binary launches the control plane by default (A2 closed
+> 2026-07-19).** `crates/wafer-runtime/src/main.rs` starts the axum
+> server alongside the pipeline; endpoints below are reachable when
+> running the `wafer` binary. Disable via `[api].enabled = false` in
+> the config when running in an embedded / testing context.
+> See closed gap **A2** in
+> [`../status/implementation-gaps.md`](../status/implementation-gaps.md).
 ## Endpoint index
 
 | Method | Path | Purpose |
@@ -89,11 +89,10 @@ Returns 404 with a plain-text body if `id` is not in the pipeline.
 Hot-swap a Wasm node between messages. The body specifies the path to
 the new component `.wasm` file on the runtime host's filesystem.
 
-**Current scope:** the HTTP handler always prepares a
-`SwapPayload::Transform`, so only Transform nodes can be swapped via
-this endpoint today. Filter and Router `SwapPayload` variants exist in
-the orchestrator (`prepare_filter_swap_timed` /
-`prepare_router_swap_timed`) but are not yet wired into the API.
+**Supported node types:** Transform, Filter, and Router. Dispatch
+happens inside the handler via `SwapKind` — A10 (closed 2026-07-20)
+wired `prepare_filter_swap_timed` / `prepare_router_swap_timed` into
+the same API endpoint.
 
 **Request body** (`application/json`):
 
@@ -105,37 +104,79 @@ the orchestrator (`prepare_filter_swap_timed` /
 
 1. Read the `.wasm` bytes from `wasm_path`.
 2. Compile + pre-instantiate via
-   `crate::orchestrator::hotswap::prepare_transform_swap_timed`.
-3. Send the resulting `SwapPayload::Transform` through the node's
+   `crate::orchestrator::hotswap::prepare_{transform,filter,router}_swap_timed`.
+3. Send the resulting `SwapPayload` through the node's
    `watch::Sender<Option<SwapPayload>>`. The runner observes the
    change at the next message boundary via `swap_rx.has_changed()`.
+4. Block up to 5 s on the runner-side `HotSwapProgress` oneshot for
+   either full convergence (ACK + first-v2 message produced) or a
+   distinguishable failure signal (init-failed, or A17
+   canary-window rollback).
 
-**Response** (`application/json`, 200):
+**Response — successful convergence** (`application/json`, 200):
 
 ```json
 {
   "node_id": "parse",
-  "status": "swap_sent",
+  "status": "swap_converged",
   "timeline": {
     "compile_ns": 8912345,
-    "instantiate_ns": 1204567
+    "instantiate_ns": 1204567,
+    "signal_ns": 1208,
+    "ack_ns": 600541,
+    "convergence_ns": 68042
   }
 }
 ```
 
+All five `SwapTimeline` phases (compile / instantiate / signal / ack /
+convergence) are populated on this response — A3b closed the drift
+reported in earlier revisions of this doc.
+
+**Response — A17 process-time rollback** (`application/json`, 200):
+
+After B1 (2026-08-02, commit `78519ea`), a swap that ACKed but was
+rolled back because v2 trapped during `process()` returns HTTP 200
+with a distinct `status: rolled_back`. The runtime restored v1 within
+the canary window; the API caller MUST NOT interpret this as
+`swap_converged`.
+
+```json
+{
+  "node_id": "parse",
+  "status": "rolled_back",
+  "reason": "error while executing at wasm backtrace: ... panic!(\"...\")",
+  "timeline": {
+    "compile_ns": 7058000,
+    "instantiate_ns": 247000,
+    "signal_ns": 458,
+    "rollback_ns": 87834
+  }
+}
+```
+
+`rollback_ns` is the wall-clock duration of the runner's
+`recover_from_cached_pre` call that restored v1. See
+[`docs/status/implementation-gaps.md#A17`](../status/implementation-gaps.md)
+for the underlying canary window semantics.
+
 **Error responses:**
 
 - 400 with `failed to read wasm file: <details>` on filesystem error.
-- 404 with the underlying error message when `id` is not in the pipeline
-  or is a native (non-swappable) node.
+- 400 on native (non-Wasm) node targets — native transforms don't
+  support hot-swap by design.
+- 404 with the underlying error message when `id` is not in the pipeline.
+- 409 `hot-swap init failed: <details>` when the replacement's
+  `validate()` or `init()` failed. v1 remains active.
 - 500 with `swap preparation failed: <details>` on compile / instantiate
-  failure.
-
-The `signal_ns`, `ack_ns`, and `convergence_ns` phases of the
-`SwapTimeline` are recorded internally (see
-[`docs/benchmarks/hot-swap.md`](../benchmarks/hot-swap.md)) but are not
-currently returned on this response — only the prepare-phase timing is
-exposed.
+  failure BEFORE the payload was sent.
+- 500 `hot-swap runner exited before acknowledgement` when the runner
+  loop dropped the `HotSwapProgress` sender without reporting a
+  terminal outcome (indicates a runtime bug — file an issue).
+- 504 `hot-swap did not converge within 5s` when neither the ACK
+  nor the first-v2 message arrived. Post-A17 this only fires when the
+  pipeline itself is stalled; a v2 that traps produces `rolled_back`
+  well within the timeout.
 
 ### POST `/api/v1/pipeline/shutdown`
 

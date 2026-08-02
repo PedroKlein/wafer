@@ -14,6 +14,13 @@ Related docs:
   run must produce.
 - `tcc-doc/research/analysis/evaluation-plan.md` — parent research plan.
 - `plans/evaluation-infrastructure/` — the plan that owns this matrix.
+- `plans/thesis-hardening.md` — closed 2026-08-02 (9/9); landed A17,
+  A19, T4 memory sampler, T8 legacy shakedown metadata unification,
+  T9 thesis-grade PDF pipeline, T10 cross-arch CI, T11 notebook
+  traceability. Preconditions for canonical Pi runs.
+- `plans/canonical-runs.md` — Pi 4 + Jetson preflight and execution.
+  C1 (aarch64 cross-compile spike) + C2 (loadgen + waferctl) closed
+  2026-08-02; `mise run cross-build-pi` ships aarch64-linux binaries.
 
 Legend:
 
@@ -67,20 +74,22 @@ Legend:
 
 ### What needs to change to book Pi time
 
-1. **Cross-compile the runtime**: `cargo build --release --target aarch64-unknown-linux-gnu` with musl or glibc toolchain. Plugins are already `wasm32-wasip2` (portable).
-2. **Linux memory sampler**: Replace `ps -o rss=` with `/proc/<pid>/smaps_rollup` reader in the shakedown scripts.
+1. **Cross-compile the runtime**: SHIPPED (canonical-runs C1+C2, 2026-08-02). `mise run cross-build-pi` produces aarch64-unknown-linux-gnu ELF binaries for `wafer`, `wafer-loadgen`, `waferctl` via `docker run --platform linux/arm64 rust:1-slim-bookworm`. See `docs/eval/cross-compile.md`. CI job at `.github/workflows/cross-arch.yml` guards the recipe on every push.
+2. **Linux memory sampler**: SHIPPED (thesis-hardening T4, A19, 2026-08-02). Runtime uses the `memory-stats` crate directly; the `MemoryRecorder::sample_loop` runs at 1 Hz and writes `memory.csv` at graceful shutdown. All `ps -o rss=` scrapes removed from shakedown scripts.
 3. **CPU isolation**: Boot Pi with `isolcpus=2,3` kernel parameter. Run SUT on core 2, loadgen on core 3.
 4. **Longer runs**: Bump `total_messages` from 5000→60000 and `warmup_secs` from 1→30 for canonical statistical power (N=30 runs × 60s each).
 5. **eKuiper native Docker**: Verify `lfedge/ekuiper:2.1.0-alpine` runs on `linux/arm64` without emulation.
 6. **HdrHistogram sub-ms precision**: The `/metrics` endpoint uses integer ms. For E-Iso-8 canonical, export raw histogram buckets from the Prometheus scrape.
 
-### A16/A17/A18 impact on canonical RQ claims
+### A16/A17/A18/A19 impact on canonical RQ claims
 
 | Gap | Impact | RQ claim modification |
 |---|---|---|
 | **A16** (WASI async panic) | CLOSED. Fixed in commit `40ab46b`. | None — regression test covers this. |
-| **A17** (process-time rollback) | CLOSED (2026-08-02). Canary window + bounded retry implemented in `run_transform_loop_with_config`. | RQ3 claim: "rollback on any failure" — both init-time and process-time traps trigger auto-rollback within the canary window. |
+| **A17** (process-time rollback) | CLOSED (2026-08-02) + polished (B1/B2/M1/M2, commit `78519ea`). Canary window + bounded retry in `run_transform_loop_with_config`; `HotSwapError::RolledBack` distinguishes rollback from convergence in the `/hot-swap` API response; `recovery_store` reapplies fuel before instantiate. | RQ3 claim: "rollback on any failure" — both init-time and process-time traps trigger auto-rollback within the canary window, and the API reports `status: rolled_back` distinctly from `swap_converged`. |
 | **A18** (native filter dispatch) | CLOSED (2026-08-01). Native filter dispatch wired; `NativeFilter::range` mirrors `plugins/threshold-filter`. | None — WAFER/native ratio moved 0.995 → 0.999, well inside the noise floor. |
+| **A19** (memory sampler) | CLOSED (2026-08-02). `memory-stats` crate + runtime-side `MemoryRecorder::sample_loop`. Per-node metrics CSV emitted at graceful shutdown. | None — canonical runs will now get consistent memory samples on Linux without shelling out to `ps`. |
+| **A20** (Prom rollbacks_total) | OPEN (filed 2026-08-02, ~1 h to close). Rollback total not on `/metrics` yet; per-node `NodeMetrics::rollbacks()` still visible via `PipelineHandle`. | None — does not affect thesis metrics. |
 
 ## Experiments
 

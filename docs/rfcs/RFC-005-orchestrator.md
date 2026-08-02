@@ -1,6 +1,6 @@
 # RFC-005: Orchestrator & Runtime Simplification
 
-- **Status:** Implemented — orchestrator, hot-swap telemetry, init-on-flip, warm swap, config cascade, lineage assignment, and Wasm lifecycle calls are all live in production (see closed gaps A3, A4, A5, A6, A10, A13, A14, and A15 in the ledger, all landed 2026-07-19 through 2026-07-21). Residual gap **A17** (process-time hot-swap rollback) is tracked in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — orchestrator, hot-swap telemetry, init-on-flip, warm swap, config cascade, lineage assignment, Wasm lifecycle calls, and process-time hot-swap rollback (A17) are all live in production. See closed gaps A3, A4, A5, A6, A10, A13, A14, A15 (all landed 2026-07-19 through 2026-07-21), and A17 (landed 2026-08-02 via thesis-hardening T1 + B1/B2/M1/M2 polish) in the ledger. No residual runtime gaps in this RFC's scope; observability follow-up **A20** (Prometheus rollback counter) is tracked in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-12
 - **Amends:** ADR-0003 (drain-and-flip → watch-channel between-messages)
 

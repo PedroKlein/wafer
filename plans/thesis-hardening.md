@@ -1,5 +1,9 @@
 # Thesis hardening — pre-Pi work
 
+**Status:** ✅ **CLOSED 2026-08-02.** All 9 tasks landed across 3 phases.
+See the closing checklist at the bottom of this file for the final tally
+and the follow-up gaps that survived (A20 Prometheus rollbacks counter).
+
 **Goal:** Close every thesis-quality gap workable without physical Pi/Jetson.
 Everything here runs on the current macOS host + docker for Linux paths.
 
@@ -8,6 +12,18 @@ owns "measure on real hardware"; this plan owns "make code + tests +
 artifacts thesis-defensible." Both can be worked in parallel.
 
 **Predecessor:** [`plans/eval-followups.md`](./eval-followups.md) (closed).
+
+## Overlap with canonical-runs.md
+
+**A19 full implementation (task T4 below).** `canonical-runs.md` Phase P1
+lets you pick option (a) shell-swap or option (b) runtime-side
+`memory_stats`. Option (b) is the thesis-correct path and lives here as
+T4. If you execute T4, mark canonical-runs M2b closed by T4's commit and
+skip M2a. If you execute M2a instead, T4 becomes post-thesis.
+
+**Resolution (2026-08-02).** T4 landed the runtime-side `memory_stats`
+path (commits `1a2bce6` → `eeee0a5`). canonical-runs.md M2b is CLOSED
+by that same commit series; M2a is SKIPPED.
 
 ## Overlap with canonical-runs.md
 
@@ -267,3 +283,39 @@ Audit found stale doc references that prior plans (evaluation-infrastructure, ev
   truth for closure status.
 - If T7 reveals a real deadlock, escalate — that's a shipping bug that
   also affects canonical Pi runs.
+
+---
+
+## Closing checklist (2026-08-02)
+
+**Landed:** 9/9 tasks across 3 phases. 21 commits from `f6fee54` through `b393088`.
+
+| Task | Closed by | Notes |
+|------|-----------|-------|
+| T1 — A17 process-time hot-swap rollback | `f1e5766` + polish `78519ea` | B1/B2/M1/M2 review-driven polish landed in `78519ea` after cross-family verify: distinguish rollback in API, retain canary budget, populate `rollback_time_ns`, `recovery_store` reapplies fuel. |
+| T2 — E-Swap-5 re-run + notebook regen | `b31dbe9` + `ad2a682` | Second re-run after B1 fix. All 12 swaps report `status: rolled_back` (was `swap_converged`). p50=72 µs, p95=100 µs, p99=115 µs, max=176 µs (n=24). |
+| T4 — A19 memory sampler + per_node_metrics | `1a2bce6`→`eeee0a5` | Closes canonical-runs M2b too. |
+| T7 — `cargo test --workspace` hang | `f6fee54` | Epoch interruption in `PluginTestHarness`. |
+| T8 — Legacy shakedown metadata unification | `c08b793` | All 11 shakedown scripts annotated + `verify-result-contract.py` WARN. |
+| T9 — Thesis-grade PDF figure pipeline | `8b77664` | 11 PDFs + 11 PNGs; LaTeX embed verified zero font substitutions. |
+| T10 — Cross-arch build CI job | `b393088` | Depends on canonical-runs C1 which was landed in the same commit via `mise run cross-build-pi`. |
+| T11 — Notebook ↔ experiment ↔ RQ traceability | `b6c9926` | rq-summary.md + notebooks/README.md fully cross-linked. |
+| T12 — Doc-freshness sweep | `ed812cf` + `4dd9965` + this commit | Second sweep post-T1-polish captured the A20 filing + A19 badge fix. |
+
+**Follow-ups filed (not blocking thesis):**
+
+- **A20** — Prometheus `wafer_hot_swap_rollbacks_total` counter. Filed 2026-08-02 in `implementation-gaps.md#A20`. Estimated ~1 h to close (needs runner ↔ registry plumbing). Non-blocking.
+- **Reconfigure rollback semantics** — the canary path is Transform-only; reconfigure snapshot semantics have a subtle `config_json` re-application issue documented in `runner/transform.rs`. Pre-existing gap; out of A17 scope.
+
+**Verified end-of-plan state (2026-08-02):**
+
+- `cargo test --workspace` = 483 passed / 0 failed / ~40 s (with one flaky `wasi_async_runner` p99 timing test that passes on retry — pre-existing, unrelated to this plan).
+- `mise run cross-build-pi-check` = OK for wafer / wafer-loadgen / waferctl.
+- `find eval/analysis/figures/ -name '*.pdf' | wc -l` = 11.
+- `pdflatex eval/analysis/figures/latex-smoke/embed.tex` = 0 font substitution warnings.
+- Fresh E-Swap-5 shakedown: 12/12 `status: rolled_back`, 0 `swap_converged` (was 12/12 misleading `swap_converged` pre-B1).
+
+**Downstream unblocking:**
+
+- `canonical-runs.md` C1 + C2 closed by the same session; C3 (plugin portability on aarch64) is the immediate next step there and no longer blocks anything else in this plan.
+- Post-thesis test-hardening plan (deferred T3/T5/T6) remains a future ticket.

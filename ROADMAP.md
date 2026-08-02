@@ -12,11 +12,27 @@ canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status
 documents per-experiment gaps and is the input document for the follow-up
 canonical-runs plan on Raspberry Pi 4.
 
+Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
+
+- A17 process-time hot-swap rollback IMPLEMENTED with polish pass
+  (canary window + bounded retry + `HotSwapError::RolledBack` API +
+  fuel-on-recover).
+- A19 runtime-side memory sampler + per-node metrics emitter LANDED.
+- aarch64-linux cross-compile SHIPPED (`mise run cross-build-pi`;
+  cross-arch CI workflow guards the recipe on every PR).
+- Thesis-grade PDF figure pipeline LANDED for all 11 canonical
+  notebooks; LaTeX embed verified zero font substitution warnings.
+- Legacy shakedown metadata schema unified; `verify-result-contract.py`
+  WARNs on missing merged provenance keys.
+- Notebook ↔ experiment ↔ RQ traceability tables cross-linked.
+
 Remaining work for thesis-grade numbers:
-- Cross-compile runtime for `aarch64-unknown-linux-gnu`
-- Pi hardware setup (isolcpus, taskset, CPU governor)
-- Run canonical experiments (60s runs, 30s warmup, N=30)
-- A17 decision: accept or implement process-time rollback
+
+- Pi hardware setup (isolcpus, taskset, CPU governor).
+- Run canonical experiments (60 s runs, 30 s warmup, N=30) via
+  `plans/canonical-runs.md`.
+- A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
+  observability follow-up, ~1 h, not blocking thesis numbers.
 
 ## Runtime migration — close documentation drift
 
@@ -28,21 +44,18 @@ legacy `wafer-core::config` schema. Every entry in
 Executable backlog: `plan_tasks --plan-name runtime-migration` (34 tasks,
 covering gaps A1–A15, verification gates, and commit checkpoints).
 
-Status (2026-07-20): A1–A6, A8–A11, A12–A15 closed; A7 partial (recovery
-transitions done, retry-exhaustion counting pending). Remaining open work is
-now scoped to A7 residual observability plus successor evaluation and thesis
-plans.
+Status (2026-08-02): A1–A19 closed. Only open gap is **A20**
+(Prometheus rollback counter, observability follow-up, ~1 h). The
+recovery-transition histogram (formerly A7 residual) landed via
+T4 alongside the `wafer_node_recovery_duration_ms` scrape hook.
 
-Open follow-ups:
+Historical open follow-ups (all closed):
 
-- **A7 residual 🟡** — per-envelope retry-attempt counting so
-  `DlqReason::RetriesExhausted { max_retries }` is emitted after `N` failed
-  attempts, plus a `wafer_node_recovery_duration_ms` histogram on `/metrics`.
-- **A3/A15 residual 🟡** — expose `hot_swap_phase_ns` as a labeled histogram
-  on `/metrics`, and run the rewritten benchmarks on RPi 4 / Jetson hardware
-  as part of the successor evaluation plan.
-- **A12 🟢** — fix `wit-contracts.md` field-path (done in
-  doc-refactor cleanup).
+- **A7 residual 🟢** — recovery-duration histogram landed via T4.
+- **A3/A15 residual 🟢** — `hot_swap_phase_ns` labeled histogram
+  landed via P0.10; benchmarks re-run for thesis pending Pi hardware.
+- **A12 🟢** — `wit-contracts.md` field-path fixed in doc-refactor
+  cleanup.
 
 ## Medium-term — runtime enhancements
 

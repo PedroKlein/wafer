@@ -7,14 +7,17 @@ the repo root; documented-but-not-yet-wired items are catalogued in
 [`implementation-gaps.md`](./implementation-gaps.md).
 
 > **Post-runtime-migration + evaluation-infrastructure + eval-followups + thesis-hardening.**
-> A1–A18 are closed with evidence. A17 (process-time hot-swap rollback)
-> closed 2026-08-02 via thesis-hardening T1: canary window + bounded
-> retry in `run_transform_loop_with_config`; RQ3 auto-rollback claim
-> upgraded to ✅ PASS. Only open gap: **A19** (runtime-side memory
-> sampler + per-node metrics emitter — canonical-run harness hygiene,
-> not thesis numbers). `wafer-config` is the runtime loader, the axum
-> control plane launches by default, and `waferctl` calls only the
-> routes that exist on the server.
+> A1–A19 are closed with evidence. Thesis-hardening (9/9 done 2026-08-02):
+> A17 (process-time hot-swap rollback) landed via T1 + a subsequent
+> B1/B2/M1/M2 polish pass (canary window + bounded retry +
+> `HotSwapError::RolledBack` API surface + fuel-on-recover); RQ3
+> auto-rollback claim upgraded to ✅ PASS. A19 (runtime-side memory
+> sampler) landed via T4 using the `memory-stats` crate. Only open
+> gap: **A20** (Prometheus `wafer_hot_swap_rollbacks_total` counter
+> — observability follow-up filed 2026-08-02; ~1 h to close; does
+> not affect thesis numbers). `wafer-config` is the runtime loader,
+> the axum control plane launches by default, and `waferctl` calls
+> only the routes that exist on the server.
 
 ## Runtime crates (7 workspace members)
 

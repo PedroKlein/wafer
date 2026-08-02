@@ -624,7 +624,7 @@ RQ1 finding that MQTT-bookend throughput is dominated by broker RTT.
 
 ---
 
-## A19 — Runtime-side memory sampler + per-node metrics emitter (Closed 2026-08-02) 🏢
+## A19 — Runtime-side memory sampler + per-node metrics emitter (Closed 2026-08-02) 🟢
 
 **Severity:** low. Affects canonical-run harness hygiene, not thesis
 numbers. Filed by F3 (`fcd855d` line of work) as the deferred half of
