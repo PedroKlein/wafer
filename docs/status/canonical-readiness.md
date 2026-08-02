@@ -56,7 +56,7 @@ Legend:
 | E-Swap-2 | RQ3 | 🟢 | `e-swap-2/shakedown-macos-2026-07-22T17-13-47Z/` | Same as E-Swap-1 | None significant |
 | E-Swap-3 | RQ3 | 🟢 | `e-swap-3/shakedown-macos-2026-07-22T20-11-05Z/` | 30 runs per strategy | Docker Desktop overhead on eKuiper |
 | E-Swap-4 | RQ3 | 🟢 | `e-swap-4/shakedown-macos-2026-07-22T17-15-59Z/` | Higher burst rate on Pi | Pipeline never saturates on M-series |
-| E-Swap-5 | RQ3 | 🟢 | `e-swap-5/shakedown-macos-2026-08-02T15-51-21Z/` | A17 closed + polished (B1/M1): canary rollback + API `status=rolled_back` | rollback_time_ns p99=115 µs (n=24) |
+| E-Swap-5 | RQ3 | 🟢 | `e-swap-5/shakedown-macos-2026-08-02T22-11-06Z/` | A17 closed + polished (B1/M1/BL-1): canary rollback + API `status=rolled_back` + shakedown script no longer double-posts | rollback_time_ns p99=98 µs (n=12) |
 | E-Swap-6 | RQ3 | 🟢 | `e-swap-6/shakedown-macos-2026-07-22T17-13-47Z/` | Phase timing at Pi speed | AOT compile phase larger on ARM |
 | E-Density-1 | All | 🟢 | `e-density-1/binary-sizes.csv` | None (static measurement) | None (portable) |
 
@@ -563,28 +563,38 @@ channels absorb the burst.
 
 ### E-Swap-5 — failed swap recovery (P5.6)
 
-- **Status**: 🟡 runtime detects failure but does NOT auto-rollback.
-- **Shakedown**: `eval/results/e-swap-5/shakedown-macos-<ts>/`
+- **Status**: 🟢 auto-rollback to v1 works (A17 closed 2026-08-02).
+- **Shakedown**: `eval/results/e-swap-5/shakedown-macos-2026-08-02T22-11-06Z/`
 - **Config**: `eval/configs/e-swap/pipeline-hotswap-rollback.toml`
-- **Script**: `eval/scripts/run-e-swap-shakedown.sh --swap rollback`
+- **Script**: `eval/scripts/run-e-swap-shakedown.sh --swap 5`
 
 The v2-panics plugin deliberately passes `init()` (by design — see
 `plugins/pass-through-v2-panics/src/lib.rs` line 24) so the A4
-init-failure rollback path is NOT triggered. The runtime's recovery
-loop re-instantiates from the CURRENT InstancePre (v2-panics), leading
-to perpetual traps. The handler returns 504 GATEWAY_TIMEOUT.
+init-failure rollback path is NOT triggered. Instead, the A17 canary
+window retains v1's `InstancePre` for a bounded number of process
+calls after every swap; the first trap during that window rolls the
+node back to v1 automatically. The API surfaces this as HTTP 200 with
+`status: "rolled_back"` (was misleading `swap_converged` pre-B1).
 
 | Metric | Value |
 | ------ | ----- |
-| Swap attempts | 6 |
-| Traps post-swap | ~93,000 |
+| Swap attempts | 12 |
+| Rollback events | 12 (100%) |
 | A4 init-rollback | 0 |
-| Auto rollback to v1 | No |
+| A17 process-time rollback | 12 |
+| Auto rollback to v1 | Yes |
+| Rollback time p50 / p99 / max | 74 µs / 98 µs / 96 µs (n=12) |
 | Runtime panic | No |
 
-**Gap**: Process-time rollback to previous InstancePre is not
-implemented. A4 covers init-time failures only. See
-`docs/status/implementation-gaps.md` if escalated.
+**Post-BL-1 fix**: The shakedown script previously fired two POSTs per
+iteration (one via `do_swap`, one via the instrumented `curl` that
+captures body). The bug inflated observed rollback counts to n=24. The
+script now issues exactly one POST per iteration; numbers above reflect
+the corrected script.
+
+**Follow-up gap**: A20 (Prometheus `wafer_hot_swap_rollbacks_total`
+counter) is filed in `docs/status/implementation-gaps.md` as a
+non-blocking observability enhancement.
 
 ### E-Iso-1..6 — attack containment shakedown (P4.1–P4.6)
 

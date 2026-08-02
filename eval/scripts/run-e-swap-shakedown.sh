@@ -608,14 +608,15 @@ run_rollback() {
             break
         fi
 
-        # Swap to panic plugin — this should trigger rollback
-        local response
-        response=$(do_swap "$V2_PANICS" 2>/dev/null || echo "FAILED")
-
+        # Swap to panic plugin — this should trigger rollback.
         # Post-B1 (2026-08-02, commit 78519ea): the API now returns
         # `HTTP 200 status=rolled_back` for a v2-panics swap that ACKed
         # and then rolled back. Older code returned 409/504. Count both
         # so the shakedown is portable across the fix boundary.
+        # Fix 2026-08-02 (BL-1): previously this block also called
+        # `do_swap` before the instrumented curl below, firing TWO
+        # POST requests per iteration and doubling the observed rollback
+        # event count. Removed to restore one-swap-per-iteration semantics.
         local status_code
         local body_file
         body_file=$(mktemp)
@@ -627,7 +628,7 @@ run_rollback() {
         status_body=$(cat "$body_file")
         rm -f "$body_file"
 
-        echo "{\"swap_index\":$swap_count,\"http_status\":$status_code,\"response\":\"$(echo "$response" | tr -d '\n' | sed 's/"/\\"/g')\",\"body\":$(echo "$status_body" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo "\"\"")}" >> "$swap_timeline_file"
+        echo "{\"swap_index\":$swap_count,\"http_status\":$status_code,\"body\":$(echo "$status_body" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo "\"\"")}" >> "$swap_timeline_file"
 
         # A rollback is signalled by: 409/504 (pre-B1 path), or
         # HTTP 200 with "status":"rolled_back" in the response body.
@@ -664,7 +665,11 @@ from pathlib import Path
 
 run_dir = Path(sys.argv[1])
 swap_count = int(sys.argv[2])
-http_failure_responses = int(sys.argv[3])
+# Post-BL-1 rename: this counts both HTTP 409/504 (pre-B1 path) and
+# HTTP 200 status=rolled_back (post-B1 path), so the field name shifted
+# from `http_409_or_504_responses` to `http_error_or_rollback_responses`
+# to stop misleading downstream readers.
+http_error_or_rollback_responses = int(sys.argv[3])
 git_sha = sys.argv[4]
 ts = sys.argv[5]
 
@@ -726,7 +731,7 @@ data = {
     "host": "shakedown-macos",
     "generated_at_utc": ts,
     "swap_attempts": swap_count,
-    "http_409_or_504_responses": http_failure_responses,
+    "http_error_or_rollback_responses": http_error_or_rollback_responses,
     "trap_count_post_swap": trap_count,
     "a4_init_rollback_events": init_failed_count,
     "auto_rollback_to_v1": auto_rollback_worked,

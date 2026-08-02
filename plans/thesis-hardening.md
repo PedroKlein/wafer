@@ -293,7 +293,7 @@ Audit found stale doc references that prior plans (evaluation-infrastructure, ev
 | Task | Closed by | Notes |
 |------|-----------|-------|
 | T1 — A17 process-time hot-swap rollback | `f1e5766` + polish `78519ea` | B1/B2/M1/M2 review-driven polish landed in `78519ea` after cross-family verify: distinguish rollback in API, retain canary budget, populate `rollback_time_ns`, `recovery_store` reapplies fuel. |
-| T2 — E-Swap-5 re-run + notebook regen | `b31dbe9` + `ad2a682` | Second re-run after B1 fix. All 12 swaps report `status: rolled_back` (was `swap_converged`). p50=72 µs, p95=100 µs, p99=115 µs, max=176 µs (n=24). |
+| T2 — E-Swap-5 re-run + notebook regen | `b31dbe9` + `ad2a682` + BL-1 patch | Re-run again after BL-1 (removed double-post in shakedown script). All 12 swaps report `status: rolled_back` (was `swap_converged`). p50=74 µs, p99=98 µs, max=96 µs (n=12). |
 | T4 — A19 memory sampler + per_node_metrics | `1a2bce6`→`eeee0a5` | Closes canonical-runs M2b too. |
 | T7 — `cargo test --workspace` hang | `f6fee54` | Epoch interruption in `PluginTestHarness`. |
 | T8 — Legacy shakedown metadata unification | `c08b793` | All 11 shakedown scripts annotated + `verify-result-contract.py` WARN. |
