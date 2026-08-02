@@ -79,7 +79,7 @@ duplication; dip <5% vs full-restart.
 | Burst swap (2×) pause p95 | 1.17 ms | ✅ | Bounded channels absorb burst |
 | vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages |
 | vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart |
-| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed: canary window + bounded retry |
+| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + bounded retry + `HotSwapError::RolledBack` API surface |
 | Rollback time (E-Swap-5) | p50=63 µs, p99=186 µs, max=139 µs (n=24, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T14-30-50Z/` |
 | Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) |
 
@@ -87,9 +87,18 @@ duplication; dip <5% vs full-restart.
 hot-swap at sub-2ms pause. The InstancePre cache makes compilation a
 one-time cost. Process-time rollback (A17) restores v1 within the canary
 window when a new plugin passes `init()` but traps during `process()`.
+A follow-up review (commit `78519ea`) tightened four polish gaps: the
+API now reports `status: rolled_back` instead of `swap_converged` when
+the swap actually reverted; `max_rollback_retries` truly bounds the
+canary trap budget; `rollback_time_ns` flows into the `/hot-swap`
+response; and `recovery_store` reapplies fuel before reinstantiate.
+Remaining observability follow-up A20 (Prometheus rollbacks_total
+series) is filed but not blocking.
 Verified by:
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
+- `cargo test -p wafer-core --lib runner::tests::canary_state_bounds_trap_count`
+- `cargo test -p wafer-core --lib runner::tests::hot_swap_progress_reports_rolled_back_after_ack`
 
 ## Overall assessment
 

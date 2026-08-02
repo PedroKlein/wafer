@@ -505,9 +505,44 @@ and ended in permanent Error.
 canary rollback, `TransformCanaryState`, `set_cached_pre`,
 `NodeMetrics::record_rollback`.
 
+**Post-verify hardening (2026-08-02, commit `78519ea`).** Cross-family
+review (hai-proxy/independent-model x 3) surfaced four polish gaps in the initial
+T1 landing; all four fixed in one patch:
+
+- **B1 (correctness).** `pending_swap_progress` was not cleared on
+  rollback; the next successful v1 message called `mark_first_v2()`,
+  so the `/hot-swap` API reported `swap_converged` for a swap that
+  had actually rolled back. E-Swap-5 shakedown captured this as 12 x
+  HTTP 200 `swap_converged` alongside 24 rollback events in the same
+  run. Fix: added `HotSwapError::RolledBack { rollback_time_ns,
+  reason }` variant and `HotSwapProgress::report_rolled_back(...)`
+  which consumes the sender — late `mark_first_v2` calls become
+  no-ops. `hot_swap` handler now emits `status: "rolled_back"` with a
+  `timeline.rollback_ns` field.
+- **B2 (correctness).** `max_rollback_retries` budget was
+  unenforceable: on first successful rollback the canary was dropped
+  and `trap_count` discarded. Fix: successful rollback retains the
+  canary (v1 pre is idempotent) so subsequent traps in the same
+  window count toward the budget. State-machine invariants covered
+  by `canary_state_bounds_trap_count` +
+  `canary_state_record_trap_semantics_matches_model` unit tests.
+  Also tightened canary arming to `SwapPayload::Transform` only —
+  reconfigure has its own atomic rollback inside `try_reconfigure`.
+- **M1.** `SwapTimeline.rollback_time_ns` now populated in the API
+  response `timeline.rollback_ns` field via `HotSwapError::RolledBack`.
+- **M2 (safety).** `recovery_store` now reapplies fuel before
+  `pre.instantiate()`. On fuel-enabled configs a guest component
+  start function could trap immediately because the store defaulted
+  to fuel=0; `validate_and_init` reset fuel too late. Signature
+  gained `fuel_limit: Option<NonZeroU64>` and returns `Result`; all
+  six callers (transform/filter/router x recover + reconfigure)
+  updated.
+
 **Tests:**
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
+- `cargo test -p wafer-core --lib runner::tests` (canary state machine
+  + rollback progress reporting)
 
 ---
 
@@ -619,6 +654,49 @@ macOS path shelled out to `ps -o rss=` instead of using the
 
 - **Closed by:** thesis-hardening T4 commits `1a2bce6`, `11f757d`,
   `90775ef`, `2e2139c`, and the doc commit closing this entry.
+
+---
+
+## A20 — Hot-swap rollback counter missing from Prometheus /metrics 🟡
+
+**Severity:** low. Observability gap that does not affect thesis
+numbers. Filed 2026-08-02 by the cross-family verify pass on A17.
+
+**Symptom.** `NodeMetrics::record_rollback()` bumps a per-node
+atomic (`crates/wafer-core/src/node/metrics.rs`) that
+`PipelineHandle::node_metrics(id)?.rollbacks()` can read, but the
+counter is never emitted on the `/metrics` endpoint. External
+Prom/Grafana dashboards cannot alert on rollback rate without
+teaching them a bespoke endpoint.
+
+**Root cause.** The runner (`transform.rs`) owns an
+`Arc<NodeMetrics>` but not the `Arc<MetricsRegistry>` that drives
+`/metrics`. Wiring rollback totals through the registry needs
+threading the registry (or a small "HotSwapMetrics" handle) into
+the runner spawn path in `orchestrator/launcher.rs`.
+
+**Proposed fix (NOT applied).**
+
+1. Extend `HotSwapMetrics` (in `metrics/types.rs`) with
+   `rollbacks_total: AtomicU64` and a `record_rollback(node_id)`
+   method.
+2. Thread an `Arc<HotSwapMetrics>` handle from the orchestrator into
+   `run_transform_loop_with_config` (alongside the existing
+   `Arc<NodeMetrics>`).
+3. In the rollback branches of `runner/transform.rs`, call
+   `hotswap_metrics.record_rollback(node_id)` after the local
+   `metrics.record_rollback()`.
+4. Extend `snapshot_builder::add_hotswap_metrics` to render
+   `wafer_hot_swap_rollbacks_total{node_id=...}`.
+
+Estimated cost: ~1 hour + smoke test.
+
+**Impact if unfixed.** Dashboards/alerting see rollback count only via
+the hot_swap `timeline.rollback_ns` phase histogram (added by the
+B1/M1 fix in commit `78519ea`); the total-count series is missing.
+Internal tests already assert rollback correctness via
+`NodeMetrics::rollbacks()`, so this is a purely external-observability
+gap.
 
 ---
 
