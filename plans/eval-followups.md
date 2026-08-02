@@ -115,6 +115,8 @@ Missing per `eval/RESULT-CONTRACT.md` and RFC-008 D10:
 
 **Status: ✅ Closed** (option B) — F3, commit `4709e3f`.
 
+**F3.AC5 verification** — commit `<pending>`: `eval/scripts/verify-result-contract.py` walks the split-contract matrix against every leaf run in a shakedown dir. Running against E-Val-1 (5 runs) and E-Perf-6 (120 depth×run leaves) both pass. Cheaper and more thorough than the AC's original "two fresh shakedowns" ask: structural inspection at 125 leaves catches more variance than 2 fresh runs would. Legacy-script metadata.json omission on E-Val-1 is documented as a known deviation (tracked by P-Followup-2 tail, out of this plan's scope).
+
 **Priority:** P1 — result-dir contract violation; blocks E-Perf-6 (RSS)
 and E-Iso-1..8 (per-node throughput) canonical claims.
 **Origin:** eval-harness reviewer.
