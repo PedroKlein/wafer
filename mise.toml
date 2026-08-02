@@ -1,7 +1,9 @@
 # WAFER project tools and tasks
 #
 # mise is the primary developer entrypoint for this repository: it installs
-# non-Rust helper tools and runs project tasks. `justfile` remains as a
+# non-Rust helper tools and runs project tasks. The legacy `justfile`
+# was removed 2026-08-02 after task-parity with mise was verified
+# (ADR-0015 follow-up).
 # temporary compatibility layer while docs and scripts finish migrating.
 #
 # Rust stays authoritative in rust-toolchain.toml. Install rustup/Rust before

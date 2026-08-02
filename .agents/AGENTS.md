@@ -122,7 +122,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 |------|---------|
 | `README.md` | Project README — quick start, prerequisites, project structure, development setup, running pipelines, building plugins. Post-migration, this is a one-page quickstart that points into `docs/`. |
 | `mise.toml` | Primary non-Rust developer toolchain and command-runner config. Run `mise run setup` for helper tools and `mise tasks ls` for tasks. |
-| `justfile` | Temporary compatibility recipes retained during the mise migration. Prefer `mise run ...` for new instructions. |
 | `rust-toolchain.toml` | Pinned Rust toolchain (stable channel, `wasm32-wasip2` target). |
 | `rustfmt.toml` | Formatter configuration. |
 | `Cargo.toml` | Workspace root. Defines workspace members, shared dependencies, and profiles. |
@@ -131,7 +130,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 ## Build & Test Commands
 
-This project uses [`mise`](https://mise.jdx.dev/) as the primary non-Rust development tool manager and command runner. Non-Rust helper tools and tasks are defined in `mise.toml`; Rust itself remains controlled by `rust-toolchain.toml` and must be installed through rustup first. The `justfile` remains temporarily for compatibility; prefer `mise run ...` in new instructions. If mise reports that `mise.toml` is not trusted, run `mise trust` once for this repo, then `mise run setup` to verify Rust/rustup and install pinned helper tools.
+This project uses [`mise`](https://mise.jdx.dev/) as the primary non-Rust development tool manager and command runner. Non-Rust helper tools and tasks are defined in `mise.toml`; Rust itself remains controlled by `rust-toolchain.toml` and must be installed through rustup first. If mise reports that `mise.toml` is not trusted, run `mise trust` once for this repo, then `mise run setup` to verify Rust/rustup and install pinned helper tools.
 
 ### Core Workflow
 

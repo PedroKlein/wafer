@@ -134,7 +134,7 @@ Verify `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtim
 **ACs:**
 - AC: Working ELF binary produced. Verify: `file target/aarch64-unknown-linux-gnu/release/wafer` reports `ELF 64-bit LSB … ARM aarch64`.
 - AC: `docs/eval/cross-compile.md` documents the working path with exact commands. Verify: fresh clone reproduces the binary.
-- AC: `mise run cross-build-pi` task in `mise.toml`. Verify: task runs and produces the binary. (Note: `mise` is the primary command runner; `justfile` is a compatibility layer being retired — do NOT add new recipes there.)
+- AC: `mise run cross-build-pi` task in `mise.toml`. Verify: task runs and produces the binary.
 
 **References:** skills `cargo-expert`, `rust-best-practices`; files `crates/wafer-runtime/Cargo.toml`, `Cargo.toml`, `mise.toml`; docs [cross-rs](https://github.com/cross-rs/cross).
 

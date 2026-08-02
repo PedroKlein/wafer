@@ -43,6 +43,26 @@ This ADR records both the decision and the initial implementation. It creates a 
 
 ## Follow-up
 
-- Keep `mise.toml` and `justfile` in parity while both exist.
-- Consider deleting `justfile` after one stabilization period, or convert it into a thin compatibility wrapper that delegates to `mise run ...`.
+- ~~Keep `mise.toml` and `justfile` in parity while both exist.~~ Superseded 2026-08-02 (see Resolution below).
+- ~~Consider deleting `justfile` after one stabilization period, or convert it into a thin compatibility wrapper that delegates to `mise run ...`.~~ Resolved 2026-08-02.
 - Add or tighten exact tool-version pins in `mise.toml` as evaluation tooling stabilizes. `rust-toolchain.toml` remains authoritative for Rust components/targets until that change is made explicitly.
+
+## Resolution (2026-08-02)
+
+Task parity between `mise.toml` and `justfile` was verified—every recipe
+in the deleted `justfile` had a corresponding task in `mise.toml`, and
+`mise.toml` had additionally grown net-new tasks (OCI publish/pull,
+registry-login, setup, tool-versions) that were never mirrored back.
+`justfile` was removed. `mise` is now the sole command-runner surface.
+
+Documentation swept: `.agents/AGENTS.md`, `.agents/skills/wafer-project/SKILL.md`,
+`docs/operations/dependencies.md`, `mise.toml` intro comment, and
+`plans/canonical-runs.md` all had their "justfile remains temporarily"
+language removed or updated.
+
+Historical references to `justfile` in
+`docs/rfcs/source-decisions/2025-07-15-phase4-io-integration.md`,
+`docs/rfcs/RFC-011-doc-refactor.md`, `docs/adr/0006-workspace-architecture.md`,
+`docs/status/migration-audit.md`, and skill reference documents are
+preserved as historical accuracy — those documents describe past state,
+not current state.

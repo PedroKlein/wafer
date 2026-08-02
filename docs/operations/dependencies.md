@@ -30,9 +30,6 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
   mise run setup   # verify Rust/rustup, then install pinned helper tools
   ```
 
-  The legacy `justfile` remains temporarily as a compatibility layer, but new
-  docs should use `mise run ...`.
-
 `mise.toml` currently declares these development tools:
 
 | Tool | Purpose |
