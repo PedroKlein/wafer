@@ -6,9 +6,11 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 | What you need | Where to find it |
 |---------------|------------------|
-| **What to build next** | `TODO.md` and `ROADMAP.md` (repo root) — implementation tasks and cross-references |
+| **What to build next** | `plans/` (repo root): `canonical-runs.md` is the active plan; `thesis-hardening.md` is closed 2026-08-02; `eval-followups.md` archives review-driven follow-ups. `ROADMAP.md` gives the aspirational narrative. `TODO.md` is legacy — use plans for active work. |
+| **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (per-experiment readiness for Pi/Jetson runs) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
-| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` |
+| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology) + `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
+| **RQ verdicts + shakedown numbers** | `docs/benchmarks/rq-summary.md` — RQ1/RQ2/RQ3 tables with linked notebooks |
 | **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
 | **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
 | **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
@@ -84,16 +86,39 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, status reports, and workflows. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
 
+### Status & Evaluation
+
+| Document | Summary |
+|----------|---------|
+| `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP doc. |
+| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID (A1–A20). Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
+| `docs/status/canonical-readiness.md` | Per-experiment readiness matrix for canonical Pi/Jetson runs. Notes macOS-vs-Linux confounders + what needs to change to book Pi time. |
+| `docs/status/evaluation-progress.md` | Progress against RFC-008 / evaluation-plan (24 experiments). |
+| `docs/status/migration-audit.md` | Row-per-decision audit of the runtime-migration plan closure. |
+| `docs/benchmarks/rq-summary.md` | **RQ1/RQ2/RQ3 verdict tables** with shakedown numbers and links to the driving notebook for each row. Read before quoting any evaluation number. |
+| `docs/benchmarks/hot-swap.md` | Hot-swap phase timing reference. |
+| `docs/benchmarks/binary-sizes.md`, `ekuiper-comparator.md`, `methodology-validation.md`, `rq2-attacks.md` | Per-experiment benchmark documentation. |
+| `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`); the path used to produce Pi-target binaries. |
+| `eval/RESULT-CONTRACT.md` | **Authoritative shape** of every result directory under `eval/results/`. Every notebook and every canonical-runs comparison assumes this contract. |
+
+### Active Plans
+
+| Plan | Status |
+|------|--------|
+| `plans/canonical-runs.md` | **Active.** Pi/Jetson preflight + canonical-run execution against RFC-008. C1+C2 closed 2026-08-02; open: C3, R1..R3, H1..H3, E1, F1..F5. |
+| `plans/thesis-hardening.md` | **Closed 2026-08-02** (9/9). Landed A17, A19, cross-arch cross-compile, thesis-grade PDF pipeline, doc-freshness sweep, plus BL/M/L verify follow-ups. |
+| `plans/eval-followups.md` | Archived follow-ups from the closed `evaluation-infrastructure` plan. |
+
 ### Design & Specification
 
 | Document | Summary |
 |----------|---------|
 | `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
 | `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
-| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Ten RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, and I/O integration. |
-| `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). See `docs/adr/README.md` for the index and conventions. |
+| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and doc refactor. |
+| `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Fifteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
 | `specs/` | Feature specifications directory (OpenSpec workflow). See `specs/README.md`. |
-| `TODO.md` | Tactical implementation task list. |
+| `TODO.md` | Tactical implementation task list (legacy — active work lives in `plans/`). |
 | `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
 
 ### API & Integration
@@ -113,7 +138,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | Document | Summary |
 |----------|---------|
-| `docs/benchmarks/hot-swap.md` | Hot-swap benchmark reference with per-phase timing (compile, instantiate, signal, ack, convergence) for the watch-channel model. |
 | `docs/AI_WORKFLOW.md` | AI-assisted development workflow (human-facing). Describes the task tracking system and agent orchestration approach used in this project. |
 
 ### Root Files
@@ -153,6 +177,17 @@ mise run build-plugins  # Build all WASM plugins
 mise run build-plugin NAME  # Build a specific plugin (e.g., mise run build-plugin uppercase)
 ```
 
+### Cross-Compile (aarch64 Linux — Pi/Jetson target)
+
+```bash
+mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch64-unknown-linux-gnu
+                               # via docker run --platform linux/arm64 rust:1-slim-bookworm.
+                               # Output: target/aarch64-unknown-linux-gnu/release/{wafer,wafer-loadgen,waferctl}
+mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
+```
+
+See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job runs `cross-build-pi` on push + PR to guard the recipe.
+
 ### Running Pipelines
 
 ```bash
@@ -191,6 +226,13 @@ For detailed Rust idioms, patterns, and style guidance, load the relevant skill 
 | `wasm-specialist` | Working with wasmtime, Wasm plugin architecture, WIT interface definitions, WASI capabilities, or Component Model design |
 | `async-tokio` | Working with `mpsc`, `watch`, `select!`, cancellation, or the hot-swap coordination code |
 | `dag-orchestration` | Working with pipeline topology, petgraph, or fan-in/fan-out wiring |
+| `rust-testing` | Adding integration/unit tests, benchmark setup, test harness design, mocking wasmtime state |
+| `observability` | Working with `tracing` spans, Prometheus metrics, log-level policy, span attributes, or the `/metrics` endpoint |
+| `oci-distribution` | Working with OCI registry pulls, `wkg` tooling, plugin publishing, or the content-addressable AOT cache |
+| `mqtt-iot` | Working with MQTT sources/sinks, mosquitto setup, or QoS/topic patterns |
+| `cli-design` | Working on `waferctl` or `wafer-runtime` CLI ergonomics, clap argument shapes, output formatting |
+
+Always-loaded: `wafer-project` (project identity, thesis contribution framing, invariants, comparators). Do not load it explicitly — it's discovered automatically.
 
 ### Key Rules
 
