@@ -8,6 +8,24 @@ in the thesis.
 **Predecessor:** [`plans/eval-followups.md`](./eval-followups.md) closed
 the verify-flagged gaps in the shakedown apparatus.
 
+**Predecessor:** [`plans/eval-followups.md`](./eval-followups.md) closed
+the verify-flagged gaps in the shakedown apparatus.
+
+**Companion plan:** [`plans/thesis-hardening.md`](./thesis-hardening.md)
+covers orthogonal work that can be done in parallel — A17 implementation,
+test coverage additions, workspace-test-hang fix, thesis-artifact prep.
+No overlap except A19 full impl (canonical-runs P1 option b == thesis-
+hardening T4); execute one, credit both.
+
+## Pi-dependency legend
+
+Most tasks in this plan are Pi-INDEPENDENT and workable now on macOS +
+docker. Only the final execution tail truly needs hardware:
+
+- **Do now on macOS:** C1, C2, C3, M1, M2a, M2b, M3, M4, R1, R2, R3, H2, P6
+- **Write now, verify on Pi later:** H1, H3, F1, E1 (docker manifest part)
+- **Needs Pi hardware:** E2, F2, F3 (and E1's `docker run` check)
+
 **Filed elsewhere:** **A17** (process-time hot-swap rollback) is out of
 this plan's scope; RQ3 claim wording stays "init-time rollback only"
 unless P6 is explicitly approved. **A19** (runtime-side memory sampler)
