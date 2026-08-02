@@ -2,21 +2,39 @@
 
 > **All outputs are shakedown-macos quality — NOT thesis-grade canonical results.**
 
-## Canonical notebook index (plan P7.1)
+## Canonical notebook index (plan P7.1 + T11 traceability)
 
-| # | File | Experiment | Figure/Table |
-|---|------|-----------|-------------|
-| 00 | `00-warmup-validation.ipynb` | E-Val-1 | Figure 0: honesty gate |
-| 01 | `01-latency-cdf.ipynb` | E-Perf-2 | Figure 1: latency CDF |
-| 02 | `02-per-hop-overhead.ipynb` | E-Perf-4 | Figure 2: per-hop × payload |
-| 03 | `03-memory-scaling.ipynb` | E-Perf-6 | Figure 3: RSS scaling |
-| 04 | `04-cross-arch.ipynb` | E-Perf-5 | Figure 4: cross-arch ratio (PENDING Pi) |
-| 05 | `05-hotswap-timeline.ipynb` | E-Swap-1..6 | Figures 5–8: hot-swap analysis |
-| 06 | `06-fault-injection.ipynb` | E-Iso-1..8 | Figure 9, Table 3: attack containment |
-| 07 | `07-metering-decomp.ipynb` | E-Perf-7 | Figure 10, Table 5: metering overhead |
-| 08 | `08-depth-scaling.ipynb` | E-Perf-3 vs 8 | Figure 11, Table 6: depth scaling |
-| 09 | `09-saturation.ipynb` | E-Perf-1 | Figure 12, Table 1: throughput comparison |
-| 10 | `10-summary-stats.ipynb` | All | Table 7: startup; cross-RQ summary |
+Each row maps a canonical notebook to its RFC-008 experiment id, the
+research question it exercises, the thesis figure/table it produces,
+the input result directory it reads, and the figure output paths it
+writes. The table is the reverse index for `docs/benchmarks/rq-summary.md`
+— every RQ metric there links back to the notebook cell that produces it.
+
+| # | File | Experiment | RQ | Figure/Table | Input data | Output figure(s) |
+|---|------|-----------|-----|--------------|------------|-----------------|
+| 00 | [`00-warmup-validation.ipynb`](00-warmup-validation.ipynb) | E-Val-1 | Methodology | Figure 0: honesty gate | `eval/results/e-val-1/shakedown-macos-*/` | inline (methodology only) |
+| 01 | [`01-latency-cdf.ipynb`](01-latency-cdf.ipynb) | E-Perf-2 | RQ1 | Figure 1: latency CDF | `eval/results/e-perf-2/shakedown-macos-*/` | `figures/e-perf-2/latency_cdf.{png,pdf}` |
+| 02 | [`02-per-hop-overhead.ipynb`](02-per-hop-overhead.ipynb) | E-Perf-4 | RQ1 | Figure 2: per-hop × payload | `eval/results/e-perf-4/shakedown-macos-*/` | `figures/e-perf-4/per_hop_overhead.{png,pdf}` |
+| 03 | [`03-memory-scaling.ipynb`](03-memory-scaling.ipynb) | E-Perf-6 | RQ1 | Figure 3: RSS scaling | `eval/results/e-perf-6/shakedown-macos-*/` | `figures/e-perf-6/rss_scaling.{png,pdf}` |
+| 04 | [`04-cross-arch.ipynb`](04-cross-arch.ipynb) | E-Perf-5 | RQ1 | Figure 4: cross-arch ratio | `eval/results/e-perf-5/shakedown-{macos,pi}-*/` | `figures/e-perf-5/cross_arch.{png,pdf}` (PENDING Pi) |
+| 05 | [`05-hotswap-timeline.ipynb`](05-hotswap-timeline.ipynb) | E-Swap-1..6 | RQ3 | Figures 5–8: hot-swap analysis | `eval/results/e-swap-{1,2,4,5,6}/shakedown-macos-*/` | `figures/e-swap/{pause,zeroloss,burst,rollback,phases}.{png,pdf}` |
+| 06 | [`06-fault-injection.ipynb`](06-fault-injection.ipynb) | E-Iso-1..8 | RQ2 | Figure 9, Table 3: attack containment | `eval/results/e-iso-{1..8}/shakedown-macos-*/` | `figures/e-iso/containment.{png,pdf}` |
+| 07 | [`07-metering-decomp.ipynb`](07-metering-decomp.ipynb) | E-Perf-7 | RQ1 | Figure 10, Table 5: metering overhead | `eval/results/e-perf-7/shakedown-macos-*/` | `figures/e-perf-7/metering_decomp.{png,pdf}` |
+| 08 | [`08-depth-scaling.ipynb`](08-depth-scaling.ipynb) | E-Perf-3 + E-Perf-8 | RQ1 | Figure 11, Table 6: depth scaling | `eval/results/e-perf-{3,8}/shakedown-macos-*/` | `figures/e-perf-8/depth_scaling.{png,pdf}` |
+| 09 | [`09-saturation.ipynb`](09-saturation.ipynb) | E-Perf-1 | RQ1 | Figure 12, Table 1: throughput comparison | `eval/results/e-perf-1/shakedown-macos-*/` | `figures/e-perf-1/throughput.{png,pdf}` |
+| 10 | [`10-summary-stats.ipynb`](10-summary-stats.ipynb) | All | All | Table 7: startup; cross-RQ summary | `eval/results/**/shakedown-macos-*/` | `figures/summary/startup_stats.{png,pdf}` |
+
+**Legend:**
+- **RQ**: research question(s) the notebook informs (RQ1 = performance,
+  RQ2 = fault containment, RQ3 = hot-swap).
+- **Input data**: canonical result-dir glob resolved by
+  `wafer_analysis.paths.find_latest_shakedown()`. Notebooks that consume
+  data from multiple experiments list every input.
+- **Output figure(s)**: relative to `eval/analysis/figures/`. Both PNG
+  (120 DPI, screen) and PDF (vector, thesis embed) are produced by
+  `wafer_analysis.plots.save_figure`; see T9 (thesis-hardening) for the
+  PDF/font pipeline. Notebooks marked “inline” ship figures inside the
+  notebook cell for reviewer inspection only — they do not export.
 
 ## Auxiliary notebooks (additional analysis, not in canonical list)
 
