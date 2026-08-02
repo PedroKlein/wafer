@@ -13,11 +13,13 @@
 //! let output = transform.process(input_envelope).unwrap();
 //! ```
 
+use std::num::NonZeroU64;
 use std::path::Path;
 use std::sync::Arc;
 
 use wasmtime::Store;
 
+use crate::config::EngineConfig;
 use crate::engine::state::WaferState;
 use crate::engine::{Capabilities, WaferEngine};
 use crate::error::Result;
@@ -33,16 +35,39 @@ pub struct PluginTestHarness {
     engine: WaferEngine,
 }
 
+/// Default epoch deadline for the test harness: 100 ticks × 10 ms = ~1 s.
+/// Generous enough for any well-behaved plugin, tight enough to catch infinite
+/// loops within a second rather than hanging the test binary.
+const HARNESS_DEFAULT_EPOCH_DEADLINE: u64 = 100;
+
 impl PluginTestHarness {
-    /// Create a new harness with a default engine.
+    /// Create a new harness with a sandbox-safe default engine.
     ///
-    /// Starts the epoch ticker so fuel/epoch limits work in tests.
+    /// Enables epoch interruption (100 ticks ≈ 1 s timeout per call) so that
+    /// misbehaving plugins (infinite loops) are contained. Starts the OS-thread
+    /// epoch ticker.
     ///
     /// # Errors
     ///
     /// Returns error if wasmtime engine creation fails.
     pub fn new() -> Result<Self> {
-        let engine = WaferEngine::new()?;
+        let config = EngineConfig {
+            epoch_deadline: NonZeroU64::new(HARNESS_DEFAULT_EPOCH_DEADLINE),
+            ..EngineConfig::default()
+        };
+        Self::with_engine_config(&config)
+    }
+
+    /// Create a harness with a caller-supplied engine configuration.
+    ///
+    /// Use this when benchmarks need unlimited epoch/fuel or when a test needs
+    /// specific metering settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if wasmtime engine creation fails.
+    pub fn with_engine_config(config: &EngineConfig) -> Result<Self> {
+        let engine = WaferEngine::from_engine_config(config)?;
         engine.ensure_epoch_ticker();
         Ok(Self { engine })
     }
@@ -95,7 +120,17 @@ impl PluginTestHarness {
             .instantiate(&mut store)
             .map_err(|e| crate::error::WaferError::PluginInit { message: e.to_string() })?;
 
-        let node = WasmTransformNode::new(store, bindings, pre, self.engine.fuel_limit());
+        let mut node = WasmTransformNode::new(store, bindings, pre, self.engine.fuel_limit());
+        // Propagate the engine's epoch deadline into the node so it resets the
+        // deadline on every process() call. Without this, the per-call
+        // `set_epoch_deadline` guard inside `WasmTransformNode::process` is a
+        // no-op (epoch_deadline defaults to None in the constructor).
+        node.configure_runtime(
+            Capabilities::sandbox(),
+            memory_limit,
+            self.engine.epoch_deadline(),
+            "{}".to_string(),
+        );
 
         Ok(TransformHarness { node })
     }

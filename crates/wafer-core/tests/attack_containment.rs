@@ -28,6 +28,13 @@
 //!   wasm32-wasip2/release/*.wasm`). Missing artefacts SKIP with an
 //!   `eprintln!` — matches the pattern used elsewhere in the crate.
 //!
+//! Epoch-interrupt dependency (S3 — infinite loop):
+//! `PluginTestHarness::new()` enables epoch interruption with a 100-tick
+//! deadline (~1 s). This is required for S3 containment — without it, the
+//! guest `loop {}` runs forever. The harness was fixed in the T7 resolution
+//! (see docs/decisions/attack-containment-hang.md) after commit `6096dfd`
+//! disabled epoch interruption for the default `EngineConfig`.
+//!
 //! Not covered here (deferred per non-goals):
 //! - Latency-to-contain (that is E-Iso-8's job).
 //! - Full 3-node channel-wired orchestrator run. The harness-level
