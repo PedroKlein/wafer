@@ -1,14 +1,14 @@
 # RFC-002: Host-Side Runtime Architecture
 
-- **Status:** Implemented for envelope shape and host resource handling; **lineage assignment is aspirational** — see gap [**A13**](../status/implementation-gaps.md#a13) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — envelope shape, host resource handling, and lineage assignment (A13 closed 2026-07-20). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-06
 - **Amends:** —
 - **Amended by:** RFC-003 (§A3 — envelope shape redesigned to `Arc<EnvelopeHeader>` + `Bytes` payload + `Lineage`); RFC-005 (§D6 — drain phase replaced with watch-channel between-messages hot-swap)
 
-> **⚠ Partial implementation.** The runtime envelope has a `Lineage` field and
-> DLQ code reads it, but production source/runner paths do not assign
-> `trace_id` / `parent_id` yet (gap [**A13**](../status/implementation-gaps.md#a13)). See §"Implementation Notes" for
-> the current state after amendment.
+> **Implementation notes.** The runtime envelope has a `Lineage` field
+> assigned at source ingress and preserved through fan-out (A13). DLQ
+> reads `trace_id` and `parent_id`. See §"Implementation Notes" for the
+> current state after amendment.
 
 ## Abstract
 

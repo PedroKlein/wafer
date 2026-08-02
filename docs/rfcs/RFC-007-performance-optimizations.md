@@ -1,14 +1,16 @@
 # RFC-007: Performance Optimizations
 
-- **Status:** Implemented for several code-level optimizations; **per-type metering and benchmark-backed claims are aspirational** — see gaps **A8** and [**A15**](../status/implementation-gaps.md#a15) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — AOT caching, epoch ticker, code-quality optimizations, per-type fuel + `StoreLimits` wired in the launcher (A8 closed 2026-07-20), and criterion benchmarks run against the production Wasm path (A15 closed 2026-07-20).
 - **Original session date:** 2026-07-12
 - **Amends:** RFC-002 (WaferState gains `limits: StoreLimits` field), RFC-004 (`[engine]` section gains fuel/epoch toggles)
 
-> **⚠ Partial implementation.** AOT caching, the epoch ticker, and several
-> code-quality optimizations are real. However, per-type fuel / `StoreLimits`
-> are not wired into the runtime launcher (gap **A8**), and the Criterion
-> benchmarks used for RQ1/RQ3 still exercise the stub `TransformInstance`
-> path rather than production bindgen wrappers (gap [**A15**](../status/implementation-gaps.md#a15)).
+> **Implementation notes.** AOT caching, the epoch OS-thread ticker, and
+> the code-quality optimizations are live. `[engine.fuel]` and
+> `[engine.memory]` per-node-kind budgets are honored by the launcher
+> (A8). `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
+> production `PluginTestHarness` and `prepare_transform_swap_timed`
+> paths with an `assert_no_stub_backed_evidence` guard against the
+> retired stub `TransformInstance` (A15).
 
 ## Abstract
 

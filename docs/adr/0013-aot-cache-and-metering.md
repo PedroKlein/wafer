@@ -1,16 +1,16 @@
 # ADR-0013: AOT Compilation Cache and Per-Node Metering (Fuel + Epoch + Limits)
 
 - **Date**: 2026-07-12
-- **Status**: Accepted for the AOT cache and OS-thread epoch ticker; **per-type fuel budgets and per-node `StoreLimits` are aspirational** — see gap **A8** in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status**: Implemented — AOT cache, OS-thread epoch ticker, per-type fuel budgets, and per-node `StoreLimits` overrides (A8 closed 2026-07-20). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Parent RFC**: [RFC-007](../rfcs/RFC-007-performance-optimizations.md)
 
-> **⚠ Implementation status.** The blake3-keyed two-tier AOT cache, `StoreLimits`
-> wrapper, and named `wafer-epoch-ticker` OS thread are real. However: fuel and
-> epoch are hard-enabled together (no independent toggle); the engine has a
-> single `fuel_limit` applied uniformly to every node type; and
-> `DEFAULT_MEMORY_LIMIT` is a single 16 MiB constant — no per-type
-> (Transform 64 MiB / Filter 16 MiB) override and no per-node override. Blocked
-> on gap **A1** (legacy config schema lacks the shape for these knobs).
+> **Implementation status.** The blake3-keyed two-tier AOT cache,
+> `StoreLimits` wrapper, and named `wafer-epoch-ticker` OS thread are
+> live. `[engine.fuel]` per-node-kind budgets (transform / filter /
+> router) and `[engine.memory]` per-node-kind limits (default 64 MiB
+> transform, 16 MiB filter/router) plus per-node `fuel` / `memory_limit`
+> overrides are honored by the launcher and preserved across hot-swap
+> (A8).
 
 ## Context
 

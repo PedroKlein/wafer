@@ -4,14 +4,15 @@ Five concerns cut across every node type and every pipeline. This file
 describes each concept at the level of "what it is and why it matters";
 the long-form reasoning lives in the linked RFC / ADR.
 
-> **⚠ Documentation drift.** The Envelope, Fuel & Metering, Capabilities,
-> and Error Policy subsections describe the intended contract; the current
-> runtime implements only a subset. Specifically: envelope lineage exists but
-> production paths do not assign `trace_id` / `parent_id` (gap [**A13**](../status/implementation-gaps.md#a13));
-> per-type fuel + `StoreLimits` overrides are not wired (gap **A8**);
-> capabilities are hard-coded to `Capabilities::sandbox()` at instantiation
-> and hot-swap (gap **A9**); and the error-policy cascade + retry exhaustion
-> are not honored (gaps **A6**, **A7**). See
+> **Implementation status.** The Envelope, Fuel & Metering, Capabilities,
+> and Error Policy subsections describe the current production contract.
+> Envelope lineage is assigned at source ingress and preserved through
+> fan-out (A13 closed 2026-07-20). Per-type fuel + `StoreLimits`
+> overrides are wired in the launcher (A8 closed 2026-07-20).
+> Capabilities are translated from `[nodes.X.capabilities]` at
+> instantiation and preserved across hot-swap (A9 closed 2026-07-20).
+> The error-policy cascade and retry exhaustion are honored (A6 closed
+> 2026-07-20; A7 closed 2026-07-21). See
 > [`../status/implementation-gaps.md`](../status/implementation-gaps.md).
 
 ## Envelope shape

@@ -1,13 +1,15 @@
 # RFC-001: WIT Contracts & Envelope Design
 
-- **Status:** Implemented for the WIT surface; **host lineage assignment and production lifecycle calls are aspirational** — see gaps [**A13**](../status/implementation-gaps.md#a13) and [**A14**](../status/implementation-gaps.md#a14) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — WIT surface plus host lineage assignment (A13 closed 2026-07-20) and production guest lifecycle `validate()` / `init()` calls (A14 closed 2026-07-20). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-05
 - **Amended by:** RFC-003 (§A1 removes Joiner world; §A2 replaces `process-outcome` wrapper with direct `result<output-message, process-error>` return); RFC-002 (§A3 replaces `list<u8>` host-side payload with `Arc<EnvelopeHeader> + Bytes` runtime envelope)
 
-> **⚠ Partial implementation.** The WIT files define the lifecycle and message
-> shapes, but production host wiring does not yet assign envelope lineage (gap
-> [**A13**](../status/implementation-gaps.md#a13)) or call guest `validate()` / `init()` for Wasm nodes (gap [**A14**](../status/implementation-gaps.md#a14)).
-> See §"Implementation Notes" for the current post-amendment shape.
+> **Implementation notes.** The WIT files define the lifecycle and
+> message shapes. Production host wiring assigns envelope lineage at
+> source ingress and preserves it through fan-out (A13). Production Wasm
+> nodes call guest `validate()` and `init()` before the first message
+> and on hot-swap replacement (A14). See §"Implementation Notes" for
+> the current post-amendment shape.
 
 ## Abstract
 

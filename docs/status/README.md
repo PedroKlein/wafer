@@ -14,4 +14,16 @@ Current implementation and evaluation state — factual reports, no roadmap.
   (`tcc-doc/research/analysis/evaluation-plan.md`).
 
 Aspirational items live in the repo-root `ROADMAP.md`; the executable
-backlog for closing gaps is `plan_tasks --plan-name runtime-migration`.
+backlog for closing gaps is tracked in the plan_tasks system.
+
+## Active plans
+
+Run `plan_tasks --list-plans` for the full inventory. Current focus:
+
+- [`plans/thesis-hardening.md`](../../plans/thesis-hardening.md) —
+  close remaining A-gaps (A17, A19), fix `cargo test --workspace` hang,
+  prep thesis-grade artifacts (PDF figures, cross-arch CI, notebook
+  traceability, doc-freshness sweep). 9 tasks across 3 phases.
+- [`plans/canonical-runs.md`](../../plans/canonical-runs.md) —
+  Pi 4 + Jetson preflight and canonical-run execution against the
+  RFC-008 evaluation harness.

@@ -1,14 +1,17 @@
 # RFC-008: Evaluation Harness Design
 
-- **Status:** Accepted for harness design; **benchmark-backed RQ1/RQ3 claims are aspirational until stub benchmarks are replaced** — see gap [**A15**](../status/implementation-gaps.md#a15) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — production-path harness. RQ1/RQ3 benchmarks now measure the real Wasm path (A15 closed 2026-07-20; A16 closed 2026-07-22; A18 closed 2026-08-01). Residual gaps at time of writing: **A17** (process-time hot-swap rollback) and **A19** (runtime-side memory sampler + per-node metrics emitter) — see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-12
 - **Depends on:** RFC-001 through RFC-007 (all prior architecture decisions)
 
-> **⚠ Evaluation caveat.** `BenchSource`, `BenchSink`, `wafer-loadgen`, and
-> the analysis plan exist, but `crates/wafer-core/benches/throughput.rs` and
-> `crates/wafer-core/benches/hot_swap.rs` still measure the stub
-> `TransformInstance` path. Treat RQ1/RQ3 numbers from those benches as
-> invalid until gap [**A15**](../status/implementation-gaps.md#a15) is closed.
+> **Historical caveat (resolved).** Earlier revisions of this RFC warned
+> that `crates/wafer-core/benches/throughput.rs` and `hot_swap.rs`
+> measured the stub `TransformInstance` path (gap A15). That stub was
+> removed on 2026-07-20; both benches now exercise
+> `PluginTestHarness::load_transform` and
+> `prepare_transform_swap_timed` against the production pass-through
+> component. The `assert_no_stub_backed_evidence` guard in the source
+> tree fails CI if the stub path returns.
 
 ## Abstract
 

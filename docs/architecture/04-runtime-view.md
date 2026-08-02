@@ -6,17 +6,16 @@ This section shows how key runtime flows execute inside WAFER. Each scenario
 is presented as a sequence diagram. For the static structure these flows
 traverse, see [03-building-blocks.md](./03-building-blocks.md).
 
-> **⚠ Documentation drift.** Some scenarios below describe behavior that is
-> only partially implemented — specifically the hot-swap phase telemetry
-> (gap **A3**), the ACK-phase `init()` call (gap **A4**), production Wasm
-> lifecycle `validate()` / `init()` calls (gap [**A14**](../status/implementation-gaps.md#a14)), lineage assignment
-> for `trace_id` / `parent_id` (gap [**A13**](../status/implementation-gaps.md#a13)), the generic per-node-type
-> dispatch on `/hot-swap` (gap **A10**), the retry-exhaustion + `Recovering`
-> state transitions (gap **A7**), capability-aware instantiation (gap
-> **A9**), and benchmark-backed hot-swap/RQ results that still use stub
-> `TransformInstance` benches (gap [**A15**](../status/implementation-gaps.md#a15)). See
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md) for
-> the full catalogue and current code pointers.
+> **Implementation status.** The scenarios below describe the current
+> production behavior. Historical drift banners (A3, A4, A7, A9, A10,
+> A13, A14, A15) are closed — hot-swap phase telemetry, ACK-phase
+> `init()`, production Wasm lifecycle `validate()` / `init()`, source /
+> fan-out lineage assignment, per-node-type `/hot-swap` dispatch,
+> retry-exhaustion + `Recovering` state transitions, and
+> capability-aware instantiation are all wired. See
+> [`../status/implementation-gaps.md`](../status/implementation-gaps.md)
+> for the full history; residual runtime gap **A17** (process-time
+> hot-swap rollback) is tracked there.
 
 ---
 

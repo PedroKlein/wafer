@@ -1,17 +1,19 @@
 # ADR-0008: Five-Category Error Policy Engine with Per-Node Cascade
 
 - **Date**: 2026-07-06
-- **Status**: Accepted for the design; **cascade, retry-exhaustion, recovery, and lineage enrichment are aspirational** — see gaps **A6**, **A7**, and [**A13**](../status/implementation-gaps.md#a13) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status**: Implemented — five-category classification, per-node cascade (A6 closed 2026-07-20), retry-exhaustion (A7 closed 2026-07-21 via P0.11 residuals), recovery state (A7), and DLQ lineage enrichment (A13 closed 2026-07-20) are all live. See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Parent RFC**: [RFC-002](../rfcs/RFC-002-host-runtime.md)
 
-> **⚠ Implementation status.** The five error categories, `try_retry` /
-> `RetryConfig`, and the DLQ writer exist. However: the builder ignores
-> config and always returns `ResolvedErrorPolicy::default()` (gap **A6**);
-> `retry_count` is never incremented and `RetriesExhausted` is never emitted
-> (gap **A7**); unrecoverable errors do not transition through `Recovering`
-> and do not re-instantiate from `InstancePre` (gap **A7**); and DLQ lineage
-> fields are read but never assigned by production source/runner paths (gap
-> [**A13**](../status/implementation-gaps.md#a13)). The default retry-buffer capacity is 100, not the documented 1000.
+> **Implementation status.** The five error categories, `try_retry` /
+> `RetryConfig`, and the DLQ writer are live. `resolve_error_policy`
+> honors pipeline-level `[error_policy]` defaults and per-node overrides
+> (A6). `RuntimeEnvelope::retry_count` is incremented on requeue and
+> `DlqReason::RetriesExhausted { max_retries }` is emitted when the
+> configured budget is spent (A7). Unrecoverable errors transition
+> through `Recovering` and re-instantiate from the cached `InstancePre`
+> (A7). DLQ lineage carries the source-assigned `trace_id` and fan-out
+> `parent_id` (A13). Default retry-buffer capacity is 1000 as
+> documented.
 
 ## Context
 

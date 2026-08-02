@@ -1,10 +1,21 @@
 # RFC-005: Orchestrator & Runtime Simplification
 
-- **Status:** Implemented for the watch-channel wiring; **hot-swap telemetry, init-on-flip, warm swap, config cascade, lineage assignment, Wasm lifecycle calls, and benchmark-backed evaluation claims are aspirational** — see gaps **A3**, **A4**, **A5**, **A6**, **A10**, [**A13**](../status/implementation-gaps.md#a13), [**A14**](../status/implementation-gaps.md#a14), and [**A15**](../status/implementation-gaps.md#a15) in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — orchestrator, hot-swap telemetry, init-on-flip, warm swap, config cascade, lineage assignment, and Wasm lifecycle calls are all live in production (see closed gaps A3, A4, A5, A6, A10, A13, A14, and A15 in the ledger, all landed 2026-07-19 through 2026-07-21). Residual gap **A17** (process-time hot-swap rollback) is tracked in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
 - **Original session date:** 2026-07-12
 - **Amends:** ADR-0003 (drain-and-flip → watch-channel between-messages)
 
-> **⚠ Partial implementation.** The watch-channel primitive is real and hot-swap works end-to-end (see `crates/wafer-core/tests/pipeline_e2e.rs::test_hot_swap_uppercase_to_passthrough`). However: the `SwapTimeline` `signal` / `ack` / `convergence` phases are only exercised by unit tests (production records `compile` + `instantiate` only — gap **A3**); the ACK step does not call `init()` on the new instance (gap **A4**); production Wasm nodes skip lifecycle `validate()` / `init()` more generally (gap [**A14**](../status/implementation-gaps.md#a14)); the config-only warm swap path via `cached_pre()` is unused (gap **A5**); the API is transform-specific despite the design being generic (gap **A10**); the builder ignores per-node error policy (gap **A6**, blocked on RFC-004 gap **A1**); DLQ lineage fields are read but never assigned in production (gap [**A13**](../status/implementation-gaps.md#a13)); and benchmark-backed evaluation claims that depend on `benches/throughput.rs` / `benches/hot_swap.rs` are blocked by stub `TransformInstance` benchmarks (gap [**A15**](../status/implementation-gaps.md#a15)).
+> **Implementation notes.** The watch-channel primitive is live and
+> hot-swap works end-to-end (see
+> `crates/wafer-core/tests/pipeline_e2e.rs::test_hot_swap_uppercase_to_passthrough`).
+> Five-phase `SwapTimeline` (`compile` / `instantiate` / `signal` / `ack`
+> / `convergence`) is reported through the API (A3 + A3b). ACK-phase
+> `init()` is called on the new instance (A4). Production Wasm nodes
+> run guest `validate()` and `init()` before the first message (A14).
+> Config-only warm swap via `cached_pre()` is served by
+> `POST /api/v1/nodes/{id}/reconfigure` (A5). The API dispatches per
+> node type: transform/filter/router (A10). The builder resolves the
+> per-pipeline + per-node `[error_policy]` cascade (A6). DLQ lineage is
+> assigned at source ingress and preserved through fan-out (A13).
 
 ## Abstract
 
