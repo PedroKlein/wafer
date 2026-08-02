@@ -1,7 +1,7 @@
 # ADR-0003: Watch-Channel Between-Messages Hot-Swap
 
 - **Date**: 2026-07-12
-- **Status**: Implemented — the watch-channel between-messages mechanism and all peripheral wiring (A3, A4, A5, A10, A14) are closed via runtime-migration plan 2026-07-19 through 2026-07-20; see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md). Residual gap: **A17** (process-time hot-swap rollback — v2 traps in `process()` after passing `init()`) tracked in the ledger. Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
+- **Status**: Implemented — the watch-channel between-messages mechanism and all peripheral wiring (A3, A4, A5, A10, A14, A17) are closed via runtime-migration plan 2026-07-19 through 2026-07-20 and thesis-hardening T1 (2026-08-02). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md). Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
 - **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
 
 > **Implementation status.** The `watch::channel(None)` primitive, the
@@ -12,9 +12,11 @@
 > Production Wasm nodes call guest `validate()` and `init()` before the
 > first message (A14). Config-only warm swap via `cached_pre()` is
 > served by `POST /api/v1/nodes/{id}/reconfigure` (A5). The `/hot-swap`
-> endpoint dispatches per node type (A10). Open gap **A17** covers the
-> case where v2 passes `init()` but traps during `process()` — there is
-> no automatic rollback to v1 yet.
+> endpoint dispatches per node type (A10). Process-time rollback (A17,
+> closed 2026-08-02): after swap ACK, the runner retains v1’s
+> `InstancePre` for a bounded canary window; if v2 traps during
+> `process()`, the runtime restores v1 automatically (bounded by
+> `max_rollback_retries` to prevent thrash).
 
 ## Context
 

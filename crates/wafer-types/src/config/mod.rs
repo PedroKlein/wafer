@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 pub use engine::{
     Capabilities, DeadLetterConfig, EngineConfig, ErrorCategory, ErrorPolicyConfig, FuelBudgets,
-    MemoryLimits, OverflowPolicy, RetryConfig, SimpleAction,
+    HotSwapConfig, MemoryLimits, OverflowPolicy, RetryConfig, SimpleAction,
 };
 pub use pipeline::{ApiConfig, MetricsConfig, PipelineConfig, RegistryConfig};
 pub use source_sink::{

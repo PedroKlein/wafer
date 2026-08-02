@@ -6,16 +6,15 @@ what is tested. Aspirational items and future work live in `ROADMAP.md` at
 the repo root; documented-but-not-yet-wired items are catalogued in
 [`implementation-gaps.md`](./implementation-gaps.md).
 
-> **Post-runtime-migration + evaluation-infrastructure + eval-followups.**
-> A1–A16 and A18 are closed with evidence (A7 fully closed 2026-07-21 via
-> P0.11 residuals: per-envelope `retry_count` + `RetriesExhausted` DLQ +
-> `wafer_node_recovery_duration_ms`). Open gaps: **A17** (process-time
-> hot-swap rollback — downgrades RQ3 auto-rollback claim from ✅ to 🟡
-> partial) and **A19** (runtime-side memory sampler + per-node metrics
-> emitter — canonical-run harness hygiene, not thesis numbers).
-> `wafer-config` is the runtime loader, the axum control plane launches
-> by default, and `waferctl` calls only the routes that exist on the
-> server.
+> **Post-runtime-migration + evaluation-infrastructure + eval-followups + thesis-hardening.**
+> A1–A18 are closed with evidence. A17 (process-time hot-swap rollback)
+> closed 2026-08-02 via thesis-hardening T1: canary window + bounded
+> retry in `run_transform_loop_with_config`; RQ3 auto-rollback claim
+> upgraded to ✅ PASS. Only open gap: **A19** (runtime-side memory
+> sampler + per-node metrics emitter — canonical-run harness hygiene,
+> not thesis numbers). `wafer-config` is the runtime loader, the axum
+> control plane launches by default, and `waferctl` calls only the
+> routes that exist on the server.
 
 ## Runtime crates (7 workspace members)
 

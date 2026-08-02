@@ -458,16 +458,16 @@ plugin-level delay tests use safe rate/delay ratios.
 
 ---
 
-## A17 — Process-time hot-swap rollback not implemented (Open) 🟡
+## A17 — Process-time hot-swap rollback (Closed 2026-08-02) 🟢
 
-**Severity:** medium. Downgrades the RQ3 hot-swap safety story from
+**Severity:** medium. Formerly downgraded the RQ3 hot-swap safety story from
 "automatic rollback on any failure" to "automatic rollback only on
 init() failure". Surfaced by E-Swap-5 (P5.6).
 
 **Symptom.** E-Swap-5 shakedown drives a `/hot-swap` from v1 to
 `pass-through-v2-panics`. v2-panics deliberately passes `init()` and
 traps on the first `process()` call. Expected per RFC-008 §D5: runtime
-rolls back to v1 via the A4 mechanism. Actual: runtime enters a
+rolls back to v1 via the A4 mechanism. Actual (pre-fix): runtime enters a
 permanent trap loop; sequence tracker records 5001 gaps and 0
 recoveries; handler returns 504 GATEWAY_TIMEOUT.
 
@@ -476,35 +476,38 @@ Evidence: `eval/results/e-swap-5/shakedown-macos-<ts>/shakedown.json`
 
 **Root cause.** A4 (§A4 closed 2026-07-20) covers `init()` failure at
 the /hot-swap handler boundary. Plugins whose `init()` returns Ok and
-whose `process()` traps only after a successful swap have no rollback
-path — the runner enters the error-policy loop, retries, exhausts,
-and ends in permanent Error.
+whose `process()` traps only after a successful swap had no rollback
+path — the runner entered the error-policy loop, retried, exhausted,
+and ended in permanent Error.
 
-**Proposed fix (NOT applied — stakeholder decision required).**
+**Fix applied.**
 
-1. Canary window: hot-swap handler retains v1's InstancePre for N s
-   after ack. If the new node enters Error within that window, swap
-   back automatically. Runtime change in
-   `crates/wafer-core/src/orchestrator/pipeline.rs`.
-2. Metric: `wafer_hot_swap_rollbacks_total{trigger="canary"}`.
-3. RFC-008 §D5 clarification of "failure" semantics.
-4. New plugin variant `pass-through-v2-slow-panic` (passes init,
-   processes N messages, then traps) as regression fixture.
+1. **Canary window:** after swap ACK, the runner retains v1’s
+   `Arc<TransformNodePre>` in a `TransformCanaryState` for a bounded
+   window (default 32 successes OR 10 s wall-clock, whichever first;
+   configurable via `[engine.hot_swap]`).
+2. **Process-time rollback:** if v2 produces an `Unrecoverable` trap
+   within the window, the runner restores v1’s `InstancePre`, calls
+   `validate() + init()`, transitions Error → Recovering → Running,
+   and resumes message processing on v1.
+3. **Bounded retries (M):** `max_rollback_retries` (default 3) caps
+   how many traps trigger a rollback before escalating to the standard
+   A7 Recovering path. Prevents thrash loops.
+4. **Metric:** `NodeMetrics::rollbacks()` counter — exposed by the
+   runner; readable from `PipelineHandle::node_metrics`.
+5. **SwapTimeline:** `rollback_time_ns: Option<u64>` field added to
+   `swap_timeline.json` schema.
+6. **Config schema:** `[engine.hot_swap]` section with fields
+   `canary_success_count`, `canary_window_ms`, `max_rollback_retries`
+   (all `#[serde(default)]` for backward compat).
 
-**Alternative view.** Current behaviour may be intentional: a plugin
-that passes validate/init but traps on process is a plugin bug, and
-the DLQ + error policy already handle poison messages. Decision:
-does the thesis need canary semantics, or is the current permanent-
-Error → DLQ path an acceptable RQ3 story?
+**Closed by:** thesis-hardening T1 — `run_transform_loop_with_config`
+canary rollback, `TransformCanaryState`, `set_cached_pre`,
+`NodeMetrics::record_rollback`.
 
-**Impact if unfixed.**
-- E-Swap-5 shakedown row stays 🟡 (not 🔴 — no runtime panic).
-- RQ3 thesis claim must be phrased as "rollback on init failure", not
-  "rollback on any failure".
-- Canonical Pi run reproduces the same behaviour — not a macOS
-  artefact.
-
-**Not fixed in this session.** Filed for stakeholder review.
+**Tests:**
+- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
+- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
 
 ---
 

@@ -15,7 +15,8 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::node::TransformNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TransformCanaryState, send_downstream};
+use wafer_types::config::HotSwapConfig;
 
 /// Run the transform processing loop until cancellation or channel close.
 ///
@@ -25,6 +26,23 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstr
 /// Only `receiver.recv()` is inside `select!` — which is documented cancel-safe.
 /// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
 pub async fn run_transform_loop(
+    transform: TransformNode,
+    receiver: mpsc::Receiver<RuntimeEnvelope>,
+    senders: Vec<DownstreamSender>,
+    swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    policy: ErrorPolicyExecutor,
+    cancel: CancellationToken,
+    state: Arc<NodeStateTracker>,
+    metrics: Arc<NodeMetrics>,
+) {
+    run_transform_loop_with_config(
+        transform, receiver, senders, swap_rx, policy, cancel, state, metrics,
+        HotSwapConfig::default(),
+    ).await
+}
+
+/// Inner transform loop with explicit hot-swap config (testable).
+pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
     senders: Vec<DownstreamSender>,
@@ -33,14 +51,32 @@ pub async fn run_transform_loop(
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
+    hot_swap_config: HotSwapConfig,
 ) {
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
+    let mut canary: Option<TransformCanaryState> = None;
     loop {
+        // 0. Check if canary window has expired (drop snapshot to free memory)
+        if let Some(ref c) = canary {
+            if c.window_expired() {
+                tracing::debug!(
+                    node = transform.node_id(),
+                    successes = c.success_count,
+                    "canary window closed — rollback snapshot dropped"
+                );
+                canary = None;
+            }
+        }
+
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
             if let Some(payload) = swap_rx.borrow_and_update().clone() {
                 policy.flush_to_dlq("hot_swap_drain");
                 let progress = payload.progress();
+
+                // Retain v1 InstancePre BEFORE applying swap (for rollback)
+                let v1_pre = transform.as_wasm_mut().map(|w| w.cached_pre().clone());
+
                 let result = match payload {
                     SwapPayload::Reconfigure { ref new_config_json, .. } => {
                         transform.try_reconfigure(new_config_json)
@@ -55,6 +91,14 @@ pub async fn run_transform_loop(
                         progress.mark_ack();
                         pending_swap_progress = Some(progress);
                         metrics.record_swap();
+                        // Install canary snapshot for process-time rollback (A17)
+                        // Drop any previous canary (new swap supersedes)
+                        if let Some(pre) = v1_pre {
+                            canary = Some(TransformCanaryState::new(
+                                pre,
+                                hot_swap_config.clone(),
+                            ));
+                        }
                     }
                     Err(err) => {
                         tracing::error!(
@@ -107,9 +151,71 @@ pub async fn run_transform_loop(
                 if let Some(progress) = pending_swap_progress.take() {
                     progress.mark_first_v2();
                 }
+                // Record success in canary window
+                if let Some(ref mut c) = canary {
+                    c.record_success();
+                }
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {
                 metrics.record_failed();
+
+                // A17: Process-time rollback if canary window is active
+                if let Some(ref mut c) = canary {
+                    if c.record_trap() {
+                        // Attempt rollback to v1
+                        tracing::warn!(
+                            node = transform.node_id(),
+                            error = %msg,
+                            trap_count = c.trap_count,
+                            "process-time trap during canary window — rolling back to v1"
+                        );
+                        state.transition_to_error();
+                        // Restore v1's InstancePre BEFORE recovery so
+                        // recover_from_cached_pre instantiates v1, not v2.
+                        if let Some(wasm) = transform.as_wasm_mut() {
+                            wasm.set_cached_pre(c.snapshot.pre.clone());
+                        }
+                        let rollback_start = Instant::now();
+                        match transform.recover_from_cached_pre() {
+                            Ok(()) => {
+                                let rollback_ns = rollback_start.elapsed().as_nanos() as u64;
+                                tracing::info!(
+                                    node = transform.node_id(),
+                                    rollback_time_ns = rollback_ns,
+                                    "process-time rollback to v1 succeeded"
+                                );
+                                state.transition_to_recovering();
+                                if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                                    metrics.record_recovery(duration_ns);
+                                }
+                                metrics.record_rollback();
+                                // Consume snapshot — single-shot rollback complete
+                                canary = None;
+                                continue;
+                            }
+                            Err(error) => {
+                                tracing::error!(
+                                    node = transform.node_id(),
+                                    %error,
+                                    "process-time rollback failed — escalating to recovery"
+                                );
+                                // Fallthrough to standard recovery
+                                canary = None;
+                            }
+                        }
+                    } else {
+                        // Retries exhausted — escalate to Recovery state
+                        tracing::error!(
+                            node = transform.node_id(),
+                            error = %msg,
+                            trap_count = c.trap_count,
+                            "canary rollback retries exhausted — escalating to recovery"
+                        );
+                        canary = None;
+                    }
+                }
+
+                // Standard recovery path (existing A7 behavior)
                 tracing::error!(
                     node = transform.node_id(),
                     error = %msg,

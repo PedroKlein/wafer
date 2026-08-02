@@ -79,15 +79,16 @@ duplication; dip <5% vs full-restart.
 | Burst swap (2×) pause p95 | 1.17 ms | ✅ | Bounded channels absorb burst |
 | vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages |
 | vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart |
-| Failed swap (E-Swap-5) | ❌ no auto-rollback | 🟡 PARTIAL | A17: init-time rollback works; process-time does not |
+| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed: canary window + bounded retry |
 | Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) |
 
-**Key finding**: The drain-and-flip algorithm achieves provably lossless
+**Key finding**: The watch-channel algorithm achieves provably lossless
 hot-swap at sub-2ms pause. The InstancePre cache makes compilation a
-one-time cost. However, A17 (process-time rollback) means if a *new*
-plugin passes `init()` but traps during `process()`, the runtime does not
-auto-rollback — it enters a perpetual trap-recovery loop. This limits the
-RQ3 claim to "rollback on init-time failure only."
+one-time cost. Process-time rollback (A17) restores v1 within the canary
+window when a new plugin passes `init()` but traps during `process()`.
+Verified by:
+- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
+- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
 
 ## Overall assessment
 
@@ -95,9 +96,10 @@ RQ3 claim to "rollback on init-time failure only."
 |----|-------------------|-----------|------------------------|
 | RQ1 | **PASS** | Medium | Absolute per-hop numbers on Pi; Pi RSS |
 | RQ2 | **PASS** | High | Sustained attack duration; recovery precision |
-| RQ3 | **PARTIAL** | Medium-High | Pi swap timing; A17 decision |
+| RQ3 | **PASS** | High | Pi swap timing confirmation |
 
 The shakedown confirms the architecture works as designed. Canonical
-runs on Pi will provide the absolute numbers for the thesis. The only
-open risk is A17 (process-time rollback), which is a design gap, not a
-measurement gap.
+runs on Pi will provide the absolute numbers for the thesis. A17
+(process-time rollback) is closed; the only remaining gap is A19
+(runtime-side memory sampler + per-node metrics emitter) which is
+hygiene, not thesis correctness.

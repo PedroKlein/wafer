@@ -77,6 +77,8 @@ pub struct SwapTimeline {
     pub swap_acked: Option<std::time::Instant>,
     /// When the first v2 output was observed at the sink.
     pub first_v2_output: Option<std::time::Instant>,
+    /// Duration of process-time rollback to v1, if triggered (A17).
+    pub rollback_time_ns: Option<u64>,
 }
 
 impl SwapTimeline {
@@ -90,6 +92,7 @@ impl SwapTimeline {
             signal_sent: None,
             swap_acked: None,
             first_v2_output: None,
+            rollback_time_ns: None,
         }
     }
 
@@ -185,7 +188,8 @@ impl SwapTimeline {
   "signal_ns": {},
   "ack_ns": {},
   "convergence_ns": {},
-  "total_ns": {}
+  "total_ns": {},
+  "rollback_time_ns": {}
 }}"#,
             fmt_opt(self.compile_duration_ns()),
             fmt_opt(self.instantiate_duration_ns()),
@@ -193,6 +197,7 @@ impl SwapTimeline {
             fmt_opt(self.ack_duration_ns()),
             fmt_opt(self.convergence_duration_ns()),
             fmt_opt(self.total_duration_ns()),
+            fmt_opt(self.rollback_time_ns),
         )
     }
 }
@@ -446,8 +451,12 @@ mod tests {
         assert!(json.contains("\"compile_ns\""));
         assert!(json.contains("\"instantiate_ns\""));
         assert!(json.contains("\"total_ns\""));
-        // No nulls since all phases are set
-        assert!(!json.contains("null"));
+        assert!(json.contains("\"rollback_time_ns\""));
+        // rollback_time_ns is null (not triggered), all other phases are set
+        assert!(json.contains("\"rollback_time_ns\": null"));
+        // Phase timing values should not be null (all phases set above)
+        assert!(!json.contains("\"compile_ns\": null"));
+        assert!(!json.contains("\"total_ns\": null"));
     }
 
     #[test]

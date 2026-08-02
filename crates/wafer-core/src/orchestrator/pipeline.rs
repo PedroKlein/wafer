@@ -27,7 +27,7 @@ use crate::runner::{DownstreamSender, send_downstream};
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::source::run_source_loop;
 use crate::runner::sink::run_sink_loop;
-use crate::runner::transform::run_transform_loop;
+use crate::runner::transform::{run_transform_loop, run_transform_loop_with_config};
 use crate::runner::filter::run_filter_loop;
 use crate::runner::router::run_router_loop;
 
@@ -398,6 +398,7 @@ impl PipelineOrchestrator {
         &mut self,
         bundles: Vec<crate::orchestrator::builder::NodeBundle>,
     ) {
+        let hot_swap_config = self.config.engine.hot_swap.clone();
         for bundle in bundles {
             let node_id = bundle.node_id.clone();
             let cancel = bundle.cancel;
@@ -407,10 +408,11 @@ impl PipelineOrchestrator {
             match bundle.kind {
                 NodeBundleKind::Transform { receiver, senders, swap_rx, policy, node } => {
                     if let Some(transform) = node {
+                        let hs_cfg = hot_swap_config.clone();
                         self.tasks.spawn(async move {
-                            run_transform_loop(
+                            run_transform_loop_with_config(
                                 transform, receiver, senders, swap_rx,
-                                policy, cancel, state, metrics,
+                                policy, cancel, state, metrics, hs_cfg,
                             ).await;
                         });
                     } else {

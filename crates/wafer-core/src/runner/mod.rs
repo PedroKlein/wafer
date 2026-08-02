@@ -24,6 +24,9 @@ use crate::node::wasm::WasmRouterNode;
 use crate::queue::RuntimeEnvelope;
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
+
+use wafer_types::config::HotSwapConfig;
 
 // =============================================================================
 // Hot-swap progress (A3b): runner-reported ACK and first-v2 convergence
@@ -131,6 +134,86 @@ impl HotSwapProgress {
 // =============================================================================
 // Shared Types
 // =============================================================================
+
+// =============================================================================
+// Canary rollback state (A17): retained after swap ACK for process-time rollback
+// =============================================================================
+
+/// Snapshot of v1 state retained after a hot-swap ACK for bounded rollback.
+///
+/// If v2 traps during `process()` within the canary window, the runner uses
+/// this snapshot to roll back to v1. The snapshot is consumed on rollback
+/// (single-shot) and dropped when the canary window closes.
+pub struct TransformRollbackSnapshot {
+    pub pre: Arc<TransformNodePre<WaferState>>,
+}
+
+impl std::fmt::Debug for TransformRollbackSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransformRollbackSnapshot")
+            .field("pre", &"<TransformNodePre>")
+            .finish()
+    }
+}
+
+/// Tracks the canary window state for process-time hot-swap rollback.
+///
+/// Exists only while the canary window is open (between swap ACK and either
+/// `canary_success_count` successes OR `canary_window_ms` expiry).
+pub struct TransformCanaryState {
+    pub snapshot: TransformRollbackSnapshot,
+    pub success_count: u32,
+    pub trap_count: u32,
+    pub window_start: Instant,
+    pub config: HotSwapConfig,
+}
+
+impl std::fmt::Debug for TransformCanaryState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransformCanaryState")
+            .field("success_count", &self.success_count)
+            .field("trap_count", &self.trap_count)
+            .field("window_start", &self.window_start)
+            .field("config", &self.config)
+            .finish()
+    }
+}
+
+impl TransformCanaryState {
+    /// Create a new canary state from the v1 InstancePre retained before swap.
+    pub fn new(pre: Arc<TransformNodePre<WaferState>>, config: HotSwapConfig) -> Self {
+        Self {
+            snapshot: TransformRollbackSnapshot { pre },
+            success_count: 0,
+            trap_count: 0,
+            window_start: Instant::now(),
+            config,
+        }
+    }
+
+    /// Check if the canary window has expired (either by success count or wall-clock).
+    pub fn window_expired(&self) -> bool {
+        self.success_count >= self.config.canary_success_count
+            || self.window_start.elapsed().as_millis() as u64 >= self.config.canary_window_ms
+    }
+
+    /// Check if the rollback retry budget is exhausted.
+    pub fn retries_exhausted(&self) -> bool {
+        self.trap_count > self.config.max_rollback_retries
+    }
+
+    /// Record a successful process() call.
+    pub fn record_success(&mut self) {
+        self.success_count += 1;
+    }
+
+    /// Record a trap and return whether rollback should fire.
+    /// Returns true if we should roll back, false if retries exhausted.
+    pub fn record_trap(&mut self) -> bool {
+        self.trap_count += 1;
+        !self.retries_exhausted()
+    }
+}
 
 /// A downstream output channel with its port identifier.
 ///

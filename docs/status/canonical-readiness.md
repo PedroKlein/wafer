@@ -49,7 +49,7 @@ Legend:
 | E-Swap-2 | RQ3 | 🟢 | `e-swap-2/shakedown-macos-2026-07-22T17-13-47Z/` | Same as E-Swap-1 | None significant |
 | E-Swap-3 | RQ3 | 🟢 | `e-swap-3/shakedown-macos-2026-07-22T20-11-05Z/` | 30 runs per strategy | Docker Desktop overhead on eKuiper |
 | E-Swap-4 | RQ3 | 🟢 | `e-swap-4/shakedown-macos-2026-07-22T17-15-59Z/` | Higher burst rate on Pi | Pipeline never saturates on M-series |
-| E-Swap-5 | RQ3 | 🟡 | `e-swap-5/shakedown-macos-2026-07-22T17-27-47Z/` | A17: process-time rollback | None significant |
+| E-Swap-5 | RQ3 | 🟢 | `e-swap-5/shakedown-macos-2026-07-22T17-27-47Z/` | A17 closed: canary rollback | Pending re-run (T2) for fresh evidence |
 | E-Swap-6 | RQ3 | 🟢 | `e-swap-6/shakedown-macos-2026-07-22T17-13-47Z/` | Phase timing at Pi speed | AOT compile phase larger on ARM |
 | E-Density-1 | All | 🟢 | `e-density-1/binary-sizes.csv` | None (static measurement) | None (portable) |
 
@@ -79,7 +79,7 @@ Legend:
 | Gap | Impact | RQ claim modification |
 |---|---|---|
 | **A16** (WASI async panic) | CLOSED. Fixed in commit `40ab46b`. | None — regression test covers this. |
-| **A17** (process-time rollback) | OPEN. `E-Swap-5` shows runtime survives but does not auto-rollback to v1 after process-time traps. | RQ3 claim downgrades from "rollback on any failure" to "rollback on init-time failure; process-time failures are contained but require manual intervention." |
+| **A17** (process-time rollback) | CLOSED (2026-08-02). Canary window + bounded retry implemented in `run_transform_loop_with_config`. | RQ3 claim: "rollback on any failure" — both init-time and process-time traps trigger auto-rollback within the canary window. |
 | **A18** (native filter dispatch) | CLOSED (2026-08-01). Native filter dispatch wired; `NativeFilter::range` mirrors `plugins/threshold-filter`. | None — WAFER/native ratio moved 0.995 → 0.999, well inside the noise floor. |
 
 ## Experiments

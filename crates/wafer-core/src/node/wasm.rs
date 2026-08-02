@@ -394,6 +394,12 @@ impl WasmTransformNode {
         &self.cached_pre
     }
 
+    /// Replace the cached InstancePre (used by process-time rollback A17
+    /// to restore v1's pre after rollback).
+    pub fn set_cached_pre(&mut self, pre: Arc<TransformNodePre<WaferState>>) {
+        self.cached_pre = pre;
+    }
+
     /// Get a mutable reference to the store (for lifecycle calls like init/close).
     pub fn store_mut(&mut self) -> &mut Store<WaferState> {
         &mut self.store

@@ -35,6 +35,8 @@ pub struct NodeMetrics {
     recovery_ns_total: AtomicU64,
     recovery_count: AtomicU64,
     recovery_max_ns: AtomicU64,
+    /// A17: Total process-time hot-swap rollbacks triggered.
+    rollbacks: AtomicU64,
 }
 
 impl Default for NodeMetrics {
@@ -57,6 +59,7 @@ impl NodeMetrics {
             recovery_ns_total: AtomicU64::new(0),
             recovery_count: AtomicU64::new(0),
             recovery_max_ns: AtomicU64::new(0),
+            rollbacks: AtomicU64::new(0),
         }
     }
 
@@ -89,6 +92,12 @@ impl NodeMetrics {
     #[inline]
     pub fn record_swap(&self) {
         self.swaps.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// A17: Record a process-time hot-swap rollback.
+    #[inline]
+    pub fn record_rollback(&self) {
+        self.rollbacks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// P0.11 (A7 residual): record one Recovering → Running duration.
@@ -181,6 +190,12 @@ impl NodeMetrics {
     #[inline]
     pub fn swaps(&self) -> u64 {
         self.swaps.load(Ordering::Relaxed)
+    }
+
+    /// A17: Total process-time hot-swap rollbacks.
+    #[inline]
+    pub fn rollbacks(&self) -> u64 {
+        self.rollbacks.load(Ordering::Relaxed)
     }
 }
 

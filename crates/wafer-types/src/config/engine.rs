@@ -63,6 +63,9 @@ pub struct EngineConfig {
 
     #[serde(default)]
     pub memory: MemoryLimits,
+
+    #[serde(default)]
+    pub hot_swap: HotSwapConfig,
 }
 
 impl Default for EngineConfig {
@@ -73,6 +76,7 @@ impl Default for EngineConfig {
             default_queue_capacity: default_queue_capacity(),
             fuel: FuelBudgets::default(),
             memory: MemoryLimits::default(),
+            hot_swap: HotSwapConfig::default(),
         }
     }
 }
@@ -122,6 +126,39 @@ impl Default for MemoryLimits {
             transform: default_memory_transform(),
             filter: default_memory_filter(),
             router: default_memory_router(),
+        }
+    }
+}
+
+/// Configuration for process-time hot-swap rollback (A17).
+///
+/// After a swap succeeds (ACK phase), the runner retains a rollback snapshot
+/// of v1 for a bounded canary window. If v2 traps during `process()` within
+/// that window, the runtime automatically rolls back to v1.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct HotSwapConfig {
+    /// Number of consecutive successful `process()` calls on v2 required
+    /// before the rollback snapshot is dropped. Default: 32.
+    #[serde(default = "default_canary_success_count")]
+    pub canary_success_count: u32,
+
+    /// Maximum wall-clock milliseconds the rollback snapshot is retained
+    /// after swap ACK. Default: 10_000 (10s).
+    #[serde(default = "default_canary_window_ms")]
+    pub canary_window_ms: u64,
+
+    /// Maximum number of rollback retries before escalating to the
+    /// Recovery state. Default: 3.
+    #[serde(default = "default_max_rollback_retries")]
+    pub max_rollback_retries: u32,
+}
+
+impl Default for HotSwapConfig {
+    fn default() -> Self {
+        Self {
+            canary_success_count: default_canary_success_count(),
+            canary_window_ms: default_canary_window_ms(),
+            max_rollback_retries: default_max_rollback_retries(),
         }
     }
 }
@@ -346,4 +383,16 @@ const fn default_dlq_mqtt_capacity() -> usize {
 
 const fn default_dlq_file_capacity() -> usize {
     5000
+}
+
+const fn default_canary_success_count() -> u32 {
+    32
+}
+
+const fn default_canary_window_ms() -> u64 {
+    10_000
+}
+
+const fn default_max_rollback_retries() -> u32 {
+    3
 }
