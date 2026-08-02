@@ -80,7 +80,7 @@ duplication; dip <5% vs full-restart.
 | vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages |
 | vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart |
 | Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + bounded retry + `HotSwapError::RolledBack` API surface |
-| Rollback time (E-Swap-5) | p50=63 µs, p99=186 µs, max=139 µs (n=24, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T14-30-50Z/` |
+| Rollback time (E-Swap-5) | p50=72 µs, p95=100 µs, p99=115 µs, max=176 µs (n=24, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T15-51-21Z/`. Every swap returned HTTP 200 `status=rolled_back` (was `swap_converged` pre-B1). |
 | Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) |
 
 **Key finding**: The watch-channel algorithm achieves provably lossless

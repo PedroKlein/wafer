@@ -49,7 +49,7 @@ Legend:
 | E-Swap-2 | RQ3 | 🟢 | `e-swap-2/shakedown-macos-2026-07-22T17-13-47Z/` | Same as E-Swap-1 | None significant |
 | E-Swap-3 | RQ3 | 🟢 | `e-swap-3/shakedown-macos-2026-07-22T20-11-05Z/` | 30 runs per strategy | Docker Desktop overhead on eKuiper |
 | E-Swap-4 | RQ3 | 🟢 | `e-swap-4/shakedown-macos-2026-07-22T17-15-59Z/` | Higher burst rate on Pi | Pipeline never saturates on M-series |
-| E-Swap-5 | RQ3 | 🟢 | `e-swap-5/shakedown-macos-2026-07-22T17-27-47Z/` | A17 closed: canary rollback | Pending re-run (T2) for fresh evidence |
+| E-Swap-5 | RQ3 | 🟢 | `e-swap-5/shakedown-macos-2026-08-02T15-51-21Z/` | A17 closed + polished (B1/M1): canary rollback + API `status=rolled_back` | rollback_time_ns p99=115 µs (n=24) |
 | E-Swap-6 | RQ3 | 🟢 | `e-swap-6/shakedown-macos-2026-07-22T17-13-47Z/` | Phase timing at Pi speed | AOT compile phase larger on ARM |
 | E-Density-1 | All | 🟢 | `e-density-1/binary-sizes.csv` | None (static measurement) | None (portable) |
 

@@ -595,19 +595,28 @@ run_rollback() {
         local response
         response=$(do_swap "$V2_PANICS" 2>/dev/null || echo "FAILED")
 
-        # The response may be a 409 CONFLICT (rollback reported to caller)
-        # or a timeout (swap failed but pipeline continued)
+        # Post-B1 (2026-08-02, commit 78519ea): the API now returns
+        # `HTTP 200 status=rolled_back` for a v2-panics swap that ACKed
+        # and then rolled back. Older code returned 409/504. Count both
+        # so the shakedown is portable across the fix boundary.
         local status_code
-        status_code=$(curl -sf -o /dev/null -w "%{http_code}" -X POST \
+        local body_file
+        body_file=$(mktemp)
+        status_code=$(curl -s -o "$body_file" -w "%{http_code}" -X POST \
             "$API_BASE/api/v1/nodes/$NODE_ID/hot-swap" \
             -H "Content-Type: application/json" \
             -d "{\"wasm_path\": \"$V2_PANICS\"}" 2>/dev/null || echo "000")
+        local status_body
+        status_body=$(cat "$body_file")
+        rm -f "$body_file"
 
-        echo "{\"swap_index\":$swap_count,\"http_status\":$status_code,\"response\":\"$(echo "$response" | tr -d '\n' | sed 's/"/\\"/g')\"}" >> "$swap_timeline_file"
+        echo "{\"swap_index\":$swap_count,\"http_status\":$status_code,\"response\":\"$(echo "$response" | tr -d '\n' | sed 's/"/\\"/g')\",\"body\":$(echo "$status_body" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))' 2>/dev/null || echo "\"\"")}" >> "$swap_timeline_file"
 
-        # A 409 or 504 means the runtime detected the failure — which is the
-        # rollback mechanism in action.
+        # A rollback is signalled by: 409/504 (pre-B1 path), or
+        # HTTP 200 with "status":"rolled_back" in the response body.
         if [ "$status_code" = "409" ] || [ "$status_code" = "504" ]; then
+            rollback_events=$((rollback_events + 1))
+        elif [ "$status_code" = "200" ] && echo "$status_body" | grep -q '"status":"rolled_back"'; then
             rollback_events=$((rollback_events + 1))
         fi
 
