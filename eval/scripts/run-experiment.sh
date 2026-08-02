@@ -8,7 +8,8 @@
 #   1. Resolve output directory via collect-results.sh (host_tag + timestamp).
 #   2. Auto-start eclipse-mosquitto in Docker if the config uses MQTT and no
 #      broker was supplied by --broker or WAFER_HARNESS_MQTT.
-#   3. Launch wafer-runtime; capture PID; poll RSS/VSZ into memory.csv.
+#   3. Launch wafer-runtime; capture PID; the runtime itself writes
+#      memory.csv via MemoryRecorder (A19).
 #   4. If the config has an MQTT source, spawn `wafer-loadgen publish`.
 #      If it has an MQTT sink, spawn `wafer-loadgen subscribe` (writes
 #      latency.hdr into the result dir).
@@ -109,17 +110,18 @@ _sha256() {
     fi
 }
 
-# A19 (thesis-hardening T4): runtime writes memory.csv via MemoryRecorder
-# when WAFER_BENCH_OUTPUT_DIR is set. This helper is a no-op stub retained
-# for interface compatibility. SIGKILL fallback (external re-sample) is
-# documented but not implemented here — manual recovery only.
-_ps_rss_vsz_bytes() {
-    local pid=$1
-    # Runtime owns memory.csv on graceful shutdown (A19). If the runtime is
-    # SIGKILLed before flushing, external re-sampling would need a dedicated
-    # script. This stub returns empty to signal "no data from harness."
-    printf '\n'
-}
+# A19 (thesis-hardening T4) closed: the runtime writes memory.csv via
+# `MemoryRecorder` in crates/wafer-core/src/bench/memory.rs when
+# WAFER_BENCH_OUTPUT_DIR is set. The external ps-based sampler and its
+# `_launch_memory_sampler` launcher have been removed to stop clobbering
+# the runtime-owned artefact.
+#
+# If the runtime is SIGKILLed before flushing, memory.csv will be
+# missing; that's a diagnostic failure mode, not a fallback path.
+#
+# `_ps_rss_vsz_bytes` and `_launch_memory_sampler` are gone; the trap
+# cleanup path `_stop_mem_sampler` is preserved as a no-op so external
+# callers that still invoke it don't break.
 
 _config_has_kind() {
     # $1 = config path, $2 = kind literal (e.g. "mqtt", "bench-source").
@@ -274,7 +276,7 @@ _start_mosquitto_if_needed
 # ============================================================================
 
 RUNTIME_PID=""
-MEM_SAMPLER_PID=""
+MEM_SAMPLER_PID=""  # legacy variable, retained empty post-A19 for old trap-cleanup call sites; no external sampler runs.
 
 _stop_runtime() {
     [ -z "$RUNTIME_PID" ] && return 0
@@ -294,30 +296,8 @@ _stop_runtime() {
 }
 
 _stop_mem_sampler() {
-    [ -z "$MEM_SAMPLER_PID" ] && return 0
-    kill "$MEM_SAMPLER_PID" 2>/dev/null || true
-    wait "$MEM_SAMPLER_PID" 2>/dev/null || true
-    MEM_SAMPLER_PID=""
-}
-
-_launch_memory_sampler() {
-    local pid=$1
-    (
-        printf 'timestamp_ns,rss_bytes,vsz_bytes\n' > "$OUT_DIR/memory.csv"
-        while kill -0 "$pid" 2>/dev/null; do
-            local sample; sample="$(_ps_rss_vsz_bytes "$pid")"
-            if [ -n "$sample" ] && [ "$sample" != "0,0" ]; then
-                # Nanoseconds via python (portable, present in every dev env)
-                # or fall back to Perl if python isn't installed.
-                local ns
-                ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null \
-                    || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
-                printf '%s,%s\n' "$ns" "$sample" >> "$OUT_DIR/memory.csv"
-            fi
-            sleep 1
-        done
-    ) &
-    MEM_SAMPLER_PID=$!
+    # No-op post-A19: runtime owns memory.csv.
+    :
 }
 
 STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
@@ -328,7 +308,7 @@ _log "launching wafer-runtime: $WAFER_RUNTIME_BIN --config $config"
     >"$OUT_DIR/stdout.log" 2>&1 &
 RUNTIME_PID=$!
 _log "wafer-runtime pid=$RUNTIME_PID"
-_launch_memory_sampler "$RUNTIME_PID"
+# A19: runtime writes memory.csv via MemoryRecorder; no external sampler.
 
 # Trap-based cleanup so a Ctrl-C or unexpected exit still tears everything down.
 _cleanup() {
@@ -444,18 +424,24 @@ duration_ns=$(( finished_ns - started_ns ))
 
 METRICS_URL="${WAFER_HARNESS_METRICS_URL:-http://127.0.0.1:9090/metrics}"
 NODE_METRICS="$OUT_DIR/per_node_metrics.csv"
-printf 'node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count\n' > "$NODE_METRICS"
+# A19 (thesis-hardening T4) closed: the runtime writes per_node_metrics.csv
+# via node_latency::NodeLatencyRecorder on graceful shutdown. Do NOT
+# overwrite it here — the old header-only write was clobbering runtime
+# output. If the file already exists we keep it verbatim; otherwise we
+# emit a stub with the schema so downstream consumers don't crash on
+# missing file.
+if [ ! -f "$NODE_METRICS" ]; then
+    printf 'node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count\n' > "$NODE_METRICS"
+    printf '# per_node_metrics.csv: runtime did not emit (SIGKILL or endpoint disabled). See stdout.log.\n' >> "$NODE_METRICS"
+fi
 
-# Runtime is already stopped by the time we get here — the scrape needs to
-# happen before _stop_runtime. Rewind the flow: we do a preliminary scrape
-# while the runtime is still alive (moved above), but only after
-# loadgen finishes so counters are settled. Skipped as best-effort here.
+# Legacy Prometheus scrape path retained as a no-op guard: pre-A19 harnesses
+# scraped /metrics into prometheus-final.txt; the runtime now owns latency
+# aggregation directly.
 if [ -f "$OUT_DIR/prometheus-final.txt" ]; then
     :
-else
-    printf '# per_node_metrics.csv: runtime shut down before scrape (or endpoint disabled). See stdout.log.\n' >> "$NODE_METRICS"
 fi
-_log "per_node_metrics.csv: best-effort scrape (metrics endpoint may need to be wired via runtime CLI)"
+_log "per_node_metrics.csv: runtime-owned (A19); harness no longer overwrites"
 
 # ============================================================================
 # Metadata JSON
