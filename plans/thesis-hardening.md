@@ -23,7 +23,6 @@ Everything else in this plan is disjoint from canonical-runs.
 
 - All work testable on macOS + docker; no hardware assumptions.
 - A17 impl (T1) upgrades RQ3 claim wording. Code change + doc update ship together.
-- Fix T7 (workspace-test hang) BEFORE adding heavy new integration tests (T3/T5).
 - `memory_stats` crate is the ONLY source of RSS in the runtime path after T4 lands.
 
 ## Non-goals
@@ -50,23 +49,25 @@ Everything else in this plan is disjoint from canonical-runs.
 - AC: A19 closed via T4 runtime-side implementation.
 - AC: E-Swap-5 re-run demonstrates process-time containment + auto-rollback; readiness row flips 🟡→🟢.
 
-### T-P1 — Test coverage additions
-
-- AC: `wafer-loadgen` covers rate accuracy, coordinated-omission resistance, sequence-tracker gap+dup.
-- AC: `waferctl` has end-to-end tests for hotswap, health, list-pipelines.
-- AC: `wafer-runtime` CLI has tests for `--validate`, `--no-api`, SIGTERM, exit codes.
-
-### T-P2 — Test-harness hygiene
+### T-P1 — Test-harness hygiene
 
 - AC: `cargo test --workspace` completes under 5 min without hanging.
 - AC: All shakedown scripts either source `write_metadata.py` merger or explicitly document why not.
 
-### T-P3 — Thesis-artifact prep
+### T-P2 — Thesis-artifact prep
 
 - AC: Every canonical notebook exports both `.png` and `.pdf` (vector) figures.
 - AC: Cross-arch build validated in CI on every push to `main`.
 - AC: `notebooks/README.md` maps each notebook to RFC-008 experiment id + RQ + figure/table number.
 - AC: Doc-freshness sweep completes: no doc references contradict `implementation-gaps.md`; new plans cross-linked from the docs index.
+
+> **Out of scope (deferred per user decision).** Original draft included
+> a T-P1 phase covering test coverage additions (T3 wafer-loadgen, T5
+> waferctl e2e, T6 wafer-runtime CLI). Deferred: existing coverage is
+> sufficient for shipping the runtime; new tests can wait for a
+> post-canonical or post-thesis phase. Task IDs T3, T5, T6 intentionally
+> left unused so the surrounding numbering keeps its git history
+> traceability.
 
 ---
 
@@ -107,21 +108,9 @@ After T1, re-run E-Swap-5 shakedown; regenerate the notebook figure.
 
 **Executor:** `inline`. **Depends on:** T1.
 
-### T3 — wafer-loadgen integration tests (T-P1)
+### T3 — (deferred) wafer-loadgen integration tests
 
-`wafer-loadgen` sits on the critical path of every RQ number. 25 unit + 2 integration files across 2257 SLOC — under-tested for critical path.
-
-**ACs:**
-- AC: Rate-accuracy test: open-loop generator at 1000 msg/s hits actual rate ±1% over 10s. Verify: `cargo test -p wafer-loadgen --test rate_accuracy`.
-- AC: Coordinated-omission-resistance test: `intended_publish_ns` stays correct under artificial 500ms send stall. Verify: `cargo test -p wafer-loadgen --test coordinated_omission_resistance`.
-- AC: Sequence-tracker precision: inject gaps + dups, tracker reports exact counts. Verify: `cargo test -p wafer-loadgen --test sequence_tracker_precision`.
-- AC: All three use `#[tokio::test(flavor = "multi_thread")]` + clean broker resources. Verify: `pgrep -f mosquitto` empty after suite.
-
-**References:** skills `rust-testing`, `mqtt-iot`, `observability`; files `crates/wafer-loadgen/src/`, `crates/wafer-loadgen/tests/`; docs RFC-008 §D3-D5.
-
-**Constraints:** no real MQTT broker required — use in-process harness or ephemeral `docker run --rm mosquitto`; if macOS can only hit ±5%, gate a tighter Linux variant with `#[cfg(target_os = "linux")]`.
-
-**Executor:** `fresh reviewer`. **Depends on:** T7 (fix hang before adding heavy tests).
+**Deferred per user decision.** Original scope was rate accuracy + coordinated-omission resistance + sequence-tracker precision tests for `wafer-loadgen`. Move to a future post-canonical or post-thesis test-hardening plan.
 
 ### T4 — A19 runtime-side memory_stats + per_node_metrics emitter (T-P0)
 
@@ -144,39 +133,15 @@ Wire existing `MemoryRecorder::sample_loop` into runtime; replace macOS `ps` she
 
 **Executor:** `forked reviewer`.
 
-### T5 — waferctl end-to-end tests (T-P1)
+### T5 — (deferred) waferctl end-to-end tests
 
-`waferctl` (1281 SLOC, 33 unit tests) has zero integration tests but is the CLI called by every shakedown script.
+**Deferred per user decision.** Original scope was e2e tests for `waferctl hotswap`, `waferctl health`, `waferctl list`. Existing 33 unit tests are the current coverage floor. Move to a future test-hardening plan.
 
-**ACs:**
-- AC: `crates/waferctl/tests/e2e_hotswap.rs` spawns runtime + issues `waferctl hotswap`, asserts event in stdout within 5s. Verify: `cargo test -p waferctl --test e2e_hotswap`.
-- AC: `e2e_health.rs` spawns runtime, calls `waferctl health`, asserts JSON shape.
-- AC: `e2e_list_pipelines.rs` asserts `waferctl list` returns current pipeline id.
-- AC: All three use `tokio::process::Child` with SIGTERM cleanup. Verify: `pgrep -f wafer` empty after suite.
+### T6 — (deferred) wafer-runtime CLI-level tests
 
-**References:** skills `rust-testing`, `cli-design`; files `crates/waferctl/src/`, `crates/wafer-runtime/tests/runtime_control_plane.rs` (reference); docs `docs/interfaces/http-api.md` (if exists).
+**Deferred per user decision.** Original scope was `--validate`, `--no-api`, SIGTERM, exit-code tests. Existing 2 unit + 10 integration tests cover the runtime's core; CLI-surface testing moves to a future plan.
 
-**Constraints:** random high port (0) for control-plane; Drop guards for panic-safe cleanup.
-
-**Non-goals:** not writing new waferctl unit tests (33 exist); cover only thesis-critical commands.
-
-**Executor:** `fresh reviewer`. **Depends on:** T7.
-
-### T6 — wafer-runtime CLI-level tests (T-P1)
-
-Runtime binary has 2 unit + 10 integration; CLI surface (`--validate`, `--no-api`, SIGTERM, exit codes) untested.
-
-**ACs:**
-- AC: `crates/wafer-runtime/tests/cli_flags.rs` covers: (a) `--validate` exits 0 valid / non-zero invalid, (b) `--no-api` skips health endpoint bind, (c) SIGTERM exits cleanly within 5s, (d) config-not-found returns distinct exit code.
-- AC: Exit codes documented in `docs/interfaces/cli-exit-codes.md` (or `http-api.md`).
-
-**References:** skills `rust-testing`, `cli-design`; files `crates/wafer-runtime/src/main.rs`, existing `runtime_control_plane.rs`.
-
-**Constraints:** use `std::process::Command`; `#[cfg(unix)]` gate SIGTERM tests.
-
-**Executor:** `inline`. **Depends on:** T7.
-
-### T7 — Diagnose + fix `cargo test --workspace` hang (T-P2)
+### T7 — Diagnose + fix `cargo test --workspace` hang (T-P1)
 
 `--workspace` hangs on `attack_containment.rs`. Per-file works. Root cause unknown.
 
@@ -191,7 +156,7 @@ Runtime binary has 2 unit + 10 integration; CLI surface (`--validate`, `--no-api
 
 **Executor:** `forked reviewer`. Diagnosis-heavy.
 
-### T8 — P-Followup-2 tail: unify legacy shakedown metadata (T-P2)
+### T8 — P-Followup-2 tail: unify legacy shakedown metadata (T-P1)
 
 Legacy `run-e-*-shakedown.sh` scripts still write bespoke `metadata.json` bypassing `eval/scripts/lib/write_metadata.py`.
 
@@ -205,7 +170,7 @@ Legacy `run-e-*-shakedown.sh` scripts still write bespoke `metadata.json` bypass
 
 **Executor:** `inline`.
 
-### T9 — Thesis-grade PDF figure export (T-P3)
+### T9 — Thesis-grade PDF figure export (T-P2)
 
 Canonical notebooks produce PNG at 120 DPI. Thesis needs vector PDF.
 
@@ -220,21 +185,21 @@ Canonical notebooks produce PNG at 120 DPI. Thesis needs vector PDF.
 
 **Executor:** `inline`.
 
-### T10 — Cross-arch build CI job (T-P3)
+### T10 — Cross-arch build CI job (T-P2)
 
-`just cross-build-pi` (from canonical-runs C1) must not regress. Add a CI job.
+`mise run cross-build-pi` (from canonical-runs C1) must not regress. Add a CI job.
 
 **ACs:**
-- AC: `.github/workflows/cross-arch.yml` (or repo's chosen CI config) runs `just cross-build-pi` on every push to `main`. Verify: workflow file exists; a synthetic breakage of the target triple in Cargo.toml fails CI.
+- AC: `.github/workflows/cross-arch.yml` (or repo's chosen CI config) runs `mise run cross-build-pi` on every push to `main`. Verify: workflow file exists; a synthetic breakage of the target triple in Cargo.toml fails CI.
 - AC: CI job uses `cross` (Docker) so it works on GitHub-hosted runners without host-arch limitations.
 
-**References:** files `.github/workflows/` (existing), `Justfile`.
+**References:** files `.github/workflows/` (existing), `mise.toml`.
 
 **Constraints:** don't gate `main` on this until canonical-runs C1 lands.
 
 **Executor:** `inline`. **Depends on:** canonical-runs C1 (recipe must exist).
 
-### T11 — Notebook → experiment → RQ traceability (T-P3)
+### T11 — Notebook → experiment → RQ traceability (T-P2)
 
 Right now `notebooks/README.md` lists notebooks but doesn't map each to its RFC-008 experiment id + RQ + figure/table number. Defense-grade reproducibility needs the reverse index too.
 
@@ -246,7 +211,7 @@ Right now `notebooks/README.md` lists notebooks but doesn't map each to its RFC-
 
 **Executor:** `inline`.
 
-### T12 — Doc-freshness sweep (T-P3)
+### T12 — Doc-freshness sweep (T-P2)
 
 Audit found stale doc references that prior plans (evaluation-infrastructure, eval-followups) didn't update. Sweep the doc tree once, fix everything, add cross-links to the two new plans.
 
@@ -275,23 +240,23 @@ Audit found stale doc references that prior plans (evaluation-infrastructure, ev
 
 ## Estimated cost
 
-| Phase | Est. hours | Notes |
-|---|---|---|
-| T-P0 (T1, T2, T4) | 10-16 | T1 is the biggest single task (A17 impl + tests) |
-| T-P1 (T3, T5, T6) | 6-10 | Depends on T7 for workspace testability |
-| T-P2 (T7, T8) | 3-6 | T7 diagnosis could balloon if root cause is a real deadlock |
-| T-P3 (T9, T10, T11, T12) | 4-6 | Doc + CI work; T10 depends on canonical-runs C1 |
-| **Total** | **23-38 h** | 3-5 sessions realistic |
+| Phase | Tasks | Est. hours | Notes |
+|---|---|---|---|
+| T-P0 | T1, T2, T4 | 10-16 | T1 is the biggest single task (A17 impl + tests) |
+| T-P1 | T7, T8 | 3-6 | T7 diagnosis could balloon if root cause is a real deadlock |
+| T-P2 | T9, T10, T11, T12 | 4-6 | Doc + CI work; T10 depends on canonical-runs C1 |
+| **Total** | **9 tasks** | **17-28 h** | 2-4 sessions realistic |
+
+**Deferred (not counted above):** T3, T5, T6 test coverage additions moved to a future post-canonical or post-thesis test-hardening plan.
 
 ## Suggested execution order
 
-1. **T7 first** — unblocks `cargo test --workspace` and prevents any future heavy test additions from being unreachable.
+1. **T7 first** — `cargo test --workspace` completes cleanly. Might reveal a real runtime deadlock (shipping bug that also affects Pi runs).
 2. **T12 early** — tiny (1-2h) doc-freshness sweep. Cheap now, costlier if compounded with T1/T4 updates.
 3. **T1 + T2** — biggest thesis upgrade (RQ3 claim). Land these together with the docs.
 4. **T4** — closes A19 the right way; coordinate with canonical-runs P1 (mark M2b closed).
-5. **T3, T5, T6 in parallel** — orthogonal test coverage additions; three reviewer runs.
-6. **T8** — hygiene cleanup.
-7. **T9, T10, T11** — artifact prep, can wait until after canonical numbers exist.
+5. **T8** — hygiene cleanup.
+6. **T9, T10, T11** — artifact prep, can wait until after canonical numbers exist.
 
 ## Handoff
 

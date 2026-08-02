@@ -86,7 +86,7 @@ is Phase P1 below.
 ### P0 — aarch64 toolchain + cross-compile
 
 - AC: `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtime -p wafer-loadgen -p waferctl` produces working ELF binaries. Verify: `file target/aarch64-unknown-linux-gnu/release/wafer` reports `ELF 64-bit LSB … ARM aarch64`.
-- AC: Reproducible via `just cross-build-pi`. Verify: recipe exists; two consecutive invocations produce identical SHA256.
+- AC: Reproducible via `mise run cross-build-pi`. Verify: task exists in `mise.toml`; two consecutive invocations produce identical SHA256.
 - AC: `docs/status/canonical-readiness.md` "What needs to change to book Pi time" §1 ticked.
 
 ### P1 — Linux memory sampler + per_node_metrics (A19)
@@ -105,7 +105,7 @@ is Phase P1 below.
 
 - AC: `docs/eval/pi-host-setup.md` walks a fresh Pi from OS install → canonical-ready in <2 h. Verify: reader can follow doc end-to-end.
 - AC: Canonical scripts use `taskset -c 2|3` for SUT|loadgen on rpi4|jetson. Verify: `grep -l 'taskset' eval/scripts/run-e-*-canonical.sh` covers every canonical experiment.
-- AC: `just deploy-pi` + `just smoke-pi` recipes work. Verify: recipes exist; smoke against a Pi produces a RESULT-CONTRACT-conformant result dir.
+- AC: `mise run deploy-pi` + `mise run smoke-pi` tasks work. Verify: tasks exist in `mise.toml`; smoke against a Pi produces a RESULT-CONTRACT-conformant result dir.
 
 ### P4 — eKuiper on ARM64
 
@@ -134,9 +134,9 @@ Verify `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtim
 **ACs:**
 - AC: Working ELF binary produced. Verify: `file target/aarch64-unknown-linux-gnu/release/wafer` reports `ELF 64-bit LSB … ARM aarch64`.
 - AC: `docs/eval/cross-compile.md` documents the working path with exact commands. Verify: fresh clone reproduces the binary.
-- AC: `just cross-build-pi` recipe in top-level Justfile. Verify: recipe runs and produces the binary.
+- AC: `mise run cross-build-pi` task in `mise.toml`. Verify: task runs and produces the binary. (Note: `mise` is the primary command runner; `justfile` is a compatibility layer being retired — do NOT add new recipes there.)
 
-**References:** skills `cargo-expert`, `rust-best-practices`; files `crates/wafer-runtime/Cargo.toml`, `Cargo.toml`, `Justfile`; docs [cross-rs](https://github.com/cross-rs/cross).
+**References:** skills `cargo-expert`, `rust-best-practices`; files `crates/wafer-runtime/Cargo.toml`, `Cargo.toml`, `mise.toml`; docs [cross-rs](https://github.com/cross-rs/cross).
 
 **Constraints:** prefer `cross` over homebrew linker (reproducibility); don't hide which toolchain worked; if openssl/native-tls blocks, evaluate `rustls` at workspace level as a spike outcome.
 
@@ -149,7 +149,7 @@ Verify `cargo build --release --target aarch64-unknown-linux-gnu -p wafer-runtim
 Extend C1's recipe to `wafer-loadgen` and `waferctl`.
 
 **ACs:**
-- AC: `just cross-build-pi` builds all three binaries. Verify: `ls target/aarch64-unknown-linux-gnu/release/{wafer,wafer-loadgen,waferctl}` + `file` reports ARM aarch64.
+- AC: `mise run cross-build-pi` builds all three binaries. Verify: `ls target/aarch64-unknown-linux-gnu/release/{wafer,wafer-loadgen,waferctl}` + `file` reports ARM aarch64.
 - AC: No new deps beyond C1. Verify: `git diff Cargo.lock` empty post-C2.
 - AC: Binary sizes recorded in `docs/eval/cross-compile.md`.
 
@@ -323,14 +323,14 @@ Every `eval/scripts/run-e-*-canonical.sh` script pins SUT to core 2 + loadgen to
 
 ### H3 — Pi deployment recipes (P3)
 
-`just deploy-pi --host <ip>` and `just smoke-pi --host <ip>`.
+`mise run deploy-pi --host <ip>` and `mise run smoke-pi --host <ip>`.
 
 **ACs:**
-- AC: `just deploy-pi --host <ip>` completes in <60s over LAN, produces `/opt/wafer/{bin,plugins,configs}/`. Verify: run + ssh + list.
-- AC: `just smoke-pi --host <ip>` runs pipeline-shakedown.toml once, rsyncs result to `eval/results/pi-smoke/`. Verify: `verify-result-contract.py` on returned dir passes.
-- AC: Recipes linked from `docs/eval/pi-host-setup.md`.
+- AC: `mise run deploy-pi --host <ip>` completes in <60s over LAN, produces `/opt/wafer/{bin,plugins,configs}/`. Verify: run + ssh + list.
+- AC: `mise run smoke-pi --host <ip>` runs pipeline-shakedown.toml once, rsyncs result to `eval/results/pi-smoke/`. Verify: `verify-result-contract.py` on returned dir passes.
+- AC: Tasks linked from `docs/eval/pi-host-setup.md`.
 
-**References:** files `Justfile`.
+**References:** files `mise.toml`.
 
 **Constraints:** rsync + ssh only, no new deps; no systemd units.
 
