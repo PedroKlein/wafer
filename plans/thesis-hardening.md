@@ -66,6 +66,7 @@ Everything else in this plan is disjoint from canonical-runs.
 - AC: Every canonical notebook exports both `.png` and `.pdf` (vector) figures.
 - AC: Cross-arch build validated in CI on every push to `main`.
 - AC: `notebooks/README.md` maps each notebook to RFC-008 experiment id + RQ + figure/table number.
+- AC: Doc-freshness sweep completes: no doc references contradict `implementation-gaps.md`; new plans cross-linked from the docs index.
 
 ---
 
@@ -245,6 +246,31 @@ Right now `notebooks/README.md` lists notebooks but doesn't map each to its RFC-
 
 **Executor:** `inline`.
 
+### T12 — Doc-freshness sweep (T-P3)
+
+Audit found stale doc references that prior plans (evaluation-infrastructure, eval-followups) didn't update. Sweep the doc tree once, fix everything, add cross-links to the two new plans.
+
+**Stale items found (audit run when this plan was authored):**
+- `docs/rfcs/RFC-008-evaluation-harness.md` header banner cites gap A15 as OPEN. A15 was closed 2026-07-20 (commit trail in `implementation-gaps.md`). The banner says RQ1/RQ3 claims are "aspirational until stub benchmarks replaced" — misleading now that stub benchmarks are gone.
+- `docs/status/implementation-status.md` header lists A1-A6, A8-A11, A13-A15 closed with A7 partial. Current state: A1-A16 + A18 closed, only A17 + A19 open. Header is 3+ gaps behind.
+- `.agents/AGENTS.md` — not re-audited, likely has similar staleness in its "documented gaps" pointers.
+- No cross-references in the docs point to `plans/canonical-runs.md` or `plans/thesis-hardening.md`.
+
+**ACs:**
+- AC: RFC-008 banner rewritten to reflect current state — either remove the A15 warning entirely or restate as "A15 closed 2026-07-20 (SHA); this RFC's aspirational sections are now fully implemented." Verify: `grep -c 'A15' docs/rfcs/RFC-008-evaluation-harness.md` returns 0, OR every occurrence appears in a past-tense "closed by" context.
+- AC: `implementation-status.md` header rewritten to cite current gap state (A17 + A19 open). Verify: doc mentions A17 and A19 as open, does not list A7 as partial.
+- AC: `.agents/AGENTS.md` reviewed for gap references; any stale citation updated to current state. Verify: `grep -E 'A[0-9]+' .agents/AGENTS.md` produces no reference that contradicts `implementation-gaps.md`.
+- AC: `docs/status/README.md` links `plans/canonical-runs.md` and `plans/thesis-hardening.md` from the plans-index section. Verify: both filenames appear in the doc.
+- AC: Sanity re-run: `grep -rE 'A15.*[Oo]pen|A7.*[Pp]artial|A16.*[Oo]pen|A18.*[Oo]pen' docs/ .agents/` returns zero matches after the sweep.
+
+**References:** files `docs/rfcs/RFC-008-evaluation-harness.md`, `docs/status/implementation-status.md`, `docs/status/README.md`, `.agents/AGENTS.md`, `docs/status/implementation-gaps.md` (source of truth for gap state).
+
+**Constraints:** doc-only task, no code changes. If any doc claim contradicts source code, trust source code and update the doc (per the AGENTS.md "ground truth" rule).
+
+**Non-goals:** not rewriting docs for style; not adding new sections; not migrating to a different doc format. Freshness only.
+
+**Executor:** `inline`.
+
 ---
 
 ## Estimated cost
@@ -254,17 +280,18 @@ Right now `notebooks/README.md` lists notebooks but doesn't map each to its RFC-
 | T-P0 (T1, T2, T4) | 10-16 | T1 is the biggest single task (A17 impl + tests) |
 | T-P1 (T3, T5, T6) | 6-10 | Depends on T7 for workspace testability |
 | T-P2 (T7, T8) | 3-6 | T7 diagnosis could balloon if root cause is a real deadlock |
-| T-P3 (T9, T10, T11) | 3-5 | Doc + CI work; T10 depends on canonical-runs C1 |
-| **Total** | **22-37 h** | 3-5 sessions realistic |
+| T-P3 (T9, T10, T11, T12) | 4-6 | Doc + CI work; T10 depends on canonical-runs C1 |
+| **Total** | **23-38 h** | 3-5 sessions realistic |
 
 ## Suggested execution order
 
 1. **T7 first** — unblocks `cargo test --workspace` and prevents any future heavy test additions from being unreachable.
-2. **T1 + T2** — biggest thesis upgrade (RQ3 claim). Land these together with the docs.
-3. **T4** — closes A19 the right way; coordinate with canonical-runs P1 (mark M2b closed).
-4. **T3, T5, T6 in parallel** — orthogonal test coverage additions; three reviewer runs.
-5. **T8** — hygiene cleanup.
-6. **T9, T10, T11** — artifact prep, can wait until after canonical numbers exist.
+2. **T12 early** — tiny (1-2h) doc-freshness sweep. Cheap now, costlier if compounded with T1/T4 updates.
+3. **T1 + T2** — biggest thesis upgrade (RQ3 claim). Land these together with the docs.
+4. **T4** — closes A19 the right way; coordinate with canonical-runs P1 (mark M2b closed).
+5. **T3, T5, T6 in parallel** — orthogonal test coverage additions; three reviewer runs.
+6. **T8** — hygiene cleanup.
+7. **T9, T10, T11** — artifact prep, can wait until after canonical numbers exist.
 
 ## Handoff
 
