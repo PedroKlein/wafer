@@ -29,9 +29,20 @@
 
 ## Running
 
+> **Prerequisite:** the `wafer_analysis` package must be importable. The
+> canonical setup is `uv sync` from `eval/analysis/` — this installs the
+> package in editable mode via the `[tool.hatch.build.targets.wheel]` entry
+> in `pyproject.toml`, so every subsequent `uv run …` command sees
+> `from wafer_analysis.paths import find_latest_shakedown`. Outside `uv`,
+> `pip install -e eval/analysis` gives the same result; or set
+> `PYTHONPATH=$(pwd)/eval/analysis/src` for a one-shot invocation.
+
 ```bash
-# Execute all canonical notebooks headless
+# One-time setup (skip if you already `uv sync`'d)
 cd eval/analysis
+uv sync
+
+# Execute all canonical notebooks headless
 uv run jupyter execute notebooks/00-warmup-validation.ipynb
 uv run jupyter execute notebooks/01-latency-cdf.ipynb
 uv run jupyter execute notebooks/02-per-hop-overhead.ipynb
