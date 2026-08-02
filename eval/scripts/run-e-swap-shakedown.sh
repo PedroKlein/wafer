@@ -664,13 +664,35 @@ if log_path.exists():
     text = log_path.read_text()
     trap_count = text.count("unrecoverable error")
     init_failed_count = text.count("init failed; keeping v1")
-    rollback_to_v1_count = text.count("keeping v1") + text.count("Rollback")
+    # A17 (T1, 2026-08-02): canary-window process-time rollback emits
+    # "process-time rollback to v1 succeeded" from runner/transform.rs.
+    # Older init-failure path still emits "keeping v1". Either counts as
+    # a rollback to v1 event for E-Swap-5's rollback-success semantics.
+    rollback_to_v1_count = (
+        text.count("process-time rollback to v1 succeeded")
+        + text.count("keeping v1")
+    )
+    # A17 rollback-time evidence: parse `rollback_time_ns=<int>` from
+    # tracing::info emissions. Feeds shakedown.json.rollback_times_ns
+    # (which the analysis notebook displays as the AC “under 10 s”
+    # visualization). Tracing emits ANSI color codes when writing to a
+    # tty-redirected file; strip them before matching so the regex
+    # anchors on the field name reliably.
+    import re as _re
+    _ansi = _re.compile(r"\x1b\[[0-9;]*m")
+    _clean = _ansi.sub("", text)
+    rollback_times_ns = [
+        int(m.group(1))
+        for m in _re.finditer(r"rollback_time_ns=(\d+)", _clean)
+    ]
+else:
+    rollback_times_ns = []
 
-# The v2-panics plugin passes init() (by design — see plugin source), so
-# A4 init-failure rollback is NOT triggered. The runtime's process-time
-# recovery re-instantiates from the CURRENT InstancePre (v2-panics), leading
-# to perpetual traps. This documents the actual behavior vs the aspirational
-# "automatic process-failure rollback" described in E-Swap-5.
+# A17 (Closed 2026-08-02): the canary window in the runner now retains v1's
+# InstancePre for a bounded window after every swap. When v2-panics traps in
+# process() the runner rolls back to v1 automatically (single-shot per
+# swap). Previously (pre-A17) only A4 init-failure rollback existed, so a
+# plugin passing init() but trapping process() led to permanent traps.
 auto_rollback_worked = rollback_to_v1_count > 0
 
 data = {
@@ -682,12 +704,14 @@ data = {
     "trap_count_post_swap": trap_count,
     "a4_init_rollback_events": init_failed_count,
     "auto_rollback_to_v1": auto_rollback_worked,
+    "a17_process_time_rollback_events": len(rollback_times_ns),
+    "rollback_times_ns": rollback_times_ns,
     "sequence_gaps": seq_gaps,
     "sequence_duplicates": seq_dups,
     "total_received": total_received,
     "sequence_continues_after_rollback": auto_rollback_worked and total_received > 0,
     "runtime_panic": False,
-    "note": "A4 rollback covers init() failures only. v2-panics passes init() by design; process-time rollback to v1 InstancePre is NOT implemented. Runtime detects failure (504 timeout) but does not auto-rollback.",
+    "note": "A17 canary rollback: runner retains v1 InstancePre for bounded window after swap and auto-rolls-back on process-time trap. Closed 2026-08-02.",
     "git_sha": git_sha,
 }
 
@@ -698,12 +722,15 @@ json.dump({"experiment": "e-swap-5", "host_tag": "shakedown-macos", "generated_a
 print(f"E-Swap-5: traps={data['trap_count_post_swap']}, a4_rollback={data['a4_init_rollback_events']}, received={total_received}")
 PY
 
-    if [ "$rollback_events" -gt 0 ] || grep -q "unrecoverable\|swap.*fail\|Swap.*fail\|keeping v1" "$run_dir/stdout.log" 2>/dev/null; then
-        # Detect whether the A4 init-failure rollback fired (ideal) or just trap detection
-        if grep -q "keeping v1" "$run_dir/stdout.log" 2>/dev/null; then
+    if [ "$rollback_events" -gt 0 ] || grep -q "process-time rollback to v1 succeeded\|unrecoverable\|swap.*fail\|Swap.*fail\|keeping v1" "$run_dir/stdout.log" 2>/dev/null; then
+        # A17 (Closed 2026-08-02): canary-window rollback is the primary
+        # success signal; A4 init-failure rollback still counts.
+        if grep -q "process-time rollback to v1 succeeded" "$run_dir/stdout.log" 2>/dev/null; then
+            _log "  E-Swap-5: PASS ✓ (A17 canary process-time rollback exercised)"
+        elif grep -q "keeping v1" "$run_dir/stdout.log" 2>/dev/null; then
             _log "  E-Swap-5: PASS ✓ (A4 init-failure rollback exercised)"
         else
-            _log "  E-Swap-5: PARTIAL ⚠ (runtime detected failure via 504 but no auto-rollback to v1; v2-panics passes init by design)"
+            _log "  E-Swap-5: PARTIAL ⚠ (runtime detected failure via 504 but no rollback log)"
         fi
         pass_count=$((pass_count+1))
     else
