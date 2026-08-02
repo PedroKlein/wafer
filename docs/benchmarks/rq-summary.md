@@ -109,7 +109,10 @@ Verified by:
 | RQ3 | **PASS** | High | Pi swap timing confirmation |
 
 The shakedown confirms the architecture works as designed. Canonical
-runs on Pi will provide the absolute numbers for the thesis. A17
-(process-time rollback) is closed; the only remaining gap is A19
-(runtime-side memory sampler + per-node metrics emitter) which is
-hygiene, not thesis correctness.
+runs on Pi will provide the absolute numbers for the thesis. All of
+A17 (process-time rollback) and A19 (runtime-side memory sampler +
+per-node metrics emitter) are closed as of 2026-08-02. The only
+remaining open gap on the observability side is A20 (Prometheus
+`wafer_hot_swap_rollbacks_total` counter) which is hygiene, not
+thesis correctness — the shakedown JSON already exposes
+`a17_process_time_rollback_events` for downstream analysis.

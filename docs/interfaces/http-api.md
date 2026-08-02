@@ -222,7 +222,7 @@ Do not describe them as if implemented:
 | `ReadyResponse` (503) | `ready: false`, `reason: string` |
 | `NodeInfoResponse` | `id: string`, `state: string` (Debug of `NodeRuntimeState`), `processed: u64`, `failed: u64`, `swappable: bool` |
 | `HotSwapRequest` | `wasm_path: string` |
-| `HotSwapResponse` | `node_id: string`, `status: "swap_sent"`, `timeline: { compile_ns, instantiate_ns }` |
+| `HotSwapResponse` | `node_id: string`, `status: "swap_converged" \| "rolled_back"`, `timeline: { compile_ns, instantiate_ns, signal_ns, ack_ns, convergence_ns }`. On `rolled_back`, `timeline` additionally carries `rollback_time_ns` and `reason`. |
 
 Node categorisation (`source | sink | transform | filter | router`)
 is not exposed on `NodeInfoResponse` today — clients infer it from the

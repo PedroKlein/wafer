@@ -121,7 +121,7 @@ mise run build-plugin json-parse
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"node_id":"upper","status":"swap_sent","timeline":{"compile_ns":...,"instantiate_ns":...}}
+# {"node_id":"upper","status":"swap_converged","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"ack_ns":...,"convergence_ns":...}}
 ```
 
 The `upper` node's Wasm instance is replaced between messages; the

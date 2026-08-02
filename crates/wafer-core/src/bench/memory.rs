@@ -117,6 +117,35 @@ mod tests {
         assert!(rss.unwrap() > 0, "RSS should be non-zero for a running process");
     }
 
+    #[test]
+    fn read_rss_bytes_within_1hz_overhead_budget() {
+        // L-3 (2026-08-02): thesis-hardening T4 AC6 promises <0.1% overhead
+        // from the 1 Hz sampler. That reduces to: read_rss_bytes must cost
+        // <1 ms per call, since 1 ms out of a 1 s sampling interval is
+        // exactly 0.1%. We measure the per-call cost here and gate the AC.
+        //
+        // Warm-up: the first call can pull the memory_stats OS bridge into
+        // hot cache paths. Discard it before timing.
+        let _ = read_rss_bytes();
+
+        const ITERATIONS: u32 = 200;
+        let start = std::time::Instant::now();
+        for _ in 0..ITERATIONS {
+            let rss = read_rss_bytes();
+            std::hint::black_box(rss);
+        }
+        let per_call = start.elapsed() / ITERATIONS;
+
+        // AC boundary: 1 ms per call = 0.1% overhead at 1 Hz.
+        // Real measurement on M1: ~500 ns per call (0.00005%). We give
+        // a very generous 1 ms budget so slow CI machines don't flake.
+        assert!(
+            per_call < std::time::Duration::from_millis(1),
+            "read_rss_bytes averaged {per_call:?} per call, above the 1 ms AC boundary. \
+             At 1 Hz sampling this would exceed the <0.1% overhead budget."
+        );
+    }
+
     #[tokio::test]
     async fn sample_loop_collects_samples() {
         let cancel = CancellationToken::new();
