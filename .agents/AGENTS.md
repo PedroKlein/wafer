@@ -6,7 +6,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 | What you need | Where to find it |
 |---------------|------------------|
-| **What to build next** | `plans/` (repo root): `canonical-runs.md` is the active plan; `thesis-hardening.md` is closed 2026-08-02; `eval-followups.md` archives review-driven follow-ups. `ROADMAP.md` gives the aspirational narrative. `TODO.md` is legacy — use plans for active work. |
+| **What to build next** | `plans/` (repo root): `canonical-runs.md` is the active plan; `thesis-hardening.md` is closed 2026-08-02; `eval-followups.md` archives review-driven follow-ups. `ROADMAP.md` gives the aspirational narrative. |
 | **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (per-experiment readiness for Pi/Jetson runs) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
 | **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology) + `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
@@ -118,7 +118,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and doc refactor. |
 | `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Fifteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
 | `specs/` | Feature specifications directory (OpenSpec workflow). See `specs/README.md`. |
-| `TODO.md` | Tactical implementation task list (legacy — active work lives in `plans/`). |
 | `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
 
 ### API & Integration
