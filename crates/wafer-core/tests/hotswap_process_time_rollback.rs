@@ -13,8 +13,25 @@ use std::path::Path;
 use std::time::Duration;
 
 use wafer_core::orchestrator::launch_pipeline;
-use wafer_core::runner::HotSwapProgress;
+use wafer_core::runner::{HotSwapError, HotSwapProgress};
 use wafer_types::config::Config;
+
+/// RAII guard to clean up the WAFER_BENCH_OUTPUT_DIR env var on test exit
+/// so parallel tests don't leak state to each other.
+struct BenchDirEnv;
+impl BenchDirEnv {
+    fn set(dir: &Path) -> Self {
+        // SAFETY: tests are single-threaded per #[tokio::test] task; the env
+        // guard exists only to prevent cross-test leakage inside this file.
+        unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir); }
+        Self
+    }
+}
+impl Drop for BenchDirEnv {
+    fn drop(&mut self) {
+        unsafe { std::env::remove_var("WAFER_BENCH_OUTPUT_DIR"); }
+    }
+}
 
 /// Path to the pre-built pass-through plugin (v1).
 const PASS_THROUGH_WASM: &str = concat!(
@@ -101,7 +118,7 @@ async fn hotswap_process_time_rollback() {
     let tmp = tempfile::tempdir().expect("tmp dir");
     let bench_dir = tmp.path().to_path_buf();
     // BenchSink needs WAFER_BENCH_OUTPUT_DIR for sequence tracking
-    unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", &bench_dir); }
+    let _env_guard = BenchDirEnv::set(&bench_dir);
 
     // Use a large message count so pipeline stays alive long enough for rollback
     let config = build_config(5000);
@@ -124,7 +141,7 @@ async fn hotswap_process_time_rollback() {
     // Prepare hot-swap payload to v2-panics
     let engine = handle.engine();
     let v2_bytes = std::fs::read(PASS_THROUGH_V2_PANICS_WASM).expect("read v2 wasm");
-    let (progress, _rx) = HotSwapProgress::channel();
+    let (progress, rx) = HotSwapProgress::channel();
     let v2_result = wafer_core::orchestrator::hotswap::prepare_transform_swap_timed(
         engine,
         &v2_bytes,
@@ -141,25 +158,35 @@ async fn hotswap_process_time_rollback() {
         .send_swap("transform", timed_swap.payload)
         .expect("send_swap");
 
-    // Wait for the rollback to happen — the canary detects the trap and rolls back
-    // Give it up to 10 seconds (the canary window)
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-    let mut rollback_detected = false;
-
-    while tokio::time::Instant::now() < deadline {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Some(m) = handle.node_metrics("transform") {
-            if m.rollbacks() > 0 {
-                rollback_detected = true;
-                break;
-            }
+    // B1 (A17): the API caller must receive `RolledBack`, NOT a fabricated
+    // `swap_converged`. Await the completion channel with the 10s canary
+    // window budget. Before this fix the runner would drop the sender
+    // silently and the next v1 message would call mark_first_v2, so this
+    // await would return `Ok(swap_converged)`.
+    let outcome = tokio::time::timeout(Duration::from_secs(10), rx)
+        .await
+        .expect("progress must complete within canary window")
+        .expect("progress sender must not be dropped");
+    match outcome {
+        Err(HotSwapError::RolledBack { rollback_time_ns, ref reason }) => {
+            assert!(
+                rollback_time_ns > 0,
+                "rollback_time_ns must be populated in production path (M1), got 0"
+            );
+            assert!(
+                reason.contains("intentional trap") || reason.contains("panic") || reason.contains("unreachable") || reason.contains("trap"),
+                "rollback reason should mention the trap origin, got: {reason}"
+            );
         }
+        other => panic!("B1: expected RolledBack outcome, got {other:?}"),
     }
 
-    assert!(
-        rollback_detected,
-        "Expected rollback metric > 0 within 10s canary window"
-    );
+    // Additionally verify the metric fired (existing behavior).
+    let rollback_detected = handle
+        .node_metrics("transform")
+        .map(|m| m.rollbacks() > 0)
+        .unwrap_or(false);
+    assert!(rollback_detected, "NodeMetrics::rollbacks() must be > 0");
 
     // After rollback, v1 should continue processing messages
     let post_rollback_processed = handle
@@ -195,11 +222,22 @@ async fn hotswap_process_time_rollback() {
     let _ = tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete()).await;
 }
 
-/// Test: bounded rollback retries — after M traps, escalate to Recovery state.
+/// Test: bounded rollback retries — canary retains trap_count across rollbacks.
 ///
-/// This test uses max_rollback_retries = 1 and verifies that the second
-/// process-time trap on v2 does NOT trigger another rollback, but instead
-/// falls through to the standard A7 recovery path.
+/// With max_rollback_retries = 1 and a v2 that traps on the first process():
+///   - First trap → record_trap increments to 1 (within budget), rollback fires.
+///   - Rollback succeeds; canary is retained (B2 fix) with trap_count = 1.
+///   - No subsequent v2 traps because v1 is now live and doesn't trap.
+///
+/// This test verifies the happy-path with a single trap. To exercise budget
+/// EXHAUSTION we'd need a fixture where v1 also traps (impossible with
+/// `pass-through` v1), so the state-machine invariant is covered by the
+/// unit tests `canary_state_bounds_trap_count` and
+/// `canary_state_record_trap_semantics_matches_model` in
+/// `crates/wafer-core/src/runner/mod.rs`.
+///
+/// See B2 in the T1 verify review notes:
+/// docs/decisions/hotswap-canary-budget.md
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hotswap_bounded_rollback_thrash() {
     if !Path::new(PASS_THROUGH_WASM).exists() {
@@ -213,7 +251,7 @@ async fn hotswap_bounded_rollback_thrash() {
 
     let tmp = tempfile::tempdir().expect("tmp dir");
     let bench_dir = tmp.path().to_path_buf();
-    unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", &bench_dir); }
+    let _env_guard = BenchDirEnv::set(&bench_dir);
 
     // Use max_rollback_retries = 1 to test exhaustion
     let toml = format!(

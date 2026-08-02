@@ -234,6 +234,33 @@ pub async fn hot_swap(
     .await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
+        Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
+            // B1 (A17): v2 ACKed and then a process-time trap triggered
+            // rollback to v1. The swap did NOT converge; report a distinct
+            // status so callers cannot mistake this for swap_converged.
+            // HTTP 200 because the runtime handled the failure end-to-end;
+            // the API's job is to report accurately, not signal a fault.
+            let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
+            let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
+            let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
+            // Record what phases we do know into the phase histogram so
+            // /metrics doesn't lose these swaps entirely.
+            orch.record_hotswap_phase("compile", &id, compile_ns);
+            orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
+            orch.record_hotswap_phase("signal", &id, signal_ns);
+            orch.record_hotswap_phase("rollback", &id, rollback_time_ns);
+            return Ok(Json(serde_json::json!({
+                "node_id": id,
+                "status": "rolled_back",
+                "reason": reason,
+                "timeline": {
+                    "compile_ns": timed_result.timeline.compile_duration_ns(),
+                    "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
+                    "signal_ns": timed_result.timeline.signal_duration_ns(),
+                    "rollback_ns": rollback_time_ns,
+                }
+            })).into_response());
+        }
         Ok(Ok(Err(err))) => {
             return Err((StatusCode::CONFLICT, err.to_string()));
         }
@@ -293,7 +320,7 @@ pub async fn hot_swap(
             "ack_ns": ack_ns,
             "convergence_ns": convergence_ns,
         }
-    })))
+    })).into_response())
 }
 
 /// POST /api/v1/nodes/:id/reconfigure — warm reconfigure via cached InstancePre
@@ -363,6 +390,22 @@ pub async fn reconfigure(
     .await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
+        Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
+            // Defensive: reconfigure does not arm the A17 canary (see
+            // `runner/transform.rs` — canary is Transform-swap-only), so
+            // this arm should be unreachable in practice. Kept so the
+            // match is exhaustive and any future canary extension to
+            // reconfigure surfaces via a distinct status instead of
+            // falling through to `swap_converged`.
+            return Ok(Json(serde_json::json!({
+                "node_id": id,
+                "status": "rolled_back",
+                "reason": reason,
+                "timeline": {
+                    "rollback_ns": rollback_time_ns,
+                }
+            })).into_response());
+        }
         Ok(Ok(Err(err))) => {
             return Err((StatusCode::CONFLICT, err.to_string()));
         }
@@ -401,7 +444,7 @@ pub async fn reconfigure(
             "ack_ns": ack_ns,
             "convergence_ns": convergence_ns,
         }
-    })))
+    })).into_response())
 }
 
 /// POST /api/v1/pipeline/shutdown — trigger graceful shutdown

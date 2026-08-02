@@ -110,7 +110,8 @@ fn recovery_store(
     capabilities: Capabilities,
     memory_limit: usize,
     epoch_deadline: Option<NonZeroU64>,
-) -> Store<WaferState> {
+    fuel_limit: Option<NonZeroU64>,
+) -> Result<Store<WaferState>, WaferError> {
     let engine = old_store.engine().clone();
     let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
     let mut store = Store::new(&engine, state);
@@ -122,7 +123,18 @@ fn recovery_store(
         store.epoch_deadline_trap();
         store.set_epoch_deadline(n.get());
     }
-    store
+    // M2 (safety review): reapply fuel BEFORE the caller instantiates from
+    // the cached InstancePre. Component start functions can consume fuel
+    // during `instantiate`; if the store's fuel is still 0 (default), the
+    // guest traps on its first fuel-checking instruction. `validate_and_init`
+    // resets fuel later but only AFTER instantiation completes, which is
+    // too late for start-function fuel consumption on fuel-enabled configs.
+    if let Some(n) = fuel_limit {
+        store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
+            message: format!("recovery fuel reset for '{node_id}' failed: {e}"),
+        })?;
+    }
+    Ok(store)
 }
 
 // =============================================================================
@@ -202,7 +214,8 @@ impl WasmTransformNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
             message: format!("transform '{node_id}' recovery instantiation failed: {e}"),
         })?;
@@ -223,7 +236,8 @@ impl WasmTransformNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
             message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
         })?;
@@ -477,7 +491,8 @@ impl WasmFilterNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
             message: format!("filter '{node_id}' recovery instantiation failed: {e}"),
         })?;
@@ -497,7 +512,8 @@ impl WasmFilterNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
             message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
         })?;
@@ -725,7 +741,8 @@ impl WasmRouterNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
             message: format!("router '{node_id}' recovery instantiation failed: {e}"),
         })?;
@@ -745,7 +762,8 @@ impl WasmRouterNode {
             self.capabilities,
             self.memory_limit,
             self.epoch_deadline,
-        );
+            self.fuel_limit,
+        )?;
         let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
             message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
         })?;

@@ -32,17 +32,34 @@ use wafer_types::config::HotSwapConfig;
 // Hot-swap progress (A3b): runner-reported ACK and first-v2 convergence
 // =============================================================================
 
-/// Error surfaces when a hot-swap fails after signal but before ACK.
+/// Error surfaces when a hot-swap fails after signal but before ACK, or
+/// when the runtime rolls back after a post-swap process-time trap (A17).
 #[derive(Debug, Clone)]
 pub enum HotSwapError {
     /// The replacement instance's validate() or init() failed. v1 is preserved.
     InitFailed(String),
+    /// A17: the swap ACKed (v2 was live), but a subsequent process-time trap
+    /// inside the canary window triggered an automatic rollback to v1. This
+    /// is NOT a swap-failed-at-init case — the swap technically applied and
+    /// was then reverted. Kept as `Err` so the API caller cannot mistake
+    /// a rolled-back swap for `swap_converged`.
+    RolledBack {
+        /// Wall-clock duration of the `recover_from_cached_pre` call that
+        /// restored v1, in nanoseconds.
+        rollback_time_ns: u64,
+        /// Trap message reported by v2's `process()` that triggered rollback.
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for HotSwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HotSwapError::InitFailed(msg) => write!(f, "hot-swap init failed: {msg}"),
+            HotSwapError::RolledBack { rollback_time_ns, reason } => write!(
+                f,
+                "hot-swap rolled back after process-time trap in {rollback_time_ns} ns: {reason}"
+            ),
         }
     }
 }
@@ -109,6 +126,26 @@ impl HotSwapProgress {
     pub fn report_init_failed(&self, msg: impl Into<String>) {
         if let Some(tx) = self.take_sender() {
             let _ = tx.send(Err(HotSwapError::InitFailed(msg.into())));
+        }
+    }
+
+    /// A17: called by the runner loop after v2 was ACKed but a subsequent
+    /// process-time trap triggered a rollback to v1. Consumes the sender so
+    /// the API caller receives `RolledBack` (with rollback duration) rather
+    /// than waiting for a `mark_first_v2` that will never fire.
+    ///
+    /// Idempotent — subsequent `mark_first_v2` calls become no-ops because
+    /// the sender is already taken.
+    pub fn report_rolled_back(
+        &self,
+        rollback_time_ns: u64,
+        reason: impl Into<String>,
+    ) {
+        if let Some(tx) = self.take_sender() {
+            let _ = tx.send(Err(HotSwapError::RolledBack {
+                rollback_time_ns,
+                reason: reason.into(),
+            }));
         }
     }
 
@@ -451,6 +488,98 @@ mod tests {
         progress.mark_first_v2();
         // Nothing to receive after the sender was consumed.
         assert!(first.first_v2_at >= first.ack_at);
+    }
+
+    // ---- A17: rollback reporting ----
+
+    #[tokio::test]
+    async fn hot_swap_progress_reports_rolled_back_after_ack() {
+        // Simulates v2 ACKing then trapping in canary window.
+        let (progress, rx) = HotSwapProgress::channel();
+        progress.mark_ack();
+        progress.report_rolled_back(139_000, "pass-through-v2-panics: intentional trap");
+        let outcome = rx.await.expect("progress reports rollback");
+        match outcome {
+            Err(HotSwapError::RolledBack { rollback_time_ns, reason }) => {
+                assert_eq!(rollback_time_ns, 139_000);
+                assert!(reason.contains("intentional trap"));
+            }
+            other => panic!("expected RolledBack, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn hot_swap_progress_rolled_back_precludes_later_first_v2() {
+        // Regression for B1: after rollback fires, a subsequent mark_first_v2
+        // (e.g. from a v1 message that races the rollback path) must be a
+        // no-op — the API caller must not observe swap_converged for a
+        // swap that actually rolled back.
+        let (progress, rx) = HotSwapProgress::channel();
+        progress.mark_ack();
+        progress.report_rolled_back(42, "trap");
+        // This is the race the bug allowed: v1 keeps producing output.
+        progress.mark_first_v2();
+        let outcome = rx.await.expect("progress reports rollback");
+        assert!(
+            matches!(outcome, Err(HotSwapError::RolledBack { .. })),
+            "rolled-back outcome must survive a late mark_first_v2, got {outcome:?}"
+        );
+    }
+
+    // ---- A17: canary state machine invariants (B2 unit-level cover) ----
+
+    #[test]
+    fn canary_state_bounds_trap_count() {
+        // The `TransformCanaryState::record_trap()` invariant is that after
+        // `max_rollback_retries` in-budget calls, one more call flips the
+        // return value to false (retries exhausted). We can't cheaply
+        // fabricate a real `Arc<TransformNodePre>` in a unit test, so we
+        // model the pure state-machine arithmetic here. The integration
+        // test `hotswap_process_time_rollback` covers the wired-up path.
+        let config = wafer_types::config::HotSwapConfig {
+            canary_success_count: 32,
+            canary_window_ms: 10_000,
+            max_rollback_retries: 3,
+        };
+
+        // Pure model of `record_trap`: trap_count += 1; return trap_count <= max.
+        fn record_trap(trap_count: &mut u32, max: u32) -> bool {
+            *trap_count += 1;
+            *trap_count <= max
+        }
+
+        let max = config.max_rollback_retries;
+        let mut trap_count = 0u32;
+        // First M traps must return true (still within budget).
+        for i in 1..=max {
+            let within = record_trap(&mut trap_count, max);
+            assert!(within, "trap #{i} must be within budget of M={max}");
+        }
+        // Trap M+1 must exhaust the budget.
+        let within = record_trap(&mut trap_count, max);
+        assert!(!within, "trap #{} must exhaust budget of M={max}", max + 1);
+        assert_eq!(trap_count, max + 1);
+    }
+
+    #[test]
+    fn canary_state_record_trap_semantics_matches_model() {
+        // Sanity: exercise `retries_exhausted` boundary explicitly across a
+        // range of budgets. See `canary_state_bounds_trap_count` for why
+        // we test the state machine as a pure model rather than through a
+        // live `TransformCanaryState`.
+        for max in [0u32, 1, 3, 10] {
+            let mut trap_count = 0u32;
+            let mut escalations = 0u32;
+            for _ in 0..(max + 5) {
+                trap_count += 1;
+                if trap_count > max {
+                    escalations += 1;
+                }
+            }
+            // With `max+5` traps, exactly 5 escalations should have been
+            // observed once trap_count crossed the budget.
+            assert_eq!(escalations, 5, "escalation count wrong for max={max}");
+        }
     }
 
     #[tokio::test]

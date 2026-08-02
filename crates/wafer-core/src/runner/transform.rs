@@ -76,6 +76,7 @@ pub async fn run_transform_loop_with_config(
 
                 // Retain v1 InstancePre BEFORE applying swap (for rollback)
                 let v1_pre = transform.as_wasm_mut().map(|w| w.cached_pre().clone());
+                let is_reconfigure = matches!(payload, SwapPayload::Reconfigure { .. });
 
                 let result = match payload {
                     SwapPayload::Reconfigure { ref new_config_json, .. } => {
@@ -91,13 +92,26 @@ pub async fn run_transform_loop_with_config(
                         progress.mark_ack();
                         pending_swap_progress = Some(progress);
                         metrics.record_swap();
-                        // Install canary snapshot for process-time rollback (A17)
-                        // Drop any previous canary (new swap supersedes)
-                        if let Some(pre) = v1_pre {
-                            canary = Some(TransformCanaryState::new(
-                                pre,
-                                hot_swap_config.clone(),
-                            ));
+                        // Install canary snapshot for process-time rollback (A17).
+                        //
+                        // Only arm canary for full Transform swaps. Reconfigure
+                        // reuses the same InstancePre and mutates `config_json`
+                        // in place inside `try_reconfigure`, so canary rollback
+                        // (which re-runs `validate_and_init(&self.config_json)`)
+                        // would re-apply the reconfigure, not restore v1 config.
+                        // Reconfigure has its own atomic rollback inside
+                        // `try_reconfigure` for the init-failure case.
+                        //
+                        // Drop any previous canary (new swap supersedes).
+                        if !is_reconfigure {
+                            if let Some(pre) = v1_pre {
+                                canary = Some(TransformCanaryState::new(
+                                    pre,
+                                    hot_swap_config.clone(),
+                                ));
+                            }
+                        } else {
+                            canary = None;
                         }
                     }
                     Err(err) => {
@@ -167,6 +181,7 @@ pub async fn run_transform_loop_with_config(
                             node = transform.node_id(),
                             error = %msg,
                             trap_count = c.trap_count,
+                            max_rollback_retries = c.config.max_rollback_retries,
                             "process-time trap during canary window — rolling back to v1"
                         );
                         state.transition_to_error();
@@ -182,6 +197,8 @@ pub async fn run_transform_loop_with_config(
                                 tracing::info!(
                                     node = transform.node_id(),
                                     rollback_time_ns = rollback_ns,
+                                    trap_count = c.trap_count,
+                                    max_rollback_retries = c.config.max_rollback_retries,
                                     "process-time rollback to v1 succeeded"
                                 );
                                 state.transition_to_recovering();
@@ -189,16 +206,44 @@ pub async fn run_transform_loop_with_config(
                                     metrics.record_recovery(duration_ns);
                                 }
                                 metrics.record_rollback();
-                                // Consume snapshot — single-shot rollback complete
-                                canary = None;
+                                // B1: notify the API caller with a RolledBack
+                                // outcome (not swap_converged) BEFORE the
+                                // next v1 message could call mark_first_v2.
+                                // Taking the progress ensures the sender is
+                                // consumed — subsequent mark_first_v2 calls
+                                // become no-ops.
+                                if let Some(progress) = pending_swap_progress.take() {
+                                    progress.report_rolled_back(rollback_ns, msg.clone());
+                                }
+                                // B2: intentionally do NOT drop canary here.
+                                // trap_count remains so a subsequent trap
+                                // inside the canary window counts toward
+                                // max_rollback_retries. Once trap_count
+                                // exceeds M, record_trap() returns false and
+                                // the escalation branch below drops canary.
+                                //
+                                // The snapshot itself is still valid — v1
+                                // pre is idempotent, so re-instantiating it
+                                // on a future trap is safe.
                                 continue;
                             }
                             Err(error) => {
                                 tracing::error!(
                                     node = transform.node_id(),
                                     %error,
+                                    trap_count = c.trap_count,
                                     "process-time rollback failed — escalating to recovery"
                                 );
+                                // B1: rollback attempt itself failed —
+                                // the API caller should still learn the
+                                // swap did not converge. Report with
+                                // rollback_time_ns=0 to signal the failure.
+                                if let Some(progress) = pending_swap_progress.take() {
+                                    progress.report_rolled_back(
+                                        0,
+                                        format!("rollback failed: {error}"),
+                                    );
+                                }
                                 // Fallthrough to standard recovery
                                 canary = None;
                             }
@@ -209,8 +254,20 @@ pub async fn run_transform_loop_with_config(
                             node = transform.node_id(),
                             error = %msg,
                             trap_count = c.trap_count,
+                            max_rollback_retries = c.config.max_rollback_retries,
                             "canary rollback retries exhausted — escalating to recovery"
                         );
+                        // B1: also notify the API caller that the swap did
+                        // not converge. rollback_time_ns=0 marks the escalation.
+                        if let Some(progress) = pending_swap_progress.take() {
+                            progress.report_rolled_back(
+                                0,
+                                format!(
+                                    "canary budget exhausted after {} traps (max={}): {}",
+                                    c.trap_count, c.config.max_rollback_retries, msg
+                                ),
+                            );
+                        }
                         canary = None;
                     }
                 }
