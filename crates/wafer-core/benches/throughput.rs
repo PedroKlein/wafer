@@ -5,6 +5,7 @@
     clippy::print_stderr,
     clippy::as_conversions,
     clippy::arithmetic_side_effects,
+    clippy::cast_sign_loss,
     clippy::indexing_slicing,
     clippy::significant_drop_tightening,
     reason = "benchmark harness: timing math, diagnostic output, and convenience patterns are acceptable"

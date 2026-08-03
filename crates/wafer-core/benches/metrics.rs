@@ -3,6 +3,7 @@
     clippy::as_conversions,
     clippy::arithmetic_side_effects,
     clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
     clippy::indexing_slicing,
     reason = "benchmark harness: timing math, unwraps on known-good fixtures, and indexed bucket access are acceptable"
 )]
