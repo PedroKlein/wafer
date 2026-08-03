@@ -341,7 +341,10 @@ pub type MetricsHandle = Arc<MetricsRegistry>;
 #[expect(
     clippy::unwrap_used,
     clippy::significant_drop_tightening,
-    reason = "test code: unwrap is acceptable in tests; MutexGuards intentionally held for assertion scope"
+    clippy::string_slice,
+    clippy::option_if_let_else,
+    clippy::indexing_slicing,
+    reason = "test code: unwrap is acceptable; MutexGuards intentionally held; string parsing uses ASCII-safe byte offsets"
 )]
 mod tests {
     use super::*;
