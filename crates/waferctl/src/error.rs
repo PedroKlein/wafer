@@ -154,8 +154,8 @@ pub fn classify_error(err: anyhow::Error) -> CliError {
 /// Result type for CLI operations.
 pub type Result<T> = std::result::Result<T, CliError>;
 
-/// Extension trait for converting anyhow errors to CliError.
-#[allow(dead_code)]
+/// Extension trait for converting anyhow errors to `CliError`.
+#[expect(dead_code)]
 pub trait ResultExt<T> {
     /// Convert to CLI result with error classification.
     fn classify(self) -> Result<T>;

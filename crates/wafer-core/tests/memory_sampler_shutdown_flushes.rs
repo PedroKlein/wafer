@@ -1,4 +1,4 @@
-//! Integration test: MemoryRecorder flushes samples on cancel-safe shutdown.
+//! Integration test: `MemoryRecorder` flushes samples on cancel-safe shutdown.
 //!
 //! AC4: SIGTERM flushes memory.csv cleanly.
 //! Spawns the sampler, cancels after a brief window, verifies samples were
@@ -9,8 +9,8 @@ use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use wafer_core::bench::MemoryRecorder;
 
-/// Verify that MemoryRecorder collects samples and produces valid CSV on
-/// cancel-safe shutdown (simulating SIGTERM → CancellationToken::cancel).
+/// Verify that `MemoryRecorder` collects samples and produces valid CSV on
+/// cancel-safe shutdown (simulating SIGTERM → `CancellationToken::cancel`).
 #[tokio::test]
 async fn memory_sampler_shutdown_flushes() {
     let cancel = CancellationToken::new();

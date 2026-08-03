@@ -186,6 +186,6 @@ mod tests {
         let source = PluginSource::local("/nonexistent/path.wasm");
         let result = registry.resolve(&source).await;
 
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

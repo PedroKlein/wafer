@@ -130,7 +130,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
             }
 
             total
-        })
+        });
     });
 
     // Reused engine (realistic hot-swap): compile + pre-instantiate + instantiate
@@ -163,7 +163,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
             }
 
             total
-        })
+        });
     });
 
     group.finish();
@@ -217,7 +217,7 @@ fn bench_prepare_target(c: &mut Criterion) {
             }
 
             total
-        })
+        });
     });
 
     group.finish();
@@ -227,9 +227,9 @@ fn bench_prepare_target(c: &mut Criterion) {
         return;
     }
 
-    let failures: Vec<_> = times.iter().filter(|d| d.as_millis() > TARGET_MS as u128).collect();
-    let mut sorted: Vec<_> = times.iter().map(|d| d.as_micros()).collect();
-    sorted.sort();
+    let failures: Vec<_> = times.iter().filter(|d| d.as_millis() > u128::from(TARGET_MS)).collect();
+    let mut sorted: Vec<_> = times.iter().map(std::time::Duration::as_micros).collect();
+    sorted.sort_unstable();
 
     let avg = sorted.iter().sum::<u128>() / sorted.len() as u128;
     let p50 = sorted[sorted.len() / 2];

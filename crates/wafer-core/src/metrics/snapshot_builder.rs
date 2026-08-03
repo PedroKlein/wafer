@@ -105,7 +105,7 @@ impl MetricsRegistry {
         base_labels: &HashMap<String, String>,
     ) {
         let queues = self.queue_metrics.read().unwrap();
-        for (_queue_id, metrics) in queues.iter() {
+        for metrics in queues.values() {
             let mut labels = base_labels.clone();
             labels.insert("from".to_string(), metrics.from_node.clone());
             labels.insert("to".to_string(), metrics.to_node.clone());
@@ -154,7 +154,7 @@ impl MetricsRegistry {
         base_labels: &HashMap<String, String>,
     ) {
         let sinks = self.sink_metrics.read().unwrap();
-        for (_sink_id, metrics) in sinks.iter() {
+        for metrics in sinks.values() {
             let mut labels = base_labels.clone();
             labels.insert("sink".to_string(), metrics.sink_id.clone());
 

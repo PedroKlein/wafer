@@ -17,7 +17,7 @@ use serde::Serialize;
 
 #[derive(Args, Debug)]
 pub struct HdrSummaryArgs {
-    /// Path to a `latency.hdr` interval log (as written by BenchSink or
+    /// Path to a `latency.hdr` interval log (as written by `BenchSink` or
     /// `wafer-loadgen subscribe`).
     #[arg(long, value_name = "PATH")]
     pub hdr: PathBuf,
@@ -85,7 +85,7 @@ pub fn run(args: HdrSummaryArgs) -> Result<()> {
         }
     }
 
-    if agg.len() == 0 {
+    if agg.is_empty() {
         // Empty run — still emit a valid summary so downstream tooling
         // never sees `null`. Callers must gate on `total_count`.
         let summary = Summary {
@@ -141,7 +141,7 @@ fn write_summary(summary: &Summary, output: Option<&std::path::Path>, pretty: bo
 }
 
 /// Minimal STANDARD base64 decoder — avoids a workspace-dep on
-/// `base64` here; the Rust HdrHistogram serialiser emits STANDARD.
+/// `base64` here; the Rust `HdrHistogram` serialiser emits STANDARD.
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;

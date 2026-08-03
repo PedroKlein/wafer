@@ -167,7 +167,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
                     }
 
                     total
-                })
+                });
             },
         );
     }
@@ -199,7 +199,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
                         }
 
                         total
-                    })
+                    });
                 },
             );
         }
@@ -248,7 +248,7 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
                 }
 
                 total
-            })
+            });
         });
     }
 
@@ -283,7 +283,7 @@ fn bench_transform_latency(c: &mut Criterion) {
                 black_box(out);
             }
             start.elapsed()
-        })
+        });
     });
 
     group.finish();

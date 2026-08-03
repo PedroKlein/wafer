@@ -23,13 +23,13 @@ impl WaferBuffer {
     /// # Performance
     /// `Bytes::clone()` is an Arc refcount bump — no allocation or copy.
     #[inline]
-    pub fn new(data: Bytes) -> Self {
+    pub const fn new(data: Bytes) -> Self {
         Self { data }
     }
 
     /// Total byte length of the payload.
     #[inline]
-    pub fn size(&self) -> u64 {
+    pub const fn size(&self) -> u64 {
         self.data.len() as u64
     }
 
@@ -54,7 +54,7 @@ impl WaferBuffer {
 
     /// Borrow the underlying bytes without copying.
     #[inline]
-    pub fn as_bytes(&self) -> &Bytes {
+    pub const fn as_bytes(&self) -> &Bytes {
         &self.data
     }
 }

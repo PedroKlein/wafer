@@ -8,8 +8,8 @@
 //!
 //! 1. A healthy transform (pass-through) processes a message
 //!    successfully *before* the attack.
-//! 2. Loading and invoking the attack plugin yields a WasmProcessError
-//!    from the same PluginTestHarness. We do NOT assert on the exact
+//! 2. Loading and invoking the attack plugin yields a `WasmProcessError`
+//!    from the same `PluginTestHarness`. We do NOT assert on the exact
 //!    trap text (varies with wasmtime version) but we DO assert the
 //!    error kind is one of the expected containment variants:
 //!    * `Unrecoverable`  — trap (unreachable, OOB memory, etc.)
@@ -91,15 +91,15 @@ const ATK_PANIC: &str = concat!(
 /// artificially-tight cap.
 const MEMORY_EXHAUST_LIMIT: usize = 4 * 1024 * 1024; // 4 MiB
 
-/// Classification of a WasmProcessError kind for readable assertions.
+/// Classification of a `WasmProcessError` kind for readable assertions.
 #[derive(Debug, PartialEq, Eq)]
 enum ContainedAs {
     /// Trap-like: `Unrecoverable(_)` — buffer overflow, cross-read,
-    /// panic, StoreLimits cap.
+    /// panic, `StoreLimits` cap.
     Trap,
     /// Fuel/epoch interruption: `TimedOut` — infinite loop when the
     /// epoch deadline fires. Fuel-exhaustion also lands here as long
-    /// as the map_trap heuristic sees an "interrupt"/"epoch" string.
+    /// as the `map_trap` heuristic sees an "interrupt"/"epoch" string.
     TimedOut,
 }
 
@@ -247,13 +247,13 @@ fn infinite_loop_contained() {
     );
 }
 
-/// S4: memory-exhaust — allocates 1 MiB chunks in a loop. StoreLimits
+/// S4: memory-exhaust — allocates 1 MiB chunks in a loop. `StoreLimits`
 /// with a 4 MiB cap must fire before the OS OOMs the test harness.
 ///
 /// This test also carries AC2's explicit assertion: the trap message
 /// must reference the memory cap. Because wasmtime's exact wording
 /// changes between versions we accept any of the substrings the
-/// upstream StoreLimits::memory_growing implementation has used in
+/// upstream `StoreLimits::memory_growing` implementation has used in
 /// recent releases.
 #[test]
 fn memory_exhaust_contained() {
@@ -301,7 +301,7 @@ fn memory_exhaust_contained() {
 /// the read succeeded or the `unwrap_or_else` returned "access
 /// denied"), yielding a trap either way. This test asserts the trap
 /// happens without asserting on which branch produced it — the
-/// safety property is "no successful FS read AND process() did not
+/// safety property is "no successful FS read AND `process()` did not
 /// return Ok", which is exactly what containment means.
 #[test]
 fn fs_access_contained() {

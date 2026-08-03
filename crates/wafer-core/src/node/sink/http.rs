@@ -66,7 +66,7 @@ impl HttpSink {
 
     /// Set the request timeout.
     #[must_use]
-    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+    pub const fn with_timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
     }
@@ -304,10 +304,10 @@ mod tests {
     #[test]
     fn test_http_sink_validate_success() {
         let sink = HttpSink::new("test-sink", "http://localhost:8080/api");
-        assert!(sink.validate().is_ok());
+        sink.validate().unwrap();
 
         let sink_https = HttpSink::new("test-sink", "https://example.com/api");
-        assert!(sink_https.validate().is_ok());
+        sink_https.validate().unwrap();
     }
 
     #[test]

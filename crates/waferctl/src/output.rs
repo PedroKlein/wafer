@@ -78,7 +78,7 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .collect();
 
         let table = Table::new(rows).to_string();
-        println!("{}", table);
+        println!("{table}");
     } else {
         let rows: Vec<NodeRow> = nodes
             .iter()
@@ -92,7 +92,7 @@ pub fn print_nodes(nodes: &[NodeInfo], wide: bool) {
             .collect();
 
         let table = Table::new(rows).to_string();
-        println!("{}", table);
+        println!("{table}");
     }
 }
 
@@ -115,10 +115,10 @@ pub fn print_hot_swap_result(result: &HotSwapResult) {
     println!();
     println!("Timing:");
     if let Some(compile_ns) = result.timeline.compile_ns {
-        println!("  Compile:     {} ns", compile_ns);
+        println!("  Compile:     {compile_ns} ns");
     }
     if let Some(instantiate_ns) = result.timeline.instantiate_ns {
-        println!("  Instantiate: {} ns", instantiate_ns);
+        println!("  Instantiate: {instantiate_ns} ns");
     }
 }
 
@@ -135,7 +135,7 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
             println!("  {} - {}", name, metric.description);
             for value in &metric.values {
                 let labels: Vec<String> =
-                    value.labels.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+                    value.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {
@@ -152,7 +152,7 @@ pub fn print_metrics(metrics: &MetricsSnapshot) {
             println!("  {} - {}", name, metric.description);
             for value in &metric.values {
                 let labels: Vec<String> =
-                    value.labels.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
+                    value.labels.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 if labels.is_empty() {
                     println!("    {}", value.value);
                 } else {

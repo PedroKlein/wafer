@@ -351,7 +351,7 @@ mod tests {
     #[test]
     fn test_mqtt_sink_validate_success() {
         let sink = MqttSink::new("test-sink", "localhost", 1883, "test/topic", 1, "test-client");
-        assert!(sink.validate().is_ok());
+        sink.validate().unwrap();
     }
 
     #[tokio::test]

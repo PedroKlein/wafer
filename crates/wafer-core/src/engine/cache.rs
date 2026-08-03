@@ -17,7 +17,7 @@ use crate::error::{Result, WaferError};
 
 /// Wasmtime major version embedded in cache keys.
 /// Prevents loading serialized modules from incompatible engine versions.
-fn wasmtime_version_major() -> &'static str {
+const fn wasmtime_version_major() -> &'static str {
     env!("CARGO_PKG_VERSION_MAJOR")
 }
 
@@ -123,13 +123,10 @@ impl ComponentCache {
 
         // SAFETY: These bytes were produced by our own serialize() and stored
         // in a directory we control. We never accept external .cwasm files.
-        match unsafe { Component::deserialize(engine, &bytes) } {
-            Ok(component) => Ok(Some(component)),
-            Err(_) => {
-                // Stale/incompatible cache entry (wasmtime version change) — evict
-                let _ = std::fs::remove_file(&path);
-                Ok(None)
-            }
+        if let Ok(component) = unsafe { Component::deserialize(engine, &bytes) } { Ok(Some(component)) } else {
+            // Stale/incompatible cache entry (wasmtime version change) — evict
+            let _ = std::fs::remove_file(&path);
+            Ok(None)
         }
     }
 

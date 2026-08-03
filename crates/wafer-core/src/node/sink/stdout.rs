@@ -245,7 +245,7 @@ mod tests {
     #[test]
     fn test_stdout_sink_validate_success() {
         let sink = StdoutSink::new("test-sink");
-        assert!(sink.validate().is_ok());
+        sink.validate().unwrap();
     }
 
     #[tokio::test]

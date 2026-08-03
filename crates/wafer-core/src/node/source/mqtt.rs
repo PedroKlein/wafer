@@ -60,7 +60,7 @@ impl MqttSource {
         &self.topic
     }
 
-    fn map_qos(qos: u8) -> QoS {
+    const fn map_qos(qos: u8) -> QoS {
         match qos {
             0 => QoS::AtMostOnce,
             1 => QoS::AtLeastOnce,
@@ -234,7 +234,7 @@ mod tests {
     fn test_mqtt_source_validate_success() {
         let source =
             MqttSource::new("test-mqtt", "localhost", 1883, "test/topic", 1, "test-client");
-        assert!(source.validate().is_ok());
+        source.validate().unwrap();
     }
 
     #[tokio::test]

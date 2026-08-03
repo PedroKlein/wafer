@@ -70,7 +70,7 @@ impl ProcessError {
         Self { code: code.into(), message: message.into(), retriable: false }
     }
 
-    pub fn retriable(mut self) -> Self {
+    pub const fn retriable(mut self) -> Self {
         self.retriable = true;
         self
     }

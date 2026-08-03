@@ -128,7 +128,7 @@ impl WaferClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Request failed with status {}: {}", status, body);
+            anyhow::bail!("Request failed with status {status}: {body}");
         }
 
         response.text().await.context("Failed to read response")
@@ -157,7 +157,7 @@ impl WaferClient {
             if let Ok(err) = response.json::<ErrorResponse>().await {
                 anyhow::bail!("{}", err.error.message);
             }
-            anyhow::bail!("Request failed with status {}", status);
+            anyhow::bail!("Request failed with status {status}");
         }
 
         Ok(())
@@ -170,7 +170,7 @@ impl WaferClient {
             if let Ok(err) = response.json::<ErrorResponse>().await {
                 anyhow::bail!("{}", err.error.message);
             }
-            anyhow::bail!("Request failed with status {}", status);
+            anyhow::bail!("Request failed with status {status}");
         }
 
         response.json().await.context("Failed to parse response")

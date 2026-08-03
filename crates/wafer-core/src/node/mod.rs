@@ -42,25 +42,25 @@ pub enum AnyNode {
 impl fmt::Debug for AnyNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AnyNode::Transform(t, tracker) => f
+            Self::Transform(t, tracker) => f
                 .debug_struct("AnyNode::Transform")
                 .field("id", &t.id())
                 .field("node_type", &t.node_type())
                 .field("state", &tracker.state())
                 .finish(),
-            AnyNode::Source(s, tracker) => f
+            Self::Source(s, tracker) => f
                 .debug_struct("AnyNode::Source")
                 .field("id", &s.id())
                 .field("node_type", &s.node_type())
                 .field("state", &tracker.state())
                 .finish(),
-            AnyNode::Sink(s, tracker) => f
+            Self::Sink(s, tracker) => f
                 .debug_struct("AnyNode::Sink")
                 .field("id", &s.id())
                 .field("node_type", &s.node_type())
                 .field("state", &tracker.state())
                 .finish(),
-            AnyNode::Router(r, tracker) => f
+            Self::Router(r, tracker) => f
                 .debug_struct("AnyNode::Router")
                 .field("id", &r.id())
                 .field("node_type", &r.node_type())
@@ -73,7 +73,7 @@ impl fmt::Debug for AnyNode {
 impl AnyNode {
     #[must_use]
     pub fn from_transform(t: impl Transform + 'static) -> Self {
-        AnyNode::Transform(Box::new(t), Arc::new(NodeStateTracker::new()))
+        Self::Transform(Box::new(t), Arc::new(NodeStateTracker::new()))
     }
 
     #[must_use]
@@ -81,33 +81,33 @@ impl AnyNode {
         t: impl Transform + 'static,
         tracker: Arc<NodeStateTracker>,
     ) -> Self {
-        AnyNode::Transform(Box::new(t), tracker)
+        Self::Transform(Box::new(t), tracker)
     }
 
     /// Wrap a source node in the `AnyNode` enum.
     #[must_use]
     pub fn from_source(s: impl Source + 'static) -> Self {
-        AnyNode::Source(Box::new(s), Arc::new(NodeStateTracker::new()))
+        Self::Source(Box::new(s), Arc::new(NodeStateTracker::new()))
     }
 
     #[must_use]
     pub fn from_sink(s: impl Sink + 'static) -> Self {
-        AnyNode::Sink(Box::new(s), Arc::new(NodeStateTracker::new()))
+        Self::Sink(Box::new(s), Arc::new(NodeStateTracker::new()))
     }
 
     #[must_use]
     pub fn from_router(r: impl Router + 'static) -> Self {
-        AnyNode::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
+        Self::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
     }
 
 
     #[must_use]
     pub fn id(&self) -> &str {
         match self {
-            AnyNode::Transform(t, _) => t.id(),
-            AnyNode::Source(s, _) => s.id(),
-            AnyNode::Sink(s, _) => s.id(),
-            AnyNode::Router(r, _) => r.id(),
+            Self::Transform(t, _) => t.id(),
+            Self::Source(s, _) => s.id(),
+            Self::Sink(s, _) => s.id(),
+            Self::Router(r, _) => r.id(),
         }
     }
 
@@ -118,12 +118,12 @@ impl AnyNode {
     }
 
     #[must_use]
-    pub fn state_tracker(&self) -> &Arc<NodeStateTracker> {
+    pub const fn state_tracker(&self) -> &Arc<NodeStateTracker> {
         match self {
-            AnyNode::Transform(_, tracker)
-            | AnyNode::Source(_, tracker)
-            | AnyNode::Sink(_, tracker)
-            | AnyNode::Router(_, tracker) => tracker,
+            Self::Transform(_, tracker)
+            | Self::Source(_, tracker)
+            | Self::Sink(_, tracker)
+            | Self::Router(_, tracker) => tracker,
         }
     }
 
@@ -134,27 +134,27 @@ impl AnyNode {
     }
 
     #[must_use]
-    pub fn is_swappable(&self) -> bool {
-        matches!(self, AnyNode::Transform(_, _) | AnyNode::Router(_, _))
+    pub const fn is_swappable(&self) -> bool {
+        matches!(self, Self::Transform(_, _) | Self::Router(_, _))
     }
 
     /// Validate the node's configuration.
     pub fn validate(&self) -> Result<()> {
         match self {
-            AnyNode::Transform(t, _) => t.validate(),
-            AnyNode::Source(s, _) => s.validate(),
-            AnyNode::Sink(s, _) => s.validate(),
-            AnyNode::Router(r, _) => r.validate(),
+            Self::Transform(t, _) => t.validate(),
+            Self::Source(s, _) => s.validate(),
+            Self::Sink(s, _) => s.validate(),
+            Self::Router(r, _) => r.validate(),
         }
     }
 
     /// Initialize the node. Transitions state to `Running` on success, `Error` on failure.
     pub async fn init(&mut self) -> Result<()> {
         let result = match self {
-            AnyNode::Transform(t, _) => t.init().await,
-            AnyNode::Source(s, _) => s.init().await,
-            AnyNode::Sink(s, _) => s.init().await,
-            AnyNode::Router(r, _) => r.init().await,
+            Self::Transform(t, _) => t.init().await,
+            Self::Source(s, _) => s.init().await,
+            Self::Sink(s, _) => s.init().await,
+            Self::Router(r, _) => r.init().await,
         };
 
         match &result {
@@ -172,10 +172,10 @@ impl AnyNode {
     /// Gracefully close the node and release resources.
     pub async fn close(&mut self) -> Result<()> {
         match self {
-            AnyNode::Transform(t, _) => t.close().await,
-            AnyNode::Source(s, _) => s.close().await,
-            AnyNode::Sink(s, _) => s.close().await,
-            AnyNode::Router(r, _) => r.close().await,
+            Self::Transform(t, _) => t.close().await,
+            Self::Source(s, _) => s.close().await,
+            Self::Sink(s, _) => s.close().await,
+            Self::Router(r, _) => r.close().await,
         }
     }
 }
@@ -183,10 +183,10 @@ impl AnyNode {
 impl fmt::Display for AnyNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = match self {
-            AnyNode::Source(s, _) => s.node_type(),
-            AnyNode::Transform(t, _) => t.node_type(),
-            AnyNode::Sink(s, _) => s.node_type(),
-            AnyNode::Router(r, _) => r.node_type(),
+            Self::Source(s, _) => s.node_type(),
+            Self::Transform(t, _) => t.node_type(),
+            Self::Sink(s, _) => s.node_type(),
+            Self::Router(r, _) => r.node_type(),
         };
         write!(f, "{name}")
     }
@@ -269,7 +269,7 @@ impl TransformNode {
 
     /// True when this is a native baseline transform.
     #[must_use]
-    pub fn is_native(&self) -> bool {
+    pub const fn is_native(&self) -> bool {
         matches!(self, Self::Native(_))
     }
 }
@@ -351,7 +351,7 @@ impl FilterNode {
     }
 
     #[must_use]
-    pub fn is_native(&self) -> bool {
+    pub const fn is_native(&self) -> bool {
         matches!(self, Self::Native(_))
     }
 }

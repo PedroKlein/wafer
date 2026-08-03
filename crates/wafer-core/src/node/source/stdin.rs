@@ -92,7 +92,7 @@ mod tests {
     #[test]
     fn test_stdin_source_validate_always_ok() {
         let source = StdinSource::new("test-stdin");
-        assert!(source.validate().is_ok());
+        source.validate().unwrap();
     }
 
     #[tokio::test]

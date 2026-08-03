@@ -37,7 +37,7 @@ pub struct SequenceTracker {
 
 impl SequenceTracker {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             expected_next: 0,
             gaps: Vec::new(),
@@ -76,13 +76,13 @@ impl SequenceTracker {
 
     /// Number of duplicate/out-of-order messages.
     #[must_use]
-    pub fn total_duplicates(&self) -> u64 {
+    pub const fn total_duplicates(&self) -> u64 {
         self.duplicates
     }
 
     /// Total messages received (including warmup, duplicates).
     #[must_use]
-    pub fn total_received(&self) -> u64 {
+    pub const fn total_received(&self) -> u64 {
         self.total_received
     }
 
@@ -124,7 +124,7 @@ pub struct SwapTransition {
 
 impl HotSwapRecorder {
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             current_version: None,
             last_v1_time_ns: None,
@@ -239,7 +239,7 @@ impl Default for BenchSinkConfig {
 impl BenchSinkConfig {
     /// Create with zero warmup and sequence tracking (useful for tests).
     #[must_use]
-    pub fn for_test() -> Self {
+    pub const fn for_test() -> Self {
         Self {
             warmup_secs: 0,
             track_sequences: true,
@@ -394,19 +394,19 @@ impl BenchSink {
 
     /// Total messages received (including warmup).
     #[must_use]
-    pub fn message_count(&self) -> u64 {
+    pub const fn message_count(&self) -> u64 {
         self.message_count
     }
 
     /// Access the sequence tracker (if enabled).
     #[must_use]
-    pub fn sequence_tracker(&self) -> Option<&SequenceTracker> {
+    pub const fn sequence_tracker(&self) -> Option<&SequenceTracker> {
         self.sequence_tracker.as_ref()
     }
 
     /// Access the hot-swap recorder (if enabled).
     #[must_use]
-    pub fn hotswap_recorder(&self) -> Option<&HotSwapRecorder> {
+    pub const fn hotswap_recorder(&self) -> Option<&HotSwapRecorder> {
         self.hotswap_recorder.as_ref()
     }
 
@@ -418,7 +418,7 @@ impl BenchSink {
 
     /// Access the raw histogram.
     #[must_use]
-    pub fn histogram(&self) -> &Histogram<u64> {
+    pub const fn histogram(&self) -> &Histogram<u64> {
         &self.histogram
     }
 
@@ -566,8 +566,7 @@ impl BenchSink {
 
         if elapsed >= Duration::from_secs(1) {
             let elapsed_since_measurement = self.measurement_start
-                .map(|s| now.duration_since(s).as_secs_f64())
-                .unwrap_or(0.0);
+                .map_or(0.0, |s| now.duration_since(s).as_secs_f64());
 
             self.throughput_samples.push(ThroughputSample {
                 elapsed_secs: elapsed_since_measurement,

@@ -57,12 +57,12 @@ impl<T> BatchBuffer<T> {
     }
 
     #[expect(dead_code, reason = "public API for sink implementations")]
-    pub fn batch_size(&self) -> usize {
+    pub const fn batch_size(&self) -> usize {
         self.batch_size
     }
 
     #[expect(dead_code, reason = "public API for sink implementations")]
-    pub fn timeout(&self) -> Duration {
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 

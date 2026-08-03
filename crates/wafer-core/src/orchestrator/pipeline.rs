@@ -208,7 +208,7 @@ impl PipelineHandle {
     /// Read-only handle to the hot-swap metrics store for use by the
     /// /metrics HTTP handler.
     #[must_use]
-    pub fn hotswap_metrics(&self) -> &Arc<crate::metrics::types::HotSwapMetrics> {
+    pub const fn hotswap_metrics(&self) -> &Arc<crate::metrics::types::HotSwapMetrics> {
         &self.hotswap_metrics
     }
 
@@ -287,13 +287,13 @@ impl PipelineHandle {
 
     /// Access the current configuration.
     #[must_use]
-    pub fn config(&self) -> &Config {
+    pub const fn config(&self) -> &Config {
         &self.config
     }
 
     /// Access the Wasm engine (for hot-swap compilation).
     #[must_use]
-    pub fn engine(&self) -> &Arc<WaferEngine> {
+    pub const fn engine(&self) -> &Arc<WaferEngine> {
         &self.engine
     }
 }
@@ -682,19 +682,19 @@ impl PipelineOrchestrator {
 
     /// Access the current configuration.
     #[must_use]
-    pub fn config(&self) -> &Config {
+    pub const fn config(&self) -> &Config {
         &self.config
     }
 
     /// Access the cancellation token (for external shutdown triggers).
     #[must_use]
-    pub fn cancel_token(&self) -> &CancellationToken {
+    pub const fn cancel_token(&self) -> &CancellationToken {
         &self.cancel_token
     }
 
     /// Access the Wasm engine (for hot-swap compilation).
     #[must_use]
-    pub fn engine(&self) -> &Arc<WaferEngine> {
+    pub const fn engine(&self) -> &Arc<WaferEngine> {
         &self.engine
     }
 

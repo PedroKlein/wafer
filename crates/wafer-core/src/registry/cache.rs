@@ -14,7 +14,7 @@ pub struct PackageCache {
 }
 
 impl PackageCache {
-    pub fn new(cache_dir: PathBuf, ttl: Duration) -> Self {
+    pub const fn new(cache_dir: PathBuf, ttl: Duration) -> Self {
         Self { cache_dir, ttl }
     }
 

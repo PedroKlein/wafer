@@ -32,7 +32,7 @@ pub struct BenchSourceConfig {
 impl BenchSourceConfig {
     /// Create a new config with required parameters.
     #[must_use]
-    pub fn new(rate_per_sec: f64, total_messages: u64) -> Self {
+    pub const fn new(rate_per_sec: f64, total_messages: u64) -> Self {
         Self {
             rate_per_sec,
             total_messages,
@@ -43,14 +43,14 @@ impl BenchSourceConfig {
 
     /// Set the number of warmup messages.
     #[must_use]
-    pub fn with_warmup(mut self, warmup_messages: u64) -> Self {
+    pub const fn with_warmup(mut self, warmup_messages: u64) -> Self {
         self.warmup_messages = warmup_messages;
         self
     }
 
     /// Set the payload size in bytes.
     #[must_use]
-    pub fn with_payload_size(mut self, size: usize) -> Self {
+    pub const fn with_payload_size(mut self, size: usize) -> Self {
         self.payload_size = size;
         self
     }

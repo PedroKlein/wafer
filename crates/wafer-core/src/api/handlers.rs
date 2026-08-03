@@ -84,13 +84,10 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
         .keys()
         .map(|id| {
             let state = orch
-                .node_state(id)
-                .map(|s| format!("{s:?}"))
-                .unwrap_or_else(|| "Unknown".to_string());
+                .node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
             let (processed, failed) = orch
                 .node_metrics(id)
-                .map(|m| (m.processed(), m.failed()))
-                .unwrap_or((0, 0));
+                .map_or((0, 0), |m| (m.processed(), m.failed()));
             NodeInfoResponse {
                 id: id.clone(),
                 state,
@@ -111,8 +108,7 @@ pub async fn get_node(
     let state = orch.node_state(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (processed, failed) = orch
         .node_metrics(&id)
-        .map(|m| (m.processed(), m.failed()))
-        .unwrap_or((0, 0));
+        .map_or((0, 0), |m| (m.processed(), m.failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
     Ok(Json(NodeInfoResponse {

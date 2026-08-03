@@ -38,7 +38,7 @@ pub async fn run_transform_loop(
     run_transform_loop_with_config(
         transform, receiver, senders, swap_rx, policy, cancel, state, metrics,
         HotSwapConfig::default(),
-    ).await
+    ).await;
 }
 
 /// Inner transform loop with explicit hot-swap config (testable).
@@ -103,15 +103,13 @@ pub async fn run_transform_loop_with_config(
                         // `try_reconfigure` for the init-failure case.
                         //
                         // Drop any previous canary (new swap supersedes).
-                        if !is_reconfigure {
-                            if let Some(pre) = v1_pre {
-                                canary = Some(TransformCanaryState::new(
-                                    pre,
-                                    hot_swap_config.clone(),
-                                ));
-                            }
-                        } else {
+                        if is_reconfigure {
                             canary = None;
+                        } else if let Some(pre) = v1_pre {
+                            canary = Some(TransformCanaryState::new(
+                                pre,
+                                hot_swap_config.clone(),
+                            ));
                         }
                     }
                     Err(err) => {
@@ -309,7 +307,7 @@ mod tests {
     use super::*;
     use crate::runner::error_policy::ResolvedErrorPolicy;
     use tokio::sync::{mpsc, watch};
-    use std::time::Duration;
+    
 
     /// Creates test infrastructure for the transform loop.
     fn setup_transform_test() -> (
@@ -345,7 +343,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_transform_loop_shutdown_on_cancel() {
-        let (input_tx, input_rx, senders, _output_rx, _swap_tx, swap_rx, policy, cancel, state, metrics) =
+        let (input_tx, _input_rx, _senders, _output_rx, _swap_tx, _swap_rx, _policy, cancel, state, metrics) =
             setup_transform_test();
 
         // Cancel immediately — the loop should exit promptly

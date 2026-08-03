@@ -153,7 +153,7 @@ fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> error:
                 Ok(ep.clone())
             } else {
                 config.get_endpoint(ep).ok_or_else(|| {
-                    CliError::user(anyhow::anyhow!("Endpoint '{}' not found in config", ep))
+                    CliError::user(anyhow::anyhow!("Endpoint '{ep}' not found in config"))
                         .with_hint("Run 'waferctl config list' to see available endpoints.")
                 })
             }
@@ -174,22 +174,22 @@ fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()>
             config.set_endpoint(name, url);
             config.save().user_err()?;
             if json {
-                println!(r#"{{"ok": true, "message": "Endpoint '{}' set to '{}'"}}"#, name, url);
+                println!(r#"{{"ok": true, "message": "Endpoint '{name}' set to '{url}'"}}"#);
             } else {
-                println!("✓ Endpoint '{}' set to '{}'", name, url);
+                println!("✓ Endpoint '{name}' set to '{url}'");
             }
         }
         ConfigAction::Use { name } => {
             if !config.has_endpoint(name) {
-                return Err(CliError::user(anyhow::anyhow!("Endpoint '{}' not found", name))
+                return Err(CliError::user(anyhow::anyhow!("Endpoint '{name}' not found"))
                     .with_hint("Run 'waferctl config list' to see available endpoints."));
             }
             config.set_default(name);
             config.save().user_err()?;
             if json {
-                println!(r#"{{"ok": true, "message": "Default endpoint set to '{}'"}}"#, name);
+                println!(r#"{{"ok": true, "message": "Default endpoint set to '{name}'"}}"#);
             } else {
-                println!("✓ Default endpoint set to '{}'", name);
+                println!("✓ Default endpoint set to '{name}'");
             }
         }
         ConfigAction::List => {

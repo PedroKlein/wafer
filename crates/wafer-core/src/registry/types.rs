@@ -83,19 +83,19 @@ impl PluginSource {
     }
 
     #[must_use]
-    pub fn oci(reference: OciReference) -> Self {
+    pub const fn oci(reference: OciReference) -> Self {
         Self::Oci(reference)
     }
 
     #[inline]
     #[must_use]
-    pub fn is_local(&self) -> bool {
+    pub const fn is_local(&self) -> bool {
         matches!(self, Self::Local(_))
     }
 
     #[inline]
     #[must_use]
-    pub fn is_oci(&self) -> bool {
+    pub const fn is_oci(&self) -> bool {
         matches!(self, Self::Oci(_))
     }
 }
@@ -110,7 +110,7 @@ pub struct ResolvedPlugin {
 
 impl ResolvedPlugin {
     #[must_use]
-    pub fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
+    pub const fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
         Self { source, content_hash, wasm_path }
     }
 }
@@ -133,7 +133,7 @@ impl Default for RegistryConfig {
 
 impl RegistryConfig {
     #[must_use]
-    pub fn cache_ttl(&self) -> Duration {
+    pub const fn cache_ttl(&self) -> Duration {
         Duration::from_secs(self.cache_ttl_hours * 3600)
     }
 

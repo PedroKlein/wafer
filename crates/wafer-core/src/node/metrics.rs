@@ -48,7 +48,7 @@ impl Default for NodeMetrics {
 impl NodeMetrics {
     /// Create a new zeroed metrics instance.
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             processed: AtomicU64::new(0),
             failed: AtomicU64::new(0),

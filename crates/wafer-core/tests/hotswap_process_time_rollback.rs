@@ -1,13 +1,13 @@
 #![cfg(test)]
 //! A17 — Process-time hot-swap rollback integration tests.
 //!
-//! Verifies that when a v2 plugin passes validate()/init() but traps on
-//! process(), the runtime automatically rolls back to v1 within a bounded
+//! Verifies that when a v2 plugin passes `validate()/init()` but traps on
+//! `process()`, the runtime automatically rolls back to v1 within a bounded
 //! canary window.
 //!
 //! Fixture plugins:
 //! - `pass-through` (v1): passes all messages unchanged.
-//! - `pass-through-v2-panics` (v2): passes validate+init, traps on first process().
+//! - `pass-through-v2-panics` (v2): passes validate+init, traps on first `process()`.
 
 use std::path::Path;
 use std::time::Duration;
@@ -16,7 +16,7 @@ use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::runner::{HotSwapError, HotSwapProgress};
 use wafer_types::config::Config;
 
-/// RAII guard to clean up the WAFER_BENCH_OUTPUT_DIR env var on test exit
+/// RAII guard to clean up the `WAFER_BENCH_OUTPUT_DIR` env var on test exit
 /// so parallel tests don't leak state to each other.
 ///
 /// L-2 fix (2026-08-02): tests in this file previously used
@@ -72,7 +72,7 @@ const PASS_THROUGH_V2_PANICS_WASM: &str = concat!(
 );
 
 /// Build a pipeline config with a single pass-through transform node,
-/// BenchSource emitting `total_messages` at high rate, BenchSink recording.
+/// `BenchSource` emitting `total_messages` at high rate, `BenchSink` recording.
 fn build_config(total_messages: u64) -> Config {
     let toml = format!(
         r#"
@@ -97,7 +97,7 @@ payload_size = 64
 
 [nodes.transform]
 type = "transform"
-plugin = {plugin:?}
+plugin = {PASS_THROUGH_WASM:?}
 plugin_version = "1.0.0"
 
 [nodes.sink]
@@ -115,7 +115,6 @@ to = "transform"
 from = "transform"
 to = "sink"
 "#,
-        plugin = PASS_THROUGH_WASM,
     );
     toml::from_str(&toml).expect("inline config must parse")
 }
@@ -127,7 +126,7 @@ to = "sink"
 /// 2. Let a few messages flow (proves v1 works).
 /// 3. Hot-swap to pass-through-v2-panics.
 /// 4. Swap ACKs (validate + init pass).
-/// 5. v2 traps on first process().
+/// 5. v2 traps on first `process()`.
 /// 6. Assert: within 10s, subsequent messages are processed by v1 (pass-through).
 /// 7. Assert: rollback metric >= 1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -160,8 +159,7 @@ async fn hotswap_process_time_rollback() {
     // Verify v1 is processing (metrics should show > 0 processed)
     let pre_swap_processed = handle
         .node_metrics("transform")
-        .map(|m| m.processed())
-        .unwrap_or(0);
+        .map_or(0, |m| m.processed());
     assert!(pre_swap_processed > 0, "v1 should have processed messages before swap");
 
     // Prepare hot-swap payload to v2-panics
@@ -210,23 +208,20 @@ async fn hotswap_process_time_rollback() {
     // Additionally verify the metric fired (existing behavior).
     let rollback_detected = handle
         .node_metrics("transform")
-        .map(|m| m.rollbacks() > 0)
-        .unwrap_or(false);
+        .is_some_and(|m| m.rollbacks() > 0);
     assert!(rollback_detected, "NodeMetrics::rollbacks() must be > 0");
 
     // After rollback, v1 should continue processing messages
     let post_rollback_processed = handle
         .node_metrics("transform")
-        .map(|m| m.processed())
-        .unwrap_or(0);
+        .map_or(0, |m| m.processed());
 
     // Wait a bit more for additional messages to flow through v1
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     let final_processed = handle
         .node_metrics("transform")
-        .map(|m| m.processed())
-        .unwrap_or(0);
+        .map_or(0, |m| m.processed());
 
     assert!(
         final_processed > post_rollback_processed,
@@ -236,8 +231,7 @@ async fn hotswap_process_time_rollback() {
     // Verify recovery count increased (the rollback path transitions Error → Recovering → Running)
     let recovery_count = handle
         .node_metrics("transform")
-        .map(|m| m.recovery_count())
-        .unwrap_or(0);
+        .map_or(0, |m| m.recovery_count());
     assert!(
         recovery_count >= 1,
         "Expected at least 1 recovery event from rollback, got {recovery_count}"
@@ -248,16 +242,16 @@ async fn hotswap_process_time_rollback() {
     let _ = tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete()).await;
 }
 
-/// Test: bounded rollback retries — canary retains trap_count across rollbacks.
+/// Test: bounded rollback retries — canary retains `trap_count` across rollbacks.
 ///
-/// With max_rollback_retries = 1 and a v2 that traps on the first process():
-///   - First trap → record_trap increments to 1 (within budget), rollback fires.
-///   - Rollback succeeds; canary is retained (B2 fix) with trap_count = 1.
+/// With `max_rollback_retries` = 1 and a v2 that traps on the first `process()`:
+///   - First trap → `record_trap` increments to 1 (within budget), rollback fires.
+///   - Rollback succeeds; canary is retained (B2 fix) with `trap_count` = 1.
 ///   - No subsequent v2 traps because v1 is now live and doesn't trap.
 ///
 /// This test verifies the happy-path with a single trap. Budget EXHAUSTION
 /// itself is not reachable through this integration test because a swap to
-/// `v2-panics` after rollback creates a fresh canary (trap_count resets)
+/// `v2-panics` after rollback creates a fresh canary (`trap_count` resets)
 /// and v1 (`pass-through`) never traps. Instead the exhaustion boundary is
 /// exercised directly on the production `CanaryCounters` state machine in
 /// the unit tests:
@@ -312,7 +306,7 @@ payload_size = 64
 
 [nodes.transform]
 type = "transform"
-plugin = {plugin:?}
+plugin = {PASS_THROUGH_WASM:?}
 plugin_version = "1.0.0"
 
 [nodes.sink]
@@ -330,7 +324,6 @@ to = "transform"
 from = "transform"
 to = "sink"
 "#,
-        plugin = PASS_THROUGH_WASM,
     );
     let config: Config = toml::from_str(&toml).expect("parse");
     let mut orchestrator = launch_pipeline(config, None)
@@ -390,8 +383,7 @@ to = "sink"
     tokio::time::sleep(Duration::from_millis(200)).await;
     let processed_final = handle
         .node_metrics("transform")
-        .map(|m| m.processed())
-        .unwrap_or(0);
+        .map_or(0, |m| m.processed());
     assert!(
         processed_final > processed_after,
         "v1 should continue processing after rollback"

@@ -55,8 +55,8 @@ pub enum HotSwapError {
 impl std::fmt::Display for HotSwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            HotSwapError::InitFailed(msg) => write!(f, "hot-swap init failed: {msg}"),
-            HotSwapError::RolledBack { rollback_time_ns, reason } => write!(
+            Self::InitFailed(msg) => write!(f, "hot-swap init failed: {msg}"),
+            Self::RolledBack { rollback_time_ns, reason } => write!(
                 f,
                 "hot-swap rolled back after process-time trap in {rollback_time_ns} ns: {reason}"
             ),
@@ -227,17 +227,17 @@ impl CanaryCounters {
             || self.window_start.elapsed().as_millis() as u64 >= self.config.canary_window_ms
     }
 
-    pub fn retries_exhausted(&self) -> bool {
+    pub const fn retries_exhausted(&self) -> bool {
         self.trap_count > self.config.max_rollback_retries
     }
 
-    pub fn record_success(&mut self) {
+    pub const fn record_success(&mut self) {
         self.success_count += 1;
     }
 
     /// Record a trap and return whether rollback should fire.
     /// Returns true if we should roll back, false if retries exhausted.
-    pub fn record_trap(&mut self) -> bool {
+    pub const fn record_trap(&mut self) -> bool {
         self.trap_count += 1;
         !self.retries_exhausted()
     }
@@ -279,12 +279,12 @@ impl TransformCanaryState {
     }
 
     /// Check if the rollback retry budget is exhausted.
-    pub fn retries_exhausted(&self) -> bool {
+    pub const fn retries_exhausted(&self) -> bool {
         self.counters.retries_exhausted()
     }
 
     /// Record a successful process() call.
-    pub fn record_success(&mut self) {
+    pub const fn record_success(&mut self) {
         self.counters.record_success();
     }
 
@@ -365,15 +365,15 @@ impl SwapPayload {
         self,
         node: &mut crate::node::TransformNode,
     ) -> Result<(), crate::error::WaferError> {
-        if let SwapPayload::Transform { new_store, new_bindings, new_pre, .. } = self {
+        if let Self::Transform { new_store, new_bindings, new_pre, .. } = self {
             let wasm = node.as_wasm_mut().ok_or_else(|| {
                 crate::error::WaferError::Runtime(
                     "native baseline transforms do not support hot-swap".into(),
                 )
             })?;
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload bindings already consumed");
             wasm.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -384,13 +384,13 @@ impl SwapPayload {
     /// returns an error so the runner logs `hot-swap init failed; keeping
     /// v1` (parallel to the native-transform contract in [`TransformNode`]).
     pub fn try_apply_filter(self, node: &mut crate::node::FilterNode) -> Result<(), crate::error::WaferError> {
-        if let SwapPayload::Filter { new_store, new_bindings, new_pre, .. } = self {
+        if let Self::Filter { new_store, new_bindings, new_pre, .. } = self {
             let wasm = node.as_wasm_mut().ok_or_else(|| crate::error::WaferError::Runtime(
                 "native baseline filters do not support hot-swap".into(),
             ))?;
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload bindings already consumed");
             wasm.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -399,10 +399,10 @@ impl SwapPayload {
 
     /// Apply this swap payload to a router node with rollback-on-init-failure.
     pub fn try_apply_router(self, node: &mut WasmRouterNode) -> Result<(), crate::error::WaferError> {
-        if let SwapPayload::Router { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store.lock().unwrap_or_else(|e| e.into_inner()).take()
+        if let Self::Router { new_store, new_bindings, new_pre, .. } = self {
+            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(|e| e.into_inner()).take()
+            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
                 .expect("swap payload bindings already consumed");
             node.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -739,7 +739,7 @@ mod tests {
         fan_out(&["nonexistent".to_string()], envelope, &senders).await;
 
         // Nothing should arrive
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 
     #[tokio::test]
@@ -749,6 +749,6 @@ mod tests {
         let envelope = RuntimeEnvelope::from_string("src", "drop");
 
         fan_out(&[], envelope, &senders).await;
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 }

@@ -20,7 +20,7 @@ pub struct MemoryRecorder {
 impl MemoryRecorder {
     /// Create a new recorder (does not start sampling).
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             samples: Vec::new(),
             start: None,
@@ -34,7 +34,7 @@ impl MemoryRecorder {
 
         loop {
             tokio::select! {
-                _ = cancel.cancelled() => break,
+                () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
                     if let Some(rss) = read_rss_bytes() {
                         let elapsed_ms = self.start.map_or(0, |s| s.elapsed().as_millis() as u64);

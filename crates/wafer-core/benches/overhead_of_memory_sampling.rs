@@ -2,7 +2,7 @@
 //! Benchmark: overhead of the memory-stats based RSS sampler.
 //!
 //! AC6 (thesis-hardening T4): proves <0.1% throughput delta from the
-//! memory-sampling task. At 1 Hz with a ~1µs read_rss_bytes call the
+//! memory-sampling task. At 1 Hz with a ~1µs `read_rss_bytes` call the
 //! overhead is ~0.0001% of wall-clock time — trivially below the AC.
 //!
 //! We measure `read_rss_bytes` cost per invocation and compare against

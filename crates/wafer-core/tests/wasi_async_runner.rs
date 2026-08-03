@@ -5,7 +5,7 @@
 //!
 //! Before the fix, `add_to_linker_sync`'s internal `Handle::current().block_on`
 //! panicked with "Cannot start a runtime from within a runtime" on the first
-//! guest call. The transform-runner task died; BenchSink recorded zero
+//! guest call. The transform-runner task died; `BenchSink` recorded zero
 //! samples; every downstream methodology claim would have been unverifiable.
 //!
 //! This test drives the real runner (not the harness) end-to-end with the
@@ -21,7 +21,7 @@ use wafer_core::orchestrator::launch_pipeline;
 use wafer_types::config::Config;
 
 /// Delay-injector artefact path. Missing artefact skips the test (matches
-/// the pattern in tests/attack_containment.rs).
+/// the pattern in `tests/attack_containment.rs`).
 const DELAY_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
@@ -54,7 +54,7 @@ payload_size = 64
 
 [nodes.delay]
 type = "transform"
-plugin = {plugin:?}
+plugin = {DELAY_WASM:?}
 
 [nodes.delay.config]
 delay_ms = 50
@@ -74,13 +74,12 @@ to = "delay"
 from = "delay"
 to = "sink"
 "#,
-        plugin = DELAY_WASM,
     );
     let _ = bench_dir; // BenchSink reads WAFER_BENCH_OUTPUT_DIR env var
     toml::from_str(&toml).expect("inline config must parse")
 }
 
-/// Read p99 from the latency.hdr the BenchSink wrote. Uses `wafer-loadgen
+/// Read p99 from the latency.hdr the `BenchSink` wrote. Uses `wafer-loadgen
 /// hdr-summary` — same tool the shakedown scripts use — so this test
 /// exercises the same path we'd exercise on Pi.
 fn p99_ms_from(bench_dir: &Path) -> f64 {
@@ -100,7 +99,7 @@ fn p99_ms_from(bench_dir: &Path) -> f64 {
         .arg(&hdr)
         .output()
         .expect("hdr-summary invocation");
-    assert!(out.status.success(), "hdr-summary failed: {:?}", out);
+    assert!(out.status.success(), "hdr-summary failed: {out:?}");
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let count = json["total_count"].as_u64().unwrap_or(0);
     assert!(count > 0, "empty histogram — runner never recorded a sample: {json}");

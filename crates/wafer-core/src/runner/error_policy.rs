@@ -348,7 +348,7 @@ impl ErrorPolicyExecutor {
         });
     }
 
-    fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
+    const fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
         match category {
             ErrorCategory::DependencyFailed => self.config.dependency_failed,
             ErrorCategory::ProcessingFailed => self.config.processing_failed,
@@ -376,8 +376,8 @@ impl ErrorPolicyExecutor {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_millis() as u64);
 
-        let trace_id = envelope.lineage.trace_id.as_ref().map(|s| s.to_string());
-        let parent_id = envelope.lineage.parent_id.as_ref().map(|s| s.to_string());
+        let trace_id = envelope.lineage.trace_id.as_ref().map(std::string::ToString::to_string);
+        let parent_id = envelope.lineage.parent_id.as_ref().map(std::string::ToString::to_string);
 
         let dlq_envelope = DlqEnvelope {
             timestamp,
@@ -464,7 +464,7 @@ mod tests {
         assert!(should_continue);
         assert_eq!(executor.pending_retries(), 1);
         // Nothing in DLQ yet — it's in the retry buffer
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 
     #[test]
@@ -479,7 +479,7 @@ mod tests {
 
         assert!(should_continue);
         assert_eq!(executor.pending_retries(), 1);
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 
     #[test]
@@ -606,15 +606,15 @@ mod tests {
         let executor = ErrorPolicyExecutor::new(config, None, "node");
 
         // retry_count=0: 1000 * 2^0 = 1000ms
-        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 0), Duration::from_millis(1000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 0), Duration::from_secs(1));
         // retry_count=1: 1000 * 2^1 = 2000ms
-        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 1), Duration::from_millis(2000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 1), Duration::from_secs(2));
         // retry_count=4: 1000 * 2^4 = 16000ms
-        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 4), Duration::from_millis(16000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 4), Duration::from_secs(16));
         // retry_count=5: 1000 * 2^5 = 32000ms → capped at 30000
-        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 5), Duration::from_millis(30000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 5), Duration::from_secs(30));
         // retry_count=20: would overflow but capped
-        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 20), Duration::from_millis(30000));
+        assert_eq!(executor.compute_backoff(ErrorCategory::ProcessingFailed, 20), Duration::from_secs(30));
     }
 
     #[test]

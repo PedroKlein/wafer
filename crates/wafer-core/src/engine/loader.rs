@@ -154,7 +154,7 @@ impl WaferEngine {
         &self,
         wasm_bytes: &[u8],
     ) -> Result<std::sync::Arc<Component>> {
-        let mut cache = self.cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.get_or_compile(&self.engine, wasm_bytes)
     }
 
@@ -260,19 +260,19 @@ impl WaferEngine {
 
     /// Get a reference to the inner wasmtime `Engine`.
     #[inline]
-    pub fn inner(&self) -> &Engine {
+    pub const fn inner(&self) -> &Engine {
         &self.engine
     }
 
     /// Configured fuel limit per process() call. `None` = unlimited.
     #[inline]
-    pub fn fuel_limit(&self) -> Option<NonZeroU64> {
+    pub const fn fuel_limit(&self) -> Option<NonZeroU64> {
         self.fuel_limit
     }
 
     /// Configured epoch deadline (number of ticks before timeout). `None` = no epoch trap.
     #[inline]
-    pub fn epoch_deadline(&self) -> Option<NonZeroU64> {
+    pub const fn epoch_deadline(&self) -> Option<NonZeroU64> {
         self.epoch_deadline
     }
 }

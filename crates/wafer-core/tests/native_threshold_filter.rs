@@ -11,7 +11,7 @@
 //! The plugin's public contract is documented in
 //! `plugins/threshold-filter/src/lib.rs`:
 //!   - Missing/non-UTF8/unparsable → drop (surfaced as bad-input in WIT,
-//!     as `Drop` in the runner's FilterOutcome).
+//!     as `Drop` in the runner's `FilterOutcome`).
 //!   - Otherwise forward iff `value >= min && value <= max` on `field`.
 //!
 //! We assert both branches: (1) native agrees with a hand-computed
@@ -34,7 +34,7 @@ fn temperature_corpus(count: usize) -> Vec<f64> {
         .map(|_| {
             state = state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
             let bits = (state >> 32) as u32;
-            (bits as f64 / u32::MAX as f64) * 100.0
+            (f64::from(bits) / f64::from(u32::MAX)) * 100.0
         })
         .collect()
 }
@@ -64,7 +64,7 @@ fn native_threshold_filter_matches_wit_semantics() {
             filter.evaluate(&env).expect("native filter cannot trap"),
             FilterOutcome::Forward
         );
-        let oracle = temp >= MIN && temp <= MAX;
+        let oracle = (MIN..=MAX).contains(&temp);
 
         if native {
             forwarded_native += 1;
@@ -110,7 +110,7 @@ fn native_threshold_filter_boundary_inclusive() {
 }
 
 /// Malformed inputs are indistinguishable from a false predicate at the
-/// FilterOutcome layer — matching the WIT plugin's `bad_input` return.
+/// `FilterOutcome` layer — matching the WIT plugin's `bad_input` return.
 #[test]
 fn native_threshold_filter_malformed_drops() {
     let mut filter = FilterNode::from(NativeFilter::range("t", "temperature", 50.0, 99.0));
@@ -127,7 +127,7 @@ fn native_threshold_filter_malformed_drops() {
 
 /// AC F1 launcher-wired regression: loading `eval/configs/pipeline-a-native.toml`
 /// via the real config loader + launcher dispatch produces a working native
-/// FilterNode. If someone reverts the `load_filter_node_dispatch` native
+/// `FilterNode`. If someone reverts the `load_filter_node_dispatch` native
 /// branch in `crates/wafer-core/src/orchestrator/launcher.rs`, this test
 /// fails at `build_native_filter_from_def` — catching the exact regression
 /// the direct-construction tests above cannot.

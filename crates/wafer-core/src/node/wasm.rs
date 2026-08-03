@@ -404,7 +404,7 @@ impl WasmTransformNode {
     }
 
     /// Access the cached InstancePre for recovery/warm-swap.
-    pub fn cached_pre(&self) -> &Arc<TransformNodePre<WaferState>> {
+    pub const fn cached_pre(&self) -> &Arc<TransformNodePre<WaferState>> {
         &self.cached_pre
     }
 
@@ -415,12 +415,12 @@ impl WasmTransformNode {
     }
 
     /// Get a mutable reference to the store (for lifecycle calls like init/close).
-    pub fn store_mut(&mut self) -> &mut Store<WaferState> {
+    pub const fn store_mut(&mut self) -> &mut Store<WaferState> {
         &mut self.store
     }
 
     /// Get a reference to the bindings (for lifecycle calls).
-    pub fn bindings(&self) -> &TransformNode {
+    pub const fn bindings(&self) -> &TransformNode {
         &self.bindings
     }
 }
@@ -660,17 +660,17 @@ impl WasmFilterNode {
     }
 
     /// Access cached InstancePre for recovery.
-    pub fn cached_pre(&self) -> &Arc<FilterNodePre<WaferState>> {
+    pub const fn cached_pre(&self) -> &Arc<FilterNodePre<WaferState>> {
         &self.cached_pre
     }
 
     /// Mutable store access for lifecycle calls.
-    pub fn store_mut(&mut self) -> &mut Store<WaferState> {
+    pub const fn store_mut(&mut self) -> &mut Store<WaferState> {
         &mut self.store
     }
 
     /// Bindings access for lifecycle calls.
-    pub fn bindings(&self) -> &FilterNode {
+    pub const fn bindings(&self) -> &FilterNode {
         &self.bindings
     }
 }
@@ -909,17 +909,17 @@ impl WasmRouterNode {
     }
 
     /// Access cached InstancePre for recovery.
-    pub fn cached_pre(&self) -> &Arc<RouterNodePre<WaferState>> {
+    pub const fn cached_pre(&self) -> &Arc<RouterNodePre<WaferState>> {
         &self.cached_pre
     }
 
     /// Mutable store access for lifecycle calls.
-    pub fn store_mut(&mut self) -> &mut Store<WaferState> {
+    pub const fn store_mut(&mut self) -> &mut Store<WaferState> {
         &mut self.store
     }
 
     /// Bindings access for lifecycle calls.
-    pub fn bindings(&self) -> &RouterNode {
+    pub const fn bindings(&self) -> &RouterNode {
         &self.bindings
     }
 }

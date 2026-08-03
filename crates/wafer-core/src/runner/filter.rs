@@ -154,7 +154,7 @@ mod tests {
     async fn test_filter_loop_cancellation_exits_cleanly() {
         let (_input_tx, _input_rx) = mpsc::channel::<RuntimeEnvelope>(32);
         let (output_tx, _output_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
+        let _senders = [DownstreamSender {
             sender: output_tx,
             port: "default".into(),
         }];

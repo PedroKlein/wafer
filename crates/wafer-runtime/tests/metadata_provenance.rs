@@ -2,7 +2,7 @@
 //! F2 regression: `metadata.json` provenance completeness (RESULT-CONTRACT).
 //!
 //! Before F2, `metadata.json` produced by `eval/scripts/run-experiment.sh`
-//! recorded git_sha + host_tag + arch + os but missed the fields the
+//! recorded `git_sha` + `host_tag` + arch + os but missed the fields the
 //! canonical Pi runs need for reproducibility: resolved wasmtime version,
 //! config sha256, per-plugin sha256, runtime binary sha256, rustc version,
 //! and kernel string. Without them a Pi result cannot be re-produced (the

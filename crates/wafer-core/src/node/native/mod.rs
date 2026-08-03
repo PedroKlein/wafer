@@ -263,7 +263,7 @@ impl NativeRouter {
         rules: Vec<(u8, String)>,
     ) -> Self {
         let ports: Vec<String> = rules.iter().map(|(_, p)| p.clone()).collect();
-        Self::new(id, ports.clone(), move |env| {
+        Self::new(id, ports, move |env| {
             let Some(&first) = env.payload.first() else {
                 return Vec::new();
             };
@@ -430,7 +430,7 @@ impl ProcessNode for NativeTransform {
 
 /// Native implementations matching Wasm plugin behavior.
 pub mod functions {
-    use super::*;
+    use super::{ProcessError, RuntimeEnvelope};
 
     /// ASCII uppercase (matches wafer-uppercase plugin).
     pub fn uppercase(payload: &[u8]) -> std::result::Result<Vec<u8>, ProcessError> {

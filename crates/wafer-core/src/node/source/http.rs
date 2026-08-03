@@ -51,13 +51,13 @@ impl HttpSource {
     }
 
     #[must_use]
-    pub fn with_buffer_size(mut self, buffer_size: usize) -> Self {
+    pub const fn with_buffer_size(mut self, buffer_size: usize) -> Self {
         self.buffer_size = buffer_size;
         self
     }
 
     #[must_use]
-    pub fn bind_addr(&self) -> SocketAddr {
+    pub const fn bind_addr(&self) -> SocketAddr {
         self.bind_addr
     }
 
@@ -299,13 +299,13 @@ mod tests {
     #[test]
     fn test_http_source_validate_success() {
         let source = HttpSource::new("test-http", "127.0.0.1:8081", "/ingest");
-        assert!(source.validate().is_ok());
+        source.validate().unwrap();
     }
 
     #[tokio::test]
     async fn test_http_source_poll_before_init() {
         let mut source = HttpSource::new("test-http", "127.0.0.1:8081", "/ingest");
         let result = source.poll().await;
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

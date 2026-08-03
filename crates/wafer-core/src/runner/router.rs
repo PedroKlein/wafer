@@ -160,7 +160,7 @@ mod tests {
     async fn test_router_loop_cancellation_exits_cleanly() {
         let (_input_tx, _input_rx) = mpsc::channel::<RuntimeEnvelope>(32);
         let (output_tx, _output_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
+        let _senders = [DownstreamSender {
             sender: output_tx,
             port: "default".into(),
         }];
@@ -231,6 +231,6 @@ mod tests {
         fan_out(&["nonexistent".to_string()], envelope, &senders).await;
 
         // Nothing should be received
-        assert!(rx.try_recv().is_err());
+        rx.try_recv().unwrap_err();
     }
 }

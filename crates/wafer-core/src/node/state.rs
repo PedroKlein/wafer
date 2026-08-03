@@ -70,7 +70,7 @@ impl NodeStateTracker {
         }
     }
 
-    fn u8_to_state(val: u8) -> NodeState {
+    const fn u8_to_state(val: u8) -> NodeState {
         match val {
             0 => NodeState::Starting,
             1 => NodeState::Running,

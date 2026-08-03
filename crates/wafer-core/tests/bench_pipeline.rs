@@ -1,5 +1,5 @@
 #![cfg(test)]
-//! Integration test: BenchSource → NativeTransform → BenchSink pipeline.
+//! Integration test: `BenchSource` → `NativeTransform` → `BenchSink` pipeline.
 //!
 //! Validates that the evaluation infrastructure produces valid histogram data
 //! when wired through the same channel infrastructure as the real pipeline.
@@ -7,7 +7,7 @@
 use wafer_core::node::{BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, Lifecycle,
     NativeTransform, ProcessResult, Sink, Source, Transform};
 
-/// Full bench pipeline: BenchSource → NativeTransform(uppercase) → BenchSink.
+/// Full bench pipeline: `BenchSource` → NativeTransform(uppercase) → `BenchSink`.
 /// Validates end-to-end measurement infrastructure.
 #[tokio::test]
 async fn test_native_bench_pipeline() {
@@ -56,7 +56,7 @@ async fn test_native_bench_pipeline() {
     sink.close().await.unwrap();
 }
 
-/// BenchSource produces exactly the configured number of messages.
+/// `BenchSource` produces exactly the configured number of messages.
 #[tokio::test]
 async fn test_bench_source_exhaustion() {
     let config = BenchSourceConfig::new(100_000.0, 50).with_payload_size(32);
@@ -71,7 +71,7 @@ async fn test_bench_source_exhaustion() {
     assert_eq!(count, 50);
 }
 
-/// BenchSink correctly excludes warmup messages.
+/// `BenchSink` correctly excludes warmup messages.
 #[tokio::test]
 async fn test_bench_sink_warmup_integration() {
     let config = BenchSinkConfig {

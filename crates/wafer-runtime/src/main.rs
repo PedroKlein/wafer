@@ -388,7 +388,7 @@ async fn wait_control_plane(tasks: Vec<JoinHandle<()>>) {
     }
 }
 
-/// Flush benchmark artifacts (memory.csv + per_node_metrics.csv) on graceful
+/// Flush benchmark artifacts (memory.csv + `per_node_metrics.csv`) on graceful
 /// shutdown when `WAFER_BENCH_OUTPUT_DIR` is set. Cancel-safe: fires the
 /// sampler's cancellation token, then drains collected samples to disk.
 async fn flush_bench_artifacts(

@@ -193,7 +193,7 @@ fn bench_native_router(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark: Envelope creation + metadata overhead (for BenchSource evaluation).
+/// Benchmark: Envelope creation + metadata overhead (for `BenchSource` evaluation).
 fn bench_bench_envelope(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench_envelope");
     group.measurement_time(Duration::from_secs(5));

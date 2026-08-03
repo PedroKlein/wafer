@@ -36,9 +36,9 @@ pub enum SwapError {
 impl std::fmt::Display for SwapError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SwapError::NodeNotFound(id) => write!(f, "node '{id}' not found"),
-            SwapError::NotSwappable(id) => write!(f, "node '{id}' does not support hot-swap"),
-            SwapError::WatchSendFailed(id) => {
+            Self::NodeNotFound(id) => write!(f, "node '{id}' not found"),
+            Self::NotSwappable(id) => write!(f, "node '{id}' does not support hot-swap"),
+            Self::WatchSendFailed(id) => {
                 write!(f, "watch channel send failed for node '{id}' (task dead?)")
             }
         }
@@ -49,7 +49,7 @@ impl std::error::Error for SwapError {}
 
 impl From<SwapError> for WaferError {
     fn from(e: SwapError) -> Self {
-        WaferError::Runtime(e.to_string())
+        Self::Runtime(e.to_string())
     }
 }
 

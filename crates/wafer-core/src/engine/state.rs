@@ -112,25 +112,25 @@ impl WaferState {
 
     /// Access the resource table (for pushing/deleting `WaferBuffer` handles).
     #[inline]
-    pub fn table(&self) -> &ResourceTable {
+    pub const fn table(&self) -> &ResourceTable {
         &self.table
     }
 
     /// Mutable access to the resource table.
     #[inline]
-    pub fn table_mut(&mut self) -> &mut ResourceTable {
+    pub const fn table_mut(&mut self) -> &mut ResourceTable {
         &mut self.table
     }
 
     /// Access the store limits (for `Store::limiter`).
     #[inline]
-    pub fn limits(&self) -> &StoreLimits {
+    pub const fn limits(&self) -> &StoreLimits {
         &self.limits
     }
 
     /// Mutable access to the store limits (for `Store::limiter`).
     #[inline]
-    pub fn limits_mut(&mut self) -> &mut StoreLimits {
+    pub const fn limits_mut(&mut self) -> &mut StoreLimits {
         &mut self.limits
     }
 

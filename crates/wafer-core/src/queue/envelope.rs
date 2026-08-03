@@ -42,7 +42,7 @@ pub struct EnvelopeHeader {
 
 /// Internal lineage tracking for distributed tracing.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Lineage {
+pub struct Lineage {
     pub parent_id: Option<Box<str>>,
     pub trace_id: Option<Box<str>>,
 }

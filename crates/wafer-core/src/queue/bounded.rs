@@ -41,7 +41,7 @@ impl<T> BoundedQueue<T> {
         self.receiver.try_recv()
     }
 
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 
@@ -97,7 +97,7 @@ impl<T> QueueReceiver<T> {
         self.receiver.try_recv()
     }
 
-    pub fn capacity(&self) -> usize {
+    pub const fn capacity(&self) -> usize {
         self.capacity
     }
 

@@ -136,7 +136,7 @@ impl PluginTestHarness {
     }
 
     /// Access the underlying engine (for advanced use cases).
-    pub fn engine(&self) -> &WaferEngine {
+    pub const fn engine(&self) -> &WaferEngine {
         &self.engine
     }
 }
@@ -161,12 +161,12 @@ impl TransformHarness {
     }
 
     /// Access the underlying node (for lifecycle calls or inspection).
-    pub fn node(&self) -> &WasmTransformNode {
+    pub const fn node(&self) -> &WasmTransformNode {
         &self.node
     }
 
     /// Mutable access to the underlying node.
-    pub fn node_mut(&mut self) -> &mut WasmTransformNode {
+    pub const fn node_mut(&mut self) -> &mut WasmTransformNode {
         &mut self.node
     }
 }

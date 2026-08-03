@@ -132,7 +132,7 @@ async fn native_baseline_soak_all_kinds() {
     let mut rout = NativeRouter::content_router("soak-router", 50.0, "hi", "lo");
 
     for i in 0..10_000 {
-        let temp = (i % 100) as f64;
+        let temp = f64::from(i % 100);
         let payload = format!(r#"{{"temperature":{temp},"level":{temp}}}"#);
         let env = RuntimeEnvelope::from_string("soak", payload);
 

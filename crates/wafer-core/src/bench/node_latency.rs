@@ -88,7 +88,7 @@ impl NodeLatencyRecorder {
 
         for id in ids {
             let hist = &self.histograms[id];
-            if hist.len() == 0 {
+            if hist.is_empty() {
                 continue;
             }
             csv.push_str(&format!(
@@ -130,7 +130,7 @@ impl NodeLatencyRecorder {
 
         for id in ids {
             let hist = &self.histograms[id];
-            if hist.len() == 0 {
+            if hist.is_empty() {
                 continue;
             }
             log_writer

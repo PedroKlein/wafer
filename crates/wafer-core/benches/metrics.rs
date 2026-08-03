@@ -33,7 +33,7 @@ fn populated_registry(nodes: usize, queues: usize) -> MetricsRegistry {
     let node_types = ["source", "transform", "router", "joiner", "sink"];
     for i in 0..nodes {
         let node_type = node_types[i % node_types.len()];
-        registry.register_node(format!("node-{}", i), node_type);
+        registry.register_node(format!("node-{i}"), node_type);
     }
 
     // Register queues
@@ -51,7 +51,7 @@ fn populated_registry(nodes: usize, queues: usize) -> MetricsRegistry {
 
     for i in 0..nodes {
         for _ in 0..100 {
-            registry.record_node_invocation(&format!("node-{}", i), 1_000_000);
+            registry.record_node_invocation(&format!("node-{i}"), 1_000_000);
         }
     }
 
@@ -82,7 +82,7 @@ fn bench_metrics_encoding(c: &mut Criterion) {
             b.iter(|| {
                 let output = registry.encode();
                 black_box(output)
-            })
+            });
         });
     }
 
@@ -131,7 +131,7 @@ fn bench_concurrent_updates(c: &mut Criterion) {
                 for h in handles {
                     h.join().unwrap();
                 }
-            })
+            });
         });
     }
 
@@ -185,7 +185,7 @@ fn bench_scrape_under_load(c: &mut Criterion) {
             for h in handles {
                 h.join().unwrap();
             }
-        })
+        });
     });
 
     group.finish();
@@ -207,8 +207,8 @@ fn bench_hotswap_metrics(c: &mut Criterion) {
                 black_box(500_000),   // 0.5ms retire
                 black_box(42),        // messages drained
                 black_box(false),     // no timeout
-            )
-        })
+            );
+        });
     });
 
     group

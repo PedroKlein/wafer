@@ -21,7 +21,7 @@ pub struct WasmRouter {
 
 impl WasmRouter {
     #[must_use]
-    pub fn new(engine: Arc<WaferEngine>, _instance: RouterInstance, config: NodeConfig) -> Self {
+    pub const fn new(engine: Arc<WaferEngine>, _instance: RouterInstance, config: NodeConfig) -> Self {
         Self { config, _engine: engine, initialized: false }
     }
 }

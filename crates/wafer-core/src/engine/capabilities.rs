@@ -23,24 +23,24 @@ impl Capabilities {
     }
 
     #[must_use]
-    pub fn full() -> Self {
+    pub const fn full() -> Self {
         Self { inherit_stdio: true, inherit_env: true, allow_inference: true }
     }
 
     #[must_use]
-    pub fn stdio(mut self, enabled: bool) -> Self {
+    pub const fn stdio(mut self, enabled: bool) -> Self {
         self.inherit_stdio = enabled;
         self
     }
 
     #[must_use]
-    pub fn env(mut self, enabled: bool) -> Self {
+    pub const fn env(mut self, enabled: bool) -> Self {
         self.inherit_env = enabled;
         self
     }
 
     #[must_use]
-    pub fn inference(mut self, enabled: bool) -> Self {
+    pub const fn inference(mut self, enabled: bool) -> Self {
         self.allow_inference = enabled;
         self
     }
@@ -84,10 +84,10 @@ mod tests {
 
     #[test]
     fn deserialize_from_toml_explicit() {
-        let toml_str = r#"
+        let toml_str = r"
             inherit_stdio = true
             allow_inference = true
-        "#;
+        ";
         let caps: Capabilities = toml::from_str(toml_str).unwrap();
         assert!(caps.inherit_stdio);
         assert!(!caps.inherit_env);
@@ -104,11 +104,11 @@ mod tests {
 
     #[test]
     fn deserialize_rejects_unknown_fields() {
-        let toml_str = r#"
+        let toml_str = r"
             inherit_stdio = true
             gpu = true
-        "#;
+        ";
         let result: Result<Capabilities, _> = toml::from_str(toml_str);
-        assert!(result.is_err());
+        result.unwrap_err();
     }
 }

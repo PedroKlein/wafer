@@ -246,7 +246,7 @@ fn build_pipeline_inner(
     })
 }
 
-fn dead_letter_capacity(config: &crate::config::DeadLetterConfig) -> usize {
+const fn dead_letter_capacity(config: &crate::config::DeadLetterConfig) -> usize {
     match config {
         crate::config::DeadLetterConfig::Mqtt { queue_capacity, .. }
         | crate::config::DeadLetterConfig::File { queue_capacity, .. } => *queue_capacity,
