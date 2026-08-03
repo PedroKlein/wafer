@@ -1,5 +1,6 @@
 //! HTTP request handlers for the new pipeline orchestrator.
 
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use axum::{
@@ -447,22 +448,28 @@ pub async fn shutdown(State(orch): State<AppState>) -> StatusCode {
 }
 
 /// GET /metrics — Prometheus-style text metrics
-#[expect(clippy::indexing_slicing, reason = "bucket indices come from enumerate() over same-length arrays")]
+#[expect(
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "bucket indices come from enumerate() over same-length arrays; write!/writeln! into String is infallible per std::fmt::Write for String"
+)]
 pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     let mut output = String::new();
 
     for node_id in orch.config().nodes.keys() {
         if let Some(m) = orch.node_metrics(node_id) {
-            output.push_str(&format!(
-                "wafer_node_processed_total{{node=\"{}\"}} {}\n",
-                node_id,
+            writeln!(
+                output,
+                "wafer_node_processed_total{{node=\"{node_id}\"}} {}",
                 m.processed()
-            ));
-            output.push_str(&format!(
-                "wafer_node_failed_total{{node=\"{}\"}} {}\n",
-                node_id,
+            )
+            .expect("String write is infallible");
+            writeln!(
+                output,
+                "wafer_node_failed_total{{node=\"{node_id}\"}} {}",
                 m.failed()
-            ));
+            )
+            .expect("String write is infallible");
         }
     }
 
@@ -478,21 +485,29 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         for ((phase, node_id), hist) in guard.iter() {
             for (i, upper) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
                 let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
-                output.push_str(&format!(
-                    "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"{upper}\"}} {count}\n"
-                ));
+                writeln!(
+                    output,
+                    "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"{upper}\"}} {count}"
+                )
+                .expect("String write is infallible");
             }
             let total = hist.count.load(std::sync::atomic::Ordering::Relaxed);
             let sum = hist.sum_ns.load(std::sync::atomic::Ordering::Relaxed);
-            output.push_str(&format!(
-                "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"+Inf\"}} {total}\n"
-            ));
-            output.push_str(&format!(
-                "hot_swap_phase_ns_sum{{phase=\"{phase}\",node_id=\"{node_id}\"}} {sum}\n"
-            ));
-            output.push_str(&format!(
-                "hot_swap_phase_ns_count{{phase=\"{phase}\",node_id=\"{node_id}\"}} {total}\n"
-            ));
+            writeln!(
+                output,
+                "hot_swap_phase_ns_bucket{{phase=\"{phase}\",node_id=\"{node_id}\",le=\"+Inf\"}} {total}"
+            )
+            .expect("String write is infallible");
+            writeln!(
+                output,
+                "hot_swap_phase_ns_sum{{phase=\"{phase}\",node_id=\"{node_id}\"}} {sum}"
+            )
+            .expect("String write is infallible");
+            writeln!(
+                output,
+                "hot_swap_phase_ns_count{{phase=\"{phase}\",node_id=\"{node_id}\"}} {total}"
+            )
+            .expect("String write is infallible");
         }
     }
 
@@ -514,15 +529,21 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
             if count > 0 {
                 let sum_ms = m.recovery_ns_total() / 1_000_000;
                 let max_ms = m.recovery_max_ns() / 1_000_000;
-                output.push_str(&format!(
-                    "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {count}\n"
-                ));
-                output.push_str(&format!(
-                    "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}\n"
-                ));
-                output.push_str(&format!(
-                    "wafer_node_recovery_duration_ms{{node_id=\"{node_id}\",quantile=\"max\"}} {max_ms}\n"
-                ));
+                writeln!(
+                    output,
+                    "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {count}"
+                )
+                .expect("String write is infallible");
+                writeln!(
+                    output,
+                    "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}"
+                )
+                .expect("String write is infallible");
+                writeln!(
+                    output,
+                    "wafer_node_recovery_duration_ms{{node_id=\"{node_id}\",quantile=\"max\"}} {max_ms}"
+                )
+                .expect("String write is infallible");
             }
         }
     }
@@ -538,21 +559,29 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
             for (i, upper_ns) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
                 let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
                 let upper_ms = upper_ns / 1_000_000;
-                output.push_str(&format!(
-                    "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"{upper_ms}\"}} {count}\n"
-                ));
+                writeln!(
+                    output,
+                    "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"{upper_ms}\"}} {count}"
+                )
+                .expect("String write is infallible");
             }
             let total = hist.count.load(std::sync::atomic::Ordering::Relaxed);
             let sum_ms = hist.sum_ns.load(std::sync::atomic::Ordering::Relaxed) / 1_000_000;
-            output.push_str(&format!(
-                "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"+Inf\"}} {total}\n"
-            ));
-            output.push_str(&format!(
-                "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}\n"
-            ));
-            output.push_str(&format!(
-                "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {total}\n"
-            ));
+            writeln!(
+                output,
+                "wafer_node_recovery_duration_ms_bucket{{node_id=\"{node_id}\",le=\"+Inf\"}} {total}"
+            )
+            .expect("String write is infallible");
+            writeln!(
+                output,
+                "wafer_node_recovery_duration_ms_sum{{node_id=\"{node_id}\"}} {sum_ms}"
+            )
+            .expect("String write is infallible");
+            writeln!(
+                output,
+                "wafer_node_recovery_duration_ms_count{{node_id=\"{node_id}\"}} {total}"
+            )
+            .expect("String write is infallible");
         }
     }
 
