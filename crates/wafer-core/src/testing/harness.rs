@@ -109,7 +109,9 @@ impl PluginTestHarness {
         // before instantiation — start functions consume fuel and the epoch
         // ticker is running.
         if let Some(n) = self.engine.fuel_limit() {
-            store.set_fuel(n.get()).unwrap();
+            store.set_fuel(n.get()).map_err(|e| crate::error::WaferError::PluginInit {
+                message: format!("failed to set fuel: {e}"),
+            })?;
         }
         if let Some(n) = self.engine.epoch_deadline() {
             store.epoch_deadline_trap();
@@ -172,6 +174,7 @@ impl TransformHarness {
 }
 
 #[cfg(test)]
+#[expect(clippy::print_stderr, reason = "test diagnostic output for skipped tests when wasm plugins are not built")]
 mod tests {
     use super::*;
 

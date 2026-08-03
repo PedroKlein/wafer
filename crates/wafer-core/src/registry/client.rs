@@ -135,14 +135,12 @@ impl WaferRegistry {
                 message: format!("failed to pull image: {e}"),
             })?;
 
-        if image_data.layers.is_empty() {
-            return Err(RegistryError::FetchFailed {
-                package: oci_ref.to_string(),
-                message: "image has no layers".to_string(),
-            });
-        }
+        let first_layer = image_data.layers.first().ok_or_else(|| RegistryError::FetchFailed {
+            package: oci_ref.to_string(),
+            message: "image has no layers".to_string(),
+        })?;
 
-        Ok(image_data.layers[0].data.to_vec())
+        Ok(first_layer.data.to_vec())
     }
 
     pub fn clear_expired_cache(&self) -> Result<usize, RegistryError> {

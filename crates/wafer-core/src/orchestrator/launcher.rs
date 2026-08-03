@@ -212,6 +212,7 @@ fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
 /// This is where the `plugin.kind = "native"` schema variant is honoured
 /// (P0.4 AC2). Wasm construction still goes through the original
 /// `load_transform_node` helper unchanged.
+#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
 async fn load_transform_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -249,6 +250,7 @@ fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::
     }
 }
 
+#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
 async fn load_transform_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -356,12 +358,19 @@ fn threshold_native_config(node_id: &str, wasm: &WasmNodeDef) -> Result<(String,
 /// TOML `Value` numeric coercion accepting both `1` (integer) and `1.0`
 /// (float) so config authors don't have to remember which one serde picks.
 fn as_f64(v: &toml::Value) -> Option<f64> {
-    v.as_float().or_else(|| v.as_integer().map(|i| i as f64))
+    v.as_float().or_else(|| {
+        v.as_integer().map(|i| {
+            #[expect(clippy::as_conversions, reason = "i64→f64 precision loss is acceptable for config values; TOML integers are typically small")]
+            let f = i as f64;
+            f
+        })
+    })
 }
 
 /// Dispatch: build a Wasm or Native filter depending on `wasm.plugin`.
 /// Mirrors [`load_transform_node_dispatch`] so the native baseline can
 /// implement `type = "filter"` (RQ1 apples-to-apples — A18).
+#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
 async fn load_filter_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -402,6 +411,7 @@ pub fn build_native_filter_from_def(
     Ok(crate::node::FilterNode::Native(native))
 }
 
+#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -452,6 +462,7 @@ async fn load_filter_node(
     Ok(node)
 }
 
+#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
 async fn load_router_node(
     node_id: &str,
     wasm: &WasmNodeDef,

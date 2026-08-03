@@ -21,19 +21,18 @@ impl OciReference {
             return None;
         }
 
-        let parts: Vec<&str> = repo_part.splitn(2, '/').collect();
-        if parts.len() < 2 {
-            return None;
-        }
-
-        let registry = parts[0].to_string();
-        let repository = parts[1].to_string();
+        let (registry, repository) = repo_part.split_once('/')?;
 
         if registry.is_empty() || repository.is_empty() {
             return None;
         }
 
-        Some(Self { reference: s.to_string(), registry, repository, tag: tag.to_string() })
+        Some(Self {
+            reference: s.to_string(),
+            registry: registry.to_string(),
+            repository: repository.to_string(),
+            tag: tag.to_string(),
+        })
     }
 
     #[must_use]
@@ -134,7 +133,7 @@ impl Default for RegistryConfig {
 impl RegistryConfig {
     #[must_use]
     pub const fn cache_ttl(&self) -> Duration {
-        Duration::from_secs(self.cache_ttl_hours * 3600)
+        Duration::from_secs(self.cache_ttl_hours.saturating_mul(3600))
     }
 
     #[must_use]

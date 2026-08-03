@@ -41,13 +41,11 @@ impl<T> BatchBuffer<T> {
     }
 
     /// Returns `true` if buffer is non-empty and timeout has elapsed.
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn should_flush(&self) -> bool {
         !self.buffer.is_empty() && self.last_flush.elapsed() >= self.timeout
     }
 
     /// Returns `true` if the buffer contains no items.
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
@@ -56,23 +54,19 @@ impl<T> BatchBuffer<T> {
         self.buffer.len()
     }
 
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub const fn batch_size(&self) -> usize {
         self.batch_size
     }
 
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn elapsed_since_flush(&self) -> Duration {
         self.last_flush.elapsed()
     }
 
     /// Returns the time remaining until the timeout, or zero if already past.
-    #[expect(dead_code, reason = "public API for sink implementations")]
     pub fn time_until_timeout(&self) -> Duration {
         self.timeout.saturating_sub(self.last_flush.elapsed())
     }

@@ -722,14 +722,15 @@ impl PipelineOrchestrator {
         node_ids.sort_unstable();
 
         for node_id in node_ids {
-            let m = &self.metrics[node_id];
+            let Some(m) = self.metrics.get(node_id) else { continue };
             let messages_out = m.processed();
             let traps_total = m.failed();
-            let messages_in = messages_out + traps_total;
+            let messages_in = messages_out.saturating_add(traps_total);
             let recovery_count = m.recovery_count();
             // error_state_seconds: cumulative time in Error/Recovering states.
             // recovery_ns_total accumulates the full Error→Recovering→Running
             // duration for each recovery cycle.
+            #[expect(clippy::as_conversions, reason = "u64→f64 precision loss is acceptable for display-only metric (max 584 years)")]
             let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
             writeln!(
                 f,

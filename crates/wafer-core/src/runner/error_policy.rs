@@ -335,9 +335,10 @@ impl ErrorPolicyExecutor {
             return;
         }
 
-        let next_retry_count = current + 1;
+        let next_retry_count = current.saturating_add(1);
         envelope.retry_count = next_retry_count;
         let backoff = self.compute_backoff(category, next_retry_count);
+        #[expect(clippy::arithmetic_side_effects, reason = "Instant + Duration cannot overflow in practice; Instant::checked_add returns None only if far past year 2500")]
         let next_attempt_at = Instant::now() + backoff;
 
         self.retry_buffer.push(RetryEntry {
@@ -374,7 +375,7 @@ impl ErrorPolicyExecutor {
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| crate::util::duration_ms_saturating(d));
+            .map_or(0, crate::util::duration_ms_saturating);
 
         let trace_id = envelope.lineage.trace_id.as_ref().map(std::string::ToString::to_string);
         let parent_id = envelope.lineage.parent_id.as_ref().map(std::string::ToString::to_string);
