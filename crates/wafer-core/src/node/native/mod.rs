@@ -343,7 +343,6 @@ impl Router for NativeRouter {
                 Ok(RouteResult::Filter),
                 |first| Ok(RouteResult::Route(first, envelope)),
             )
-            }
         })
     }
 }

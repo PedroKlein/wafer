@@ -126,14 +126,14 @@ impl ComponentCache {
         // Safety invariant: deserialization is from a trusted .cwasm produced by
         // our own Module::serialize in the same wasmtime version.
         let result = unsafe { Component::deserialize(engine, &bytes) };
-        match result {
-            Ok(component) => Ok(Some(component)),
-            Err(_) => {
+        result.map_or_else(
+            |_| {
                 // Stale/incompatible cache entry (wasmtime version change) — evict
                 let _ = std::fs::remove_file(&path);
                 Ok(None)
-            }
-        }
+            },
+            |component| Ok(Some(component)),
+        )
     }
 
     /// Best-effort save to disk cache. Failures are non-fatal.

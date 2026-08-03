@@ -211,7 +211,8 @@ fn build_pipeline_inner(
                         policy,
                         node: None,
                     },
-                    _ => unreachable!(),
+                    #[expect(clippy::unreachable, reason = "Source/Sink categories are handled in the outer match; inner match only sees Transform/Filter/Router")]
+                    _ => unreachable!("Source/Sink should not reach wasm node builder"),
                 }
             }
             NodeCategory::Source => {

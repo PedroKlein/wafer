@@ -175,10 +175,7 @@ impl SwapTimeline {
     /// Serialize to JSON for swap_timeline.json output.
     #[must_use]
     pub fn to_json(&self) -> String {
-        let fmt_opt = |opt: Option<u64>| match opt {
-            Some(v) => v.to_string(),
-            None => "null".to_string(),
-        };
+        let fmt_opt = |opt: Option<u64>| opt.map_or_else(|| "null".to_string(), |v| v.to_string());
 
         format!(
             r#"{{

@@ -216,6 +216,7 @@ async fn run_http_server(
     }
 }
 
+#[expect(clippy::unwrap_used, reason = "hyper Response::builder().status(literal).body(Bytes) cannot fail with valid constants")]
 async fn handle_request(
     req: hyper::Request<hyper::body::Incoming>,
     expected_path: &str,
