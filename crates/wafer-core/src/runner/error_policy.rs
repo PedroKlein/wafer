@@ -361,6 +361,7 @@ impl ErrorPolicyExecutor {
         Duration::from_millis(ms.min(MAX_BACKOFF_MS))
     }
 
+    #[expect(clippy::let_underscore_must_use, reason = "DLQ try_send: non-blocking by design; if DLQ channel is full, drop is intentional")]
     fn send_to_dlq(
         &self,
         envelope: RuntimeEnvelope,

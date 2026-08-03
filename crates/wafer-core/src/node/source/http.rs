@@ -119,6 +119,7 @@ impl Lifecycle for HttpSource {
         })
     }
 
+    #[expect(clippy::let_underscore_must_use, reason = "shutdown signals are fire-and-forget: receiver may already be gone; JoinHandle abort is best-effort")]
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             if let Some(shutdown_tx) = self.shutdown_tx.take() {

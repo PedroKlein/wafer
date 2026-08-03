@@ -48,6 +48,7 @@ impl NodeLatencyRecorder {
     /// If `duration_ns` is below the histogram minimum (1µs), it's recorded as 1µs.
     /// If the node ID is not registered, the call is silently ignored.
     #[inline]
+    #[expect(clippy::let_underscore_must_use, reason = "histogram record errors only on values outside configured range; clamped values can still exceed max — silently dropping is correct for latency sampling")]
     pub fn record(&mut self, node_id: &str, duration_ns: u64) {
         if let Some(hist) = self.histograms.get_mut(node_id) {
             let clamped = duration_ns.max(1_000);
@@ -177,6 +178,7 @@ impl Default for NodeLatencyRecorder {
 }
 
 #[cfg(test)]
+#[expect(clippy::let_underscore_must_use, reason = "test cleanup: fs::remove_dir_all failure is benign")]
 mod tests {
     use super::*;
 

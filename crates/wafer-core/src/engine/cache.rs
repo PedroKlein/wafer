@@ -108,6 +108,7 @@ impl ComponentCache {
     }
 
     /// Try to load a compiled component from the disk cache.
+    #[expect(clippy::let_underscore_must_use, reason = "cache I/O is best-effort: eviction or creation failure is non-fatal")]
     fn try_load_from_disk(
         &self,
         engine: &Engine,
@@ -137,6 +138,7 @@ impl ComponentCache {
     }
 
     /// Best-effort save to disk cache. Failures are non-fatal.
+    #[expect(clippy::let_underscore_must_use, reason = "cache I/O is best-effort: mkdir/write failure is non-fatal")]
     fn try_save_to_disk(&self, _engine: &Engine, hash: &blake3::Hash, component: &Component) {
         let Some(ref dir) = self.disk_dir else { return };
         let path = Self::artifact_path(dir, hash);

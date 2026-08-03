@@ -1,5 +1,6 @@
 #![cfg(test)]
 #![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
+#![expect(clippy::let_underscore_must_use, reason = "test: fire-and-forget channel sends during setup/teardown")]
 //! A17 — Process-time hot-swap rollback integration tests.
 //!
 //! Verifies that when a v2 plugin passes `validate()/init()` but traps on

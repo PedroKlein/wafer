@@ -107,6 +107,7 @@ impl NodeStateTracker {
     }
 
     /// Valid from: any non-terminal state.
+    #[expect(clippy::let_underscore_must_use, reason = "compare_exchange on recovery_started_ns: benign if another thread already set it (preserves original timestamp)")]
     pub fn transition_to_error(&self) -> bool {
         loop {
             let current = self.state.load(Ordering::Acquire);

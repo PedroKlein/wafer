@@ -182,6 +182,7 @@ impl Lifecycle for MqttSink {
         })
     }
 
+    #[expect(clippy::let_underscore_must_use, reason = "MQTT disconnect is best-effort during shutdown; broker may already be gone")]
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             // Flush any remaining buffered messages

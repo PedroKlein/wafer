@@ -93,6 +93,10 @@ pub struct HotSwapProgress {
     tx: Mutex<Option<oneshot::Sender<HotSwapOutcome>>>,
 }
 
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "fire-and-forget: OnceLock::set returns Err if already set (benign race); oneshot::send returns Err if receiver timed out (caller gave up)"
+)]
 impl HotSwapProgress {
     /// Create a new progress handle paired with a receiver for the API caller.
     #[must_use]
@@ -441,6 +445,7 @@ impl SwapPayload {
 /// Panics if `senders` is empty after the early-return check (unreachable).
 #[expect(clippy::indexing_slicing, reason = "senders[0] is guarded by len() == 1 check")]
 #[expect(clippy::expect_used, reason = "split_last() is called after verifying senders is non-empty")]
+#[expect(clippy::let_underscore_must_use, reason = "fire-and-forget: downstream receiver being gone means node shut down; dropping is intentional")]
 pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnvelope) {
     if senders.is_empty() {
         return;
@@ -471,6 +476,7 @@ pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnve
 /// Panics if `matching` is empty after the early-return check (unreachable).
 #[expect(clippy::indexing_slicing, reason = "matching[0] guarded by len() == 1 check")]
 #[expect(clippy::expect_used, reason = "split_last() called after verifying matching is non-empty")]
+#[expect(clippy::let_underscore_must_use, reason = "fire-and-forget: downstream receiver gone means node shut down")]
 pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[DownstreamSender]) {
     // Collect senders that match the requested ports
     let matching: Vec<&DownstreamSender> = senders

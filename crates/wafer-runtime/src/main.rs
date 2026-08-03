@@ -92,6 +92,10 @@ struct Args {
     clippy::too_many_lines,
     reason = "main() is the linear boot sequence: arg parsing, tracing init, config validation, orchestrator wiring, control-plane launch, shutdown handlers. Splitting into helpers obscures the boot order without adding testability."
 )]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "fire-and-forget in spawned tasks: dir creation is best-effort; oneshot send may fail if receiver moved on"
+)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 

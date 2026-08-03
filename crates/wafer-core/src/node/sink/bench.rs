@@ -648,6 +648,7 @@ impl Lifecycle for BenchSink {
     }
 }
 
+#[expect(clippy::let_underscore_must_use, reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling")]
 impl Sink for BenchSink {
     fn collect(
         &mut self,
@@ -737,6 +738,7 @@ impl Sink for BenchSink {
 }
 
 #[cfg(test)]
+#[expect(clippy::let_underscore_must_use, reason = "test code: fire-and-forget histogram records and fs cleanup")]
 mod tests {
     use super::*;
     use crate::queue::RuntimeEnvelope;

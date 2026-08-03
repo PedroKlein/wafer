@@ -3,6 +3,10 @@
     clippy::print_stderr,
     reason = "test diagnostic output: prints reason when the test is skipped due to missing fixture"
 )]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "test: fire-and-forget on task handles during setup"
+)]
 //! F2 regression: `metadata.json` provenance completeness (RESULT-CONTRACT).
 //!
 //! Before F2, `metadata.json` produced by `eval/scripts/run-experiment.sh`
