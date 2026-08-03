@@ -122,6 +122,7 @@ pub async fn get_node(
 }
 
 /// POST /api/v1/nodes/:id/hot-swap — trigger hot-swap with new Wasm binary
+#[expect(clippy::too_many_lines, reason = "multi-step hot-swap procedure (guard → load → compile → swap → canary → respond): linear sequence")]
 pub async fn hot_swap(
     State(orch): State<AppState>,
     Path(id): Path<String>,
@@ -451,7 +452,8 @@ pub async fn shutdown(State(orch): State<AppState>) -> StatusCode {
 #[expect(
     clippy::indexing_slicing,
     clippy::expect_used,
-    reason = "bucket indices come from enumerate() over same-length arrays; write!/writeln! into String is infallible per std::fmt::Write for String"
+    clippy::too_many_lines,
+    reason = "bucket indices come from enumerate() over same-length arrays; write!/writeln! into String is infallible per std::fmt::Write for String; Prometheus text format has many series to emit"
 )]
 pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     let mut output = String::new();

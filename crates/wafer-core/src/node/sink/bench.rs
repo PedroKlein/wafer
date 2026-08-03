@@ -50,15 +50,19 @@ impl SequenceTracker {
     pub fn record(&mut self, seq: u64) {
         self.total_received = self.total_received.saturating_add(1);
 
-        if seq == self.expected_next {
-            self.expected_next = self.expected_next.saturating_add(1);
-        } else if seq > self.expected_next {
-            // Gap detected: missing [expected_next, seq)
-            self.gaps.push((self.expected_next, seq.saturating_sub(1)));
-            self.expected_next = seq.saturating_add(1);
-        } else {
-            // seq < expected_next means duplicate or out-of-order
-            self.duplicates = self.duplicates.saturating_add(1);
+        match seq.cmp(&self.expected_next) {
+            std::cmp::Ordering::Equal => {
+                self.expected_next = self.expected_next.saturating_add(1);
+            }
+            std::cmp::Ordering::Greater => {
+                // Gap detected: missing [expected_next, seq)
+                self.gaps.push((self.expected_next, seq.saturating_sub(1)));
+                self.expected_next = seq.saturating_add(1);
+            }
+            std::cmp::Ordering::Less => {
+                // seq < expected_next means duplicate or out-of-order
+                self.duplicates = self.duplicates.saturating_add(1);
+            }
         }
     }
 
@@ -471,13 +475,17 @@ impl BenchSink {
     ///
     /// Format: `elapsed_secs,msg_count,bytes`
     /// One row per 1-second bucket.
+    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
     pub fn throughput_csv(&self) -> String {
+        use std::fmt::Write as _;
         let mut csv = String::from("elapsed_secs,msg_count,bytes\n");
         for sample in &self.throughput_samples {
-            csv.push_str(&format!(
-                "{:.3},{},{}\n",
+            writeln!(
+                csv,
+                "{:.3},{},{}",
                 sample.elapsed_secs, sample.msg_count, sample.bytes
-            ));
+            )
+            .expect("String write is infallible");
         }
         csv
     }

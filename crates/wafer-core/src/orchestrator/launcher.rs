@@ -360,7 +360,11 @@ fn threshold_native_config(node_id: &str, wasm: &WasmNodeDef) -> Result<(String,
 fn as_f64(v: &toml::Value) -> Option<f64> {
     v.as_float().or_else(|| {
         v.as_integer().map(|i| {
-            #[expect(clippy::as_conversions, reason = "i64→f64 precision loss is acceptable for config values; TOML integers are typically small")]
+            #[expect(
+                clippy::as_conversions,
+                clippy::cast_precision_loss,
+                reason = "i64→f64 precision loss is acceptable for config values; TOML integers are typically small"
+            )]
             let f = i as f64;
             f
         })
@@ -529,7 +533,7 @@ async fn resolve_and_load_component(
             "resolve_and_load_component called on non-Wasm plugin for node '{node_id}'"
         ))
     })?;
-    let mut source = plugin_source(plugin_path)?;
+    let mut source = plugin_source(plugin_path);
 
     if let PluginSource::Local(ref path) = source
         && path.is_relative()
@@ -598,12 +602,12 @@ pub(crate) const fn capabilities_from_config(config: &ConfigCapabilities) -> Cap
     }
 }
 
-fn plugin_source(plugin: &str) -> Result<PluginSource> {
+fn plugin_source(plugin: &str) -> PluginSource {
     if let Some(oci_ref) = OciReference::parse(plugin) {
-        return Ok(PluginSource::Oci(oci_ref));
+        return PluginSource::Oci(oci_ref);
     }
 
-    Ok(PluginSource::Local(PathBuf::from(plugin)))
+    PluginSource::Local(PathBuf::from(plugin))
 }
 
 #[cfg(test)]

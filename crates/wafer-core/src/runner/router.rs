@@ -25,6 +25,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, fan_out};
 /// Router borrows the envelope — no safety clone needed. Fan-out after routing
 /// clones for N-1 ports and moves for the last port.
 #[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
+#[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop; splitting into helpers would fragment the control flow")]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,

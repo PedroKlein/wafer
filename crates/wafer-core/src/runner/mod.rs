@@ -260,7 +260,7 @@ impl std::fmt::Debug for TransformCanaryState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransformCanaryState")
             .field("counters", &self.counters)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

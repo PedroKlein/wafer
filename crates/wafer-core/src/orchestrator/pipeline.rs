@@ -115,7 +115,7 @@ impl PipelineHandle {
             WaferError::Runtime(format!("node-not-swappable: {node_id}"))
         })?;
         flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .map_err(|_| WaferError::Runtime(format!("swap-in-progress: {node_id}")))?;
+            .map_err(|_was_true| WaferError::Runtime(format!("swap-in-progress: {node_id}")))?;
         Ok(SwapGuard { flag: Arc::clone(flag) })
     }
 
@@ -247,7 +247,7 @@ impl PipelineHandle {
             ))
         })?;
 
-        sender.send(Some(payload)).map_err(|_| {
+        sender.send(Some(payload)).map_err(|_send_err| {
             WaferError::Runtime(format!(
                 "cannot hot-swap node '{node_id}': receiver dropped (task dead?)"
             ))
@@ -508,7 +508,7 @@ impl PipelineOrchestrator {
             ))
         })?;
 
-        sender.send(Some(payload)).map_err(|_| {
+        sender.send(Some(payload)).map_err(|_send_err| {
             WaferError::Runtime(format!(
                 "cannot hot-swap node '{node_id}': receiver dropped (task dead?)"
             ))
@@ -730,7 +730,11 @@ impl PipelineOrchestrator {
             // error_state_seconds: cumulative time in Error/Recovering states.
             // recovery_ns_total accumulates the full Error→Recovering→Running
             // duration for each recovery cycle.
-            #[expect(clippy::as_conversions, reason = "u64→f64 precision loss is acceptable for display-only metric (max 584 years)")]
+            #[expect(
+                clippy::as_conversions,
+                clippy::cast_precision_loss,
+                reason = "u64→f64 precision loss is acceptable for display-only metric (max 584 years)"
+            )]
             let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
             writeln!(
                 f,

@@ -283,7 +283,6 @@ impl ErrorPolicyExecutor {
     /// Flush all pending retries to DLQ (called on shutdown or hot-swap drain).
     pub fn flush_to_dlq(&mut self, reason: &str) {
         let dlq_reason = match reason {
-            "shutdown" => DlqReason::Shutdown,
             "hot_swap_drain" => DlqReason::HotSwapDrain,
             _ => DlqReason::Shutdown,
         };
@@ -352,7 +351,6 @@ impl ErrorPolicyExecutor {
     const fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
         match category {
             ErrorCategory::DependencyFailed => self.config.dependency_failed,
-            ErrorCategory::ProcessingFailed => self.config.processing_failed,
             _ => self.config.processing_failed,
         }
     }

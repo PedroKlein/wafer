@@ -78,7 +78,12 @@ impl BenchSource {
     #[must_use]
     pub fn new(config: BenchSourceConfig) -> Self {
         let payload = Bytes::from(vec![0x42u8; config.payload_size]);
-        #[expect(clippy::as_conversions, reason = "f64→u64: result of 1e9/rate is always a positive finite value that fits in u64 for any reasonable rate")]
+        #[expect(
+            clippy::as_conversions,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "f64→u64: 1e9/rate is always a positive finite value < u64::MAX for any rate ≥ 1"
+        )]
         let interval_ns = (1_000_000_000.0 / config.rate_per_sec) as u64;
 
         Self {

@@ -137,6 +137,10 @@ pub fn build_pipeline(config: &Config) -> Result<BuildOutput> {
 /// # Errors
 ///
 /// Returns error if DAG validation fails or wiring encounters issues.
+#[expect(
+    clippy::implicit_hasher,
+    reason = "public API uses std HashMap deliberately; callers construct from literal maps, not custom hashers"
+)]
 pub fn build_pipeline_with_io(
     config: &Config,
     sources: HashMap<String, Box<dyn Source + Send>>,
@@ -152,7 +156,7 @@ fn build_pipeline_inner(
 ) -> Result<BuildOutput> {
     let dag_graph = DagGraph::from_config(config)?;
 
-    let mut wiring = wire_queues(&config.edges, config.engine.default_queue_capacity)?;
+    let mut wiring = wire_queues(&config.edges, config.engine.default_queue_capacity);
 
     let cancel_token = CancellationToken::new();
     let mut watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>> = HashMap::new();
@@ -293,7 +297,7 @@ impl QueueWiring {
 /// Groups edges by destination node. Creates ONE mpsc channel per destination.
 /// Multiple edges to the same destination clone the sender — this is how tokio
 /// mpsc multi-producer fan-in works. Capacity conflicts on merge use the max.
-fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> Result<QueueWiring> {
+fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
     let mut edges_by_dest: HashMap<String, Vec<&EdgeDef>> = HashMap::new();
     for edge in edges {
         edges_by_dest.entry(edge.to.clone()).or_default().push(edge);
@@ -325,7 +329,7 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> Result<QueueWiring
         }
     }
 
-    Ok(QueueWiring { receivers, edge_senders })
+    QueueWiring { receivers, edge_senders }
 }
 
 // =============================================================================

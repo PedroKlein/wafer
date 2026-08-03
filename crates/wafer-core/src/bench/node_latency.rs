@@ -81,7 +81,9 @@ impl NodeLatencyRecorder {
     /// Export per-node metrics as CSV.
     ///
     /// Format: `node_id,count,min_ns,p50_ns,p99_ns,p999_ns,max_ns,mean_ns`
+    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
     pub fn to_csv(&self) -> String {
+        use std::fmt::Write as _;
         let mut csv = String::from("node_id,count,min_ns,p50_ns,p99_ns,p999_ns,max_ns,mean_ns\n");
 
         let mut entries: Vec<(&String, &Histogram<u64>)> = self.histograms.iter().collect();
@@ -91,8 +93,9 @@ impl NodeLatencyRecorder {
             if hist.is_empty() {
                 continue;
             }
-            csv.push_str(&format!(
-                "{},{},{},{},{},{},{},{:.0}\n",
+            writeln!(
+                csv,
+                "{},{},{},{},{},{},{},{:.0}",
                 id,
                 hist.len(),
                 hist.min(),
@@ -101,7 +104,8 @@ impl NodeLatencyRecorder {
                 hist.value_at_quantile(0.999),
                 hist.max(),
                 hist.mean(),
-            ));
+            )
+            .expect("String write is infallible");
         }
         csv
     }

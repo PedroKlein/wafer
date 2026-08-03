@@ -70,10 +70,12 @@ impl MemoryRecorder {
 
     /// Export as CSV string: "elapsed_ms,rss_bytes\n..."
     #[must_use]
+    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
     pub fn to_csv(&self) -> String {
+        use std::fmt::Write as _;
         let mut out = String::from("elapsed_ms,rss_bytes\n");
         for (elapsed, rss) in &self.samples {
-            out.push_str(&format!("{elapsed},{rss}\n"));
+            writeln!(out, "{elapsed},{rss}").expect("String write is infallible");
         }
         out
     }
@@ -129,13 +131,12 @@ mod tests {
         // hot cache paths. Discard it before timing.
         let _ = read_rss_bytes();
 
-        const ITERATIONS: u32 = 200;
         let start = std::time::Instant::now();
-        for _ in 0..ITERATIONS {
+        for _ in 0..200_u32 {
             let rss = read_rss_bytes();
             std::hint::black_box(rss);
         }
-        let per_call = start.elapsed() / ITERATIONS;
+        let per_call = start.elapsed() / 200;
 
         // AC boundary: 1 ms per call = 0.1% overhead at 1 Hz.
         // Real measurement on M1: ~500 ns per call (0.00005%). We give

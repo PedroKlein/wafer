@@ -44,6 +44,7 @@ pub async fn run_transform_loop(
 
 /// Inner transform loop with explicit hot-swap config (testable).
 #[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring plus hot-swap config for testability")]
+#[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop with canary logic; splitting would fragment the control flow")]
 pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
