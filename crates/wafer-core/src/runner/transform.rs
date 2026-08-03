@@ -153,10 +153,10 @@ pub async fn run_transform_loop_with_config(
         // permit the nested `block_on` inside wasmtime-wasi's sync shim for
         // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
-        let _guard = ProcessingGuard::enter(&state);
+        let guard = ProcessingGuard::enter(&state);
         let result = tokio::task::block_in_place(|| transform.process(envelope));
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(_guard);
+        drop(guard);
 
         // 6. Dispatch result
         match result {
@@ -286,7 +286,6 @@ pub async fn run_transform_loop_with_config(
                         if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                             metrics.record_recovery(duration_ns);
                         }
-                        continue;
                     }
                     Err(error) => {
                         tracing::error!(node = transform.node_id(), %error, "recovery failed");

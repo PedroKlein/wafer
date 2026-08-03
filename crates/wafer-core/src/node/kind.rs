@@ -97,10 +97,11 @@ mod tests {
 
     #[test]
     fn node_kind_variants() {
-        let _t = NodeKind::Transform;
-        let _f = NodeKind::Filter;
-        let _r = NodeKind::Router;
-        let _src = NodeKind::Source;
-        let _sink = NodeKind::Sink;
+        // Verify all variants are constructable (compile-time exhaustiveness guard)
+        assert!(matches!(NodeKind::Transform, NodeKind::Transform));
+        assert!(matches!(NodeKind::Filter, NodeKind::Filter));
+        assert!(matches!(NodeKind::Router, NodeKind::Router));
+        assert!(matches!(NodeKind::Source, NodeKind::Source));
+        assert!(matches!(NodeKind::Sink, NodeKind::Sink));
     }
 }

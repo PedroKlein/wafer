@@ -92,10 +92,10 @@ pub async fn run_filter_loop(
         // permit the nested `block_on` inside wasmtime-wasi's sync shim for
         // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
-        let _guard = ProcessingGuard::enter(&state);
+        let guard = ProcessingGuard::enter(&state);
         let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(_guard);
+        drop(guard);
 
         // 5. Dispatch result
         match result {
@@ -127,7 +127,6 @@ pub async fn run_filter_loop(
                         if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                             metrics.record_recovery(duration_ns);
                         }
-                        continue;
                     }
                     Err(error) => {
                         tracing::error!(node = filter.node_id(), %error, "recovery failed");

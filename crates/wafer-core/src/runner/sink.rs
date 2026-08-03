@@ -125,13 +125,13 @@ mod tests {
         handle.await.unwrap();
 
         // Collect all received messages
-        let mut received = Vec::new();
+        let mut collected = Vec::new();
         while let Ok(env) = rx.try_recv() {
-            received.push(env);
+            collected.push(env);
         }
 
-        assert_eq!(received.len(), 10);
-        for (i, env) in received.iter().enumerate() {
+        assert_eq!(collected.len(), 10);
+        for (i, env) in collected.iter().enumerate() {
             assert_eq!(env.payload_as_string(), format!("msg-{i}"));
         }
         assert_eq!(metrics.processed(), 10);
@@ -167,11 +167,11 @@ mod tests {
         assert!(result.is_ok(), "sink loop should terminate on channel close");
 
         // All messages should have been collected
-        let mut received = Vec::new();
+        let mut collected = Vec::new();
         while let Ok(env) = rx.try_recv() {
-            received.push(env);
+            collected.push(env);
         }
-        assert_eq!(received.len(), 5);
+        assert_eq!(collected.len(), 5);
     }
 
     #[tokio::test]
@@ -212,13 +212,13 @@ mod tests {
         assert!(result.is_ok(), "sink loop should stop on cancel");
 
         // Verify messages were collected (at least the ones before cancel)
-        let mut received = Vec::new();
+        let mut collected = Vec::new();
         while let Ok(env) = rx.try_recv() {
-            received.push(env);
+            collected.push(env);
         }
         // At minimum the 3 messages sent before delay should arrive;
         // the "after-delay" message should also be drained
-        assert!(received.len() >= 3);
-        assert!(received.len() <= 4);
+        assert!(collected.len() >= 3);
+        assert!(collected.len() <= 4);
     }
 }

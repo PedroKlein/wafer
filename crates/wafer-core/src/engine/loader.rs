@@ -281,7 +281,7 @@ impl WaferEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DEFAULT_EPOCH_TICK_MS, FuelBudgets};
+    use crate::config::{DEFAULT_EPOCH_TICK_MS, FuelBudgets, HotSwapConfig, MemoryLimits};
 
     #[test]
     fn engine_creation_default() {
@@ -297,8 +297,8 @@ mod tests {
             epoch_deadline: NonZeroU64::new(50),
             epoch_tick_ms: DEFAULT_EPOCH_TICK_MS,
             default_queue_capacity: 1024,
-            memory: Default::default(),
-            hot_swap: Default::default(),
+            memory: MemoryLimits::default(),
+            hot_swap: HotSwapConfig::default(),
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
         assert_eq!(engine.fuel_limit(), NonZeroU64::new(500_000));

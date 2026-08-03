@@ -768,11 +768,11 @@ async fn run_passthrough_loop(
         };
 
         let start = Instant::now();
-        let _guard = ProcessingGuard::enter(&state);
+        let guard = ProcessingGuard::enter(&state);
         // Identity: forward unchanged
         send_downstream(&senders, envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(_guard);
+        drop(guard);
         metrics.record_processed(duration_ns);
     }
 }
