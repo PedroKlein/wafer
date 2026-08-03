@@ -3,7 +3,8 @@
     clippy::print_stderr,
     clippy::as_conversions,
     clippy::cast_precision_loss,
-    reason = "integration test: diagnostic output and timing conversions"
+    clippy::large_futures,
+    reason = "integration test: diagnostic output, timing conversions, and large launch_pipeline future"
 )]
 //! P0.14 regression: WASI async host calls (`std::thread::sleep` in guest,
 //! `wasi:clocks/monotonic-clock.subscribe-duration` on the wire) must NOT

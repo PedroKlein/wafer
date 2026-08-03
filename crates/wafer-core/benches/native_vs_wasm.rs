@@ -59,7 +59,7 @@ fn bench_native_transform(c: &mut Criterion) {
                         for _ in 0..iters {
                             let envelope = create_test_envelope(size);
                             let result = transform.process(envelope).await;
-                            black_box(result);
+                            drop(black_box(result));
                         }
 
                         start.elapsed()
@@ -81,7 +81,7 @@ fn bench_native_transform(c: &mut Criterion) {
                         for _ in 0..iters {
                             let envelope = create_test_envelope(size);
                             let result = transform.process(envelope).await;
-                            black_box(result);
+                            drop(black_box(result));
                         }
 
                         start.elapsed()
@@ -111,7 +111,7 @@ fn bench_native_transform(c: &mut Criterion) {
                         for _ in 0..iters {
                             let envelope = RuntimeEnvelope::new("bench-source", payload.clone());
                             let result = transform.process(envelope).await;
-                            black_box(result);
+                            drop(black_box(result));
                         }
 
                         start.elapsed()
@@ -151,7 +151,7 @@ fn bench_native_filter(c: &mut Criterion) {
                     for _ in 0..iters {
                         let envelope = RuntimeEnvelope::new("bench-source", payload.clone());
                         let outcome = filter.evaluate(&envelope).await;
-                        black_box(outcome);
+                        drop(black_box(outcome));
                     }
                     start.elapsed()
                 })
@@ -187,7 +187,7 @@ fn bench_native_router(c: &mut Criterion) {
                     for _ in 0..iters {
                         let envelope = RuntimeEnvelope::new("bench-source", payload.clone());
                         let outcome = router.route(envelope).await;
-                        black_box(outcome);
+                        drop(black_box(outcome));
                     }
                     start.elapsed()
                 })

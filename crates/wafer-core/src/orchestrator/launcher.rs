@@ -39,6 +39,10 @@ use crate::registry::{OciReference, PluginSource, RegistryConfig, WaferRegistry}
 ///
 /// Returns error if engine creation, plugin loading, source/sink creation,
 /// or pipeline building fails.
+#[expect(
+    clippy::large_futures,
+    reason = "pipeline launch holds WASM Store/Component across sequential .await points; called once at startup, not per-message hot path"
+)]
 pub async fn launch_pipeline(
     config: Config,
     config_path: Option<&Path>,
@@ -213,6 +217,7 @@ fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
 /// (P0.4 AC2). Wasm construction still goes through the original
 /// `load_transform_node` helper unchanged.
 #[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
+#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
 async fn load_transform_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -251,6 +256,7 @@ fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::
 }
 
 #[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
+#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
 async fn load_transform_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -375,6 +381,7 @@ fn as_f64(v: &toml::Value) -> Option<f64> {
 /// Mirrors [`load_transform_node_dispatch`] so the native baseline can
 /// implement `type = "filter"` (RQ1 apples-to-apples — A18).
 #[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
+#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
 async fn load_filter_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -416,6 +423,7 @@ pub fn build_native_filter_from_def(
 }
 
 #[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
+#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -467,6 +475,7 @@ async fn load_filter_node(
 }
 
 #[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
+#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
 async fn load_router_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -521,6 +530,7 @@ async fn load_router_node(
 /// component. Returning the hash lets the launcher seed
 /// `PipelineHandle::plugin_hashes` with the same value the P0.12 guard
 /// checks on hot-swap — single source of truth (metadata.json AC2).
+#[expect(clippy::large_futures, reason = "OCI resolution + WASM compilation hold large intermediates across awaits; called once per node")]
 async fn resolve_and_load_component(
     node_id: &str,
     wasm: &WasmNodeDef,

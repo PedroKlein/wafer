@@ -7,6 +7,10 @@
     clippy::let_underscore_must_use,
     reason = "test: fire-and-forget on task handles during setup"
 )]
+#![expect(
+    clippy::large_futures,
+    reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
+)]
 //! F2 regression: `metadata.json` provenance completeness (RESULT-CONTRACT).
 //!
 //! Before F2, `metadata.json` produced by `eval/scripts/run-experiment.sh`

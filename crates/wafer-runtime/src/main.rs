@@ -96,6 +96,10 @@ struct Args {
     clippy::let_underscore_must_use,
     reason = "fire-and-forget in spawned tasks: dir creation is best-effort; oneshot send may fail if receiver moved on"
 )]
+#[expect(
+    clippy::large_futures,
+    reason = "main() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
+)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
