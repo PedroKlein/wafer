@@ -157,13 +157,13 @@ impl Source for BenchSource {
 
             // Build envelope
             let seq = self.sequence;
-            self.sequence += 1;
+            self.sequence = self.sequence.saturating_add(1);
 
             // Use real wall-clock for the envelope timestamp field, but intended_ns
             // in metadata for latency calculation at the sink
             let now_ns = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos() as u64);
+                .map_or(0, |d| crate::util::duration_ns_saturating(d));
 
             let envelope = RuntimeEnvelope::new("bench-source", self.payload.clone())
                 .with_metadata("bench.sequence", seq.to_string())

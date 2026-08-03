@@ -152,7 +152,7 @@ pub async fn run_transform_loop_with_config(
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
         let result = tokio::task::block_in_place(|| transform.process(envelope));
-        let duration_ns = start.elapsed().as_nanos() as u64;
+        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(_guard);
 
         // 6. Dispatch result
@@ -191,7 +191,7 @@ pub async fn run_transform_loop_with_config(
                         let rollback_start = Instant::now();
                         match transform.recover_from_cached_pre() {
                             Ok(()) => {
-                                let rollback_ns = rollback_start.elapsed().as_nanos() as u64;
+                                let rollback_ns = crate::util::duration_ns_saturating(rollback_start.elapsed());
                                 tracing::info!(
                                     node = transform.node_id(),
                                     rollback_time_ns = rollback_ns,

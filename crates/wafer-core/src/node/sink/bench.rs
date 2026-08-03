@@ -48,17 +48,17 @@ impl SequenceTracker {
 
     /// Record a received sequence number.
     pub fn record(&mut self, seq: u64) {
-        self.total_received += 1;
+        self.total_received = self.total_received.saturating_add(1);
 
         if seq == self.expected_next {
-            self.expected_next += 1;
+            self.expected_next = self.expected_next.saturating_add(1);
         } else if seq > self.expected_next {
             // Gap detected: missing [expected_next, seq)
             self.gaps.push((self.expected_next, seq - 1));
             self.expected_next = seq + 1;
         } else {
             // seq < expected_next means duplicate or out-of-order
-            self.duplicates += 1;
+            self.duplicates = self.duplicates.saturating_add(1);
         }
     }
 
@@ -586,7 +586,7 @@ impl BenchSink {
 fn current_time_ns() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| d.as_nanos() as u64)
+        .map_or(0, |d| crate::util::duration_ns_saturating(d))
 }
 
 impl Lifecycle for BenchSink {
@@ -654,7 +654,7 @@ impl Sink for BenchSink {
             }
         }
 
-        self.message_count += 1;
+        self.message_count = self.message_count.saturating_add(1);
 
         // Skip recording during warmup
         if let Some(until) = self.warmup_until {
@@ -673,7 +673,7 @@ impl Sink for BenchSink {
 
         // Throughput tracking
         let payload_len = envelope.payload.len() as u64;
-        self.bucket_msg_count += 1;
+        self.bucket_msg_count = self.bucket_msg_count.saturating_add(1);
         self.bucket_bytes += payload_len;
         self.flush_bucket_if_needed(now);
 

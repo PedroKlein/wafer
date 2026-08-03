@@ -770,7 +770,7 @@ async fn run_passthrough_loop(
         let _guard = ProcessingGuard::enter(&state);
         // Identity: forward unchanged
         send_downstream(&senders, envelope).await;
-        let duration_ns = start.elapsed().as_nanos() as u64;
+        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(_guard);
         metrics.record_processed(duration_ns);
     }

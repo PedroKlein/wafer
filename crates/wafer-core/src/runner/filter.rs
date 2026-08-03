@@ -92,7 +92,7 @@ pub async fn run_filter_loop(
         let start = Instant::now();
         let _guard = ProcessingGuard::enter(&state);
         let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));
-        let duration_ns = start.elapsed().as_nanos() as u64;
+        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(_guard);
 
         // 5. Dispatch result

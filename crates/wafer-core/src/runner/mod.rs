@@ -224,7 +224,7 @@ impl CanaryCounters {
 
     pub fn window_expired(&self) -> bool {
         self.success_count >= self.config.canary_success_count
-            || self.window_start.elapsed().as_millis() as u64 >= self.config.canary_window_ms
+            || crate::util::duration_ms_saturating(self.window_start.elapsed()) >= self.config.canary_window_ms
     }
 
     pub const fn retries_exhausted(&self) -> bool {
@@ -232,13 +232,13 @@ impl CanaryCounters {
     }
 
     pub const fn record_success(&mut self) {
-        self.success_count += 1;
+        self.success_count = self.success_count.saturating_add(1);
     }
 
     /// Record a trap and return whether rollback should fire.
     /// Returns true if we should roll back, false if retries exhausted.
     pub const fn record_trap(&mut self) -> bool {
-        self.trap_count += 1;
+        self.trap_count = self.trap_count.saturating_add(1);
         !self.retries_exhausted()
     }
 }
@@ -617,7 +617,7 @@ mod tests {
             for _ in 0..(max + 5) {
                 let within = counters.record_trap();
                 if !within {
-                    escalations += 1;
+                    escalations = escalations.saturating_add(1);
                 }
             }
             // With `max+5` traps, exactly 5 escalations should have been

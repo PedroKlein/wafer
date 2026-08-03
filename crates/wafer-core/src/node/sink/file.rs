@@ -75,7 +75,7 @@ impl FileSink {
 
         writer.flush()?;
 
-        self.batch_stats.flushes_since_last_check += 1;
+        self.batch_stats.flushes_since_last_check = self.batch_stats.flushes_since_last_check.saturating_add(1);
         self.batch_stats.last_flush_size = batch_size as u64;
 
         Ok(())

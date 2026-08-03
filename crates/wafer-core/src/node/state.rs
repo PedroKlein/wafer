@@ -129,7 +129,7 @@ impl NodeStateTracker {
                 // multiple errors chain (Error → Recovering → Error), the
                 // original timestamp is preserved so recovery duration
                 // reflects the whole outage, not just the last attempt.
-                let now_ns = self.epoch.elapsed().as_nanos() as u64;
+                let now_ns = crate::util::duration_ns_saturating(self.epoch.elapsed());
                 let _ = self.recovery_started_ns.compare_exchange(
                     0,
                     now_ns.max(1),
@@ -159,7 +159,7 @@ impl NodeStateTracker {
             if started == 0 {
                 return Some(0);
             }
-            let now = self.epoch.elapsed().as_nanos() as u64;
+            let now = crate::util::duration_ns_saturating(self.epoch.elapsed());
             Some(now.saturating_sub(started))
         } else {
             None

@@ -1,13 +1,12 @@
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stderr))]
 //! WAFER - WebAssembly Flow Execution Runtime.
 
 #![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
-#![allow(clippy::doc_markdown)]
-#![allow(clippy::missing_errors_doc)]
-#![allow(clippy::must_use_candidate)]
-#![allow(clippy::return_self_not_must_use)]
-#![allow(clippy::struct_excessive_bools)]
+#![expect(clippy::module_name_repetitions, reason = "crate-internal modules share the crate name prefix for disambiguation")]
+#![expect(clippy::doc_markdown, reason = "technical terms like HdrHistogram, WebAssembly are not code identifiers")]
+#![expect(clippy::missing_errors_doc, reason = "error documentation is added incrementally; bulk requirement deferred")]
+#![expect(clippy::must_use_candidate, reason = "most functions have clear semantics from signature; adding #[must_use] everywhere adds noise")]
+#![expect(clippy::return_self_not_must_use, reason = "builder pattern methods return self by convention")]
+#![expect(clippy::struct_excessive_bools, reason = "config structs legitimately use multiple boolean flags")]
 
 pub mod error;
 
@@ -23,6 +22,7 @@ pub mod queue;
 pub mod registry;
 pub mod runner;
 pub mod testing;
+pub mod util;
 
 #[cfg(feature = "http-api")]
 pub mod api;

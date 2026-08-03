@@ -37,7 +37,7 @@ impl MemoryRecorder {
                 () = cancel.cancelled() => break,
                 _ = ticker.tick() => {
                     if let Some(rss) = read_rss_bytes() {
-                        let elapsed_ms = self.start.map_or(0, |s| s.elapsed().as_millis() as u64);
+                        let elapsed_ms = self.start.map_or(0, |s| crate::util::duration_ms_saturating(s.elapsed()));
                         self.samples.push((elapsed_ms, rss));
                     }
                 }

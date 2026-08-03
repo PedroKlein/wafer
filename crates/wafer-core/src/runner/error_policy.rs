@@ -374,7 +374,7 @@ impl ErrorPolicyExecutor {
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_millis() as u64);
+            .map_or(0, |d| crate::util::duration_ms_saturating(d));
 
         let trace_id = envelope.lineage.trace_id.as_ref().map(std::string::ToString::to_string);
         let parent_id = envelope.lineage.parent_id.as_ref().map(std::string::ToString::to_string);

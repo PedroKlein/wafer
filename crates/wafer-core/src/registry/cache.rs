@@ -79,7 +79,7 @@ impl PackageCache {
     }
 
     pub fn clear_expired(&self) -> Result<usize, RegistryError> {
-        let mut removed = 0;
+        let mut removed: usize = 0;
         if !self.cache_dir.exists() {
             return Ok(0);
         }
@@ -111,7 +111,7 @@ impl PackageCache {
                         if let Ok(modified) = metadata.modified() {
                             if let Ok(age) = SystemTime::now().duration_since(modified) {
                                 if age > self.ttl && fs::remove_file(&version_path).is_ok() {
-                                    removed += 1;
+                                    removed = removed.saturating_add(1);
                                 }
                             }
                         }

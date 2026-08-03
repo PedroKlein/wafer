@@ -274,15 +274,13 @@ pub async fn hot_swap(
         }
     };
 
-    let ack_ns = report.ack_at.duration_since(signal_at).as_nanos() as u64;
-    let convergence_ns = report
-        .first_v2_at
-        .duration_since(report.ack_at)
-        .as_nanos() as u64;
-    let first_v2_ns = report
-        .first_v2_at
-        .duration_since(signal_at)
-        .as_nanos() as u64;
+    let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
+    let convergence_ns = crate::util::duration_ns_saturating(
+        report.first_v2_at.duration_since(report.ack_at),
+    );
+    let first_v2_ns = crate::util::duration_ns_saturating(
+        report.first_v2_at.duration_since(signal_at),
+    );
 
     // P0.10 AC1: record every phase into the hot_swap_phase_ns histogram
     // labelled {phase, node_id}. Six phases total — curl :9090/metrics | rg
@@ -419,11 +417,10 @@ pub async fn reconfigure(
         }
     };
 
-    let ack_ns = report.ack_at.duration_since(signal_at).as_nanos() as u64;
-    let convergence_ns = report
-        .first_v2_at
-        .duration_since(report.ack_at)
-        .as_nanos() as u64;
+    let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
+    let convergence_ns = crate::util::duration_ns_saturating(
+        report.first_v2_at.duration_since(report.ack_at),
+    );
 
     // Reconfigure reuses the cached InstancePre; compile is unused and
     // instantiation is the tiny cached-pre `.instantiate()` inside try_reconfigure,

@@ -13,13 +13,12 @@ use crate::engine::Capabilities;
 use crate::error::{Result, WaferError};
 use crate::runner::{HotSwapProgress, SwapPayload};
 
-/// Prepare a transform/filter/router swap payload.
-///
-/// The timed variants (`prepare_transform_swap_timed`, etc.) below are the
-/// production path used by both the runtime API handler and RQ3 benchmarks.
-/// Compile, pre-instantiate, instantiate, and package into a `SwapPayload`
-/// ready to send via watch channel.
-///
+// Prepare a transform/filter/router swap payload.
+//
+// The timed variants (`prepare_transform_swap_timed`, etc.) below are the
+// production path used by both the runtime API handler and RQ3 benchmarks.
+// Compile, pre-instantiate, instantiate, and package into a `SwapPayload`
+// ready to send via watch channel.
 
 // =============================================================================
 // Legacy hot-swap coordinator — feature-gated for old tests
@@ -127,14 +126,14 @@ impl SwapTimeline {
     #[must_use]
     pub fn compile_duration_ns(&self) -> Option<u64> {
         self.compile_done
-            .map(|done| done.duration_since(self.request_time).as_nanos() as u64)
+            .map(|done| crate::util::duration_ns_saturating(done.duration_since(self.request_time)))
     }
 
     /// Instantiation duration (compile_done → instantiate_done).
     #[must_use]
     pub fn instantiate_duration_ns(&self) -> Option<u64> {
         match (self.compile_done, self.instantiate_done) {
-            (Some(start), Some(end)) => Some(end.duration_since(start).as_nanos() as u64),
+            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
             _ => None,
         }
     }
@@ -143,7 +142,7 @@ impl SwapTimeline {
     #[must_use]
     pub fn signal_duration_ns(&self) -> Option<u64> {
         match (self.instantiate_done, self.signal_sent) {
-            (Some(start), Some(end)) => Some(end.duration_since(start).as_nanos() as u64),
+            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
             _ => None,
         }
     }
@@ -152,7 +151,7 @@ impl SwapTimeline {
     #[must_use]
     pub fn ack_duration_ns(&self) -> Option<u64> {
         match (self.signal_sent, self.swap_acked) {
-            (Some(start), Some(end)) => Some(end.duration_since(start).as_nanos() as u64),
+            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
             _ => None,
         }
     }
@@ -161,7 +160,7 @@ impl SwapTimeline {
     #[must_use]
     pub fn convergence_duration_ns(&self) -> Option<u64> {
         match (self.swap_acked, self.first_v2_output) {
-            (Some(start), Some(end)) => Some(end.duration_since(start).as_nanos() as u64),
+            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
             _ => None,
         }
     }
@@ -170,7 +169,7 @@ impl SwapTimeline {
     #[must_use]
     pub fn total_duration_ns(&self) -> Option<u64> {
         self.first_v2_output
-            .map(|end| end.duration_since(self.request_time).as_nanos() as u64)
+            .map(|end| crate::util::duration_ns_saturating(end.duration_since(self.request_time)))
     }
 
     /// Serialize to JSON for swap_timeline.json output.
