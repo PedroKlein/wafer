@@ -132,10 +132,9 @@ as_conversions = "deny"
 # === Don't Fail Silently ===
 let_underscore_future = "deny"
 let_underscore_must_use = "warn"
-unused_result_ok = "warn"
-map_err_ignore = "warn"
+unused_result_ok = "deny"
+map_err_ignore = "deny"
 assertions_on_result_states = "warn"
-
 # === Don't Do Bad Async Stuff (see async-tokio skill) ===
 await_holding_lock = "deny"
 await_holding_refcell_ref = "deny"
@@ -147,6 +146,7 @@ undocumented_unsafe_blocks = "deny"
 multiple_unsafe_ops_per_block = "warn"
 
 # === Performance (see rust-best-practices: zero-allocation hot path) ===
+format_push_string = "deny"
 redundant_clone = "deny"
 clone_on_copy = "deny"
 needless_collect = "warn"
@@ -162,7 +162,7 @@ or_fun_call = "warn"
 needless_borrow = "deny"
 
 # === Numeric Safety ===
-cast_sign_loss = "warn"
+cast_sign_loss = "deny"
 float_cmp = "warn"
 lossy_float_literal = "warn"
 

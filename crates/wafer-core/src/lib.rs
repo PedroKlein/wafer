@@ -1,6 +1,5 @@
 //! WAFER - WebAssembly Flow Execution Runtime.
 
-#![warn(clippy::pedantic)]
 #![expect(clippy::module_name_repetitions, reason = "crate-internal modules share the crate name prefix for disambiguation")]
 #![expect(clippy::doc_markdown, reason = "technical terms like HdrHistogram, WebAssembly are not code identifiers")]
 #![expect(clippy::missing_errors_doc, reason = "error documentation is added incrementally; bulk requirement deferred")]
