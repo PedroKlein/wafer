@@ -1,4 +1,10 @@
 //! Snapshot builder methods for MetricsRegistry.
+#![expect(
+    clippy::unwrap_used,
+    clippy::significant_drop_tightening,
+    clippy::as_conversions,
+    reason = "RwLock::read().unwrap() is idiomatic; guards intentionally held during snapshot; u64→f64 precision loss acceptable for metrics display"
+)]
 
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;

@@ -1,4 +1,8 @@
 //! Prometheus metrics registry.
+#![expect(
+    clippy::unwrap_used,
+    reason = "RwLock::read/write().unwrap() is idiomatic — lock poisoning implies a prior panic which is unrecoverable anyway"
+)]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -334,6 +338,11 @@ impl Default for MetricsRegistry {
 pub type MetricsHandle = Arc<MetricsRegistry>;
 
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::significant_drop_tightening,
+    reason = "test code: unwrap is acceptable in tests; MutexGuards intentionally held for assertion scope"
+)]
 mod tests {
     use super::*;
 

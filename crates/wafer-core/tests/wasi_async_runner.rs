@@ -2,6 +2,7 @@
 #![expect(
     clippy::print_stderr,
     clippy::as_conversions,
+    clippy::cast_precision_loss,
     clippy::significant_drop_tightening,
     reason = "integration test: diagnostic output and convenience patterns"
 )]

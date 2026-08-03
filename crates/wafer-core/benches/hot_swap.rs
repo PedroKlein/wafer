@@ -8,6 +8,8 @@
     clippy::indexing_slicing,
     clippy::significant_drop_tightening,
     clippy::items_after_statements,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
     reason = "benchmark harness: timing math, diagnostic output, and convenience patterns are acceptable"
 )]
 //! Hot-swap benchmarks for WAFER (RQ3 evidence).

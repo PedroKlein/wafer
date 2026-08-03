@@ -447,6 +447,7 @@ pub async fn shutdown(State(orch): State<AppState>) -> StatusCode {
 }
 
 /// GET /metrics — Prometheus-style text metrics
+#[expect(clippy::indexing_slicing, reason = "bucket indices come from enumerate() over same-length arrays")]
 pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     let mut output = String::new();
 

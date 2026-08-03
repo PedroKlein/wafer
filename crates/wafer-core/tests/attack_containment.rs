@@ -19,6 +19,7 @@
 //!    error kind is one of the expected containment variants:
 //!    - `Unrecoverable`  — trap (unreachable, OOB memory, etc.)
 //!    - `TimedOut`       — epoch interruption
+//!
 //!    Both variants map into `NodeStateTracker::transition_to_error`
 //!    at the runner layer (see `crates/wafer-core/src/runner/*.rs`).
 //! 3. The healthy transform still processes a *subsequent* message
