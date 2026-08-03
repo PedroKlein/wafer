@@ -6,11 +6,10 @@
 
 use std::process::Command;
 
-fn main() {
+fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=../../Cargo.lock");
 
-    let lockfile = std::fs::read_to_string("../../Cargo.lock")
-        .expect("workspace Cargo.lock is required for provenance version capture");
+    let lockfile = std::fs::read_to_string("../../Cargo.lock")?;
     let wasmtime_version = wasmtime_version_from_lockfile(&lockfile)
         .unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=WAFER_WASMTIME_VERSION={wasmtime_version}");
@@ -21,9 +20,10 @@ fn main() {
         .output()
         .ok()
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(|| "unknown".to_string(), |s| s.trim().to_string());
     println!("cargo:rustc-env=WAFER_RUSTC_VERSION={rustc_version}");
+
+    Ok(())
 }
 
 /// Parse `Cargo.lock` for the top-level `wasmtime` package version. Uses a

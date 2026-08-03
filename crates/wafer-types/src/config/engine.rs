@@ -5,26 +5,34 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::source_sink::{AuthConfig, TlsConfig};
 
 /// Custom deserializer for metering fields: missing → None (unlimited),
-/// positive integer → Some(NonZeroU64), zero → hard error.
+/// positive integer → `Some(NonZeroU64)`, zero → hard error.
 ///
 /// Standard `Option<NonZeroU64>` silently maps `0` to `None` (TOML trait
 /// semantics). We reject it instead so the P0.13 footgun stays impossible.
-pub(crate) fn deserialize_metering_limit<'de, D>(deserializer: D) -> Result<Option<NonZeroU64>, D::Error>
+pub(super) fn deserialize_metering_limit<'de, D>(deserializer: D) -> Result<Option<NonZeroU64>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let v = Option::<u64>::deserialize(deserializer)?;
-    match v {
-        None => Ok(None),
-        Some(0) => Err(serde::de::Error::custom(
+    // Reject `0` explicitly (would trap the Wasm call immediately — P0.13).
+    // `NonZeroU64::new(0)` returns None, which we translate to the same error
+    // so there's a single source of truth for the rejection.
+    let Some(n) = Option::<u64>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    NonZeroU64::new(n).map(Some).ok_or_else(|| {
+        serde::de::Error::custom(
             "metering value must not be 0 (would trap immediately); omit the field for unlimited",
-        )),
-        Some(n) => Ok(Some(NonZeroU64::new(n).unwrap())),
-    }
+        )
+    })
 }
 
-/// Serialize helper: unwrap the NonZeroU64 back to a plain u64 for TOML.
-pub(crate) fn serialize_metering_limit<S>(value: &Option<NonZeroU64>, serializer: S) -> Result<S::Ok, S::Error>
+/// Serialize helper: extract the inner value of `NonZeroU64` back to a plain `u64` for TOML.
+#[expect(
+    clippy::ref_option,
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's serialize_with contract requires fn(&T, S) -> Result<...>"
+)]
+pub(super) fn serialize_metering_limit<S>(value: &Option<NonZeroU64>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -46,7 +54,7 @@ pub(super) const fn default_true() -> bool {
 pub struct EngineConfig {
     /// Epoch ticks before a Wasm call traps. `None` = no epoch interrupt.
     ///
-    /// NonZeroU64 prevents the `0 = trap immediately` footgun (P0.13 lesson:
+    /// `NonZeroU64` prevents the `0 = trap immediately` footgun (P0.13 lesson:
     /// a typo or off-by-one silently makes every Wasm call trap on first
     /// epoch check, indistinguishable from a plugin bug).
     #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
@@ -83,17 +91,17 @@ impl Default for EngineConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub struct FuelBudgets {
-    /// Fuel per transform process() call. `None` = unlimited (set_fuel skipped).
+    /// Fuel per transform `process()` call. `None` = unlimited (`set_fuel` skipped).
     ///
-    /// NonZeroU64: `0` would trap on the first fuel check (P0.13 lesson).
+    /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
     #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
     pub transform: Option<NonZeroU64>,
 
-    /// Fuel per filter apply() call. `None` = unlimited.
+    /// Fuel per filter `apply()` call. `None` = unlimited.
     #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
     pub filter: Option<NonZeroU64>,
 
-    /// Fuel per router route() call. `None` = unlimited.
+    /// Fuel per router `route()` call. `None` = unlimited.
     #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
     pub router: Option<NonZeroU64>,
 }
@@ -133,7 +141,7 @@ pub struct HotSwapConfig {
     pub canary_success_count: u32,
 
     /// Maximum wall-clock milliseconds the rollback snapshot is retained
-    /// after swap ACK. Default: 10_000 (10s).
+    /// after swap ACK. Default: `10_000` (10s).
     #[serde(default = "default_canary_window_ms")]
     pub canary_window_ms: u64,
 

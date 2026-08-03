@@ -109,21 +109,25 @@ unsafe_op_in_unsafe_fn = "deny"
 [workspace.lints.clippy]
 # === Groups ===
 all = { level = "deny", priority = -1 }
-pedantic = { level = "warn", priority = -1 }
-nursery = { level = "warn", priority = -1 }
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
 
 # === Don't Panic (WAFER runs 24/7 — panics kill all healthy nodes) ===
-unwrap_used = "warn"
-expect_used = "warn"
-panic = "warn"
-todo = "warn"
-unimplemented = "warn"
-unreachable = "warn"
-get_unwrap = "warn"
-unwrap_in_result = "warn"
-panic_in_result_fn = "warn"
-indexing_slicing = "warn"
-string_slice = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+get_unwrap = "deny"
+unwrap_in_result = "deny"
+panic_in_result_fn = "deny"
+indexing_slicing = "deny"
+string_slice = "deny"
+arithmetic_side_effects = "deny"
+unchecked_time_subtraction = "deny"
+exit = "deny"
+as_conversions = "deny"
 
 # === Don't Fail Silently ===
 let_underscore_future = "deny"

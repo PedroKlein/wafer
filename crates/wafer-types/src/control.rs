@@ -506,15 +506,15 @@ mod tests {
 
         assert_eq!(parsed.error.code, "invalid_state");
         let details = parsed.error.details.unwrap();
-        assert_eq!(details.get("expected").unwrap(), "running");
-        assert_eq!(details.get("actual").unwrap(), "stopped");
+        assert_eq!(details["expected"], "running");
+        assert_eq!(details["actual"], "stopped");
     }
 
     #[test]
     fn test_hot_swap_result_durations_roundtrip() {
         let result = HotSwapResult {
             node_id: "test".to_string(),
-            drain_duration: Duration::from_secs(1) + Duration::from_nanos(123456789),
+            drain_duration: Duration::from_secs(1) + Duration::from_nanos(123_456_789),
             load_duration: Duration::from_millis(500),
             total_duration: Duration::from_secs(2),
             messages_drained: 100,

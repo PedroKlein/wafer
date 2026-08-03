@@ -1,4 +1,3 @@
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! Guest SDK for WAFER pipeline plugins.
 //!
 //! Provides macros and utilities for writing Wasm Component Model plugins.
@@ -162,7 +161,6 @@ pub fn parse_config<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, Str
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // --- parse_config tests (feature-gated) ---
 
