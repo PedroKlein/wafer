@@ -17,6 +17,11 @@ use crate::node::{Filter, Router, Transform};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::WasmProcessError;
 
+/// Type alias for the boxed transform processing function.
+type TransformFn = Box<dyn Fn(&[u8]) -> std::result::Result<Vec<u8>, ProcessError> + Send>;
+/// Type alias for the boxed routing function.
+type RouteFn = Box<dyn Fn(&RuntimeEnvelope) -> Vec<String> + Send>;
+
 // =============================================================================
 // NativeTransform
 // =============================================================================
@@ -28,7 +33,7 @@ use crate::runner::error_policy::WasmProcessError;
 pub struct NativeTransform {
     id: String,
     node_type_name: String,
-    process_fn: Box<dyn Fn(&[u8]) -> std::result::Result<Vec<u8>, ProcessError> + Send>,
+    process_fn: TransformFn,
 }
 
 impl NativeTransform {
@@ -238,7 +243,7 @@ impl Filter for NativeFilter {
 pub struct NativeRouter {
     id: String,
     ports: Vec<String>,
-    route_fn: Box<dyn Fn(&RuntimeEnvelope) -> Vec<String> + Send>,
+    route_fn: RouteFn,
 }
 
 impl NativeRouter {
@@ -334,10 +339,10 @@ impl Router for NativeRouter {
     ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>> {
         let ports = (self.route_fn)(&envelope);
         Box::pin(async move {
-            if let Some(first) = ports.into_iter().next() {
-                Ok(RouteResult::Route(first, envelope))
-            } else {
-                Ok(RouteResult::Filter)
+            ports.into_iter().next().map_or(
+                Ok(RouteResult::Filter),
+                |first| Ok(RouteResult::Route(first, envelope)),
+            )
             }
         })
     }

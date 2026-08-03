@@ -245,7 +245,6 @@ impl Sink for MqttSink {
                 if let Some(batch) = buffer.push(envelope) {
                     self.publish_batch(batch).await?;
                 }
-                Ok(())
             } else {
                 // No batching - publish immediately
                 let client = self.client.as_ref().ok_or_else(|| WaferError::PluginInit {
@@ -256,9 +255,8 @@ impl Sink for MqttSink {
                     .publish(&self.topic, self.qos, false, envelope.payload)
                     .await
                     .map_err(|e| WaferError::Io(std::io::Error::other(e.to_string())))?;
-
-                Ok(())
             }
+            Ok(())
         })
     }
 

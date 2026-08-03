@@ -47,7 +47,8 @@ impl PipelineMetrics {
         if total == 0 {
             return 0;
         }
-        self.process_time_ns() / total
+        #[expect(clippy::arithmetic_side_effects, reason = "division by zero guarded by the check above")]
+        { self.process_time_ns() / total }
     }
 
     /// Create a snapshot of current metrics.

@@ -96,6 +96,7 @@ impl WaferEngine {
     /// Uses `std::thread::spawn` with a Weak engine reference so the thread
     /// exits when all `Engine` clones are dropped. This ensures epoch ticks
     /// fire even when all Tokio workers are blocked in Wasm execution.
+    #[expect(clippy::expect_used, reason = "epoch ticker is a single lightweight OS thread; spawn failure indicates catastrophic OS resource exhaustion")]
     pub fn ensure_epoch_ticker(&self) {
         self.epoch_started.get_or_init(|| {
             let engine_weak = self.engine.weak();

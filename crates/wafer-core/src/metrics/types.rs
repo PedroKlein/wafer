@@ -142,6 +142,7 @@ impl PhaseHistogram {
         }
     }
 
+    #[expect(clippy::indexing_slicing, reason = "i bounded by enumerate() over BUCKETS_NS which has same length as self.buckets")]
     pub fn record(&self, ns: u64) {
         for (i, upper) in Self::BUCKETS_NS.iter().enumerate() {
             if ns <= *upper {

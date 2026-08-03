@@ -147,10 +147,7 @@ impl Source for HttpSource {
                 message: "HttpSource not initialized - call init() first".into(),
             })?;
 
-            match rx.recv().await {
-                Some(envelope) => Ok(Some(envelope)),
-                None => Ok(None),
-            }
+            Ok(rx.recv().await)
         })
     }
 }

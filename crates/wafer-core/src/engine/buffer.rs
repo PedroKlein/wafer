@@ -37,6 +37,7 @@ impl WaferBuffer {
     #[inline]
     #[expect(clippy::as_conversions, reason = "u64→usize: offset/len validated against data.len() which is usize; truncation impossible")]
     #[expect(clippy::arithmetic_side_effects, reason = "total-offset underflow impossible (offset<total guard); start+clamped_len <= total (clamped_len = min(len,remaining))")]
+    #[expect(clippy::indexing_slicing, reason = "start..start+clamped_len proven in-bounds: start < total and clamped_len <= total-start")]
     pub fn read(&self, offset: u64, len: u64) -> Vec<u8> {
         let total = crate::util::usize_as_u64(self.data.len());
         if offset >= total {

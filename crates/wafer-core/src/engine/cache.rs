@@ -123,10 +123,16 @@ impl ComponentCache {
 
         // SAFETY: These bytes were produced by our own serialize() and stored
         // in a directory we control. We never accept external .cwasm files.
-        if let Ok(component) = unsafe { Component::deserialize(engine, &bytes) } { Ok(Some(component)) } else {
-            // Stale/incompatible cache entry (wasmtime version change) — evict
-            let _ = std::fs::remove_file(&path);
-            Ok(None)
+        // Safety invariant: deserialization is from a trusted .cwasm produced by
+        // our own Module::serialize in the same wasmtime version.
+        let result = unsafe { Component::deserialize(engine, &bytes) };
+        match result {
+            Ok(component) => Ok(Some(component)),
+            Err(_) => {
+                // Stale/incompatible cache entry (wasmtime version change) — evict
+                let _ = std::fs::remove_file(&path);
+                Ok(None)
+            }
         }
     }
 

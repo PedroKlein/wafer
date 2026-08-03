@@ -157,15 +157,14 @@ impl Sink for FileSink {
                 if let Some(batch) = buffer.push(envelope) {
                     self.write_batch(batch)?;
                 }
-                Ok(())
             } else {
                 let writer = self.writer.as_mut().ok_or_else(|| WaferError::PluginInit {
                     message: "FileSink not initialized - call init() first".to_string(),
                 })?;
                 writer.write_all(&envelope.payload)?;
                 writer.write_all(b"\n")?;
-                Ok(())
             }
+            Ok(())
         })
     }
 
