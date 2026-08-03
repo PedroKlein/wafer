@@ -1,15 +1,10 @@
 #![expect(
     clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::print_stdout,
-    clippy::print_stderr,
     clippy::as_conversions,
     clippy::arithmetic_side_effects,
-    clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::indexing_slicing,
-    clippy::significant_drop_tightening,
-    reason = "benchmark harness: timing math, diagnostic output, and convenience patterns are acceptable"
+    reason = "benchmark harness: timing math, unwraps on known-good fixtures, and indexed bucket access are acceptable"
 )]
 //! Metrics endpoint benchmarks for WAFER.
 //!

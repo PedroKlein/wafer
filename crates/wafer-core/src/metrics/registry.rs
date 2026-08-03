@@ -339,12 +339,10 @@ pub type MetricsHandle = Arc<MetricsRegistry>;
 
 #[cfg(test)]
 #[expect(
-    clippy::unwrap_used,
     clippy::significant_drop_tightening,
     clippy::string_slice,
     clippy::option_if_let_else,
-    clippy::indexing_slicing,
-    reason = "test code: unwrap is acceptable; MutexGuards intentionally held; string parsing uses ASCII-safe byte offsets"
+    reason = "test code: MutexGuards intentionally held for assertion scope; string parsing uses ASCII-safe byte offsets"
 )]
 mod tests {
     use super::*;
@@ -786,7 +784,6 @@ mod tests {
     }
 
     #[test]
-    #[expect(clippy::too_many_lines, reason = "comprehensive hot-swap validation")]
     fn test_hotswap_metrics() {
         let registry = MetricsRegistry::new();
 
