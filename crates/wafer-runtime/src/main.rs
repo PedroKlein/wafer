@@ -1,4 +1,3 @@
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 //! WAFER Runtime — WebAssembly Flow Execution Runtime binary.
 //!
 //! Loads pipeline config, launches all nodes, runs until completion or signal.
@@ -89,6 +88,10 @@ struct Args {
 }
 
 #[tokio::main]
+#[expect(
+    clippy::too_many_lines,
+    reason = "main() is the linear boot sequence: arg parsing, tracing init, config validation, orchestrator wiring, control-plane launch, shutdown handlers. Splitting into helpers obscures the boot order without adding testability."
+)]
 async fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -284,34 +287,27 @@ async fn run_with_swap(
     orchestrator: &mut PipelineOrchestrator,
     rx: tokio::sync::oneshot::Receiver<(String, wafer_core::runner::SwapPayload)>,
 ) {
-    // We can't use run_until_complete directly because we need to interleave
-    // with the swap oneshot. Instead, replicate the logic with an additional arm.
-    let mut swap_rx = Some(rx);
+    // Race the cancel signal against the swap oneshot; if cancelled first, we
+    // skip the run-to-completion phase. If the swap arrives (or errors), we
+    // dispatch it and then fall through to run_until_complete.
     let cancel = orchestrator.cancel_token().clone();
 
-    loop {
-        if let Some(rx) = swap_rx.take() {
-            tokio::select! {
-                biased;
-                () = cancel.cancelled() => break,
-                result = rx => {
-                    if let Ok((node_id, payload)) = result {
-                        match orchestrator.send_swap(&node_id, payload) {
-                            Ok(()) => info!(node = %node_id, "Hot-swap dispatched"),
-                            Err(e) => error!(error = %e, "Hot-swap dispatch failed"),
-                        }
-                    }
-                    // After swap dispatched, fall through to run_until_complete
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => return,
+        result = rx => {
+            if let Ok((node_id, payload)) = result {
+                match orchestrator.send_swap(&node_id, payload) {
+                    Ok(()) => info!(node = %node_id, "Hot-swap dispatched"),
+                    Err(e) => error!(error = %e, "Hot-swap dispatch failed"),
                 }
             }
         }
+    }
 
-        // Now just run until complete
-        match orchestrator.run_until_complete().await {
-            Ok(()) => info!("Pipeline completed"),
-            Err(e) => error!(error = %e, "Pipeline exited with error"),
-        }
-        break;
+    match orchestrator.run_until_complete().await {
+        Ok(()) => info!("Pipeline completed"),
+        Err(e) => error!(error = %e, "Pipeline exited with error"),
     }
 }
 
@@ -423,6 +419,10 @@ async fn flush_bench_artifacts(
     }
 }
 
+#[expect(
+    clippy::expect_used,
+    reason = "signal handler installation is fundamental infrastructure: failure means the runtime cannot shut down cleanly on SIGINT/SIGTERM, so panicking is the only defensible response"
+)]
 async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");

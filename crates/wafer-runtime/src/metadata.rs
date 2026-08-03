@@ -148,6 +148,7 @@ mod tests {
         }
         let resolved = resolve_output_path().unwrap();
         assert_eq!(resolved, explicit);
+        // SAFETY: single-threaded test wrt these vars; no other thread reads them.
         unsafe {
             std::env::remove_var("WAFER_METADATA_OUTPUT");
             std::env::remove_var("WAFER_BENCH_OUTPUT_DIR");

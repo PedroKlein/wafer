@@ -1,3 +1,9 @@
+#![expect(
+    clippy::expect_used,
+    clippy::arithmetic_side_effects,
+    reason = "integration test harness: setup expects fail the test explicitly; Instant + Duration deadline math is safe within test lifetimes"
+)]
+
 use std::fs;
 use std::io::Write as _;
 use std::net::{SocketAddr, TcpListener};

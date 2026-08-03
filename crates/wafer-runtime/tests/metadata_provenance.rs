@@ -1,4 +1,8 @@
 #![cfg(test)]
+#![expect(
+    clippy::print_stderr,
+    reason = "test diagnostic output: prints reason when the test is skipped due to missing fixture"
+)]
 //! F2 regression: `metadata.json` provenance completeness (RESULT-CONTRACT).
 //!
 //! Before F2, `metadata.json` produced by `eval/scripts/run-experiment.sh`
