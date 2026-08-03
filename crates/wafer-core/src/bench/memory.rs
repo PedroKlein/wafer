@@ -53,12 +53,13 @@ impl MemoryRecorder {
 
     /// Average RSS across all samples.
     #[must_use]
+    #[expect(clippy::arithmetic_side_effects, reason = "division by zero guarded by is_empty() check above")]
     pub fn avg_rss_bytes(&self) -> u64 {
         if self.samples.is_empty() {
             return 0;
         }
         let sum: u64 = self.samples.iter().map(|(_, rss)| rss).sum();
-        sum / self.samples.len() as u64
+        sum / crate::util::usize_as_u64(self.samples.len())
     }
 
     /// Peak RSS observed.
@@ -89,7 +90,7 @@ impl Default for MemoryRecorder {
 /// Cross-platform (macOS + Linux) without subprocess overhead. Returns
 /// `None` only when the underlying OS API is unavailable (e.g., WASI).
 pub fn read_rss_bytes() -> Option<u64> {
-    memory_stats::memory_stats().map(|s| s.physical_mem as u64)
+    memory_stats::memory_stats().map(|s| crate::util::usize_as_u64(s.physical_mem))
 }
 
 #[cfg(test)]

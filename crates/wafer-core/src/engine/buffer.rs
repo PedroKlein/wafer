@@ -30,13 +30,15 @@ impl WaferBuffer {
     /// Total byte length of the payload.
     #[inline]
     pub const fn size(&self) -> u64 {
-        self.data.len() as u64
+        crate::util::usize_as_u64(self.data.len())
     }
 
     /// Read a slice of the payload. Returns fewer bytes if offset+len exceeds size.
     #[inline]
+    #[expect(clippy::as_conversions, reason = "u64→usize: offset/len validated against data.len() which is usize; truncation impossible")]
+    #[expect(clippy::arithmetic_side_effects, reason = "total-offset underflow impossible (offset<total guard); start+clamped_len <= total (clamped_len = min(len,remaining))")]
     pub fn read(&self, offset: u64, len: u64) -> Vec<u8> {
-        let total = self.data.len() as u64;
+        let total = crate::util::usize_as_u64(self.data.len());
         if offset >= total {
             return Vec::new();
         }

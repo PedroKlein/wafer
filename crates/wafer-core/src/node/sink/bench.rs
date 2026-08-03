@@ -54,8 +54,8 @@ impl SequenceTracker {
             self.expected_next = self.expected_next.saturating_add(1);
         } else if seq > self.expected_next {
             // Gap detected: missing [expected_next, seq)
-            self.gaps.push((self.expected_next, seq - 1));
-            self.expected_next = seq + 1;
+            self.gaps.push((self.expected_next, seq.saturating_sub(1)));
+            self.expected_next = seq.saturating_add(1);
         } else {
             // seq < expected_next means duplicate or out-of-order
             self.duplicates = self.duplicates.saturating_add(1);
@@ -65,7 +65,7 @@ impl SequenceTracker {
     /// Total number of missing message slots.
     #[must_use]
     pub fn total_gaps(&self) -> u64 {
-        self.gaps.iter().map(|(start, end)| end - start + 1).sum()
+        self.gaps.iter().map(|(start, end)| end.saturating_sub(*start).saturating_add(1)).sum()
     }
 
     /// Whether any gaps exist.
@@ -307,6 +307,7 @@ pub struct BenchSink {
 impl BenchSink {
     /// Create a new BenchSink with the given configuration.
     #[must_use]
+    #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
     pub fn new(config: BenchSinkConfig) -> Self {
         let sequence_tracker = if config.track_sequences {
             Some(SequenceTracker::new())
@@ -428,6 +429,7 @@ impl BenchSink {
     ///
     /// Format compatible with HdrHistogram tooling and the Python `hdr_loader.py`.
     /// Single interval spanning the entire measurement period.
+    #[expect(clippy::expect_used, reason = "HdrHistogram writer/serialization operates on in-memory buffers; UTF-8 guaranteed from ASCII content")]
     pub fn to_hdr_log(&self) -> String {
         let mut buf = Vec::new();
         let mut serializer = V2Serializer::new();
@@ -586,7 +588,7 @@ impl BenchSink {
 fn current_time_ns() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| crate::util::duration_ns_saturating(d))
+        .map_or(0, crate::util::duration_ns_saturating)
 }
 
 impl Lifecycle for BenchSink {

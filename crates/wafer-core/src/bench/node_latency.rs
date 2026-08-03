@@ -84,11 +84,10 @@ impl NodeLatencyRecorder {
     pub fn to_csv(&self) -> String {
         let mut csv = String::from("node_id,count,min_ns,p50_ns,p99_ns,p999_ns,max_ns,mean_ns\n");
 
-        let mut ids: Vec<&String> = self.histograms.keys().collect();
-        ids.sort(); // Deterministic output order
+        let mut entries: Vec<(&String, &Histogram<u64>)> = self.histograms.iter().collect();
+        entries.sort_by_key(|(id, _)| *id);
 
-        for id in ids {
-            let hist = &self.histograms[id];
+        for (id, hist) in entries {
             if hist.is_empty() {
                 continue;
             }
@@ -127,11 +126,10 @@ impl NodeLatencyRecorder {
             .begin_log_with(&mut buf, &mut serializer)
             .expect("begin interval log");
 
-        let mut ids: Vec<&String> = self.histograms.keys().collect();
-        ids.sort();
+        let mut entries: Vec<(&String, &Histogram<u64>)> = self.histograms.iter().collect();
+        entries.sort_by_key(|(id, _)| *id);
 
-        for id in ids {
-            let hist = &self.histograms[id];
+        for (id, hist) in entries {
             if hist.is_empty() {
                 continue;
             }

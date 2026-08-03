@@ -78,6 +78,7 @@ impl BenchSource {
     #[must_use]
     pub fn new(config: BenchSourceConfig) -> Self {
         let payload = Bytes::from(vec![0x42u8; config.payload_size]);
+        #[expect(clippy::as_conversions, reason = "f64→u64: result of 1e9/rate is always a positive finite value that fits in u64 for any reasonable rate")]
         let interval_ns = (1_000_000_000.0 / config.rate_per_sec) as u64;
 
         Self {
@@ -163,7 +164,7 @@ impl Source for BenchSource {
             // in metadata for latency calculation at the sink
             let now_ns = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .map_or(0, |d| crate::util::duration_ns_saturating(d));
+                .map_or(0, crate::util::duration_ns_saturating);
 
             let envelope = RuntimeEnvelope::new("bench-source", self.payload.clone())
                 .with_metadata("bench.sequence", seq.to_string())

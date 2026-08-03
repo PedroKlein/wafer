@@ -31,6 +31,7 @@ impl HttpSource {
     /// Panics if the hardcoded fallback address `127.0.0.1:8081` fails to parse
     /// (this should never happen as it's a valid address literal).
     #[must_use]
+    #[expect(clippy::unwrap_used, reason = "fallback \"127.0.0.1:8081\" is a valid literal socket address; parse cannot fail")]
     pub fn new(
         id: impl Into<String>,
         bind_addr: impl Into<String>,
