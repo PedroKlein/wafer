@@ -24,6 +24,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, fan_out};
 /// The Wasm call (`router.route()`) runs OUTSIDE the `select!` block.
 /// Router borrows the envelope — no safety clone needed. Fan-out after routing
 /// clones for N-1 ports and moves for the last port.
+#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
@@ -38,7 +39,8 @@ pub async fn run_router_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
-            if let Some(payload) = swap_rx.borrow_and_update().clone() {
+            let swap_value = swap_rx.borrow_and_update().clone();
+            if let Some(payload) = swap_value {
                 policy.flush_to_dlq("hot_swap_drain");
                 let progress = payload.progress();
                 let result = match payload {

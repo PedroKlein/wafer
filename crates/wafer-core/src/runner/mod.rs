@@ -290,7 +290,7 @@ impl TransformCanaryState {
 
     /// Record a trap and return whether rollback should fire.
     /// Returns true if we should roll back, false if retries exhausted.
-    pub fn record_trap(&mut self) -> bool {
+    pub const fn record_trap(&mut self) -> bool {
         self.counters.record_trap()
     }
 }
@@ -361,6 +361,12 @@ impl SwapPayload {
     /// Native transforms reject the swap with a stable
     /// `WaferError::Runtime` message (the baseline is by construction
     /// not swappable).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the swap payload's store or bindings have already been consumed.
+    /// This is a bug — each `SwapPayload` is single-consumer.
+    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
     pub fn try_apply_transform(
         self,
         node: &mut crate::node::TransformNode,
@@ -383,6 +389,11 @@ impl SwapPayload {
     /// Native filters have no InstancePre — a swap payload targeting one
     /// returns an error so the runner logs `hot-swap init failed; keeping
     /// v1` (parallel to the native-transform contract in [`TransformNode`]).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the swap payload's store or bindings have already been consumed.
+    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
     pub fn try_apply_filter(self, node: &mut crate::node::FilterNode) -> Result<(), crate::error::WaferError> {
         if let Self::Filter { new_store, new_bindings, new_pre, .. } = self {
             let wasm = node.as_wasm_mut().ok_or_else(|| crate::error::WaferError::Runtime(
@@ -398,6 +409,11 @@ impl SwapPayload {
     }
 
     /// Apply this swap payload to a router node with rollback-on-init-failure.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the swap payload's store or bindings have already been consumed.
+    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
     pub fn try_apply_router(self, node: &mut WasmRouterNode) -> Result<(), crate::error::WaferError> {
         if let Self::Router { new_store, new_bindings, new_pre, .. } = self {
             let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
@@ -419,6 +435,12 @@ impl SwapPayload {
 /// For transforms and filters, every downstream edge gets the message.
 /// Uses `try_send` to avoid blocking — if a channel is full, the message is
 /// dropped with a warning (overflow policy enforcement happens at a higher level).
+///
+/// # Panics
+///
+/// Panics if `senders` is empty after the early-return check (unreachable).
+#[expect(clippy::indexing_slicing, reason = "senders[0] is guarded by len() == 1 check")]
+#[expect(clippy::expect_used, reason = "split_last() is called after verifying senders is non-empty")]
 pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnvelope) {
     if senders.is_empty() {
         return;
@@ -443,6 +465,12 @@ pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnve
 /// Clone for N-1 matching ports, move original to last matching port.
 /// Non-matching senders are skipped. If no ports match any sender, the
 /// envelope is silently dropped.
+///
+/// # Panics
+///
+/// Panics if `matching` is empty after the early-return check (unreachable).
+#[expect(clippy::indexing_slicing, reason = "matching[0] guarded by len() == 1 check")]
+#[expect(clippy::expect_used, reason = "split_last() called after verifying matching is non-empty")]
 pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[DownstreamSender]) {
     // Collect senders that match the requested ports
     let matching: Vec<&DownstreamSender> = senders

@@ -25,6 +25,7 @@ use wafer_types::config::HotSwapConfig;
 /// The Wasm call (`transform.process()`) runs OUTSIDE the `select!` block.
 /// Only `receiver.recv()` is inside `select!` — which is documented cancel-safe.
 /// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
+#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
 pub async fn run_transform_loop(
     transform: TransformNode,
     receiver: mpsc::Receiver<RuntimeEnvelope>,
@@ -42,6 +43,7 @@ pub async fn run_transform_loop(
 }
 
 /// Inner transform loop with explicit hot-swap config (testable).
+#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring plus hot-swap config for testability")]
 pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
@@ -70,7 +72,8 @@ pub async fn run_transform_loop_with_config(
 
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
-            if let Some(payload) = swap_rx.borrow_and_update().clone() {
+            let swap_value = swap_rx.borrow_and_update().clone();
+            if let Some(payload) = swap_value {
                 policy.flush_to_dlq("hot_swap_drain");
                 let progress = payload.progress();
 

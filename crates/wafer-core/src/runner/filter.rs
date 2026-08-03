@@ -23,6 +23,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstr
 /// The Wasm call (`filter.evaluate()`) runs OUTSIDE the `select!` block.
 /// Filter borrows the envelope — no safety clone needed. If the evaluation
 /// errors, we still own the envelope and can pass it to the error policy.
+#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
 pub async fn run_filter_loop(
     mut filter: FilterNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
@@ -37,7 +38,8 @@ pub async fn run_filter_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if swap_rx.has_changed().unwrap_or(false) {
-            if let Some(payload) = swap_rx.borrow_and_update().clone() {
+            let swap_value = swap_rx.borrow_and_update().clone();
+            if let Some(payload) = swap_value {
                 policy.flush_to_dlq("hot_swap_drain");
                 let progress = payload.progress();
                 let result = match payload {
