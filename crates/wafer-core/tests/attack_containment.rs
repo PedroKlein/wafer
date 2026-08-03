@@ -1,4 +1,9 @@
 #![cfg(test)]
+#![expect(
+    clippy::print_stderr,
+    clippy::option_if_let_else,
+    reason = "integration test: diagnostic output and convenience patterns"
+)]
 //! P0.8 — RQ2 Attack containment integration harness.
 //!
 //! Six real attack plugins live under `plugins/attacks/*`. This file
@@ -12,8 +17,8 @@
 //!    from the same `PluginTestHarness`. We do NOT assert on the exact
 //!    trap text (varies with wasmtime version) but we DO assert the
 //!    error kind is one of the expected containment variants:
-//!    * `Unrecoverable`  — trap (unreachable, OOB memory, etc.)
-//!    * `TimedOut`       — epoch interruption
+//!    - `Unrecoverable`  — trap (unreachable, OOB memory, etc.)
+//!    - `TimedOut`       — epoch interruption
 //!    Both variants map into `NodeStateTracker::transition_to_error`
 //!    at the runner layer (see `crates/wafer-core/src/runner/*.rs`).
 //! 3. The healthy transform still processes a *subsequent* message

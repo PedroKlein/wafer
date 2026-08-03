@@ -1,4 +1,15 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::print_stdout, clippy::print_stderr)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::print_stdout,
+    clippy::print_stderr,
+    clippy::as_conversions,
+    clippy::arithmetic_side_effects,
+    clippy::indexing_slicing,
+    clippy::significant_drop_tightening,
+    clippy::items_after_statements,
+    reason = "benchmark harness: timing math, diagnostic output, and convenience patterns are acceptable"
+)]
 //! Hot-swap benchmarks for WAFER (RQ3 evidence).
 //!
 //! Measures the prepare-phase costs of the production hot-swap path: component

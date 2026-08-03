@@ -1,4 +1,5 @@
 #![cfg(test)]
+#![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
 //! A17 — Process-time hot-swap rollback integration tests.
 //!
 //! Verifies that when a v2 plugin passes `validate()/init()` but traps on

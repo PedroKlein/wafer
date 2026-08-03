@@ -313,6 +313,7 @@ mod tests {
     
 
     /// Creates test infrastructure for the transform loop.
+    #[expect(clippy::type_complexity, reason = "test setup helper; type alias would obscure the tuple for readability")]
     fn setup_transform_test() -> (
         mpsc::Sender<RuntimeEnvelope>,
         mpsc::Receiver<RuntimeEnvelope>,

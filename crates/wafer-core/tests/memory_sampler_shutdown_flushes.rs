@@ -1,3 +1,5 @@
+#![expect(clippy::significant_drop_tightening, reason = "integration test: guard scopes are intentionally test-wide")]
+
 //! Integration test: `MemoryRecorder` flushes samples on cancel-safe shutdown.
 //!
 //! AC4: SIGTERM flushes memory.csv cleanly.

@@ -1,4 +1,10 @@
 #![cfg(test)]
+#![expect(
+    clippy::print_stderr,
+    clippy::as_conversions,
+    clippy::significant_drop_tightening,
+    reason = "integration test: diagnostic output and convenience patterns"
+)]
 //! P0.14 regression: WASI async host calls (`std::thread::sleep` in guest,
 //! `wasi:clocks/monotonic-clock.subscribe-duration` on the wire) must NOT
 //! panic when invoked from a Tokio worker thread.

@@ -1,4 +1,10 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![expect(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::as_conversions,
+    clippy::arithmetic_side_effects,
+    reason = "benchmark harness: timing math and convenience patterns are acceptable"
+)]
 //! Native vs Wasm comparison benchmarks for WAFER evaluation.
 //!
 //! Measures the isolation tax: difference between native Rust function calls

@@ -1109,6 +1109,7 @@ mod tests {
     /// AC1: recording every phase populates six independent series in
     /// the phase histogram. The Prometheus emitter reads from this map.
     #[test]
+    #[expect(clippy::significant_drop_tightening, reason = "RwLockReadGuard held for assertions across the for loop — intentional")]
     fn phase_histogram_records_six_phases() {
         let handle = PipelineHandle::for_p0_10_test(&["transform"]);
 

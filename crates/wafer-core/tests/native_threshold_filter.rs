@@ -1,4 +1,9 @@
 #![cfg(test)]
+#![expect(
+    clippy::as_conversions,
+    clippy::unreadable_literal,
+    reason = "integration test: numeric literals and casts are readable in benchmark context"
+)]
 //! RQ1 apples-to-apples: native filter agrees with the WIT
 //! `plugins/threshold-filter` contract on a mixed-temperature corpus.
 //!
