@@ -1,5 +1,4 @@
-#![allow(clippy::print_stdout, clippy::print_stderr)]
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+#![expect(clippy::print_stdout, clippy::print_stderr, reason = "CLI binary — stdout/stderr output is the primary interface")]
 //! waferctl - CLI for managing WAFER pipeline instances.
 
 mod client;
@@ -123,7 +122,7 @@ async fn run(cli: Cli) -> error::Result<()> {
 
     // Resolve endpoint URL
     let config = CtlConfig::load().user_err()?;
-    let endpoint_url = resolve_endpoint(&cli.endpoint, &config)?;
+    let endpoint_url = resolve_endpoint(cli.endpoint.as_ref(), &config)?;
 
     // Create client
     let client = WaferClient::new(&endpoint_url).user_err()?;
@@ -137,18 +136,27 @@ async fn run(cli: Cli) -> error::Result<()> {
         Commands::HotSwap { node_id, wasm_path } => {
             cmd_hot_swap(&client, &node_id, &wasm_path, cli.json).await
         }
-        Commands::Reload => cmd_reload(&client, cli.json).await,
-        Commands::Drain => cmd_drain(&client, cli.json).await,
+        Commands::Reload => cmd_reload(&client, cli.json),
+        Commands::Drain => cmd_drain(&client, cli.json),
         Commands::Shutdown => cmd_shutdown(&client, cli.json).await,
         Commands::Metrics { raw } => cmd_metrics(&client, cli.json, raw).await,
-        Commands::Config { .. } => unreachable!(),
+        Commands::Config { .. } => {
+            #[expect(clippy::unreachable, reason = "Config command is handled before client creation and never reaches this branch")]
+            {unreachable!("Config commands handled earlier in main")}
+        }
     }
 }
 
-fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> error::Result<String> {
-    match endpoint_arg {
-        Some(ep) => {
-            // Check if it's a URL or an endpoint name
+fn resolve_endpoint(endpoint_arg: Option<&String>, config: &CtlConfig) -> error::Result<String> {
+    endpoint_arg.map_or_else(
+        || {
+            config.get_default_endpoint().ok_or_else(|| {
+                CliError::user(anyhow::anyhow!("No default endpoint configured")).with_hint(
+                    "Use --endpoint <url> or run 'waferctl config set-endpoint <name> <url>'",
+                )
+            })
+        },
+        |ep| {
             if ep.starts_with("http://") || ep.starts_with("https://") {
                 Ok(ep.clone())
             } else {
@@ -157,13 +165,8 @@ fn resolve_endpoint(endpoint_arg: &Option<String>, config: &CtlConfig) -> error:
                         .with_hint("Run 'waferctl config list' to see available endpoints.")
                 })
             }
-        }
-        None => config.get_default_endpoint().ok_or_else(|| {
-            CliError::user(anyhow::anyhow!("No default endpoint configured")).with_hint(
-                "Use --endpoint <url> or run 'waferctl config set-endpoint <name> <url>'",
-            )
-        }),
-    }
+        },
+    )
 }
 
 fn handle_config_command(action: &ConfigAction, json: bool) -> error::Result<()> {
@@ -264,14 +267,14 @@ async fn cmd_hot_swap(
     Ok(())
 }
 
-async fn cmd_reload(_client: &WaferClient, _json: bool) -> error::Result<()> {
+fn cmd_reload(_client: &WaferClient, _json: bool) -> error::Result<()> {
     Err(CliError::user(anyhow::anyhow!(
         "configuration reload is not exposed by the runtime HTTP API"
     ))
     .with_hint("Restart the runtime or hot-swap a specific node."))
 }
 
-async fn cmd_drain(_client: &WaferClient, _json: bool) -> error::Result<()> {
+fn cmd_drain(_client: &WaferClient, _json: bool) -> error::Result<()> {
     Err(CliError::user(anyhow::anyhow!(
         "standalone drain is not exposed by the runtime HTTP API"
     ))
@@ -298,7 +301,7 @@ async fn cmd_metrics(client: &WaferClient, json: bool, raw: bool) -> error::Resu
         let metrics = client.metrics_raw().await.classify()?;
         println!("{metrics}");
     } else {
-        let metrics = client.metrics().await.classify()?;
+        let metrics = client.metrics().classify()?;
         if json {
             println!("{}", serde_json::to_string_pretty(&metrics).user_err()?);
         } else {

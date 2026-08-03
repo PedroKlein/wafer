@@ -78,7 +78,7 @@ pub fn run(args: HdrSummaryArgs) -> Result<()> {
                     .with_context(|| "failed to deserialise interval histogram — V2 cookie mismatch?".to_string())?;
                 agg.add(&h)
                     .map_err(|e| anyhow!("aggregation failed (bounds mismatch): {e:?}"))?;
-                intervals += 1;
+                intervals = intervals.saturating_add(1);
             }
             Ok(LogEntry::BaseTime(_) | LogEntry::StartTime(_)) => {}
             Err(e) => return Err(anyhow!("interval-log parse error: {e:?}")),
@@ -135,7 +135,8 @@ fn write_summary(summary: &Summary, output: Option<&std::path::Path>, pretty: bo
         std::fs::write(path, &json)
             .with_context(|| format!("failed to write summary to {}", path.display()))?;
     } else {
-        println!("{json}");
+        #[expect(clippy::print_stdout, reason = "CLI tool — stdout is the default output destination when no --output path given")]
+        { println!("{json}"); }
     }
     Ok(())
 }

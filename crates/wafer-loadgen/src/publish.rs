@@ -370,7 +370,8 @@ fn spawn_hotswap_trigger(
     let wasm_path = wasm_path.clone();
     let api_url = api_url.clone();
     Some(tokio::spawn(async move {
-        let target = start + Duration::from_secs_f64(swap_at);
+        let target = start.checked_add(Duration::from_secs_f64(swap_at))
+            .unwrap_or(start);
         tokio::time::sleep_until(target).await;
         let url = format!("{api_url}/api/v1/nodes/{target_node}/hot-swap");
         let body = serde_json::json!({ "wasm_path": wasm_path });
@@ -447,7 +448,8 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let start = Instant::now();
-    let deadline = start + Duration::from_secs(args.duration_secs);
+    let deadline = start.checked_add(Duration::from_secs(args.duration_secs))
+        .unwrap_or(start);
     let hotswap_task = spawn_hotswap_trigger(&shape, start);
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. } => Some(*swap_at_secs),
@@ -465,7 +467,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         // we're already past this deadline, we just publish immediately and
         // let the next offset extend from the (now-late) present.
         let offset = scheduler.next_offset();
-        let target = start + offset;
+        let target = start.checked_add(offset).unwrap_or(start);
         if target >= deadline {
             break;
         }
@@ -485,10 +487,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             .await
         {
             warn!("Publish error (seq={seq}): {e}");
-            errors += 1;
+            errors = errors.saturating_add(1);
         }
 
-        seq += 1;
+        seq = seq.saturating_add(1);
     }
 
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -505,6 +507,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let actual_rate = if elapsed.as_secs_f64() > 0.0 {
         #[expect(
             clippy::cast_precision_loss,
+            clippy::as_conversions,
             reason = "seq bounded by (base_rate * duration_secs) which fits in f64 mantissa for any realistic run"
         )]
         let rate = seq as f64 / elapsed.as_secs_f64();

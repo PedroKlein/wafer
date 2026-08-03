@@ -254,6 +254,7 @@ pub struct SubscriberReport {
 /// bounded to 10 s so this can never approach that range.
 #[expect(
     clippy::cast_precision_loss,
+    clippy::as_conversions,
     reason = "latency values are bounded to 10 s = 10^10 ns, well below f64 mantissa capacity"
 )]
 fn ms_from_ns(ns: u64) -> f64 {

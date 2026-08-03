@@ -61,11 +61,13 @@ impl CliError {
 
     /// Format the error for human-readable output.
     pub fn format_human(&self) -> String {
+        use std::fmt::Write;
         let mut output = format!("Error: {}", self.error);
 
-        // Add hint if present
         if let Some(ref hint) = self.hint {
-            output.push_str(&format!("\n\nHint: {hint}"));
+            // fmt::Write for String is infallible — the impl never returns Err
+            #[expect(clippy::unwrap_used, reason = "fmt::Write for String cannot fail")]
+            write!(output, "\n\nHint: {hint}").unwrap();
         }
 
         output
@@ -81,7 +83,9 @@ impl CliError {
         });
 
         if let Some(ref hint) = self.hint {
-            obj["error"]["hint"] = serde_json::Value::String(hint.clone());
+            if let Some(err_obj) = obj.get_mut("error").and_then(serde_json::Value::as_object_mut) {
+                err_obj.insert("hint".to_string(), serde_json::Value::String(hint.clone()));
+            }
         }
 
         // Try to pretty-print, fall back to compact
@@ -155,7 +159,7 @@ pub fn classify_error(err: anyhow::Error) -> CliError {
 pub type Result<T> = std::result::Result<T, CliError>;
 
 /// Extension trait for converting anyhow errors to `CliError`.
-#[expect(dead_code)]
+#[expect(dead_code, reason = "Extension trait for future CLI commands not yet implemented")]
 pub trait ResultExt<T> {
     /// Convert to CLI result with error classification.
     fn classify(self) -> Result<T>;

@@ -89,7 +89,8 @@ fn check_filter_single_inbound(config: &Config, errors: &mut Vec<ValidationError
     let mut inbound_count: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
     for edge in &config.edges {
-        *inbound_count.entry(edge.to.as_str()).or_default() += 1;
+        let count = inbound_count.entry(edge.to.as_str()).or_default();
+        *count = count.saturating_add(1);
     }
 
     for (id, node) in &config.nodes {
@@ -109,7 +110,8 @@ fn check_router_single_inbound(config: &Config, errors: &mut Vec<ValidationError
     let mut inbound_count: std::collections::HashMap<&str, usize> =
         std::collections::HashMap::new();
     for edge in &config.edges {
-        *inbound_count.entry(edge.to.as_str()).or_default() += 1;
+        let count = inbound_count.entry(edge.to.as_str()).or_default();
+        *count = count.saturating_add(1);
     }
 
     for (id, node) in &config.nodes {

@@ -116,7 +116,12 @@ impl WaferClient {
     }
 
     /// Get metrics as structured data.
-    pub async fn metrics(&self) -> Result<MetricsSnapshot> {
+    ///
+    /// Currently returns a default snapshot; will call the runtime API when
+    /// the structured metrics endpoint is implemented.
+    #[expect(clippy::unused_self, reason = "Will use self.get() once runtime metrics endpoint exists")]
+    #[expect(clippy::unnecessary_wraps, reason = "Maintains consistent Result<T> API with other client methods")]
+    pub fn metrics(&self) -> Result<MetricsSnapshot> {
         Ok(MetricsSnapshot::default())
     }
 
@@ -141,7 +146,7 @@ impl WaferClient {
         Self::handle_response(response).await
     }
 
-    async fn post_json<T: DeserializeOwned, B: Serialize>(&self, path: &str, body: &B) -> Result<T> {
+    async fn post_json<T: DeserializeOwned, B: Serialize + Sync>(&self, path: &str, body: &B) -> Result<T> {
         let url = format!("{}{}", self.base_url, path);
         let response = self.client.post(&url).json(body).send().await?;
 

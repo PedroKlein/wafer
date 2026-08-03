@@ -61,14 +61,18 @@ impl SequenceTracker {
 
     /// Record a received sequence number.
     pub fn record(&mut self, seq: u64) {
-        self.total_received += 1;
+        self.total_received = self.total_received.saturating_add(1);
         match seq.cmp(&self.expected_next) {
             std::cmp::Ordering::Equal => {
-                self.expected_next += 1;
+                self.expected_next = self.expected_next.saturating_add(1);
             }
             std::cmp::Ordering::Greater => {
-                self.gaps.push((self.expected_next, seq - 1));
-                self.expected_next = seq + 1;
+                // seq > expected_next, so subtraction cannot underflow
+                #[expect(clippy::arithmetic_side_effects, reason = "seq > expected_next checked by match arm; seq - 1 safe because seq > 0 (seq > expected_next >= 0)")]
+                {
+                    self.gaps.push((self.expected_next, seq - 1));
+                    self.expected_next = seq + 1;
+                }
             }
             std::cmp::Ordering::Less => {
                 self.duplicates.push(seq);
@@ -78,12 +82,13 @@ impl SequenceTracker {
 
     #[must_use]
     pub fn total_gaps(&self) -> u64 {
-        self.gaps.iter().map(|(s, e)| e - s + 1).sum()
+        self.gaps.iter().map(|(s, e)| e.saturating_sub(*s).saturating_add(1)).sum()
     }
 
     #[must_use]
     pub fn total_duplicates(&self) -> u64 {
-        self.duplicates.len() as u64
+        #[expect(clippy::as_conversions, reason = "Vec::len() is usize which fits in u64 on all targets")]
+        { self.duplicates.len() as u64 }
     }
 
     #[must_use]
@@ -210,16 +215,16 @@ impl LatencyRecorder {
     /// Parse a JSON payload (with `ts` = intended-publish-ns and `seq` = u64)
     /// and record the observed latency against `receive_ns`.
     pub fn record_json(&mut self, payload: &[u8], receive_ns: u64) -> RecordOutcome {
-        self.total_messages += 1;
+        self.total_messages = self.total_messages.saturating_add(1);
         let parsed: serde_json::Result<serde_json::Value> = serde_json::from_slice(payload);
         let Ok(json) = parsed else {
-            self.parse_errors += 1;
+            self.parse_errors = self.parse_errors.saturating_add(1);
             return RecordOutcome::ParseError;
         };
         let ts = json.get("ts").and_then(serde_json::Value::as_u64);
         let seq = json.get("seq").and_then(serde_json::Value::as_u64);
         let (Some(ts), Some(seq)) = (ts, seq) else {
-            self.parse_errors += 1;
+            self.parse_errors = self.parse_errors.saturating_add(1);
             return RecordOutcome::ParseError;
         };
         self.record(ts, receive_ns, seq)
@@ -229,9 +234,11 @@ impl LatencyRecorder {
     /// latencies without JSON round-tripping.
     pub fn record(&mut self, intended_publish_ns: u64, receive_ns: u64, seq: u64) -> RecordOutcome {
         if receive_ns < intended_publish_ns {
-            self.negative_latency += 1;
+            self.negative_latency = self.negative_latency.saturating_add(1);
             return RecordOutcome::NegativeLatency;
         }
+        // receive_ns >= intended_publish_ns checked above
+        #[expect(clippy::arithmetic_side_effects, reason = "subtraction safe: receive_ns >= intended_publish_ns guarded by the if-check above")]
         let latency_ns = receive_ns - intended_publish_ns;
         // Clamp below-histogram-floor values to the floor rather than dropping.
         // Sub-microsecond latencies are physically impossible over MQTT, but a
@@ -326,13 +333,14 @@ impl LatencyRecorder {
         use std::fmt::Write as _;
         let mut csv = String::from("event_type,seq_start,seq_end,count\n");
         for (start, end) in self.sequence.gaps() {
-            let count = end - start + 1;
-            // writeln! into a String is infallible — rely on that fact and
-            // silence the must-use warning by rebinding to _r.
-            let _r = writeln!(csv, "gap,{start},{end},{count}");
+            let count = end.saturating_sub(*start).saturating_add(1);
+            // writeln! into a String is infallible
+            #[expect(clippy::unwrap_used, reason = "fmt::Write for String cannot fail")]
+            writeln!(csv, "gap,{start},{end},{count}").unwrap();
         }
         for seq in self.sequence.duplicates() {
-            let _r = writeln!(csv, "duplicate,{seq},{seq},1");
+            #[expect(clippy::unwrap_used, reason = "fmt::Write for String cannot fail")]
+            writeln!(csv, "duplicate,{seq},{seq},1").unwrap();
         }
         csv
     }

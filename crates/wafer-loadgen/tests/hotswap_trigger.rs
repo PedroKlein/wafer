@@ -133,6 +133,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
     // setup delay in run_publisher).
     #[expect(
         clippy::cast_possible_truncation,
+        clippy::as_conversions,
         reason = "target_offset_secs is 1.0 in this test; the multiplied value fits comfortably in i64"
     )]
     let target_ms = (target_offset_secs * 1000.0) as i64;

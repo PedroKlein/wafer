@@ -71,17 +71,21 @@ impl LoadShape {
             Self::Steady { rate } => f64::from(rate).max(1.0),
             Self::HotswapTrigger { base_rate, .. } => f64::from(base_rate).max(1.0),
             Self::Burst { base_rate, multiplier, on_secs, cycle_secs } => {
+                #[expect(clippy::as_conversions, reason = "u32 -> f64 is lossless (u32::MAX < f64 mantissa capacity)")]
                 let cycle = cycle_secs.max(1) as f64;
+                #[expect(clippy::as_conversions, reason = "u32 -> f64 is lossless")]
                 let on = on_secs.min(cycle_secs) as f64;
                 let phase = elapsed_secs.rem_euclid(cycle);
                 let mult = if phase < on { u32::max(multiplier, 1) } else { 1 };
                 (f64::from(base_rate) * f64::from(mult)).max(1.0)
             }
             Self::Ramp { start_rate, step_rate, step_interval_secs, max_rate } => {
+                #[expect(clippy::as_conversions, reason = "u32 -> f64 is lossless")]
                 let step_len = step_interval_secs.max(1) as f64;
                 #[expect(
                     clippy::cast_sign_loss,
                     clippy::cast_possible_truncation,
+                    clippy::as_conversions,
                     reason = "step_index is non-negative by construction (division of non-negative floats) and bounded well within u32"
                 )]
                 let step_index = (elapsed_secs / step_len).max(0.0).floor() as u32;
@@ -136,7 +140,7 @@ impl Scheduler {
         // 1/current_rate seconds → Duration.
         let step = Duration::from_secs_f64(1.0 / current_rate);
         self.next_offset = now.saturating_add(step);
-        self.emitted += 1;
+        self.emitted = self.emitted.saturating_add(1);
         now
     }
 
@@ -194,6 +198,7 @@ mod tests {
         // Two burst windows (20s) at 2000 msg/s → 40_000. Two steady windows (100s) at 1000 msg/s → 100_000.
         #[expect(
             clippy::cast_precision_loss,
+            clippy::as_conversions,
             reason = "burst_msgs / steady_msgs are bounded by 200s * 2000 msg/s = 400k, way below f64 mantissa"
         )]
         let (burst_rate, steady_rate) = (burst_msgs as f64 / 20.0, steady_msgs as f64 / 100.0);

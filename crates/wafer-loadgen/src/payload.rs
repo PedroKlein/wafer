@@ -168,10 +168,13 @@ fn render_generic(tpl: PayloadTemplate, ts_ns: u64, seq: u64) -> Vec<u8> {
         r#"{{"device_id":"{DEVICE_ID}","temperature":72.5,"humidity":37.2,"ts":{ts_ns},"seq":{seq},"pad":""#
     );
     let suffix = "\"}";
-    let base_len = prefix.len() + suffix.len();
+    let base_len = prefix.len().saturating_add(suffix.len());
     let target = tpl.target_size();
     let pad = if target > base_len {
-        deterministic_pad_hex(tpl.name(), target - base_len)
+        // target > base_len guarded by the if-check
+        #[expect(clippy::arithmetic_side_effects, reason = "target > base_len checked in enclosing if")]
+        let pad_len = target - base_len;
+        deterministic_pad_hex(tpl.name(), pad_len)
     } else {
         String::new()
     };
