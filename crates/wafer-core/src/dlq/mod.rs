@@ -112,6 +112,7 @@ impl DlqEnvelope {
     }
 }
 
+#[expect(clippy::expect_used, reason = "DlqEnvelope fields are all serde-infallible types (String, u64, HashMap, Vec<u8>)")]
 pub fn wrap_for_dlq(
     envelope: RuntimeEnvelope,
     failed_edge: impl Into<String>,

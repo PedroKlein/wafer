@@ -480,6 +480,8 @@ pub mod functions {
     /// points. Not a full JSON parser — mirrors the equivalent Wasm
     /// plugin logic (see plugins/threshold-filter and plugins/content-router).
     #[must_use]
+    #[expect(clippy::arithmetic_side_effects, reason = "idx from find() + key.len() cannot exceed json.len()")]
+    #[expect(clippy::string_slice, reason = "find-based indices guaranteed to be at char boundaries in ASCII JSON keys/numbers")]
     pub fn extract_json_number(json: &str, field: &str) -> Option<f64> {
         let key = format!("\"{field}\"");
         let idx = json.find(&key)?;

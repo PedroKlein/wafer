@@ -171,7 +171,8 @@ impl NodeMetrics {
         if total == 0 {
             return 0;
         }
-        self.process_ns() / total
+        #[expect(clippy::arithmetic_side_effects, reason = "division by zero guarded by the check above")]
+        { self.process_ns() / total }
     }
 
     /// Total retry attempts.

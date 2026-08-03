@@ -158,7 +158,7 @@ mod tests {
         cache.put("wafer", "test", "1.0.0", content).unwrap();
 
         let entry = cache.get("wafer", "test", "1.0.0").unwrap();
-        assert_eq!(entry.size, content.len() as u64);
+        assert_eq!(entry.size, crate::util::usize_as_u64(content.len()));
         assert!(entry.age < Duration::from_secs(1));
     }
 

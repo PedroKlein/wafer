@@ -31,6 +31,7 @@ pub struct NodeLatencyRecorder {
 impl NodeLatencyRecorder {
     /// Create a new recorder pre-allocated for the given node IDs.
     #[must_use]
+    #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
     pub fn new(node_ids: &[&str]) -> Self {
         let mut histograms = HashMap::with_capacity(node_ids.len());
         for id in node_ids {
@@ -109,6 +110,7 @@ impl NodeLatencyRecorder {
     /// Export all node histograms to an HdrHistogram interval log.
     ///
     /// Each node gets its own tagged interval in the log file.
+    #[expect(clippy::expect_used, reason = "HdrHistogram writer/serialization uses in-memory buffers that cannot fail; UTF-8 is guaranteed from ASCII content")]
     pub fn to_hdr_log(&self) -> String {
         let mut buf = Vec::new();
         let mut serializer = V2Serializer::new();

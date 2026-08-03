@@ -415,6 +415,7 @@ mod tests {
         // Cache should be empty initially
         let cache = engine.cache.lock().unwrap();
         assert!(cache.is_empty());
+        drop(cache);
     }
 
     #[test]

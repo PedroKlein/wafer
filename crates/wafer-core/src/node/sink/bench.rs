@@ -647,10 +647,10 @@ impl Sink for BenchSink {
         if !self.started {
             self.started = true;
             if self.config.warmup_secs > 0 {
-                self.warmup_until = Some(
-                    Instant::now()
-                        + std::time::Duration::from_secs(self.config.warmup_secs),
-                );
+                #[expect(clippy::arithmetic_side_effects, reason = "Instant + Duration cannot overflow for realistic warmup values")]
+                let deadline = Instant::now()
+                    + std::time::Duration::from_secs(self.config.warmup_secs);
+                self.warmup_until = Some(deadline);
             }
         }
 
@@ -672,9 +672,9 @@ impl Sink for BenchSink {
         }
 
         // Throughput tracking
-        let payload_len = envelope.payload.len() as u64;
+        let payload_len = crate::util::usize_as_u64(envelope.payload.len());
         self.bucket_msg_count = self.bucket_msg_count.saturating_add(1);
-        self.bucket_bytes += payload_len;
+        self.bucket_bytes = self.bucket_bytes.saturating_add(payload_len);
         self.flush_bucket_if_needed(now);
 
         // Extract intended_ns from metadata for latency calculation

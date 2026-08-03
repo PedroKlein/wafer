@@ -76,7 +76,7 @@ impl FileSink {
         writer.flush()?;
 
         self.batch_stats.flushes_since_last_check = self.batch_stats.flushes_since_last_check.saturating_add(1);
-        self.batch_stats.last_flush_size = batch_size as u64;
+        self.batch_stats.last_flush_size = crate::util::usize_as_u64(batch_size);
 
         Ok(())
     }
@@ -197,7 +197,7 @@ impl Sink for FileSink {
         self.batch_buffer.as_ref()?;
 
         self.batch_stats.current_buffer_size =
-            self.batch_buffer.as_ref().map_or(0, |b| b.len() as u64);
+            self.batch_buffer.as_ref().map_or(0, |b| crate::util::usize_as_u64(b.len()));
 
         let stats = self.batch_stats.clone();
         self.batch_stats.flushes_since_last_check = 0;

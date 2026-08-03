@@ -986,10 +986,10 @@ mod tests {
         let (source_tx, source) = ChannelSource::new("src");
         let (sink, mut sink_rx) = ChannelSink::new("sink");
 
-        let mut sources = HashMap::new();
-        sources.insert("src".to_string(), Box::new(source) as Box<dyn crate::node::Source + Send>);
-        let mut sinks = HashMap::new();
-        sinks.insert("sink".to_string(), Box::new(sink) as Box<dyn crate::node::Sink + Send>);
+        let mut sources: HashMap<String, Box<dyn crate::node::Source + Send>> = HashMap::new();
+        sources.insert("src".to_string(), Box::new(source));
+        let mut sinks: HashMap<String, Box<dyn crate::node::Sink + Send>> = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(sink));
 
         let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
         let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
@@ -1035,10 +1035,10 @@ mod tests {
         let (source_tx, source) = ChannelSource::new("src");
         let (sink, mut sink_rx) = ChannelSink::new("sink");
 
-        let mut sources = HashMap::new();
-        sources.insert("src".to_string(), Box::new(source) as Box<dyn crate::node::Source + Send>);
-        let mut sinks = HashMap::new();
-        sinks.insert("sink".to_string(), Box::new(sink) as Box<dyn crate::node::Sink + Send>);
+        let mut sources: HashMap<String, Box<dyn crate::node::Source + Send>> = HashMap::new();
+        sources.insert("src".to_string(), Box::new(source));
+        let mut sinks: HashMap<String, Box<dyn crate::node::Sink + Send>> = HashMap::new();
+        sinks.insert("sink".to_string(), Box::new(sink));
 
         let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
         let mut orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
