@@ -15,6 +15,7 @@ pub struct BatchBuffer<T> {
     last_flush: Instant,
 }
 
+#[expect(dead_code, reason = "BatchBuffer is staged for Phase 2")]
 impl<T> BatchBuffer<T> {
     pub fn new(batch_size: usize, timeout: Duration) -> Self {
         assert!(batch_size > 0, "batch_size must be greater than 0");

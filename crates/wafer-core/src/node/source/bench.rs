@@ -270,7 +270,10 @@ mod tests {
             .with_warmup(20)
             .with_payload_size(512);
 
-        assert_eq!(config.rate_per_sec, 5000.0);
+        assert!(
+            (config.rate_per_sec - 5000.0).abs() < f64::EPSILON,
+            "rate_per_sec should be 5000.0"
+        );
         assert_eq!(config.total_messages, 100);
         assert_eq!(config.warmup_messages, 20);
         assert_eq!(config.payload_size, 512);

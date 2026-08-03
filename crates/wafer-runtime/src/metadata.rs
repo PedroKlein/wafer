@@ -142,16 +142,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let explicit = dir.path().join("explicit.json");
         // SAFETY: single-threaded test wrt these vars; no other thread reads them.
-        unsafe {
-            std::env::set_var("WAFER_METADATA_OUTPUT", &explicit);
-            std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir.path());
-        }
+        unsafe { std::env::set_var("WAFER_METADATA_OUTPUT", &explicit) };
+        // SAFETY: single-threaded test wrt these vars; no other thread reads them.
+        unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir.path()) };
         let resolved = resolve_output_path().unwrap();
         assert_eq!(resolved, explicit);
         // SAFETY: single-threaded test wrt these vars; no other thread reads them.
-        unsafe {
-            std::env::remove_var("WAFER_METADATA_OUTPUT");
-            std::env::remove_var("WAFER_BENCH_OUTPUT_DIR");
-        }
+        unsafe { std::env::remove_var("WAFER_METADATA_OUTPUT") };
+        // SAFETY: single-threaded test wrt these vars; no other thread reads them.
+        unsafe { std::env::remove_var("WAFER_BENCH_OUTPUT_DIR") };
     }
 }

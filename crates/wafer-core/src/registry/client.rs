@@ -165,6 +165,7 @@ impl std::fmt::Debug for WaferRegistry {
 }
 
 #[cfg(test)]
+#[expect(clippy::large_futures, reason = "test: registry resolve calls hold HTTP client state across awaits")]
 mod tests {
     use super::*;
 

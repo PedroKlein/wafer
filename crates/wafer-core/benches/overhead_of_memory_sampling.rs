@@ -1,4 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used)]
 //! Benchmark: overhead of the memory-stats based RSS sampler.
 //!
 //! AC6 (thesis-hardening T4): proves <0.1% throughput delta from the

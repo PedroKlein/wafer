@@ -283,6 +283,7 @@ impl TransformCanaryState {
     }
 
     /// Check if the rollback retry budget is exhausted.
+    #[expect(dead_code, reason = "used by upcoming process-time rollback integration in runner loop")]
     pub const fn retries_exhausted(&self) -> bool {
         self.counters.retries_exhausted()
     }

@@ -117,9 +117,8 @@ impl ComponentCache {
         let Some(ref dir) = self.disk_dir else { return Ok(None) };
         let path = Self::artifact_path(dir, hash);
 
-        let bytes = match std::fs::read(&path) {
-            Ok(b) => b,
-            Err(_) => return Ok(None),
+        let Ok(bytes) = std::fs::read(&path) else {
+            return Ok(None);
         };
 
         // SAFETY: These bytes were produced by our own serialize() and stored

@@ -569,8 +569,8 @@ impl BenchSink {
                 swap_file,
                 "{{\"transitions\":[{}],\"first_v2_ns\":{},\"last_v1_ns\":{}}}",
                 transitions_json.join(","),
-                recorder.first_v2_ns().map_or(String::from("null"), |v| v.to_string()),
-                recorder.last_v1_ns().map_or(String::from("null"), |v| v.to_string()),
+                recorder.first_v2_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
+                recorder.last_v1_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
             )?;
         }
 
