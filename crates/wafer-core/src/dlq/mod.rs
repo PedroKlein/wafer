@@ -112,6 +112,11 @@ impl DlqEnvelope {
     }
 }
 
+/// Wrap an envelope in DLQ metadata for dead-letter routing.
+///
+/// # Panics
+///
+/// Panics if JSON serialization of the DLQ envelope fails (unreachable: all fields are serde-infallible).
 #[expect(clippy::expect_used, reason = "DlqEnvelope fields are all serde-infallible types (String, u64, HashMap, Vec<u8>)")]
 pub fn wrap_for_dlq(
     envelope: RuntimeEnvelope,

@@ -30,6 +30,10 @@ pub struct NodeLatencyRecorder {
 
 impl NodeLatencyRecorder {
     /// Create a new recorder pre-allocated for the given node IDs.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal histogram cannot be created (compile-time constant bounds; unreachable in practice).
     #[must_use]
     #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
     pub fn new(node_ids: &[&str]) -> Self {
@@ -114,6 +118,10 @@ impl NodeLatencyRecorder {
     /// Export all node histograms to an HdrHistogram interval log.
     ///
     /// Each node gets its own tagged interval in the log file.
+    ///
+    /// # Panics
+    ///
+    /// Panics if in-memory histogram serialization fails (unreachable: buffers are always valid).
     #[expect(clippy::expect_used, reason = "HdrHistogram writer/serialization uses in-memory buffers that cannot fail; UTF-8 is guaranteed from ASCII content")]
     pub fn to_hdr_log(&self) -> String {
         let mut buf = Vec::new();

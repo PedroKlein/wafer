@@ -230,8 +230,8 @@ impl ErrorPolicyExecutor {
     ///
     /// Returns `true` if the loop should continue processing, `false` if
     /// the node should enter recovery (Unrecoverable).
-    pub fn handle(&mut self, error: WasmProcessError, envelope: RuntimeEnvelope) -> bool {
-        match &error {
+    pub fn handle(&mut self, error: &WasmProcessError, envelope: RuntimeEnvelope) -> bool {
+        match error {
             WasmProcessError::BadInput(msg) => {
                 match self.config.bad_input {
                     ResolvedSimpleAction::Skip => {}
@@ -437,7 +437,7 @@ mod tests {
         let envelope = test_envelope("bad data");
 
         let should_continue = executor.handle(
-            WasmProcessError::BadInput("invalid json".into()),
+            &WasmProcessError::BadInput("invalid json".into()),
             envelope,
         );
 
@@ -457,7 +457,7 @@ mod tests {
         let envelope = test_envelope("request");
 
         let should_continue = executor.handle(
-            WasmProcessError::DependencyFailed("db timeout".into()),
+            &WasmProcessError::DependencyFailed("db timeout".into()),
             envelope,
         );
 
@@ -473,7 +473,7 @@ mod tests {
         let envelope = test_envelope("data");
 
         let should_continue = executor.handle(
-            WasmProcessError::ProcessingFailed("null pointer".into()),
+            &WasmProcessError::ProcessingFailed("null pointer".into()),
             envelope,
         );
 
@@ -487,7 +487,7 @@ mod tests {
         let (mut executor, mut rx) = make_executor_with_dlq(100);
         let envelope = test_envelope("slow data");
 
-        let should_continue = executor.handle(WasmProcessError::TimedOut, envelope);
+        let should_continue = executor.handle(&WasmProcessError::TimedOut, envelope);
 
         assert!(should_continue, "should continue after timeout");
         assert_eq!(executor.pending_retries(), 0, "should not retry timed out");
@@ -500,7 +500,7 @@ mod tests {
         let envelope = test_envelope("data");
 
         let should_continue = executor.handle(
-            WasmProcessError::Unrecoverable("stack overflow".into()),
+            &WasmProcessError::Unrecoverable("stack overflow".into()),
             envelope,
         );
 
@@ -516,7 +516,7 @@ mod tests {
 
         // Add to retry buffer
         executor.handle(
-            WasmProcessError::DependencyFailed("transient".into()),
+            &WasmProcessError::DependencyFailed("transient".into()),
             envelope,
         );
         assert_eq!(executor.pending_retries(), 1);
@@ -534,11 +534,11 @@ mod tests {
 
         // Fill the buffer
         executor.handle(
-            WasmProcessError::DependencyFailed("err1".into()),
+            &WasmProcessError::DependencyFailed("err1".into()),
             test_envelope("msg1"),
         );
         executor.handle(
-            WasmProcessError::DependencyFailed("err2".into()),
+            &WasmProcessError::DependencyFailed("err2".into()),
             test_envelope("msg2"),
         );
         assert_eq!(executor.pending_retries(), 2);
@@ -546,7 +546,7 @@ mod tests {
 
         // Third should overflow to DLQ
         executor.handle(
-            WasmProcessError::DependencyFailed("err3".into()),
+            &WasmProcessError::DependencyFailed("err3".into()),
             test_envelope("msg3"),
         );
         assert_eq!(executor.pending_retries(), 2, "buffer still at capacity");
@@ -561,11 +561,11 @@ mod tests {
         let (mut executor, mut rx) = make_executor_with_dlq(100);
 
         executor.handle(
-            WasmProcessError::DependencyFailed("err1".into()),
+            &WasmProcessError::DependencyFailed("err1".into()),
             test_envelope("msg1"),
         );
         executor.handle(
-            WasmProcessError::ProcessingFailed("err2".into()),
+            &WasmProcessError::ProcessingFailed("err2".into()),
             test_envelope("msg2"),
         );
         assert_eq!(executor.pending_retries(), 2);
@@ -589,7 +589,7 @@ mod tests {
         let mut executor = ErrorPolicyExecutor::new(config, Some(tx), "test-node");
 
         executor.handle(
-            WasmProcessError::DependencyFailed("slow".into()),
+            &WasmProcessError::DependencyFailed("slow".into()),
             test_envelope("data"),
         );
         assert_eq!(executor.pending_retries(), 1);
@@ -622,7 +622,7 @@ mod tests {
         let (mut executor, mut rx) = make_executor_with_dlq(100);
 
         executor.handle(
-            WasmProcessError::DependencyFailed("err".into()),
+            &WasmProcessError::DependencyFailed("err".into()),
             test_envelope("msg"),
         );
 
@@ -639,7 +639,7 @@ mod tests {
         let mut executor = ErrorPolicyExecutor::new(config, None, "node");
 
         let should_continue = executor.handle(
-            WasmProcessError::BadInput("bad".into()),
+            &WasmProcessError::BadInput("bad".into()),
             test_envelope("data"),
         );
         assert!(should_continue);
@@ -654,7 +654,7 @@ mod tests {
         envelope.lineage.trace_id = Some("trace-abc".into());
         envelope.lineage.parent_id = Some("parent-xyz".into());
 
-        executor.handle(WasmProcessError::BadInput("bad".into()), envelope);
+        executor.handle(&WasmProcessError::BadInput("bad".into()), envelope);
 
         let dlq = rx.try_recv().expect("dlq entry");
         assert_eq!(dlq.trace_id.as_deref(), Some("trace-abc"));
@@ -674,7 +674,7 @@ mod tests {
         let envelope = test_envelope("a");
         assert_eq!(envelope.retry_count, 0, "fresh envelope starts at 0");
 
-        executor.handle(WasmProcessError::ProcessingFailed("fail 1".into()), envelope);
+        executor.handle(&WasmProcessError::ProcessingFailed("fail 1".into()), envelope);
 
         // First failure schedules a retry with retry_count = 1.
         assert_eq!(executor.pending_retries(), 1);
@@ -702,7 +702,7 @@ mod tests {
         envelope.retry_count = 3;
 
         executor.handle(
-            WasmProcessError::ProcessingFailed("final fail".into()),
+            &WasmProcessError::ProcessingFailed("final fail".into()),
             envelope,
         );
 

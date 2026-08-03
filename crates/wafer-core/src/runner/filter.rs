@@ -137,7 +137,7 @@ pub async fn run_filter_loop(
             Err(e) => {
                 metrics.record_failed();
                 // Filter still owns the envelope — pass to error policy
-                policy.handle(e, envelope);
+                policy.handle(&e, envelope);
             }
         }
     }

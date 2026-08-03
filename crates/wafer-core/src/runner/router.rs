@@ -119,7 +119,7 @@ pub async fn run_router_loop(
                 // Router returned a logical routing error (not a Wasm trap)
                 metrics.record_failed();
                 let wasm_err = WasmProcessError::ProcessingFailed(e.message);
-                policy.handle(wasm_err, envelope);
+                policy.handle(&wasm_err, envelope);
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {
                 metrics.record_failed();
@@ -144,7 +144,7 @@ pub async fn run_router_loop(
             }
             Err(e) => {
                 metrics.record_failed();
-                policy.handle(e, envelope);
+                policy.handle(&e, envelope);
             }
         }
     }

@@ -296,7 +296,7 @@ pub async fn run_transform_loop_with_config(
             }
             Err(e) => {
                 metrics.record_failed();
-                policy.handle(e, safety);
+                policy.handle(&e, safety);
             }
         }
     }

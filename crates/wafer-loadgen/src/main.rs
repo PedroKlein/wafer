@@ -48,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
             run_subscriber(args).await?;
         }
         Command::HdrSummary(args) => {
-            run_hdr_summary(args)?;
+            run_hdr_summary(&args)?;
         }
     }
     Ok(())

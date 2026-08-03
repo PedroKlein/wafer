@@ -52,7 +52,10 @@ struct Summary {
     p9999_ns: u64,
 }
 
-pub fn run(args: HdrSummaryArgs) -> Result<()> {
+/// # Errors
+///
+/// Returns error if the HDR file cannot be read, parsed, or is not valid UTF-8.
+pub fn run(args: &HdrSummaryArgs) -> Result<()> {
     let bytes = std::fs::read(&args.hdr)
         .with_context(|| format!("failed to read {}", args.hdr.display()))?;
     let text = std::str::from_utf8(&bytes)

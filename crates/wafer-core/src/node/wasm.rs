@@ -41,7 +41,7 @@ fn map_process_error(err: transform_node::pipeline::types::types::ProcessError) 
 /// Maps a wasmtime trap/error to `WasmProcessError`.
 ///
 /// Epoch interruption → TimedOut; all others → Unrecoverable.
-fn map_trap(err: wasmtime::Error) -> WasmProcessError {
+fn map_trap(err: &wasmtime::Error) -> WasmProcessError {
     // Debug repr surfaces the `Caused by:` chain (which carries the trap
     // variant); Display shows only the top frame. Missing the chain would
     // misclassify epoch interrupts as Unrecoverable and route them to
@@ -258,6 +258,10 @@ impl WasmTransformNode {
     /// Process one message through the Wasm transform.
     ///
     /// MUST run to completion — never place in a select! branch.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "API contract: transform takes ownership of input envelope (consumed semantically even if implementation only borrows)"
+    )]
     pub fn process(
         &mut self,
         envelope: RuntimeEnvelope,
@@ -318,7 +322,7 @@ impl WasmTransformNode {
                 Ok(new_envelope)
             }
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
-            Err(trap) => Err(map_trap(trap)),
+            Err(trap) => Err(map_trap(&trap)),
         }
     }
 
@@ -616,7 +620,7 @@ impl WasmFilterNode {
             Ok(Ok(true)) => Ok(FilterOutcome::Forward),
             Ok(Ok(false)) => Ok(FilterOutcome::Drop),
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
-            Err(trap) => Err(map_trap(trap)),
+            Err(trap) => Err(map_trap(&trap)),
         }
     }
 
@@ -865,7 +869,7 @@ impl WasmRouterNode {
         match result {
             Ok(Ok(ports)) => Ok(RouteOutcome::Ports(ports)),
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
-            Err(trap) => Err(map_trap(trap)),
+            Err(trap) => Err(map_trap(&trap)),
         }
     }
 
@@ -954,14 +958,14 @@ mod tests {
     #[test]
     fn map_trap_epoch_interrupt() {
         let err = wasmtime::Error::msg("wasm trap: epoch interruption");
-        let mapped = map_trap(err);
+        let mapped = map_trap(&err);
         assert!(matches!(mapped, WasmProcessError::TimedOut));
     }
 
     #[test]
     fn map_trap_other() {
         let err = wasmtime::Error::msg("wasm trap: unreachable instruction");
-        let mapped = map_trap(err);
+        let mapped = map_trap(&err);
         assert!(matches!(mapped, WasmProcessError::Unrecoverable(_)));
     }
 
