@@ -148,7 +148,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | System | Shares With WAFER | Lacks vs WAFER |
 |--------|-------------------|----------------|
 | **eKuiper** | Same HW (RPi), same protocol (MQTT), lightweight, goroutine-per-op | No per-operator isolation, no typed contracts, full rule restart |
-| **Torvyn** | Rust+Wasmtime+WIT+typed streams+backpressure | No hot-swap, no IoT protocols, no edge HW benchmarks, single-task model |
+| **Torvyn** | Rust+Wasmtime+WIT+typed streams+backpressure, edge-processing use case published, Apache-2.0 | No per-node hot-swap (task-per-flow reactor), no MQTT/HTTP adapters (protocol-agnostic), no canonical Pi/Jetson benchmarks |
 | **Spin** | Component Model, Tokio, InstancePre, Factors, pooling | Serverless (no streaming, no DAG, no backpressure), whole-app reload |
 | **Wassette** | Component Model, deny-by-default, InstancePre, OCI | No streaming, no DAG, no backpressure, atomic replace (no drain) |
 | **Azure IoT Ops** | Wasm+WIT+DAG, same domain, edge IoT | Platform-managed (K8s), linear only, no hot-swap, no standalone |
@@ -174,7 +174,7 @@ on ≤4GB ARM.
 - vs eKuiper: "What does per-operator isolation cost?" — not "faster than native"
 - vs Spin: "Spin demonstrates CM viability for serverless; WAFER extends CM to continuous edge streaming"
 - vs Azure: "WAFER provides equivalent data processing as a standalone runtime with explicit backpressure and hot-swap"
-- vs Torvyn: "WAFER adds per-stage fault isolation and IoT-protocol integration"
+- vs Torvyn: "WAFER adds per-node hot-swap, IoT-protocol integration, and constrained-hardware evaluation" (Torvyn = public Rust runtime, not a UFRGS thesis; edge processing IS a published Torvyn use case)
 - vs Wick (abandoned): validates narrow scope + standard protocols + clear contribution criteria
 - vs Fluvio: validates Wasm-in-data-path at scale; WAFER adds persistent DAG with isolation
 

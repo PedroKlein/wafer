@@ -16,7 +16,7 @@ in the table.
 | **Azure IoT Operations** (dataflow graphs) | Wasm + WIT + DAG at edge, `wasm32-wasip2`, similar operator taxonomy | Platform-managed (Kubernetes), linear pipelines only, no hot-swap, cannot run standalone | Managed edge platform |
 | **Fermyon Spin** | Component Model, Tokio, `InstancePre`, Factors architecture, pooling allocator | Serverless request/response (no DAG, no continuous streaming, no backpressure), whole-app reload | Wasm microservices |
 | **Microsoft Wassette** | Component Model, deny-by-default capabilities, `InstancePre`, OCI distribution | No streaming, no DAG, no backpressure, atomic component replace (no drain semantics) | Wasm-based extension host |
-| **Torvyn** | Rust + wasmtime + WIT + typed streams + backpressure, buffer-pool zero-copy pattern | No hot-swap, no IoT protocols, no edge-hardware benchmarks, single-task model | Wasm streaming runtime |
+| **Torvyn** | Rust + wasmtime + WIT + typed streams + backpressure, buffer-pool zero-copy pattern, edge-processing use case published | No per-node hot-swap, no MQTT/HTTP adapters (protocol-agnostic), no canonical Pi/Jetson benchmarks, task-per-flow reactor | Wasm streaming runtime (public, Apache-2.0) |
 | **Tremor** (Wayfair) | Rust DAG, streaming, backpressure, production-scale (10 TB/day) | No Wasm isolation, no typed plugin contracts, no per-node hot-swap | General-purpose event processor |
 
 *Extended comparator set (Fluvio SmartModules, Flow-Like, Wick,
@@ -68,13 +68,18 @@ adoption.
 
 ### Torvyn
 
-The closest single-repo sibling in the sample: Rust + wasmtime + WIT
-+ typed streams + backpressure. Torvyn's buffer-pool zero-copy pattern
-informed WAFER's `Bytes`-based envelope. Torvyn lacks per-node
-hot-swap, IoT-protocol integration, and edge-hardware benchmarks —
-those are precisely WAFER's additions. Framing: *"WAFER adds per-stage
-fault isolation and IoT-protocol integration on top of a Torvyn-shaped
-streaming core."*
+The closest single-repo sibling in the sample: Rust + wasmtime + WIT +
+typed streams + backpressure, developed independently of UFRGS
+(Apache-2.0, `github.com/torvyn/torvyn`). Torvyn's buffer-pool
+zero-copy pattern informed WAFER's `Bytes`-based envelope. Torvyn's
+documentation site publishes an explicit edge-processing use case, so
+the domain overlap is real; the remaining WAFER additions are per-node
+hot-swap (Torvyn's task-per-flow reactor forecloses per-node live
+update), first-class IoT-protocol adapters (WAFER ships `mqtt` and
+`http` source/sink node types), and canonical evaluation on constrained
+hardware (RPi 4, Jetson Orin Nano). Framing: *"WAFER adds per-node
+hot-swap, IoT-protocol integration, and constrained-hardware
+evaluation on top of a Torvyn-shaped streaming core."*
 
 ### Tremor
 
@@ -96,8 +101,8 @@ Wasm plugins.
   WAFER extends CM to continuous edge streaming."*
 - **vs Wassette:** *"Wassette shows deny-by-default at rest; WAFER
   shows it in flight."*
-- **vs Torvyn:** *"WAFER adds per-stage fault isolation and
-  IoT-protocol integration."*
+- **vs Torvyn:** *"WAFER adds per-node hot-swap, IoT-protocol
+  integration, and constrained-hardware evaluation."*
 - **vs Tremor:** *"The isolation and live-update budget you buy for
   the Wasm boundary cost."*
 
