@@ -68,6 +68,16 @@ THESIS_STYLE = {
     "pdf.compression": 6,
 }
 
+# Canonical system colour mapping used across all comparison figures.
+# Deck palette: rust-orange for WAFER, muted grey for Native, violet for eKuiper.
+# Import this dict in any notebook that plots per-system series so colours
+# stay consistent across figures.
+SYSTEM_COLORS = {
+    'WAFER': '#c2410c',
+    'Native': '#6b6156',
+    'eKuiper': '#6d28d9',
+}
+
 # Canonical output directory relative to the notebook. Notebooks live at
 # eval/analysis/notebooks/*.ipynb; the figures dir is a sibling of
 # notebooks/ so "../figures/e-perf-4/per_hop_overhead.pdf" resolves cleanly.

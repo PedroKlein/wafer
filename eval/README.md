@@ -12,26 +12,31 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 ## Quick Start
 
 ```bash
-# Build everything
-make build plugins
+# Build everything (runtime + eval plugins)
+mise run //:build-release //eval:build-plugins-eval
 
 # Run a micro-benchmark (no MQTT needed)
-make e-perf-4
+mise run //eval:e-perf-4
 
 # Run full E2E (requires Mosquitto)
-make e-perf-1
+mise run //eval:e-perf-1
+
+# Or from inside eval/, use the shorter form:
+cd eval && mise run :e-perf-4
 ```
 
 ## Experiment Targets
 
 | Target | Experiment | RQ | Requirements |
 |--------|-----------|-----|-------------|
-| `make e-perf-1` | E2E latency | RQ1 | Mosquitto |
-| `make e-perf-4` | Per-hop overhead | RQ1 | None |
-| `make e-perf-7` | Metering decomposition | RQ1 | None |
-| `make e-swap-1` | Hot-swap pause | RQ3 | None |
-| `make e-swap-2` | Zero-loss verification | RQ3 | None |
-| `make e-iso-7` | Fault isolation | RQ2 | None |
+| `mise run //eval:e-perf-1` | E2E latency | RQ1 | Mosquitto |
+| `mise run //eval:e-perf-4` | Per-hop overhead | RQ1 | None |
+| `mise run //eval:e-perf-7` | Metering decomposition | RQ1 | None |
+| `mise run //eval:e-swap-1` | Hot-swap pause | RQ3 | None |
+| `mise run //eval:e-swap-2` | Zero-loss verification | RQ3 | None |
+| `mise run //eval:e-iso-7` | Fault isolation | RQ2 | None |
+| `mise run //eval:eval-all` | Run every experiment above | — | Mosquitto |
+| `mise run //eval:eval-clean` | Remove `eval/results/*/` | — | — |
 
 ## Results
 

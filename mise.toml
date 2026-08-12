@@ -1,18 +1,31 @@
-# WAFER project tools and tasks
+# WAFER project tools and tasks — MONOREPO ROOT
 #
-# mise is the primary developer entrypoint for this repository: it installs
-# non-Rust helper tools and runs project tasks. The legacy `justfile`
-# was removed 2026-08-02 after task-parity with mise was verified
-# (ADR-0015 follow-up).
-# temporary compatibility layer while docs and scripts finish migrating.
+# mise is the single developer entrypoint for this repository. Tasks are split
+# across config_roots to keep each file small:
+#
+#   mise.toml           — this file: tools, workspace-scope tasks (build,
+#                          test, run, cross-build)
+#   plugins/mise.toml   — plugin builds (Rust/Go/Python) + OCI registry
+#   eval/mise.toml      — experiment orchestration (E-*) + analysis notebooks
+#
+# Invocation from anywhere:
+#   mise run build                    # this file
+#   mise run //plugins:build-plugins  # plugins/mise.toml
+#   mise run //eval:e-perf-1          # eval/mise.toml
+#   mise tasks --all                  # list everything
 #
 # Rust stays authoritative in rust-toolchain.toml. Install rustup/Rust before
 # `mise install`; cargo-based mise tools such as wasm-tools and wkg require
-# `cargo` to exist. Keeping Rust out of mise avoids double-managing rustc while
-# preserving rust-toolchain.toml as the single Rust source of truth.
+# `cargo` to exist. Keeping Rust out of mise avoids double-managing rustc
+# while preserving rust-toolchain.toml as the single Rust source of truth.
+
+monorepo_root = true
+
+[monorepo]
+config_roots = ["plugins", "eval"]
 
 [tools]
-# Non-Rust language/tooling surface.
+# Non-Rust language/tooling surface. Inherited by every sub-config_root.
 python = "3.11"
 uv = "latest"
 go = "1.24"
@@ -46,7 +59,7 @@ fi
 
 rustup show active-toolchain
 rustup target add wasm32-wasip2
-mise install
+mise install --monorepo
 '''
 
 [tasks.tool-versions]
@@ -64,11 +77,11 @@ if command -v jq >/dev/null 2>&1; then jq --version; fi
 
 [tasks.default]
 description = "List available project tasks"
-run = "mise tasks ls"
+run = "mise tasks ls --all"
 
 [tasks.tasks]
-description = "List available project tasks"
-run = "mise tasks ls"
+description = "List available project tasks (every config_root)"
+run = "mise tasks ls --all"
 
 # =============================================================================
 # Core Workspace Commands
@@ -94,7 +107,7 @@ run = "cargo check --workspace"
 description = "Clean workspace and plugin build artifacts"
 run = '''
 cargo clean
-for plugin in plugins/*/Cargo.toml; do
+for plugin in plugins/*/Cargo.toml plugins/attacks/*/Cargo.toml; do
   cargo clean --manifest-path "$plugin" 2>/dev/null || true
 done
 '''
@@ -135,240 +148,6 @@ run = '''
 bash -c '
 set -euo pipefail
 cargo run -p waferctl -- "$@"
-' --
-'''
-
-# =============================================================================
-# Plugin Build Commands
-# =============================================================================
-
-[tasks.plugin]
-description = "Build the pass-through plugin"
-run = "cargo build --release --manifest-path plugins/pass-through/Cargo.toml --target wasm32-wasip2"
-
-[tasks.validate]
-description = "Validate the pass-through plugin WASM component"
-depends = ["plugin"]
-run = "wasm-tools validate --features component-model plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
-
-[tasks.build-plugins]
-description = "Build all plugins for wasm32-wasip2"
-run = '''
-for plugin in plugins/*/Cargo.toml; do
-  name=$(basename "$(dirname "$plugin")")
-  echo "Building plugin: $name"
-  cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
-done
-'''
-
-[tasks.build-plugin]
-description = "Build one plugin for wasm32-wasip2: mise run build-plugin <name>"
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 1 ]; then
-  echo "usage: mise run build-plugin <name>" >&2
-  exit 2
-fi
-cargo build --release --manifest-path "plugins/$1/Cargo.toml" --target wasm32-wasip2
-' --
-'''
-
-# =============================================================================
-# OCI Registry Commands
-# =============================================================================
-
-[tasks.list-plugins]
-description = "List built plugins and WASM file sizes"
-run = '''
-echo "Built plugins:"
-for wasm in plugins/*/target/wasm32-wasip2/release/*.wasm; do
-  if [ -f "$wasm" ]; then
-    name=$(echo "$wasm" | sed 's|plugins/\([^/]*\)/.*|\1|')
-    size=$(du -h "$wasm" | cut -f1)
-    echo "  $name: $wasm ($size)"
-  fi
-done
-'''
-
-[tasks.install-wkg]
-description = "Install the mise-managed wkg tool"
-run = "mise install cargo:wkg"
-
-[tasks.registry-login]
-description = "Login to GitHub Container Registry: mise run registry-login <username> <token>"
-quiet = true
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 2 ]; then
-  echo "usage: mise run registry-login <username> <token>" >&2
-  exit 2
-fi
-username=$1
-token=$2
-echo "Logging into ghcr.io..."
-printf "%s" "$token" | docker login ghcr.io -u "$username" --password-stdin
-echo "✓ Logged in to ghcr.io as $username"
-echo "Credentials stored in ~/.docker/config.json (used by wkg)"
-' --
-'''
-
-[tasks.registry-status]
-description = "Show current registry auth status"
-run = '''
-echo "Checking Docker credential store..."
-docker-credential-osxkeychain list 2>/dev/null || docker-credential-desktop list 2>/dev/null || echo "No credential helper found"
-echo ""
-echo "Docker config location: ~/.docker/config.json"
-grep -A2 "ghcr.io" ~/.docker/config.json 2>/dev/null || echo "No ghcr.io credentials found"
-'''
-
-[tasks.publish-plugin]
-description = "Publish one plugin using Docker credentials: mise run publish-plugin <name> <version>"
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 2 ]; then
-  echo "usage: mise run publish-plugin <name> <version>" >&2
-  exit 2
-fi
-name=$1
-version=$2
-case "$name" in
-  pass-through)    wasm_file="pass_through_transform.wasm" ;;
-  uppercase)       wasm_file="uppercase_transform.wasm" ;;
-  filter)          wasm_file="filter_transform.wasm" ;;
-  json-parse)      wasm_file="json_parse_transform.wasm" ;;
-  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
-  result-format)   wasm_file="result_format.wasm" ;;
-  mnist-inference) wasm_file="mnist_inference.wasm" ;;
-  *)               wasm_file="${name}_transform.wasm" ;;
-esac
-wasm_path="plugins/$name/target/wasm32-wasip2/release/$wasm_file"
-if [ ! -f "$wasm_path" ]; then
-  echo "Error: WASM not found at $wasm_path" >&2
-  echo "Run 'mise run build-plugin $name' first" >&2
-  exit 1
-fi
-pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
-ref="$registry/wafer-${pkg_name}:$version"
-echo "Publishing $wasm_path to $ref"
-wkg oci push "$ref" "$wasm_path"
-echo "✓ Published $ref"
-' --
-'''
-
-[tasks.publish-plugin-auth]
-description = "Publish one plugin with inline credentials: mise run publish-plugin-auth <username> <token> <name> <version>"
-quiet = true
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 4 ]; then
-  echo "usage: mise run publish-plugin-auth <username> <token> <name> <version>" >&2
-  exit 2
-fi
-username=$1
-token=$2
-name=$3
-version=$4
-case "$name" in
-  pass-through)    wasm_file="pass_through_transform.wasm" ;;
-  uppercase)       wasm_file="uppercase_transform.wasm" ;;
-  filter)          wasm_file="filter_transform.wasm" ;;
-  json-parse)      wasm_file="json_parse_transform.wasm" ;;
-  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
-  result-format)   wasm_file="result_format.wasm" ;;
-  mnist-inference) wasm_file="mnist_inference.wasm" ;;
-  *)               wasm_file="${name}_transform.wasm" ;;
-esac
-wasm_path="plugins/$name/target/wasm32-wasip2/release/$wasm_file"
-if [ ! -f "$wasm_path" ]; then
-  echo "Error: WASM not found at $wasm_path" >&2
-  echo "Run 'mise run build-plugin $name' first" >&2
-  exit 1
-fi
-pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
-ref="$registry/wafer-${pkg_name}:$version"
-echo "Publishing $wasm_path to $ref"
-wkg oci push -u "$username" -p "$token" "$ref" "$wasm_path"
-echo "✓ Published $ref"
-' --
-'''
-
-[tasks.publish-all]
-description = "Publish all built plugins: mise run publish-all <version>"
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 1 ]; then
-  echo "usage: mise run publish-all <version>" >&2
-  exit 2
-fi
-version=$1
-plugins=(pass-through uppercase filter json-parse tensor-prep result-format mnist-inference)
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
-for name in "${plugins[@]}"; do
-  wasm_dir="plugins/$name/target/wasm32-wasip2/release"
-  if [ -d "$wasm_dir" ] && ls "$wasm_dir"/*.wasm >/dev/null 2>&1; then
-    echo "Publishing $name..."
-    mise run publish-plugin "$name" "$version"
-  else
-    echo "Skipping $name (not built)"
-  fi
-done
-echo ""
-echo "✓ All plugins published to $registry"
-' --
-'''
-
-[tasks.pull-plugin]
-description = "Pull one plugin from OCI registry: mise run pull-plugin <name> <version>"
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 2 ]; then
-  echo "usage: mise run pull-plugin <name> <version>" >&2
-  exit 2
-fi
-name=$1
-version=$2
-pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
-ref="$registry/wafer-${pkg_name}:$version"
-output="downloads/${pkg_name}-${version}.wasm"
-mkdir -p downloads
-echo "Pulling $ref to $output..."
-wkg oci pull "$ref" -o "$output"
-echo "✓ Downloaded to $output"
-' --
-'''
-
-[tasks.pull-plugin-auth]
-description = "Pull one plugin with inline credentials: mise run pull-plugin-auth <username> <token> <name> <version>"
-quiet = true
-run = '''
-bash -c '
-set -euo pipefail
-if [ $# -ne 4 ]; then
-  echo "usage: mise run pull-plugin-auth <username> <token> <name> <version>" >&2
-  exit 2
-fi
-username=$1
-token=$2
-name=$3
-version=$4
-pkg_name=$(echo "$name" | tr '-' '_')
-registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
-ref="$registry/wafer-${pkg_name}:$version"
-output="downloads/${pkg_name}-${version}.wasm"
-mkdir -p downloads
-echo "Pulling $ref to $output..."
-wkg oci pull -u "$username" -p "$token" "$ref" -o "$output"
-echo "✓ Downloaded to $output"
 ' --
 '''
 
@@ -455,50 +234,4 @@ for b in wafer wafer-loadgen waferctl; do
   echo "OK   $f ($(du -h "$f" | cut -f1))"
 done
 [ "$missing" -eq 0 ] || { echo "cross-build-pi-check FAILED: $missing binary/binaries missing or wrong arch" >&2; exit 1; }
-'''
-
-[tasks.notebooks]
-description = "Open all analysis notebooks in JupyterLab (browser)"
-run = '''
-set -euo pipefail
-cd eval/analysis
-uv run jupyter lab --notebook-dir=notebooks
-'''
-
-[tasks.notebooks-view]
-description = "Open a specific notebook read-only in the browser (renders inline)"
-run = '''
-set -euo pipefail
-if [ -z "${1:-}" ]; then
-  echo "usage: mise run notebooks-view <notebook-stem>" >&2
-  echo "  e.g. mise run notebooks-view 05-hotswap-timeline" >&2
-  echo "  available:" >&2
-  ls eval/analysis/notebooks/*.ipynb | xargs -n1 basename | sed 's/\.ipynb$//; s/^/    /' >&2
-  exit 2
-fi
-cd eval/analysis
-out=$(mktemp -d)/$1.html
-uv run jupyter nbconvert --to html --output-dir "$(dirname "$out")" "notebooks/$1.ipynb"
-open "$out"
-'''
-
-[tasks.notebooks-execute]
-description = "Re-execute all analysis notebooks against fresh eval/results/ data"
-run = '''
-set -euo pipefail
-cd eval/analysis
-for nb in notebooks/*.ipynb; do
-  echo "=== executing $(basename "$nb") ==="
-  uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
-done
-'''
-
-[tasks.figures]
-description = "Regenerate all thesis PDF/PNG figures under eval/analysis/figures/"
-depends = ["notebooks-execute"]
-run = '''
-set -euo pipefail
-count=$(find eval/analysis/figures -name '*.pdf' | wc -l | tr -d ' ')
-echo "generated $count PDFs under eval/analysis/figures/"
-find eval/analysis/figures -name '*.pdf' | sort
 '''

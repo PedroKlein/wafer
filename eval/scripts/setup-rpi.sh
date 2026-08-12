@@ -36,4 +36,4 @@ if command -v vcgencmd &> /dev/null; then
 fi
 
 echo ""
-echo "=== Environment ready. Run benchmarks with: make e-perf-1 ==="
+echo "=== Environment ready. Run benchmarks with: mise run //eval:e-perf-1 ==="

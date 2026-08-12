@@ -1,0 +1,150 @@
+# Evaluation experiment tasks + analysis notebooks.
+#
+# Tasks default to cwd = eval/ (this config_root). Invocation from repo root:
+# `mise run //eval:e-perf-1`; from inside eval/: `mise run :e-perf-1`.
+# Root-scope depends use `//:build-release`.
+#
+# Result trees are timestamped so repeated runs never collide.
+
+[tasks.build-plugins-eval]
+description = "Build the three plugins consumed by the E-* experiments"
+run = '''
+set -euo pipefail
+for p in pass-through uppercase threshold-filter; do
+  echo "Building plugin: $p"
+  cargo build --release --manifest-path "../plugins/$p/Cargo.toml" --target wasm32-wasip2
+done
+'''
+
+# =============================================================================
+# Canonical experiments (RQ1 / RQ2 / RQ3)
+# =============================================================================
+
+[tasks.e-perf-1]
+description = "E-Perf-1: E2E latency (MQTT, steady 1000 msg/s) — RQ1"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+out="results/e-perf-1/$ts"
+mkdir -p "$out"
+cp configs/pipeline-c-passthrough.toml "$out/config.toml"
+echo "=== E-Perf-1: E2E Latency (MQTT, steady 1000 msg/s) ==="
+./scripts/run-experiment.sh configs/pipeline-c-passthrough.toml "$out"
+'''
+
+[tasks.e-perf-4]
+description = "E-Perf-4: Per-hop overhead (in-process bench) — RQ1"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+out="results/e-perf-4/$ts"
+mkdir -p "$out"
+echo "=== E-Perf-4: Per-Hop Overhead (in-process) ==="
+( cd .. && cargo bench --package wafer-core --bench throughput -- wasm_boundary ) 2>&1 | tee "$out/output.log"
+'''
+
+[tasks.e-perf-7]
+description = "E-Perf-7: Metering decomposition (4 configs) — RQ1"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+out="results/e-perf-7/$ts"
+mkdir -p "$out"
+echo "=== E-Perf-7: Metering Decomposition (4 configs) ==="
+for cfg in pipeline-c-passthrough pipeline-c-fuel-only pipeline-c-epoch-only pipeline-c-neither; do
+  echo "  Running $cfg..."
+  cp "configs/$cfg.toml" "$out/"
+done
+'''
+
+[tasks.e-swap-1]
+description = "E-Swap-1: Hot-swap pause duration — RQ3"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+out="results/e-swap-1/$ts"
+mkdir -p "$out"
+echo "=== E-Swap-1: Hot-Swap Pause Duration ==="
+( cd .. && cargo bench --package wafer-core --bench hot_swap ) 2>&1 | tee "$out/output.log"
+'''
+
+[tasks.e-swap-2]
+description = "E-Swap-2: Zero-loss verification — RQ3 (stub)"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+mkdir -p "results/e-swap-2/$ts"
+echo "=== E-Swap-2: Zero-Loss Verification ==="
+echo "TODO: Run pipeline with hot-swap and verify sequence tracker"
+'''
+
+[tasks.e-iso-7]
+description = "E-Iso-7: Fault isolation throughput impact — RQ2 (stub)"
+depends = ["//:build-release", ":build-plugins-eval"]
+run = '''
+set -euo pipefail
+ts=$(date +%Y%m%d-%H%M%S)
+mkdir -p "results/e-iso-7/$ts"
+echo "=== E-Iso-7: Fault Isolation Throughput Impact ==="
+echo "TODO: Run parallel-branch topology with attack node"
+'''
+
+[tasks.eval-all]
+description = "Run every canonical experiment (e-perf-1/4/7, e-swap-1/2, e-iso-7)"
+depends = [":e-perf-1", ":e-perf-4", ":e-perf-7", ":e-swap-1", ":e-swap-2", ":e-iso-7"]
+
+[tasks.eval-clean]
+description = "Remove every timestamped result tree under eval/results/"
+run = "rm -rf results/*/"
+
+# =============================================================================
+# Analysis notebooks + thesis figures
+# =============================================================================
+
+[tasks.notebooks]
+description = "Open all analysis notebooks in JupyterLab (browser)"
+dir = "{{config_root}}/analysis"
+run = "uv run jupyter lab --notebook-dir=notebooks"
+
+[tasks.notebooks-view]
+description = "Open a specific notebook read-only: mise run //eval:notebooks-view <stem>"
+dir = "{{config_root}}/analysis"
+run = '''
+set -euo pipefail
+if [ -z "${1:-}" ]; then
+  echo "usage: mise run //eval:notebooks-view <notebook-stem>" >&2
+  echo "  e.g. mise run //eval:notebooks-view 05-hotswap-timeline" >&2
+  echo "  available:" >&2
+  ls notebooks/*.ipynb | xargs -n1 basename | sed 's/\.ipynb$//; s/^/    /' >&2
+  exit 2
+fi
+out=$(mktemp -d)/$1.html
+uv run jupyter nbconvert --to html --output-dir "$(dirname "$out")" "notebooks/$1.ipynb"
+open "$out"
+'''
+
+[tasks.notebooks-execute]
+description = "Re-execute all analysis notebooks against fresh eval/results/ data"
+dir = "{{config_root}}/analysis"
+run = '''
+set -euo pipefail
+for nb in notebooks/*.ipynb; do
+  echo "=== executing $(basename "$nb") ==="
+  uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
+done
+'''
+
+[tasks.figures]
+description = "Regenerate all thesis PDF/PNG figures under eval/analysis/figures/"
+depends = [":notebooks-execute"]
+run = '''
+set -euo pipefail
+count=$(find analysis/figures -name '*.pdf' | wc -l | tr -d ' ')
+echo "generated $count PDFs under eval/analysis/figures/"
+find analysis/figures -name '*.pdf' | sort
+'''

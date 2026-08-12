@@ -1,0 +1,313 @@
+# Plugin build + OCI registry tasks.
+#
+# Tasks default to cwd = plugins/ (this config_root). Invocation from repo
+# root: `mise run //plugins:<task>`; from inside plugins/: `mise run :<task>`.
+# Cross-config-root: `//:build-release` calls the root workspace build.
+#
+# Downloads land at repo root (../downloads) because that's what users expect
+# for the pull-plugin/pull-plugin-auth tasks.
+
+# =============================================================================
+# Rust plugin builds (regular + attacks)
+# =============================================================================
+
+[tasks.plugin]
+description = "Build the pass-through plugin"
+run = "cargo build --release --manifest-path pass-through/Cargo.toml --target wasm32-wasip2"
+
+[tasks.validate]
+description = "Validate the pass-through plugin WASM component"
+depends = [":plugin"]
+run = "wasm-tools validate --features component-model pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+
+[tasks.build-plugins]
+description = "Build all Rust plugins (regular + attacks) for wasm32-wasip2 (release)"
+run = '''
+set -euo pipefail
+for plugin in */Cargo.toml attacks/*/Cargo.toml; do
+  name=${plugin%/Cargo.toml}
+  echo "Building plugin: $name"
+  cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
+done
+# Post-process: 10-30% size reduction (requires wasm-opt from binaryen)
+if command -v wasm-opt >/dev/null 2>&1; then
+  find . -path "*/wasm32-wasip2/release/*.wasm" -exec sh -c \
+    'echo "Optimizing $(basename "$1")" && wasm-opt -Os "$1" -o "$1"' _ {} \;
+else
+  echo "wasm-opt not found, skipping size optimization" >&2
+fi
+'''
+
+[tasks.build-plugin]
+description = "Build one plugin for wasm32-wasip2: mise run //plugins:build-plugin <name>"
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 1 ]; then
+  echo "usage: mise run //plugins:build-plugin <name>" >&2
+  exit 2
+fi
+cargo build --release --manifest-path "$1/Cargo.toml" --target wasm32-wasip2
+' --
+'''
+
+[tasks.check-plugins]
+description = "cargo check every Rust plugin (regular + attacks)"
+run = '''
+set -euo pipefail
+for plugin in */Cargo.toml attacks/*/Cargo.toml; do
+  name=${plugin%/Cargo.toml}
+  echo "Checking plugin: $name"
+  cargo check --manifest-path "$plugin"
+done
+'''
+
+[tasks.test-plugins]
+description = "cargo test every Rust plugin against host target (skips attacks)"
+run = '''
+set -euo pipefail
+host=$(rustc -vV | awk '/^host:/ { print $2 }')
+for plugin in */Cargo.toml; do
+  name=${plugin%/Cargo.toml}
+  echo "Testing plugin: $name"
+  cargo test --manifest-path "$plugin" --target "$host"
+done
+'''
+
+[tasks.clean-plugins]
+description = "cargo clean every Rust plugin (regular + attacks)"
+run = '''
+set -euo pipefail
+for plugin in */Cargo.toml attacks/*/Cargo.toml; do
+  cargo clean --manifest-path "$plugin"
+done
+'''
+
+# =============================================================================
+# Polyglot plugins (TinyGo + componentize-py)
+# =============================================================================
+
+[tasks.build-plugin-go]
+description = "Build the TinyGo uppercase plugin (wasip2) — requires tinygo + wasm-tools"
+dir = "{{config_root}}/go/uppercase"
+run = '''
+set -euo pipefail
+GO_ROOT=$(mise where go)
+PATH="$GO_ROOT/bin:$PATH" GOROOT="$GO_ROOT" \
+  tinygo build -target=wasip2 -no-debug \
+    -wit-package ./wit -wit-world transform-node-go \
+    -o wafer-uppercase-go.wasm .
+echo "Built: wafer-uppercase-go.wasm ($(wc -c < wafer-uppercase-go.wasm | tr -d ' ') bytes)"
+'''
+
+[tasks.plugin-go-generate]
+description = "Regenerate Go WIT bindings for plugins/go/uppercase"
+dir = "{{config_root}}/go/uppercase"
+run = "go run go.bytecodealliance.org/cmd/wit-bindgen-go generate ../../../wit/node --out gen --world transform-node"
+
+[tasks.build-plugin-py]
+description = "Build the Python threshold-filter plugin (componentize-py)"
+dir = "{{config_root}}/python/threshold-filter"
+run = '''
+set -euo pipefail
+componentize-py -d ../../../wit/node -w filter-node componentize app -o wafer-threshold-filter-py.wasm
+echo "Built: wafer-threshold-filter-py.wasm ($(wc -c < wafer-threshold-filter-py.wasm | tr -d ' ') bytes)"
+'''
+
+# =============================================================================
+# OCI registry (list / login / publish / pull)
+# =============================================================================
+
+[tasks.list-plugins]
+description = "List built plugins and WASM file sizes"
+run = '''
+echo "Built plugins:"
+for wasm in */target/wasm32-wasip2/release/*.wasm; do
+  if [ -f "$wasm" ]; then
+    name=${wasm%%/*}
+    size=$(du -h "$wasm" | cut -f1)
+    echo "  $name: $wasm ($size)"
+  fi
+done
+'''
+
+[tasks.install-wkg]
+description = "Install the mise-managed wkg tool"
+run = "mise install cargo:wkg"
+
+[tasks.registry-login]
+description = "Login to GitHub Container Registry: mise run //plugins:registry-login <username> <token>"
+quiet = true
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 2 ]; then
+  echo "usage: mise run //plugins:registry-login <username> <token>" >&2
+  exit 2
+fi
+username=$1
+token=$2
+echo "Logging into ghcr.io..."
+printf "%s" "$token" | docker login ghcr.io -u "$username" --password-stdin
+echo "✓ Logged in to ghcr.io as $username"
+echo "Credentials stored in ~/.docker/config.json (used by wkg)"
+' --
+'''
+
+[tasks.registry-status]
+description = "Show current registry auth status"
+run = '''
+echo "Checking Docker credential store..."
+docker-credential-osxkeychain list 2>/dev/null || docker-credential-desktop list 2>/dev/null || echo "No credential helper found"
+echo ""
+echo "Docker config location: ~/.docker/config.json"
+grep -A2 "ghcr.io" ~/.docker/config.json 2>/dev/null || echo "No ghcr.io credentials found"
+'''
+
+[tasks.publish-plugin]
+description = "Publish one plugin using Docker credentials: mise run //plugins:publish-plugin <name> <version>"
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 2 ]; then
+  echo "usage: mise run //plugins:publish-plugin <name> <version>" >&2
+  exit 2
+fi
+name=$1
+version=$2
+case "$name" in
+  pass-through)    wasm_file="pass_through_transform.wasm" ;;
+  uppercase)       wasm_file="uppercase_transform.wasm" ;;
+  filter)          wasm_file="filter_transform.wasm" ;;
+  json-parse)      wasm_file="json_parse_transform.wasm" ;;
+  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
+  result-format)   wasm_file="result_format.wasm" ;;
+  mnist-inference) wasm_file="mnist_inference.wasm" ;;
+  *)               wasm_file="${name}_transform.wasm" ;;
+esac
+wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
+if [ ! -f "$wasm_path" ]; then
+  echo "Error: WASM not found at $wasm_path" >&2
+  echo "Run '"'"'mise run //plugins:build-plugin $name'"'"' first" >&2
+  exit 1
+fi
+pkg_name=$(echo "$name" | tr '-' '_')
+registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+ref="$registry/wafer-${pkg_name}:$version"
+echo "Publishing $wasm_path to $ref"
+wkg oci push "$ref" "$wasm_path"
+echo "✓ Published $ref"
+' --
+'''
+
+[tasks.publish-plugin-auth]
+description = "Publish one plugin with inline credentials: mise run //plugins:publish-plugin-auth <username> <token> <name> <version>"
+quiet = true
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 4 ]; then
+  echo "usage: mise run //plugins:publish-plugin-auth <username> <token> <name> <version>" >&2
+  exit 2
+fi
+username=$1
+token=$2
+name=$3
+version=$4
+case "$name" in
+  pass-through)    wasm_file="pass_through_transform.wasm" ;;
+  uppercase)       wasm_file="uppercase_transform.wasm" ;;
+  filter)          wasm_file="filter_transform.wasm" ;;
+  json-parse)      wasm_file="json_parse_transform.wasm" ;;
+  tensor-prep)     wasm_file="tensor_prep.wasm" ;;
+  result-format)   wasm_file="result_format.wasm" ;;
+  mnist-inference) wasm_file="mnist_inference.wasm" ;;
+  *)               wasm_file="${name}_transform.wasm" ;;
+esac
+wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
+if [ ! -f "$wasm_path" ]; then
+  echo "Error: WASM not found at $wasm_path" >&2
+  echo "Run '"'"'mise run //plugins:build-plugin $name'"'"' first" >&2
+  exit 1
+fi
+pkg_name=$(echo "$name" | tr '-' '_')
+registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+ref="$registry/wafer-${pkg_name}:$version"
+echo "Publishing $wasm_path to $ref"
+wkg oci push -u "$username" -p "$token" "$ref" "$wasm_path"
+echo "✓ Published $ref"
+' --
+'''
+
+[tasks.publish-all]
+description = "Publish all built plugins: mise run //plugins:publish-all <version>"
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 1 ]; then
+  echo "usage: mise run //plugins:publish-all <version>" >&2
+  exit 2
+fi
+version=$1
+plugins=(pass-through uppercase filter json-parse tensor-prep result-format mnist-inference)
+registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+for name in "${plugins[@]}"; do
+  wasm_dir="$name/target/wasm32-wasip2/release"
+  if [ -d "$wasm_dir" ] && ls "$wasm_dir"/*.wasm >/dev/null 2>&1; then
+    echo "Publishing $name..."
+    mise run //plugins:publish-plugin "$name" "$version"
+  else
+    echo "Skipping $name (not built)"
+  fi
+done
+echo ""
+echo "✓ All plugins published to $registry"
+' --
+'''
+
+[tasks.pull-plugin]
+description = "Pull one plugin from OCI registry: mise run //plugins:pull-plugin <name> <version>"
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 2 ]; then
+  echo "usage: mise run //plugins:pull-plugin <name> <version>" >&2
+  exit 2
+fi
+name=$1
+version=$2
+pkg_name=$(echo "$name" | tr '-' '_')
+registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+ref="$registry/wafer-${pkg_name}:$version"
+output="../downloads/${pkg_name}-${version}.wasm"
+mkdir -p ../downloads
+echo "Pulling $ref to $output..."
+wkg oci pull "$ref" -o "$output"
+echo "✓ Downloaded to $output"
+' --
+'''
+
+[tasks.pull-plugin-auth]
+description = "Pull one plugin with inline credentials: mise run //plugins:pull-plugin-auth <username> <token> <name> <version>"
+quiet = true
+run = '''
+bash -c '
+set -euo pipefail
+if [ $# -ne 4 ]; then
+  echo "usage: mise run //plugins:pull-plugin-auth <username> <token> <name> <version>" >&2
+  exit 2
+fi
+username=$1
+token=$2
+name=$3
+version=$4
+pkg_name=$(echo "$name" | tr '-' '_')
+registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
+ref="$registry/wafer-${pkg_name}:$version"
+output="../downloads/${pkg_name}-${version}.wasm"
+mkdir -p ../downloads
+echo "Pulling $ref to $output..."
+wkg oci pull -u "$username" -p "$token" "$ref" -o "$output"
+echo "✓ Downloaded to $output"
+' --
+'''
