@@ -31,7 +31,7 @@ Rubric: `.delegation-runner/verify-eval-2025/rubric.json` (29 frozen criteria).
 | eval-harness | 2 | FAIL (result-dir contract violations) | independent-model |
 | quality | 1, 2 | FAILED to produce output (twice) | independent-model |
 
-Cross-family judge protocol satisfied: builder was primary model family, all reviewers independent model.
+Cross-family judge protocol satisfied: builder was the primary model family, all reviewers an independent model.
 
 ---
 
@@ -257,7 +257,7 @@ returns nothing. Unit tests in `eval/analysis/test_utils.py`.
 ## P-Followup-8 — Skill drift audit
 
 **Status: ✅ Closed** (partial) — F8, commit `4709e3f`. Root cause
-documented (empty quality-reviewer output is a independent model cold-start /
+documented (empty quality-reviewer output is a an independent model cold-start /
 rate-limit artefact; complements are captured in `memory_remember`
 category `wafer-verify`). No prompt or agent-config change needed;
 future runs should retry once before escalating.
