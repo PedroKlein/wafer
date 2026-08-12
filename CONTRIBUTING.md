@@ -36,8 +36,9 @@ mise run clippy
 mise run test
 ```
 
-If you touch the runtime hot path, run `mise run bench` before opening
-a PR. If you touch a Wasm plugin, run `mise run //plugins:build-*` for
+If you touch the runtime hot path, run the criterion benches under
+`crates/wafer-core/benches/` (e.g. `cargo bench -p wafer-core`) before
+opening a PR. If you touch a Wasm plugin, run `mise run //plugins:build-*` for
 that plugin and confirm the produced `.wasm` still loads.
 
 ## Pull request checklist

@@ -6,7 +6,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 | What you need | Where to find it |
 |---------------|------------------|
-| **What to build next** | `plans/` (repo root): `canonical-runs.md` is the active plan; `thesis-hardening.md` is closed 2026-08-02; `eval-followups.md` archives review-driven follow-ups. `ROADMAP.md` gives the aspirational narrative. |
+| **What to build next** | Archived planning scratchpads live in `docs/history/plans/`: `canonical-runs.md` (Pi/Jetson canonical-run plan), `thesis-hardening.md` (closed 2026-08-02), `eval-followups.md`. `ROADMAP.md` gives the aspirational narrative. |
 | **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (per-experiment readiness for Pi/Jetson runs) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
 | **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology) + `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
@@ -105,9 +105,9 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | Plan | Status |
 |------|--------|
-| `plans/canonical-runs.md` | **Active.** Pi/Jetson preflight + canonical-run execution against RFC-008. C1+C2 closed 2026-08-02; open: C3, R1..R3, H1..H3, E1, F1..F5. |
-| `plans/thesis-hardening.md` | **Closed 2026-08-02** (9/9). Landed A17, A19, cross-arch cross-compile, thesis-grade PDF pipeline, doc-freshness sweep, plus BL/M/L verify follow-ups. |
-| `plans/eval-followups.md` | Archived follow-ups from the closed `evaluation-infrastructure` plan. |
+| `docs/history/plans/canonical-runs.md` | **Active.** Pi/Jetson preflight + canonical-run execution against RFC-008. C1+C2 closed 2026-08-02; open: C3, R1..R3, H1..H3, E1, F1..F5. |
+| `docs/history/plans/thesis-hardening.md` | **Closed 2026-08-02** (9/9). Landed A17, A19, cross-arch cross-compile, thesis-grade PDF pipeline, doc-freshness sweep, plus BL/M/L verify follow-ups. |
+| `docs/history/plans/eval-followups.md` | Archived follow-ups from the closed `evaluation-infrastructure` plan. |
 
 ### Design & Specification
 

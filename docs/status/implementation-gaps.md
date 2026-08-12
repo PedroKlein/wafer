@@ -453,8 +453,8 @@ recorded p99 reflects only injected delay. This is the exact class of
 methodology error E-Val-1 exists to catch — documenting here so future
 plugin-level delay tests use safe rate/delay ratios.
 
-**Closed by:** commit landing this file. See
-`plans/evaluation-infrastructure/plan.json` task P0.14.
+**Closed by:** commit landing this file. Tracked at the time under
+the closed `evaluation-infrastructure` plan (see `docs/history/plans/`).
 
 ---
 

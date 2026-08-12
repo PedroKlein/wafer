@@ -166,7 +166,7 @@ mod tests {
 
     #[cfg(feature = "serde")]
     mod parse_config_tests {
-        use super::*;
+        use crate::parse_config;
 
         #[derive(serde::Deserialize, Debug, PartialEq)]
         struct TestConfig {

@@ -16,7 +16,6 @@ path = "src/main.rs"
 default = ["http-api"]
 http-api = ["wafer-core/http-api"]
 # Phase 2 integration tests (require WASM fixtures)
-phase2-tests = []
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wafer-core/cuda"]

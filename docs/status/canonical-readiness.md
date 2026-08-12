@@ -13,7 +13,7 @@ Related docs:
 - `eval/RESULT-CONTRACT.md` — result-directory manifest every canonical
   run must produce.
 - `tcc-doc/research/analysis/evaluation-plan.md` — parent research plan.
-- `plans/evaluation-infrastructure/` — the plan that owns this matrix.
+- The `evaluation-infrastructure` plan closed before the doc refactor. Its narrative is archived across `docs/history/plans/` and the `docs/adr/` entries; the runtime matrix below is the current source of truth.
 - `docs/history/plans/thesis-hardening.md` — closed 2026-08-02 (9/9); landed A17,
   A19, T4 memory sampler, T8 legacy shakedown metadata unification,
   T9 thesis-grade PDF pipeline, T10 cross-arch CI, T11 notebook
@@ -190,7 +190,7 @@ microseconds, macOS M-series):
 
 ### E-Perf-1..2, E-Perf-5 — not yet started
 
-⚪ shakedown pending. See `plans/evaluation-infrastructure/` task queue.
+⚪ shakedown pending. See the runtime matrix at the top of this document.
 
 ### E-Perf-1 — throughput comparison (P3.2)
 
