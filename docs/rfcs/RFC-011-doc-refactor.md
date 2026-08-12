@@ -428,7 +428,7 @@ Reconciliation queue (for RFC-vs-code drift found during Phase 2) is checked but
 | `skill-judge` | Phase 5 skill deep audit | Score skills against official spec |
 | `wafer-project` | Auto-loaded (post-0.2 rewrite) | Correct project invariants |
 
-## Reviewers matrix
+## Reviewer matrix
 
 | Reviewer | Context | Used in |
 |----------|---------|---------|

@@ -39,9 +39,9 @@ What becomes easier or more difficult to do because of this change?
 
 ## Historical workflow
 
-Historical note: earlier iterations of the project used a `beads` task tracker
-to shepherd ADRs through the Proposed → Accepted lifecycle. The workflow is
-preserved here for reference; day-to-day work no longer requires it.
+Earlier iterations of the project used an external task tracker to shepherd
+ADRs through the Proposed → Accepted lifecycle. The workflow is preserved
+here for reference; day-to-day work no longer requires it.
 
 ### Creating a New ADR
 
