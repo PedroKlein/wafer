@@ -115,16 +115,15 @@ mqtt/log/
 # Local docker-compose overrides
 docker-compose.override.yml
 
-# Agent / plan scratch (may exist locally under various names)
-/.delegation-runner
+# Agent / plan scratch (any local agent runner state)
 /.pi
+/.pi-*
+/.tasks
 /.a5c
-/.tasks
-/.tasks
-/.tasks
+/.cache-dir
+/.claude
 /.cursor
 /.aider*
-/.claude
 .plan-verify/
 
 
