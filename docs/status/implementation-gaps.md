@@ -683,7 +683,7 @@ Shakedown re-run confirmed the WAFER/native ratio moved from 0.995
 baseline) — a shift well inside the noise floor, consistent with the
 RQ1 finding that MQTT-bookend throughput is dominated by broker RTT.
 
-- Closed by: commit `ac8955f` (F1 in `plans/eval-followups`).
+- Closed by: commit `ac8955f` (F1 in `docs/history/plans/eval-followups`).
 
 ---
 

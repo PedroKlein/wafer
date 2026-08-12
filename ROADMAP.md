@@ -30,7 +30,7 @@ Remaining work for thesis-grade numbers:
 
 - Pi hardware setup (isolcpus, taskset, CPU governor).
 - Run canonical experiments (60 s runs, 30 s warmup, N=30) via
-  `plans/canonical-runs.md`.
+  `docs/history/plans/canonical-runs.md`.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 

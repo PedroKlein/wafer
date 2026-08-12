@@ -16,8 +16,8 @@ isolation, hot-swap disruption).
 ## Quickstart
 
 ```bash
-git clone https://github.com/PedroKlein/wafer-poc.git
-cd wafer-poc
+git clone https://github.com/PedroKlein/wafer.git
+cd wafer
 
 # Prerequisites: rustup/Rust, mise, and a C toolchain.
 # Install Rust first from https://rustup.rs/ if `cargo --version` fails.

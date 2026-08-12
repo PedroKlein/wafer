@@ -8,7 +8,7 @@
 package transform
 
 import (
-	"github.com/PedroKlein/wafer-poc/plugins/go/uppercase/gen/pipeline/types/types"
+	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/pipeline/types/types"
 )
 
 // Message represents the exported type alias "pipeline:node/transform@0.1.0#message".

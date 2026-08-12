@@ -30,8 +30,8 @@ Before starting an implementation session, generate a prompt that includes ALL c
 
 ## Reference Patterns (read for inspiration)
 [Paths to relevant code in pi-repos reference repositories]
-- Torvyn: `<home>/Dev/pi-repos/repos/github.com/torvyn/torvyn/main/[relevant/path]`
-- Flow-Like: `<home>/Dev/pi-repos/repos/github.com/Rheosoph/flow-like/dev/[relevant/path]`
+- Torvyn: `~/Dev/pi-repos/repos/github.com/torvyn/torvyn/main/[relevant/path]`
+- Flow-Like: `~/Dev/pi-repos/repos/github.com/Rheosoph/flow-like/dev/[relevant/path]`
 
 ## Subtasks (ordered)
 1. [First thing to implement]

@@ -137,7 +137,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | Document | Summary |
 |----------|---------|
-| `docs/AI_WORKFLOW.md` | AI-assisted development workflow (human-facing). Describes the task tracking system and agent orchestration approach used in this project. |
 
 ### Root Files
 

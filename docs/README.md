@@ -64,7 +64,7 @@ docs/
 ├── api/                  Machine-readable API artefacts
 │   ├── openapi.yaml
 │   └── bruno-collection/
-└── AI_WORKFLOW.md        AI-assisted development workflow
+└── history/plans/        Archived planning scratchpads (Historical)
 ```
 
 ## Reader profiles
@@ -108,5 +108,5 @@ Legacy files are removed; git history preserves them if needed.
   and RQ definitions.
 - `github.com/PedroKlein/obsidian-personal` — literature notes under
   `TCC/`.
-- `docs/AI_WORKFLOW.md` and `.agents/AGENTS.md` — how humans and
-  agents collaborate in this repository.
+- `.agents/AGENTS.md` — how humans and agents collaborate in this
+  repository.

@@ -20,14 +20,14 @@ backlog for closing gaps is tracked in the plan_tasks system.
 
 Run `plan_tasks --list-plans` for the full inventory. Current focus:
 
-- [`plans/thesis-hardening.md`](../../plans/thesis-hardening.md) —
+- [`docs/history/plans/thesis-hardening.md`](../history/plans/thesis-hardening.md) —
   **9/9 done (closed 2026-08-02)**. Landed: A17 process-time hot-swap
   rollback (T1) + B1/B2/M1/M2 polish, `cargo test --workspace` hang
   fix (T7), A19 runtime-side memory sampler (T4), doc freshness sweep
   (T12), legacy shakedown metadata unification (T8), thesis-grade PDF
   figure pipeline (T9), notebook↔RQ traceability (T11), aarch64-linux
   cross-arch CI (T10).
-- [`plans/canonical-runs.md`](../../plans/canonical-runs.md) —
+- [`docs/history/plans/canonical-runs.md`](../history/plans/canonical-runs.md) —
   Pi 4 + Jetson preflight and canonical-run execution against the
   RFC-008 evaluation harness. C1 (aarch64 cross-compile spike) and
   C2 (cross-build loadgen + waferctl) closed 2026-08-02 via

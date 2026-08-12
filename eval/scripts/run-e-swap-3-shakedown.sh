@@ -68,7 +68,7 @@ done
 _log() { printf '[e-swap-3] %s\n' "$*" >&2; }
 _now_ns() { python3 -c 'import time; print(int(time.time()*1e9))'; }
 
-export DOCKER_HOST="${DOCKER_HOST:-unix://<home>/.colima/default/docker.sock}"
+export DOCKER_HOST="${DOCKER_HOST:-unix://${HOME}/.colima/default/docker.sock}"
 
 # ---------------------------------------------------------------------------
 # Build

@@ -57,7 +57,7 @@ registry-login, setup, tool-versions) that were never mirrored back.
 
 Documentation swept: `.agents/AGENTS.md`, `.agents/skills/wafer-project/SKILL.md`,
 `docs/operations/dependencies.md`, `mise.toml` intro comment, and
-`plans/canonical-runs.md` all had their "justfile remains temporarily"
+`docs/history/plans/canonical-runs.md` all had their "justfile remains temporarily"
 language removed or updated.
 
 Historical references to `justfile` in

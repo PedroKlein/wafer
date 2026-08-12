@@ -27,7 +27,7 @@ Ask yourself:
 |-----------|---------|
 | Single node behaviour | Unit test + plugin fixture + `#[tokio::test]` |
 | Graph topology validity | Pure `#[test]`, no async, no WASM |
-| Full pipeline execution | `tests/integration.rs` + multi_thread flavor |
+| Full pipeline execution | `crates/wafer-runtime/tests/integration.rs` + multi_thread flavor |
 | WASM overhead vs native | Criterion bench with paired native baseline |
 | Hot-swap / drain timeout | Unit test + `tokio::time::pause()` |
 | Broker-dependent MQTT | Integration test + env-var guard |

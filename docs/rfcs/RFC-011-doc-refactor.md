@@ -9,7 +9,7 @@
 
 ## Executive summary
 
-Before the doc-refactor, the wafer-poc repo had undergone a major Phase-0 architectural refactor between 2026-07-05 and 2026-07-15 (then recorded in `docs/decisions/`). At that point, user-facing documentation still described the pre-refactor architecture. This archived plan records the execution contract used to replace those docs with the current arc42-lite tree.
+Before the doc-refactor, the wafer repo had undergone a major Phase-0 architectural refactor between 2026-07-05 and 2026-07-15 (then recorded in `docs/decisions/`). At that point, user-facing documentation still described the pre-refactor architecture. This archived plan records the execution contract used to replace those docs with the current arc42-lite tree.
 
 This plan replaces `SPEC.md` + `MVP.md` with an **arc42-lite documentation tree** organized by reader intent (architecture / requirements / interfaces / operations / status), promotes the 10 decision docs to a formal **RFC archive**, adds **8 new Nygard-style ADRs**, and updates cross-repo pointer files.
 
@@ -23,7 +23,7 @@ Designed for **one-shot execution** with parallel worker reviewers, scout prefli
 |--------|----------|
 | Framework | arc42-lite full split into subdirectories |
 | Authority scope | Docs describe current reality only; aspirational content in `ROADMAP.md` |
-| Cross-repo duplication | `wafer-poc/docs/` is sole source; other repos hold thin pointers |
+| Cross-repo duplication | `wafer/docs/` is sole source; other repos hold thin pointers |
 | ADR archive | Two-tier: short Nygard ADRs + detailed RFCs |
 | MVP.md | Deleted; content redistributed |
 | SPEC.md | Deleted; content redistributed |
@@ -43,7 +43,7 @@ Designed for **one-shot execution** with parallel worker reviewers, scout prefli
 ## Target layout
 
 ```
-wafer-poc/
+wafer/
 ├── README.md                            # rewritten: 1-page quickstart
 ├── ROADMAP.md                           # NEW: aspirational items
 ├── TODO.md                              # kept: tactical items OR merged into ROADMAP
@@ -333,7 +333,7 @@ If oracle flags drift → main agent hotfixes before Phase 5.
 - **5.3** Rewrite `pi-repos/groups/tcc/docs/architecture.md` as thin pointer + cross-repo relationships only.
 - **5.4** Rewrite `pi-repos/groups/tcc/docs/glossary.md` and `roles.md` as thin pointers.
 - **5.5** Rewrite `obsidian-personal/master/TCC/WAFER System.md` as thin pointer + literature-reading quick-ref.
-- **5.6** Migrate `wafer-poc/TODO.md` "Done ✅" (fix stale plugin list) + Phase 1-3 tasks (into ROADMAP.md if not already).
+- **5.6** Migrate `wafer/TODO.md` "Done ✅" (fix stale plugin list) + Phase 1-3 tasks (into ROADMAP.md if not already).
 - **5.7** Deep skill audit — parallel workers using `skill-judge` skill:
   - For each of 12 skill files (wafer-project + 10 domain + AGENTS.md): score against skill spec; produce audit report; apply high-priority fixes.
   - `parallelGroup: skill-deep-audit`
@@ -368,18 +368,18 @@ If oracle flags drift → main agent hotfixes before Phase 5.
 
 ```
 # No stale file references
-grep -rn "SPEC\.md\|MVP\.md" wafer-poc/          # expect: 0 (except this file & git history)
-grep -rn "docs/api\.md\|docs/REGISTRY\.md" wafer-poc/  # expect: 0
+grep -rn "SPEC\.md\|MVP\.md" wafer/          # expect: 0 (except this file & git history)
+grep -rn "docs/api\.md\|docs/REGISTRY\.md" wafer/  # expect: 0
 
 # No pre-refactor terminology as current-tense
-grep -rn "joiner\|Joiner\|merge-joiner\|WasmJoiner" wafer-poc/docs/  # expect: 0 or only in past-tense
-grep -rn "pipeline:transform@0\.1\.0" wafer-poc/docs/                # expect: 0
-grep -rn "plugin_path\|plugin_ref" wafer-poc/docs/                   # expect: 0 as separate fields
-grep -rn "from_port\|to_port" wafer-poc/docs/                        # expect: 0
-grep -rn "primary thesis target" wafer-poc/docs/                     # expect: 0
+grep -rn "joiner\|Joiner\|merge-joiner\|WasmJoiner" wafer/docs/  # expect: 0 or only in past-tense
+grep -rn "pipeline:transform@0\.1\.0" wafer/docs/                # expect: 0
+grep -rn "plugin_path\|plugin_ref" wafer/docs/                   # expect: 0 as separate fields
+grep -rn "from_port\|to_port" wafer/docs/                        # expect: 0
+grep -rn "primary thesis target" wafer/docs/                     # expect: 0
 
 # No deleted endpoints as implemented
-grep -rn "GET /api/v1/pipeline[^/]\|/pipeline/reload\|/pipeline/drain" wafer-poc/docs/  # expect: 0
+grep -rn "GET /api/v1/pipeline[^/]\|/pipeline/reload\|/pipeline/drain" wafer/docs/  # expect: 0
 
 # Broken link check (in docs/)
 # markdown-link-check or grep-based validation

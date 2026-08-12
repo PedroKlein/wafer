@@ -187,14 +187,14 @@ resource buffer {
 }
 ```
 
-**Rationale (WAFER-specific, not copying Torvyn):**
+**Rationale (WAFER-specific):**
 - **Security (least privilege):** Router/filter never sees payload bytes unless it explicitly calls `read()`. Host can audit data access patterns.
 - **Hot-swap (RQ3):** Messages in queues during drain are host-managed buffers. New component gets fresh borrows to same underlying data — no re-copy during flip.
 - **Memory (4GB RPi):** Payload exists once in host memory regardless of pipeline depth.
 - **Performance:** Routers/filters skip payload copy entirely (0 bytes transferred vs ~1KB). More headroom under 50µs RQ1a budget for deep pipelines.
 - **CM idiomatic:** Resources with borrow semantics are a core CM feature designed for this exact pattern.
 
-**NOT adopted from Torvyn:**
+**Rejected patterns from surveyed comparators:**
 - No `mutable-buffer` / `buffer-allocator` (output is simple `list<u8>`)
 - No `flow-context` resource (tracing via envelope metadata)
 - No buffer pool (standard Rust heap; optimization is future work)

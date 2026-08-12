@@ -1,44 +1,32 @@
-# Wafer POC - .gitignore
+# WAFER — .gitignore
 
-# Go binaries and executables
-bin/*
+# Rust build artifacts
+/target/
+/build/
+/dist/
+examples/rust/*/target/
+examples/rust/*/pkg/
+examples/rust/*/Cargo.lock
+target/docker-aarch64-linux/
+
+# WebAssembly artifacts (built plugins)
+*.wasm
+
+# Native library artifacts
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
 
-# Go test artifacts
+# Test / coverage artifacts
 *.test
 *.out
 coverage.*
 *.coverprofile
 profile.cov
 
-# Go workspace and modules
-go.work
-go.work.sum
-/vendor/
-
-# WebAssembly files (generated plugins)
-*.wasm
-!plugins/example.wasm  # Keep the hand-written example
-
-# Build and package directories
-/target/
-/build/
-/dist/
-
-# Rust build artifacts
-examples/rust/*/target/
-examples/rust/*/pkg/
-examples/rust/*/Cargo.lock
-
-# TinyGo/Go build artifacts
-examples/go/*/pkg/
-examples/go/*/*.wasm
-
-# Node.js (for future JS/TS examples)
+# Node.js (future JS/TS examples)
 node_modules/
 npm-debug.log*
 yarn-debug.log*
@@ -47,7 +35,7 @@ yarn-error.log*
 *.tgz
 .yarn-integrity
 
-# Python (for future Python examples)
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -57,8 +45,14 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+.venv/
+.venv-eval/
+eval/analysis/.venv/
 
-# IDE and editor files
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE / editor
 .idea/
 *.swp
 *.swo
@@ -67,7 +61,7 @@ venv.bak/
 *.ipr
 *.iws
 
-# OS generated files
+# OS
 .DS_Store
 .DS_Store?
 ._*
@@ -76,14 +70,14 @@ venv.bak/
 ehthumbs.db
 Thumbs.db
 
-# Environment and configuration
+# Environment
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
 
-# Logs and temporary files
+# Logs / temporary files
 *.log
 logs/
 *.tmp
@@ -91,7 +85,7 @@ logs/
 .tmp/
 .temp/
 
-# Backup and archive files
+# Backup / archive
 *.bak
 *.backup
 *.tar.gz
@@ -102,38 +96,35 @@ logs/
 site/
 docs/_build/
 
-# Debug and profiling
+# Debug / profiling
 debug
 *.debug
 *.prof
 *.pprof
 
-# Security files
+# Security material
 *.pem
 *.key
 *.crt
 *.p12
 
-
-# Added by cargo
-
-/target
-
-# MQTT broker runtime data and logs
+# MQTT broker runtime state
 mqtt/data/
 mqtt/log/
 
+# Local docker-compose overrides
 docker-compose.override.yml
 
+# Agent / plan scratch
 /.delegation-runner
 /.pi
 /.a5c
 .plan-verify/
 
-# eval/results/ — experiment artifacts. Individual result dirs are large
-# and generated. Commit only fixture-style examples that are explicitly
-# `git add -f`'d for documentation purposes.
+# Local vector store (agent memory / embeddings)
+.chroma_db/
+
+# eval/ result trees — large generated artifacts.
+# Only fixture-style dirs are `git add -f`'d for documentation.
 eval/results/*/
 !eval/results/e-density-1/
-.venv-eval/
-target/docker-aarch64-linux/

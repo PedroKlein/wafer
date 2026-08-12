@@ -1,4 +1,4 @@
-module github.com/PedroKlein/wafer-poc/plugins/go/uppercase
+module github.com/PedroKlein/wafer/plugins/go/uppercase
 
 go 1.24
 

@@ -14,11 +14,11 @@ Related docs:
   run must produce.
 - `tcc-doc/research/analysis/evaluation-plan.md` — parent research plan.
 - `plans/evaluation-infrastructure/` — the plan that owns this matrix.
-- `plans/thesis-hardening.md` — closed 2026-08-02 (9/9); landed A17,
+- `docs/history/plans/thesis-hardening.md` — closed 2026-08-02 (9/9); landed A17,
   A19, T4 memory sampler, T8 legacy shakedown metadata unification,
   T9 thesis-grade PDF pipeline, T10 cross-arch CI, T11 notebook
   traceability. Preconditions for canonical Pi runs.
-- `plans/canonical-runs.md` — Pi 4 + Jetson preflight and execution.
+- `docs/history/plans/canonical-runs.md` — Pi 4 + Jetson preflight and execution.
   C1 (aarch64 cross-compile spike) + C2 (loadgen + waferctl) closed
   2026-08-02; `mise run cross-build-pi` ships aarch64-linux binaries.
 
@@ -38,7 +38,7 @@ Legend:
 | E-Perf-2 | RQ1 | 🟢 | `e-perf-2/shakedown-macos-2026-08-01T19-50-15Z/` (post-A18) | Same as E-Perf-1 | Docker Desktop overhead on eKuiper |
 | E-Perf-3 | RQ1 | 🟢 | `e-perf-3/shakedown-macos-2026-07-22T18-29-39Z/` | 60 s runs for statistical power | Localhost MQTT faster than cross-device |
 | E-Perf-4 | RQ1 | 🟢 | `e-perf-4/shakedown-macos-2026-07-21T20-08-17Z/` | Prime run, shuffle order, 60 s | Mach kernel scheduling noise at p999 |
-| E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86_64 Linux cross-run — filed as `plans/canonical-runs.md` **F5** (depends on F4 sweep passing) | N/A (inherently multi-platform) |
+| E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86_64 Linux cross-run — filed as `docs/history/plans/canonical-runs.md` **F5** (depends on F4 sweep passing) | N/A (inherently multi-platform) |
 | E-Perf-6 | RQ1 | 🟢 | `e-perf-6/shakedown-macos-2026-07-22T17-49-56Z/` | `/proc/pid/smaps_rollup` on Linux | macOS RSS includes shared libs |
 | E-Perf-7 | RQ1 | 🟢 | `e-perf-7/shakedown-macos-2026-07-22T18-01-09Z/` | Instruction-heavy plugin, true disable | M-series branch prediction hides cost |
 | E-Perf-8 | RQ1 | 🟢 | `e-perf-8/shakedown-macos-2026-07-22T17-49-56Z/` | 60 s, 30 s warmup | M-series ~10–30× faster than Pi |

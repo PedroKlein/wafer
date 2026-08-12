@@ -33,8 +33,8 @@ first WAFER pipeline. If any step fails, jump to
 ## 1 — Clone and inventory the workspace
 
 ```bash
-git clone https://github.com/PedroKlein/wafer-poc.git
-cd wafer-poc
+git clone https://github.com/PedroKlein/wafer.git
+cd wafer
 cargo --version     # if this fails, install Rust first from https://rustup.rs/
 mise trust          # one-time trust for this repo's mise.toml, if prompted
 mise run setup      # verify Rust/rustup, then install pinned helper tools
@@ -164,3 +164,17 @@ runners drain → retry buffers flush to DLQ → sinks close.
   is a Wasm node (Transform / Filter / Router). Native Source and
   Sink nodes are not swappable; they report `swappable = false` on
   `GET /api/v1/nodes/{id}`.
+
+## Notebook outputs
+
+Notebooks under `eval/analysis/notebooks/` are tracked without cell
+outputs so the repository stays small and free of local paths. If you
+plan to edit notebooks, install `nbstripout` and register it as a git
+filter once:
+
+```sh
+pip install --user nbstripout
+nbstripout --install
+```
+
+Regenerate outputs locally with `mise run //eval:notebooks`.

@@ -270,7 +270,7 @@ macro_rules! log_error {
 **Decision:** Separate `plugins/` workspace (different build target). Polyglot plugins in language-specific subdirectories. SDK crate in host workspace.
 
 ```
-wafer-poc/
+wafer/
 ├── Cargo.toml                      # Host workspace (wafer-core, wafer-runtime, etc.)
 ├── crates/
 │   ├── wafer-core/

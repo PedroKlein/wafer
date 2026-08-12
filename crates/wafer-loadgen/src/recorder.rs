@@ -142,7 +142,7 @@ pub struct SubscriberMetadata {
     pub ended_at_ns: u64,
     /// Why the subscriber stopped.
     pub exit_reason: String,
-    /// Git SHA of the wafer-poc tree that built this binary, if the environment
+    /// Git SHA of the wafer tree that built this binary, if the environment
     /// injected it (via `WAFER_GIT_SHA` at run time or build-time `env!`).
     pub git_sha: Option<String>,
     /// Host tag as passed by the eval scripts (P1.1 result contract).

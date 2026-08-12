@@ -44,9 +44,9 @@ Read EVERYTHING relevant before producing any output:
    └── Any other relevant findings files
 
 5. Obsidian vault — academic papers and literature notes
-   └── <home>/Dev/github.com/PedroKlein/tcc-doc/main/TCC/papers/
-   └── <home>/Dev/github.com/PedroKlein/tcc-doc/main/TCC/software/
-   └── <home>/Dev/github.com/PedroKlein/tcc-doc/main/TCC/systems/
+   └── ~/Dev/github.com/PedroKlein/tcc-doc/main/TCC/papers/
+   └── ~/Dev/github.com/PedroKlein/tcc-doc/main/TCC/software/
+   └── ~/Dev/github.com/PedroKlein/tcc-doc/main/TCC/systems/
    └── Search for keywords relevant to the session topic
 
 6. tcc-doc research synthesis

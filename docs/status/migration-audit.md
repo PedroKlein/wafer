@@ -1210,7 +1210,7 @@ Each row below is one concrete decision, amendment, follow-up, or challenge deci
 - **Scout file:** `.delegation-runner/doc-refactor/migration-audit/plugin-rewrite.md`
 - **Successor:** docs/rfcs/RFC-006-plugin-sdk.md (Decision 6)
 - **Successor evidence:** docs/rfcs/RFC-006-plugin-sdk.md: "Decision 6: Testing Strategy — Three Levels + E2E"
-- **Code evidence:** crates/wafer-core/src/testing/harness.rs:1-32 — `PluginTestHarness` implemented; crates/wafer-core/tests/* and tests/integration.rs reference TestPipeline / E2E tests (evidence of Level 2/3 harness)
+- **Code evidence:** crates/wafer-core/src/testing/harness.rs:1-32 — `PluginTestHarness` implemented; crates/wafer-core/tests/* and crates/wafer-runtime/tests/integration.rs reference TestPipeline / E2E tests (evidence of Level 2/3 harness)
 - **Status:** preserved+implemented
 - **Existing ledger match:** none
 - **Proposed new gap ID:** none
@@ -1280,7 +1280,7 @@ Each row below is one concrete decision, amendment, follow-up, or challenge deci
 - **Scout file:** `.delegation-runner/doc-refactor/migration-audit/plugin-rewrite.md`
 - **Successor:** docs/rfcs/RFC-006-plugin-sdk.md (Decision 13) and docs/adr/0014 mentions wasi-nn integration.
 - **Successor evidence:** docs/rfcs/RFC-006-plugin-sdk.md: "Decision 13: wasi-nn Integration"
-- **Code evidence:** plugins/mnist-inference exists and tests reference mnist inference in tests/integration.rs and crates/wafer-core/src/testing/harness.rs uses Capabilities::with_stdio() for instance creation; wasm-nn import expectations live in plugin WIT files (plugin wit artifacts under some plugin wit/ directories). The presence of `crates/wafer-plugin/src/lib.rs` plus mnist plugin directory shows the integration path is implemented.
+- **Code evidence:** plugins/mnist-inference exists and tests reference mnist inference in crates/wafer-runtime/tests/integration.rs and crates/wafer-core/src/testing/harness.rs uses Capabilities::with_stdio() for instance creation; wasm-nn import expectations live in plugin WIT files (plugin wit artifacts under some plugin wit/ directories). The presence of `crates/wafer-plugin/src/lib.rs` plus mnist plugin directory shows the integration path is implemented.
 - **Status:** preserved+implemented (wasi-nn wiring present in plugin and host test harness)
 - **Existing ledger match:** none
 - **Proposed new gap ID:** none

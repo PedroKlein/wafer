@@ -37,7 +37,7 @@ Binary outputs land at:
 ## Reproducing on a fresh clone
 
 ```bash
-git clone <this-repo> && cd wafer-poc
+git clone <this-repo> && cd wafer
 mise install                # rust/uv/wasm-tools/etc.
 mise run cross-build-pi     # cold-cache first run: ~11 minutes
 mise run cross-build-pi-check

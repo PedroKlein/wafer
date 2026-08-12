@@ -53,7 +53,7 @@ Follow RFC 9457 Problem Details + extension fields:
   "instance": "/health",
   "suggested_fix": "Start the pipeline: wafer --config pipeline.toml",
   "retry_after": null,
-  "docs_url": "https://github.com/PedroKlein/wafer-poc#quickstart"
+  "docs_url": "https://github.com/PedroKlein/wafer#quickstart"
 }
 ```
 

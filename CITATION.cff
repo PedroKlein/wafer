@@ -1,0 +1,40 @@
+cff-version: 1.2.0
+message: >-
+  If you use WAFER in academic work, please cite the thesis it
+  supports rather than the software repository alone.
+type: software
+title: "WAFER: WebAssembly Flow Execution Runtime"
+abstract: >-
+  WAFER is a research prototype runtime for DAG-shaped IoT edge
+  pipelines whose transform, filter, and router nodes are executed as
+  WebAssembly Component Model plugins. It was developed as the
+  software artefact for a Computer Science TCC/TG2 thesis at the
+  Federal University of Rio Grande do Sul (UFRGS).
+authors:
+  - given-names: Pedro
+    family-names: Klein
+    email: pedroklein1@hotmail.com
+    affiliation: "Universidade Federal do Rio Grande do Sul (UFRGS)"
+repository-code: "https://github.com/PedroKlein/wafer"
+license: MIT
+keywords:
+  - WebAssembly
+  - Component Model
+  - edge computing
+  - IoT
+  - stream processing
+  - pipeline runtime
+preferred-citation:
+  type: thesis
+  title: >-
+    WAFER: A WebAssembly Component Model runtime for DAG-shaped IoT
+    edge pipelines
+  authors:
+    - given-names: Pedro
+      family-names: Klein
+      affiliation: "Universidade Federal do Rio Grande do Sul (UFRGS)"
+  thesis-type: "Undergraduate thesis (TCC/TG2)"
+  institution:
+    name: "Universidade Federal do Rio Grande do Sul"
+    address: "Porto Alegre, Brazil"
+  year: 2026

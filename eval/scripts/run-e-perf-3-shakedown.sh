@@ -87,7 +87,7 @@ fi
 
 MOSQ_CONTAINER=""
 MOSQ_IMAGE="eclipse-mosquitto:2.0.18"
-export DOCKER_HOST="${DOCKER_HOST:-unix://<home>/.colima/default/docker.sock}"
+export DOCKER_HOST="${DOCKER_HOST:-unix://${HOME}/.colima/default/docker.sock}"
 
 _stop_mosquitto() {
     [ -z "$MOSQ_CONTAINER" ] && return 0

@@ -215,14 +215,14 @@ authoritative for *why*.
 
 | Need | Read |
 |------|------|
-| Architecture overview (post-migration) | `wafer-poc/main/docs/architecture/` |
-| Implementation status (post-migration) | `wafer-poc/main/docs/status/implementation-status.md` |
-| WIT contract reference (post-migration) | `wafer-poc/main/docs/interfaces/wit-contracts.md` |
-| HTTP API reference (post-migration) | `wafer-poc/main/docs/interfaces/http-api.md` |
-| Config schema reference (post-migration) | `wafer-poc/main/docs/interfaces/config-schema.md` |
-| RFC archive (design decisions) | `wafer-poc/main/docs/rfcs/` |
-| Architecture Decision Records | `wafer-poc/main/docs/adr/` |
-| Ground-truth WIT contracts | `wafer-poc/main/wit/*.wit` (four packages) |
+| Architecture overview (post-migration) | `wafer/main/docs/architecture/` |
+| Implementation status (post-migration) | `wafer/main/docs/status/implementation-status.md` |
+| WIT contract reference (post-migration) | `wafer/main/docs/interfaces/wit-contracts.md` |
+| HTTP API reference (post-migration) | `wafer/main/docs/interfaces/http-api.md` |
+| Config schema reference (post-migration) | `wafer/main/docs/interfaces/config-schema.md` |
+| RFC archive (design decisions) | `wafer/main/docs/rfcs/` |
+| Architecture Decision Records | `wafer/main/docs/adr/` |
+| Ground-truth WIT contracts | `wafer/main/wit/*.wit` (four packages) |
 | Current thesis statement & RQs | `tcc-doc/main/research/analysis/thesis-statement-v3.md` |
 | Evaluation plan (experiments, stats, threats) | `tcc-doc/main/research/analysis/evaluation-plan.md` |
 | Comparator positioning matrix | `tcc-doc/main/research/analysis/positioning-matrix.md` |

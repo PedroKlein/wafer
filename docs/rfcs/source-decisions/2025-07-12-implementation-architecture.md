@@ -84,14 +84,14 @@ When implementing, read the CURRENT file to understand what exists, then the dec
 
 | Repo | Path | Relevant Patterns |
 |---|---|---|
-| Torvyn (closest sibling) | `<home>/Dev/pi-repos/repos/github.com/torvyn/torvyn/main` | Pipeline builder, WIT bindings, AOT cache, buffer pool, config |
-| Flow-Like (AOT cache) | `<home>/Dev/pi-repos/repos/github.com/Rheosoph/flow-like/dev` | `packages/wasm/src/aot_cache.rs`, `engine.rs` |
-| wasmtime (runtime internals) | `<home>/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main` | ResourceTable API, Store, InstancePre, fuel |
-| wit-bindgen (plugin codegen) | `<home>/Dev/pi-repos/repos/github.com/bytecodealliance/wit-bindgen/main` | `generate!` macro usage, guest patterns |
-| Spin (Component Model lifecycle) | `<home>/Dev/pi-repos/repos/github.com/fermyon/spin/main` | `crates/core/src/store.rs`, epoch handling |
-| tremor-rs (DAG backpressure) | `<home>/Dev/pi-repos/repos/github.com/tremor-rs/tremor-runtime/main` | Contraflow, bench connector pattern |
-| eKuiper (comparison target) | `<home>/Dev/pi-repos/repos/github.com/lf-edge/ekuiper/master` | `internal/topo/node/`, SQL rules |
-| tcc-doc (thesis research) | `<home>/Dev/github.com/PedroKlein/tcc-doc/main` | `findings/`, `research/analysis/evaluation-plan.md` |
+| Torvyn (closest sibling) | `~/Dev/pi-repos/repos/github.com/torvyn/torvyn/main` | Pipeline builder, WIT bindings, AOT cache, buffer pool, config |
+| Flow-Like (AOT cache) | `~/Dev/pi-repos/repos/github.com/Rheosoph/flow-like/dev` | `packages/wasm/src/aot_cache.rs`, `engine.rs` |
+| wasmtime (runtime internals) | `~/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main` | ResourceTable API, Store, InstancePre, fuel |
+| wit-bindgen (plugin codegen) | `~/Dev/pi-repos/repos/github.com/bytecodealliance/wit-bindgen/main` | `generate!` macro usage, guest patterns |
+| Spin (Component Model lifecycle) | `~/Dev/pi-repos/repos/github.com/fermyon/spin/main` | `crates/core/src/store.rs`, epoch handling |
+| tremor-rs (DAG backpressure) | `~/Dev/pi-repos/repos/github.com/tremor-rs/tremor-runtime/main` | Contraflow, bench connector pattern |
+| eKuiper (comparison target) | `~/Dev/pi-repos/repos/github.com/lf-edge/ekuiper/master` | `internal/topo/node/`, SQL rules |
+| tcc-doc (thesis research) | `~/Dev/github.com/PedroKlein/tcc-doc/main` | `findings/`, `research/analysis/evaluation-plan.md` |
 
 ---
 
@@ -705,7 +705,7 @@ CancellationToken fires
 ## Full Workspace Overview
 
 ```
-wafer-poc/
+wafer/
 ├── Cargo.toml                   # Host workspace (5 crates)
 ├── clippy.toml
 ├── rustfmt.toml
