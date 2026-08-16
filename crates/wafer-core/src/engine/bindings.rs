@@ -1,57 +1,58 @@
 //! Wasmtime [`bindgen!`] outputs for the three WAFER pipeline worlds.
 //!
-//! Each world (transform-node, filter-node, router-node) gets its own submodule.
-//! The first invocation (`transform_node`) generates the canonical
-//! `pipeline:types/types` interface bindings; subsequent invocations redirect
-//! to that module via `with:` so `WaferBuffer` impls are deduplicated and
-//! `WaferState` only needs one `HostBuffer` implementation.
+//! Each world (`transform-node`, `filter-node`, `router-node`) gets its own
+//! submodule. The first invocation (`transform_node`) generates the canonical
+//! `wafer:pipeline/types` and `wafer:pipeline/logging` interface bindings;
+//! subsequent invocations redirect to that module via `with:` so `WaferBuffer`
+//! impls are deduplicated and `WaferState` only needs one `HostBuffer`
+//! implementation.
 //!
-//! Directory layout:
-//!   - `wit/node/` — main package `pipeline:node` (transform-node + filter-node worlds)
-//!   - `wit/router/` — main package `pipeline:routing` (router-node world)
-//!   - Each has `deps/` subdirectories for cross-package references.
+//! All three worlds live in the single `wafer:pipeline@0.1.0` package under
+//! `wit/`. See RFC-001 and the top-level `wit/` directory.
 //!
 //! [`bindgen!`]: wasmtime::component::bindgen
 
-/// Bindings for the `transform-node` world (package `pipeline:node`).
+/// Bindings for the `transform-node` world (package `wafer:pipeline`).
 ///
-/// This is the "canonical" invocation that generates the `pipeline:types/types`
+/// This is the "canonical" invocation that generates the `wafer:pipeline/types`
 /// host trait definitions. Other worlds redirect to these types via `with:`.
 pub mod transform_node {
     wasmtime::component::bindgen!({
-        path: "wit/node",
+        path: "wit",
         world: "transform-node",
         with: {
-            "pipeline:types/types.buffer": crate::engine::WaferBuffer,
+            "wafer:pipeline/types.buffer": crate::engine::WaferBuffer,
         },
     });
 }
 
-/// Bindings for the `filter-node` world (package `pipeline:node`).
+/// Bindings for the `filter-node` world (package `wafer:pipeline`).
 ///
-/// Reuses `pipeline:types/types` from the transform-node bindings via `with:`.
+/// Reuses `wafer:pipeline/types` and `wafer:pipeline/logging` from the
+/// transform-node bindings via `with:`.
 pub mod filter_node {
     wasmtime::component::bindgen!({
-        path: "wit/node",
+        path: "wit",
         world: "filter-node",
         with: {
-            "pipeline:types/types": super::transform_node::pipeline::types::types,
-            "pipeline:host/logging": super::transform_node::pipeline::host::logging,
+            "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
+            "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
         },
     });
 }
 
-/// Bindings for the `router-node` world (package `pipeline:routing`).
+/// Bindings for the `router-node` world (package `wafer:pipeline`).
 ///
-/// Reuses `pipeline:types/types` and `pipeline:node/lifecycle` from previous bindings.
+/// Reuses `wafer:pipeline/types`, `wafer:pipeline/logging`, and the exported
+/// `wafer:pipeline/lifecycle` from the transform-node bindings via `with:`.
 pub(crate) mod router_node {
     wasmtime::component::bindgen!({
-        path: "wit/router",
+        path: "wit",
         world: "router-node",
         with: {
-            "pipeline:types/types": super::transform_node::pipeline::types::types,
-            "pipeline:host/logging": super::transform_node::pipeline::host::logging,
-            "pipeline:node/lifecycle": super::transform_node::exports::pipeline::node::lifecycle,
+            "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
+            "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
+            "wafer:pipeline/lifecycle": super::transform_node::exports::wafer::pipeline::lifecycle,
         },
     });
 }
@@ -80,9 +81,9 @@ impl std::fmt::Display for WasmBindings {
 // Host trait implementations for WaferState
 //
 // bindgen! generates:
-//   - `pipeline::types::types::HostBuffer` — resource methods (size, read, read_all)
-//   - `pipeline::types::types::Host` — marker trait for the types interface
-//   - `pipeline::host::logging::Host` — log(level, message) function
+//   - `wafer::pipeline::types::HostBuffer` — resource methods (size, read, read_all)
+//   - `wafer::pipeline::types::Host` — marker trait for the types interface
+//   - `wafer::pipeline::logging::Host` — log(level, message) function
 //
 // These are implemented on WaferState since Store<WaferState> is the store type.
 // All three worlds share the same canonical traits via `with:` directives above.
@@ -94,10 +95,10 @@ use super::WaferBuffer;
 use super::state::{LogLevel, WaferState};
 
 /// Re-export the generated host trait paths for use in linker setup.
-pub use transform_node::pipeline::host::logging;
-pub use transform_node::pipeline::types::types as host_types;
+pub use transform_node::wafer::pipeline::logging;
+pub use transform_node::wafer::pipeline::types as host_types;
 
-/// Marker trait — the `pipeline:types/types` interface has no free functions,
+/// Marker trait — the `wafer:pipeline/types` interface has no free functions,
 /// only the `buffer` resource. bindgen generates an empty `Host` trait.
 impl host_types::Host for WaferState {}
 
@@ -142,7 +143,7 @@ impl host_types::HostBuffer for WaferState {
     }
 }
 
-/// Host implementation for `pipeline:host/logging` — guest log emission.
+/// Host implementation for `wafer:pipeline/logging` — guest log emission.
 ///
 /// Pushes log entries to WaferState's per-call buffer. The runner loop
 /// drains this buffer after each Wasm call and emits via the tracing crate.

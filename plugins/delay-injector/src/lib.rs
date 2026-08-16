@@ -26,13 +26,13 @@
 //! that ceiling will trap. E-Val-1's 50 ms injection is safely under.
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::lifecycle::NodeConfig;
-use exports::pipeline::node::transform::{Message, OutputMessage, ProcessError};
+use exports::wafer::pipeline::lifecycle::NodeConfig;
+use exports::wafer::pipeline::transform::{Message, OutputMessage, ProcessError};
 
 /// Delay applied in `process()`, in milliseconds. Set by `init()` from the
 /// TOML `[nodes.<id>.config]` block; defaults to 50 ms if config is empty or
@@ -80,7 +80,7 @@ fn extract_delay_ms(json: &str) -> Option<u64> {
 
 struct DelayInjector;
 
-impl exports::pipeline::node::lifecycle::Guest for DelayInjector {
+impl exports::wafer::pipeline::lifecycle::Guest for DelayInjector {
     fn validate(config: NodeConfig) -> Option<String> {
         if config.config.is_empty() {
             return None;
@@ -105,7 +105,7 @@ impl exports::pipeline::node::lifecycle::Guest for DelayInjector {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for DelayInjector {
+impl exports::wafer::pipeline::transform::Guest for DelayInjector {
     fn process(input: Message) -> Result<OutputMessage, ProcessError> {
         // Read payload BEFORE sleeping so any host-side buffer lifecycle stays
         // synchronous with the message boundary. Otherwise a very long delay

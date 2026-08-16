@@ -5,38 +5,38 @@
 //! the minimal transform for integration testing the Wasm plugin boundary.
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
 struct PassThrough;
 
-impl exports::pipeline::node::lifecycle::Guest for PassThrough {
-    fn validate(_config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for PassThrough {
+    fn validate(_config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         None
     }
 
     fn init(
-        _config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        _config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         Ok(())
     }
 
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for PassThrough {
+impl exports::wafer::pipeline::transform::Guest for PassThrough {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         // Read entire payload from host buffer (the only copy needed for pass-through)
         let payload = input.payload.read_all();
 
-        Ok(exports::pipeline::node::transform::OutputMessage {
+        Ok(exports::wafer::pipeline::transform::OutputMessage {
             id: input.id,
             timestamp: input.timestamp,
             source: input.source,

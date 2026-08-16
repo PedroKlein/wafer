@@ -1,22 +1,22 @@
-// pipeline:routing — routing interface for WAFER pipeline router nodes.
+package wafer:pipeline@0.1.0;
+
+// wafer:pipeline — routing interface for WAFER pipeline router nodes.
 //
 // Router nodes decide WHERE a message goes, not WHAT it contains.
 // Returning port names only (not transformed messages) enables zero-copy
 // routing — the host clones borrow handles for each destination.
 //
 // Amendment A1 (Session 3): Merge is implicit host topology.
-// Merge is implicit host topology (multiple edges to same node).
 //
 // See docs/rfcs/RFC-001-wit-contracts.md D3.
 
-package pipeline:routing@0.1.0;
 
 // -------------------------------------------------------------------------
 // Router — routing decision only (borrow-only, zero-copy)
 // -------------------------------------------------------------------------
 
 interface router {
-    use pipeline:types/types@0.1.0.{message, process-error, port-id};
+    use types.{message, process-error, port-id};
 
     // Returns the names of all output ports this router can route to.
     //
@@ -25,23 +25,11 @@ interface router {
 
     // Decide which output port(s) the message should be forwarded to.
     //
-    // []            → drop the message
-    // ["alert"]     → single-port route
+    // []              → drop the message
+    // ["alert"]       → single-port route
     // ["alert","log"] → fan-out to multiple ports (host clones borrow for each)
     //
     // The router must not read payload bytes for routing decisions based only
     // on metadata — zero-copy routing is the expected common case.
     route: func(input: message) -> result<list<port-id>, process-error>;
-}
-
-// -------------------------------------------------------------------------
-// World
-// -------------------------------------------------------------------------
-
-// A router node: exports lifecycle + router.
-world router-node {
-    import pipeline:types/types@0.1.0;
-    import pipeline:host/logging@0.1.0;
-    export pipeline:node/lifecycle@0.1.0;
-    export router;
 }

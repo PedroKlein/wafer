@@ -130,21 +130,21 @@ macro_rules! with_state {
 #[macro_export]
 macro_rules! log_info {
     ($msg:expr) => {
-        pipeline::host::logging::log(LogLevel::Info, $msg)
+        wafer::pipeline::logging::log(LogLevel::Info, $msg)
     };
 }
 
 #[macro_export]
 macro_rules! log_warn {
     ($msg:expr) => {
-        pipeline::host::logging::log(LogLevel::Warn, $msg)
+        wafer::pipeline::logging::log(LogLevel::Warn, $msg)
     };
 }
 
 #[macro_export]
 macro_rules! log_error {
     ($msg:expr) => {
-        pipeline::host::logging::log(LogLevel::Error, $msg)
+        wafer::pipeline::logging::log(LogLevel::Error, $msg)
     };
 }
 

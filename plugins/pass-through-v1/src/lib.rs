@@ -14,15 +14,15 @@
 //! `[nodes.<id>].plugin_version` in TOML — treat as 1.0.0).
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
 use std::sync::Mutex;
 
-use exports::pipeline::node::lifecycle::NodeConfig;
-use exports::pipeline::node::transform::{Message, OutputMessage, ProcessError};
+use exports::wafer::pipeline::lifecycle::NodeConfig;
+use exports::wafer::pipeline::transform::{Message, OutputMessage, ProcessError};
 
 /// Fallback version when the operator did not stamp one in TOML.
 const DEFAULT_VERSION: &str = "1.0.0";
@@ -49,7 +49,7 @@ fn set_plugin_version(v: String) {
 
 struct PassThroughV1;
 
-impl exports::pipeline::node::lifecycle::Guest for PassThroughV1 {
+impl exports::wafer::pipeline::lifecycle::Guest for PassThroughV1 {
     fn validate(_config: NodeConfig) -> Option<String> {
         None
     }
@@ -67,7 +67,7 @@ impl exports::pipeline::node::lifecycle::Guest for PassThroughV1 {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for PassThroughV1 {
+impl exports::wafer::pipeline::transform::Guest for PassThroughV1 {
     fn process(input: Message) -> Result<OutputMessage, ProcessError> {
         let payload = input.payload.read_all();
         let mut metadata = input.metadata;

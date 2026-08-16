@@ -7,12 +7,12 @@
 //! Output: { "prediction": "normal", "confidence": 0.92, "scores": [0.92, 0.05, 0.03], "above_threshold": true }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use wafer_plugin::{bad_input, define_state, output_with_type, payload_bytes, set_state, with_state};
 
 struct ResultFormatConfig {
@@ -24,8 +24,8 @@ define_state!(ResultFormatConfig);
 
 struct ResultFormat;
 
-impl exports::pipeline::node::lifecycle::Guest for ResultFormat {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for ResultFormat {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match parse_result_config(&config.config) {
             Ok(_) => None,
             Err(e) => Some(e),
@@ -33,10 +33,10 @@ impl exports::pipeline::node::lifecycle::Guest for ResultFormat {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg = parse_result_config(&config.config)
-            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+            .map_err(exports::wafer::pipeline::lifecycle::ProcessError::BadInput)?;
         set_state!(cfg);
         Ok(())
     }
@@ -44,12 +44,12 @@ impl exports::pipeline::node::lifecycle::Guest for ResultFormat {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for ResultFormat {
+impl exports::wafer::pipeline::transform::Guest for ResultFormat {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let bytes = payload_bytes!(&input);
 

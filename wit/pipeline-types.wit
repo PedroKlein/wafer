@@ -1,6 +1,8 @@
-// pipeline:types — shared data types for the WAFER pipeline runtime.
+package wafer:pipeline@0.1.0;
+
+// wafer:pipeline — shared data types for the WAFER pipeline runtime.
 //
-// This package contains the buffer resource and message types that cross
+// This interface contains the buffer resource and message types that cross
 // the Wasm boundary on every pipeline call.
 //
 // Design decisions:
@@ -10,9 +12,9 @@
 //   - output-message uses list<u8> (output, component-owned bytes).
 //   - process-error categories map to the host error policy engine.
 //
-// See docs/rfcs/RFC-001-wit-contracts.md.
+// All wafer:pipeline interfaces live in one package; there are no cross-package
+// dependencies inside this repo. See docs/rfcs/RFC-001-wit-contracts.md.
 
-package pipeline:types@0.1.0;
 
 interface types {
     // -------------------------------------------------------------------------

@@ -1,8 +1,10 @@
-// pipeline:node — core processing interfaces for WAFER pipeline nodes.
+package wafer:pipeline@0.1.0;
+
+// wafer:pipeline — core processing interfaces for WAFER pipeline nodes.
 //
-// All Wasm processing nodes (transform, filter) implement:
+// All Wasm processing nodes (transform, filter, router) implement:
 //   1. The lifecycle interface (validate → init → process loop → close).
-//   2. Exactly one processing interface (transform or filter).
+//   2. Exactly one processing interface (transform, filter, or router).
 //
 // Amendment A2 (Session 3): Transform returns result<output-message, process-error>
 // directly — no process-outcome wrapper. Filter is a distinct interface.
@@ -10,14 +12,13 @@
 //
 // See docs/rfcs/RFC-001-wit-contracts.md.
 
-package pipeline:node@0.1.0;
 
 // -------------------------------------------------------------------------
 // Lifecycle — shared by all Wasm node types
 // -------------------------------------------------------------------------
 
 interface lifecycle {
-    use pipeline:types/types@0.1.0.{process-error};
+    use types.{process-error};
 
     // Config passed to every node at startup.
     record node-config {
@@ -51,7 +52,7 @@ interface lifecycle {
 // -------------------------------------------------------------------------
 
 interface transform {
-    use pipeline:types/types@0.1.0.{message, output-message, process-error};
+    use types.{message, output-message, process-error};
 
     // Transform one input message into one output message.
     //
@@ -65,7 +66,7 @@ interface transform {
 // -------------------------------------------------------------------------
 
 interface filter {
-    use pipeline:types/types@0.1.0.{message, process-error};
+    use types.{message, process-error};
 
     // Evaluate whether the message should be forwarded.
     //
@@ -74,24 +75,3 @@ interface filter {
     // err(e)    → error policy applies.
     evaluate: func(input: message) -> result<bool, process-error>;
 }
-
-// -------------------------------------------------------------------------
-// Worlds
-// -------------------------------------------------------------------------
-
-// A standard transform node: exports lifecycle + transform.
-world transform-node {
-    import pipeline:types/types@0.1.0;
-    import pipeline:host/logging@0.1.0;
-    export lifecycle;
-    export transform;
-}
-
-// A filter node: exports lifecycle + filter.
-world filter-node {
-    import pipeline:types/types@0.1.0;
-    import pipeline:host/logging@0.1.0;
-    export lifecycle;
-    export filter;
-}
-

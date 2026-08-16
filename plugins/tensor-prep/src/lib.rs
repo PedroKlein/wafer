@@ -6,12 +6,12 @@
 //! Config: { "fields": ["temperature", "humidity", "pressure"], "normalize": true }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use wafer_plugin::{bad_input, define_state, output_with_type, payload_as_str, set_state, with_state};
 
 struct TensorPrepConfig {
@@ -23,8 +23,8 @@ define_state!(TensorPrepConfig);
 
 struct TensorPrep;
 
-impl exports::pipeline::node::lifecycle::Guest for TensorPrep {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for TensorPrep {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match parse_tensor_config(&config.config) {
             Ok(_) => None,
             Err(e) => Some(e),
@@ -32,10 +32,10 @@ impl exports::pipeline::node::lifecycle::Guest for TensorPrep {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg = parse_tensor_config(&config.config)
-            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+            .map_err(exports::wafer::pipeline::lifecycle::ProcessError::BadInput)?;
         set_state!(cfg);
         Ok(())
     }
@@ -43,12 +43,12 @@ impl exports::pipeline::node::lifecycle::Guest for TensorPrep {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for TensorPrep {
+impl exports::wafer::pipeline::transform::Guest for TensorPrep {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let text = payload_as_str!(&input)?;
 

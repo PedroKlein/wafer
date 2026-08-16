@@ -4,36 +4,36 @@
 //! No serde dependency — uses a manual parser/formatter to keep binary small.
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use wafer_plugin::{bad_input, output_with_type, payload_as_str};
 
 struct JsonParse;
 
-impl exports::pipeline::node::lifecycle::Guest for JsonParse {
-    fn validate(_config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for JsonParse {
+    fn validate(_config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         None
     }
 
     fn init(
-        _config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        _config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         Ok(())
     }
 
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for JsonParse {
+impl exports::wafer::pipeline::transform::Guest for JsonParse {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let text = payload_as_str!(&input)?;
 

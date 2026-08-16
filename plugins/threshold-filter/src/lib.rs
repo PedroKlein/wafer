@@ -7,12 +7,12 @@
 //!   { "field": "temperature", "min": 0.0, "max": 100.0 }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "filter-node",
     generate_all,
 });
 
-use exports::pipeline::node::filter::ProcessError;
+use exports::wafer::pipeline::filter::ProcessError;
 use wafer_plugin::{bad_input, define_state, payload_as_str, set_state, with_state};
 
 struct FilterConfig {
@@ -25,8 +25,8 @@ define_state!(FilterConfig);
 
 struct ThresholdFilter;
 
-impl exports::pipeline::node::lifecycle::Guest for ThresholdFilter {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for ThresholdFilter {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match parse_filter_config(&config.config) {
             Ok(_) => None,
             Err(e) => Some(e),
@@ -34,10 +34,10 @@ impl exports::pipeline::node::lifecycle::Guest for ThresholdFilter {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg = parse_filter_config(&config.config)
-            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+            .map_err(exports::wafer::pipeline::lifecycle::ProcessError::BadInput)?;
         set_state!(cfg);
         Ok(())
     }
@@ -45,10 +45,10 @@ impl exports::pipeline::node::lifecycle::Guest for ThresholdFilter {
     fn close() {}
 }
 
-impl exports::pipeline::node::filter::Guest for ThresholdFilter {
+impl exports::wafer::pipeline::filter::Guest for ThresholdFilter {
     fn evaluate(
-        input: exports::pipeline::node::filter::Message,
-    ) -> Result<bool, exports::pipeline::node::filter::ProcessError> {
+        input: exports::wafer::pipeline::filter::Message,
+    ) -> Result<bool, exports::wafer::pipeline::filter::ProcessError> {
         let text = payload_as_str!(&input)?;
 
         with_state!(cfg => {

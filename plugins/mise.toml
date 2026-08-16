@@ -101,16 +101,16 @@ echo "Built: wafer-uppercase-go.wasm ($(wc -c < wafer-uppercase-go.wasm | tr -d 
 '''
 
 [tasks.plugin-go-generate]
-description = "Regenerate Go WIT bindings for plugins/go/uppercase"
+description = "Regenerate Go WIT bindings for plugins/go/uppercase (see plugins/go/uppercase/README.md before running — output may need hand-patching against cm@v0.3.0)."
 dir = "{{config_root}}/go/uppercase"
-run = "go run go.bytecodealliance.org/cmd/wit-bindgen-go generate ../../../wit/node --out gen --world transform-node"
+run = "go run go.bytecodealliance.org/cmd/wit-bindgen-go generate ./wit --out gen --world transform-node-go"
 
 [tasks.build-plugin-py]
 description = "Build the Python threshold-filter plugin (componentize-py)"
 dir = "{{config_root}}/python/threshold-filter"
 run = '''
 set -euo pipefail
-componentize-py -d ../../../wit/node -w filter-node componentize app -o wafer-threshold-filter-py.wasm
+componentize-py -d ../../../wit -w filter-node componentize app -o wafer-threshold-filter-py.wasm
 echo "Built: wafer-threshold-filter-py.wasm ($(wc -c < wafer-threshold-filter-py.wasm | tr -d ' ') bytes)"
 '''
 
@@ -182,7 +182,6 @@ case "$name" in
   json-parse)      wasm_file="json_parse_transform.wasm" ;;
   tensor-prep)     wasm_file="tensor_prep.wasm" ;;
   result-format)   wasm_file="result_format.wasm" ;;
-  mnist-inference) wasm_file="mnist_inference.wasm" ;;
   *)               wasm_file="${name}_transform.wasm" ;;
 esac
 wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
@@ -221,7 +220,6 @@ case "$name" in
   json-parse)      wasm_file="json_parse_transform.wasm" ;;
   tensor-prep)     wasm_file="tensor_prep.wasm" ;;
   result-format)   wasm_file="result_format.wasm" ;;
-  mnist-inference) wasm_file="mnist_inference.wasm" ;;
   *)               wasm_file="${name}_transform.wasm" ;;
 esac
 wasm_path="$name/target/wasm32-wasip2/release/$wasm_file"
@@ -249,7 +247,7 @@ if [ $# -ne 1 ]; then
   exit 2
 fi
 version=$1
-plugins=(pass-through uppercase filter json-parse tensor-prep result-format mnist-inference)
+plugins=(pass-through uppercase filter json-parse tensor-prep result-format)
 registry=${WAFER_REGISTRY:-ghcr.io/pedroklein}
 for name in "${plugins[@]}"; do
   wasm_dir="$name/target/wasm32-wasip2/release"

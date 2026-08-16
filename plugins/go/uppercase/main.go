@@ -9,9 +9,9 @@ import (
 
 	"go.bytecodealliance.org/cm"
 
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/pipeline/node/lifecycle"
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/pipeline/node/transform"
-	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/pipeline/types/types"
+	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/lifecycle"
+	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/transform"
+	"github.com/PedroKlein/wafer/plugins/go/uppercase/gen/wafer/pipeline/types"
 )
 
 func init() {
@@ -36,7 +36,11 @@ func closeNode() {}
 func process(input transform.Message) cm.Result[transform.OutputMessageShape, transform.OutputMessage, transform.ProcessError] {
 	var result cm.Result[transform.OutputMessageShape, transform.OutputMessage, transform.ProcessError]
 
-	// Read payload from host buffer
+	// Every process() call must release the input Payload borrow before
+	// returning. See borrow_shim.go for the "why" and the exact conditions
+	// under which this call must be removed.
+	defer releaseInputBorrow(input.Payload)
+
 	payload := input.Payload.ReadAll()
 	bytes := payload.Slice()
 
@@ -54,7 +58,6 @@ func process(input transform.Message) cm.Result[transform.OutputMessageShape, tr
 		return result
 	}
 
-	// Convert to uppercase (ASCII)
 	text := string(bytes)
 	uppercased := strings.ToUpper(text)
 

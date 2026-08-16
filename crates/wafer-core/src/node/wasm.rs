@@ -27,8 +27,8 @@ use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::WasmProcessError;
 
 /// Maps a WIT `process-error` variant to our host-side error type.
-fn map_process_error(err: transform_node::pipeline::types::types::ProcessError) -> WasmProcessError {
-    use transform_node::pipeline::types::types::ProcessError as WitErr;
+fn map_process_error(err: transform_node::wafer::pipeline::types::ProcessError) -> WasmProcessError {
+    use transform_node::wafer::pipeline::types::ProcessError as WitErr;
     match err {
         WitErr::BadInput(msg) => WasmProcessError::BadInput(msg),
         WitErr::DependencyFailed(msg) => WasmProcessError::DependencyFailed(msg),
@@ -80,7 +80,7 @@ fn flush_logs(store: &mut Store<WaferState>) {
 fn build_wit_message(
     store: &mut Store<WaferState>,
     envelope: &RuntimeEnvelope,
-) -> Result<transform_node::pipeline::types::types::Message, WasmProcessError> {
+) -> Result<transform_node::wafer::pipeline::types::Message, WasmProcessError> {
     // Push payload into ResourceTable so guest gets a borrow<buffer> handle
     let resource = store
         .data_mut()
@@ -94,7 +94,7 @@ fn build_wit_message(
         .map(|(k, v)| (k.to_string(), v.to_string()))
         .collect();
 
-    Ok(transform_node::pipeline::types::types::Message {
+    Ok(transform_node::wafer::pipeline::types::Message {
         id: envelope.header.id.to_string(),
         timestamp: envelope.header.timestamp,
         source: envelope.header.source.to_string(),
@@ -291,7 +291,7 @@ impl WasmTransformNode {
 
         let result = self
             .bindings
-            .pipeline_node_transform()
+            .wafer_pipeline_transform()
             .call_process(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
@@ -328,7 +328,7 @@ impl WasmTransformNode {
 
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
-        let node_config = transform_node::exports::pipeline::node::lifecycle::NodeConfig {
+        let node_config = transform_node::exports::wafer::pipeline::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
@@ -345,7 +345,7 @@ impl WasmTransformNode {
         }
         if let Some(message) = self
             .bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_validate(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("transform '{}' validate() trapped: {e}", self.node_id()),
@@ -356,7 +356,7 @@ impl WasmTransformNode {
             });
         }
         self.bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_init(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("transform '{}' init() trapped: {e}", self.node_id()),
@@ -537,7 +537,7 @@ impl WasmFilterNode {
 
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
-        let node_config = crate::engine::bindings::filter_node::exports::pipeline::node::lifecycle::NodeConfig {
+        let node_config = crate::engine::bindings::filter_node::exports::wafer::pipeline::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
@@ -553,7 +553,7 @@ impl WasmFilterNode {
         }
         if let Some(message) = self
             .bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_validate(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("filter '{}' validate() trapped: {e}", self.node_id()),
@@ -564,7 +564,7 @@ impl WasmFilterNode {
             });
         }
         self.bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_init(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("filter '{}' init() trapped: {e}", self.node_id()),
@@ -601,7 +601,7 @@ impl WasmFilterNode {
 
         let result = self
             .bindings
-            .pipeline_node_filter()
+            .wafer_pipeline_filter()
             .call_evaluate(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
@@ -787,7 +787,7 @@ impl WasmRouterNode {
 
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
-        let node_config = crate::engine::bindings::router_node::exports::pipeline::node::lifecycle::NodeConfig {
+        let node_config = crate::engine::bindings::router_node::exports::wafer::pipeline::lifecycle::NodeConfig {
             id: self.node_id().to_string(),
             config: config_json.to_string(),
             plugin_version: self.plugin_version.clone(),
@@ -803,7 +803,7 @@ impl WasmRouterNode {
         }
         if let Some(message) = self
             .bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_validate(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("router '{}' validate() trapped: {e}", self.node_id()),
@@ -814,7 +814,7 @@ impl WasmRouterNode {
             });
         }
         self.bindings
-            .pipeline_node_lifecycle()
+            .wafer_pipeline_lifecycle()
             .call_init(&mut self.store, &node_config)
             .map_err(|e| WaferError::PluginInit {
                 message: format!("router '{}' init() trapped: {e}", self.node_id()),
@@ -851,7 +851,7 @@ impl WasmRouterNode {
 
         let result = self
             .bindings
-            .pipeline_routing_router()
+            .wafer_pipeline_router()
             .call_route(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
@@ -935,7 +935,7 @@ mod tests {
 
     #[test]
     fn map_process_error_all_variants() {
-        use transform_node::pipeline::types::types::ProcessError as WitErr;
+        use transform_node::wafer::pipeline::types::ProcessError as WitErr;
 
         let cases = [
             (WitErr::BadInput("bad".into()), "BadInput"),

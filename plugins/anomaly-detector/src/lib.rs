@@ -6,12 +6,12 @@
 //! Config: { "alpha": 0.1, "warmup_samples": 50, "z_threshold": 3.0, "fields": ["temperature", "pressure"] }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use wafer_plugin::{bad_input, define_state, output_with_type, payload_as_str, set_state, with_state};
@@ -76,8 +76,8 @@ define_state!(AnomalyState);
 
 struct AnomalyDetector;
 
-impl exports::pipeline::node::lifecycle::Guest for AnomalyDetector {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for AnomalyDetector {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match serde_json::from_str::<AnomalyConfig>(&config.config) {
             Ok(c) => {
                 if c.fields.is_empty() {
@@ -93,10 +93,10 @@ impl exports::pipeline::node::lifecycle::Guest for AnomalyDetector {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg: AnomalyConfig = serde_json::from_str(&config.config)
-            .map_err(|e| exports::pipeline::node::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?;
+            .map_err(|e| exports::wafer::pipeline::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?;
 
         let accumulators = cfg.fields.iter().map(|f| (f.clone(), EwmaAccumulator::default())).collect();
 
@@ -110,12 +110,12 @@ impl exports::pipeline::node::lifecycle::Guest for AnomalyDetector {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for AnomalyDetector {
+impl exports::wafer::pipeline::transform::Guest for AnomalyDetector {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let text = payload_as_str!(&input)?;
 

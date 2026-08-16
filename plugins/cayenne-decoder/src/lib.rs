@@ -6,12 +6,12 @@
 //! Output: { "sensors": [{ "channel": 1, "type": "temperature", "value": 25.5, "unit": "°C" }, ...] }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use serde::Deserialize;
 use std::collections::HashMap;
 use wafer_plugin::{bad_input, define_state, output_with_type, payload_bytes, set_state, with_state};
@@ -43,8 +43,8 @@ define_state!(CayenneConfig);
 
 struct CayenneDecoder;
 
-impl exports::pipeline::node::lifecycle::Guest for CayenneDecoder {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for CayenneDecoder {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         if config.config.trim().is_empty() || config.config.trim() == "{}" {
             return None; // Empty config is valid
         }
@@ -55,13 +55,13 @@ impl exports::pipeline::node::lifecycle::Guest for CayenneDecoder {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let input: CayenneConfigInput = if config.config.trim().is_empty() || config.config.trim() == "{}" {
             CayenneConfigInput::default()
         } else {
             serde_json::from_str(&config.config)
-                .map_err(|e| exports::pipeline::node::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?
+                .map_err(|e| exports::wafer::pipeline::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?
         };
 
         let extra_types = input
@@ -81,12 +81,12 @@ impl exports::pipeline::node::lifecycle::Guest for CayenneDecoder {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for CayenneDecoder {
+impl exports::wafer::pipeline::transform::Guest for CayenneDecoder {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let bytes = payload_bytes!(&input);
 

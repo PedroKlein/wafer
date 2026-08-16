@@ -7,12 +7,12 @@
 //! Config: { "rules": [{"field":"diameter","op":"range","min":9.9,"max":10.1}], "logic": "all" }
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "filter-node",
     generate_all,
 });
 
-use exports::pipeline::node::filter::ProcessError;
+use exports::wafer::pipeline::filter::ProcessError;
 use serde::Deserialize;
 use wafer_plugin::{bad_input, define_state, payload_as_str, set_state, with_state};
 
@@ -69,8 +69,8 @@ define_state!(QualityConfig);
 
 struct QualityRules;
 
-impl exports::pipeline::node::lifecycle::Guest for QualityRules {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for QualityRules {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match parse_quality_config(&config.config) {
             Ok(_) => None,
             Err(e) => Some(e),
@@ -78,10 +78,10 @@ impl exports::pipeline::node::lifecycle::Guest for QualityRules {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg = parse_quality_config(&config.config)
-            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+            .map_err(exports::wafer::pipeline::lifecycle::ProcessError::BadInput)?;
         set_state!(cfg);
         Ok(())
     }
@@ -89,10 +89,10 @@ impl exports::pipeline::node::lifecycle::Guest for QualityRules {
     fn close() {}
 }
 
-impl exports::pipeline::node::filter::Guest for QualityRules {
+impl exports::wafer::pipeline::filter::Guest for QualityRules {
     fn evaluate(
-        input: exports::pipeline::node::filter::Message,
-    ) -> Result<bool, exports::pipeline::node::filter::ProcessError> {
+        input: exports::wafer::pipeline::filter::Message,
+    ) -> Result<bool, exports::wafer::pipeline::filter::ProcessError> {
         let text = payload_as_str!(&input)?;
 
         let parsed: serde_json::Value = serde_json::from_str(&text)

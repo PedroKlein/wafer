@@ -24,20 +24,20 @@
 //!   unreachable — the guest instance is discarded after the trap).
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::lifecycle::NodeConfig;
-use exports::pipeline::node::transform::{Message, OutputMessage, ProcessError};
+use exports::wafer::pipeline::lifecycle::NodeConfig;
+use exports::wafer::pipeline::transform::{Message, OutputMessage, ProcessError};
 
 /// Sentinel version. Grep this in a config review to catch accidental use.
 const PANIC_VERSION: &str = "2.0.0-panic";
 
 struct PassThroughV2Panics;
 
-impl exports::pipeline::node::lifecycle::Guest for PassThroughV2Panics {
+impl exports::wafer::pipeline::lifecycle::Guest for PassThroughV2Panics {
     fn validate(_config: NodeConfig) -> Option<String> {
         None
     }
@@ -52,7 +52,7 @@ impl exports::pipeline::node::lifecycle::Guest for PassThroughV2Panics {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for PassThroughV2Panics {
+impl exports::wafer::pipeline::transform::Guest for PassThroughV2Panics {
     fn process(_input: Message) -> Result<OutputMessage, ProcessError> {
         // Trap immediately. `panic!` in wasm32-wasip2 aborts the instance
         // with a trap the host observes as `wasmtime::Trap::UnreachableCodeReached`

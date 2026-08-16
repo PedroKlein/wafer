@@ -2,23 +2,23 @@
 //! Expected runtime behavior: Epoch interrupt → Trap (interrupted/timed-out).
 
 wit_bindgen::generate!({
-    path: "../../../wit/node",
+    path: "../../../wit",
     world: "transform-node",
     generate_all,
 });
 
 struct AttackPlugin;
 
-impl exports::pipeline::node::lifecycle::Guest for AttackPlugin {
-    fn validate(_config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> { None }
-    fn init(_config: exports::pipeline::node::lifecycle::NodeConfig) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> { Ok(()) }
+impl exports::wafer::pipeline::lifecycle::Guest for AttackPlugin {
+    fn validate(_config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> { None }
+    fn init(_config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> { Ok(()) }
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for AttackPlugin {
+impl exports::wafer::pipeline::transform::Guest for AttackPlugin {
     fn process(
-        _input: exports::pipeline::node::transform::Message,
-    ) -> Result<exports::pipeline::node::transform::OutputMessage, exports::pipeline::node::transform::ProcessError> {
+        _input: exports::wafer::pipeline::transform::Message,
+    ) -> Result<exports::wafer::pipeline::transform::OutputMessage, exports::wafer::pipeline::transform::ProcessError> {
         loop {}
     }
 }

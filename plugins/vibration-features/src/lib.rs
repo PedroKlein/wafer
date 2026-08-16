@@ -8,12 +8,12 @@
 //! Output: JSON with RMS, peak, crest_factor, kurtosis, dominant_freq, band energies, health_score
 
 wit_bindgen::generate!({
-    path: "../../wit/node",
+    path: "../../wit",
     world: "transform-node",
     generate_all,
 });
 
-use exports::pipeline::node::transform::{OutputMessage, ProcessError};
+use exports::wafer::pipeline::transform::{OutputMessage, ProcessError};
 use rustfft::{num_complex::Complex, FftPlanner};
 use serde::Deserialize;
 use wafer_plugin::{bad_input, define_state, output_with_type, payload_bytes, set_state, with_state};
@@ -35,8 +35,8 @@ define_state!(VibConfig);
 
 struct VibrationFeatures;
 
-impl exports::pipeline::node::lifecycle::Guest for VibrationFeatures {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for VibrationFeatures {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match serde_json::from_str::<VibConfigInput>(&config.config) {
             Ok(c) => {
                 if c.fft_size == 0 || (c.fft_size & (c.fft_size - 1)) != 0 {
@@ -52,10 +52,10 @@ impl exports::pipeline::node::lifecycle::Guest for VibrationFeatures {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let input: VibConfigInput = serde_json::from_str(&config.config)
-            .map_err(|e| exports::pipeline::node::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?;
+            .map_err(|e| exports::wafer::pipeline::lifecycle::ProcessError::BadInput(format!("config parse error: {e}")))?;
 
         set_state!(VibConfig {
             sample_rate: input.sample_rate,
@@ -68,12 +68,12 @@ impl exports::pipeline::node::lifecycle::Guest for VibrationFeatures {
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for VibrationFeatures {
+impl exports::wafer::pipeline::transform::Guest for VibrationFeatures {
     fn process(
-        input: exports::pipeline::node::transform::Message,
+        input: exports::wafer::pipeline::transform::Message,
     ) -> Result<
-        exports::pipeline::node::transform::OutputMessage,
-        exports::pipeline::node::transform::ProcessError,
+        exports::wafer::pipeline::transform::OutputMessage,
+        exports::wafer::pipeline::transform::ProcessError,
     > {
         let bytes = payload_bytes!(&input);
 

@@ -7,12 +7,12 @@
 //!   { "route_field": "type", "routes": {"alert": "alert-port", "telemetry": "log-port"}, "default_port": "log-port" }
 
 wit_bindgen::generate!({
-    path: "../../wit/router",
+    path: "../../wit",
     world: "router-node",
     generate_all,
 });
 
-use exports::pipeline::routing::router::ProcessError;
+use exports::wafer::pipeline::router::ProcessError;
 use wafer_plugin::{bad_input, define_state, set_state, with_state};
 
 struct RouterConfig {
@@ -26,8 +26,8 @@ define_state!(RouterConfig);
 
 struct ContentRouter;
 
-impl exports::pipeline::node::lifecycle::Guest for ContentRouter {
-    fn validate(config: exports::pipeline::node::lifecycle::NodeConfig) -> Option<String> {
+impl exports::wafer::pipeline::lifecycle::Guest for ContentRouter {
+    fn validate(config: exports::wafer::pipeline::lifecycle::NodeConfig) -> Option<String> {
         match parse_router_config(&config.config) {
             Ok(_) => None,
             Err(e) => Some(e),
@@ -35,10 +35,10 @@ impl exports::pipeline::node::lifecycle::Guest for ContentRouter {
     }
 
     fn init(
-        config: exports::pipeline::node::lifecycle::NodeConfig,
-    ) -> Result<(), exports::pipeline::node::lifecycle::ProcessError> {
+        config: exports::wafer::pipeline::lifecycle::NodeConfig,
+    ) -> Result<(), exports::wafer::pipeline::lifecycle::ProcessError> {
         let cfg = parse_router_config(&config.config)
-            .map_err(exports::pipeline::node::lifecycle::ProcessError::BadInput)?;
+            .map_err(exports::wafer::pipeline::lifecycle::ProcessError::BadInput)?;
         set_state!(cfg);
         Ok(())
     }
@@ -46,7 +46,7 @@ impl exports::pipeline::node::lifecycle::Guest for ContentRouter {
     fn close() {}
 }
 
-impl exports::pipeline::routing::router::Guest for ContentRouter {
+impl exports::wafer::pipeline::router::Guest for ContentRouter {
     fn output_ports() -> Vec<String> {
         with_state!(cfg => {
             cfg.all_ports.clone()
@@ -54,8 +54,8 @@ impl exports::pipeline::routing::router::Guest for ContentRouter {
     }
 
     fn route(
-        input: exports::pipeline::routing::router::Message,
-    ) -> Result<Vec<String>, exports::pipeline::routing::router::ProcessError> {
+        input: exports::wafer::pipeline::router::Message,
+    ) -> Result<Vec<String>, exports::wafer::pipeline::router::ProcessError> {
         // Read payload to extract the route field value
         let bytes = input.payload.read_all();
 

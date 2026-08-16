@@ -1,8 +1,6 @@
-// pipeline:host — host-provided capabilities importable by all Wasm nodes.
-//
-// All interfaces in this package are optional imports — plugins that don't
-// need them simply don't import them. The worlds in pipeline:node and
-// pipeline:routing include logging by default as it is universally useful.
+package wafer:pipeline@0.1.0;
+
+// wafer:pipeline — host-provided logging capability importable by all Wasm nodes.
 //
 // The logging interface is designed for easy migration to wasi:logging if
 // that WASI proposal stabilizes — it follows the same (level, message)
@@ -10,10 +8,9 @@
 //
 // See docs/rfcs/RFC-001-wit-contracts.md F9.
 
-package pipeline:host@0.1.0;
 
 interface logging {
-    use pipeline:types/types@0.1.0.{log-level};
+    use types.{log-level};
 
     // Emit a structured log message visible in the host tracing span for this node.
     log: func(level: log-level, message: string);

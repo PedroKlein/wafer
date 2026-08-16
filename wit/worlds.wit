@@ -1,0 +1,35 @@
+package wafer:pipeline@0.1.0;
+
+// wafer:pipeline — worlds for the three WAFER node roles.
+//
+// Guest plugins pick the world that matches what they export:
+//   - transform-node: lifecycle + transform
+//   - filter-node:    lifecycle + filter
+//   - router-node:    lifecycle + router
+//
+// All imports (types, logging) are same-package interfaces.
+
+
+// A standard transform node: exports lifecycle + transform.
+world transform-node {
+    import types;
+    import logging;
+    export lifecycle;
+    export transform;
+}
+
+// A filter node: exports lifecycle + filter.
+world filter-node {
+    import types;
+    import logging;
+    export lifecycle;
+    export filter;
+}
+
+// A router node: exports lifecycle + router.
+world router-node {
+    import types;
+    import logging;
+    export lifecycle;
+    export router;
+}
