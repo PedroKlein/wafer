@@ -675,6 +675,17 @@ impl Sink for BenchSink {
 
         self.message_count = self.message_count.saturating_add(1);
 
+        if let Some(ref mut tracker) = self.sequence_tracker
+            && let Some(seq) = envelope
+                .header
+                .metadata
+                .iter()
+                .find(|(k, _)| k.as_ref() == "bench.sequence")
+                .and_then(|(_, v)| v.parse::<u64>().ok())
+        {
+            tracker.record(seq);
+        }
+
         // Skip recording during warmup
         if let Some(until) = self.warmup_until {
             if Instant::now() < until {
@@ -716,19 +727,6 @@ impl Sink for BenchSink {
             }
         }
 
-        // Sequence tracking
-        if let Some(ref mut tracker) = self.sequence_tracker {
-            if let Some(seq) = envelope
-                .header
-                .metadata
-                .iter()
-                .find(|(k, _)| k.as_ref() == "bench.sequence")
-                .and_then(|(_, v)| v.parse::<u64>().ok())
-            {
-                tracker.record(seq);
-            }
-        }
-
         // Hot-swap version tracking
         if let Some(ref mut recorder) = self.hotswap_recorder {
             if let Some((_, version)) = envelope
@@ -764,7 +762,7 @@ mod tests {
     async fn bench_sink_warmup_exclusion() {
         let config = BenchSinkConfig {
             warmup_secs: 1,
-            track_sequences: false,
+            track_sequences: true,
             track_hotswap: false,
             output_dir: None,
         };
@@ -778,6 +776,9 @@ mod tests {
         // With 1s warmup, this message should not be recorded
         assert_eq!(sink.recorded_count(), 0);
         assert_eq!(sink.message_count(), 1);
+        let tracker = sink.sequence_tracker().unwrap();
+        assert_eq!(tracker.total_received(), 1);
+        assert!(!tracker.has_gaps());
     }
 
     #[tokio::test]

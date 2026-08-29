@@ -21,7 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 MERGER = REPO_ROOT / "eval/scripts/lib/write_metadata.py"
 
 
-def run_merger(out_path: Path, provenance_json: str) -> dict:
+def run_merger(
+    out_path: Path, provenance_json: str, cwd: Path | None = None
+) -> dict:
     cmd = [
         sys.executable,
         str(MERGER),
@@ -38,7 +40,7 @@ def run_merger(out_path: Path, provenance_json: str) -> dict:
         "0",                   # rc
         provenance_json,
     ]
-    subprocess.run(cmd, check=True, capture_output=True, text=True)
+    subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=cwd)
     return json.loads(out_path.read_text())
 
 
@@ -63,11 +65,22 @@ def test_merge_promotes_runtime_provenance() -> None:
         assert meta.get(key) == expected, (
             f"metadata.json {key} = {meta.get(key)!r}, sidecar had {expected!r}"
         )
-    # Preserved harness-side keys must still be present.
+    assert isinstance(meta["git_dirty"], bool)
     for key in ("experiment", "host_tag", "duration_ns", "git_sha",
-                "hostname", "arch", "os", "config_path", "loadgen",
+                "git_dirty", "hostname", "arch", "os", "config_path", "loadgen",
                 "mosquitto", "exit_codes"):
         assert key in meta, f"harness-side key missing: {key}"
+
+
+def test_deployed_source_state_fills_git_provenance() -> None:
+    source_state = {"git_sha": "1" * 40, "git_dirty": True}
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "SOURCE_STATE.json").write_text(json.dumps(source_state))
+        meta = run_merger(root / "metadata.json", "null", cwd=root)
+
+    assert meta["git_sha"] == source_state["git_sha"]
+    assert meta["git_dirty"] is True
 
 
 def test_merge_without_sidecar_keeps_harness_values() -> None:
@@ -82,7 +95,9 @@ def test_merge_without_sidecar_keeps_harness_values() -> None:
 
     for key in ("experiment", "host_tag", "kernel", "arch", "os",
                 "rustc_version", "config_path", "config_sha256",
-                "duration_ns", "exit_codes"):
+                "duration_ns", "exit_codes", "hardware_model",
+                "memory_total_kib", "cpu_governors", "isolated_cpus",
+                "temperature_millicelsius", "throttled"):
         assert key in meta and meta[key] not in ("", None), (
             f"harness-side fallback missing/empty for {key}: {meta.get(key)!r}"
         )
@@ -98,5 +113,6 @@ def test_merge_without_sidecar_keeps_harness_values() -> None:
 
 if __name__ == "__main__":
     test_merge_promotes_runtime_provenance()
+    test_deployed_source_state_fills_git_provenance()
     test_merge_without_sidecar_keeps_harness_values()
     print("write_metadata merge tests: PASS")

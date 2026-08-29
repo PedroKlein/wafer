@@ -25,6 +25,7 @@ Args (positional):
 """
 
 import json
+import pathlib
 import subprocess
 import sys
 
@@ -34,6 +35,73 @@ def _sh(cmd: list[str]) -> str:
         return subprocess.check_output(cmd, text=True).strip()
     except Exception:
         return "unknown"
+
+
+def _read_text(path: str, default: str = "unknown") -> str:
+    try:
+        return pathlib.Path(path).read_text().replace("\x00", "").strip() or default
+    except OSError:
+        return default
+
+
+def _source_metadata() -> tuple[str, bool]:
+    git_sha = _sh(["git", "rev-parse", "HEAD"])
+    git_status = _sh(["git", "status", "--porcelain"])
+    if git_sha != "unknown":
+        return git_sha, git_status != ""
+
+    candidates = (
+        pathlib.Path.cwd() / "SOURCE_STATE.json",
+        pathlib.Path(__file__).resolve().parents[3] / "SOURCE_STATE.json",
+    )
+    for path in candidates:
+        try:
+            state = json.loads(path.read_text())
+        except (OSError, ValueError):
+            continue
+        if isinstance(state.get("git_sha"), str) and isinstance(
+            state.get("git_dirty"), bool
+        ):
+            return state["git_sha"], state["git_dirty"]
+
+    return "unknown", True
+
+
+def _hardware_metadata() -> dict:
+    memory_total_kib: int | str = "unknown"
+    try:
+        for line in pathlib.Path("/proc/meminfo").read_text().splitlines():
+            if line.startswith("MemTotal:"):
+                memory_total_kib = int(line.split()[1])
+                break
+    except (OSError, ValueError, IndexError):
+        pass
+
+    governors = sorted({
+        path.read_text().strip()
+        for path in pathlib.Path("/sys/devices/system/cpu").glob(
+            "cpu[0-9]*/cpufreq/scaling_governor"
+        )
+        if path.is_file()
+    })
+
+    temperature: int | str = "unknown"
+    raw_temperature = _read_text("/sys/class/thermal/thermal_zone0/temp")
+    if raw_temperature.isdigit():
+        temperature = int(raw_temperature)
+
+    throttled = _sh(["vcgencmd", "get_throttled"])
+    if throttled.startswith("throttled="):
+        throttled = throttled.removeprefix("throttled=")
+
+    return {
+        "hardware_model": _read_text("/proc/device-tree/model"),
+        "memory_total_kib": memory_total_kib,
+        "cpu_governors": governors or ["unknown"],
+        "isolated_cpus": _read_text("/sys/devices/system/cpu/isolated"),
+        "temperature_millicelsius": temperature,
+        "throttled": throttled,
+    }
 
 
 def merge_metadata(
@@ -50,6 +118,7 @@ def merge_metadata(
     rc: str,
     provenance: str,
 ) -> None:
+    git_sha, git_dirty = _source_metadata()
     meta = {
         "experiment": experiment,
         "host_tag": host,
@@ -57,7 +126,8 @@ def merge_metadata(
         "started_at": started,
         "finished_at": finished,
         "duration_ns": int(duration_ns),
-        "git_sha": _sh(["git", "rev-parse", "HEAD"]),
+        "git_sha": git_sha,
+        "git_dirty": git_dirty,
         "hostname": _sh(["hostname"]),
         "kernel": _sh(["uname", "-r"]),
         "arch": _sh(["uname", "-m"]),
@@ -68,6 +138,7 @@ def merge_metadata(
         "loadgen": json.loads(loadgen),
         "mosquitto": json.loads(mosquitto),
         "exit_codes": {"wafer_runtime": int(rc)},
+        **_hardware_metadata(),
     }
     # Runtime provenance is authoritative when the sidecar is present: it
     # observed the actual bytes loaded and cannot drift from the process

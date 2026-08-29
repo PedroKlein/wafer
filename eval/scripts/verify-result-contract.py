@@ -128,6 +128,28 @@ def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
                     f"(legacy shakedown script; canonical runs source "
                     f"eval/scripts/lib/write_metadata.py)"
                 )
+            if leaf.name.startswith("rpi5-"):
+                expected = {
+                    "host_tag": "rpi5",
+                    "arch": "aarch64",
+                    "isolated_cpus": "1-3",
+                    "throttled": "0x0",
+                }
+                for key, value in expected.items():
+                    if meta.get(key) != value:
+                        violations.append(
+                            f"Pi 5 metadata {key}={meta.get(key)!r}, expected {value!r}"
+                        )
+                if "Raspberry Pi 5" not in str(meta.get("hardware_model", "")):
+                    violations.append("Pi 5 metadata lacks Raspberry Pi 5 hardware model")
+                if meta.get("cpu_governors") != ["performance"]:
+                    violations.append("Pi 5 metadata CPU governor is not performance")
+                if not re.fullmatch(r"[0-9a-f]{40}", str(meta.get("git_sha", ""))):
+                    violations.append("Pi 5 metadata lacks a source commit SHA")
+                if not isinstance(meta.get("git_dirty"), bool):
+                    violations.append("Pi 5 metadata git_dirty is not boolean")
+                if meta.get("exit_codes", {}).get("wafer_runtime") != 0:
+                    violations.append("Pi 5 metadata records a non-zero runtime exit")
         except (OSError, ValueError) as exc:
             warnings.append(f"metadata.json unreadable: {exc}")
 
