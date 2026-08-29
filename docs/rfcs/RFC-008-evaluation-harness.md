@@ -70,7 +70,9 @@ This is the Carbone 2015 gold standard: "reimplemented on the SAME RUNTIME."
 
 ### Decision 6: eKuiper Comparison Setup
 
-Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same MQTT broker (mosquitto), same message format, same hardware, same load profile. Same-machine deployment with CPU affinity isolation (load generator + broker on core 0; SUT on cores 1–3).
+Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same native Mosquitto broker, same message format, same Raspberry Pi 5 4 GB host, and same load profile. eKuiper 2.1.0 runs from its official Linux ARM64 package rather than in Docker, so neither comparator receives an additional container or bridge-network boundary.
+
+The Pi boots with CPUs 1–3 isolated. The operating system, Mosquitto, and `wafer-loadgen` use CPU 0; the active SUT—WAFER, the native Rust baseline, or eKuiper—uses CPUs 1–3. Only one SUT runs at a time.
 
 Measurement: both systems publish to an output topic. A common MQTT subscriber (part of wafer-loadgen) computes `now - payload.ts` for both — identical measurement methodology.
 
@@ -93,7 +95,7 @@ Recording output per experiment run: `config.toml`, `metadata.json`, `latency.hd
 
 ### Decision 10: Reproducibility Artifacts
 
-Full automation suite in `eval/` directory: pipeline configs (telemetry, inference, passthrough variants ×4 metering, native, depth-1/2/3/5/10), load generator profiles, hardware setup scripts (`setup-rpi.sh` with CPU pinning, governor, thermal), experiment runner (`run-experiment.sh`), and a Makefile for targeting individual experiments.
+Full automation suite in `eval/` directory: pipeline configs (telemetry, inference, passthrough variants ×4 metering, native, depth-1/2/3/5/10), load generator profiles, Raspberry Pi 5 host setup and preflight scripts, experiment runner (`run-experiment.sh`), and mise tasks for targeting individual experiments.
 
 Published alongside thesis: git repository, raw results tarball (Zenodo), exact binary SHA256 for all `.wasm` modules, `Cargo.lock` pinning wasmtime version, hardware/OS manifest, `uv.lock` for Python environment.
 
@@ -105,13 +107,13 @@ Published alongside thesis: git repository, raw results tarball (Zenodo), exact 
 
 "Saturated" = the rate where p99 latency exceeds 2× the p99 at steady-state (1000 msg/s) OR message loss exceeds 1%. Procedure: establish baseline at 1000 msg/s, run ramp profile (100→5000), binary search refinement between last-good and first-bad rates (30s steady runs). Follows Karimov 2018's "sustainable throughput" definition.
 
-### Decision 13: Cross-Architecture — Same Binary, Ratio Reporting
+### Decision 13: Cross-Architecture — Same Source Revision, Ratio Reporting
 
-Cross-compile identical binary for ARM64 (RPi 4) and x86-64. Report overhead RATIO (Wasm/Native) — dimensionless, portable across hardware. Target: |ARM ratio – x86 ratio| < 5 percentage points.
+Build equivalent release binaries from the same tagged source revision for ARM64 (Raspberry Pi 5) and x86-64. Report overhead RATIO (Wasm/Native) — dimensionless, portable across hardware. Target: |ARM ratio – x86 ratio| < 5 percentage points.
 
 ### Decision 14: Memory Measurement — `/proc/self/statm` at 1Hz
 
-Use `procfs` crate to read RSS at 1Hz. For per-node attribution (E-Perf-6), measure delta RSS when adding nodes incrementally (1→3→5→10 nodes); per-node cost = slope of linear fit. On macOS (development), use `memory_stats` crate; thesis numbers always from Linux/RPi.
+Use the runtime's `memory-stats` integration to record process RSS at 1 Hz. For per-node attribution (E-Perf-6), measure delta RSS when adding nodes incrementally (1→3→5→10 nodes); per-node cost = slope of linear fit. Canonical memory numbers come from the Raspberry Pi 5 Linux host.
 
 ### Decision 15: Shared Pipeline Builder — Pluggable I/O Adapters
 
@@ -126,6 +128,10 @@ One unified `PipelineBuilder` with pluggable source/sink types. `TestPipeline` a
 - **Fixed-bucket histograms**: Rejected in favour of HdrHistogram which provides constant-time recording (~20ns), fixed memory footprint, and lossless percentile accuracy across the full latency range.
 - **Event-time-based measurement (embedding timestamps in MQTT payload only)**: The external `wafer-loadgen` uses payload timestamps, but in-process micro-benchmarks use `Instant::now()` for nanosecond precision without serialization overhead. Both approaches coexist for their respective experiment classes.
 
+## Canonical hardware amendment
+
+Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.0 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
+
 ## Related RFCs
 
 - **RFC-005** (Orchestrator) — provides the unconditional `NodeMetrics` (AtomicU64 counters, D10) and task-per-node structure (D1) that the harness instruments.
@@ -136,11 +142,9 @@ One unified `PipelineBuilder` with pluggable source/sink types. `TestPipeline` a
 
 ## Implementation Notes
 
-- The `eval/` directory structure exists and partially matches Decision 10: `eval/configs/` contains pipeline TOML files for telemetry, passthrough variants (fuel-only, epoch-only, neither), native baseline, and depth-scaling (1/2/3/5/10). `eval/scripts/` contains `setup-rpi.sh`, `run-experiment.sh`, and `verify-environment.sh`. `eval/analysis/` contains a `pyproject.toml` and notebook scaffolding.
+- The production-path runtime, load generator, result metadata, and analysis notebooks are implemented. The Pi 5 deployment, preflight, native-eKuiper adapter, and canonical experiment wrappers are tracked by the active `rpi5-canonical-runs` plan.
+- `eval/configs/` contains telemetry, passthrough, metering-ablation, native-baseline, depth-scaling, isolation, and hot-swap configurations. A runbook identifies which configurations already have executable runners and which canonical wrappers remain to be completed.
 - The `wafer-loadgen` crate exists (`crates/wafer-loadgen/src/main.rs`) as a workspace binary.
-- The `BenchSource` and `BenchSink` adapters, `HdrHistogram` integration, `SequenceTracker`, native baseline (`ProcessNode` trait), `SwapTimeline` instrumentation, and the Python analysis notebooks are not yet fully implemented — this RFC's status is "Accepted" rather than "Implemented" because the harness infrastructure is partially scaffolded but not evaluation-ready.
-- The eKuiper comparison setup (`eval/configs/ekuiper/`) exists as directory scaffolding.
-- The `Makefile` at `eval/Makefile` exists for experiment targeting.
 
 ### Amendments to prior RFCs noted in source
 

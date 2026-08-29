@@ -5,7 +5,7 @@ require material rework. Each risk carries a likelihood × impact
 estimate, the current mitigation, and the residual (post-mitigation)
 exposure. Ordered roughly by product-of-likelihood-and-impact.
 
-## R1 — Wasm boundary overhead exceeds the 30 %-of-eKuiper threshold on RPi 4
+## R1 — Wasm boundary overhead exceeds the 30 %-of-eKuiper threshold on Raspberry Pi 5
 
 **Likelihood:** Medium — literature reports Wasm hop overheads from
 6 % (Lyu 2022) to 13.4 % (Sledge 2020) on x86; ARM numbers are noisier
@@ -116,7 +116,7 @@ recompilation on validation error.
 
 ## R8 — Evaluation hardware access
 
-**Likelihood:** Medium — the primary RPi 4 unit and the Jetson Orin
+**Likelihood:** Medium — the primary Raspberry Pi 5 unit and the optional Jetson Orin
 are single instances at the author's site. A hardware failure would
 extend the evaluation timeline.
 **Impact:** Medium — RQ1 / RQ2 / RQ3 measurements are pinned to those

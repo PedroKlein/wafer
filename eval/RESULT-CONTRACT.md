@@ -25,10 +25,11 @@ eval/results/
 
 **Host tags** (explicit whitelist — the harness rejects anything else):
 
-- `shakedown-macos` — MacBook laptop shakedown (this plan).
-- `rpi4` — Raspberry Pi 4 canonical run (canonical-runs plan).
-- `jetson` — Jetson Orin Nano canonical run (canonical-runs plan).
-- `x86` — x86 workstation cross-architecture validation (canonical-runs plan).
+- `shakedown-macos` — MacBook laptop shakedown.
+- `rpi5` — Raspberry Pi 5 4 GB canonical run.
+- `rpi4` — retained for existing Raspberry Pi 4 result directories; not the active canonical target.
+- `jetson` — Jetson Orin Nano inference validation.
+- `x86` — x86 workstation cross-architecture validation.
 
 **Timestamp format**: `YYYY-MM-DDTHH-MM-SSZ` — UTC, colons replaced with
 hyphens so the path is `mv`-safe on every filesystem.
@@ -102,10 +103,17 @@ authoritative through cross-compilation.
   "finished_at": "2026-07-21T14:32:47Z",
   "duration_ns": 152000000000,
   "git_sha": "38252494da5f39ce1e02e5a642fae85d0791a527",
-  "hostname": "pkleins-mbp.local",
-  "kernel": "24.5.0",
-  "arch": "arm64",
-  "os": "darwin",
+  "git_dirty": false,
+  "hostname": "wafer-pi5",
+  "kernel": "6.18.39+rpt-rpi-2712",
+  "arch": "aarch64",
+  "os": "linux",
+  "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+  "memory_total_kib": 4194304,
+  "cpu_governors": ["performance"],
+  "isolated_cpus": "1-3",
+  "temperature_millicelsius": 53800,
+  "throttled": "0x0",
   "rustc_version": "rustc 1.85.0 (unknown)",
   "wafer_runtime_version": "0.1.0",
   "wafer_runtime_sha256": "…",
@@ -129,6 +137,23 @@ authoritative through cross-compilation.
   }
 }
 ```
+
+Canonical runs require `git_dirty: false`; smoke runs may be dirty but cannot be promoted to thesis evidence.
+
+### Pi 5 host fields
+
+Canonical `rpi5` runs additionally require:
+
+| Field | Source | Required value |
+| --- | --- | --- |
+| `hardware_model` | `/proc/device-tree/model` | Raspberry Pi 5 |
+| `memory_total_kib` | `/proc/meminfo` | approximately 4 GB; exact firmware-visible value is recorded |
+| `cpu_governors` | `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` | only `performance` during measured runs |
+| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | `1-3` |
+| `temperature_millicelsius` | `/sys/class/thermal/thermal_zone0/temp` | captured at run completion |
+| `throttled` | `vcgencmd get_throttled` | `0x0` |
+
+The preflight rejects a host that does not meet these conditions. Smoke runs may retain the same `rpi5` path prefix, but their metadata and invocation are labelled non-canonical and must not be consumed as thesis evidence.
 
 ### Runtime-owned fields
 
@@ -168,16 +193,10 @@ loaded by the runtime — reproducibility hinge for notebook cross-references.
 - **Safe to re-run**: `run-experiment.sh` never overwrites an existing
   timestamped directory. Two runs at the same second (rare) get a
   suffixed second timestamp.
-- **Never `sudo`** on the dev machine. Only `setup-rpi.sh` and
-  `setup-jetson.sh` (canonical-runs plan) require privileged setup.
+- **Never `sudo`** on the development machine. The Pi host setup how-to explicitly marks its privileged device configuration commands.
 - **Never `rm -rf`** on a result directory. Cleanup is the operator's job.
-- **Docker containers created by the harness are labelled**
-  `wafer-harness=1`; `docker ps -f label=wafer-harness=1` lists everything
-  the harness owns. Anything without that label is left alone.
-- **Broker discovery order**: `--broker` flag → `WAFER_HARNESS_MQTT` env
-  var → auto-start eclipse-mosquitto in Docker. In the auto path the
-  harness stops the container it created; in the pre-existing-broker path
-  it leaves the broker running.
+- **Native broker on Pi 5**: canonical Pi runs pass `--broker 127.0.0.1:1883`; the harness never starts Docker there.
+- **Development fallback only**: when no broker is supplied, `run-experiment.sh` may auto-start a labelled Mosquitto container for laptop shakedowns.
 
 ## Reproducibility hinge
 

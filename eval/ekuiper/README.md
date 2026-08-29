@@ -1,34 +1,59 @@
-# eval/ekuiper — eKuiper 2.1.x LTS comparator stack
+# Native eKuiper comparator
 
-Docker Compose stack for the RQ1/RQ3 comparator experiments. Reads:
-`../../docs/benchmarks/ekuiper-comparator.md` for the full write-up.
+The Raspberry Pi 5 evaluation runs eKuiper 2.1.0 directly from its official Linux ARM64 Debian package. Docker Compose remains only as a historical laptop-shakedown fixture; it is not used for Pi 5 results.
 
-## Quick start
+## Install on the Pi
 
 ```sh
-docker compose up -d
-./seed-pipeline-a.sh
+./eval/ekuiper/install-native.sh --dry-run
+./eval/ekuiper/install-native.sh
+```
+
+The installer downloads both the pinned package and its published SHA256 file, verifies the package, installs it with APT, points its default MQTT source at native Mosquitto, and assigns the service to CPUs 1–3.
+
+## Register Pipeline A
+
+```sh
+./eval/ekuiper/seed-pipeline-a.sh --dry-run
+./eval/ekuiper/seed-pipeline-a.sh
+```
+
+Overrides are available when needed:
+
+```sh
+EKUIPER_URL=http://127.0.0.1:9081 \
+EKUIPER_BROKER_URL=tcp://127.0.0.1:1883 \
+  ./eval/ekuiper/seed-pipeline-a.sh
+```
+
+Pipeline A implements the comparator path:
+
+```text
+MQTT wafer/telemetry → JSON decode → temperature > 50 → MQTT wafer/telemetry/hot
+```
+
+## Smoke test
+
+```sh
+./eval/ekuiper/smoke-test.sh --dry-run
+./eval/ekuiper/smoke-test.sh
+```
+
+The smoke test publishes one record that must be dropped and one that must pass. It uses the native `mosquitto_pub` and `mosquitto_sub` clients.
+
+## Verify
+
+```sh
+systemctl is-active mosquitto kuiper
+curl -fsS http://127.0.0.1:9081/
+taskset -pc "$(systemctl show -p MainPID --value kuiper)"
+./eval/ekuiper/test-native-scripts.sh
 ```
 
 ## Files
 
-- `docker-compose.yml` — mosquitto + eKuiper stack (label
-  `wafer-harness=1`).
-- `mosquitto.conf` — anonymous auth, all-interfaces listener.
-- `pipeline-a-rule.sql` — human-readable Pipeline A definition.
-- `seed-pipeline-a.sh` — idempotent stream + rule registration.
-- `smoke-test.sh` — pass + drop assertion smoke test (exit 0 = healthy).
-
-## Verification
-
-```sh
-./smoke-test.sh                  # pass + drop assertion
-curl -s :9081/streams | jq       # ["wafer_telemetry"]
-curl -s :9081/rules   | jq       # pipeline_a running
-```
-
-## Teardown
-
-```sh
-docker compose down
-```
+- `install-native.sh` — pinned package download, checksum verification, installation, and systemd affinity.
+- `seed-pipeline-a.sh` — idempotent REST registration.
+- `pipeline-a-rule.sql` — human-readable rule definition.
+- `smoke-test.sh` — native pass/drop behavior check.
+- `docker-compose.yml` — retained for reproducing historical laptop shakedowns only.

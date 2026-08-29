@@ -18,7 +18,8 @@ Usage: collect-results.sh --experiment <id> [--host <tag>] [--root <path>]
                           [--print-only]
 
   --experiment <id>   Experiment id, e.g. e-perf-4 (required).
-  --host <tag>        Host tag; one of {shakedown-macos, rpi4, jetson, x86}.
+  --host <tag>        Host tag; one of {shakedown-macos, rpi5, rpi4, jetson, x86}.
+                      `rpi5` is canonical; `rpi4` remains readable for legacy runs.
                       Defaults to WAFER_HOST_TAG env var or shakedown-macos.
   --root <path>       Override the result root (default: eval/results).
   --print-only        Print the target directory path without creating it.
@@ -48,8 +49,8 @@ done
 # Reject unknown host tags at the harness boundary. Canonical-runs
 # plans MUST widen this list, not open it.
 case "$host" in
-    shakedown-macos|rpi4|jetson|x86) ;;
-    *) printf 'ERROR: unknown host tag %q (allowed: shakedown-macos, rpi4, jetson, x86)\n' "$host" >&2; exit 2 ;;
+    shakedown-macos|rpi5|rpi4|jetson|x86) ;;
+    *) printf 'ERROR: unknown host tag %q (allowed: shakedown-macos, rpi5, rpi4, jetson, x86)\n' "$host" >&2; exit 2 ;;
 esac
 
 # --- timestamped subdir -----------------------------------------------------

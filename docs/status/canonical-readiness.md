@@ -1,9 +1,9 @@
 # Canonical-run readiness matrix
 
-Living document tracking which RFC-008 experiments are ready to book Pi /
-Jetson time. Each row is filled in as its shakedown lands. **Numbers here
-are macOS shakedown values — informational only, never quotable in the
-thesis. Canonical numbers come from the `rpi4` and `jetson` host tags via
+Living document tracking which RFC-008 experiments are ready to run on the
+Raspberry Pi 5 4 GB canonical host. Each row is filled in as its shakedown
+lands. **Numbers here are macOS shakedown values — informational only, never
+quotable in the thesis. Canonical numbers come from the `rpi5` host tag via
 `eval/scripts/run-experiment.sh`.**
 
 Related docs:
@@ -18,9 +18,10 @@ Related docs:
   A19, T4 memory sampler, T8 legacy shakedown metadata unification,
   T9 thesis-grade PDF pipeline, T10 cross-arch CI, T11 notebook
   traceability. Preconditions for canonical Pi runs.
-- `docs/history/plans/canonical-runs.md` — Pi 4 + Jetson preflight and execution.
-  C1 (aarch64 cross-compile spike) + C2 (loadgen + waferctl) closed
-  2026-08-02; `mise run cross-build-pi` ships aarch64-linux binaries.
+- `docs/status/rpi5-canonical-transition.md` — pre-measurement decision record for Raspberry Pi 5, native eKuiper, and CPU allocation.
+- `docs/eval/pi5-host-setup.md` — fresh-host installation and preflight.
+- `docs/eval/pi5-experiment-runbook.md` — pipeline, execution, retrieval, and analysis workflow.
+- `docs/history/plans/canonical-runs.md` — historical Pi 4 + Jetson plan; its Pi 4 and Docker assumptions are superseded by the transition record.
 
 Legend:
 
@@ -66,20 +67,20 @@ Legend:
 
 | Confounder | Impact | Mitigation for canonical runs |
 |---|---|---|
-| **Docker Desktop overhead** | eKuiper runs inside Docker Desktop VM on macOS, adding ~0.5–1 ms latency vs native Linux Docker. Inflates eKuiper numbers relative to WAFER. | On Pi: eKuiper runs in native Docker (no VM layer). Report Docker version. |
-| **Mach kernel scheduling** | macOS does not support `SCHED_FIFO`, `isolcpus`, or `taskset`. Background processes (Spotlight, Time Machine, WindowServer) inject jitter at p999. | On Pi: `isolcpus=2,3` + `taskset -c 2` for SUT; `taskset -c 3` for loadgen. Pin CPU governor to `performance`. |
-| **Memory reporting (`ps` vs `/proc`)** | macOS `ps -o rss=` includes shared library pages counted once per framework. Over-reports absolute RSS. Per-hop *delta* is valid because shared libs don't grow with depth. | On Pi: use `/proc/<pid>/smaps_rollup` Private_Dirty for accurate per-process RSS. |
-| **Page cache behavior** | macOS Unified Buffer Cache doesn't support `drop_caches`. Cold-start measurements (E-Perf-9) rely on binary rebuild as a proxy for cache invalidation. | On Pi: `echo 3 > /proc/sys/vm/drop_caches` before cold runs. |
-| **MQTT localhost latency** | macOS mosquitto on localhost has lower latency than cross-device MQTT on Pi (USB Ethernet + kernel network stack). | On Pi: loadgen on separate device or isolated core. Report network topology. |
+| **Docker Desktop overhead** | Historical eKuiper shakedowns ran inside a Linux VM on macOS. | Canonical Pi 5 runs use the native eKuiper 2.1.0 ARM64 package and native Mosquitto. |
+| **Mach kernel scheduling** | macOS does not support `isolcpus` or `taskset`; background work injects tail jitter. | Pi 5 boots with `isolcpus=1-3`; OS, broker, and load generation use CPU 0 while the active SUT uses CPUs 1–3. |
+| **Memory reporting (`ps` vs `/proc`)** | macOS RSS semantics differ from Linux. | The runtime-owned `memory-stats` sampler records Pi 5 RSS at 1 Hz. |
+| **Page cache behavior** | macOS cannot reproduce Linux cache eviction. | On Pi 5, sync and write `3` to `/proc/sys/vm/drop_caches` only for declared cold-start trials. |
+| **MQTT locality** | External devices add network and clock variance. | Canonical load uses `wafer-loadgen` and native Mosquitto on CPU 0 for every comparator. |
 
 ### What needs to change to book Pi time
 
-1. **Cross-compile the runtime**: SHIPPED (canonical-runs C1+C2, 2026-08-02). `mise run cross-build-pi` produces aarch64-unknown-linux-gnu ELF binaries for `wafer`, `wafer-loadgen`, `waferctl` via `docker run --platform linux/arm64 rust:1-slim-bookworm`. See `docs/eval/cross-compile.md`. CI job at `.github/workflows/cross-arch.yml` guards the recipe on every push.
-2. **Linux memory sampler**: SHIPPED (thesis-hardening T4, A19, 2026-08-02). Runtime uses the `memory-stats` crate directly; the `MemoryRecorder::sample_loop` runs at 1 Hz and writes `memory.csv` at graceful shutdown. All `ps -o rss=` scrapes removed from shakedown scripts.
-3. **CPU isolation**: Boot Pi with `isolcpus=2,3` kernel parameter. Run SUT on core 2, loadgen on core 3.
-4. **Longer runs**: Bump `total_messages` from 5000→60000 and `warmup_secs` from 1→30 for canonical statistical power (N=30 runs × 60s each).
-5. **eKuiper native Docker**: Verify `lfedge/ekuiper:2.1.0-alpine` runs on `linux/arm64` without emulation.
-6. **HdrHistogram sub-ms precision**: The `/metrics` endpoint uses integer ms. For E-Iso-8 canonical, export raw histogram buckets from the Prometheus scrape.
+1. **Cross-compile the runtime**: SHIPPED. `mise run cross-build-pi` produces ARM64 Linux binaries for `wafer`, `wafer-loadgen`, and `waferctl`.
+2. **Linux memory sampler**: SHIPPED. The runtime writes 1 Hz RSS and per-node metrics on graceful shutdown.
+3. **Pi 5 host setup and smoke path**: SHIPPED by the `rpi5-canonical-runs` plan. Use `docs/eval/pi5-host-setup.md` and require green preflight plus Pipeline C and E-Val-1 smoke evidence.
+4. **Native eKuiper**: SHIPPED for install, seed, and smoke. Dedicated Pi 5 canonical comparator wrappers still need to replace Docker checks in historical shakedown scripts.
+5. **Canonical wrappers**: PENDING. Existing reduced macOS scripts remain shakedown-only; each Pi 5 wrapper must enforce N≥30, 30 s warmup, experiment duration, CPU allocation, and contract verification.
+6. **HdrHistogram sub-ms precision**: For E-Iso-8 canonical, export raw histogram buckets rather than the integer-ms `/metrics` summary.
 
 ### A16/A17/A18/A19 impact on canonical RQ claims
 

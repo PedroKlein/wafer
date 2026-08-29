@@ -6,8 +6,8 @@
 #
 # Responsibilities:
 #   1. Resolve output directory via collect-results.sh (host_tag + timestamp).
-#   2. Auto-start eclipse-mosquitto in Docker if the config uses MQTT and no
-#      broker was supplied by --broker or WAFER_HARNESS_MQTT.
+#   2. Reuse the native broker supplied by --broker or WAFER_HARNESS_MQTT;
+#      development hosts may still auto-start eclipse-mosquitto in Docker.
 #   3. Launch wafer-runtime; capture PID; the runtime itself writes
 #      memory.csv via MemoryRecorder (A19).
 #   4. If the config has an MQTT source, spawn `wafer-loadgen publish`.
@@ -43,7 +43,8 @@ Required:
 
 Common options:
   --host <tag>               Host tag (default: shakedown-macos). Whitelist:
-                             shakedown-macos, rpi4, jetson, x86.
+                             shakedown-macos, rpi5, rpi4, jetson, x86.
+                             `rpi5` is canonical; `rpi4` is retained for legacy data.
   --loadgen-profile <path>   TOML profile for wafer-loadgen publish. Required
                              when config uses an MQTT source.
   --subscribe-topic <topic>  Topic for wafer-loadgen subscribe. Auto-detected
@@ -59,8 +60,8 @@ Common options:
 Environment:
   WAFER_HOST_TAG             Default for --host (overrides shakedown-macos).
   WAFER_HARNESS_MQTT         Default for --broker.
-  WAFER_HARNESS_METRICS_URL  Prometheus scrape endpoint
-                             (default: http://127.0.0.1:9090/metrics).
+  WAFER_RUNTIME_CPUSET       Optional taskset CPU list for wafer-runtime.
+  WAFER_LOADGEN_CPUSET       Optional taskset CPU list for loadgen processes.
 USAGE
 }
 
@@ -276,7 +277,6 @@ _start_mosquitto_if_needed
 # ============================================================================
 
 RUNTIME_PID=""
-MEM_SAMPLER_PID=""  # legacy variable, retained empty post-A19 for old trap-cleanup call sites; no external sampler runs.
 
 _stop_runtime() {
     [ -z "$RUNTIME_PID" ] && return 0
@@ -303,9 +303,13 @@ _stop_mem_sampler() {
 STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 started_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
 
-_log "launching wafer-runtime: $WAFER_RUNTIME_BIN --config $config"
-"$WAFER_RUNTIME_BIN" --config "$config" \
-    >"$OUT_DIR/stdout.log" 2>&1 &
+runtime_cmd=("$WAFER_RUNTIME_BIN" --config "$config")
+if [ -n "${WAFER_RUNTIME_CPUSET:-}" ]; then
+    command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_RUNTIME_CPUSET"; exit 4; }
+    runtime_cmd=(taskset -c "$WAFER_RUNTIME_CPUSET" "${runtime_cmd[@]}")
+fi
+_log "launching wafer-runtime: ${runtime_cmd[*]}"
+"${runtime_cmd[@]}" >"$OUT_DIR/stdout.log" 2>&1 &
 RUNTIME_PID=$!
 _log "wafer-runtime pid=$RUNTIME_PID"
 # A19: runtime writes memory.csv via MemoryRecorder; no external sampler.
@@ -352,7 +356,12 @@ if [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     sub_args=(subscribe --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
               --topic "$subscribe_topic" --output-dir "$OUT_DIR")
     [ -n "$total_messages" ] && sub_args+=(--total-messages "$total_messages")
-    "$WAFER_LOADGEN_BIN" "${sub_args[@]}" >>"$OUT_DIR/stdout.log" 2>&1 &
+    loadgen_cmd=("$WAFER_LOADGEN_BIN" "${sub_args[@]}")
+    if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
+        command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }
+        loadgen_cmd=(taskset -c "$WAFER_LOADGEN_CPUSET" "${loadgen_cmd[@]}")
+    fi
+    "${loadgen_cmd[@]}" >>"$OUT_DIR/stdout.log" 2>&1 &
     LOADGEN_SUB_PID=$!
     # Give the subscriber time to connect before publishing starts.
     sleep 0.5
@@ -363,7 +372,12 @@ if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ]; then
     pub_args=(publish --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
               --topic "$mqtt_source_topic" --profile-file "$loadgen_profile")
     [ -n "$total_messages" ] && pub_args+=(--total-messages "$total_messages")
-    "$WAFER_LOADGEN_BIN" "${pub_args[@]}" >>"$OUT_DIR/stdout.log" 2>&1 &
+    loadgen_cmd=("$WAFER_LOADGEN_BIN" "${pub_args[@]}")
+    if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
+        command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }
+        loadgen_cmd=(taskset -c "$WAFER_LOADGEN_CPUSET" "${loadgen_cmd[@]}")
+    fi
+    "${loadgen_cmd[@]}" >>"$OUT_DIR/stdout.log" 2>&1 &
     LOADGEN_PUB_PID=$!
 fi
 
@@ -405,8 +419,9 @@ done
 runtime_exit=0
 if kill -0 "$RUNTIME_PID" 2>/dev/null; then
     _stop_loadgen
+    stopped_runtime_pid="$RUNTIME_PID"
     _stop_runtime
-    wait "$RUNTIME_PID" 2>/dev/null || runtime_exit=$?
+    wait "$stopped_runtime_pid" 2>/dev/null || runtime_exit=$?
 else
     _stop_loadgen
     wait "$RUNTIME_PID" 2>/dev/null || runtime_exit=$?
@@ -422,7 +437,6 @@ duration_ns=$(( finished_ns - started_ns ))
 # Per-node metrics scrape (best-effort)
 # ============================================================================
 
-METRICS_URL="${WAFER_HARNESS_METRICS_URL:-http://127.0.0.1:9090/metrics}"
 NODE_METRICS="$OUT_DIR/per_node_metrics.csv"
 # A19 (thesis-hardening T4) closed: the runtime writes per_node_metrics.csv
 # via node_latency::NodeLatencyRecorder on graceful shutdown. Do NOT
@@ -448,7 +462,7 @@ _log "per_node_metrics.csv: runtime-owned (A19); harness no longer overwrites"
 # ============================================================================
 
 _write_metadata() {
-    local pub_json="null" sub_json="null" mosq_json="null" loadgen_json="null"
+    local pub_json="null" mosq_json="null" loadgen_json="null"
     if [ -n "$loadgen_profile" ]; then
         pub_json="\"$loadgen_profile\""
     fi

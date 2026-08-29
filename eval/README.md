@@ -7,7 +7,8 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 - Rust toolchain (1.85+, wasm32-wasip2 target)
 - UV (Python package manager) — for analysis notebooks
 - Mosquitto MQTT broker — for E2E experiments (E-Perf-1/2, E-Swap-*)
-- RPi 4 or x86-64 Linux — for production measurements
+- Raspberry Pi 5 with 4 GB RAM — canonical measurement host
+- Native eKuiper 2.1.0 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
 
 ## Quick Start
 
@@ -54,12 +55,28 @@ uv run jupyter lab            # interactive
 uv run jupyter execute notebooks/*.ipynb  # headless
 ```
 
-## RPi 4 Setup
+## Raspberry Pi 5
+
+The Pi uses Raspberry Pi OS Lite 64-bit, native Mosquitto, and native
+eKuiper—Docker is not required on the device.
 
 ```bash
-# Pin CPU frequency, disable thermal throttling services
-sudo ./scripts/setup-rpi.sh
+# On the development machine
+mise run cross-build-pi
+mise run cross-build-pi-check
+mise run //plugins:build-plugins
+./eval/scripts/deploy-pi5.sh --host USER@wafer-pi5
 
-# Verify environment before benchmarks
-./scripts/verify-environment.sh
+# On the Pi
+cd ~/wafer
+./eval/ekuiper/install-native.sh
+./eval/ekuiper/seed-pipeline-a.sh
+./eval/scripts/preflight-pi5.sh
+./eval/scripts/run-rpi5-smoke.sh
+./eval/scripts/run-rpi5-validation.sh
 ```
+
+See [`../docs/eval/pi5-host-setup.md`](../docs/eval/pi5-host-setup.md) for
+fresh-host preparation and
+[`../docs/eval/pi5-experiment-runbook.md`](../docs/eval/pi5-experiment-runbook.md)
+for the pipeline matrix, evidence levels, retrieval, and analysis workflow.

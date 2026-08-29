@@ -9,7 +9,7 @@ Edge gateways sit between constrained sensors and cloud analytics. They must par
 - **Cloud-managed platforms** (Azure IoT Operations) use the same Wasm+WIT DAG model but require Kubernetes and ≥16 GB RAM — unsuitable for sub-8 GB gateways.
 - **Monolithic edge processors** (eKuiper) run pipeline logic in a single address space with no per-stage isolation and no live-update mechanism.
 
-WAFER targets the gap: typed Wasm composition, per-stage fault containment, and live node replacement — all on a Raspberry Pi 4 or Jetson Orin running a single Linux process.
+WAFER targets the gap: typed Wasm composition, per-stage fault containment, and live node replacement — all on a Raspberry Pi 5 4 GB or Jetson Orin running a single Linux process.
 
 ## Contribution
 
@@ -29,7 +29,7 @@ The runtime architecture *is* the contribution. No single feature is elevated; t
 
 ## Hardware Targets
 
-- **Primary:** Raspberry Pi 4 (4 GB RAM, Cortex-A72, aarch64).
+- **Primary:** Raspberry Pi 5 (4 GB RAM, Cortex-A76, aarch64).
 - **Secondary:** NVIDIA Jetson Orin Nano (8 GB, for `wasi-nn` inference workloads).
 - **Development:** Apple Silicon / x86-64 Linux (any machine that runs `wasm32-wasip2` guests).
 

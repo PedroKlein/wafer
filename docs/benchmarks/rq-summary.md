@@ -4,7 +4,7 @@
 >
 > All numbers below are from macOS Apple Silicon shakedown runs. They confirm
 > the measurement rig works and identify trends, but are NOT suitable for
-> thesis claims. Canonical numbers require Raspberry Pi 4 with CPU pinning,
+> thesis claims. Canonical numbers require Raspberry Pi 5 4 GB with CPU pinning,
 > isolated cores, 60-second runs, and proper Linux scheduling.
 >
 > See [`docs/status/canonical-readiness.md`](../status/canonical-readiness.md)

@@ -33,17 +33,17 @@ Key findings from shakedown:
 - **RQ3**: Pause p95 = 1.33 ms (target <100 ms). Zero message loss across
   51 swaps. Process-time rollback NOT implemented (A17).
 
-## What's next: canonical runs on Raspberry Pi 4
+## What's next: canonical runs on Raspberry Pi 5
 
 The canonical-readiness matrix (`docs/status/canonical-readiness.md`)
-documents every experiment's gap list, macOS confounders, and what needs to
-change before booking Pi time. Key prerequisites:
+documents every experiment's gap list, macOS confounders, and what must be
+verified on the Raspberry Pi 5 4 GB host. The immediate path is:
 
-1. Cross-compile the runtime for `aarch64-unknown-linux-gnu`.
-2. Set up Pi with `isolcpus`, `taskset`, CPU governor pinning.
-3. Bump run duration from 5s → 60s and warmup from 1s → 30s.
-4. Replace macOS `ps` memory sampler with `/proc/pid/smaps_rollup`.
-5. Verify eKuiper Docker image on `linux/arm64`.
+1. ✅ Deploy ARM64 binaries and evaluation plugins to the Pi 5.
+2. ✅ Boot with `isolcpus=1-3`; assign CPU 0 to OS/Mosquitto/loadgen and CPUs 1–3 to the active SUT.
+3. ✅ Pass Pi 5 preflight, Pipeline C smoke, and the E-Val-1 honesty check. The 2026-08-29 dirty-tree shakedown is methodology evidence only.
+4. Adapt each reduced macOS runner into a reviewed canonical wrapper with N≥30 and 30 s warmup.
+5. Run the canonical matrix against native eKuiper 2.1.0 rather than the historical Docker comparator.
 
 ## Runtime infrastructure
 
@@ -51,10 +51,10 @@ change before booking Pi time. Key prerequisites:
 |-----------|--------|
 | Open-loop load generator (`wafer-loadgen`) | ✅ Fully operational |
 | Native Rust baseline (Pipeline D) | ✅ Passthrough functional |
-| eKuiper comparison setup | ✅ Docker Compose + seed script |
+| eKuiper comparison setup | ✅ Native ARM64 install, seed, and smoke path; canonical wrappers pending |
 | Attack scenario Wasm modules (S1–S6) | ✅ All 6 implemented and tested |
 | Per-hop latency instrumentation | ✅ HdrHistogram + sequence tracker |
-| Per-node RSS sampling | ✅ 1 Hz `ps` reader (macOS); needs `/proc` for Linux |
+| Per-node RSS sampling | ✅ Runtime-owned 1 Hz `memory-stats` sampler |
 | Pipeline configs (1/3/5/10-node chains) | ✅ All checked in |
 | Analysis notebooks | ✅ 11 canonical + 4 auxiliary |
 
@@ -62,7 +62,7 @@ change before booking Pi time. Key prerequisites:
 
 | ID | Purpose | Status |
 |----|---------|--------|
-| E-Val-1 | 50 ms delay → honesty gate [45, 55] ms | ✅ PASS (5/5 runs) |
+| E-Val-1 | 50 ms delay → honesty gate [45, 55] ms | ✅ macOS 5/5; Pi 5 shakedown p99 51.184 ms, 300/300 messages, zero gaps |
 
 ## E-Perf — Performance experiments (RQ1)
 
@@ -116,8 +116,9 @@ change before booking Pi time. Key prerequisites:
 | `eval/` directory with configs + scripts | ✅ Complete |
 | Python analysis notebooks | ✅ 11 canonical, statistical pipeline |
 | Zenodo raw-data dataset | Not yet published |
-| Pi setup automation (Ansible/script) | Not yet built |
-| Hardware controls doc | Documented in canonical-readiness |
+| Pi setup automation | ✅ Pi 5 setup, deploy, preflight, smoke, and validation scripts |
+| Hardware controls doc | ✅ `docs/eval/pi5-host-setup.md` |
+| Pi 5 hardware shakedown | ✅ 19/19 preflight; Pipeline C and E-Val-1 passed; dirty-tree/non-canonical |
 
 ## Cross-references
 

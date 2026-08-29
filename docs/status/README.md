@@ -27,9 +27,10 @@ Run `plan_tasks --list-plans` for the full inventory. Current focus:
   (T12), legacy shakedown metadata unification (T8), thesis-grade PDF
   figure pipeline (T9), notebook↔RQ traceability (T11), aarch64-linux
   cross-arch CI (T10).
+- [`docs/status/rpi5-canonical-transition.md`](rpi5-canonical-transition.md) —
+  active pre-measurement decision record for Raspberry Pi 5 4 GB, native
+  eKuiper 2.1.0, and canonical CPU allocation.
 - [`docs/history/plans/canonical-runs.md`](../history/plans/canonical-runs.md) —
-  Pi 4 + Jetson preflight and canonical-run execution against the
-  RFC-008 evaluation harness. C1 (aarch64 cross-compile spike) and
-  C2 (cross-build loadgen + waferctl) closed 2026-08-02 via
-  `mise run cross-build-pi` (docker linux/arm64). Next: C3 plugin
-  portability check, then Pi hardware preflight.
+  historical Pi 4 + Jetson plan. Its Pi 4 and Docker assumptions are
+  superseded by the Pi 5 transition record; its completed ARM64 build work
+  remains applicable.

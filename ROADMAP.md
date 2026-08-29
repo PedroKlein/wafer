@@ -10,7 +10,7 @@ decisions that these items would build on are captured in
 The macOS shakedown pass is **complete** (25/26 experiments green). The
 canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md)
 documents per-experiment gaps and is the input document for the follow-up
-canonical-runs plan on Raspberry Pi 4.
+canonical-runs work on Raspberry Pi 5 4 GB.
 
 Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 
@@ -28,7 +28,9 @@ Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 
 Remaining work for thesis-grade numbers:
 
-- Pi hardware setup (isolcpus, taskset, CPU governor).
+- Pi 5 hardware setup (`isolcpus=1-3`, CPU 0 for OS/Mosquitto/loadgen,
+  CPUs 1–3 for the active SUT, performance governor).
+- Native eKuiper 2.1.0 comparator setup and Pi smoke validation.
 - Run canonical experiments (60 s runs, 30 s warmup, N=30) via
   `docs/history/plans/canonical-runs.md`.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —

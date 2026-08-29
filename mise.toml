@@ -235,3 +235,19 @@ for b in wafer wafer-loadgen waferctl; do
 done
 [ "$missing" -eq 0 ] || { echo "cross-build-pi-check FAILED: $missing binary/binaries missing or wrong arch" >&2; exit 1; }
 '''
+
+[tasks.deploy-pi5]
+description = "Deploy prebuilt ARM64 WAFER bundle to a Raspberry Pi 5"
+run = './eval/scripts/deploy-pi5.sh "$@"'
+
+[tasks.preflight-pi5]
+description = "Run the read-only WAFER preflight on a Raspberry Pi 5 over SSH"
+run = 'ssh "${PI_HOST:?set PI_HOST=user@host}" "cd wafer && ./eval/scripts/preflight-pi5.sh"'
+
+[tasks.smoke-pi5]
+description = "Run the short Pipeline C smoke check on a Raspberry Pi 5 over SSH"
+run = 'ssh "${PI_HOST:?set PI_HOST=user@host}" "cd wafer && ./eval/scripts/run-rpi5-smoke.sh"'
+
+[tasks.validate-pi5]
+description = "Run the 50 ms methodology honesty check on a Raspberry Pi 5 over SSH"
+run = 'ssh "${PI_HOST:?set PI_HOST=user@host}" "cd wafer && ./eval/scripts/run-rpi5-validation.sh"'

@@ -39,7 +39,7 @@ returning `["out"]` copies zero payload bytes on the wire between host
 and guest. See [ADR-0011](../adr/0011-arc-header-envelope.md) for the
 detailed decision, and [RFC-003 §A3](../rfcs/RFC-003-node-types.md) for
 the historical migration from an owned-payload shape. The performance
-consequence feeds directly into RQ1 (per-hop < 50 µs on RPi 4).
+consequence feeds directly into RQ1 (per-hop < 50 µs on Raspberry Pi 5).
 
 ## Buffer resource
 

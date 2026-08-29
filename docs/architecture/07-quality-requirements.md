@@ -19,18 +19,18 @@ Source for pass criteria: the always-loaded `wafer-project` skill and
   *Method:* open-loop load generator (`wafer-loadgen`) at a fixed
   ingress rate, HdrHistogram-recorded sink completion timestamps,
   Mann-Whitney U vs eKuiper baseline, N ≥ 30 runs.
-  *Hardware:* Raspberry Pi 4 (primary).
+  *Hardware:* Raspberry Pi 5 4 GB (primary).
 - **NFR-PERF-2 · p95 latency vs eKuiper.**
   End-to-end p95 latency is within 2× eKuiper's on the same pipeline.
   *Method:* same as NFR-PERF-1, Bootstrap CI95 on p95.
 - **NFR-PERF-3 · Per-hop overhead.**
-  Median per-hop latency is < 50 µs on Raspberry Pi 4 on the
+  Median per-hop latency is < 50 µs on Raspberry Pi 5 on the
   pass-through pipeline (`pass-through` Transform, no other logic).
   *Method:* in-process `bench::node_latency` tap around the WIT call
   boundary, `Instant::now()` deltas, HdrHistogram 3 sig digits.
 - **NFR-PERF-4 · Cold-start hot-swap prepare.**
   Hot-swap prepare phase (compile + instantiate a fresh component)
-  completes in < 30 ms on RPi 4 without the AOT cache, < 2 ms with
+  completes in < 30 ms on Raspberry Pi 5 without the AOT cache, < 2 ms with
   it.
   *Method:* `SwapTimeline` per-phase timing recorded on every swap;
   `hot_swap` HTTP handler returns `compile_ns` / `instantiate_ns`.
@@ -72,7 +72,7 @@ Source for pass criteria: the always-loaded `wafer-project` skill and
 *What is the disruption cost of replacing a stage at runtime?*
 
 - **NFR-SWAP-1 · Bounded pause.**
-  Node pause at p95 is < 100 ms during hot-swap on Raspberry Pi 4.
+  Node pause at p95 is < 100 ms during hot-swap on Raspberry Pi 5.
   *Method:* `SwapTimeline` per-phase timings — the `signal_ns` +
   `ack_ns` + `convergence_ns` sum is the observable pause; HdrHistogram
   over N ≥ 30 swaps at load.

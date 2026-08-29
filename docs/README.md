@@ -15,6 +15,9 @@ arc42-lite framework, split into subdirectories by reader intent.
 - **Writing a plugin?** →
   [`interfaces/wit-contracts.md`](interfaces/wit-contracts.md) and
   [`interfaces/plugin-sdk.md`](interfaces/plugin-sdk.md).
+- **Preparing the Raspberry Pi 5 evaluation host?** →
+  [`eval/pi5-host-setup.md`](eval/pi5-host-setup.md), then
+  [`eval/pi5-experiment-runbook.md`](eval/pi5-experiment-runbook.md).
 - **Investigating a design decision?** →
   [`rfcs/`](rfcs/) for long-form and [`adr/`](adr/) for short summaries.
 - **Checking what is implemented today?** →

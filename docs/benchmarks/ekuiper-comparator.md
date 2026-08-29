@@ -1,119 +1,67 @@
 # eKuiper comparator setup
 
-**Version pin.** eKuiper `2.1.0-alpine` (v2.1 LTS, released 2025-03-11).
-Locked at RFC-008 §D6 planning time and re-verified during P1.4
-shakedown.
+**Version pin.** Native eKuiper `2.1.0` Linux ARM64 package. The Raspberry Pi 5 canonical evaluation does not use Docker. The old Compose file remains solely for reproducing historical macOS shakedowns.
 
-**Role.** Reference stream-processing engine for the RQ1 comparative
-experiments (E-Perf-1 throughput, E-Perf-2 latency) and the RQ3
-comparator (E-Swap-3 hot-swap dip vs full restart). eKuiper is
-treated as a black box driven identically to WAFER via
-`wafer-loadgen publish` + `wafer-loadgen subscribe`.
+**Role.** eKuiper is the reference stream-processing engine for E-Perf-1 throughput, E-Perf-2 latency, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
-## macOS setup
+## Raspberry Pi 5 setup
+
+Install the pinned package and verify its published checksum:
 
 ```sh
-cd eval/ekuiper
-docker compose up -d
-./seed-pipeline-a.sh
-curl -s :9081/streams | jq .   # → ["wafer_telemetry"]
-curl -s :9081/rules   | jq .   # → [{"id":"pipeline_a","status":"running",...}]
+./eval/ekuiper/install-native.sh --dry-run
+./eval/ekuiper/install-native.sh
+systemctl is-active kuiper
 ```
 
-Prereqs: Docker Desktop or colima. The compose file uses the compose
-default network name (`wafer-ekuiper_default`); scripts referring to
-it (loadgen, seed) run inside that network via `--network` on
-`docker run`.
+The package installs the daemon under `/usr/lib/kuiper`, configuration under `/etc/kuiper`, mutable data under `/var/lib/kuiper`, and logs under `/var/log/kuiper`. The systemd override assigns eKuiper to CPUs 1–3 and sets the default MQTT broker to `tcp://127.0.0.1:1883`.
 
-Cleanup:
+Register and test Pipeline A:
 
 ```sh
-docker compose -f eval/ekuiper/docker-compose.yml down
-```
-
-## Pipeline A definition
-
-Mirrors RFC-008 §D6: MQTT input → JSON parse → `temperature > 50`
-filter → MQTT output. Stream + rule are defined in
-`pipeline-a-rule.sql` (documentation-only file) and pushed via
-`seed-pipeline-a.sh` using the eKuiper REST API on port 9081.
-
-**Stream:** `wafer_telemetry` — MQTT source subscribing to
-`wafer/telemetry`, JSON payload with fields `sequence`,
-`intended_ns`, `temperature`.
-
-**Rule:** `pipeline_a` — SQL:
-
-```sql
-SELECT sequence, intended_ns, temperature
-  FROM wafer_telemetry
-  WHERE temperature > 50;
-```
-
-Action: MQTT sink → `wafer/telemetry/hot` on the same broker
-(`tcp://mosquitto:1883` inside the compose network).
-
-`sendSingle: true` ensures one output message per input record
-matching the filter (not batched into a JSON array). This matches
-how WAFER's MQTT sink emits messages, so latency comparisons stay
-apples-to-apples.
-
-## Smoke test
-
-Source of truth: [`eval/ekuiper/smoke-test.sh`](../../eval/ekuiper/smoke-test.sh).
-
-```sh
+./eval/ekuiper/seed-pipeline-a.sh
 ./eval/ekuiper/smoke-test.sh
 ```
 
-The script asserts **both** the pass case (temperature=80 forwards)
-and the drop case (temperature=30 is filtered). If the eKuiper rule
-regressed to passing everything, the script exits non-zero with a
-clear message. See the script header for manual regression-toggle
-instructions.
+## Historical macOS setup
 
-## Driving comparators
+Historical shakedowns used `eval/ekuiper/docker-compose.yml` because eKuiper needed a Linux guest on macOS. Those measurements remain informational and are not mixed with Pi 5 results.
 
-`wafer-loadgen publish` publishes to `wafer/telemetry` at a
-configured rate; `wafer-loadgen subscribe` reads from
-`wafer/telemetry/hot` and records latency to a HdrHistogram log.
+## Pipeline A
 
-To compare WAFER vs eKuiper on Pipeline A:
+Pipeline A mirrors RFC-008 Decision 6:
 
-1. Start eKuiper: `docker compose -f eval/ekuiper/docker-compose.yml up -d`
-2. Seed: `./eval/ekuiper/seed-pipeline-a.sh`
-3. Run comparator experiment: `./eval/scripts/run-e-perf-1-shakedown.sh`
-   (or the equivalent E-Perf-2 / E-Swap-3 script).
-4. Stop eKuiper's rule, restart WAFER runtime on the same broker + topics.
-5. Re-run the loadgen driver; compare the two `latency.hdr` files.
+```text
+MQTT wafer/telemetry → JSON decode → temperature > 50 → MQTT wafer/telemetry/hot
+```
 
-## Deltas from RFC-008 §D6
+`seed-pipeline-a.sh` creates the `wafer_telemetry` stream and `pipeline_a` rule through the REST API on port 9081. Its broker is configurable through `EKUIPER_BROKER_URL` and defaults to native Mosquitto at `tcp://127.0.0.1:1883`.
 
-- **§D6 called for eKuiper 2.1.x LTS.** We pinned `2.1.0-alpine`
-  (the LTS point-release). No behavioural drift from the RFC.
-- **§D6 planned mosquitto as a separate service.** Kept as a
-  separate service inside the same compose stack. Simpler
-  lifecycle; identical behaviour.
-- **§D6 did not specify `sendSingle`.** Added explicitly to keep
-  one input → one output semantics matching WAFER.
+The MQTT sink sets `sendSingle: true`, giving one output per matching input as WAFER does. `smoke-test.sh` proves both directions of the filter: temperature 30 must be absent and temperature 80 must be present.
+
+## Comparator procedure
+
+For every paired WAFER/eKuiper run:
+
+1. Confirm Mosquitto is active and assigned to CPU 0.
+2. Assign the active SUT to CPUs 1–3. Run only one SUT at a time.
+3. Seed eKuiper before its run and verify `pipeline_a` reports `running`.
+4. Use the same `wafer-loadgen` profile, payload, topics, warmup, and measurement window for WAFER and eKuiper.
+5. Use the common subscriber to write `latency.hdr`, `throughput.csv`, and sequence accounting.
+6. Record the eKuiper package version and SHA256 in run metadata.
 
 ## Known limitations
 
-- **Docker-Desktop / colima overhead.** macOS runs Docker inside a
-  Linux VM; MQTT hops incur ~1 ms extra latency vs Linux native.
-  Canonical Pi runs on Linux will show tighter tails.
-- **JSON parsing.** eKuiper decodes JSON per message; WAFER's
-  pass-through moves bytes without deserialising. This is a
-  legitimate architectural difference the RQ1 comparators are
-  designed to measure — do NOT try to "fix" it.
-- **REST API port 9081.** Distinct from WAFER's runtime port 9090
-  and mosquitto's 1883. No conflicts.
+- Native Pi 5 results are not directly comparable to the old Docker Desktop macOS shakedowns. The latter include a Linux VM and bridge-network overhead.
+- Raspberry Pi 5 results are not numerically interchangeable with Raspberry Pi 4 results from prior literature. Report absolute values and WAFER/native/eKuiper ratios.
+- eKuiper decodes JSON per message while WAFER's minimal pass-through pipeline moves opaque bytes. Pipeline A uses equivalent threshold-filter semantics for the primary engine comparison.
+- REST port 9081 is distinct from WAFER's port 9090 and Mosquitto's port 1883.
 
-## Related
+## Related files
 
-- `eval/ekuiper/docker-compose.yml`
+- `eval/ekuiper/install-native.sh`
 - `eval/ekuiper/seed-pipeline-a.sh`
+- `eval/ekuiper/smoke-test.sh`
 - `eval/ekuiper/pipeline-a-rule.sql`
-- `eval/ekuiper/mosquitto.conf`
-- `plans/evaluation-infrastructure/plan.json` task P1.4
-- RFC-008 §D6
+- `docs/status/rpi5-canonical-transition.md`
+- `docs/rfcs/RFC-008-evaluation-harness.md`

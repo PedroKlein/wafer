@@ -82,9 +82,9 @@ def test_pinned_relative_resolves_from_repo(fake_results: pathlib.Path):
 def test_custom_host_tag(fake_results: pathlib.Path):
     base = fake_results / "eval" / "results" / "e-perf-1"
     base.mkdir(parents=True)
-    d = base / "canonical-rpi4-2026-08-01T10-00-00Z"
+    d = base / "rpi5-2026-08-01T10-00-00Z"
     d.mkdir()
-    result = utils.find_latest_shakedown("e-perf-1", host_tag="canonical-rpi4")
+    result = utils.find_latest_shakedown("e-perf-1", host_tag="rpi5")
     assert result == d
 
 

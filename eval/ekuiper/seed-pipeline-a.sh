@@ -4,13 +4,27 @@
 # Idempotent — deletes existing wafer_telemetry stream and pipeline_a
 # rule before re-creating. Safe to run repeatedly during shakedown.
 #
-# Pre-req: `docker compose -f eval/ekuiper/docker-compose.yml up -d`
-# and eKuiper's healthcheck is passing.
+# Pre-req: native eKuiper is reachable through its REST API and Mosquitto
+# is listening at EKUIPER_BROKER_URL (default: localhost).
 
 set -euo pipefail
 
 EKUIPER="${EKUIPER_URL:-http://127.0.0.1:9081}"
-BROKER_INTERNAL="tcp://mosquitto:1883"   # DNS name inside the compose network
+BROKER_URL="${EKUIPER_BROKER_URL:-tcp://127.0.0.1:1883}"
+dry_run=0
+
+if [ "${1:-}" = "--dry-run" ]; then
+    dry_run=1
+elif [ "$#" -ne 0 ]; then
+    echo "usage: $0 [--dry-run]" >&2
+    exit 2
+fi
+
+if [ "$dry_run" -eq 1 ]; then
+    printf 'ekuiper_url: %s\nbroker_url: %s\nstream: wafer_telemetry\nrule: pipeline_a\n' \
+        "$EKUIPER" "$BROKER_URL"
+    exit 0
+fi
 
 _log() { printf '[%s] %s\n' "$(date +%H:%M:%S)" "$*" >&2; }
 
@@ -46,7 +60,7 @@ curl -sf -X POST "$EKUIPER/rules" \
   \"actions\": [
     {
       \"mqtt\": {
-        \"server\": \"${BROKER_INTERNAL}\",
+        \"server\": \"${BROKER_URL}\",
         \"topic\": \"wafer/telemetry/hot\",
         \"sendSingle\": true
       }

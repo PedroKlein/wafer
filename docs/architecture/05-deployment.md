@@ -8,11 +8,12 @@ plugin `.wasm` components (target-independent).
 
 ## Deployment targets
 
-### Raspberry Pi 4 — primary edge gateway
+### Raspberry Pi 5 — primary edge gateway
 
-**Hardware:** Broadcom BCM2711, ARM Cortex-A72 quad-core @ 1.5 GHz,
-4 GB LPDDR4 RAM, `aarch64-unknown-linux-gnu`. Storage: microSD or USB
-SSD. Network: Gigabit Ethernet.
+**Hardware:** Broadcom BCM2712, ARM Cortex-A76 quad-core @ stock 2.4 GHz maximum,
+4 GB LPDDR4X RAM, `aarch64-unknown-linux-gnu`. Storage: microSD or NVMe/USB
+SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
+64-bit, active cooling, and no overclocking.
 
 **Role in the evaluation:**
 
@@ -28,11 +29,7 @@ SSD. Network: Gigabit Ethernet.
   instantiate, signal, ack, convergence) is measured here; the < 100 ms
   p95 pause budget is validated against this hardware.
 
-**Operational notes.** The runtime installs as a systemd unit; Mosquitto
-runs co-located when MQTT sources/sinks are exercised. Fuel and epoch
-tick defaults (10 000 000 fuel per Transform call, 10 ms epoch tick) are
-sized for this hardware. The AOT cache lives in
-`$XDG_CACHE_HOME/wafer/aot/` and survives restarts.
+**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1–3 are isolated and assigned to exactly one active SUT. Fuel and epoch defaults (10 000 000 fuel per Transform call, 10 ms epoch tick) are evaluated on this hardware. The AOT cache lives in `$XDG_CACHE_HOME/wafer/aot/` and survives restarts.
 
 ### Jetson Orin — inference target
 
@@ -62,7 +59,7 @@ native Linux x86 host), 16+ GB RAM, `x86_64-unknown-linux-gnu` or
 **Role in the evaluation:**
 
 - The native-Rust baseline that measures the "isolation tax" is
-  produced here as well as on RPi 4; comparing them isolates
+  produced here as well as on Raspberry Pi 5; comparing them isolates
   architecture-specific overhead.
 - Rapid iteration surface for plugin development and pre-flight
   benchmarks before spending scarce RPi/Jetson time.

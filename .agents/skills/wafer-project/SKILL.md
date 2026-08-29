@@ -69,7 +69,7 @@ on sub-8GB gateway hardware.
 
 | RQ | Question | Pass Criterion |
 |----|----------|----------------|
-| **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | Within 30% of eKuiper throughput; p95 within 2× eKuiper; <50µs per-hop on RPi 4 |
+| **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | Within 30% of native eKuiper 2.1.0 throughput; p95 within 2× eKuiper; <50µs per-hop on Raspberry Pi 5 |
 | **RQ2** | Do per-stage sandboxes contain faults without pipeline-wide failure? | All 6 attack scenarios (S1-S6) contained; <1% throughput impact on healthy stages |
 | **RQ3** | What is the disruption cost of replacing a stage at runtime? | <100ms pause at p95; zero message loss; <5% throughput dip vs full restart's 100% |
 
@@ -78,7 +78,8 @@ on sub-8GB gateway hardware.
 Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←── Gap B: "competitive?" ──→ eKuiper
 ```
 
-**Hardware**: Raspberry Pi 4 (primary), Jetson Orin (inference), x86 (cross-validation).
+**Hardware**: Raspberry Pi 5 4 GB (primary), Jetson Orin (optional inference validation), x86 (cross-validation).
+**Canonical allocation**: CPU 0 runs OS, native Mosquitto, and `wafer-loadgen`; isolated CPUs 1–3 run one active SUT. eKuiper 2.1.0 runs natively. ESP32 is excluded from measured experiments.
 **Method**: N≥30 repetitions, open-loop load gen, Mann-Whitney U, HdrHistogram, Bootstrap CI95.
 
 ---
@@ -108,7 +109,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 
 | Term | Means | Does NOT Mean |
 |------|-------|---------------|
-| "Edge gateway" | Linux-capable, ≥4GB RAM (RPi 4, Jetson) | Microcontrollers (Cortex-M) |
+| "Edge gateway" | Linux-capable, ≥4GB RAM (Raspberry Pi 5 4 GB, Jetson) | Microcontrollers (Cortex-M) |
 | "Isolation" | Memory containment + capability scoping | Information-flow control, covert-channel elimination |
 | "Hot-swap" | Stateless node replacement between messages | State-preserving live update |
 | "Competitive performance" | Within 30% of eKuiper throughput | Near-native for arbitrary computation |

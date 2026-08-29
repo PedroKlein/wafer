@@ -27,9 +27,9 @@ and `tcc-doc/research/analysis/positioning-matrix.md`.*
 
 ### eKuiper
 
-The **primary RQ1 comparator**. Runs on the same hardware (RPi 4) with
-the same MQTT sources and sinks, in the same telemetry pipeline
-topology. eKuiper's `goroutine-per-op` execution model gives it a
+The **primary RQ1 comparator**. Native eKuiper 2.1.0 runs on the same
+Raspberry Pi 5 CPUs 1–3 with the same native Mosquitto broker, MQTT
+sources and sinks, and telemetry pipeline semantics. eKuiper's `goroutine-per-op` execution model gives it a
 lower per-hop cost than WAFER's Wasm boundary, so the RQ1 pass
 criterion ("within 30 % of eKuiper throughput, p95 within 2×") is a
 deliberately hard target that answers *"what does per-operator
@@ -76,8 +76,8 @@ documentation site publishes an explicit edge-processing use case, so
 the domain overlap is real; the remaining WAFER additions are per-node
 hot-swap (Torvyn's task-per-flow reactor forecloses per-node live
 update), first-class IoT-protocol adapters (WAFER ships `mqtt` and
-`http` source/sink node types), and canonical evaluation on constrained
-hardware (RPi 4, Jetson Orin Nano). Framing: *"WAFER adds per-node
+`http` source/sink node types), and canonical evaluation on constrained hardware (Raspberry Pi 5 4 GB, with optional
+Jetson Orin Nano validation). Framing: *"WAFER adds per-node
 hot-swap, IoT-protocol integration, and constrained-hardware
 evaluation on top of a Torvyn-shaped streaming core."*
 

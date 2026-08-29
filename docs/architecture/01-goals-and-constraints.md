@@ -10,7 +10,7 @@ The runtime IS the contribution. No single feature — performance, isolation, o
 
 ## Research questions and pass criteria
 
-The evaluation validates that each architectural property holds in practice on constrained hardware (Raspberry Pi 4, Jetson Orin Nano).
+The evaluation validates that each architectural property holds in practice on constrained hardware (Raspberry Pi 5 4 GB, with optional Jetson Orin validation).
 
 ### RQ1: What is the performance cost of typed Wasm boundaries on edge hardware?
 
@@ -18,11 +18,11 @@ Does a Wasm-isolated pipeline achieve competitive throughput and latency compare
 
 | Sub-question | Metric | Pass criterion |
 |---|---|---|
-| RQ1a | µs per WIT boundary crossing (empty pass-through) | < 50 µs on RPi 4 |
+| RQ1a | µs per WIT boundary crossing (empty pass-through) | < 50 µs on Raspberry Pi 5 |
 | RQ1b | Pipeline throughput at saturation (4-stage) | Within 30 % of eKuiper |
 | RQ1c | p95/p99 tail latency under sustained 1000 msg/s | p95 within 2× eKuiper |
 | RQ1d | RSS for 5-node pipeline | < 150 MB total; < 10 MB per added node |
-| RQ1e | AOT compile + instantiate time | < 50 ms on RPi 4 |
+| RQ1e | AOT compile + instantiate time | < 50 ms on Raspberry Pi 5 |
 
 Baselines: native Rust (same logic, no Wasm — measures "isolation tax") and eKuiper (Go-based edge stream processor — measures "competitive viability").
 
@@ -92,7 +92,7 @@ Every processing stage (transform, filter, router) runs in its own `wasmtime::St
 
 ### C5: Edge hardware target
 
-The primary deployment target is Linux-capable devices with ≥ 4 GB RAM (Raspberry Pi 4, Jetson Orin Nano). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. This constraint drives decisions around single-process design, AOT compilation caching, memory limits, and the absence of distributed coordination.
+The primary deployment target is Linux-capable devices with ≥ 4 GB RAM (Raspberry Pi 5 4 GB, optionally Jetson Orin). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. This constraint drives decisions around single-process design, AOT compilation caching, memory limits, and the absence of distributed coordination.
 
 ### C6: Stateless node replacement
 

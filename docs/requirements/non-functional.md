@@ -12,10 +12,10 @@ narrative Explanation.
 
 | ID | Statement | Pass criterion | Method |
 |----|-----------|----------------|--------|
-| **NFR-PERF-1** | Throughput on the reference telemetry pipeline is within a bounded gap of eKuiper on the same hardware. | Within 30 % of eKuiper throughput. | Open-loop `wafer-loadgen` at fixed ingress rate; HdrHistogram at sink; Mann-Whitney U vs eKuiper baseline; N ≥ 30 runs on RPi 4. |
+| **NFR-PERF-1** | Throughput on the reference telemetry pipeline is within a bounded gap of eKuiper on the same hardware. | Within 30 % of native eKuiper 2.1.0 throughput. | Open-loop `wafer-loadgen` at fixed ingress rate; HdrHistogram at sink; Mann-Whitney U vs eKuiper baseline; N ≥ 30 runs on Raspberry Pi 5. |
 | **NFR-PERF-2** | End-to-end p95 latency is within a bounded ratio of eKuiper on the same pipeline. | p95 within 2× eKuiper. | Same run as NFR-PERF-1; Bootstrap CI95 on p95. |
-| **NFR-PERF-3** | Median per-hop latency is bounded on RPi 4. | < 50 µs per hop on the `pass-through` Transform pipeline. | `bench::node_latency` tap around the WIT call boundary; `Instant::now()` deltas; HdrHistogram 3 sig digits; RPi 4 hardware. |
-| **NFR-PERF-4** | Hot-swap prepare (compile + instantiate) is bounded. | < 30 ms cold-start / < 2 ms with AOT cache on RPi 4. | `SwapTimeline` per-phase timing; `hot_swap` HTTP handler returns `compile_ns` / `instantiate_ns`. |
+| **NFR-PERF-3** | Median per-hop latency is bounded on Raspberry Pi 5. | < 50 µs per hop on the `pass-through` Transform pipeline. | `bench::node_latency` tap around the WIT call boundary; `Instant::now()` deltas; HdrHistogram 3 sig digits; Raspberry Pi 5 hardware. |
+| **NFR-PERF-4** | Hot-swap prepare (compile + instantiate) is bounded. | < 30 ms cold-start / < 2 ms with AOT cache on Raspberry Pi 5. | `SwapTimeline` per-phase timing; `hot_swap` HTTP handler returns `compile_ns` / `instantiate_ns`. |
 
 ## RQ2 — Isolation (fault containment)
 
@@ -30,7 +30,7 @@ narrative Explanation.
 
 | ID | Statement | Pass criterion | Method |
 |----|-----------|----------------|--------|
-| **NFR-SWAP-1** | Node pause during hot-swap is bounded at p95. | < 100 ms p95 pause on RPi 4. | `SwapTimeline`: observable pause = `signal_ns + ack_ns + convergence_ns`; HdrHistogram over N ≥ 30 swaps under load. |
+| **NFR-SWAP-1** | Node pause during hot-swap is bounded at p95. | < 100 ms p95 pause on Raspberry Pi 5. | `SwapTimeline`: observable pause = `signal_ns + ack_ns + convergence_ns`; HdrHistogram over N ≥ 30 swaps under load. |
 | **NFR-SWAP-2** | No in-flight message is lost across a hot-swap. | Every sequence emitted by `wafer-loadgen` is either delivered to the primary sink or recorded in DLQ. | Sequence-number tracker in the load-gen; DLQ audit; assertion in the eval harness. |
 | **NFR-SWAP-3** | Pipeline throughput does not collapse during hot-swap. | Integrated throughput drop < 5 % vs a matching no-swap baseline (full-restart baseline is 100 %). | 60 s open-loop throughput run with one swap at 30 s; compare integrated throughput. |
 
@@ -46,8 +46,8 @@ narrative Explanation.
 
 ## Notes on measurement
 
-- All quantitative NFRs are validated on Raspberry Pi 4 (primary
-  hardware). Jetson Orin and x86_64 are used for cross-validation
+- All quantitative NFRs are validated on Raspberry Pi 5 with 4 GB RAM
+  (primary hardware). Jetson Orin and x86_64 are used for cross-validation
   only.
 - All runs are open-loop (fixed ingress rate; no back-off on receiver
   stall) to avoid coordinated omission. See `../rfcs/RFC-008-evaluation-harness.md`
