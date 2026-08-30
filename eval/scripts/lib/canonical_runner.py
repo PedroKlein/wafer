@@ -707,6 +707,7 @@ def run_restart_item(
                 stderr=log,
                 check=True,
             )
+            measurement_started_ns = time.time_ns()
             subscriber = subprocess.Popen(
                 loadgen_command(root, item, "subscribe", output=output),
                 cwd=root,
@@ -758,7 +759,18 @@ def run_restart_item(
                 raise RuntimeError(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
                 )
+            measurement_finished_ns = time.time_ns()
 
+        (output / "measurement-window.json").write_text(
+            json.dumps(
+                {
+                    "started_ns": measurement_started_ns,
+                    "finished_ns": measurement_finished_ns,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
         if runtime is not None:
             runtime.terminate()
             try:
@@ -881,6 +893,7 @@ def run_ekuiper_item(
                 stderr=log,
                 check=True,
             )
+            measurement_started_ns = time.time_ns()
             subscriber = subprocess.Popen(
                 loadgen_command(root, item, "subscribe", output=output),
                 cwd=root,
@@ -898,10 +911,21 @@ def run_ekuiper_item(
                 check=False,
             )
             subscriber_code = wait_for_subscriber(subscriber)
+            measurement_finished_ns = time.time_ns()
         if publisher.returncode != 0 or subscriber_code != 0:
             raise RuntimeError(
                 f"loadgen failed: publisher={publisher.returncode}, subscriber={subscriber_code}"
             )
+        (output / "measurement-window.json").write_text(
+            json.dumps(
+                {
+                    "started_ns": measurement_started_ns,
+                    "finished_ns": measurement_finished_ns,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
         stop_pi_telemetry(telemetry)
         finished_ns = time.time_ns()

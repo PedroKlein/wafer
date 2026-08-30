@@ -101,8 +101,9 @@ Do not expand a short smoke command into an overnight loop and call it canonical
 
 ## Power and thermal telemetry
 
-Canonical Pi 5 runs start `eval/scripts/lib/pi_telemetry.py` before warmup and stop it after the measured process. Each result leaf may contain:
+Canonical Pi 5 runs start `eval/scripts/lib/pi_telemetry.py` before warmup and stop it after the measured process. `BenchSink` records the in-process window from the first post-warmup message through export; external MQTT paths bracket the subscriber measurement in the harness. Each result leaf may contain:
 
+- `measurement-window.json` — exact bounds used to exclude warmup and teardown from energy integration;
 - `pi-telemetry.csv` — temperature, CPU frequency, governor, throttling, and summed rail-proxy watts;
 - `pmic-rails.csv` — named PMIC rail voltage/current/power samples;
 - `power-boundary.json` — the measurement boundary and exclusions;

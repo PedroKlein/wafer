@@ -426,6 +426,10 @@ fi
 # Loadgen — publish + subscribe
 # ============================================================================
 
+measurement_started_ns=""
+if [ "$has_bench_sink" -eq 0 ]; then
+    measurement_started_ns=$(python3 -c 'import time; print(time.time_ns())')
+fi
 LOADGEN_PUB_PID=""
 LOADGEN_SUB_PID=""
 
@@ -505,6 +509,12 @@ while true; do
     fi
     sleep 1
 done
+
+if [ "$has_bench_sink" -eq 0 ]; then
+    measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
+    printf '{"started_ns":%s,"finished_ns":%s}\n' \
+        "$measurement_started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
+fi
 
 runtime_exit=0
 if kill -0 "$RUNTIME_PID" 2>/dev/null; then

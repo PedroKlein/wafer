@@ -503,6 +503,7 @@ impl BenchSink {
     /// Creates:
     /// - `latency.hdr` — HdrHistogram interval log
     /// - `throughput.csv` — periodic throughput samples
+    /// - `measurement-window.json` — exact post-warmup wall-clock bounds
     /// - `sequence.csv` — gap and duplicate accounting (only when the
     ///   sink was constructed with `track_sequences = true`)
     /// - `swap_timeline.json` — per-transition timeline for hot-swap
@@ -523,6 +524,18 @@ impl BenchSink {
         let csv_content = self.throughput_csv();
         let mut csv_file = std::fs::File::create(dir.join("throughput.csv"))?;
         csv_file.write_all(csv_content.as_bytes())?;
+
+        if let Some(started) = self.start_wall_time {
+            let started_ns = started
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, crate::util::duration_ns_saturating);
+            let finished_ns = current_time_ns();
+            let mut window_file = std::fs::File::create(dir.join("measurement-window.json"))?;
+            writeln!(
+                window_file,
+                "{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}"
+            )?;
+        }
 
         // Write sequence.csv when the sink was configured to track sequences.
         // Absence of the file signals "not tracked" — the P1.1 result contract
@@ -779,6 +792,24 @@ mod tests {
         let tracker = sink.sequence_tracker().unwrap();
         assert_eq!(tracker.total_received(), 1);
         assert!(!tracker.has_gaps());
+
+        let tmp_dir = std::env::temp_dir()
+            .join(format!("wafer-warmup-window-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        sink.export_to_dir(&tmp_dir).unwrap();
+        assert!(!tmp_dir.join("measurement-window.json").exists());
+
+        tokio::time::sleep(Duration::from_millis(1_010)).await;
+        let before_measurement_ns = current_time_ns();
+        sink.collect(make_bench_envelope(1)).await.unwrap();
+        sink.export_to_dir(&tmp_dir).unwrap();
+
+        let window: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp_dir.join("measurement-window.json")).unwrap(),
+        )
+        .unwrap();
+        assert!(window["started_ns"].as_u64().unwrap() >= before_measurement_ns);
+        let _ = std::fs::remove_dir_all(&tmp_dir);
     }
 
     #[tokio::test]
@@ -1012,6 +1043,7 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
 
+        let before_measurement_ns = current_time_ns();
         for seq in 0..20 {
             let env = make_bench_envelope(seq);
             sink.collect(env).await.unwrap();
@@ -1027,9 +1059,21 @@ mod tests {
         // Verify files exist and have content
         let hdr_path = tmp_dir.join("latency.hdr");
         let csv_path = tmp_dir.join("throughput.csv");
+        let window_path = tmp_dir.join("measurement-window.json");
 
         assert!(hdr_path.exists(), "latency.hdr not created");
         assert!(csv_path.exists(), "throughput.csv not created");
+        assert!(window_path.exists(), "measurement-window.json not created");
+
+        let window: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(window_path).unwrap(),
+        )
+        .unwrap();
+        let started_ns = window["started_ns"].as_u64().unwrap();
+        let finished_ns = window["finished_ns"].as_u64().unwrap();
+        assert!(started_ns >= before_measurement_ns);
+        assert!(finished_ns > started_ns);
+        assert!(finished_ns <= current_time_ns());
 
         let hdr_content = std::fs::read_to_string(&hdr_path).unwrap();
         assert!(hdr_content.contains("#[StartTime"));
@@ -1063,6 +1107,10 @@ mod tests {
 
         assert!(tmp_dir.join("latency.hdr").exists(), "auto-export failed: latency.hdr missing");
         assert!(tmp_dir.join("throughput.csv").exists(), "auto-export failed: throughput.csv missing");
+        assert!(
+            tmp_dir.join("measurement-window.json").exists(),
+            "auto-export failed: measurement-window.json missing"
+        );
 
         let hdr = std::fs::read_to_string(tmp_dir.join("latency.hdr")).unwrap();
         assert!(hdr.contains("Recorded values: 15"));

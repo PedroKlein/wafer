@@ -30,8 +30,14 @@ def make_result(root: Path) -> Path:
         "latency.hdr",
         "throughput.csv",
         "sequence.csv",
+        "pi-telemetry.csv",
+        "pmic-rails.csv",
+        "power-boundary.json",
     ):
         (result / name).write_text("fixture\n")
+    (result / "measurement-window.json").write_text(
+        '{"started_ns":100,"finished_ns":200}\n'
+    )
     metadata = {
         "experiment": "e-perf-4",
         "host_tag": "rpi5",
@@ -64,8 +70,20 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
         root = Path(tmp)
         result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
         result.mkdir(parents=True)
-        for name in ("config.toml", "stdout.log", "latency.hdr", "throughput.csv", "sequence.csv"):
+        for name in (
+            "config.toml",
+            "stdout.log",
+            "latency.hdr",
+            "throughput.csv",
+            "sequence.csv",
+            "pi-telemetry.csv",
+            "pmic-rails.csv",
+            "power-boundary.json",
+        ):
             (result / name).write_text("fixture\n")
+        (result / "measurement-window.json").write_text(
+            '{"started_ns":100,"finished_ns":200}\n'
+        )
         metadata = {
             "experiment": "e-perf-1",
             "system": "ekuiper",
@@ -93,6 +111,12 @@ def test_canonical_result_rejects_dirty_untagged_and_missing_output() -> None:
         "required canonical artefact": lambda result, metadata: (
             result / "latency.hdr"
         ).unlink(),
+        "Pi telemetry artefact": lambda result, metadata: (
+            result / "measurement-window.json"
+        ).unlink(),
+        "empty or reversed": lambda result, metadata: (
+            result / "measurement-window.json"
+        ).write_text('{"started_ns":200,"finished_ns":100}\n'),
     }
     for expected, mutate in mutations.items():
         with tempfile.TemporaryDirectory() as tmp:

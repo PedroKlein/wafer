@@ -23,6 +23,55 @@ def load_telemetry(path: Path) -> list[dict[str, float | int | str]]:
     return rows
 
 
+def clip_to_window(
+    samples: list[dict[str, float | int | str]],
+    started_ns: int,
+    finished_ns: int,
+) -> list[dict[str, float | int | str]]:
+    if not samples:
+        raise ValueError("power telemetry contains no samples")
+    if finished_ns <= started_ns:
+        raise ValueError("measurement window must finish after it starts")
+    ordered = sorted(samples, key=lambda sample: int(sample["timestamp_ns"]))
+    started_ns = max(started_ns, int(ordered[0]["timestamp_ns"]))
+    finished_ns = min(finished_ns, int(ordered[-1]["timestamp_ns"]))
+    if finished_ns <= started_ns:
+        raise ValueError("measurement window does not overlap power telemetry")
+
+    def boundary(timestamp_ns: int) -> dict[str, float | int | str]:
+        left = ordered[0]
+        right = ordered[-1]
+        for sample in ordered:
+            sample_ns = int(sample["timestamp_ns"])
+            if sample_ns <= timestamp_ns:
+                left = sample
+            if sample_ns >= timestamp_ns:
+                right = sample
+                break
+        result = dict(
+            left
+            if timestamp_ns - int(left["timestamp_ns"])
+            <= int(right["timestamp_ns"]) - timestamp_ns
+            else right
+        )
+        left_ns = int(left["timestamp_ns"])
+        right_ns = int(right["timestamp_ns"])
+        if left_ns < timestamp_ns < right_ns:
+            ratio = (timestamp_ns - left_ns) / (right_ns - left_ns)
+            result["rail_proxy_watts"] = float(left["rail_proxy_watts"]) + ratio * (
+                float(right["rail_proxy_watts"]) - float(left["rail_proxy_watts"])
+            )
+        result["timestamp_ns"] = timestamp_ns
+        return result
+
+    within = [
+        sample
+        for sample in ordered
+        if started_ns < int(sample["timestamp_ns"]) < finished_ns
+    ]
+    return [boundary(started_ns), *within, boundary(finished_ns)]
+
+
 def summarize_power(
     samples: list[dict[str, float | int | str]],
     idle_watts: float = 0.0,

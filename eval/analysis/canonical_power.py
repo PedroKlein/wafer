@@ -12,10 +12,13 @@ import pandas as pd
 
 from wafer_analysis.paths import find_canonical_batch
 from wafer_analysis.plots import SYSTEM_COLORS, save_figure, setup_thesis_style
-from wafer_analysis.power import load_telemetry, summarize_power
+from wafer_analysis.power import clip_to_window, load_telemetry, summarize_power
 
 
 def read_message_count(result: Path) -> int | None:
+    percentiles = result / "percentiles.json"
+    if percentiles.is_file():
+        return int(json.loads(percentiles.read_text()).get("total_count", 0))
     subscriber = result / "subscriber-metadata.json"
     if subscriber.is_file():
         return int(json.loads(subscriber.read_text()).get("total_recorded", 0))
@@ -30,6 +33,14 @@ def read_message_count(result: Path) -> int | None:
     return int(row["total_received"])
 
 
+def read_measurement_window(result: Path) -> tuple[int, int]:
+    path = result / "measurement-window.json"
+    if not path.is_file():
+        raise ValueError(f"missing measurement window: {path}")
+    window = json.loads(path.read_text())
+    return int(window["started_ns"]), int(window["finished_ns"])
+
+
 def collect(batch_id: str, experiments: list[str]) -> pd.DataFrame:
     rows = []
     for experiment in experiments:
@@ -37,7 +48,11 @@ def collect(batch_id: str, experiments: list[str]) -> pd.DataFrame:
         for telemetry in sorted(batch.rglob("pi-telemetry.csv")):
             metadata = json.loads((telemetry.parent / "metadata.json").read_text())
             messages = read_message_count(telemetry.parent)
-            summary = summarize_power(load_telemetry(telemetry), messages=messages)
+            started_ns, finished_ns = read_measurement_window(telemetry.parent)
+            samples = clip_to_window(
+                load_telemetry(telemetry), started_ns, finished_ns
+            )
+            summary = summarize_power(samples, messages=messages)
             rows.append(
                 {
                     "experiment": experiment,

@@ -38,6 +38,12 @@ from pathlib import Path
 
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
+CANONICAL_PI_FILES = {
+    "measurement-window.json",
+    "pi-telemetry.csv",
+    "pmic-rails.csv",
+    "power-boundary.json",
+}
 CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
 
 # Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
@@ -175,6 +181,19 @@ def check_leaf(
                         violations.append("missing canonical runtime provenance: runtime-provenance.json")
         except (OSError, ValueError) as exc:
             warnings.append(f"metadata.json unreadable: {exc}")
+
+    if canonical:
+        for required in CANONICAL_PI_FILES:
+            if required not in files:
+                violations.append(f"missing canonical Pi telemetry artefact: {required}")
+        window_path = leaf / "measurement-window.json"
+        if window_path.is_file():
+            try:
+                window = json.loads(window_path.read_text())
+                if int(window["finished_ns"]) <= int(window["started_ns"]):
+                    violations.append("canonical measurement window is empty or reversed")
+            except (KeyError, OSError, TypeError, ValueError):
+                violations.append("canonical measurement window is invalid")
 
     if canonical and canonical_matrix is not None:
         experiment_contract = canonical_matrix.get("experiments", {}).get(experiment)
