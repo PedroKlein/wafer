@@ -510,8 +510,8 @@ while true; do
     sleep 1
 done
 
+measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
 if [ "$has_bench_sink" -eq 0 ]; then
-    measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
     printf '{"started_ns":%s,"finished_ns":%s}\n' \
         "$measurement_started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
 fi
@@ -528,6 +528,10 @@ else
     RUNTIME_PID=""
 fi
 _stop_mem_sampler
+if [ ! -f "$OUT_DIR/measurement-window.json" ]; then
+    printf '{"started_ns":%s,"finished_ns":%s}\n' \
+        "$started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
+fi
 _stop_pi_telemetry
 
 if [ -f "$OUT_DIR/subscriber-metadata.json" ]; then
