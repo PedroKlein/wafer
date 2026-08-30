@@ -1072,7 +1072,18 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
 
     loadgen = root / "target/release/wafer-loadgen"
     hdr = output / "latency.hdr"
-    if hdr.is_file():
+    subscriber_metadata = output / "subscriber-metadata.json"
+    if subscriber_metadata.is_file():
+        subscriber = json.loads(subscriber_metadata.read_text())
+        percentiles = {
+            "total_count": subscriber.get("total_recorded", 0),
+            "p50_ns": subscriber.get("latency_p50_ns", 0),
+            "p95_ns": subscriber.get("latency_p95_ns", 0),
+            "p99_ns": subscriber.get("latency_p99_ns", 0),
+            "p999_ns": subscriber.get("latency_p999_ns", 0),
+        }
+        (output / "percentiles.json").write_text(json.dumps(percentiles, indent=2) + "\n")
+    elif hdr.is_file():
         subprocess.run(
             [str(loadgen), "hdr-summary", "--hdr", str(hdr), "--output", str(output / "percentiles.json")],
             check=True,

@@ -13,6 +13,7 @@ from canonical_runner import (  # noqa: E402
     build_schedule,
     derive_containment,
     evaluate_validation_gate,
+    postprocess_run,
     select_attempt,
     summarize_recovery,
 )
@@ -177,6 +178,37 @@ def test_canonical_configs_match_frozen_windows() -> None:
     assert burst["warmup_secs"] == 30
 
 
+def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
+    item = next(
+        item
+        for item in build_schedule({"e-perf-1"}, seed=1729)
+        if item.condition == "wafer" and item.run_index == 1
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        (output / "metadata.json").write_text(
+            json.dumps({"loadgen": {}, "system": "wafer"})
+        )
+        (output / "latency.hdr").write_bytes(b"\x1c\x84\x93\x03binary")
+        (output / "subscriber-metadata.json").write_text(
+            json.dumps(
+                {
+                    "started_at_ns": 1_000_000_000,
+                    "ended_at_ns": 61_000_000_000,
+                    "total_recorded": 60_000,
+                    "latency_p50_ns": 1_000,
+                    "latency_p95_ns": 2_000,
+                    "latency_p99_ns": 3_000,
+                    "latency_p999_ns": 4_000,
+                }
+            )
+        )
+        postprocess_run(ROOT, item, output)
+        percentiles = json.loads((output / "percentiles.json").read_text())
+    assert percentiles["p99_ns"] == 3_000
+    assert percentiles["total_count"] == 60_000
+
+
 def test_resume_skips_passed_attempt_and_preserves_failed_attempt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         condition = Path(tmp)
@@ -241,6 +273,7 @@ if __name__ == "__main__":
     test_isolation_and_swap_schedule_preserves_experiment_semantics()
     test_isolation_derivations_use_raw_runtime_metrics()
     test_canonical_configs_match_frozen_windows()
+    test_external_subscriber_percentiles_do_not_parse_binary_hdr()
     test_resume_skips_passed_attempt_and_preserves_failed_attempt()
     test_validation_gate_rejects_one_bad_repetition()
     test_validation_gate_accepts_all_repetitions()

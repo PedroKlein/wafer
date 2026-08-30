@@ -145,23 +145,17 @@ _config_has_kind() {
 }
 
 _first_topic_for_type() {
-    # $1 = config path, $2 = "source" | "sink"; emits the first matching
-    # topic string. Falls back to empty if no match.
-    awk -v want_type="$2" '
-        /^\[nodes\./            { in_node = 1; node_type=""; kind=""; topic="" }
-        in_node && /^type[[:space:]]*=/  { gsub(/[",]/, "", $3); node_type=$3 }
-        in_node && /^kind[[:space:]]*=/  { gsub(/[",]/, "", $3); kind=$3 }
-        in_node && /^topic[[:space:]]*=/ { gsub(/[",]/, "", $3); topic=$3 }
-        /^\[/ && !/^\[nodes\./ {
-            if (node_type == want_type && kind == "mqtt" && topic != "") {
-                print topic; found = 1; exit
-            }
-            in_node = 0
-        }
-        END {
-            if (!found && node_type == want_type && kind == "mqtt" && topic != "") print topic
-        }
-    ' "$1"
+    python3 - "$1" "$2" <<'PY'
+import sys
+import tomllib
+
+with open(sys.argv[1], "rb") as stream:
+    config = tomllib.load(stream)
+for node in config.get("nodes", {}).values():
+    if node.get("type") == sys.argv[2] and node.get("kind") == "mqtt":
+        print(node.get("topic", ""))
+        break
+PY
 }
 
 # ============================================================================
