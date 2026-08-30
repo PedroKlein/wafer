@@ -15,17 +15,28 @@ from wafer_analysis.plots import SYSTEM_COLORS, save_figure, setup_thesis_style
 from wafer_analysis.power import load_telemetry, summarize_power
 
 
+def read_message_count(result: Path) -> int | None:
+    subscriber = result / "subscriber-metadata.json"
+    if subscriber.is_file():
+        return int(json.loads(subscriber.read_text()).get("total_recorded", 0))
+    sequence = result / "sequence.csv"
+    if not sequence.is_file():
+        return None
+    with sequence.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        row = next(reader, None)
+    if row is None or "total_received" not in row:
+        return None
+    return int(row["total_received"])
+
+
 def collect(batch_id: str, experiments: list[str]) -> pd.DataFrame:
     rows = []
     for experiment in experiments:
         batch = find_canonical_batch(experiment, batch_id)
         for telemetry in sorted(batch.rglob("pi-telemetry.csv")):
             metadata = json.loads((telemetry.parent / "metadata.json").read_text())
-            sequence = telemetry.parent / "sequence.csv"
-            messages = None
-            if sequence.is_file():
-                with sequence.open(newline="") as stream:
-                    messages = int(next(csv.DictReader(stream))["total_received"])
+            messages = read_message_count(telemetry.parent)
             summary = summarize_power(load_telemetry(telemetry), messages=messages)
             rows.append(
                 {

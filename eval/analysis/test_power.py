@@ -4,7 +4,15 @@ import pathlib
 
 import pandas as pd
 
-from canonical_power import render
+from canonical_power import read_message_count, render
+
+
+def test_external_subscriber_message_count_ignores_empty_gap_csv(
+    tmp_path: pathlib.Path,
+) -> None:
+    (tmp_path / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
+    (tmp_path / "subscriber-metadata.json").write_text('{"total_recorded":60000}')
+    assert read_message_count(tmp_path) == 60_000
 
 
 def test_power_report_writes_data_and_vector_figure(tmp_path: pathlib.Path) -> None:
