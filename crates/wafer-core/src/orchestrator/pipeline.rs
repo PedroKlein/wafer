@@ -698,7 +698,7 @@ impl PipelineOrchestrator {
         &self.engine
     }
 
-    /// Export per-node metrics as CSV to `dir/per_node_metrics.csv`.
+    /// Export aggregate per-node metrics and exact recovery samples.
     ///
     /// Schema: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`
     ///
@@ -709,13 +709,15 @@ impl PipelineOrchestrator {
     ///
     /// # Errors
     ///
-    /// Returns I/O errors from file creation/writing.
+    /// Returns I/O errors while writing `per_node_metrics.csv` or `recovery.csv`.
     pub fn export_per_node_metrics(&self, dir: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
         let path = dir.join("per_node_metrics.csv");
         let mut f = std::fs::File::create(&path)?;
         writeln!(f, "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count")?;
+        let mut recovery = std::fs::File::create(dir.join("recovery.csv"))?;
+        writeln!(recovery, "node_id,sample_index,duration_ns")?;
 
         // Sort by node_id for deterministic output
         let mut node_ids: Vec<&str> = self.metrics.keys().map(|k| &**k).collect();
@@ -740,6 +742,9 @@ impl PipelineOrchestrator {
                 f,
                 "{node_id},{messages_in},{messages_out},{traps_total},{error_state_secs:.6},{recovery_count}"
             )?;
+            for (sample_index, duration_ns) in m.recovery_samples_ns().into_iter().enumerate() {
+                writeln!(recovery, "{node_id},{sample_index},{duration_ns}")?;
+            }
         }
         Ok(())
     }
@@ -964,6 +969,28 @@ mod tests {
 
         let metrics = orch.node_metrics("t1").expect("metrics");
         assert_eq!(metrics.processed(), 0);
+    }
+
+    #[tokio::test]
+    async fn recovery_export_preserves_nanosecond_samples() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let build_output = build_pipeline(&config).expect("build");
+        let mut orchestrator =
+            PipelineOrchestrator::from_build_output(build_output, config, engine);
+
+        let metrics = orchestrator.node_metrics("src").expect("source metrics");
+        metrics.record_recovery(12_345);
+        metrics.record_recovery(67_890);
+        let output = tempfile::tempdir().expect("tempdir");
+        orchestrator.export_per_node_metrics(output.path()).expect("export metrics");
+
+        let recovery = std::fs::read_to_string(output.path().join("recovery.csv"))
+            .expect("read recovery samples");
+        assert!(recovery.contains("src,0,12345"));
+        assert!(recovery.contains("src,1,67890"));
+
+        orchestrator.shutdown().await.expect("shutdown");
     }
 
     #[tokio::test]

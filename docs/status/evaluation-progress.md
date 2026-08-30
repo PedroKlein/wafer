@@ -42,8 +42,8 @@ verified on the Raspberry Pi 5 4 GB host. The immediate path is:
 1. ✅ Deploy ARM64 binaries and evaluation plugins to the Pi 5.
 2. ✅ Boot with `isolcpus=1-3`; assign CPU 0 to OS/Mosquitto/loadgen and CPUs 1–3 to the active SUT.
 3. ✅ Pass Pi 5 preflight, Pipeline C smoke, and the E-Val-1 honesty check. The 2026-08-29 dirty-tree shakedown is methodology evidence only.
-4. Adapt each reduced macOS runner into a reviewed canonical wrapper with N≥30 and 30 s warmup.
-5. Run the canonical matrix against native eKuiper 2.1.0 rather than the historical Docker comparator.
+4. ✅ Implement one reviewed, resumable canonical runner with N≥30, experiment-specific warmup, strict provenance, and PMIC telemetry.
+5. Run the frozen matrix against WAFER, native Rust, and native eKuiper 2.1.0 on the Pi 5.
 
 ## Runtime infrastructure
 

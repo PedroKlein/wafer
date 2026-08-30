@@ -7,7 +7,11 @@
 //! See docs/rfcs/RFC-007-performance-optimizations.md — "Feature gate
 //! only exposition, not measurement."
 
+use std::collections::VecDeque;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+const MAX_RECOVERY_SAMPLES: usize = 65_536;
 
 /// Per-node processing metrics tracked via lock-free atomics.
 ///
@@ -35,6 +39,7 @@ pub struct NodeMetrics {
     recovery_ns_total: AtomicU64,
     recovery_count: AtomicU64,
     recovery_max_ns: AtomicU64,
+    recovery_samples_ns: Mutex<VecDeque<u64>>,
     /// A17: Total process-time hot-swap rollbacks triggered.
     rollbacks: AtomicU64,
 }
@@ -59,6 +64,7 @@ impl NodeMetrics {
             recovery_ns_total: AtomicU64::new(0),
             recovery_count: AtomicU64::new(0),
             recovery_max_ns: AtomicU64::new(0),
+            recovery_samples_ns: Mutex::new(VecDeque::new()),
             rollbacks: AtomicU64::new(0),
         }
     }
@@ -107,10 +113,13 @@ impl NodeMetrics {
     pub fn record_recovery(&self, duration_ns: u64) {
         self.recovery_ns_total.fetch_add(duration_ns, Ordering::Relaxed);
         self.recovery_count.fetch_add(1, Ordering::Relaxed);
-        // Track max so /metrics can report worst-case without keeping a
-        // full histogram per NodeMetrics (the shared histogram in
-        // HotSwapMetrics.recovery_duration is the source of truth for
-        // percentile analysis).
+        if let Ok(mut samples) = self.recovery_samples_ns.lock() {
+            if samples.len() == MAX_RECOVERY_SAMPLES {
+                samples.pop_front();
+            }
+            samples.push_back(duration_ns);
+        }
+        // Keep max lock-free for exposition; exact samples flush only at shutdown.
         let mut cur = self.recovery_max_ns.load(Ordering::Relaxed);
         while duration_ns > cur {
             match self.recovery_max_ns.compare_exchange_weak(
@@ -141,6 +150,14 @@ impl NodeMetrics {
     #[inline]
     pub fn recovery_max_ns(&self) -> u64 {
         self.recovery_max_ns.load(Ordering::Relaxed)
+    }
+
+    /// Exact recent recovery samples in nanoseconds.
+    #[must_use]
+    pub fn recovery_samples_ns(&self) -> Vec<u64> {
+        self.recovery_samples_ns
+            .lock()
+            .map_or_else(|_| Vec::new(), |samples| samples.iter().copied().collect())
     }
 
     // --- Read accessors (exposition layer reads these) ---
@@ -256,6 +273,14 @@ mod tests {
         let m = NodeMetrics::new();
         // No messages processed — should return 0, not panic
         assert_eq!(m.avg_process_ns(), 0);
+    }
+
+    #[test]
+    fn recovery_samples_preserve_nanosecond_values() {
+        let m = NodeMetrics::new();
+        m.record_recovery(12_345);
+        m.record_recovery(67_890);
+        assert_eq!(m.recovery_samples_ns(), vec![12_345, 67_890]);
     }
 
     #[test]

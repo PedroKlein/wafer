@@ -44,11 +44,16 @@ def _read_text(path: str, default: str = "unknown") -> str:
         return default
 
 
-def _source_metadata() -> tuple[str, bool]:
+def _source_metadata() -> tuple[str, bool, list[str]]:
     git_sha = _sh(["git", "rev-parse", "HEAD"])
     git_status = _sh(["git", "status", "--porcelain"])
     if git_sha != "unknown":
-        return git_sha, git_status != ""
+        tags = [
+            tag
+            for tag in _sh(["git", "tag", "--points-at", "HEAD"]).splitlines()
+            if tag
+        ]
+        return git_sha, git_status != "", tags
 
     candidates = (
         pathlib.Path.cwd() / "SOURCE_STATE.json",
@@ -62,9 +67,14 @@ def _source_metadata() -> tuple[str, bool]:
         if isinstance(state.get("git_sha"), str) and isinstance(
             state.get("git_dirty"), bool
         ):
-            return state["git_sha"], state["git_dirty"]
+            tags = state.get("git_tags", [])
+            if not isinstance(tags, list) or not all(
+                isinstance(tag, str) for tag in tags
+            ):
+                tags = []
+            return state["git_sha"], state["git_dirty"], tags
 
-    return "unknown", True
+    return "unknown", True, []
 
 
 def _hardware_metadata() -> dict:
@@ -118,7 +128,7 @@ def merge_metadata(
     rc: str,
     provenance: str,
 ) -> None:
-    git_sha, git_dirty = _source_metadata()
+    git_sha, git_dirty, git_tags = _source_metadata()
     meta = {
         "experiment": experiment,
         "host_tag": host,
@@ -128,6 +138,7 @@ def merge_metadata(
         "duration_ns": int(duration_ns),
         "git_sha": git_sha,
         "git_dirty": git_dirty,
+        "git_tags": git_tags,
         "hostname": _sh(["hostname"]),
         "kernel": _sh(["uname", "-r"]),
         "arch": _sh(["uname", "-m"]),

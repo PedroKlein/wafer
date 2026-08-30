@@ -1,0 +1,10 @@
+[loadgen]
+rate = 1000
+duration_secs = 300
+warmup_secs = 30
+topic = "wafer/bench/input"
+payload_template = "telemetry-120b"
+profile = "burst"
+burst_multiplier = 2
+burst_on_secs = 10
+burst_cycle_secs = 60

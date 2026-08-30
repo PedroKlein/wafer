@@ -9,7 +9,7 @@ description = "3 pass-through transforms between bench source and bench sink"
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 60000
+total_messages = 90000
 warmup_messages = 30000
 payload_size = 128
 

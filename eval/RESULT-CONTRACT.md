@@ -67,6 +67,10 @@ before reading. The matrix below is authoritative:
 | `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
 | `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and any run with `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `MemoryRecorder::sample_loop` (1 Hz, cross-platform via `memory-stats` crate). Flush on graceful shutdown. | 1 Hz process-RSS timeline of `wafer-runtime`: `elapsed_ms,rss_bytes`. Runtime-owned since A19 closure (thesis-hardening T4). Legacy harness `ps` polling removed. |
 | `per_node_metrics.csv` | All experiments (emitted on graceful shutdown when `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Runtime-owned since A19 closure (thesis-hardening T4). |
+| `recovery.csv` | E-Iso-8 and any run with recovery events | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | Exact recovery samples: `node_id,sample_index,duration_ns`. Retains nanosecond precision for trap-to-running percentiles. |
+| `pi-telemetry.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Timestamped temperature, CPU frequency, governor, throttling state, and summed PMIC internal-rail proxy watts. |
+| `pmic-rails.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Long-form named PMIC rail voltage/current/power samples. Rails without both voltage and current are not included. |
+| `power-boundary.json` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Declares that telemetry is an internal-rail proxy, not total USB-C input power, and records excluded consumers and the source limitation. |
 | `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `wafer-runtime` orchestrator's `SwapTimeline` emitter | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
 | `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
 
@@ -74,9 +78,9 @@ before reading. The matrix below is authoritative:
 
 - `wafer-runtime` owns `runtime-provenance.json`, `latency.hdr` (via
   `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
-  (via `BenchSink` when `track_sequences=true`),
-  `swap_timeline.json`, `memory.csv` (via `MemoryRecorder`), and
-  `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
+  (via `BenchSink` when `track_sequences=true`), `swap_timeline.json`,
+  `memory.csv` (via `MemoryRecorder`), `recovery.csv` (exact recovery samples),
+  and `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
   `latency.hdr` (E2E path), `sequence.csv`.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
@@ -104,6 +108,7 @@ authoritative through cross-compilation.
   "duration_ns": 152000000000,
   "git_sha": "38252494da5f39ce1e02e5a642fae85d0791a527",
   "git_dirty": false,
+  "git_tags": ["rpi5-eval-v1"],
   "hostname": "wafer-pi5",
   "kernel": "6.18.39+rpt-rpi-2712",
   "arch": "aarch64",
@@ -138,7 +143,11 @@ authoritative through cross-compilation.
 }
 ```
 
-Canonical runs require `git_dirty: false`; smoke runs may be dirty but cannot be promoted to thesis evidence.
+Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the Pi 5 host fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
+
+```sh
+python3 eval/scripts/verify-result-contract.py --canonical <result-dir>
+```
 
 ### Pi 5 host fields
 

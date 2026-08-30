@@ -13,8 +13,8 @@ description = "Diamond topology: healthy branch-A vs panic attack branch-B, fan-
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 5000
-warmup_messages = 0
+total_messages = 90000
+warmup_messages = 30000
 payload_size = 128
 
 # Healthy branch — receives and forwards all messages
@@ -30,7 +30,7 @@ plugin = "../../../plugins/attacks/panic/target/wasm32-wasip2/release/wafer_atta
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
-warmup_secs = 0
+warmup_secs = 30
 track_sequences = true
 track_hotswap = false
 

@@ -12,8 +12,8 @@ description = "Diamond topology control: pass-through in both branches"
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 5000
-warmup_messages = 0
+total_messages = 90000
+warmup_messages = 30000
 payload_size = 128
 
 [nodes.branch_a]
@@ -27,7 +27,7 @@ plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
-warmup_secs = 0
+warmup_secs = 30
 track_sequences = true
 track_hotswap = false
 

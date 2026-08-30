@@ -8,8 +8,10 @@ trap 'rm -rf "$tmp"' EXIT
 deploy="$("$ROOT/eval/scripts/deploy-pi5.sh" --host pi@example --dry-run)"
 grep -q 'remote_root: ~/wafer' <<<"$deploy"
 grep -q 'source_dirty:' <<<"$deploy"
+grep -q 'source_tags:' <<<"$deploy"
 grep -q 'target/release/wafer-loadgen' <<<"$deploy"
 grep -q 'plugins/\*/target/wasm32-wasip2/release/\*.wasm' <<<"$deploy"
+grep -q 'eval/canonical-matrix.json' <<<"$deploy"
 
 smoke="$("$ROOT/eval/scripts/run-rpi5-smoke.sh" --dry-run)"
 grep -q 'WAFER_RUNTIME_CPUSET=1-3' <<<"$smoke"

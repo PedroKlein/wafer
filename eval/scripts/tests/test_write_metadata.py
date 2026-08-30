@@ -73,7 +73,11 @@ def test_merge_promotes_runtime_provenance() -> None:
 
 
 def test_deployed_source_state_fills_git_provenance() -> None:
-    source_state = {"git_sha": "1" * 40, "git_dirty": True}
+    source_state = {
+        "git_sha": "1" * 40,
+        "git_dirty": True,
+        "git_tags": ["rpi5-eval-v1"],
+    }
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         (root / "SOURCE_STATE.json").write_text(json.dumps(source_state))
@@ -81,6 +85,7 @@ def test_deployed_source_state_fills_git_provenance() -> None:
 
     assert meta["git_sha"] == source_state["git_sha"]
     assert meta["git_dirty"] is True
+    assert meta["git_tags"] == source_state["git_tags"]
 
 
 def test_merge_without_sidecar_keeps_harness_values() -> None:

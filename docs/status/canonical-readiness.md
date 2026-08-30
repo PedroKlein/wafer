@@ -79,8 +79,8 @@ Legend:
 2. **Linux memory sampler**: SHIPPED. The runtime writes 1 Hz RSS and per-node metrics on graceful shutdown.
 3. **Pi 5 host setup and smoke path**: SHIPPED by the `rpi5-canonical-runs` plan. Use `docs/eval/pi5-host-setup.md` and require green preflight plus Pipeline C and E-Val-1 smoke evidence.
 4. **Native eKuiper**: SHIPPED for install, seed, and smoke. Dedicated Pi 5 canonical comparator wrappers still need to replace Docker checks in historical shakedown scripts.
-5. **Canonical wrappers**: PENDING. Existing reduced macOS scripts remain shakedown-only; each Pi 5 wrapper must enforce N≥30, 30 s warmup, experiment duration, CPU allocation, and contract verification.
-6. **HdrHistogram sub-ms precision**: For E-Iso-8 canonical, export raw histogram buckets rather than the integer-ms `/metrics` summary.
+5. **Canonical wrappers**: IMPLEMENTED, hardware gate pending. `eval/canonical-matrix.json` freezes scale and conditions; `eval/scripts/run-rpi5-canonical.sh` provides sequential, resumable execution with strict provenance and result verification.
+6. **Recovery precision**: IMPLEMENTED, hardware gate pending. The runtime exports exact nanosecond recovery samples in `recovery.csv`; E-Iso-8 no longer depends on integer-millisecond `/metrics` summaries.
 
 ### A16/A17/A18/A19 impact on canonical RQ claims
 

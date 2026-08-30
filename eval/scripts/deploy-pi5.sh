@@ -27,6 +27,7 @@ esac
 
 BIN_DIR="$ROOT/target/docker-aarch64-linux/release"
 REVISION="$(git -C "$ROOT" rev-parse HEAD)"
+SOURCE_TAGS_JSON="$(git -C "$ROOT" tag --points-at "$REVISION" | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
     SOURCE_DIRTY=true
 else
@@ -38,6 +39,7 @@ host: $HOST
 remote_root: ~/$REMOTE_ROOT
 source_revision: $REVISION
 source_dirty: $SOURCE_DIRTY
+source_tags: $SOURCE_TAGS_JSON
 binaries:
   - target/release/wafer
   - target/release/wafer-loadgen
@@ -48,6 +50,7 @@ content:
   - eval/scripts
   - eval/ekuiper
   - eval/RESULT-CONTRACT.md
+  - eval/canonical-matrix.json
   - plugins/*/target/wasm32-wasip2/release/*.wasm
 PLAN
 
@@ -71,8 +74,9 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/target/release" "$stage/eval" "$stage/plugins"
 cp "$BIN_DIR/wafer" "$BIN_DIR/wafer-loadgen" "$BIN_DIR/waferctl" "$stage/target/release/"
 cp -R "$ROOT/eval/configs" "$ROOT/eval/loadgen" "$ROOT/eval/scripts" "$ROOT/eval/ekuiper" "$stage/eval/"
-cp "$ROOT/eval/RESULT-CONTRACT.md" "$stage/eval/"
-printf '{"git_sha":"%s","git_dirty":%s}\n' "$REVISION" "$SOURCE_DIRTY" > "$stage/SOURCE_STATE.json"
+cp "$ROOT/eval/RESULT-CONTRACT.md" "$ROOT/eval/canonical-matrix.json" "$stage/eval/"
+printf '{"git_sha":"%s","git_dirty":%s,"git_tags":%s}\n' \
+    "$REVISION" "$SOURCE_DIRTY" "$SOURCE_TAGS_JSON" > "$stage/SOURCE_STATE.json"
 
 while IFS= read -r wasm; do
     relative="${wasm#"$ROOT"/}"

@@ -15,7 +15,7 @@ description = "Minimal in-process bench: bench-source â†’ pass-through (Wasm) â†
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 60000
+total_messages = 90000
 warmup_messages = 30000
 payload_size = 128
 

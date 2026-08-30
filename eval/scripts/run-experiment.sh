@@ -51,10 +51,15 @@ Common options:
                              from config when config has one mqtt sink.
   --total-messages <N>       Loadgen --total-messages (also used as runtime
                              hard stop signal). Defaults to profile setting.
-  --duration <secs>          Hard cap on runtime duration. Default: 300.
+  --warmup-secs <secs>       MQTT warmup publisher duration before measurement.
+  --duration <secs>          Hard cap on measured runtime duration. Default: 300.
+  --output-dir <path>        Exact result leaf. Must not already exist.
   --broker <host:port>       Reuse an existing MQTT broker.
   --skip-build               Assume wafer-runtime + wafer-loadgen are built.
-  --dry-run                  Print the plan; do not launch anything.
+  --canonical                Enforce the frozen Pi 5 provenance and host gate.
+  --canonical-facts <path>   Validate a saved facts JSON during --dry-run only.
+  --defer-verification       Let a canonical wrapper add derived artefacts before verification.
+  --dry-run                  Print the plan; do not launch anything or create results.
   -h, --help                 This help.
 
 Environment:
@@ -71,9 +76,14 @@ host="${WAFER_HOST_TAG:-shakedown-macos}"
 loadgen_profile=""
 subscribe_topic=""
 total_messages=""
+warmup_secs=0
 duration=300
+output_dir=""
 broker="${WAFER_HARNESS_MQTT:-}"
 skip_build=0
+canonical=0
+canonical_facts=""
+defer_verification=0
 dry_run=0
 
 while [ $# -gt 0 ]; do
@@ -84,9 +94,14 @@ while [ $# -gt 0 ]; do
         --loadgen-profile)   loadgen_profile="${2:?}"; shift 2 ;;
         --subscribe-topic)   subscribe_topic="${2:?}"; shift 2 ;;
         --total-messages)    total_messages="${2:?}"; shift 2 ;;
+        --warmup-secs)       warmup_secs="${2:?}"; shift 2 ;;
         --duration)          duration="${2:?}"; shift 2 ;;
+        --output-dir)        output_dir="${2:?}"; shift 2 ;;
         --broker)            broker="${2:?}"; shift 2 ;;
         --skip-build)        skip_build=1; shift ;;
+        --canonical)         canonical=1; shift ;;
+        --canonical-facts)   canonical_facts="${2:?}"; shift 2 ;;
+        --defer-verification) defer_verification=1; shift ;;
         --dry-run)           dry_run=1; shift ;;
         -h|--help)           usage; exit 0 ;;
         *) printf 'Unknown flag: %s\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -183,6 +198,82 @@ if [ "$has_mqtt_source" -eq 1 ] && [ -z "$loadgen_profile" ]; then
     _log "         The pipeline will start but no messages will flow. Continue anyway."
 fi
 
+if [ "$canonical" -eq 1 ]; then
+    [ "$host" = "rpi5" ] || {
+        _log "canonical runs require --host rpi5 (got $host)"
+        exit 2
+    }
+    python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" matrix \
+        "$REPO_ROOT/eval/canonical-matrix.json"
+    python3 - "$REPO_ROOT/eval/canonical-matrix.json" "$experiment" <<'PY'
+import json
+import sys
+
+matrix = json.load(open(sys.argv[1]))
+if sys.argv[2] not in matrix["experiments"]:
+    raise SystemExit(f"experiment {sys.argv[2]!r} is absent from canonical matrix")
+PY
+    if [ "$has_mqtt_source" -eq 1 ] || [ "$has_mqtt_sink" -eq 1 ]; then
+        [ -n "$broker" ] || {
+            _log "canonical MQTT runs require --broker; implicit Docker is forbidden"
+            exit 2
+        }
+    fi
+    if [ -n "$canonical_facts" ]; then
+        [ "$dry_run" -eq 1 ] || {
+            _log "--canonical-facts is allowed only with --dry-run"
+            exit 2
+        }
+        python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" preflight \
+            "$canonical_facts"
+    else
+        python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" host \
+            --root "$REPO_ROOT"
+    fi
+elif [ -n "$canonical_facts" ]; then
+    _log "--canonical-facts requires --canonical"
+    exit 2
+elif [ "$defer_verification" -eq 1 ]; then
+    _log "--defer-verification requires --canonical"
+    exit 2
+fi
+
+# ============================================================================
+# Resolve output directory
+# ============================================================================
+
+if [ -n "$output_dir" ]; then
+    OUT_DIR="$output_dir"
+    if [ "$dry_run" -eq 0 ]; then
+        [ ! -e "$OUT_DIR" ] || { _log "output directory already exists: $OUT_DIR"; exit 2; }
+        mkdir -p "$OUT_DIR"
+    fi
+else
+    collect_args=(--experiment "$experiment" --host "$host")
+    [ "$dry_run" -eq 1 ] && collect_args+=(--print-only)
+    OUT_DIR="$("$REPO_ROOT/eval/scripts/collect-results.sh" "${collect_args[@]}")"
+fi
+_log "result dir: $OUT_DIR"
+
+# ============================================================================
+# Dry-run: emit plan and stop
+# ============================================================================
+
+if [ "$dry_run" -eq 1 ]; then
+    _log "DRY RUN — no processes launched and no result directory created"
+    _log "  config           = $config"
+    _log "  experiment       = $experiment"
+    _log "  host             = $host"
+    _log "  canonical        = $([ "$canonical" -eq 1 ] && echo true || echo false)"
+    _log "  out_dir          = $OUT_DIR"
+    _log "  loadgen_profile  = ${loadgen_profile:-<none>}"
+    _log "  subscribe_topic  = ${subscribe_topic:-<none>}"
+    _log "  broker           = ${broker:-<auto-mosquitto>}"
+    _log "  duration_secs    = $duration"
+    _log "  warmup_secs      = $warmup_secs"
+    exit 0
+fi
+
 # ============================================================================
 # Build (unless skipped)
 # ============================================================================
@@ -197,35 +288,25 @@ fi
 [ -x "$WAFER_RUNTIME_BIN" ] || { _log "wafer-runtime binary missing: $WAFER_RUNTIME_BIN"; exit 3; }
 [ -x "$WAFER_LOADGEN_BIN" ] || { _log "wafer-loadgen binary missing: $WAFER_LOADGEN_BIN"; exit 3; }
 
-# ============================================================================
-# Resolve output directory
-# ============================================================================
-
-OUT_DIR="$("$REPO_ROOT/eval/scripts/collect-results.sh" --experiment "$experiment" --host "$host")"
-_log "result dir: $OUT_DIR"
-
 cp "$config" "$OUT_DIR/config.toml"
 CONFIG_SHA256="$(_sha256 "$config")"
 
 # BenchSink writes latency.hdr + throughput.csv into this env-driven dir.
 export WAFER_BENCH_OUTPUT_DIR="$OUT_DIR"
 
-# ============================================================================
-# Dry-run: emit plan and stop
-# ============================================================================
-
-if [ "$dry_run" -eq 1 ]; then
-    _log "DRY RUN — no processes launched"
-    _log "  config           = $config (sha256=$CONFIG_SHA256)"
-    _log "  experiment       = $experiment"
-    _log "  host             = $host"
-    _log "  out_dir          = $OUT_DIR"
-    _log "  loadgen_profile  = ${loadgen_profile:-<none>}"
-    _log "  subscribe_topic  = ${subscribe_topic:-<none>}"
-    _log "  broker           = ${broker:-<auto-mosquitto>}"
-    _log "  duration_secs    = $duration"
-    exit 0
-fi
+TELEMETRY_PID=""
+_start_pi_telemetry() {
+    [ "$canonical" -eq 1 ] || return 0
+    python3 "$REPO_ROOT/eval/scripts/lib/pi_telemetry.py" "$OUT_DIR" &
+    TELEMETRY_PID=$!
+}
+_stop_pi_telemetry() {
+    [ -n "$TELEMETRY_PID" ] || return 0
+    kill -TERM "$TELEMETRY_PID" 2>/dev/null || true
+    wait "$TELEMETRY_PID" 2>/dev/null || true
+    TELEMETRY_PID=""
+}
+_start_pi_telemetry
 
 # ============================================================================
 # Mosquitto lifecycle
@@ -319,6 +400,7 @@ _cleanup() {
     _stop_mem_sampler
     _stop_runtime
     _stop_mosquitto
+    _stop_pi_telemetry
 }
 trap _cleanup EXIT INT TERM
 
@@ -329,6 +411,22 @@ sleep 1
 if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
     _log "wafer-runtime died during startup; see $OUT_DIR/stdout.log"
     exit 5
+fi
+
+# ============================================================================
+# MQTT warmup — publisher only, before the measured subscriber starts
+# ============================================================================
+
+if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ] && [ "$warmup_secs" -gt 0 ]; then
+    _log "running MQTT warmup for ${warmup_secs}s"
+    warmup_cmd=("$WAFER_LOADGEN_BIN" publish \
+        --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
+        --topic "$mqtt_source_topic" --profile-file "$loadgen_profile" \
+        --duration-secs "$warmup_secs")
+    if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
+        warmup_cmd=(taskset -c "$WAFER_LOADGEN_CPUSET" "${warmup_cmd[@]}")
+    fi
+    "${warmup_cmd[@]}" >>"$OUT_DIR/stdout.log" 2>&1
 fi
 
 # ============================================================================
@@ -428,6 +526,12 @@ else
     RUNTIME_PID=""
 fi
 _stop_mem_sampler
+_stop_pi_telemetry
+
+if [ -f "$OUT_DIR/subscriber-metadata.json" ]; then
+    python3 "$REPO_ROOT/eval/scripts/lib/write_throughput.py" \
+        "$OUT_DIR/subscriber-metadata.json" "$OUT_DIR/throughput.csv"
+fi
 
 FINISHED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 finished_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
@@ -467,7 +571,7 @@ _write_metadata() {
         pub_json="\"$loadgen_profile\""
     fi
     if [ -n "$loadgen_profile" ] || [ -n "$subscribe_topic" ]; then
-        loadgen_json=$(printf '{"profile_path": %s, "subscribe_topic": "%s"}' "$pub_json" "${subscribe_topic:-}")
+        loadgen_json=$(printf '{"profile_path": %s, "subscribe_topic": "%s", "warmup_secs": %s}' "$pub_json" "${subscribe_topic:-}" "$warmup_secs")
     fi
     if [ -n "$MOSQ_CONTAINER" ]; then
         mosq_json=$(printf '{"container_id": "%s", "image": "%s"}' "$MOSQ_CONTAINER" "$MOSQ_IMAGE")
@@ -491,6 +595,32 @@ _write_metadata() {
         "$loadgen_json" "$mosq_json" "$runtime_exit" "$provenance_json"
 }
 _write_metadata
+
+if [ -f "$OUT_DIR/power-boundary.json" ]; then
+    python3 - "$OUT_DIR/metadata.json" "$OUT_DIR/power-boundary.json" <<'PY'
+import json
+import os
+import sys
+
+metadata_path, boundary_path = sys.argv[1:]
+metadata = json.load(open(metadata_path))
+boundary = json.load(open(boundary_path))
+telemetry_path = boundary_path.rsplit("/", 1)[0] + "/pi-telemetry.csv"
+error_path = boundary_path.rsplit("/", 1)[0] + "/telemetry-error.json"
+try:
+    boundary["valid"] = os.path.getsize(telemetry_path) > 100 and not os.path.exists(error_path)
+except OSError:
+    boundary["valid"] = False
+metadata["power_measurement"] = boundary
+with open(metadata_path, "w") as stream:
+    json.dump(metadata, stream, indent=2)
+PY
+fi
+
+if [ "$canonical" -eq 1 ] && [ "$defer_verification" -eq 0 ]; then
+    python3 "$REPO_ROOT/eval/scripts/verify-result-contract.py" \
+        --canonical "$OUT_DIR"
+fi
 
 _log "run complete: $OUT_DIR"
 ls -1 "$OUT_DIR"

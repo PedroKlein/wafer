@@ -1,6 +1,6 @@
 # Evaluation Analysis Notebooks
 
-> **All outputs are shakedown-macos quality — NOT thesis-grade canonical results.**
+Canonical thesis exports require an explicit `WAFER_EVAL_BATCH_ID`. Without it, the legacy shakedown lookup remains available only for development checks.
 
 ## Canonical notebook index (plan P7.1 + T11 traceability)
 
@@ -61,7 +61,8 @@ cd eval/analysis
 uv sync
 
 # Execute all canonical notebooks headless
-uv run jupyter execute notebooks/00-warmup-validation.ipynb
+# Execute canonical notebooks against one explicit Pi 5 batch
+WAFER_EVAL_BATCH_ID=<batch-id> uv run jupyter execute notebooks/00-warmup-validation.ipynb
 uv run jupyter execute notebooks/01-latency-cdf.ipynb
 uv run jupyter execute notebooks/02-per-hop-overhead.ipynb
 uv run jupyter execute notebooks/03-memory-scaling.ipynb
@@ -94,6 +95,8 @@ RESULT_DIR = find_latest_shakedown('e-val-1', pinned='eval/results/e-val-1/shake
 import os
 RESULT_DIR = find_latest_shakedown('e-perf-4', pinned=os.environ.get('SHAKEDOWN_DIR'))
 ```
+
+The helper also resolves an explicit canonical batch when `WAFER_EVAL_BATCH_ID` is set. Canonical resolution validates `rpi5` provenance, clean tagged source, zero throttling, passed run receipts, and a single source SHA before returning the path.
 
 The helper is also re-exported at the package root:
 `from wafer_analysis import find_latest_shakedown`.

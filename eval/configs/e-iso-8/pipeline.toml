@@ -2,8 +2,8 @@
 #
 # Linear pipeline: bench-source → panic-attack → bench-sink.
 # Each trap triggers Recovering → Running; the per-node recovery_duration
-# histogram records each cycle. 500 messages at 200 msg/s produces enough
-# recovery samples for p50/p99 computation.
+# histogram records each cycle. 12,000 messages at 200 msg/s provide a
+# one-minute recovery distribution for p50/p99 computation.
 
 [pipeline]
 name = "e-iso-8-recovery"
@@ -13,7 +13,7 @@ description = "Linear pipeline with panic attack for recovery-time histogram pop
 type = "source"
 kind = "bench-source"
 rate = 200.0
-total_messages = 500
+total_messages = 12000
 warmup_messages = 0
 payload_size = 128
 

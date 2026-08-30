@@ -13,8 +13,8 @@ description = "Failed swap recovery: v2-panics triggers rollback to v1 (E-Swap-5
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 120000
-warmup_messages = 5000
+total_messages = 330000
+warmup_messages = 30000
 payload_size = 128
 
 [nodes.transform]
@@ -24,7 +24,7 @@ plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pa
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
-warmup_secs = 5
+warmup_secs = 30
 track_sequences = true
 track_hotswap = true
 

@@ -251,3 +251,11 @@ run = 'ssh "${PI_HOST:?set PI_HOST=user@host}" "cd wafer && ./eval/scripts/run-r
 [tasks.validate-pi5]
 description = "Run the 50 ms methodology honesty check on a Raspberry Pi 5 over SSH"
 run = 'ssh "${PI_HOST:?set PI_HOST=user@host}" "cd wafer && ./eval/scripts/run-rpi5-validation.sh"'
+
+[tasks.plan-canonical-pi5]
+description = "Print the frozen canonical Raspberry Pi 5 experiment matrix"
+run = './eval/scripts/run-rpi5-canonical.sh --dry-run "$@"'
+
+[tasks.run-canonical-pi5]
+description = "Run or resume a canonical Raspberry Pi 5 evaluation batch"
+run = './eval/scripts/run-rpi5-canonical.sh --execute "$@"'

@@ -2,7 +2,7 @@
 #
 # Linear pipeline: bench-source → 1× pass-through → bench-sink.
 # Reduced message count for shakedown speed (5s per run).
-# Canonical configs at eval/configs/pipeline-depth-1.toml use 60k msgs.
+# Canonical configs at eval/configs/pipeline-depth-1.toml use 90k msgs.
 
 [pipeline]
 name = "e-perf-6-depth-1"

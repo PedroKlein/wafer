@@ -1,0 +1,30 @@
+[pipeline]
+name = "e-perf-4-120b"
+description = "Canonical pass-through boundary benchmark with 120-byte payload"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 90000
+warmup_messages = 30000
+payload_size = 120
+
+[nodes.transform]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

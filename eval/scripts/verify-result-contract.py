@@ -31,12 +31,14 @@ Example:
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 from pathlib import Path
 
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
+CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
 
 # Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
 # when it merges `runtime-provenance.json` (emitted by wafer-runtime) into
@@ -93,7 +95,12 @@ def experiment_of(path: Path) -> str | None:
     return None
 
 
-def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
+def check_leaf(
+    leaf: Path,
+    experiment: str,
+    canonical: bool = False,
+    canonical_matrix: dict | None = None,
+) -> tuple[list[str], list[str]]:
     """Return (violations, warnings). Empty lists = fully conformant."""
     files = {f.name for f in leaf.iterdir() if f.is_file()}
     violations: list[str] = []
@@ -116,19 +123,23 @@ def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
     # such in their headers; the WARN surfaces the gap without breaking
     # existing baseline dirs.
     meta_path = leaf / "metadata.json"
+    metadata: dict = {}
     if meta_path.is_file():
         try:
-            import json as _json
             with meta_path.open() as fh:
-                meta = _json.load(fh)
-            missing = [k for k in MERGED_PROVENANCE_KEYS if k not in meta]
-            if missing:
-                warnings.append(
+                metadata = json.load(fh)
+            missing = [k for k in MERGED_PROVENANCE_KEYS if k not in metadata]
+            if missing and metadata.get("system") != "ekuiper":
+                message = (
                     f"metadata.json lacks merged provenance keys: {sorted(missing)} "
                     f"(legacy shakedown script; canonical runs source "
                     f"eval/scripts/lib/write_metadata.py)"
                 )
-            if leaf.name.startswith("rpi5-"):
+                if canonical:
+                    violations.append(message)
+                else:
+                    warnings.append(message)
+            if leaf.name.startswith("rpi5-") or canonical:
                 expected = {
                     "host_tag": "rpi5",
                     "arch": "aarch64",
@@ -136,22 +147,45 @@ def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
                     "throttled": "0x0",
                 }
                 for key, value in expected.items():
-                    if meta.get(key) != value:
+                    if metadata.get(key) != value:
                         violations.append(
-                            f"Pi 5 metadata {key}={meta.get(key)!r}, expected {value!r}"
+                            f"Pi 5 metadata {key}={metadata.get(key)!r}, expected {value!r}"
                         )
-                if "Raspberry Pi 5" not in str(meta.get("hardware_model", "")):
+                if "Raspberry Pi 5" not in str(metadata.get("hardware_model", "")):
                     violations.append("Pi 5 metadata lacks Raspberry Pi 5 hardware model")
-                if meta.get("cpu_governors") != ["performance"]:
+                if metadata.get("cpu_governors") != ["performance"]:
                     violations.append("Pi 5 metadata CPU governor is not performance")
-                if not re.fullmatch(r"[0-9a-f]{40}", str(meta.get("git_sha", ""))):
+                if not re.fullmatch(r"[0-9a-f]{40}", str(metadata.get("git_sha", ""))):
                     violations.append("Pi 5 metadata lacks a source commit SHA")
-                if not isinstance(meta.get("git_dirty"), bool):
+                if not isinstance(metadata.get("git_dirty"), bool):
                     violations.append("Pi 5 metadata git_dirty is not boolean")
-                if meta.get("exit_codes", {}).get("wafer_runtime") != 0:
+                exit_codes = metadata.get("exit_codes", {})
+                if metadata.get("system") == "ekuiper":
+                    if exit_codes.get("ekuiper") != 0:
+                        violations.append("Pi 5 metadata records a non-zero eKuiper exit")
+                elif exit_codes.get("wafer_runtime") != 0:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
+                if canonical:
+                    if metadata.get("git_dirty") is not False:
+                        violations.append("canonical result records dirty source")
+                    tags = metadata.get("git_tags")
+                    if not isinstance(tags, list) or not tags:
+                        violations.append("canonical result lacks tagged source provenance")
+                    if metadata.get("system") != "ekuiper" and "runtime-provenance.json" not in files:
+                        violations.append("missing canonical runtime provenance: runtime-provenance.json")
         except (OSError, ValueError) as exc:
             warnings.append(f"metadata.json unreadable: {exc}")
+
+    if canonical and canonical_matrix is not None:
+        experiment_contract = canonical_matrix.get("experiments", {}).get(experiment)
+        if not isinstance(experiment_contract, dict):
+            violations.append(f"experiment {experiment} is absent from canonical matrix")
+        else:
+            for required in experiment_contract.get("required_outputs", []):
+                if required not in files:
+                    violations.append(
+                        f"missing required canonical artefact for {experiment}: {required}"
+                    )
 
     matrix = OPTIONAL_MATRIX.get(experiment)
     if matrix is None:
@@ -168,11 +202,25 @@ def check_leaf(leaf: Path, experiment: str) -> tuple[list[str], list[str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
+    parser.add_argument(
+        "--canonical",
+        action="store_true",
+        help="enforce Pi 5 provenance and experiment-specific canonical outputs",
+    )
     parser.add_argument("dirs", nargs="+", type=Path)
     args = parser.parse_args()
 
+    canonical_matrix: dict | None = None
+    if args.canonical:
+        try:
+            canonical_matrix = json.loads(CANONICAL_MATRIX.read_text())
+        except (OSError, ValueError) as exc:
+            print(f"error: cannot load canonical matrix: {exc}", file=sys.stderr)
+            return 2
+
     all_violations: list[tuple[Path, str]] = []
     all_warnings: list[tuple[Path, str]] = []
+    canonical_shas: set[str] = set()
     checked = 0
 
     for root in args.dirs:
@@ -189,11 +237,29 @@ def main() -> int:
             continue
         for leaf in leaves:
             checked += 1
-            violations, warnings = check_leaf(leaf, experiment)
+            violations, warnings = check_leaf(
+                leaf,
+                experiment,
+                canonical=args.canonical,
+                canonical_matrix=canonical_matrix,
+            )
+            if args.canonical:
+                try:
+                    metadata = json.loads((leaf / "metadata.json").read_text())
+                    sha = metadata.get("git_sha")
+                    if isinstance(sha, str):
+                        canonical_shas.add(sha)
+                except (OSError, ValueError):
+                    pass
             for v in violations:
                 all_violations.append((leaf, v))
             for w in warnings:
                 all_warnings.append((leaf, w))
+
+    if args.canonical and len(canonical_shas) > 1:
+        all_violations.append(
+            (Path("<batch>"), f"canonical inputs mix source SHAs: {sorted(canonical_shas)}")
+        )
 
     for leaf, w in all_warnings:
         print(f"WARN       {leaf}: {w}")

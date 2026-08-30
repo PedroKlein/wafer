@@ -11,7 +11,7 @@ description = "Cross-read attack in position 2 of 3-node linear pipeline"
 type = "source"
 kind = "bench-source"
 rate = 100.0
-total_messages = 200
+total_messages = 12000
 warmup_messages = 0
 payload_size = 128
 

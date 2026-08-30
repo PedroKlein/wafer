@@ -76,6 +76,14 @@ The shakedown scripts named above are useful implementation references, but scri
 
 ## Canonical execution contract
 
+Canonical method parameters are frozen in `eval/canonical-matrix.json`. The matrix is machine-checked with:
+
+```sh
+python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
+```
+
+A wrapper may reuse measurements across experiment IDs only when the matrix declares `shares_measurements_with` and the resulting batch records that relationship.
+
 Every canonical wrapper must enforce:
 
 - host tag `rpi5`;
@@ -86,9 +94,21 @@ Every canonical wrapper must enforce:
 - native Mosquitto and load generation on CPU 0;
 - governor `performance` and `vcgencmd get_throttled=0x0` before and after;
 - a clean, tagged source revision;
-- `verify-result-contract.py` success for every run directory.
+- `python3 eval/scripts/validate-canonical.py host --root .` success before launch;
+- `verify-result-contract.py --canonical` success for every run directory.
 
-Do not expand a short smoke command into an overnight loop and call it canonical. Implement and review each canonical wrapper against its experiment definition first.
+Do not expand a short smoke command into an overnight loop and call it canonical. Implement and review each canonical wrapper against its experiment definition first. `run-experiment.sh --canonical` provides the per-run host/provenance gate; a saved facts file may be supplied only with `--dry-run` for deterministic tests.
+
+## Power and thermal telemetry
+
+Canonical Pi 5 runs start `eval/scripts/lib/pi_telemetry.py` before warmup and stop it after the measured process. Each result leaf may contain:
+
+- `pi-telemetry.csv` — temperature, CPU frequency, governor, throttling, and summed rail-proxy watts;
+- `pmic-rails.csv` — named PMIC rail voltage/current/power samples;
+- `power-boundary.json` — the measurement boundary and exclusions;
+- `telemetry-error.json` — telemetry failed; benchmark data remains usable, but power/thermal evidence from that run is invalid.
+
+This is **not total board input power**. Raspberry Pi documents that `pmic_read_adc` cannot see USB current or devices connected directly to 5 V and should not be expected to sum to source-supply wattage. Report it only as the **Raspberry Pi 5 PMIC internal-rail proxy**. A logging inline USB-C meter is required for defensible whole-board watts and joules.
 
 ## Retrieve data
 

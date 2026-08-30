@@ -2,8 +2,8 @@
 #
 # API enabled for HTTP-triggered hot-swaps. BenchSink tracks sequences AND
 # hot-swap transitions (both needed for E-Swap-1 pause measurement and
-# E-Swap-2 zero-loss verification). 120s duration at 1000 msg/s = 120k msgs.
-# Warmup 5s so post-warmup accumulation starts quickly for the swap loop.
+# E-Swap-2 zero-loss verification). 150s total at 1000 msg/s: 30s
+# warmup followed by a 120s measurement window.
 
 [pipeline]
 name = "e-swap-hotswap"
@@ -13,8 +13,8 @@ description = "Hotswap shakedown: pass-through-v1 → repeated v1/v2 swaps via A
 type = "source"
 kind = "bench-source"
 rate = 1000.0
-total_messages = 120000
-warmup_messages = 5000
+total_messages = 150000
+warmup_messages = 30000
 payload_size = 128
 
 [nodes.transform]
@@ -24,7 +24,7 @@ plugin = "../../../plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pa
 [nodes.sink]
 type = "sink"
 kind = "bench-sink"
-warmup_secs = 5
+warmup_secs = 30
 track_sequences = true
 track_hotswap = true
 

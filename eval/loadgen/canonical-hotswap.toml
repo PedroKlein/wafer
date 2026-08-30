@@ -1,0 +1,13 @@
+[loadgen]
+rate = 1000
+duration_secs = 120
+warmup_secs = 30
+topic = "wafer/telemetry"
+payload_template = "telemetry-120b"
+profile = "hotswap-trigger"
+
+[hotswap]
+trigger_after_secs = 60
+target_node = "transform"
+new_plugin_path = "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
+api_url = "http://127.0.0.1:9090"

@@ -1,0 +1,33 @@
+[pipeline]
+name = "e-val-1-canonical"
+description = "50 ms injected delay with 30 s warmup and 30 s measurement"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 10.0
+total_messages = 900
+warmup_messages = 300
+payload_size = 128
+
+[nodes.delay]
+type = "transform"
+plugin = "../../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
+
+[nodes.delay.config]
+delay_ms = 50
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "delay"
+
+[[edges]]
+from = "delay"
+to = "sink"
