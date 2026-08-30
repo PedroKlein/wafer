@@ -49,8 +49,7 @@ Common options:
                              when config uses an MQTT source.
   --subscribe-topic <topic>  Topic for wafer-loadgen subscribe. Auto-detected
                              from config when config has one mqtt sink.
-  --total-messages <N>       Loadgen --total-messages (also used as runtime
-                             hard stop signal). Defaults to profile setting.
+  --total-messages <N>       Subscriber completion count. Defaults to run-until-signal.
   --warmup-secs <secs>       MQTT warmup publisher duration before measurement.
   --duration <secs>          Hard cap on measured runtime duration. Default: 300.
   --output-dir <path>        Exact result leaf. Must not already exist.
@@ -445,8 +444,8 @@ _stop_loadgen() {
 
 if [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     _log "launching wafer-loadgen subscribe topic=$subscribe_topic"
-    sub_args=(subscribe --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
-              --topic "$subscribe_topic" --output-dir "$OUT_DIR")
+    sub_args=(subscribe --broker "$broker" --topic "$subscribe_topic" \
+              --output-dir "$OUT_DIR" --host-tag "$host")
     [ -n "$total_messages" ] && sub_args+=(--total-messages "$total_messages")
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${sub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
@@ -463,7 +462,6 @@ if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ]; then
     _log "launching wafer-loadgen publish profile=$loadgen_profile"
     pub_args=(publish --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
               --topic "$mqtt_source_topic" --profile-file "$loadgen_profile")
-    [ -n "$total_messages" ] && pub_args+=(--total-messages "$total_messages")
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${pub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
         command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }

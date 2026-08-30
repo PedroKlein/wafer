@@ -54,6 +54,12 @@ mqtt_plan="$(
 [ "$(grep -c 'subscribe_topic  = wafer/telemetry/hot' <<<"$mqtt_plan")" -eq 1 ] \
   || { echo 'MQTT sink topic was not resolved exactly once' >&2; exit 1; }
 grep -q 'config topology: mqtt_source=1 mqtt_sink=1' <<<"$mqtt_plan"
+# shellcheck disable=SC2016
+grep -q 'sub_args=(subscribe --broker "$broker"' "$ROOT/eval/scripts/run-experiment.sh"
+if grep -q 'pub_args.*total-messages\|pub_args+=(--total-messages' "$ROOT/eval/scripts/run-experiment.sh"; then
+  echo 'publisher received unsupported --total-messages argument' >&2
+  exit 1
+fi
 [ ! -e "$tmp/planned-output" ] || { echo 'explicit dry-run output was created' >&2; exit 1; }
 
 if "$ROOT/eval/scripts/run-experiment.sh" \
