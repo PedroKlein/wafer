@@ -154,12 +154,12 @@ _first_topic_for_type() {
         in_node && /^topic[[:space:]]*=/ { gsub(/[",]/, "", $3); topic=$3 }
         /^\[/ && !/^\[nodes\./ {
             if (node_type == want_type && kind == "mqtt" && topic != "") {
-                print topic; exit
+                print topic; found = 1; exit
             }
             in_node = 0
         }
         END {
-            if (node_type == want_type && kind == "mqtt" && topic != "") print topic
+            if (!found && node_type == want_type && kind == "mqtt" && topic != "") print topic
         }
     ' "$1"
 }

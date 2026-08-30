@@ -39,6 +39,18 @@ after="$(find "$ROOT/eval/results/e-perf-4" -mindepth 1 -maxdepth 1 -type d | wc
 grep -q 'canonical        = true' <<<"$plan"
 grep -q 'canonical preflight: PASS' <<<"$plan"
 grep -q "out_dir          = $tmp/planned-output" <<<"$plan"
+[ "$(grep -c 'subscribe_topic  = wafer/telemetry/hot' <<<"$(
+  "$ROOT/eval/scripts/run-experiment.sh" \
+    --config "$ROOT/eval/configs/pipeline-a-wafer.toml" \
+    --experiment e-perf-1 \
+    --host rpi5 \
+    --canonical \
+    --canonical-facts "$tmp/facts.json" \
+    --broker 127.0.0.1:1883 \
+    --loadgen-profile "$ROOT/eval/loadgen/telemetry-120b.toml" \
+    --skip-build \
+    --dry-run 2>&1
+)")" -eq 1 ] || { echo 'MQTT sink topic was not resolved exactly once' >&2; exit 1; }
 [ ! -e "$tmp/planned-output" ] || { echo 'explicit dry-run output was created' >&2; exit 1; }
 
 if "$ROOT/eval/scripts/run-experiment.sh" \
