@@ -970,8 +970,7 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
         return run_ekuiper_item(root, item, selection)
 
     output = selection.path
-    if item.experiment in {"e-perf-1", "e-perf-5", "e-swap-3"}:
-        set_ekuiper_active(root, False)
+    set_ekuiper_active(root, False)
     command = [
         str(root / "eval/scripts/run-experiment.sh"),
         "--config",
