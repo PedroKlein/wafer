@@ -375,6 +375,38 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def write_progress(
+    ledger: Path,
+    event: str,
+    completed: int,
+    total: int,
+    item: str = "",
+    failures: int = 0,
+) -> None:
+    try:
+        temperature_c = int(
+            Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
+        ) / 1000
+    except (OSError, ValueError):
+        temperature_c = None
+    entry = {
+        "timestamp": utc_now(),
+        "event": event,
+        "completed": completed,
+        "total": total,
+        "item": item,
+        "failures": failures,
+        "temperature_c": temperature_c,
+    }
+    with (ledger / "progress.jsonl").open("a") as stream:
+        stream.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    print(
+        f"[{entry['timestamp']}] PROGRESS {completed}/{total} event={event} "
+        f"item={item or '-'} failures={failures} temp_c={temperature_c}",
+        flush=True,
+    )
+
+
 def write_status(path: Path, item: RunItem, status: str, detail: str = "") -> None:
     path.mkdir(parents=True, exist_ok=True)
     receipt = {
@@ -1208,11 +1240,17 @@ def main() -> int:
     )
 
     failures: list[str] = []
+    completed = 0
+    total = len(schedule)
     validation_items = [item for item in schedule if item.experiment == "e-val-1"]
     remaining_items = [item for item in schedule if item.experiment != "e-val-1"]
+    write_progress(ledger, "batch-started", completed, total)
     for item in validation_items:
+        write_progress(ledger, "item-started", completed, total, item.result_key, len(failures))
         if not run_item(root, batch_id, item):
             failures.append(item.result_key)
+        completed += 1
+        write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
 
     if validation_items:
         validation_root = root / "eval/results/e-val-1" / f"rpi5-{batch_id}" / "delay-50ms"
@@ -1222,13 +1260,18 @@ def main() -> int:
         )
         if not gate.passed:
             print(f"[{utc_now()}] STOP E-Val-1 gate failed: {gate.failed_runs}", flush=True)
+            write_progress(ledger, "batch-stopped", completed, total, failures=len(failures))
             return 1
 
     for item in remaining_items:
+        write_progress(ledger, "item-started", completed, total, item.result_key, len(failures))
         if not run_item(root, batch_id, item):
             failures.append(item.result_key)
+        completed += 1
+        write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
     summarise(root, batch_id, experiments)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
+    write_progress(ledger, "batch-finished", completed, total, failures=len(failures))
     return 1 if failures else 0
 
 

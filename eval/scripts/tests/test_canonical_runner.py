@@ -16,6 +16,7 @@ from canonical_runner import (  # noqa: E402
     postprocess_run,
     select_attempt,
     summarize_recovery,
+    write_progress,
 )
 
 T2_EXPERIMENTS = {
@@ -209,6 +210,26 @@ def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
     assert percentiles["total_count"] == 60_000
 
 
+def test_progress_log_records_counts_and_temperature_field() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp)
+        write_progress(
+            ledger,
+            "item-finished",
+            completed=3,
+            total=10,
+            item="e-perf-1/wafer/run-01",
+            failures=1,
+        )
+        entry = json.loads((ledger / "progress.jsonl").read_text())
+    assert entry["event"] == "item-finished"
+    assert entry["completed"] == 3
+    assert entry["total"] == 10
+    assert entry["item"] == "e-perf-1/wafer/run-01"
+    assert entry["failures"] == 1
+    assert "temperature_c" in entry
+
+
 def test_resume_skips_passed_attempt_and_preserves_failed_attempt() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         condition = Path(tmp)
@@ -274,6 +295,7 @@ if __name__ == "__main__":
     test_isolation_derivations_use_raw_runtime_metrics()
     test_canonical_configs_match_frozen_windows()
     test_external_subscriber_percentiles_do_not_parse_binary_hdr()
+    test_progress_log_records_counts_and_temperature_field()
     test_resume_skips_passed_attempt_and_preserves_failed_attempt()
     test_validation_gate_rejects_one_bad_repetition()
     test_validation_gate_accepts_all_repetitions()
