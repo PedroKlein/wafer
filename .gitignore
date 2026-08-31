@@ -118,6 +118,7 @@ docker-compose.override.yml
 # Agent / plan scratch (any local agent runner state)
 /.pi
 /.pi-*
+/.plans/
 /.tasks
 /.a5c
 /.cache-dir
