@@ -7,15 +7,17 @@
 -- eKuiper.
 --
 -- Mirrors RFC-008 §D6 Pipeline A: MQTT input → JSON parse →
--- temperature > 50 filter → routed MQTT output.
+-- inclusive configured range filter → routed MQTT output.
 
 -- Stream: MQTT source, JSON payload, subscribes to wafer/telemetry.
 -- SHARED=true so multiple rules can attach without duplicating the
 -- MQTT subscription.
 CREATE STREAM wafer_telemetry (
-    seq        BIGINT,
+    device_id  STRING,
+    temperature FLOAT,
+    humidity   FLOAT,
     ts         BIGINT,
-    temperature FLOAT
+    seq        BIGINT
 ) WITH (
     TYPE       = "mqtt",
     DATASOURCE = "wafer/telemetry",
@@ -23,9 +25,8 @@ CREATE STREAM wafer_telemetry (
     SHARED     = "true"
 );
 
--- Rule: temperature > 50 → publish to wafer/telemetry/hot.
--- Passes ts + seq through unchanged so the loadgen subscriber can
--- compute latency identically to the WAFER path.
-SELECT ts, seq, temperature
+-- Passes the five-field input schema through unchanged so the loadgen
+-- subscriber computes latency identically to the WAFER/native paths.
+SELECT device_id, temperature, humidity, ts, seq
   FROM wafer_telemetry
-  WHERE temperature > 50;
+  WHERE temperature >= 50 AND temperature <= 99999;

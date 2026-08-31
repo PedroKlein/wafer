@@ -1,0 +1,20 @@
+{
+  "main_pid": 100,
+  "processes": [
+    {
+      "pid": 100,
+      "ppid": 1,
+      "name": "kuiperd",
+      "args": "/usr/bin/kuiperd -loadFileType absolute",
+      "cpus_allowed_list": "1-3"
+    },
+    {
+      "pid": 101,
+      "ppid": 100,
+      "name": "kuiperd-worker",
+      "args": "kuiperd-worker",
+      "cpus_allowed_list": "1-2"
+    }
+  ],
+  "other_suts": []
+}

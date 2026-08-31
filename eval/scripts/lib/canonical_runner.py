@@ -701,6 +701,7 @@ def run_restart_item(
     started_at = utc_now()
     runtime: subprocess.Popen | None = None
     runtime_exit = 0
+    ekuiper_audit: Path | None = None
     telemetry = start_pi_telemetry(root, output)
     try:
         is_ekuiper = item.system == "ekuiper"
@@ -719,6 +720,8 @@ def run_restart_item(
             host_command.append("--require-ekuiper")
         subprocess.run(host_command, cwd=root, check=True)
         facts = json.loads(facts_path.read_text())
+        if is_ekuiper:
+            ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
@@ -850,6 +853,10 @@ def run_restart_item(
                 "config_sha256": config_sha,
                 "loadgen": {"profile_path": item.loadgen_profile, "warmup_secs": item.warmup_secs},
                 "exit_codes": {"ekuiper": 0},
+                "comparator_audit": {
+                    "path": ekuiper_audit.name,
+                    "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
+                },
                 **facts,
             }
             (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
@@ -882,6 +889,161 @@ def run_restart_item(
     write_status(output, item, "passed")
     print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
     return True
+
+
+def _expand_cpu_list(value: str) -> set[int]:
+    cpus: set[int] = set()
+    for part in value.split(","):
+        bounds = part.strip().split("-", maxsplit=1)
+        if len(bounds) == 1:
+            cpus.add(int(bounds[0]))
+        else:
+            cpus.update(range(int(bounds[0]), int(bounds[1]) + 1))
+    return cpus
+
+
+def validate_ekuiper_process_snapshot(snapshot: dict, allowed_cpus: str) -> None:
+    processes = snapshot.get("processes", [])
+    if not processes or snapshot.get("main_pid") not in {process.get("pid") for process in processes}:
+        raise ValueError("eKuiper main PID is absent from process snapshot")
+    if snapshot.get("other_suts"):
+        raise ValueError(f"concurrent SUT processes detected: {snapshot['other_suts']}")
+    allowed = _expand_cpu_list(allowed_cpus)
+    for process in processes:
+        observed = _expand_cpu_list(str(process.get("cpus_allowed_list", "")))
+        if not observed or not observed <= allowed:
+            raise ValueError(
+                f"eKuiper PID {process.get('pid')} affinity {sorted(observed)} is outside {allowed_cpus}"
+            )
+
+
+def _process_snapshot(main_pid: int) -> dict:
+    output = subprocess.check_output(
+        ["ps", "-e", "-o", "pid=,ppid=,comm=,args="], text=True
+    )
+    rows = []
+    for line in output.splitlines():
+        fields = line.strip().split(maxsplit=3)
+        if len(fields) < 3:
+            continue
+        rows.append(
+            {
+                "pid": int(fields[0]),
+                "ppid": int(fields[1]),
+                "name": Path(fields[2]).name,
+                "args": fields[3] if len(fields) == 4 else "",
+            }
+        )
+    descendants = {main_pid}
+    while True:
+        children = {row["pid"] for row in rows if row["ppid"] in descendants}
+        expanded = descendants | children
+        if expanded == descendants:
+            break
+        descendants = expanded
+    processes = []
+    for row in rows:
+        if row["pid"] not in descendants:
+            continue
+        status = Path(f"/proc/{row['pid']}/status").read_text()
+        affinity = next(
+            line.split(":", maxsplit=1)[1].strip()
+            for line in status.splitlines()
+            if line.startswith("Cpus_allowed_list:")
+        )
+        processes.append({**row, "cpus_allowed_list": affinity})
+    other_suts = [
+        row for row in rows if row["name"] in {"wafer", "wafer-runtime"}
+    ]
+    return {"main_pid": main_pid, "processes": processes, "other_suts": other_suts}
+
+
+def _service_properties() -> dict[str, str]:
+    properties = (
+        "MainPID",
+        "User",
+        "Group",
+        "ExecStart",
+        "Environment",
+        "CPUAffinity",
+        "Restart",
+        "RestartUSec",
+        "WorkingDirectory",
+        "FragmentPath",
+        "DropInPaths",
+    )
+    command = ["systemctl", "show", "kuiper.service"]
+    command.extend(f"--property={name}" for name in properties)
+    output = subprocess.check_output(command, text=True)
+    return dict(line.split("=", maxsplit=1) for line in output.splitlines() if "=" in line)
+
+
+def _url_value(url: str) -> object:
+    with urllib.request.urlopen(url, timeout=5) as response:
+        text = response.read().decode()
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
+    service = _service_properties()
+    main_pid = int(service.get("MainPID", "0"))
+    snapshot = _process_snapshot(main_pid)
+    validate_ekuiper_process_snapshot(snapshot, allowed_cpus)
+    unit_text = subprocess.check_output(
+        ["systemctl", "cat", "kuiper.service"], text=True
+    )
+    source_config = Path("/etc/kuiper/mqtt_source.yaml")
+    source_text = source_config.read_text()
+    expected_source_text = (root / "eval/ekuiper/mqtt-source-default.yaml").read_text()
+    if source_text != expected_source_text:
+        raise ValueError("eKuiper MQTT source configuration differs from the canonical file")
+    install_receipt = json.loads(
+        Path("/var/lib/kuiper/wafer-install-receipt.json").read_text()
+    )
+    version = subprocess.check_output(
+        ["dpkg-query", "-W", "-f=${Version}", "kuiper"], text=True
+    ).strip()
+    if install_receipt.get("version") != version or not re.fullmatch(
+        r"[0-9a-f]{64}", str(install_receipt.get("sha256", ""))
+    ):
+        raise ValueError("eKuiper package version/checksum does not match install receipt")
+    audit = {
+        "captured_at": utc_now(),
+        "system": "ekuiper",
+        "version": version,
+        "install_receipt": install_receipt,
+        "service": {
+            "properties": service,
+            "unit_sha256": hashlib.sha256(unit_text.encode()).hexdigest(),
+            "unit_text": unit_text,
+        },
+        "mqtt_source_config": {
+            "path": str(source_config),
+            "sha256": hashlib.sha256(source_text.encode()).hexdigest(),
+            "settings": {
+                "server": "tcp://127.0.0.1:1883",
+                "qos": 1,
+                "protocol_version": "3.1.1",
+                "insecure_skip_verify": False,
+            },
+        },
+        "process_snapshot": snapshot,
+        "stream": _url_value("http://127.0.0.1:9081/streams/wafer_telemetry"),
+        "rule": _url_value("http://127.0.0.1:9081/rules/pipeline_a"),
+        "seed_dry_run": json.loads(
+            subprocess.check_output(
+                [str(root / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"],
+                cwd=root,
+                text=True,
+            )
+        ),
+    }
+    path = output / "ekuiper-audit.json"
+    path.write_text(json.dumps(audit, indent=2) + "\n")
+    return path
 
 
 def set_ekuiper_active(root: Path, active: bool) -> None:
@@ -921,10 +1083,9 @@ def run_ekuiper_item(
             cwd=root,
             check=True,
         )
-        loadgen = root / "target/release/wafer-loadgen"
-        profile = root / str(item.loadgen_profile)
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = json.loads(facts_path.read_text())["git_sha"]
+        ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
         with (output / "stdout.log").open("ab") as log:
             subprocess.run(
                 loadgen_command(root, item, "publish", duration=item.warmup_secs),
@@ -987,6 +1148,10 @@ def run_ekuiper_item(
                 "warmup_secs": item.warmup_secs,
             },
             "exit_codes": {"ekuiper": 0},
+            "comparator_audit": {
+                "path": ekuiper_audit.name,
+                "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
+            },
             **facts,
         }
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")

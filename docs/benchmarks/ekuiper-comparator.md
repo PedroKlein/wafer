@@ -32,12 +32,12 @@ Historical shakedowns used `eval/ekuiper/docker-compose.yml` because eKuiper nee
 Pipeline A mirrors RFC-008 Decision 6:
 
 ```text
-MQTT wafer/telemetry → JSON decode → temperature > 50 → MQTT wafer/telemetry/hot
+MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT wafer/telemetry/hot
 ```
 
 `seed-pipeline-a.sh` creates the `wafer_telemetry` stream and `pipeline_a` rule through the REST API on port 9081. Its broker is configurable through `EKUIPER_BROKER_URL` and defaults to native Mosquitto at `tcp://127.0.0.1:1883`.
 
-The MQTT sink sets `sendSingle: true`, giving one output per matching input as WAFER does. `smoke-test.sh` proves both directions of the filter: temperature 30 must be absent and temperature 80 must be present.
+The MQTT sink explicitly sets MQTT 3.1.1, QoS 1, `retained: false`, and `sendSingle: true`. The stream projects the same five telemetry fields used by WAFER and native Rust. `smoke-test.sh` proves the inclusive lower bound, exclusive out-of-range records, field preservation, and unchanged `ts`/`seq` values.
 
 ## Comparator procedure
 
@@ -49,12 +49,13 @@ For every paired WAFER/eKuiper run:
 4. Use the same `wafer-loadgen` profile, payload, topics, warmup, and measurement window for WAFER and eKuiper.
 5. Use the common subscriber to write `latency.hdr`, `throughput.csv`, and sequence accounting.
 6. Record the eKuiper package version and SHA256 in run metadata.
+7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, MQTT source configuration, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check.
 
 ## Known limitations
 
 - Native Pi 5 results are not directly comparable to the old Docker Desktop macOS shakedowns. The latter include a Linux VM and bridge-network overhead.
 - Raspberry Pi 5 results are not numerically interchangeable with Raspberry Pi 4 results from prior literature. Report absolute values and WAFER/native/eKuiper ratios.
-- eKuiper decodes JSON per message while WAFER's minimal pass-through pipeline moves opaque bytes. Pipeline A uses equivalent threshold-filter semantics for the primary engine comparison.
+- eKuiper and WAFER/native Pipeline A all decode the telemetry field used by the filter. Their output schemas, predicate bounds, topics, and QoS are matched; their internal JSON implementations remain engine-specific.
 - REST port 9081 is distinct from WAFER's port 9090 and Mosquitto's port 1883.
 
 ## Related files

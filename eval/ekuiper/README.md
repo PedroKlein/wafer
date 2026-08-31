@@ -9,7 +9,7 @@ The Raspberry Pi 5 evaluation runs eKuiper 2.1.0 directly from its official Linu
 ./eval/ekuiper/install-native.sh
 ```
 
-The installer downloads both the pinned package and its published SHA256 file, verifies the package, installs it with APT, points its default MQTT source at native Mosquitto, and assigns the service to CPUs 1–3.
+The installer downloads both the pinned package and its published SHA256 file, verifies the package, installs the canonical MQTT source configuration, writes an installation receipt, and assigns the service to CPUs 1–3.
 
 ## Register Pipeline A
 
@@ -29,7 +29,7 @@ EKUIPER_BROKER_URL=tcp://127.0.0.1:1883 \
 Pipeline A implements the comparator path:
 
 ```text
-MQTT wafer/telemetry → JSON decode → temperature > 50 → MQTT wafer/telemetry/hot
+MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT wafer/telemetry/hot
 ```
 
 ## Smoke test
@@ -39,7 +39,7 @@ MQTT wafer/telemetry → JSON decode → temperature > 50 → MQTT wafer/telemet
 ./eval/ekuiper/smoke-test.sh
 ```
 
-The smoke test publishes one record that must be dropped and one that must pass. It uses the native `mosquitto_pub` and `mosquitto_sub` clients.
+The smoke test publishes below-range, boundary, and above-range records. It requires exactly the boundary record with the full five-field schema and unchanged `ts`/`seq`. It uses the native `mosquitto_pub` and `mosquitto_sub` clients.
 
 ## Verify
 
@@ -53,6 +53,7 @@ taskset -pc "$(systemctl show -p MainPID --value kuiper)"
 ## Files
 
 - `install-native.sh` — pinned package download, checksum verification, installation, and systemd affinity.
+- `mqtt-source-default.yaml` — canonical MQTT source settings installed on the Pi.
 - `seed-pipeline-a.sh` — idempotent REST registration.
 - `pipeline-a-rule.sql` — human-readable rule definition.
 - `smoke-test.sh` — native pass/drop behavior check.

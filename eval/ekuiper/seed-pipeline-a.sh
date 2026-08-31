@@ -11,6 +11,26 @@ set -euo pipefail
 
 EKUIPER="${EKUIPER_URL:-http://127.0.0.1:9081}"
 BROKER_URL="${EKUIPER_BROKER_URL:-tcp://127.0.0.1:1883}"
+STREAM_PAYLOAD='{"sql":"CREATE STREAM wafer_telemetry (device_id STRING, temperature FLOAT, humidity FLOAT, ts BIGINT, seq BIGINT) WITH (TYPE=\"mqtt\", DATASOURCE=\"wafer/telemetry\", FORMAT=\"json\", SHARED=\"true\")"}'
+RULE_PAYLOAD="$(cat <<EOF
+{
+  "id": "pipeline_a",
+  "sql": "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry WHERE temperature >= 50 AND temperature <= 99999",
+  "actions": [
+    {
+      "mqtt": {
+        "server": "${BROKER_URL}",
+        "topic": "wafer/telemetry/hot",
+        "protocolVersion": "3.1.1",
+        "qos": 1,
+        "retained": false,
+        "sendSingle": true
+      }
+    }
+  ]
+}
+EOF
+)"
 dry_run=0
 
 if [ "${1:-}" = "--dry-run" ]; then
@@ -21,8 +41,8 @@ elif [ "$#" -ne 0 ]; then
 fi
 
 if [ "$dry_run" -eq 1 ]; then
-    printf 'ekuiper_url: %s\nbroker_url: %s\nstream: wafer_telemetry\nrule: pipeline_a\n' \
-        "$EKUIPER" "$BROKER_URL"
+    printf '{"ekuiper_url":"%s","broker_url":"%s","stream_payload":%s,"rule_payload":%s}\n' \
+        "$EKUIPER" "$BROKER_URL" "$STREAM_PAYLOAD" "$RULE_PAYLOAD"
     exit 0
 fi
 
@@ -44,7 +64,7 @@ _log "creating stream wafer_telemetry"
 #   {"device_id":"...","temperature":72.5,"humidity":37.2,"ts":N,"seq":N}
 curl -sf -X POST "$EKUIPER/streams" \
     -H "Content-Type: application/json" \
-    -d '{"sql":"CREATE STREAM wafer_telemetry (seq BIGINT, ts BIGINT, temperature FLOAT) WITH (TYPE=\"mqtt\", DATASOURCE=\"wafer/telemetry\", FORMAT=\"json\", SHARED=\"true\")"}' \
+    -d "$STREAM_PAYLOAD" \
     | tee /dev/stderr
 
 echo
@@ -54,19 +74,7 @@ _log "creating rule pipeline_a"
 # compute end-to-end latency from the embedded intended-publish timestamp.
 curl -sf -X POST "$EKUIPER/rules" \
     -H "Content-Type: application/json" \
-    -d "{
-  \"id\": \"pipeline_a\",
-  \"sql\": \"SELECT ts, seq, temperature FROM wafer_telemetry WHERE temperature > 50\",
-  \"actions\": [
-    {
-      \"mqtt\": {
-        \"server\": \"${BROKER_URL}\",
-        \"topic\": \"wafer/telemetry/hot\",
-        \"sendSingle\": true
-      }
-    }
-  ]
-}" | tee /dev/stderr
+    -d "$RULE_PAYLOAD" | tee /dev/stderr
 
 echo
 _log "done — verify with: curl -s $EKUIPER/streams | jq"

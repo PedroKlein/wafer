@@ -5,5 +5,11 @@ deployment = "native-arm64"
 broker = "tcp://127.0.0.1:1883"
 input_topic = "wafer/telemetry"
 output_topic = "wafer/telemetry/hot"
-stream = "CREATE STREAM wafer_telemetry (seq BIGINT, ts BIGINT, temperature FLOAT) WITH (TYPE=\"mqtt\", DATASOURCE=\"wafer/telemetry\", FORMAT=\"json\", SHARED=\"true\")"
-rule = "SELECT ts, seq, temperature FROM wafer_telemetry WHERE temperature > 50"
+stream = "CREATE STREAM wafer_telemetry (device_id STRING, temperature FLOAT, humidity FLOAT, ts BIGINT, seq BIGINT) WITH (TYPE=\"mqtt\", DATASOURCE=\"wafer/telemetry\", FORMAT=\"json\", SHARED=\"true\")"
+rule = "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry WHERE temperature >= 50 AND temperature <= 99999"
+source_qos = 1
+source_protocol_version = "3.1.1"
+sink_qos = 1
+sink_protocol_version = "3.1.1"
+sink_retained = false
+send_single = true

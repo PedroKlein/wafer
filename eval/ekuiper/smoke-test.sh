@@ -21,7 +21,7 @@ if [ "$dry_run" -eq 1 ]; then
     exit 0
 fi
 
-for command in curl mosquitto_pub mosquitto_sub; do
+for command in curl mosquitto_pub mosquitto_sub python3; do
     command -v "$command" >/dev/null || { echo "error: $command is required" >&2; exit 1; }
 done
 curl -fsS "$EKUIPER/rules/pipeline_a" >/dev/null || {
@@ -31,23 +31,32 @@ curl -fsS "$EKUIPER/rules/pipeline_a" >/dev/null || {
 
 output="$(mktemp)"
 trap 'rm -f "$output"' EXIT
-mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$OUTPUT_TOPIC" -W 4 -C 2 >"$output" &
+mosquitto_sub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$OUTPUT_TOPIC" -W 4 -C 1 >"$output" &
 subscriber_pid=$!
 sleep 1
 mosquitto_pub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$INPUT_TOPIC" \
-    -m '{"seq":1,"ts":1,"temperature":30}'
+    -m '{"device_id":"below","temperature":49,"humidity":37.2,"ts":1,"seq":1}'
 mosquitto_pub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$INPUT_TOPIC" \
-    -m '{"seq":2,"ts":2,"temperature":80}'
+    -m '{"device_id":"above","temperature":100000,"humidity":37.2,"ts":2,"seq":2}'
+mosquitto_pub -h "$BROKER_HOST" -p "$BROKER_PORT" -t "$INPUT_TOPIC" \
+    -m '{"device_id":"boundary","temperature":50,"humidity":37.2,"ts":3,"seq":3}'
 wait "$subscriber_pid" 2>/dev/null || true
 
-if grep -q '"seq":1' "$output"; then
-    echo "FAIL: eKuiper forwarded the below-threshold record" >&2
-    exit 1
-fi
-if ! grep -q '"seq":2' "$output"; then
-    echo "FAIL: eKuiper did not forward the above-threshold record" >&2
-    cat "$output" >&2
-    exit 1
-fi
+python3 - "$output" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+rows = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines() if line]
+expected = {
+    "device_id": "boundary",
+    "temperature": 50,
+    "humidity": 37.2,
+    "ts": 3,
+    "seq": 3,
+}
+if rows != [expected]:
+    raise SystemExit(f"FAIL: expected one schema-preserving boundary output, got {rows!r}")
+PY
 
 echo "native eKuiper smoke test: PASS"

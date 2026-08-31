@@ -1,6 +1,6 @@
 # Pipeline A (WAFER): MQTT source → Wasm threshold-filter → MQTT sink.
 #
-# Mirrors eKuiper's Pipeline A semantics: pass messages where temperature > 50.
+# Mirrors eKuiper's Pipeline A semantics: pass 50 <= temperature <= 99999.
 # Driven by wafer-loadgen (payload template telemetry-120b, temperature=72.5).
 # Used in E-Perf-1 (throughput), E-Perf-2 (latency), E-Swap-3 comparisons.
 # See RFC-008 §D6.

@@ -5,6 +5,7 @@ VERSION="2.1.0"
 ARCHIVE="kuiper-${VERSION}-linux-arm64.deb"
 BASE_URL="https://github.com/lf-edge/ekuiper/releases/download/v${VERSION}"
 INSTALL_ROOT="/usr/lib/kuiper"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 dry_run=0
 
 render_service_override() {
@@ -39,6 +40,8 @@ checksum_url: $BASE_URL/$ARCHIVE.sha256
 install_root: $INSTALL_ROOT
 service: kuiper.service
 broker: tcp://127.0.0.1:1883
+mqtt_source_config: /etc/kuiper/mqtt_source.yaml
+receipt: /var/lib/kuiper/wafer-install-receipt.json
 PLAN
 
 if [ "$dry_run" -eq 1 ]; then
@@ -67,9 +70,15 @@ sudo install -d -o kuiper -g kuiper \
     /var/lib/kuiper/plugins \
     /var/log/kuiper
 sudo chown -R kuiper:kuiper /var/lib/kuiper /var/log/kuiper /etc/kuiper
+sudo install -m 0644 -o kuiper -g kuiper \
+    "$SCRIPT_DIR/mqtt-source-default.yaml" /etc/kuiper/mqtt_source.yaml
 sudo install -d /etc/systemd/system/kuiper.service.d
 render_service_override \
     | sudo tee /etc/systemd/system/kuiper.service.d/wafer-eval.conf >/dev/null
+printf '{"version":"%s","artifact":"%s","sha256":"%s","source":"%s"}\n' \
+    "$VERSION" "$ARCHIVE" "$actual" "$BASE_URL/$ARCHIVE" \
+    | sudo tee /var/lib/kuiper/wafer-install-receipt.json >/dev/null
+sudo chown kuiper:kuiper /var/lib/kuiper/wafer-install-receipt.json
 sudo systemctl daemon-reload
 sudo systemctl reset-failed kuiper.service
 sudo systemctl enable --now kuiper.service

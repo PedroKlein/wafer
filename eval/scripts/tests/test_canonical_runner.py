@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import subprocess
 import sys
 import tempfile
 import tomllib
@@ -18,6 +19,7 @@ from canonical_runner import (  # noqa: E402
     postprocess_run,
     select_attempt,
     summarize_recovery,
+    validate_ekuiper_process_snapshot,
     write_progress,
 )
 
@@ -215,6 +217,90 @@ def test_eperf9_plugin_configs_supply_required_guest_configuration() -> None:
     assert large["sample_rate"] > 0
     assert large["fft_size"] > 0
     assert large["bands"]
+
+
+def test_ekuiper_process_snapshot_rejects_overlap_and_outside_affinity() -> None:
+    snapshot = json.loads(
+        (ROOT / "eval/scripts/tests/fixtures/ekuiper-process-snapshot.json").read_text()
+    )
+    validate_ekuiper_process_snapshot(snapshot, "1-3")
+
+    overlap = {**snapshot, "other_suts": [{"pid": 200, "name": "wafer"}]}
+    with pytest.raises(ValueError, match="concurrent SUT"):
+        validate_ekuiper_process_snapshot(overlap, "1-3")
+
+    outside = {
+        **snapshot,
+        "processes": [
+            {"pid": 100, "ppid": 1, "name": "kuiperd", "cpus_allowed_list": "0-3"}
+        ],
+    }
+    with pytest.raises(ValueError, match="outside 1-3"):
+        validate_ekuiper_process_snapshot(outside, "1-3")
+
+
+def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
+    seed = subprocess.run(
+        [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    rendered = json.loads(seed.stdout)
+    stream_sql = rendered["stream_payload"]["sql"]
+    rule = rendered["rule_payload"]
+    action = rule["actions"][0]["mqtt"]
+    assert "device_id STRING" in stream_sql
+    assert "humidity FLOAT" in stream_sql
+    assert "DATASOURCE=\"wafer/telemetry\"" in stream_sql
+    assert rule["sql"] == (
+        "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry "
+        "WHERE temperature >= 50 AND temperature <= 99999"
+    )
+    assert action == {
+        "server": "tcp://127.0.0.1:1883",
+        "topic": "wafer/telemetry/hot",
+        "protocolVersion": "3.1.1",
+        "qos": 1,
+        "retained": False,
+        "sendSingle": True,
+    }
+    comparator = tomllib.loads(
+        (ROOT / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
+    )["comparator"]
+    assert comparator["stream"] == stream_sql
+    assert comparator["rule"] == rule["sql"]
+    assert comparator["source_qos"] == comparator["sink_qos"] == 1
+    assert comparator["source_protocol_version"] == "3.1.1"
+    assert comparator["sink_protocol_version"] == "3.1.1"
+    assert comparator["sink_retained"] is False
+    assert comparator["send_single"] is True
+
+    install = subprocess.run(
+        [str(ROOT / "eval/ekuiper/install-native.sh"), "--dry-run"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    assert "CPUAffinity=1 2 3" in install
+    assert "MQTT_SOURCE__DEFAULT__SERVER=tcp://127.0.0.1:1883" in install
+    assert "mqtt_source_config: /etc/kuiper/mqtt_source.yaml" in install
+    source = (ROOT / "eval/ekuiper/mqtt-source-default.yaml").read_text()
+    assert 'server: "tcp://127.0.0.1:1883"' in source
+    assert "qos: 1" in source
+    assert 'protocolVersion: "3.1.1"' in source
+
+    for relative in ("eval/configs/pipeline-a-wafer.toml", "eval/configs/pipeline-a-native.toml"):
+        config = tomllib.loads((ROOT / relative).read_text())
+        assert config["nodes"]["mqtt-in"]["topic"] == "wafer/telemetry"
+        assert config["nodes"]["mqtt-in"]["qos"] == 1
+        assert config["nodes"]["mqtt-out"]["topic"] == "wafer/telemetry/hot"
+        assert config["nodes"]["mqtt-out"]["qos"] == 1
+        assert config["nodes"]["filter"]["config"] == {
+            "field": "temperature",
+            "min": 50.0,
+            "max": 99999.0,
+        }
 
 
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
