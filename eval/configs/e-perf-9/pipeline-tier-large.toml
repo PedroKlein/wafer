@@ -8,13 +8,14 @@ description = "AOT startup measurement — large plugin (vibration-features, 375
 type = "source"
 kind = "bench-source"
 rate = 100.0
-total_messages = 50
+total_messages = 1
 warmup_messages = 0
 payload_size = 128
 
 [nodes.t1]
 type = "transform"
 plugin = "../../../plugins/vibration-features/target/wasm32-wasip2/release/wafer_vibration_features.wasm"
+config = { sample_rate = 1000.0, fft_size = 32, bands = [[0.0, 100.0], [100.0, 400.0]] }
 
 [nodes.sink]
 type = "sink"

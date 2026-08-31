@@ -333,12 +333,21 @@ def evaluate_validation_gate(root: Path, expected_runs: int) -> ValidationGate:
 
 def derive_containment(output: Path) -> dict:
     with (output / "per_node_metrics.csv").open(newline="") as stream:
-        rows = list(csv.DictReader(stream))
-    traps_total = sum(int(row["traps_total"]) for row in rows)
-    healthy_messages = max(
-        (int(row["messages_out"]) for row in rows if row["node_id"] not in {"attack", "branch_b"}),
-        default=0,
-    )
+        rows = [
+            row
+            for row in csv.DictReader(stream)
+            if row.get("node_id") and not row["node_id"].startswith("#")
+        ]
+    if not rows:
+        raise ValueError("per_node_metrics.csv contains no runtime metric rows")
+    try:
+        traps_total = sum(int(row["traps_total"]) for row in rows)
+        healthy_messages = max(
+            (int(row["messages_out"]) for row in rows if row["node_id"] not in {"attack", "branch_b"}),
+            default=0,
+        )
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("per_node_metrics.csv contains invalid runtime metrics") from error
     log = (output / "stdout.log").read_text(errors="replace")
     runtime_panic = bool(re.search(r"thread .* panicked|panicked at", log))
     return {

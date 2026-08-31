@@ -6,6 +6,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
@@ -134,6 +136,18 @@ def test_isolation_derivations_use_raw_runtime_metrics() -> None:
         assert recovery["p99_ns"] == 1000
 
 
+def test_containment_derivation_rejects_placeholder_metrics() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "per_node_metrics.csv").write_text(
+            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count\n"
+            "# runtime did not emit final metrics\n"
+        )
+        (root / "stdout.log").write_text("runtime required SIGKILL\n")
+        with pytest.raises(ValueError, match="no runtime metric rows"):
+            derive_containment(root)
+
+
 def test_canonical_configs_match_frozen_windows() -> None:
     config_paths = {
         item.config
@@ -177,6 +191,30 @@ def test_canonical_configs_match_frozen_windows() -> None:
     )["loadgen"]
     assert burst["duration_secs"] == 300
     assert burst["warmup_secs"] == 30
+
+
+def test_infinite_loop_experiment_enables_epoch_interruption() -> None:
+    config = tomllib.loads(
+        (ROOT / "eval/configs/e-iso-4/pipeline.toml").read_text()
+    )
+    assert config["engine"]["epoch_deadline"] > 0
+
+
+def test_eperf9_plugin_configs_supply_required_guest_configuration() -> None:
+    paths = [
+        ROOT / f"eval/configs/e-perf-9/pipeline-tier-{tier}.toml"
+        for tier in ("small", "medium", "large")
+    ]
+    configs = [tomllib.loads(path.read_text()) for path in paths]
+    assert all(config["nodes"]["source"]["total_messages"] == 1 for config in configs)
+
+    medium = configs[1]["nodes"]["t1"]["config"]
+    assert medium["fields"]
+
+    large = configs[2]["nodes"]["t1"]["config"]
+    assert large["sample_rate"] > 0
+    assert large["fft_size"] > 0
+    assert large["bands"]
 
 
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:

@@ -104,4 +104,53 @@ if "$ROOT/eval/scripts/run-experiment.sh" \
 fi
 grep -q 'dirty source is not canonical' "$tmp/dirty.log"
 
+harness_root="$tmp/harness-root"
+mkdir -p "$harness_root/eval/scripts/lib" "$harness_root/target/release"
+cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experiment.sh"
+cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
+cat >"$harness_root/eval/startup.toml" <<'TOML'
+[pipeline]
+name = "startup-test"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+
+[[edges]]
+from = "source"
+to = "sink"
+TOML
+cat >"$harness_root/target/release/wafer" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+cat >"$harness_root/target/release/wafer-loadgen" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+chmod +x \
+  "$harness_root/eval/scripts/run-experiment.sh" \
+  "$harness_root/eval/scripts/lib/write_metadata.py" \
+  "$harness_root/target/release/wafer" \
+  "$harness_root/target/release/wafer-loadgen"
+
+"$harness_root/eval/scripts/run-experiment.sh" \
+  --config "$harness_root/eval/startup.toml" \
+  --experiment e-perf-9 \
+  --host shakedown-macos \
+  --skip-build \
+  --duration 5 \
+  --output-dir "$tmp/startup-result" >"$tmp/startup.log" 2>&1
+python3 - "$tmp/startup-result/metadata.json" <<'PY'
+import json
+import sys
+metadata = json.load(open(sys.argv[1]))
+assert metadata["exit_codes"]["wafer_runtime"] == 0
+assert metadata["duration_ns"] < 500_000_000, metadata["duration_ns"]
+PY
+
 echo 'canonical run-experiment tests: PASS'

@@ -8,13 +8,14 @@ description = "AOT startup measurement — medium plugin (tensor-prep, 97 KB)"
 type = "source"
 kind = "bench-source"
 rate = 100.0
-total_messages = 50
+total_messages = 1
 warmup_messages = 0
 payload_size = 128
 
 [nodes.t1]
 type = "transform"
 plugin = "../../../plugins/tensor-prep/target/wasm32-wasip2/release/wafer_tensor_prep.wasm"
+config = { fields = ["temperature"], normalize = false }
 
 [nodes.sink]
 type = "sink"

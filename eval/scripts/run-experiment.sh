@@ -383,9 +383,12 @@ if [ -n "${WAFER_RUNTIME_CPUSET:-}" ]; then
     runtime_cmd=(taskset -c "$WAFER_RUNTIME_CPUSET" "${runtime_cmd[@]}")
 fi
 _log "launching wafer-runtime: ${runtime_cmd[*]}"
+runtime_started_ns=$(python3 -c 'import time; print(time.time_ns())')
 "${runtime_cmd[@]}" >"$OUT_DIR/stdout.log" 2>&1 &
 RUNTIME_PID=$!
 _log "wafer-runtime pid=$RUNTIME_PID"
+runtime_finished_ns=""
+runtime_exit=0
 # A19: runtime writes memory.csv via MemoryRecorder; no external sampler.
 
 # Trap-based cleanup so a Ctrl-C or unexpected exit still tears everything down.
@@ -397,13 +400,26 @@ _cleanup() {
 }
 trap _cleanup EXIT INT TERM
 
-# Wait until the runtime has been up for at least 0.5 s so any early startup
-# trap surfaces before we spawn loadgen against it.
-sleep 1
-
-if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
-    _log "wafer-runtime died during startup; see $OUT_DIR/stdout.log"
-    exit 5
+if [ "$experiment" = "e-perf-9" ]; then
+    if wait "$RUNTIME_PID"; then
+        runtime_exit=0
+    else
+        runtime_exit=$?
+    fi
+    runtime_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
+    RUNTIME_PID=""
+    if [ "$runtime_exit" -ne 0 ]; then
+        _log "wafer-runtime failed during startup measurement; see $OUT_DIR/stdout.log"
+        exit 5
+    fi
+    _log "wafer-runtime completed startup measurement"
+else
+    # Give long-running pipelines time to surface startup traps before loadgen.
+    sleep 1
+    if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+        _log "wafer-runtime died during startup; see $OUT_DIR/stdout.log"
+        exit 5
+    fi
 fi
 
 # ============================================================================
@@ -486,29 +502,31 @@ fi
 
 deadline=$(( $(date +%s) + duration ))
 
-while true; do
-    now=$(date +%s)
-    if [ "$now" -ge "$deadline" ]; then
-        _log "duration ($duration s) elapsed"
-        break
-    fi
-    if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
-        _log "wafer-runtime exited before deadline (see stdout.log)"
-        break
-    fi
-    pub_running=0; sub_running=0
-    [ -n "$LOADGEN_PUB_PID" ] && kill -0 "$LOADGEN_PUB_PID" 2>/dev/null && pub_running=1
-    [ -n "$LOADGEN_SUB_PID" ] && kill -0 "$LOADGEN_SUB_PID" 2>/dev/null && sub_running=1
-    if [ -z "$LOADGEN_PUB_PID" ] && [ -z "$LOADGEN_SUB_PID" ]; then
-        # Pure BenchSource/BenchSink run: wait for runtime to self-terminate
-        # (BenchSource emits total_messages then exits).
-        :
-    elif [ "$pub_running" -eq 0 ] && [ "$sub_running" -eq 0 ]; then
-        _log "loadgen processes finished"
-        break
-    fi
-    sleep 1
-done
+if [ -n "$RUNTIME_PID" ]; then
+    while true; do
+        now=$(date +%s)
+        if [ "$now" -ge "$deadline" ]; then
+            _log "duration ($duration s) elapsed"
+            break
+        fi
+        if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+            _log "wafer-runtime exited before deadline (see stdout.log)"
+            break
+        fi
+        pub_running=0; sub_running=0
+        [ -n "$LOADGEN_PUB_PID" ] && kill -0 "$LOADGEN_PUB_PID" 2>/dev/null && pub_running=1
+        [ -n "$LOADGEN_SUB_PID" ] && kill -0 "$LOADGEN_SUB_PID" 2>/dev/null && sub_running=1
+        if [ -z "$LOADGEN_PUB_PID" ] && [ -z "$LOADGEN_SUB_PID" ]; then
+            # Pure BenchSource/BenchSink run: wait for runtime to self-terminate
+            # (BenchSource emits total_messages then exits).
+            :
+        elif [ "$pub_running" -eq 0 ] && [ "$sub_running" -eq 0 ]; then
+            _log "loadgen processes finished"
+            break
+        fi
+        sleep 1
+    done
+fi
 
 measurement_finished_ns=$(python3 -c 'import time; print(time.time_ns())')
 if [ "$has_bench_sink" -eq 0 ]; then
@@ -516,16 +534,17 @@ if [ "$has_bench_sink" -eq 0 ]; then
         "$measurement_started_ns" "$measurement_finished_ns" > "$OUT_DIR/measurement-window.json"
 fi
 
-runtime_exit=0
-if kill -0 "$RUNTIME_PID" 2>/dev/null; then
+if [ -n "$RUNTIME_PID" ] && kill -0 "$RUNTIME_PID" 2>/dev/null; then
     _stop_loadgen
     stopped_runtime_pid="$RUNTIME_PID"
     _stop_runtime
     wait "$stopped_runtime_pid" 2>/dev/null || runtime_exit=$?
-else
+elif [ -n "$RUNTIME_PID" ]; then
     _stop_loadgen
     wait "$RUNTIME_PID" 2>/dev/null || runtime_exit=$?
     RUNTIME_PID=""
+else
+    _stop_loadgen
 fi
 _stop_mem_sampler
 if [ ! -f "$OUT_DIR/measurement-window.json" ]; then
@@ -542,6 +561,9 @@ fi
 FINISHED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 finished_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
 duration_ns=$(( finished_ns - started_ns ))
+if [ "$experiment" = "e-perf-9" ] && [ -n "$runtime_finished_ns" ]; then
+    duration_ns=$(( runtime_finished_ns - runtime_started_ns ))
+fi
 
 # ============================================================================
 # Per-node metrics scrape (best-effort)
