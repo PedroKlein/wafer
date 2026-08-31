@@ -91,6 +91,8 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
     // port so we don't need mosquitto — the publish() failures are counted as
     // errors but do not stop the run. What we care about is the trigger POST.
     let target_offset_secs = 1.0_f64;
+    let output = tempfile::tempdir()?;
+    let result_path = output.path().join("swap_timeline.json");
     let args = PublishArgs {
         broker_host: "127.0.0.1".into(),
         broker_port: 1, // dead port; publishes will fail, that's fine
@@ -114,6 +116,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
         hotswap_wasm_path: Some(PathBuf::from("/tmp/fake-pass-through-v2.wasm")),
         hotswap_swap_at_secs: target_offset_secs,
         hotswap_api_url: format!("http://{addr}"),
+        hotswap_result_path: Some(result_path.clone()),
     };
 
     // Give the axum server a moment to be listening. axum::serve() awaits so
@@ -157,7 +160,67 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
     // Verify the {id} captured is our target node.
     let captured_id = state.node_id.lock().unwrap().clone();
     assert_eq!(captured_id.as_deref(), Some("transform"));
+    let artifact: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&result_path)?)?;
+    assert_eq!(artifact["requests"][0]["http_status"], 200);
+    assert_eq!(artifact["requests"][0]["body"], "ok");
 
+    server.abort();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::panic_in_result_fn,
+    reason = "integration test asserts that an out-of-window trigger never fires"
+)]
+async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Result<()> {
+    let start = Instant::now();
+    let state = RecorderState {
+        start,
+        recorded_ms: Arc::new(AtomicI64::new(-1)),
+        body_len: Arc::new(AtomicI64::new(-1)),
+        node_id: Arc::new(std::sync::Mutex::new(None)),
+    };
+    let app = Router::new()
+        .route("/api/v1/nodes/{id}/hot-swap", post(record_swap))
+        .with_state(state.clone());
+    let listener = TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+    let addr = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let _ok = axum::serve(listener, app).await;
+    });
+
+    let args = PublishArgs {
+        broker_host: "127.0.0.1".into(),
+        broker_port: 1,
+        topic: "wafer/bench/input".into(),
+        rate: 10,
+        duration_secs: 1,
+        payload_size: 128,
+        payload_template: None,
+        profile: "hotswap-trigger".into(),
+        client_id: "wafer-loadgen-no-late-trigger-test".into(),
+        profile_file: None,
+        dry_run: false,
+        burst_multiplier: 2,
+        burst_on_secs: 10,
+        burst_cycle_secs: 60,
+        ramp_start_rate: 100,
+        ramp_step_rate: 100,
+        ramp_step_interval_secs: 10,
+        ramp_max_rate: 10_000,
+        hotswap_target_node: Some("transform".into()),
+        hotswap_wasm_path: Some(PathBuf::from("/tmp/fake-pass-through-v2.wasm")),
+        hotswap_swap_at_secs: 2.0,
+        hotswap_api_url: format!("http://{addr}"),
+        hotswap_result_path: None,
+    };
+
+    let report = run_publisher(args).await?;
+
+    assert_eq!(report.hotswap_triggered_at_secs, None);
+    assert_eq!(state.recorded_ms.load(Ordering::Acquire), -1);
     server.abort();
     Ok(())
 }

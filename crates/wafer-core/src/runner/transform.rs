@@ -58,6 +58,7 @@ pub async fn run_transform_loop_with_config(
 ) {
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut canary: Option<TransformCanaryState> = None;
+    let mut rollback_retry = None;
     loop {
         // 0. Check if canary window has expired (drop snapshot to free memory)
         if let Some(ref c) = canary {
@@ -72,7 +73,7 @@ pub async fn run_transform_loop_with_config(
         }
 
         // 1. Hot-swap check (non-blocking, between messages)
-        if swap_rx.has_changed().unwrap_or(false) {
+        if rollback_retry.is_none() && swap_rx.has_changed().unwrap_or(false) {
             let swap_value = swap_rx.borrow_and_update().clone();
             if let Some(payload) = swap_value {
                 policy.flush_to_dlq("hot_swap_drain");
@@ -130,7 +131,9 @@ pub async fn run_transform_loop_with_config(
         }
 
         // 2. Retry buffer priority — retries before fresh messages
-        let envelope = if let Some(retry) = policy.next_ready_retry() {
+        let envelope = if let Some(retry) = rollback_retry.take() {
+            retry
+        } else if let Some(retry) = policy.next_ready_retry() {
             retry
         } else {
             // 3. Receive from channel (cancel-safe: ONLY recv in select!)
@@ -217,6 +220,7 @@ pub async fn run_transform_loop_with_config(
                                 if let Some(progress) = pending_swap_progress.take() {
                                     progress.report_rolled_back(rollback_ns, msg.clone());
                                 }
+                                rollback_retry = Some(safety);
                                 // B2: intentionally do NOT drop canary here.
                                 // trap_count remains so a subsequent trap
                                 // inside the canary window counts toward

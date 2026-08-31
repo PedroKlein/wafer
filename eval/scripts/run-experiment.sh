@@ -481,7 +481,8 @@ fi
 if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ]; then
     _log "launching wafer-loadgen publish profile=$loadgen_profile"
     pub_args=(publish --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
-              --topic "$mqtt_source_topic" --profile-file "$loadgen_profile")
+              --topic "$mqtt_source_topic" --profile-file "$loadgen_profile" \
+              --hotswap-result-path "$OUT_DIR/swap_timeline.json")
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${pub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
         command -v taskset >/dev/null 2>&1 || { _log "taskset is required for WAFER_LOADGEN_CPUSET"; exit 4; }

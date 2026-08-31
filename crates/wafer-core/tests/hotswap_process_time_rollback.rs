@@ -148,8 +148,7 @@ async fn hotswap_process_time_rollback() {
     // BenchSink needs WAFER_BENCH_OUTPUT_DIR for sequence tracking
     let _env_guard = BenchDirEnv::set(&bench_dir);
 
-    // Use a large message count so pipeline stays alive long enough for rollback
-    let config = build_config(5000);
+    let config = build_config(1000);
     let mut orchestrator = launch_pipeline(config, None)
         .await
         .expect("launch_pipeline");
@@ -240,9 +239,18 @@ async fn hotswap_process_time_rollback() {
         "Expected at least 1 recovery event from rollback, got {recovery_count}"
     );
 
-    // Clean shutdown
-    orchestrator.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete()).await;
+    tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete())
+        .await
+        .expect("pipeline should complete after rollback")
+        .expect("pipeline should shut down cleanly");
+
+    let sequence = std::fs::read_to_string(bench_dir.join("sequence.csv"))
+        .expect("BenchSink should export sequence.csv");
+    let row = sequence.lines().nth(1).expect("sequence.csv data row");
+    let columns: Vec<_> = row.split(',').collect();
+    assert_eq!(columns[0], columns[1], "rollback must preserve every message: {row}");
+    assert_eq!(columns[3], "0", "rollback must replay the trapping message: {row}");
+    assert_eq!(columns[4], "0", "rollback must not duplicate messages: {row}");
 }
 
 /// Test: bounded rollback retries — canary retains `trap_count` across rollbacks.

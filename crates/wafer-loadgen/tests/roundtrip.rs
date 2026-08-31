@@ -141,6 +141,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         hotswap_wasm_path: None,
         hotswap_swap_at_secs: 30.0,
         hotswap_api_url: "http://localhost:9090".into(),
+        hotswap_result_path: None,
     };
     let pub_report = run_publisher(pub_args).await?;
     assert_eq!(

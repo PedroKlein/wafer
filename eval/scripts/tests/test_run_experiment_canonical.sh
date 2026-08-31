@@ -60,6 +60,8 @@ if grep -q 'pub_args.*total-messages\|pub_args+=(--total-messages' "$ROOT/eval/s
   echo 'publisher received unsupported --total-messages argument' >&2
   exit 1
 fi
+grep -Fq -- "--hotswap-result-path \"\$OUT_DIR/swap_timeline.json\"" \
+  "$ROOT/eval/scripts/run-experiment.sh"
 [ ! -e "$tmp/planned-output" ] || { echo 'explicit dry-run output was created' >&2; exit 1; }
 
 if "$ROOT/eval/scripts/run-experiment.sh" \

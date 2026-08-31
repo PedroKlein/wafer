@@ -127,6 +127,10 @@ pub struct PublishArgs {
     /// target is `{api_url}/api/v1/nodes/{target_node}/hot-swap`.
     #[arg(long, default_value = "http://localhost:9090")]
     pub hotswap_api_url: String,
+
+    /// Write the hot-swap HTTP response as a canonical timeline artifact.
+    #[arg(long)]
+    pub hotswap_result_path: Option<PathBuf>,
 }
 
 // -----------------------------------------------------------------------------
@@ -361,6 +365,7 @@ fn now_ns() -> u64 {
 fn spawn_hotswap_trigger(
     shape: &LoadShape,
     start: Instant,
+    result_path: Option<PathBuf>,
 ) -> Option<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let LoadShape::HotswapTrigger { swap_at_secs, target_node, wasm_path, api_url, .. } = shape else {
         return None;
@@ -382,8 +387,31 @@ fn spawn_hotswap_trigger(
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
-        let resp = client.post(&url).json(&body).send().await?;
-        info!("hot-swap POST {} => HTTP {}", url, resp.status());
+        let request_started_ns = now_ns();
+        let response = client.post(&url).json(&body).send().await?;
+        let status = response.status();
+        let response_body = response.text().await?;
+        let request_finished_ns = now_ns();
+        info!("hot-swap POST {} => HTTP {}", url, status);
+        if !status.is_success() {
+            anyhow::bail!("hot-swap POST returned HTTP {status}: {response_body}");
+        }
+        if let Some(path) = result_path {
+            let body = serde_json::from_str(&response_body)
+                .unwrap_or_else(|_| serde_json::Value::String(response_body.clone()));
+            let artifact = serde_json::json!({
+                "requests": [{
+                    "event_index": 0,
+                    "plugin": wasm_path.file_name().and_then(|name| name.to_str()),
+                    "request_started_ns": request_started_ns,
+                    "request_finished_ns": request_finished_ns,
+                    "request_duration_ns": request_finished_ns.saturating_sub(request_started_ns),
+                    "http_status": status.as_u16(),
+                    "body": body,
+                }]
+            });
+            tokio::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?)).await?;
+        }
         Ok(())
     }))
 }
@@ -450,11 +478,14 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let start = Instant::now();
     let deadline = start.checked_add(Duration::from_secs(args.duration_secs))
         .unwrap_or(start);
-    let hotswap_task = spawn_hotswap_trigger(&shape, start);
     let hotswap_target = match &shape {
-        LoadShape::HotswapTrigger { swap_at_secs, .. } => Some(*swap_at_secs),
+        LoadShape::HotswapTrigger { swap_at_secs, .. }
+            if Duration::from_secs_f64(*swap_at_secs) < Duration::from_secs(args.duration_secs) => Some(*swap_at_secs),
         _ => None,
     };
+    let hotswap_task = hotswap_target.and_then(|_| {
+        spawn_hotswap_trigger(&shape, start, args.hotswap_result_path.clone())
+    });
 
     let padding: String = "x".repeat(args.payload_size.saturating_sub(80));
     let payload_template = args.payload_template;
