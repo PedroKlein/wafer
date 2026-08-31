@@ -117,6 +117,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
         hotswap_swap_at_secs: target_offset_secs,
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: Some(result_path.clone()),
+        trace_file: None,
     };
 
     // Give the axum server a moment to be listening. axum::serve() awaits so
@@ -215,6 +216,7 @@ async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Res
         hotswap_swap_at_secs: 2.0,
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: None,
+        trace_file: None,
     };
 
     let report = run_publisher(args).await?;

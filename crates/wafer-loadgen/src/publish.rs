@@ -17,6 +17,7 @@
 //! `--profile` string still accepts `steady`, `burst`, `ramp`; P0.3 adds
 //! `hotswap-trigger` and the `--hotswap-*` flags to configure it.
 
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -127,6 +128,11 @@ pub struct PublishArgs {
     /// target is `{api_url}/api/v1/nodes/{target_node}/hot-swap`.
     #[arg(long, default_value = "http://localhost:9090")]
     pub hotswap_api_url: String,
+
+    /// Write every offered sequence and wall-clock timestamp as CSV.
+    /// Intended for diagnostics; omit during canonical measurements.
+    #[arg(long)]
+    pub trace_file: Option<PathBuf>,
 
     /// Write the hot-swap HTTP response as a canonical timeline artifact.
     #[arg(long)]
@@ -489,6 +495,15 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
 
     let padding: String = "x".repeat(args.payload_size.saturating_sub(80));
     let payload_template = args.payload_template;
+    let mut trace = args
+        .trace_file
+        .as_ref()
+        .map(std::fs::File::create)
+        .transpose()?
+        .map(BufWriter::new);
+    if let Some(trace) = &mut trace {
+        writeln!(trace, "seq,ts_ns")?;
+    }
     let mut scheduler = Scheduler::new(shape);
     let mut seq: u64 = 0;
     let mut errors: u64 = 0;
@@ -512,6 +527,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             .into_bytes(),
             |tpl| tpl.render(ts, seq),
         );
+        if let Some(trace) = &mut trace {
+            writeln!(trace, "{seq},{ts}")?;
+        }
 
         if let Err(e) = client
             .publish(&args.topic, QoS::AtLeastOnce, false, payload_vec.as_slice())
@@ -524,6 +542,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         seq = seq.saturating_add(1);
     }
 
+    if let Some(trace) = &mut trace {
+        trace.flush()?;
+    }
     tokio::time::sleep(Duration::from_millis(200)).await;
     let _disc = client.disconnect().await;
     eventloop_task.abort();

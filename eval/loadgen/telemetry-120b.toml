@@ -5,7 +5,7 @@
 # {device_id, temperature, humidity, ts, seq} exactly (Pipeline A).
 #
 # SHA-256 of the canonical rendering (ts=1_800_000_000_000_000_000, seq=999_999_999):
-#   d39c713ac4c27e23dc8ffed24d28ef4f8cd5ffb731ffa2cea29cb4765189ed54
+#   fffb14064f8d7956b5ce410c8298ab5c511bd46e5dffcde8389975337a0e38d1
 # Total byte length at canonical inputs: 120.
 #
 # Verify: `wafer-loadgen publish --profile-file eval/loadgen/telemetry-120b.toml --dry-run`.
@@ -16,4 +16,5 @@ duration_secs = 60
 warmup_secs = 30
 topic = "wafer/bench/input"
 payload_template = "telemetry-120b"
+payload_template_sha256 = "fffb14064f8d7956b5ce410c8298ab5c511bd46e5dffcde8389975337a0e38d1"
 profile = "steady"

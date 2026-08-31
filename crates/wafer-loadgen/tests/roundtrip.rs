@@ -26,7 +26,9 @@ use std::time::Duration;
 use testcontainers::runners::AsyncRunner;
 use testcontainers_modules::mosquitto::Mosquitto;
 
-use wafer_loadgen::{PublishArgs, SubscribeArgs, run_publisher, run_subscriber, SubscriberMetadata};
+use wafer_loadgen::{
+    PayloadTemplate, PublishArgs, SubscribeArgs, SubscriberMetadata, run_publisher, run_subscriber,
+};
 
 const TOTAL_MESSAGES: u64 = 10_000;
 
@@ -98,6 +100,8 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     // via the reaper but belt-and-suspenders is cheap).
     let topic = format!("wafer/roundtrip/{}", std::process::id());
     let output_dir: PathBuf = tempfile::tempdir()?.keep(); // keep on failure for post-mortem
+    let published_trace = output_dir.join("published.csv");
+    let received_trace = output_dir.join("received.csv");
 
     // Subscriber: start FIRST so it is subscribed before the publisher fires
     // its first message. The subscriber advertises via ConnAck-subscribe;
@@ -111,6 +115,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         client_id: format!("wafer-loadgen-sub-{}", std::process::id()),
         host_tag: Some("shakedown-macos".into()),
         qos: 1,
+        trace_file: Some(received_trace.clone()),
     };
     let sub_handle = tokio::spawn(async move { run_subscriber(sub_args).await });
 
@@ -124,8 +129,8 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         topic: topic.clone(),
         rate: 5_000,             // 10k msgs / 2s
         duration_secs: 2,
-        payload_size: 120,       // Approximate telemetry-120b shape (P0.2 will formalise).
-        payload_template: None,  // Legacy 'x' filler path; template validation lives in payload tests.
+        payload_size: 120,
+        payload_template: Some(PayloadTemplate::Telemetry120b),
         profile: "steady".into(),
         client_id: format!("wafer-loadgen-pub-{}", std::process::id()),
         profile_file: None,
@@ -142,6 +147,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         hotswap_swap_at_secs: 30.0,
         hotswap_api_url: "http://localhost:9090".into(),
         hotswap_result_path: None,
+        trace_file: Some(published_trace.clone()),
     };
     let pub_report = run_publisher(pub_args).await?;
     assert_eq!(
@@ -209,6 +215,13 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     // sequence.csv is header-only when zero gaps/dups.
     let csv = std::fs::read_to_string(output_dir.join("sequence.csv"))?;
     assert_eq!(csv, "event_type,seq_start,seq_end,count\n");
+
+    let published = std::fs::read_to_string(published_trace)?;
+    let received = std::fs::read_to_string(received_trace)?;
+    assert_eq!(published.lines().next(), Some("seq,ts_ns"));
+    assert_eq!(received.lines().next(), Some("seq,payload_ts_ns,receive_ns,latency_ns"));
+    assert_eq!(published.lines().count(), usize::try_from(TOTAL_MESSAGES)? + 1);
+    assert_eq!(received.lines().count(), usize::try_from(TOTAL_MESSAGES)? + 1);
 
     Ok(())
 }

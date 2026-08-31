@@ -12,6 +12,7 @@
 //!
 //! Both paths flush artifacts before returning.
 
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -20,7 +21,7 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::recorder::{LatencyRecorder, SequenceReport, SubscriberMetadata, now_ns};
+use crate::recorder::{LatencyRecorder, RecordOutcome, SequenceReport, SubscriberMetadata, now_ns};
 
 /// Arguments for the `subscribe` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -56,6 +57,11 @@ pub struct SubscribeArgs {
     /// the default per RFC-008 / edge-IoT guidance in the mqtt-iot skill.
     #[arg(long, default_value_t = 1)]
     pub qos: u8,
+
+    /// Write every recorded sequence and timestamp pair as CSV.
+    /// Intended for diagnostics; omit during canonical measurements.
+    #[arg(long)]
+    pub trace_file: Option<PathBuf>,
 }
 
 fn parse_broker(s: &str) -> (String, u16) {
@@ -138,6 +144,15 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     });
 
     let mut recorder = LatencyRecorder::new();
+    let mut trace = args
+        .trace_file
+        .as_ref()
+        .map(std::fs::File::create)
+        .transpose()?
+        .map(BufWriter::new);
+    if let Some(trace) = &mut trace {
+        writeln!(trace, "seq,payload_ts_ns,receive_ns,latency_ns")?;
+    }
     let started_at_ns = now_ns();
 
     // Ctrl-C exit path. On non-unix builds `ctrl_c` still resolves.
@@ -156,7 +171,12 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
             recv = rx.recv() => {
                 match recv {
                     Some((receive_ns, payload)) => {
-                        let _ = recorder.record_json(&payload, receive_ns);
+                        if let RecordOutcome::Recorded { latency_ns, seq } = recorder.record_json(&payload, receive_ns) {
+                            if let Some(trace) = &mut trace {
+                                let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
+                                writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
+                            }
+                        }
                         if args.total_messages > 0 && recorder.total_messages() >= args.total_messages {
                             exit_reason = "total-messages";
                             info!(
@@ -177,6 +197,9 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     let ended_at_ns = now_ns();
     eventloop_task.abort();
+    if let Some(trace) = &mut trace {
+        trace.flush()?;
+    }
 
     let metadata = SubscriberMetadata {
         broker: broker_display,
