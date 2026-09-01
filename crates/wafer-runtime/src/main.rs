@@ -90,27 +90,10 @@ struct Args {
     swap_output_dir: Option<PathBuf>,
 }
 
-const RUNTIME_WORKER_THREADS: usize = 4;
-// Sync WASI calls use block_in_place. Bounding compensation workers prevents
-// their retained stacks from growing with message count on edge hosts.
-const MAX_BLOCKING_THREADS: usize = 8;
-
-fn build_runtime() -> Result<tokio::runtime::Runtime> {
-    tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(RUNTIME_WORKER_THREADS)
-        .max_blocking_threads(MAX_BLOCKING_THREADS)
-        .enable_all()
-        .build()
-        .context("Failed to build Tokio runtime")
-}
-
-fn main() -> Result<()> {
-    build_runtime()?.block_on(run())
-}
-
+#[tokio::main]
 #[expect(
     clippy::too_many_lines,
-    reason = "run() is the linear boot sequence: arg parsing, tracing init, config validation, orchestrator wiring, control-plane launch, shutdown handlers. Splitting into helpers obscures the boot order without adding testability."
+    reason = "main() is the linear boot sequence: arg parsing, tracing init, config validation, orchestrator wiring, control-plane launch, shutdown handlers. Splitting into helpers obscures the boot order without adding testability."
 )]
 #[expect(
     clippy::let_underscore_must_use,
@@ -118,9 +101,9 @@ fn main() -> Result<()> {
 )]
 #[expect(
     clippy::large_futures,
-    reason = "run() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
+    reason = "main() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
 )]
-async fn run() -> Result<()> {
+async fn main() -> Result<()> {
     let process_started = Instant::now();
     let args = Args::parse();
 
@@ -174,9 +157,7 @@ async fn run() -> Result<()> {
     if let Some(provenance_path) = metadata::resolve_output_path() {
         match metadata::write_provenance(&provenance_path, &orchestrator, &args.config) {
             Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
-            Err(e) => {
-                warn!(path = %provenance_path.display(), error = %e, "provenance write failed");
-            }
+            Err(e) => warn!(path = %provenance_path.display(), error = %e, "provenance write failed"),
         }
     }
 
@@ -463,9 +444,7 @@ async fn flush_bench_artifacts(
         let csv = guard.to_csv();
         let path = dir.join("memory.csv");
         match std::fs::write(&path, csv) {
-            Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written");
-            }
+            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written"),
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
         }
     }
@@ -476,9 +455,7 @@ async fn flush_bench_artifacts(
     ) {
         let guard = recorder.lock().await;
         match std::fs::write(&path, guard.to_csv()) {
-            Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written");
-            }
+            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written"),
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write queue-depth.csv"),
         }
     }
@@ -514,50 +491,5 @@ async fn shutdown_signal() {
     tokio::select! {
         () = ctrl_c => {},
         () = terminate => {},
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashSet;
-    use std::sync::{Arc, Mutex};
-    use std::time::Duration;
-
-    use tokio::task::JoinSet;
-
-    use super::*;
-
-    #[test]
-    fn runtime_bounds_blocking_compensation_threads() {
-        let runtime = build_runtime().expect("runtime");
-        let thread_ids = Arc::new(Mutex::new(HashSet::new()));
-
-        runtime.block_on(async {
-            let mut tasks = JoinSet::new();
-            for _ in 0..64 {
-                let thread_ids = Arc::clone(&thread_ids);
-                tasks.spawn(async move {
-                    tokio::task::block_in_place(|| {
-                        thread_ids
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .insert(std::thread::current().id());
-                        std::thread::sleep(Duration::from_millis(50));
-                    });
-                });
-            }
-            while let Some(result) = tasks.join_next().await {
-                result.expect("blocking task");
-            }
-        });
-
-        let observed = thread_ids
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .len();
-        assert!(
-            observed <= RUNTIME_WORKER_THREADS + 8,
-            "runtime used {observed} threads for blocking work"
-        );
     }
 }
