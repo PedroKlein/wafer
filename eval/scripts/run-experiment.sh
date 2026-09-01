@@ -300,6 +300,11 @@ CONFIG_SHA256="$(_sha256 "$config")"
 
 # BenchSink writes latency.hdr + throughput.csv into this env-driven dir.
 export WAFER_BENCH_OUTPUT_DIR="$OUT_DIR"
+if [ "$experiment" = "e-backpressure" ]; then
+    export WAFER_QUEUE_DEPTH_OUTPUT="$OUT_DIR/queue-depth.csv"
+else
+    unset WAFER_QUEUE_DEPTH_OUTPUT
+fi
 
 TELEMETRY_PID=""
 _start_pi_telemetry() {

@@ -1,0 +1,37 @@
+[pipeline]
+name = "e-backpressure-saturated"
+description = "Bounded queue saturation with a deterministic slow consumer"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 1000
+warmup_messages = 0
+payload_size = 128
+
+[nodes.slow]
+type = "transform"
+plugin = "../../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
+
+[nodes.slow.config]
+delay_ms = 5
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "slow"
+capacity = 64
+overflow = "slow"
+
+[[edges]]
+from = "slow"
+to = "sink"
+capacity = 64
+overflow = "slow"

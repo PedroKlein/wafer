@@ -15,10 +15,10 @@ use crate::dag::graph::DagGraph;
 use crate::error::Result;
 use crate::node::wasm::WasmRouterNode;
 use crate::node::{FilterNode, TransformNode};
-use crate::node::{NodeMetrics, NodeStateTracker, Sink, Source};
+use crate::node::{NodeMetrics, NodeStateTracker, QueueMetrics, Sink, Source};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqEnvelope, ErrorPolicyExecutor, ResolvedErrorPolicy};
-use crate::runner::{DownstreamSender, SwapPayload};
+use crate::runner::{DownstreamSender, SwapPayload, TrackedReceiver};
 
 // =============================================================================
 // Public Types
@@ -40,6 +40,7 @@ pub struct BuildOutput {
     pub metrics_map: HashMap<Box<str>, Arc<NodeMetrics>>,
     /// Validated DAG graph (for topo order and structural queries).
     pub dag_graph: DagGraph,
+    pub queue_probes: Vec<QueueProbe>,
 }
 
 /// Everything a single node task needs to run.
@@ -62,7 +63,7 @@ pub struct NodeBundle {
 /// needed by its corresponding runner loop.
 pub enum NodeBundleKind {
     Transform {
-        receiver: mpsc::Receiver<RuntimeEnvelope>,
+        receiver: TrackedReceiver,
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
@@ -70,7 +71,7 @@ pub enum NodeBundleKind {
         node: Option<TransformNode>,
     },
     Filter {
-        receiver: mpsc::Receiver<RuntimeEnvelope>,
+        receiver: TrackedReceiver,
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
@@ -78,7 +79,7 @@ pub enum NodeBundleKind {
         node: Option<FilterNode>,
     },
     Router {
-        receiver: mpsc::Receiver<RuntimeEnvelope>,
+        receiver: TrackedReceiver,
         senders: Vec<DownstreamSender>,
         swap_rx: watch::Receiver<Option<SwapPayload>>,
         policy: ErrorPolicyExecutor,
@@ -93,8 +94,15 @@ pub enum NodeBundleKind {
     Sink {
         /// Constructed sink instance (None when builder is used without I/O construction).
         sink: Option<Box<dyn Sink + Send>>,
-        receiver: mpsc::Receiver<RuntimeEnvelope>,
+        receiver: TrackedReceiver,
     },
+}
+
+#[derive(Debug, Clone)]
+pub struct QueueProbe {
+    pub queue: Box<str>,
+    pub capacity: usize,
+    pub metrics: Arc<QueueMetrics>,
 }
 
 /// An output edge sender with metadata for overflow handling.
@@ -106,6 +114,7 @@ pub struct EdgeSender {
     pub to_port: Box<str>,
     pub sender: mpsc::Sender<RuntimeEnvelope>,
     pub overflow: OverflowPolicy,
+    pub queue_metrics: Arc<QueueMetrics>,
 }
 
 // =============================================================================
@@ -248,6 +257,7 @@ fn build_pipeline_inner(
         state_trackers,
         metrics_map,
         dag_graph,
+        queue_probes: wiring.queue_probes,
     })
 }
 
@@ -265,17 +275,18 @@ const fn dead_letter_capacity(config: &crate::config::DeadLetterConfig) -> usize
 /// Internal wiring state — groups edges by destination to create shared receivers.
 struct QueueWiring {
     /// One receiver per destination node.
-    receivers: HashMap<String, mpsc::Receiver<RuntimeEnvelope>>,
+    receivers: HashMap<String, TrackedReceiver>,
     /// All edge senders, grouped by source node for collecting downstream outputs.
     edge_senders: Vec<EdgeSender>,
+    queue_probes: Vec<QueueProbe>,
 }
 
 impl QueueWiring {
     /// Take the receiver for a given node.
-    fn take_receiver(&mut self, node_id: &str) -> mpsc::Receiver<RuntimeEnvelope> {
+    fn take_receiver(&mut self, node_id: &str) -> TrackedReceiver {
         self.receivers.remove(node_id).unwrap_or_else(|| {
             let (_tx, rx) = mpsc::channel(1);
-            rx
+            rx.into()
         })
     }
 
@@ -287,6 +298,7 @@ impl QueueWiring {
             .map(|e| DownstreamSender {
                 sender: e.sender.clone(),
                 port: e.from_port.clone(),
+                queue_metrics: Some(Arc::clone(&e.queue_metrics)),
             })
             .collect()
     }
@@ -305,6 +317,7 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
 
     let mut receivers = HashMap::new();
     let mut edge_senders = Vec::new();
+    let mut queue_probes = Vec::new();
 
     for (to_node, edges_to_dest) in &edges_by_dest {
         let capacity = edges_to_dest
@@ -313,8 +326,17 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
             .max()
             .unwrap_or(default_capacity);
 
+        let queue_metrics = Arc::new(QueueMetrics::default());
         let (sender, receiver) = mpsc::channel(capacity);
-        receivers.insert(to_node.clone(), receiver);
+        receivers.insert(
+            to_node.clone(),
+            TrackedReceiver::new(receiver, Arc::clone(&queue_metrics)),
+        );
+        queue_probes.push(QueueProbe {
+            queue: to_node.clone().into_boxed_str(),
+            capacity,
+            metrics: Arc::clone(&queue_metrics),
+        });
 
         for edge in edges_to_dest {
             let from_port = edge.port.as_deref().unwrap_or("default");
@@ -325,11 +347,12 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
                 to_port: "default".into(),
                 sender: sender.clone(),
                 overflow: edge.overflow.unwrap_or_default(),
+                queue_metrics: Arc::clone(&queue_metrics),
             });
         }
     }
 
-    QueueWiring { receivers, edge_senders }
+    QueueWiring { receivers, edge_senders, queue_probes }
 }
 
 // =============================================================================

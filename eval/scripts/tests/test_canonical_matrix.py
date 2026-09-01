@@ -93,6 +93,24 @@ def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
     assert configs[0] == configs[1] == configs[2]
 
 
+def test_backpressure_freezes_internal_queue_pressure_contract() -> None:
+    experiment = json.loads(MATRIX.read_text())["experiments"]["e-backpressure"]
+    config = tomllib.loads((ROOT / experiment["config"]).read_text())
+
+    assert experiment["conditions"] == ["saturated-slow-consumer"]
+    assert experiment["queue_occupancy_threshold"] == 0.8
+    assert experiment["queue_recovery_threshold"] == 0.1
+    assert experiment["rss_limit_bytes"] == 268_435_456
+    assert {"queue-depth.csv", "backpressure.json", "memory.csv", "sequence.csv"} <= set(
+        experiment["required_outputs"]
+    )
+    assert config["nodes"]["source"]["kind"] == "bench-source"
+    assert config["nodes"]["source"]["rate"] == 1000.0
+    assert config["nodes"]["slow"]["config"]["delay_ms"] == 5
+    assert config["edges"][0]["capacity"] == 64
+    assert config["edges"][0]["overflow"] == "slow"
+
+
 def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
     matrix = json.loads(MATRIX.read_text())
     purpose = matrix["experiments"]["e-perf-1"]["purpose"].lower()

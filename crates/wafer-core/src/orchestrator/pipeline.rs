@@ -21,9 +21,9 @@ use crate::engine::WaferEngine;
 use crate::error::{Result, WaferError};
 use crate::node::{NodeMetrics, NodeStateTracker};
 use wafer_types::NodeState;
-use crate::orchestrator::builder::{BuildOutput, NodeBundleKind};
+use crate::orchestrator::builder::{BuildOutput, NodeBundleKind, QueueProbe};
 use crate::runner::SwapPayload;
-use crate::runner::{DownstreamSender, send_downstream};
+use crate::runner::{DownstreamSender, TrackedReceiver, send_downstream};
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::source::run_source_loop;
 use crate::runner::sink::run_sink_loop;
@@ -44,6 +44,7 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// - State trackers + metrics for lock-free status queries
 ///
 /// NO shared mutex on the hot path. Nodes own their instances.
+#[derive(Clone)]
 pub struct PipelineHandle {
     watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>>,
     cancel_token: CancellationToken,
@@ -69,6 +70,17 @@ pub struct PipelineHandle {
     /// can reject callers whose mental model has diverged from the
     /// actually-running binary.
     plugin_hashes: Arc<std::sync::RwLock<HashMap<Box<str>, String>>>,
+    queue_probes: Vec<QueueProbe>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QueueSnapshot {
+    pub queue: Box<str>,
+    pub depth: u64,
+    pub capacity: usize,
+    pub accepted: u64,
+    pub dequeued: u64,
+    pub processed: u64,
 }
 
 /// RAII guard returned by [`PipelineHandle::try_begin_swap`]. Dropping
@@ -232,6 +244,7 @@ impl PipelineHandle {
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
             plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            queue_probes: Vec::new(),
         }
     }
 
@@ -279,6 +292,21 @@ impl PipelineHandle {
         self.metrics.get(node_id)
     }
 
+    #[must_use]
+    pub fn queue_snapshots(&self) -> Vec<QueueSnapshot> {
+        self.queue_probes
+            .iter()
+            .map(|probe| QueueSnapshot {
+                queue: probe.queue.clone(),
+                depth: probe.metrics.depth(),
+                capacity: probe.capacity,
+                accepted: probe.metrics.enqueued(),
+                dequeued: probe.metrics.dequeued(),
+                processed: self.metrics.get(&probe.queue).map_or(0, |metrics| metrics.processed()),
+            })
+            .collect()
+    }
+
     /// Get all node IDs that support hot-swap.
     #[must_use]
     pub fn swappable_nodes(&self) -> Vec<&str> {
@@ -323,6 +351,7 @@ pub struct PipelineOrchestrator {
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
     /// Shared plugin-hash registry, populated on every successful hot-swap.
     plugin_hashes: Arc<std::sync::RwLock<HashMap<Box<str>, String>>>,
+    queue_probes: Vec<QueueProbe>,
 }
 
 impl PipelineOrchestrator {
@@ -358,6 +387,7 @@ impl PipelineOrchestrator {
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
             plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            queue_probes: build_output.queue_probes,
         };
 
         // Spawn DLQ sink task if configured
@@ -387,6 +417,7 @@ impl PipelineOrchestrator {
             swap_in_progress: self.swap_in_progress.clone(),
             hotswap_metrics: Arc::clone(&self.hotswap_metrics),
             plugin_hashes: Arc::clone(&self.plugin_hashes),
+            queue_probes: self.queue_probes.clone(),
         }
     }
 
@@ -755,7 +786,7 @@ impl PipelineOrchestrator {
 /// Receives messages, records metrics, and forwards unchanged to all downstreams.
 /// Used for native-transform (passthrough/uppercase) and nodes without .wasm.
 async fn run_passthrough_loop(
-    mut receiver: tokio::sync::mpsc::Receiver<crate::queue::RuntimeEnvelope>,
+    mut receiver: TrackedReceiver,
     senders: Vec<DownstreamSender>,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
@@ -1053,6 +1084,17 @@ mod tests {
         for (i, env) in received.iter().enumerate() {
             assert_eq!(env.payload_as_string(), format!("msg-{i}"));
         }
+        assert_eq!(
+            orch.handle().queue_snapshots(),
+            vec![QueueSnapshot {
+                queue: "sink".into(),
+                depth: 0,
+                capacity: 1024,
+                accepted: 5,
+                dequeued: 5,
+                processed: 5,
+            }]
+        );
 
         orch.shutdown().await.expect("shutdown");
         assert!(!orch.is_running());

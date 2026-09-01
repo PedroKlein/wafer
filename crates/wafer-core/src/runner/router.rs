@@ -8,14 +8,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::node::wasm::WasmRouterNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, fan_out};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, fan_out};
 
 fn recover_after_timeout(
     router: &mut WasmRouterNode,
@@ -58,7 +57,7 @@ fn recover_after_timeout(
 #[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop; splitting into helpers would fragment the control flow")]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
-    mut receiver: mpsc::Receiver<RuntimeEnvelope>,
+    receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
     mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
     mut policy: ErrorPolicyExecutor,
@@ -66,6 +65,7 @@ pub async fn run_router_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
@@ -201,6 +201,7 @@ mod tests {
         let _senders = [DownstreamSender {
             sender: output_tx,
             port: "default".into(),
+            queue_metrics: None,
         }];
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(
@@ -224,6 +225,7 @@ mod tests {
         let senders = vec![DownstreamSender {
             sender: tx,
             port: "output-a".into(),
+            queue_metrics: None,
         }];
 
         let envelope = RuntimeEnvelope::from_string("src", "hello");
@@ -238,8 +240,8 @@ mod tests {
         let (tx_a, mut rx_a) = mpsc::channel(32);
         let (tx_b, mut rx_b) = mpsc::channel(32);
         let senders = vec![
-            DownstreamSender { sender: tx_a, port: "port-a".into() },
-            DownstreamSender { sender: tx_b, port: "port-b".into() },
+            DownstreamSender { sender: tx_a, port: "port-a".into(), queue_metrics: None },
+            DownstreamSender { sender: tx_b, port: "port-b".into(), queue_metrics: None },
         ];
 
         let envelope = RuntimeEnvelope::from_string("src", "routed");
@@ -262,6 +264,7 @@ mod tests {
         let senders = vec![DownstreamSender {
             sender: tx,
             port: "other-port".into(),
+            queue_metrics: None,
         }];
 
         let envelope = RuntimeEnvelope::from_string("src", "lost");

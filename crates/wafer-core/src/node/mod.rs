@@ -17,7 +17,7 @@ pub use native::{NativeFilter, NativeRouter, NativeTransform, ProcessNode};
 // Re-export the runner-side TransformNode enum near the top.
 // (Full definition below in this module.)
 pub use kind::{Node, NodeKind};
-pub use metrics::NodeMetrics;
+pub use metrics::{NodeMetrics, QueueMetrics};
 pub use state::{NodeStateTracker, ProcessingGuard};
 pub use traits::{
     ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError,

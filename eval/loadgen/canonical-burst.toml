@@ -1,3 +1,6 @@
+# Legacy MQTT burst profile retained for non-canonical diagnostics.
+# Canonical E-Backpressure uses an in-process source and deterministic slow consumer.
+
 [loadgen]
 rate = 1000
 duration_secs = 300

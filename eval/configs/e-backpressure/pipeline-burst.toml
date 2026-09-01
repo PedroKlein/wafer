@@ -1,8 +1,5 @@
-# E-Backpressure: burst load on pipeline-c shape (passthrough).
-#
-# Topology: mqtt-source → pass-through → mqtt-sink.
-# Driven by burst loadgen profile (2× burst every 60s for 180s total).
-# Channel capacity bounded at 64 to stress backpressure at 2000 msg/s bursts.
+# Legacy MQTT burst diagnostic. It does not prove internal queue saturation.
+# The canonical E-Backpressure condition is pipeline-saturated.toml.
 
 [pipeline]
 name = "e-backpressure"

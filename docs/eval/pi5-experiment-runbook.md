@@ -65,7 +65,7 @@ The run passes only when the histogram is non-empty, p99 is within 45–55 ms, t
 | RQ1 memory/depth | E-Perf-6, E-Perf-8 | `e-perf-6/pipeline-depth-{1,3,5,10}.toml` | `run-e-perf-6-8-shakedown.sh`; canonical wrapper pending | `memory.csv`, latency by depth |
 | RQ1 metering | E-Perf-7 | `e-perf-7/pipeline-c-{passthrough,fuel-only,epoch-only,neither}.toml` | `run-e-perf-7-shakedown.sh`; canonical wrapper pending | latency by metering mode |
 | RQ1 startup | E-Perf-9 | `e-perf-9/pipeline-tier-{small,medium,large}.toml` | `run-e-bp-perf9-shakedown.sh`; canonical wrapper pending | cold/warm startup |
-| RQ1 pressure | E-Backpressure | `e-backpressure/pipeline-burst.toml` | `run-e-bp-perf9-shakedown.sh`; canonical wrapper pending | throughput, queue behavior, sequence |
+| RQ1 pressure | E-Backpressure | `e-backpressure/pipeline-saturated.toml` | canonical runner | internal queue occupancy, offered/accepted/processed/drained rates, RSS, sequence |
 | RQ2 containment | E-Iso-1..6 | `e-iso-{1..6}/pipeline.toml` | `run-e-iso-shakedown.sh`; canonical wrapper pending | trap and node-state evidence |
 | RQ2 branch/recovery | E-Iso-7, E-Iso-8 | `e-iso-7/*.toml`, `e-iso-8/pipeline.toml` | `run-e-iso-7-8.sh`; canonical wrapper pending | healthy-branch throughput, recovery latency |
 | RQ3 hot-swap | E-Swap-1,2,4,5,6 | `e-swap/pipeline-hotswap*.toml` | `run-e-swap-shakedown.sh`; canonical wrapper pending | swap timeline, sequence, throughput |

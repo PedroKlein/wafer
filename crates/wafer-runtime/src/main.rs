@@ -17,7 +17,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
 use wafer_config::{load_config, validate};
 use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
-use wafer_core::bench::MemoryRecorder;
+use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
 use wafer_core::engine::Capabilities;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::orchestrator::launch_pipeline_timed;
@@ -30,6 +30,8 @@ mod startup;
 /// can retrieve samples after cancellation. Only populated when
 /// `WAFER_BENCH_OUTPUT_DIR` is set.
 static BENCH_RECORDER: std::sync::OnceLock<Arc<tokio::sync::Mutex<MemoryRecorder>>> =
+    std::sync::OnceLock::new();
+static QUEUE_DEPTH_RECORDER: std::sync::OnceLock<Arc<tokio::sync::Mutex<QueueDepthRecorder>>> =
     std::sync::OnceLock::new();
 
 /// Log output format.
@@ -174,6 +176,18 @@ async fn main() -> Result<()> {
         });
         // Stash the handle so flush_bench_artifacts can retrieve samples.
         BENCH_RECORDER.get_or_init(|| recorder);
+    }
+
+    if std::env::var_os("WAFER_QUEUE_DEPTH_OUTPUT").is_some() {
+        let queue_recorder = Arc::new(tokio::sync::Mutex::new(QueueDepthRecorder::new(
+            orchestrator.handle(),
+        )));
+        let queue_clone = Arc::clone(&queue_recorder);
+        let cancel = bench_cancel.clone();
+        tokio::spawn(async move {
+            queue_clone.lock().await.sample_loop(cancel).await;
+        });
+        QUEUE_DEPTH_RECORDER.get_or_init(|| queue_recorder);
     }
 
     let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
@@ -432,6 +446,17 @@ async fn flush_bench_artifacts(
         match std::fs::write(&path, csv) {
             Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written"),
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
+        }
+    }
+
+    if let (Some(recorder), Some(path)) = (
+        QUEUE_DEPTH_RECORDER.get(),
+        std::env::var_os("WAFER_QUEUE_DEPTH_OUTPUT").map(PathBuf::from),
+    ) {
+        let guard = recorder.lock().await;
+        match std::fs::write(&path, guard.to_csv()) {
+            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written"),
+            Err(e) => warn!(path = %path.display(), error = %e, "failed to write queue-depth.csv"),
         }
     }
 

@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
 from canonical_runner import (  # noqa: E402
+    analyze_backpressure,
     analyze_rate_sweep_traces,
     build_schedule,
     classify_sustainable_throughput,
@@ -29,6 +30,7 @@ from canonical_runner import (  # noqa: E402
     summarize_process_resources,
     summarize_rate_sweep,
     summarize_recovery,
+    validate_backpressure_result,
     validate_ekuiper_process_snapshot,
     validate_rate_sweep_result,
     validate_startup_artifact,
@@ -79,6 +81,90 @@ def test_schedule_covers_performance_matrix() -> None:
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
     assert len({item.result_key for item in schedule}) == len(schedule)
+
+
+def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:
+    samples = [
+        {"elapsed_ns": 0, "queue": "source->slow", "depth": 0, "capacity": 64, "accepted": 0, "processed": 0},
+        {"elapsed_ns": 100_000_000, "queue": "source->slow", "depth": 60, "capacity": 64, "accepted": 100, "processed": 40},
+        {"elapsed_ns": 200_000_000, "queue": "source->slow", "depth": 64, "capacity": 64, "accepted": 140, "processed": 76},
+        {"elapsed_ns": 300_000_000, "queue": "source->slow", "depth": 4, "capacity": 64, "accepted": 140, "processed": 136},
+        {"elapsed_ns": 400_000_000, "queue": "source->slow", "depth": 0, "capacity": 64, "accepted": 140, "processed": 140},
+    ]
+
+    result = analyze_backpressure(
+        samples,
+        offered_messages=200,
+        offered_duration_ns=200_000_000,
+        occupancy_threshold=0.8,
+        recovery_threshold=0.1,
+    )
+
+    assert result["classification"] == "saturated-and-drained"
+    assert result["threshold_crossed"] is True
+    assert result["recovered"] is True
+    assert result["rates_msg_s"] == {
+        "offered": 1000.0,
+        "accepted": 350.0,
+        "processed": 350.0,
+        "drained": 600.0,
+    }
+
+
+def test_backpressure_postprocess_writes_lossless_memory_bounded_summary(tmp_path: Path) -> None:
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "queue-depth.csv").write_text(
+        "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed\n"
+        "0,slow,0,64,0,0,0\n"
+        "100000000,slow,64,64,500,436,435\n"
+        "1000000000,slow,0,64,1000,1000,1000\n"
+    )
+    (tmp_path / "memory.csv").write_text(
+        "elapsed_ms,rss_bytes\n0,100000000\n1000,110000000\n"
+    )
+    (tmp_path / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "1000,1000,0,0,0\n"
+    )
+    item = RunItem(
+        experiment="e-backpressure",
+        condition="saturated-slow-consumer",
+        run_index=1,
+        config="eval/configs/e-backpressure/pipeline-saturated.toml",
+        warmup_secs=0,
+        measurement_secs=10,
+        total_messages=1000,
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    result = json.loads((tmp_path / "backpressure.json").read_text())
+    assert result["classification"] == "saturated-and-drained"
+    assert result["sequence"]["lossless"] is True
+    assert result["memory"]["within_limit"] is True
+    assert set(result["rates_msg_s"]) == {"offered", "accepted", "processed", "drained"}
+
+
+def test_backpressure_does_not_infer_saturation_from_offered_rate() -> None:
+    samples = [
+        {"elapsed_ns": 0, "queue": "source->sink", "depth": 0, "capacity": 64, "accepted": 0, "processed": 0},
+        {"elapsed_ns": 100_000_000, "queue": "source->sink", "depth": 0, "capacity": 64, "accepted": 100, "processed": 100},
+    ]
+
+    result = analyze_backpressure(
+        samples,
+        offered_messages=10_000,
+        offered_duration_ns=100_000_000,
+        occupancy_threshold=0.8,
+        recovery_threshold=0.1,
+    )
+
+    assert result["classification"] == "not-saturated"
+    assert result["threshold_crossed"] is False
+    assert result["rates_msg_s"]["offered"] == 100_000.0
+    assert result["rates_msg_s"]["accepted"] == 1000.0
+    with pytest.raises(ValueError, match="did not cross"):
+        validate_backpressure_result(result)
 
 
 def _startup_artifact() -> dict:
@@ -666,13 +752,6 @@ def test_canonical_configs_match_frozen_windows() -> None:
     native = tomllib.loads((ROOT / "eval/configs/pipeline-d-native.toml").read_text())
     assert native["nodes"]["source"]["total_messages"] == 90_000
     assert native["nodes"]["source"]["warmup_messages"] == 30_000
-
-    burst = tomllib.loads(
-        (ROOT / "eval/loadgen/canonical-burst.toml").read_text()
-    )["loadgen"]
-    assert burst["duration_secs"] == 300
-    assert burst["warmup_secs"] == 30
-
 
 def test_infinite_loop_experiment_enables_epoch_interruption() -> None:
     config = tomllib.loads(

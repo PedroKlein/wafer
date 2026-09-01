@@ -8,14 +8,13 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::node::TransformNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TransformCanaryState, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState, send_downstream};
 use wafer_types::config::HotSwapConfig;
 
 fn recover_after_timeout(
@@ -58,7 +57,7 @@ fn recover_after_timeout(
 #[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
 pub async fn run_transform_loop(
     transform: TransformNode,
-    receiver: mpsc::Receiver<RuntimeEnvelope>,
+    receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
     swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
     policy: ErrorPolicyExecutor,
@@ -77,7 +76,7 @@ pub async fn run_transform_loop(
 #[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop with canary logic; splitting would fragment the control flow")]
 pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
-    mut receiver: mpsc::Receiver<RuntimeEnvelope>,
+    receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
     mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
     mut policy: ErrorPolicyExecutor,
@@ -86,6 +85,7 @@ pub async fn run_transform_loop_with_config(
     metrics: Arc<NodeMetrics>,
     hot_swap_config: HotSwapConfig,
 ) {
+    let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut canary: Option<TransformCanaryState> = None;
     let mut rollback_retry = None;
@@ -371,6 +371,7 @@ mod tests {
         let senders = vec![DownstreamSender {
             sender: output_tx,
             port: "default".into(),
+            queue_metrics: None,
         }];
         let (swap_tx, swap_rx) = watch::channel(None);
         let policy = ErrorPolicyExecutor::new(

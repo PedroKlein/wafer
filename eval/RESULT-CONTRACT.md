@@ -19,6 +19,8 @@ eval/results/
         ├── throughput.csv
         ├── memory.csv
         ├── per_node_metrics.csv
+        ├── queue-depth.csv             ← E-Backpressure
+        ├── backpressure.json           ← E-Backpressure
         ├── sequence.csv                ← where applicable
         ├── swap_timeline.json          ← where applicable
         ├── branch-a/                   ← E-Iso-7 only
@@ -73,6 +75,8 @@ before reading. The matrix below is authoritative:
 | `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Perf-10, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
 | `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and any run with `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `MemoryRecorder::sample_loop` (1 Hz, cross-platform via `memory-stats` crate). Flush on graceful shutdown. | 1 Hz process-RSS timeline of `wafer-runtime`: `elapsed_ms,rss_bytes`. Runtime-owned since A19 closure (thesis-hardening T4). Legacy harness `ps` polling removed. |
 | `per_node_metrics.csv` | All experiments (emitted on graceful shutdown when `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Runtime-owned since A19 closure (thesis-hardening T4). |
+| `queue-depth.csv` | E-Backpressure, when `WAFER_QUEUE_DEPTH_OUTPUT` is set | `wafer-runtime` via `QueueDepthRecorder` | Bounded internal Tokio queue samples at 10 ms intervals: `elapsed_ns,queue,depth,capacity,accepted,dequeued,processed`. Counters are internal pipeline observations; broker backlog is excluded. Collection is capped at 131,072 rows and reports truncation in the runtime log. |
+| `backpressure.json` | E-Backpressure | `canonical_runner.py` | Queue threshold crossing and recovery, offered/accepted/processed/drained rates in messages per second, loss/duplication accounting, and peak-RSS bound. A high offered rate without measured occupancy is classified `not-saturated`. |
 | `recovery.csv` | E-Iso-8 and any run with recovery events | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | Exact recovery samples: `node_id,sample_index,duration_ns`. Retains nanosecond precision for trap-to-running percentiles. |
 | `measurement-window.json` | Canonical Pi 5 runs | `BenchSink` for in-process runs with post-warmup output; canonical harness for external MQTT subscribers and zero-output containment runs | Exact `started_ns` and `finished_ns` bounds for excluding warmup and teardown from PMIC energy integration. |
 | `pi-telemetry.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Timestamped temperature, CPU frequency, governor, throttling state, and summed PMIC internal-rail proxy watts. |
@@ -95,13 +99,14 @@ before reading. The matrix below is authoritative:
 - `wafer-runtime` owns `runtime-provenance.json`, E-Perf-9 `startup.json`,
   `latency.hdr` (via `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
   (via `BenchSink` when `track_sequences=true`), `swap_timeline.json`,
-  `memory.csv` (via `MemoryRecorder`), `recovery.csv` (exact recovery samples),
-  and `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
+  `memory.csv` (via `MemoryRecorder`), `queue-depth.csv` (via `QueueDepthRecorder`),
+  `recovery.csv` (exact recovery samples), and `per_node_metrics.csv`
+  (via `PipelineOrchestrator::export_per_node_metrics`).
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
   `latency.hdr` (E2E path), `sequence.csv`, and opt-in `received.csv` traces.
 - `wafer-loadgen publish` owns opt-in `published.csv` traces.
 - `canonical_runner.py` owns E-Perf-10 `resource-usage.csv`,
-  `process-audit.json`, and `rate-sweep.json`, plus E-Iso-7
+  `process-audit.json`, and `rate-sweep.json`, E-Backpressure `backpressure.json`, plus E-Iso-7
   `branch-isolation.json` and the batch-level branch-A impact summary.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
   `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9

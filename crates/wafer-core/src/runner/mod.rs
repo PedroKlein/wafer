@@ -21,6 +21,7 @@ use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::bindings::transform_node::{TransformNode, TransformNodePre};
 use crate::engine::state::WaferState;
 use crate::node::wasm::WasmRouterNode;
+use crate::node::QueueMetrics;
 use crate::queue::RuntimeEnvelope;
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -309,6 +310,49 @@ impl TransformCanaryState {
 pub struct DownstreamSender {
     pub sender: mpsc::Sender<RuntimeEnvelope>,
     pub port: Box<str>,
+    pub queue_metrics: Option<Arc<QueueMetrics>>,
+}
+
+pub struct TrackedReceiver {
+    receiver: mpsc::Receiver<RuntimeEnvelope>,
+    queue_metrics: Option<Arc<QueueMetrics>>,
+}
+
+impl TrackedReceiver {
+    pub(crate) const fn new(
+        receiver: mpsc::Receiver<RuntimeEnvelope>,
+        queue_metrics: Arc<QueueMetrics>,
+    ) -> Self {
+        Self {
+            receiver,
+            queue_metrics: Some(queue_metrics),
+        }
+    }
+
+    pub async fn recv(&mut self) -> Option<RuntimeEnvelope> {
+        let envelope = self.receiver.recv().await;
+        if envelope.is_some() && let Some(metrics) = &self.queue_metrics {
+            metrics.record_dequeued();
+        }
+        envelope
+    }
+
+    pub fn try_recv(&mut self) -> Result<RuntimeEnvelope, mpsc::error::TryRecvError> {
+        let envelope = self.receiver.try_recv()?;
+        if let Some(metrics) = &self.queue_metrics {
+            metrics.record_dequeued();
+        }
+        Ok(envelope)
+    }
+}
+
+impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
+    fn from(receiver: mpsc::Receiver<RuntimeEnvelope>) -> Self {
+        Self {
+            receiver,
+            queue_metrics: None,
+        }
+    }
 }
 
 /// Payload for watch-channel hot-swap signaling.
@@ -438,15 +482,13 @@ impl SwapPayload {
 /// Send an envelope to ALL downstream senders (broadcast for transforms/filters).
 ///
 /// For transforms and filters, every downstream edge gets the message.
-/// Uses `try_send` to avoid blocking — if a channel is full, the message is
-/// dropped with a warning (overflow policy enforcement happens at a higher level).
+/// The bounded send awaits capacity, preserving the default lossless policy.
 ///
 /// # Panics
 ///
 /// Panics if `senders` is empty after the early-return check (unreachable).
 #[expect(clippy::indexing_slicing, reason = "senders[0] is guarded by len() == 1 check")]
 #[expect(clippy::expect_used, reason = "split_last() is called after verifying senders is non-empty")]
-#[expect(clippy::let_underscore_must_use, reason = "fire-and-forget: downstream receiver being gone means node shut down; dropping is intentional")]
 pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnvelope) {
     if senders.is_empty() {
         return;
@@ -454,16 +496,16 @@ pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnve
 
     if senders.len() == 1 {
         // Single downstream — move without cloning
-        let _ = senders[0].sender.send(envelope).await;
+        send_one(&senders[0], envelope).await;
         return;
     }
 
     // Multiple downstream — clone for N-1, move for last
     let (last, rest) = senders.split_last().expect("checked non-empty above");
     for sender in rest {
-        let _ = sender.sender.send(envelope.clone()).await;
+        send_one(sender, envelope.clone()).await;
     }
-    let _ = last.sender.send(envelope).await;
+    send_one(last, envelope).await;
 }
 
 /// Fan-out an envelope to specific ports based on routing decision.
@@ -477,7 +519,6 @@ pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnve
 /// Panics if `matching` is empty after the early-return check (unreachable).
 #[expect(clippy::indexing_slicing, reason = "matching[0] guarded by len() == 1 check")]
 #[expect(clippy::expect_used, reason = "split_last() called after verifying matching is non-empty")]
-#[expect(clippy::let_underscore_must_use, reason = "fire-and-forget: downstream receiver gone means node shut down")]
 pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[DownstreamSender]) {
     // Collect senders that match the requested ports
     let matching: Vec<&DownstreamSender> = senders
@@ -494,7 +535,7 @@ pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[Dow
     if matching.len() == 1 {
         let mut child = envelope;
         child.set_parent_id(parent_id);
-        let _ = matching[0].sender.send(child).await;
+        send_one(matching[0], child).await;
         return;
     }
 
@@ -503,11 +544,21 @@ pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[Dow
     for sender in rest {
         let mut child = envelope.clone();
         child.set_parent_id(parent_id.clone());
-        let _ = sender.sender.send(child).await;
+        send_one(sender, child).await;
     }
     let mut child = envelope;
     child.set_parent_id(parent_id);
-    let _ = last.sender.send(child).await;
+    send_one(last, child).await;
+}
+
+async fn send_one(sender: &DownstreamSender, envelope: RuntimeEnvelope) {
+    let Ok(permit) = sender.sender.reserve().await else {
+        return;
+    };
+    if let Some(metrics) = &sender.queue_metrics {
+        metrics.record_enqueued();
+    }
+    permit.send(envelope);
 }
 
 #[cfg(test)]
@@ -692,14 +743,22 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_downstream_single() {
-        let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "out".into() }];
+        let metrics = Arc::new(QueueMetrics::default());
+        let (tx, rx) = mpsc::channel(32);
+        let senders = vec![DownstreamSender {
+            sender: tx,
+            port: "out".into(),
+            queue_metrics: Some(Arc::clone(&metrics)),
+        }];
+        let mut receiver = TrackedReceiver::new(rx, Arc::clone(&metrics));
         let envelope = RuntimeEnvelope::from_string("src", "hello");
 
         send_downstream(&senders, envelope).await;
+        assert_eq!(metrics.depth(), 1);
 
-        let received = rx.recv().await.expect("should receive");
+        let received = receiver.recv().await.expect("should receive");
         assert_eq!(received.payload_as_string(), "hello");
+        assert_eq!(metrics.depth(), 0);
     }
 
     #[tokio::test]
@@ -707,8 +766,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(32);
         let (tx2, mut rx2) = mpsc::channel(32);
         let senders = vec![
-            DownstreamSender { sender: tx1, port: "a".into() },
-            DownstreamSender { sender: tx2, port: "b".into() },
+            DownstreamSender { sender: tx1, port: "a".into(), queue_metrics: None },
+            DownstreamSender { sender: tx2, port: "b".into(), queue_metrics: None },
         ];
         let envelope = RuntimeEnvelope::from_string("src", "broadcast");
 
@@ -731,7 +790,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_single_port_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "port-a".into() }];
+        let senders = vec![DownstreamSender { sender: tx, port: "port-a".into(), queue_metrics: None }];
         let envelope = RuntimeEnvelope::from_string("src", "routed");
 
         fan_out(&["port-a".to_string()], envelope, &senders).await;
@@ -745,8 +804,8 @@ mod tests {
         let (tx_a, mut rx_a) = mpsc::channel(32);
         let (tx_b, mut rx_b) = mpsc::channel(32);
         let senders = vec![
-            DownstreamSender { sender: tx_a, port: "port-a".into() },
-            DownstreamSender { sender: tx_b, port: "port-b".into() },
+            DownstreamSender { sender: tx_a, port: "port-a".into(), queue_metrics: None },
+            DownstreamSender { sender: tx_b, port: "port-b".into(), queue_metrics: None },
         ];
         let mut envelope = RuntimeEnvelope::from_string("src", "fan");
         envelope.ensure_trace_id();
@@ -768,7 +827,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_no_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "other".into() }];
+        let senders = vec![DownstreamSender { sender: tx, port: "other".into(), queue_metrics: None }];
         let envelope = RuntimeEnvelope::from_string("src", "lost");
 
         fan_out(&["nonexistent".to_string()], envelope, &senders).await;
@@ -780,7 +839,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_empty_ports_list() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "x".into() }];
+        let senders = vec![DownstreamSender { sender: tx, port: "x".into(), queue_metrics: None }];
         let envelope = RuntimeEnvelope::from_string("src", "drop");
 
         fan_out(&[], envelope, &senders).await;

@@ -8,11 +8,44 @@
 //! only exposition, not measurement."
 
 use std::collections::VecDeque;
-use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 const MAX_RECOVERY_SAMPLES: usize = 65_536;
+
+#[derive(Debug, Default)]
+pub struct QueueMetrics {
+    enqueued: AtomicU64,
+    dequeued: AtomicU64,
+}
+
+impl QueueMetrics {
+    #[inline]
+    pub fn record_enqueued(&self) {
+        self.enqueued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_dequeued(&self) {
+        self.dequeued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn enqueued(&self) -> u64 {
+        self.enqueued.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn dequeued(&self) -> u64 {
+        self.dequeued.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn depth(&self) -> u64 {
+        self.enqueued().saturating_sub(self.dequeued())
+    }
+}
 
 /// Per-node processing metrics tracked via lock-free atomics.
 ///
@@ -200,8 +233,13 @@ impl NodeMetrics {
         if total == 0 {
             return 0;
         }
-        #[expect(clippy::arithmetic_side_effects, reason = "division by zero guarded by the check above")]
-        { self.process_ns() / total }
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "division by zero guarded by the check above"
+        )]
+        {
+            self.process_ns() / total
+        }
     }
 
     /// Total retry attempts.
@@ -232,6 +270,17 @@ impl NodeMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queue_metrics_track_exact_depth() {
+        let metrics = QueueMetrics::default();
+        metrics.record_enqueued();
+        metrics.record_enqueued();
+        metrics.record_dequeued();
+        assert_eq!(metrics.enqueued(), 2);
+        assert_eq!(metrics.dequeued(), 1);
+        assert_eq!(metrics.depth(), 1);
+    }
 
     #[test]
     fn new_metrics_zeroed() {

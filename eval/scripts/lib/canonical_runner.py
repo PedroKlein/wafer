@@ -92,6 +92,116 @@ STARTUP_PHASES = (
 STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS = 5_000_000
 
 
+def analyze_backpressure(
+    samples: list[dict],
+    *,
+    offered_messages: int,
+    offered_duration_ns: int,
+    occupancy_threshold: float,
+    recovery_threshold: float,
+) -> dict:
+    if not samples:
+        raise ValueError("queue-depth samples are empty")
+    if offered_duration_ns <= 0:
+        raise ValueError("offered duration must be positive")
+    if not 0 <= recovery_threshold < occupancy_threshold <= 1:
+        raise ValueError("queue thresholds must satisfy 0 <= recovery < occupancy <= 1")
+
+    by_queue: dict[str, list[dict]] = {}
+    for sample in samples:
+        capacity = int(sample["capacity"])
+        depth = int(sample["depth"])
+        if capacity <= 0 or depth < 0 or depth > capacity:
+            raise ValueError("queue depth must be within its positive capacity")
+        by_queue.setdefault(str(sample["queue"]), []).append(sample)
+
+    selected_queue, selected = max(
+        by_queue.items(),
+        key=lambda item: max(int(row["depth"]) / int(row["capacity"]) for row in item[1]),
+    )
+    selected.sort(key=lambda row: int(row["elapsed_ns"]))
+    peak_index = max(
+        range(len(selected)),
+        key=lambda index: int(selected[index]["depth"]) / int(selected[index]["capacity"]),
+    )
+    peak = selected[peak_index]
+    peak_occupancy = int(peak["depth"]) / int(peak["capacity"])
+    threshold_crossed = peak_occupancy >= occupancy_threshold
+
+    recovery = next(
+        (
+            row
+            for row in selected[peak_index + 1 :]
+            if int(row["depth"]) / int(row["capacity"]) <= recovery_threshold
+        ),
+        None,
+    )
+    recovered = threshold_crossed and recovery is not None
+    elapsed_ns = int(selected[-1]["elapsed_ns"]) - int(selected[0]["elapsed_ns"])
+    if elapsed_ns <= 0:
+        raise ValueError("queue-depth samples must span positive elapsed time")
+
+    accepted = max(int(row["accepted"]) for row in selected)
+    processed = max(int(row["processed"]) for row in selected)
+    drained_rate = None
+    if recovered:
+        drain_duration_ns = int(recovery["elapsed_ns"]) - int(peak["elapsed_ns"])
+        drained_messages = int(recovery["processed"]) - int(peak["processed"])
+        if drain_duration_ns > 0 and drained_messages >= 0:
+            drained_rate = drained_messages * 1_000_000_000 / drain_duration_ns
+
+    return {
+        "schema_version": 1,
+        "clock": "monotonic",
+        "queue": selected_queue,
+        "sample_count": len(selected),
+        "capacity_messages": int(peak["capacity"]),
+        "peak_depth_messages": int(peak["depth"]),
+        "peak_occupancy": peak_occupancy,
+        "occupancy_threshold": occupancy_threshold,
+        "recovery_threshold": recovery_threshold,
+        "threshold_crossed": threshold_crossed,
+        "recovered": recovered,
+        "classification": (
+            "saturated-and-drained"
+            if recovered
+            else "saturated-not-drained"
+            if threshold_crossed
+            else "not-saturated"
+        ),
+        "counts": {
+            "offered": offered_messages,
+            "accepted": accepted,
+            "processed": processed,
+            "outstanding": accepted - processed,
+        },
+        "rates_msg_s": {
+            "offered": offered_messages * 1_000_000_000 / offered_duration_ns,
+            "accepted": accepted * 1_000_000_000 / elapsed_ns,
+            "processed": processed * 1_000_000_000 / elapsed_ns,
+            "drained": drained_rate,
+        },
+    }
+
+
+def read_queue_depth(path: Path) -> list[dict]:
+    with path.open(newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+def validate_backpressure_result(result: dict) -> None:
+    if result.get("classification") != "saturated-and-drained":
+        raise ValueError("backpressure run did not cross and recover below queue thresholds")
+    if set(result.get("rates_msg_s", {})) != {"offered", "accepted", "processed", "drained"}:
+        raise ValueError("backpressure rates must include offered, accepted, processed, and drained")
+    if result["rates_msg_s"]["drained"] is None:
+        raise ValueError("backpressure run has no measurable drain rate")
+    if not result.get("sequence", {}).get("lossless"):
+        raise ValueError("backpressure slow policy lost or duplicated messages")
+    if not result.get("memory", {}).get("within_limit"):
+        raise ValueError("backpressure run exceeded the frozen RSS bound")
+
+
 def _validate_rate_sweep_definition(root: Path, definition: dict) -> None:
     profile = tomllib.loads((root / RATE_SWEEP_PROFILE).read_text())["sweep"]
     expected = {
@@ -278,10 +388,9 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     ),
     "e-backpressure": (
         Condition(
-            "burst-2x",
-            "eval/configs/e-backpressure/pipeline-burst.toml",
-            "eval/loadgen/canonical-burst.toml",
-            350_000,
+            "saturated-slow-consumer",
+            "eval/configs/e-backpressure/pipeline-saturated.toml",
+            total_messages=1_000,
         ),
     ),
 }
@@ -2378,6 +2487,45 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         branch_a_window = output / "branch-a/measurement-window.json"
         if branch_a_window.is_file():
             shutil.copyfile(branch_a_window, output / "measurement-window.json")
+
+    if item.experiment == "e-backpressure":
+        definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"][
+            "e-backpressure"
+        ]
+        config = tomllib.loads((root / item.config).read_text())
+        source = next(
+            node for node in config["nodes"].values() if node.get("kind") == "bench-source"
+        )
+        offered_messages = int(source["total_messages"])
+        offered_duration_ns = int(offered_messages / float(source["rate"]) * 1_000_000_000)
+        summary = analyze_backpressure(
+            read_queue_depth(output / "queue-depth.csv"),
+            offered_messages=offered_messages,
+            offered_duration_ns=offered_duration_ns,
+            occupancy_threshold=float(definition["queue_occupancy_threshold"]),
+            recovery_threshold=float(definition["queue_recovery_threshold"]),
+        )
+        with (output / "memory.csv").open(newline="") as handle:
+            rss_peak = max(int(row["rss_bytes"]) for row in csv.DictReader(handle))
+        with (output / "sequence.csv").open(newline="") as handle:
+            sequence = next(csv.DictReader(handle))
+        received = int(sequence["total_received"])
+        gaps = int(sequence["gap_msgs"])
+        duplicates = int(sequence["duplicates_count"])
+        summary["sequence"] = {
+            "offered": offered_messages,
+            "received": received,
+            "gaps": gaps,
+            "duplicates": duplicates,
+            "lossless": received == offered_messages and gaps == 0 and duplicates == 0,
+        }
+        summary["memory"] = {
+            "peak_rss_bytes": rss_peak,
+            "limit_bytes": int(definition["rss_limit_bytes"]),
+            "within_limit": rss_peak <= int(definition["rss_limit_bytes"]),
+        }
+        (output / "backpressure.json").write_text(json.dumps(summary, indent=2) + "\n")
+        validate_backpressure_result(summary)
 
     if item.experiment.startswith("e-iso-"):
         containment = derive_containment(output)

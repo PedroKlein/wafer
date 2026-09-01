@@ -8,13 +8,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, send_downstream};
 
 fn recover_after_timeout(
     filter: &mut FilterNode,
@@ -58,7 +57,7 @@ fn recover_after_timeout(
 #[expect(clippy::too_many_lines, reason = "keeping the linear message and recovery state machine in one function preserves control-flow locality")]
 pub async fn run_filter_loop(
     mut filter: FilterNode,
-    mut receiver: mpsc::Receiver<RuntimeEnvelope>,
+    receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
     mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
     mut policy: ErrorPolicyExecutor,
@@ -66,6 +65,7 @@ pub async fn run_filter_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
@@ -191,6 +191,7 @@ mod tests {
         let _senders = [DownstreamSender {
             sender: output_tx,
             port: "default".into(),
+            queue_metrics: None,
         }];
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(

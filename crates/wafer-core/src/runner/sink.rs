@@ -8,12 +8,11 @@
 
 use std::sync::Arc;
 
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::Sink;
 use crate::node::{NodeMetrics, NodeStateTracker};
-use crate::queue::RuntimeEnvelope;
+use crate::runner::TrackedReceiver;
 
 /// Run a sink adapter loop until cancellation or upstream close.
 ///
@@ -27,11 +26,12 @@ use crate::queue::RuntimeEnvelope;
 /// Steps 3–4 run unconditionally, even if drain encounters errors.
 pub async fn run_sink_loop(
     mut sink: Box<dyn Sink + Send>,
-    mut receiver: mpsc::Receiver<RuntimeEnvelope>,
+    receiver: impl Into<TrackedReceiver>,
     cancel: CancellationToken,
     _state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    let mut receiver = receiver.into();
     let batch_timeout = sink.batch_timeout();
 
     loop {
@@ -93,6 +93,8 @@ pub async fn run_sink_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::queue::RuntimeEnvelope;
+    use tokio::sync::mpsc;
     use crate::testing::channel::ChannelSink;
     use std::time::Duration;
 
