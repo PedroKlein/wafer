@@ -22,7 +22,9 @@ eval/results/
         ├── queue-depth.csv             ← E-Backpressure
         ├── backpressure.json           ← E-Backpressure
         ├── sequence.csv                ← where applicable
-        ├── swap_timeline.json          ← where applicable
+        ├── swap_requests.json          ← API-side hot-swap timing
+        ├── swap_timeline.json          ← sink-observed output transitions
+        ├── hotswap-analysis.json       ← matched internal/output-gap evidence
         ├── branch-a/                   ← E-Iso-7 only
         │   ├── latency.hdr
         │   ├── throughput.csv
@@ -91,14 +93,16 @@ before reading. The matrix below is authoritative:
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent latency histogram, throughput series, sequence accounting, and measurement window for each branch. Root-level fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local offered/received counts, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
 | `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
-| `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `wafer-runtime` orchestrator's `SwapTimeline` emitter | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
+| `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with wall-clock request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's internal `compile_ns`, `instantiate_ns`, `signal_ns`, `ack_ns`, and `convergence_ns` phases. |
+| `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `BenchSink` | Sink-observed plugin-version transitions. Each `pause_ns` is an output interarrival gap and is not an internal swap duration. |
+| `hotswap-analysis.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `canonical_runner.py` | Index-matched API and sink observations with explicit `*_ns` names: internal phases, `http_total_ns`, and `sink_observed_output_gap_ns`. Includes the unique measurement source leaf so shared E-Swap-2/6 views do not multiply samples. |
 | `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
 
 ### Ownership summary
 
 - `wafer-runtime` owns `runtime-provenance.json`, E-Perf-9 `startup.json`,
   `latency.hdr` (via `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
-  (via `BenchSink` when `track_sequences=true`), `swap_timeline.json`,
+  (via `BenchSink` when `track_sequences=true`), sink-observed `swap_timeline.json`,
   `memory.csv` (via `MemoryRecorder`), `queue-depth.csv` (via `QueueDepthRecorder`),
   `recovery.csv` (exact recovery samples), and `per_node_metrics.csv`
   (via `PipelineOrchestrator::export_per_node_metrics`).
@@ -106,7 +110,8 @@ before reading. The matrix below is authoritative:
   `latency.hdr` (E2E path), `sequence.csv`, and opt-in `received.csv` traces.
 - `wafer-loadgen publish` owns opt-in `published.csv` traces.
 - `canonical_runner.py` owns E-Perf-10 `resource-usage.csv`,
-  `process-audit.json`, and `rate-sweep.json`, E-Backpressure `backpressure.json`, plus E-Iso-7
+  `process-audit.json`, and `rate-sweep.json`, E-Backpressure `backpressure.json`,
+  E-Swap `swap_requests.json` and `hotswap-analysis.json`, plus E-Iso-7
   `branch-isolation.json` and the batch-level branch-A impact summary.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
   `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9

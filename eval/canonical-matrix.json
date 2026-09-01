@@ -263,7 +263,7 @@
       "warmup_secs": 30,
       "measurement_secs": 120,
       "conditions": ["steady"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_timeline.json"],
+      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
       "analysis": "05-hotswap-timeline.ipynb",
       "shares_measurements_with": ["e-swap-2", "e-swap-6"]
     },
@@ -276,7 +276,7 @@
       "warmup_secs": 30,
       "measurement_secs": 120,
       "conditions": ["steady"],
-      "required_outputs": ["sequence.csv", "swap_timeline.json"],
+      "required_outputs": ["sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
       "analysis": "05-hotswap-timeline.ipynb",
       "shares_measurements_with": ["e-swap-1", "e-swap-6"]
     },
@@ -300,7 +300,7 @@
       "warmup_secs": 30,
       "measurement_secs": 120,
       "conditions": ["burst-2x"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_timeline.json"],
+      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
       "analysis": "05-hotswap-timeline.ipynb"
     },
     "e-swap-5": {
@@ -324,7 +324,7 @@
       "warmup_secs": 30,
       "measurement_secs": 120,
       "conditions": ["steady"],
-      "required_outputs": ["swap_timeline.json"],
+      "required_outputs": ["swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
       "analysis": "05-hotswap-timeline.ipynb",
       "shares_measurements_with": ["e-swap-1", "e-swap-2"]
     },

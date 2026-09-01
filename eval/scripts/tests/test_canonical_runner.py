@@ -19,7 +19,9 @@ from canonical_runner import (  # noqa: E402
     classify_sustainable_throughput,
     compare_branch_a,
     compare_branch_conditions,
+    copy_shared_result,
     derive_branch_isolation,
+    derive_hotswap_evidence,
     derive_containment,
     evaluate_validation_gate,
     loadgen_command,
@@ -81,6 +83,115 @@ def test_schedule_covers_performance_matrix() -> None:
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
     assert len({item.result_key for item in schedule}) == len(schedule)
+
+
+def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:
+    requests = [
+        {
+            "event_index": 0,
+            "request_duration_ns": 120_000_000,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {
+                "timeline": {
+                    "compile_ns": 100_000_000,
+                    "instantiate_ns": 10_000_000,
+                    "signal_ns": 1_000,
+                    "ack_ns": 2_000_000,
+                    "convergence_ns": 3_000_000,
+                }
+            },
+        },
+        {
+            "event_index": 1,
+            "request_duration_ns": 2_000_000,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {
+                "timeline": {
+                    "compile_ns": 100_000,
+                    "instantiate_ns": 200_000,
+                    "signal_ns": 1_000,
+                    "ack_ns": 300_000,
+                    "convergence_ns": 400_000,
+                }
+            },
+        },
+    ]
+    sink = {"transitions": [{"pause_ns": 0}, {"pause_ns": 1_000_000}]}
+
+    evidence = derive_hotswap_evidence(
+        requests,
+        sink,
+        experiment="e-swap-4",
+        condition="burst-2x",
+        source_leaf="eval/results/e-swap-4/batch/burst-2x/run-01-attempt-01",
+    )
+
+    assert evidence["events"][0]["http_total_ns"] == 120_000_000
+    assert evidence["events"][0]["sink_observed_output_gap_ns"] == 0
+    assert evidence["events"][1]["compile_ns"] == 100_000
+    assert evidence["events"][1]["sink_observed_output_gap_ns"] == 1_000_000
+    assert "does not imply" in evidence["interpretation"]
+    assert evidence["measurement_source_leaf"].startswith("eval/results/e-swap-4/")
+
+
+def test_hotswap_evidence_rejects_unit_name_conflation() -> None:
+    request = {
+        "event_index": 0,
+        "request_duration_ns": 2_000_000,
+        "http_status": 200,
+        "body": {
+            "timeline": {
+                "compile_ms": 1.0,
+                "instantiate_ns": 1,
+                "signal_ns": 1,
+                "ack_ns": 1,
+                "convergence_ns": 1,
+            }
+        },
+    }
+    with pytest.raises(ValueError, match="compile_ns"):
+        derive_hotswap_evidence(
+            [request],
+            {"transitions": [{"pause_ns": 1}]},
+            experiment="e-swap-1",
+            condition="steady",
+            source_leaf="source",
+        )
+
+
+def test_shared_hotswap_result_preserves_single_source_leaf(tmp_path: Path) -> None:
+    source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
+    source.mkdir(parents=True)
+    (source / "canonical-status.json").write_text('{"status":"passed"}')
+    (source / "metadata.json").write_text(
+        json.dumps({"experiment": "e-swap-1", "measurement_source_leaf": str(source.relative_to(tmp_path))})
+    )
+    (source / "hotswap-analysis.json").write_text(
+        json.dumps({"experiment": "e-swap-1", "measurement_source_leaf": str(source.relative_to(tmp_path)), "events": [{"event_index": 0}]})
+    )
+    item = RunItem(
+        experiment="e-swap-2",
+        condition="steady",
+        run_index=1,
+        config="unused.toml",
+        warmup_secs=30,
+        measurement_secs=120,
+        shared_from="e-swap-1",
+    )
+
+    target = copy_shared_result(tmp_path, "batch", item)
+
+    metadata = json.loads((target / "metadata.json").read_text())
+    analysis = json.loads((target / "hotswap-analysis.json").read_text())
+    expected_source = str(source.relative_to(tmp_path))
+    assert metadata["shared_from"] == expected_source
+    assert metadata["measurement_source_leaf"] == expected_source
+    assert metadata["shared_measurement"] is True
+    assert analysis["shared_from"] == expected_source
+    assert analysis["measurement_source_leaf"] == expected_source
+    assert analysis["experiment"] == "e-swap-2"
 
 
 def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:
@@ -564,6 +675,9 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     assert {"recovery.csv", "recovery.json"} <= set(matrix["e-iso-8"]["required_outputs"])
     for index in range(1, 7):
         assert "swap_timeline.json" in matrix[f"e-swap-{index}"]["required_outputs"]
+    for index in (1, 2, 4, 6):
+        outputs = set(matrix[f"e-swap-{index}"]["required_outputs"])
+        assert {"swap_requests.json", "hotswap-analysis.json"} <= outputs
     assert "rollback.json" in matrix["e-swap-5"]["required_outputs"]
 
 

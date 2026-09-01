@@ -90,6 +90,72 @@ STARTUP_PHASES = (
     "first_process",
 )
 STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS = 5_000_000
+HOTSWAP_SHARED_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-6"}
+HOTSWAP_PHASE_FIELDS = (
+    "compile_ns",
+    "instantiate_ns",
+    "signal_ns",
+    "ack_ns",
+    "convergence_ns",
+)
+
+
+def derive_hotswap_evidence(
+    requests: list[dict],
+    sink_timeline: dict,
+    *,
+    experiment: str,
+    condition: str,
+    source_leaf: str,
+) -> dict:
+    transitions = sink_timeline.get("transitions")
+    if not isinstance(transitions, list):
+        raise ValueError("swap_timeline.json must contain a transitions array")
+    if len(requests) != len(transitions):
+        raise ValueError(
+            f"hot-swap request/transition count mismatch: {len(requests)} != {len(transitions)}"
+        )
+
+    events = []
+    for index, (request, transition) in enumerate(zip(requests, transitions, strict=True)):
+        timeline = request.get("body", {}).get("timeline", {})
+        for field in HOTSWAP_PHASE_FIELDS:
+            value = timeline.get(field)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"hot-swap event {index} requires non-negative integer {field}")
+        http_total_ns = request.get("request_duration_ns")
+        output_gap_ns = transition.get("pause_ns")
+        if type(http_total_ns) is not int or http_total_ns < 0:
+            raise ValueError(f"hot-swap event {index} requires non-negative integer request_duration_ns")
+        if type(output_gap_ns) is not int or output_gap_ns < 0:
+            raise ValueError(f"hot-swap event {index} requires non-negative integer pause_ns")
+        events.append(
+            {
+                "event_index": int(request.get("event_index", index)),
+                **{field: timeline[field] for field in HOTSWAP_PHASE_FIELDS},
+                "http_total_ns": http_total_ns,
+                "http_total_clock": request.get(
+                    "request_duration_clock", "wall-clock-difference-legacy"
+                ),
+                "sink_observed_output_gap_ns": output_gap_ns,
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "duration_unit": "ns",
+        "experiment": experiment,
+        "condition": condition,
+        "measurement_source_leaf": source_leaf,
+        "shared_from": None,
+        "sample_count": len(events),
+        "events": events,
+        "interpretation": (
+            "Internal swap phases, HTTP request duration, and sink-observed output gaps are "
+            "separate measurements. A smaller sink-observed output gap does not imply a faster "
+            "internal swap because queued output can mask internal disruption."
+        ),
+    }
 
 
 def analyze_backpressure(
@@ -1210,9 +1276,19 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     status_path.unlink(missing_ok=True)
     metadata_path = selection.path / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
+    source_leaf = str(source.relative_to(root))
     metadata["experiment"] = item.experiment
-    metadata["shared_from"] = str(source.relative_to(root))
+    metadata["shared_from"] = source_leaf
+    metadata["measurement_source_leaf"] = source_leaf
+    metadata["shared_measurement"] = True
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+    analysis_path = selection.path / "hotswap-analysis.json"
+    if analysis_path.is_file():
+        analysis = json.loads(analysis_path.read_text())
+        analysis["experiment"] = item.experiment
+        analysis["shared_from"] = source_leaf
+        analysis["measurement_source_leaf"] = source_leaf
+        analysis_path.write_text(json.dumps(analysis, indent=2) + "\n")
     return selection.path
 
 
@@ -1309,7 +1385,9 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 event_started = time.monotonic()
                 plugin = panics if item.experiment == "e-swap-5" else (v2 if event_index % 2 == 0 else v1)
                 request_started_ns = time.time_ns()
+                request_started_monotonic_ns = time.monotonic_ns()
                 response = post_hot_swap("transform", plugin)
+                request_duration_ns = time.monotonic_ns() - request_started_monotonic_ns
                 request_finished_ns = time.time_ns()
                 requests.append(
                     {
@@ -1317,7 +1395,9 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                         "plugin": plugin.name,
                         "request_started_ns": request_started_ns,
                         "request_finished_ns": request_finished_ns,
-                        "request_duration_ns": request_finished_ns - request_started_ns,
+                        "request_timestamp_clock": "unix-epoch",
+                        "request_duration_ns": request_duration_ns,
+                        "request_duration_clock": "monotonic",
                         **response,
                     }
                 )
@@ -2414,6 +2494,9 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     if item.experiment == "e-perf-10":
         metadata["thesis_evidence"] = False
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
+    if item.experiment in HOTSWAP_SHARED_EXPERIMENTS:
+        metadata["measurement_source_leaf"] = str(output.relative_to(root))
+        metadata["shared_measurement"] = False
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
         loadgen = metadata.get("loadgen") or {}
@@ -2487,6 +2570,18 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         branch_a_window = output / "branch-a/measurement-window.json"
         if branch_a_window.is_file():
             shutil.copyfile(branch_a_window, output / "measurement-window.json")
+
+    if item.experiment in {"e-swap-1", "e-swap-4"}:
+        requests = json.loads((output / "swap_requests.json").read_text())
+        sink_timeline = json.loads((output / "swap_timeline.json").read_text())
+        evidence = derive_hotswap_evidence(
+            requests,
+            sink_timeline,
+            experiment=item.experiment,
+            condition=item.condition,
+            source_leaf=str(output.relative_to(root)),
+        )
+        (output / "hotswap-analysis.json").write_text(json.dumps(evidence, indent=2) + "\n")
 
     if item.experiment == "e-backpressure":
         definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"][
