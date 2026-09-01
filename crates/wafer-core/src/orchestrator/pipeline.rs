@@ -8,6 +8,7 @@
 //! See docs/rfcs/RFC-005-orchestrator.md D6, D11, D12.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -33,6 +34,14 @@ use crate::runner::router::run_router_loop;
 
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
+fn spawn_wasm_runner(
+    tasks: &mut JoinSet<()>,
+    runner: impl Future<Output = ()> + Send + 'static,
+) {
+    let runtime = tokio::runtime::Handle::current();
+    tasks.spawn_blocking(move || runtime.block_on(runner));
+}
 
 /// Pipeline orchestrator managing node lifecycle with watch-channel hot-swap.
 ///
@@ -440,7 +449,7 @@ impl PipelineOrchestrator {
                 NodeBundleKind::Transform { receiver, senders, swap_rx, policy, node } => {
                     if let Some(transform) = node {
                         let hs_cfg = hot_swap_config.clone();
-                        self.tasks.spawn(async move {
+                        spawn_wasm_runner(&mut self.tasks, async move {
                             run_transform_loop_with_config(
                                 transform, receiver, senders, swap_rx,
                                 policy, cancel, state, metrics, hs_cfg,
@@ -456,7 +465,7 @@ impl PipelineOrchestrator {
                 }
                 NodeBundleKind::Filter { receiver, senders, swap_rx, policy, node } => {
                     if let Some(filter) = node {
-                        self.tasks.spawn(async move {
+                        spawn_wasm_runner(&mut self.tasks, async move {
                             run_filter_loop(
                                 filter, receiver, senders, swap_rx,
                                 policy, cancel, state, metrics,
@@ -471,7 +480,7 @@ impl PipelineOrchestrator {
                 }
                 NodeBundleKind::Router { receiver, senders, swap_rx, policy, node } => {
                     if let Some(router) = node {
-                        self.tasks.spawn(async move {
+                        spawn_wasm_runner(&mut self.tasks, async move {
                             run_router_loop(
                                 router, receiver, senders, swap_rx,
                                 policy, cancel, state, metrics,
@@ -861,7 +870,8 @@ async fn run_dlq_sink(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
+    use std::sync::Mutex;
 
     use crate::config::{
         Config, EdgeDef, EngineConfig, NodeDef, SourceDef, SinkDef, StdinSourceConfig,
@@ -934,6 +944,32 @@ mod tests {
 
         assert_eq!(orch.wasm_node_count(), 1);
         assert!(orch.swappable_nodes().contains(&"t1"));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn wasm_runner_keeps_block_in_place_on_one_thread() {
+        let mut tasks = JoinSet::new();
+        let thread_ids = Arc::new(Mutex::new(HashSet::new()));
+        let observed = Arc::clone(&thread_ids);
+        spawn_wasm_runner(&mut tasks, async move {
+            for _ in 0..10_000 {
+                tokio::task::block_in_place(|| {
+                    observed
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .insert(std::thread::current().id());
+                });
+            }
+        });
+
+        tasks.join_next().await.expect("runner task").expect("runner result");
+        assert_eq!(
+            thread_ids
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]
