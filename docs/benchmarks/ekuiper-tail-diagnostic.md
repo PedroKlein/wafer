@@ -65,7 +65,7 @@ These small-N operating-point comparisons show that corrected eKuiper retained a
 ## Remaining limits
 
 - The corrected runs are diagnostics, not the planned N≥30 evidence.
-- eKuiper operator concurrency remained at its default of one. A concurrency decision must be made before confirmatory collection and frozen before seeing final results.
+- A later two-block diagnostic found no material p50/p95, throughput, CPU, or RSS improvement from operator concurrency 3. The comparator freezes the default concurrency 1; the data do not characterize best-tuned eKuiper.
 - WAFER and Native capacity were censored by CPU-0 support-plane load before their SUT ceilings were isolated.
 - Direct MQTT is a support-path guardrail, not a comparator and not a percentile subtraction term.
 - The comparison matches externally observable behavior, not internal feature breadth or implementation complexity.
@@ -77,4 +77,4 @@ These small-N operating-point comparisons show that corrected eKuiper retained a
 2. Keep explicit sink QoS 1 in the canonical comparator and its regression test.
 3. Keep fixed-load latency separate from sustainable-throughput claims.
 4. Use run-level paired inference for confirmatory blocks; message samples are not independent experimental units.
-5. Resolve the eKuiper concurrency choice and WAFER memory-retention finding before a definitive thesis comparison.
+5. Preserve the frozen default concurrency 1 decision and resolve the WAFER memory-retention finding before a definitive thesis comparison.

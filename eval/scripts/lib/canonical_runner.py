@@ -1835,6 +1835,7 @@ def ekuiper_operator_concurrency(root: Path) -> int:
 
 
 def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
+    operator_concurrency = ekuiper_operator_concurrency(root)
     service = _service_properties()
     main_pid = int(service.get("MainPID", "0"))
     snapshot = _process_snapshot(main_pid)
@@ -1857,6 +1858,9 @@ def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
         r"[0-9a-f]{64}", str(install_receipt.get("sha256", ""))
     ):
         raise ValueError("eKuiper package version/checksum does not match install receipt")
+    rule = _url_value("http://127.0.0.1:9081/rules/pipeline_a")
+    if not isinstance(rule, dict) or rule.get("options", {}).get("concurrency") != operator_concurrency:
+        raise ValueError("active eKuiper rule does not use the frozen operator concurrency")
     audit = {
         "captured_at": utc_now(),
         "system": "ekuiper",
@@ -1879,13 +1883,13 @@ def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
         },
         "process_snapshot": snapshot,
         "stream": _url_value("http://127.0.0.1:9081/streams/wafer_telemetry"),
-        "rule": _url_value("http://127.0.0.1:9081/rules/pipeline_a"),
+        "rule": rule,
         "seed_dry_run": json.loads(
             subprocess.check_output(
                 [
                     str(root / "eval/ekuiper/seed-pipeline-a.sh"),
                     "--concurrency",
-                    str(ekuiper_operator_concurrency(root)),
+                    str(operator_concurrency),
                     "--dry-run",
                 ],
                 cwd=root,

@@ -37,7 +37,7 @@ MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT w
 
 `seed-pipeline-a.sh` creates the `wafer_telemetry` stream and `pipeline_a` rule through the REST API on port 9081. Its broker is configurable through `EKUIPER_BROKER_URL` and defaults to native Mosquitto at `tcp://127.0.0.1:1883`.
 
-The MQTT sink explicitly sets MQTT 3.1.1, QoS 1, `retained: false`, and `sendSingle: true`. The stream projects the same five telemetry fields used by WAFER and native Rust. `smoke-test.sh` proves the inclusive lower bound, exclusive out-of-range records, field preservation, and unchanged `ts`/`seq` values.
+The MQTT sink explicitly sets MQTT 3.1.1, QoS 1, `retained: false`, and `sendSingle: true`. Rule operator concurrency is explicitly frozen at 1. The stream projects the same five telemetry fields used by WAFER and native Rust. `smoke-test.sh` proves the inclusive lower bound, exclusive out-of-range records, field preservation, and unchanged `ts`/`seq` values.
 
 ## Comparator procedure
 
@@ -59,7 +59,7 @@ See [Why the v11 eKuiper latency tail was misleading](ekuiper-tail-diagnostic.md
 
 ## Known limitations
 
-- Corrected small-N diagnostics characterize the frozen default-style comparator, not eKuiper's best achievable tuning. The operator-concurrency choice must be audited and frozen before confirmatory collection.
+- Corrected small-N diagnostics characterize the frozen default-style comparator, not eKuiper's best achievable tuning. A two-block diagnostic compared operator concurrency 1 and 3 at 1,000 messages/second. Both settings had a median p95 of 0.327 ms and similar throughput, CPU, and RSS. Concurrency 3 had a lower median p99, 2.411 ms versus 2.652 ms, but N=2 is insufficient to justify selecting a non-default setting after observation. The canonical comparator therefore freezes concurrency 1 regardless of ranking impact.
 - Native Pi 5 results are not directly comparable to the old Docker Desktop macOS shakedowns. The latter include a Linux VM and bridge-network overhead.
 - Raspberry Pi 5 results are not numerically interchangeable with Raspberry Pi 4 results from prior literature. Report absolute values and WAFER/native/eKuiper ratios.
 - eKuiper and WAFER/native Pipeline A all decode the telemetry field used by the filter. Their output schemas, predicate bounds, topics, and QoS are matched; their internal JSON implementations remain engine-specific.
