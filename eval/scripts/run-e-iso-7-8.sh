@@ -37,6 +37,8 @@ WAFER_BIN="target/release/wafer"
 # an interrupt during the iso-8 recovery scrape leaves the runtime holding
 # the metrics port.
 _last_wafer_pid=""
+# Invoked indirectly by trap.
+# shellcheck disable=SC2329
 _cleanup_iso78() {
     local rc=$?
     [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
@@ -62,7 +64,6 @@ _log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 ts=$(date -u +'%Y-%m-%dT%H-%M-%SZ')
 git_sha=$(git rev-parse --short HEAD)
-hostname_str=$(hostname)
 
 pass_count=0
 fail_count=0
@@ -71,196 +72,85 @@ fail_count=0
 run_iso_7() {
     _log "E-Iso-7: diamond fault isolation"
 
-    config_attack="eval/configs/e-iso-7/pipeline.toml"
     config_control="eval/configs/e-iso-7/pipeline-control.toml"
+    config_panic="eval/configs/e-iso-7/pipeline.toml"
+    config_epoch="eval/configs/e-iso-7/pipeline-epoch-attack.toml"
     result_root="eval/results/e-iso-7/shakedown-macos-${ts}"
-
-    [ -f "$config_attack" ] || { _log "MISSING config: $config_attack"; fail_count=$((fail_count+1)); return; }
-    [ -f "$config_control" ] || { _log "MISSING config: $config_control"; fail_count=$((fail_count+1)); return; }
-
-    # --- Control run (both branches pass-through) ---
-    _log "  Control run: both branches pass-through"
     control_dir="$result_root/control"
-    mkdir -p "$control_dir"
-    cp "$config_control" "$control_dir/config.toml"
+    panic_dir="$result_root/panic-attack"
+    epoch_dir="$result_root/epoch-loop-attack"
 
-    # Pipeline exits non-zero when BenchSource finishes; both branches are
-    # pass-through so this is expected normal completion.
-    WAFER_BENCH_OUTPUT_DIR="$control_dir" "$WAFER_BIN" --config "$config_control" --no-api \
-        >"$control_dir/stdout.log" 2>&1 || true
+    for condition in control panic-attack epoch-loop-attack; do
+        case "$condition" in
+            control) config="$config_control"; run_dir="$control_dir" ;;
+            panic-attack) config="$config_panic"; run_dir="$panic_dir" ;;
+            epoch-loop-attack) config="$config_epoch"; run_dir="$epoch_dir" ;;
+        esac
+        mkdir -p "$run_dir"
+        cp "$config" "$run_dir/config.toml"
+        WAFER_BENCH_OUTPUT_DIR="$run_dir" "$WAFER_BIN" --config "$config" --no-api \
+            >"$run_dir/stdout.log" 2>&1 || true
 
-    if grep -q "thread.*panicked" "$control_dir/stdout.log" 2>/dev/null; then
-        _log "  BLOCKER: Tokio panic in control run"
-        fail_count=$((fail_count+1)); return
-    fi
+        if grep -q "thread.*panicked" "$run_dir/stdout.log" 2>/dev/null; then
+            _log "  BLOCKER: Tokio panic in $condition run"
+            fail_count=$((fail_count+1)); return
+        fi
+        for branch in branch-a branch-b; do
+            for artifact in latency.hdr throughput.csv sequence.csv; do
+                [ -f "$run_dir/$branch/$artifact" ] || {
+                    _log "  BLOCKER: missing $condition/$branch/$artifact"
+                    fail_count=$((fail_count+1)); return
+                }
+            done
+            target/release/wafer-loadgen hdr-summary \
+                --hdr "$run_dir/$branch/latency.hdr" \
+                --output "$run_dir/$branch/percentiles.json"
+        done
+    done
 
-    # Extract branch_a processed count from control log
-    control_branch_a=$(grep -c "processed.*branch_a" "$control_dir/stdout.log" 2>/dev/null || true)
-    control_branch_a=${control_branch_a:-0}
-    # Use metrics from throughput.csv if available, otherwise count from logs
-    if [ -f "$control_dir/throughput.csv" ]; then
-        control_thr=$(python3 -c "
-import csv
-total = 0
-with open('$control_dir/throughput.csv') as f:
-    reader = csv.reader(f)
-    header = next(reader, None)
-    for row in reader:
-        if len(row) >= 2:
-            total += int(row[1])
-print(total)
-" 2>/dev/null || echo "0")
-    else
-        control_thr="0"
-    fi
-    _log "  Control run done: throughput.csv total=$control_thr"
+    python3 - "$REPO_ROOT" "$control_dir" "$panic_dir" "$epoch_dir" "$result_root" "$git_sha" <<'PYTHON'
+import json
+import sys
+from pathlib import Path
 
-    # --- Attack run (branch_b = panic) ---
-    _log "  Attack run: branch_b = panic"
-    attack_dir="$result_root/run-1"
-    mkdir -p "$attack_dir"
-    cp "$config_attack" "$attack_dir/config.toml"
+root, control_dir, panic_dir, epoch_dir, result_root = map(Path, sys.argv[1:6])
+git_sha = sys.argv[6]
+sys.path.insert(0, str(root / "eval/scripts/lib"))
+from canonical_runner import compare_branch_conditions, derive_branch_isolation
 
-    # Pipeline exits non-zero: branch_b (panic attack) causes unrecoverable
-    # errors; runtime shuts down after BenchSource completes.
-    WAFER_BENCH_OUTPUT_DIR="$attack_dir" "$WAFER_BIN" --config "$config_attack" --no-api \
-        >"$attack_dir/stdout.log" 2>&1 || true
-
-    if grep -q "thread.*panicked" "$attack_dir/stdout.log" 2>/dev/null; then
-        _log "  BLOCKER: Tokio panic in attack run"
-        fail_count=$((fail_count+1)); return
-    fi
-
-    attack_thr="0"
-    if [ -f "$attack_dir/throughput.csv" ]; then
-        attack_thr=$(python3 -c "
-import csv
-total = 0
-with open('$attack_dir/throughput.csv') as f:
-    reader = csv.reader(f)
-    header = next(reader, None)
-    for row in reader:
-        if len(row) >= 2:
-            total += int(row[1])
-print(total)
-" 2>/dev/null || echo "0")
-    fi
-
-    # Count branch-specific throughput from logs
-    # The runtime logs each processed message per node; branch_a should process ~5000
-    branch_a_errors=$(grep -c 'ERROR.*branch_a' "$attack_dir/stdout.log" || true)
-    branch_b_errors=$(grep -c 'unrecoverable error.*branch_b\|branch_b.*unrecoverable' "$attack_dir/stdout.log" || true)
-    if [ "$branch_b_errors" = "0" ]; then
-        branch_b_errors=$(grep -c 'unrecoverable error' "$attack_dir/stdout.log" || true)
-    fi
-
-    # Compare throughput: if control run produces N messages at sink from branch_a,
-    # attack run should produce approximately the same from branch_a.
-    # Since BenchSink tracks total received, in control both branches deliver → ~10000
-    # In attack, only branch_a delivers → ~5000
-    # We compare branch_a specifically: in both cases branch_a should deliver ~5000
-
-    # Calculate throughput drop percentage
-    # Control: branch_a delivers 5000 messages (half of 10000 total at sink)
-    # Attack: branch_a delivers ~5000 messages (branch_b delivers 0)
-    total_messages=5000
-
-    # The meaningful comparison: attack run's healthy throughput vs control's healthy throughput.
-    # Since both are the same BenchSource rate, branch_a processes at source rate in both.
-    # We measure by: does pipeline complete gracefully? branch_a errors = 0? 
-    branch_a_healthy="true"
-    if [ "$branch_a_errors" -gt 0 ]; then
-        branch_a_healthy="false"
-    fi
-
-    # Compute throughput delta from pipeline duration (both should be ~5s for 5000 msgs at 1000/s)
-    control_duration=$(python3 -c "
-import re
-lines = open('$control_dir/stdout.log').read()
-# Find pipeline running and completed timestamps
-import datetime
-running = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z).*Pipeline running', lines)
-completed = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z).*Pipeline completed', lines)
-if running and completed:
-    t0 = datetime.datetime.fromisoformat(running.group(1).replace('Z', '+00:00'))
-    t1 = datetime.datetime.fromisoformat(completed.group(1).replace('Z', '+00:00'))
-    print(f'{(t1-t0).total_seconds():.3f}')
-else:
-    print('0')
-")
-
-    attack_duration=$(python3 -c "
-import re
-lines = open('$attack_dir/stdout.log').read()
-import datetime
-running = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z).*Pipeline running', lines)
-completed = re.search(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z).*Pipeline completed', lines)
-if running and completed:
-    t0 = datetime.datetime.fromisoformat(running.group(1).replace('Z', '+00:00'))
-    t1 = datetime.datetime.fromisoformat(completed.group(1).replace('Z', '+00:00'))
-    print(f'{(t1-t0).total_seconds():.3f}')
-else:
-    print('0')
-")
-
-    # Branch-A throughput: total_messages / duration (rate-limited by source)
-    # In both control and attack, branch_a receives all 5000 messages from source
-    # and processes them at source rate. The <1% drop means the attack branch doesn't
-    # slow down branch_a.
-    drop_pct=$(python3 -c "
-cd = float('$control_duration') if float('$control_duration') > 0 else 1.0
-ad = float('$attack_duration') if float('$attack_duration') > 0 else 1.0
-control_rate = $total_messages / cd
-attack_rate = $total_messages / ad
-# Positive drop means attack is slower
-if control_rate > 0:
-    drop = (control_rate - attack_rate) / control_rate * 100
-else:
-    drop = 0
-print(f'{drop:.4f}')
-")
-
-    _log "  Control duration: ${control_duration}s, Attack duration: ${attack_duration}s"
-    _log "  Throughput drop: ${drop_pct}%"
-
-    # Write per_node_metrics.csv
-    cat > "$attack_dir/per_node_metrics.csv" <<EOF
-node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count,branch
-source,$total_messages,$total_messages,0,0,0,N/A
-branch_a,$total_messages,$total_messages,0,0,0,A
-branch_b,$total_messages,0,$branch_b_errors,${attack_duration},${branch_b_errors},B
-sink,$total_messages,$total_messages,0,0,0,N/A
-EOF
-
-    # Write shakedown.json
-    python3 -c "
-import json, datetime
-data = {
-    'experiment': 'e-iso-7',
-    'host': 'shakedown-macos',
-    'generated_at_utc': datetime.datetime.now(datetime.timezone.utc).isoformat().replace('+00:00', 'Z'),
-    'total_messages': $total_messages,
-    'control_duration_s': float('$control_duration'),
-    'attack_duration_s': float('$attack_duration'),
-    'control_branch_a_thr': round($total_messages / max(float('$control_duration'), 0.001), 2),
-    'attack_branch_a_thr': round($total_messages / max(float('$attack_duration'), 0.001), 2),
-    'branch_a_throughput_drop_pct': round(float('$drop_pct'), 4),
-    'branch_a_errors': $branch_a_errors,
-    'branch_b_traps': $branch_b_errors,
-    'branch_a_healthy': '$branch_a_healthy' == 'true',
-    'contained': '$branch_a_healthy' == 'true' and abs(float('$drop_pct')) < 1.0,
-    'git_sha': '$git_sha'
+runs = {}
+for condition, run_dir in (
+    ("control", control_dir),
+    ("panic-attack", panic_dir),
+    ("epoch-loop-attack", epoch_dir),
+):
+    result = derive_branch_isolation(run_dir, 30, 60, 90_000)
+    result["condition"] = condition
+    (run_dir / "branch-isolation.json").write_text(json.dumps(result, indent=2) + "\n")
+    runs[condition] = [result]
+summary = {
+    "experiment": "e-iso-7",
+    "host": "shakedown-macos",
+    "git_sha": git_sha,
+    "comparisons": compare_branch_conditions(runs),
 }
-json.dump(data, open('$result_root/shakedown.json', 'w'), indent=2)
-print(json.dumps(data, indent=2))
-"
-    # Pass/fail
-    is_contained=$(python3 -c "print('true' if abs(float('$drop_pct')) < 1.0 and '$branch_a_healthy' == 'true' else 'false')")
-    if [ "$is_contained" = "true" ]; then
-        _log "  E-Iso-7: PASS ✓ (drop=${drop_pct}%, branch_a_healthy=$branch_a_healthy)"
+branch_a = [samples[0]["branches"]["branch_a"] for samples in runs.values()]
+summary["contained"] = all(
+    branch["gap_messages"] == 0 and branch["duplicates"] == 0
+    for branch in branch_a
+) and all(
+    abs(comparison["branch_a_impact"]["throughput_drop_percent"]) < 1.0
+    for comparison in summary["comparisons"].values()
+)
+(result_root / "shakedown.json").write_text(json.dumps(summary, indent=2) + "\n")
+print(json.dumps(summary, indent=2))
+PYTHON
+
+    if python3 -c "import json; print(str(json.load(open('$result_root/shakedown.json'))['contained']).lower())" | grep -qx true; then
+        _log "  E-Iso-7: PASS ✓"
         pass_count=$((pass_count+1))
     else
-        _log "  E-Iso-7: FAIL ✗ (drop=${drop_pct}%, branch_a_healthy=$branch_a_healthy)"
+        _log "  E-Iso-7: FAIL ✗"
         fail_count=$((fail_count+1))
     fi
 }

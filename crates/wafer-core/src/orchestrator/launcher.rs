@@ -191,21 +191,30 @@ fn create_sink(node_id: &str, sink_def: &SinkDef) -> Box<dyn Sink + Send> {
 }
 
 fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
-    let mut core = BenchSinkConfig {
+    let core = BenchSinkConfig {
         warmup_secs: cfg.warmup_secs,
         track_sequences: cfg.track_sequences,
         track_hotswap: cfg.track_hotswap,
-        output_dir: cfg.output_dir.as_ref().map(std::path::PathBuf::from),
+        output_dir: resolve_bench_sink_output_dir(
+            cfg.output_dir.as_deref(),
+            std::env::var_os("WAFER_BENCH_OUTPUT_DIR").as_deref(),
+        ),
     };
-    // If the environment (eval scripts) supplied a WAFER_BENCH_OUTPUT_DIR,
-    // let it override the TOML value — same convention used by other
-    // eval-facing knobs. Keeps configs portable across hosts.
-    if let Ok(env_dir) = std::env::var("WAFER_BENCH_OUTPUT_DIR") {
-        if !env_dir.is_empty() {
-            core.output_dir = Some(std::path::PathBuf::from(env_dir));
-        }
-    }
     BenchSink::new(core).with_id(node_id.to_owned())
+}
+
+fn resolve_bench_sink_output_dir(
+    configured: Option<&str>,
+    environment: Option<&std::ffi::OsStr>,
+) -> Option<PathBuf> {
+    let configured = configured.map(Path::new);
+    let Some(base) = environment.filter(|path| !path.is_empty()) else {
+        return configured.map(Path::to_path_buf);
+    };
+    if let Some(relative) = configured.filter(|path| path.is_relative()) {
+        return Some(Path::new(base).join(relative));
+    }
+    Some(PathBuf::from(base))
 }
 
 // =============================================================================
@@ -625,6 +634,23 @@ mod tests {
     use super::*;
     use crate::config::{BenchSinkConfigToml, BenchSourceConfigToml};
     use crate::node::Lifecycle;
+
+    #[test]
+    fn bench_sink_relative_output_directory_is_scoped_to_run() {
+        let run_dir = Path::new("/tmp/e-iso-7/control");
+        assert_eq!(
+            resolve_bench_sink_output_dir(Some("branch-a"), Some(run_dir.as_os_str())),
+            Some(run_dir.join("branch-a"))
+        );
+        assert_eq!(
+            resolve_bench_sink_output_dir(None, Some(run_dir.as_os_str())),
+            Some(run_dir.to_path_buf())
+        );
+        assert_eq!(
+            resolve_bench_sink_output_dir(Some("/configured/output"), Some(run_dir.as_os_str())),
+            Some(run_dir.to_path_buf())
+        );
+    }
 
     #[test]
     fn launch_bench_source_and_sink() {

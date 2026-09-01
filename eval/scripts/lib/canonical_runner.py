@@ -10,11 +10,15 @@ import random
 import re
 import shutil
 import signal
+import statistics
 import subprocess
 import sys
+import threading
 import time
+import tomllib
 import urllib.error
 import urllib.request
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -31,6 +35,8 @@ class Condition:
     startup_mode: str | None = None
     system: str = "wafer"
     events_per_run: int | None = None
+    offered_rate_msg_s: int | None = None
+    exclusive_sut: bool = False
 
 
 @dataclass(frozen=True)
@@ -49,6 +55,8 @@ class RunItem:
     startup_mode: str | None = None
     system: str = "wafer"
     events_per_run: int | None = None
+    offered_rate_msg_s: int | None = None
+    exclusive_sut: bool = False
 
     @property
     def result_key(self) -> str:
@@ -68,6 +76,47 @@ class ValidationGate:
     observed_runs: int
 
 
+RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
+RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
+RATE_SWEEP_BASELINE = 1_000
+RATE_SWEEP_P99_MULTIPLIER = 2.0
+RATE_SWEEP_MAX_LOSS_PERCENT = 1.0
+RATE_SWEEP_PROFILE = "eval/loadgen/canonical-rate-sweep.toml"
+
+
+def _validate_rate_sweep_definition(root: Path, definition: dict) -> None:
+    profile = tomllib.loads((root / RATE_SWEEP_PROFILE).read_text())["sweep"]
+    expected = {
+        "systems": list(RATE_SWEEP_SYSTEMS),
+        "rate_points_msg_s": list(RATE_SWEEP_RATES),
+        "repetitions": profile["repetitions"],
+        "thesis_evidence": profile["thesis_evidence"],
+    }
+    for field, value in expected.items():
+        if definition.get(field) != value:
+            raise ValueError(f"e-perf-10 {field} differs from canonical rate-sweep profile")
+    criteria = definition.get("sustainable_throughput", {})
+    for field, value in {
+        "baseline_rate_msg_s": profile["baseline_rate_msg_s"],
+        "p99_multiplier_limit": profile["p99_multiplier_limit"],
+        "max_loss_percent": profile["max_loss_percent"],
+        "p99_aggregation": profile["p99_aggregation"],
+        "loss_aggregation": profile["loss_aggregation"],
+    }.items():
+        if criteria.get(field) != value:
+            raise ValueError(f"e-perf-10 {field} differs from canonical rate-sweep profile")
+
+
+def _rate_sweep_config(system: str) -> str:
+    if system == "wafer":
+        return "eval/configs/pipeline-a-wafer.toml"
+    if system == "native":
+        return "eval/configs/pipeline-a-native.toml"
+    if system == "ekuiper":
+        return "eval/configs/canonical/e-perf-1-ekuiper.toml"
+    return RATE_SWEEP_PROFILE
+
+
 CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-perf-1": tuple(
         Condition(
@@ -82,6 +131,18 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
             system=system,
         )
         for system in ("wafer", "native", "ekuiper")
+    ),
+    "e-perf-10": tuple(
+        Condition(
+            f"{system}/rate-{rate:05d}",
+            _rate_sweep_config(system),
+            RATE_SWEEP_PROFILE,
+            system=system,
+            offered_rate_msg_s=rate,
+            exclusive_sut=True,
+        )
+        for system in RATE_SWEEP_SYSTEMS
+        for rate in RATE_SWEEP_RATES
     ),
     "e-perf-2": tuple(
         Condition(
@@ -174,7 +235,8 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-iso-6": (Condition("panic", "eval/configs/e-iso-6/pipeline.toml"),),
     "e-iso-7": (
         Condition("control", "eval/configs/e-iso-7/pipeline-control.toml"),
-        Condition("attack", "eval/configs/e-iso-7/pipeline.toml"),
+        Condition("panic-attack", "eval/configs/e-iso-7/pipeline.toml"),
+        Condition("epoch-loop-attack", "eval/configs/e-iso-7/pipeline-epoch-attack.toml"),
     ),
     "e-iso-8": (Condition("panic-recovery", "eval/configs/e-iso-8/pipeline.toml"),),
     "e-swap-1": (
@@ -228,6 +290,7 @@ EXPERIMENT_ORDER = (
     "e-perf-8",
     "e-perf-7",
     "e-perf-9",
+    "e-perf-10",
     "e-backpressure",
     "e-iso-1",
     "e-iso-2",
@@ -253,6 +316,8 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
 
     matrix_path = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
     matrix = json.loads(matrix_path.read_text())["experiments"]
+    if "e-perf-10" in experiments:
+        _validate_rate_sweep_definition(matrix_path.parents[1], matrix["e-perf-10"])
     schedule: list[RunItem] = []
 
     for experiment in (item for item in EXPERIMENT_ORDER if item in experiments):
@@ -261,10 +326,27 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
         for run_index in range(1, definition["repetitions"] + 1):
             if experiment == "e-perf-9":
                 ordered = list(conditions)
+            elif experiment == "e-perf-10":
+                by_pair = {
+                    (condition.system, condition.offered_rate_msg_s): condition
+                    for condition in conditions
+                }
+                rates = list(RATE_SWEEP_RATES)
+                random.Random(f"{seed}:{experiment}:{run_index}:rates").shuffle(rates)
+                ordered = []
+                for rate in rates:
+                    systems = list(RATE_SWEEP_SYSTEMS)
+                    random.Random(f"{seed}:{experiment}:{rate}:systems").shuffle(systems)
+                    offset = (run_index - 1) % len(systems)
+                    systems = systems[offset:] + systems[:offset]
+                    ordered.extend(by_pair[(system, rate)] for system in systems)
             else:
                 ordered = list(conditions)
                 random.Random(f"{seed}:{experiment}:{run_index}").shuffle(ordered)
             for condition in ordered:
+                total_messages = condition.total_messages
+                if condition.offered_rate_msg_s is not None:
+                    total_messages = condition.offered_rate_msg_s * definition["measurement_secs"]
                 schedule.append(
                     RunItem(
                         experiment=experiment,
@@ -274,11 +356,13 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
                         warmup_secs=definition["warmup_secs"],
                         measurement_secs=definition["measurement_secs"],
                         loadgen_profile=condition.loadgen_profile,
-                        total_messages=condition.total_messages,
+                        total_messages=total_messages,
                         shared_from=condition.shared_from,
                         startup_mode=condition.startup_mode,
                         system=condition.system,
                         events_per_run=condition.events_per_run or definition.get("events_per_run"),
+                        offered_rate_msg_s=condition.offered_rate_msg_s,
+                        exclusive_sut=condition.exclusive_sut,
                     )
                 )
     return schedule
@@ -331,6 +415,177 @@ def evaluate_validation_gate(root: Path, expected_runs: int) -> ValidationGate:
     return ValidationGate(not failed and observed == expected_runs, failed, observed)
 
 
+def _summarize_branch_artifacts(
+    output: Path,
+    branch_dir: str,
+    offered_messages: int | None,
+) -> dict:
+    branch = output / branch_dir
+    with (branch / "sequence.csv").open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    if len(rows) != 1:
+        raise ValueError(f"{branch_dir}/sequence.csv must contain one summary row")
+    try:
+        sequence = {field: int(rows[0][field]) for field in (
+            "total_expected",
+            "total_received",
+            "gap_msgs",
+            "duplicates_count",
+        )}
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"{branch_dir}/sequence.csv contains invalid counts") from error
+
+    with (branch / "throughput.csv").open(newline="") as stream:
+        try:
+            throughput = [
+                {
+                    "elapsed_seconds": float(row["elapsed_secs"]),
+                    "msg_count": int(row["msg_count"]),
+                    "bytes": int(row["bytes"]),
+                }
+                for row in csv.DictReader(stream)
+            ]
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"{branch_dir}/throughput.csv contains invalid samples") from error
+
+    try:
+        percentiles = json.loads((branch / "percentiles.json").read_text())
+        latency = {
+            "sample_count": int(percentiles["total_count"]),
+            "p50": int(percentiles["p50_ns"]),
+            "p95": int(percentiles["p95_ns"]),
+            "p99": int(percentiles["p99_ns"]),
+            "p999": int(percentiles["p999_ns"]),
+        }
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        raise ValueError(f"{branch_dir}/percentiles.json is invalid") from error
+
+    window_path = branch / "measurement-window.json"
+    window = None
+    if window_path.is_file():
+        try:
+            raw_window = json.loads(window_path.read_text())
+            window = {
+                "started_ns": int(raw_window["started_ns"]),
+                "finished_ns": int(raw_window["finished_ns"]),
+            }
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            raise ValueError(f"{branch_dir}/measurement-window.json is invalid") from error
+        if window["finished_ns"] <= window["started_ns"]:
+            raise ValueError(f"{branch_dir}/measurement-window.json is empty or reversed")
+
+    total_messages = sum(sample["msg_count"] for sample in throughput)
+    duration_seconds = (
+        (window["finished_ns"] - window["started_ns"]) / 1_000_000_000
+        if window
+        else 0.0
+    )
+    offered = offered_messages or sequence["total_expected"]
+    return {
+        "artifact_dir": branch_dir,
+        "offered_messages": offered,
+        "expected_next_sequence": sequence["total_expected"],
+        "received_messages": sequence["total_received"],
+        "lost_messages": max(0, offered - sequence["total_received"]),
+        "gap_messages": sequence["gap_msgs"],
+        "duplicates": sequence["duplicates_count"],
+        "measurement_window": window,
+        "throughput": {
+            "total_messages": total_messages,
+            "mean_messages_per_second": total_messages / duration_seconds if duration_seconds else 0.0,
+            "samples": throughput,
+        },
+        "latency_ns": latency,
+    }
+
+
+def derive_branch_isolation(
+    output: Path,
+    warmup_secs: int,
+    measurement_secs: int,
+    offered_messages: int | None = None,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "experiment": "e-iso-7",
+        "measurement_boundary": {
+            "kind": "branch_sink_post_warmup",
+            "warmup_secs": warmup_secs,
+            "measurement_secs": measurement_secs,
+        },
+        "units": {
+            "counts": "messages",
+            "throughput": "messages_per_second",
+            "latency": "nanoseconds",
+            "timestamps": "unix_epoch_nanoseconds",
+        },
+        "branches": {
+            "branch_a": _summarize_branch_artifacts(output, "branch-a", offered_messages),
+            "branch_b": _summarize_branch_artifacts(output, "branch-b", offered_messages),
+        },
+    }
+
+
+def compare_branch_a(control_runs: list[dict], attack_runs: list[dict]) -> dict:
+    if not control_runs or not attack_runs:
+        raise ValueError("branch-A comparison requires control and attack runs")
+
+    def condition_summary(runs: list[dict]) -> dict:
+        branches = [run["branches"]["branch_a"] for run in runs]
+        return {
+            "run_count": len(branches),
+            "median_throughput_messages_per_second": statistics.median(
+                branch["throughput"]["mean_messages_per_second"] for branch in branches
+            ),
+            "median_p95_latency_ns": statistics.median(
+                branch["latency_ns"]["p95"] for branch in branches
+            ),
+        }
+
+    control = condition_summary(control_runs)
+    attack = condition_summary(attack_runs)
+    control_throughput = control["median_throughput_messages_per_second"]
+    control_p95 = control["median_p95_latency_ns"]
+    return {
+        "control": control,
+        "attack": attack,
+        "branch_a_impact": {
+            "throughput_drop_percent": (
+                (control_throughput - attack["median_throughput_messages_per_second"])
+                / control_throughput
+                * 100
+                if control_throughput
+                else 0.0
+            ),
+            "p95_latency_increase_percent": (
+                (attack["median_p95_latency_ns"] - control_p95) / control_p95 * 100
+                if control_p95
+                else 0.0
+            ),
+        },
+        "units": {
+            "throughput": "messages_per_second",
+            "latency": "nanoseconds",
+            "impact": "percent",
+        },
+    }
+
+
+def compare_branch_conditions(runs: dict[str, list[dict]]) -> dict[str, dict]:
+    control = runs.get("control", [])
+    attacks = {
+        condition: samples
+        for condition, samples in runs.items()
+        if condition != "control"
+    }
+    if not attacks:
+        raise ValueError("branch-A comparison requires at least one attack condition")
+    return {
+        condition: compare_branch_a(control, samples)
+        for condition, samples in sorted(attacks.items())
+    }
+
+
 def derive_containment(output: Path) -> dict:
     with (output / "per_node_metrics.csv").open(newline="") as stream:
         rows = [
@@ -377,6 +632,303 @@ def summarize_recovery(path: Path) -> dict:
         "p95_ns": percentile(0.95),
         "p99_ns": percentile(0.99),
         "max_ns": ordered[-1],
+    }
+
+
+def _read_integer_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, int]]:
+    with path.open(newline="") as stream:
+        reader = csv.DictReader(stream)
+        missing = [field for field in fields if field not in (reader.fieldnames or [])]
+        if missing:
+            raise ValueError(f"{path} missing columns: {', '.join(missing)}")
+        try:
+            return [{field: int(row[field]) for field in fields} for row in reader]
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"{path} contains invalid integers") from error
+
+
+def analyze_rate_sweep_traces(
+    published_path: Path,
+    received_path: Path,
+    subscriber_metadata_path: Path,
+) -> dict:
+    published = _read_integer_csv(published_path, ("seq", "ts_ns"))
+    received = _read_integer_csv(
+        received_path,
+        ("seq", "payload_ts_ns", "receive_ns", "latency_ns"),
+    )
+    published_by_seq = {row["seq"]: row["ts_ns"] for row in published}
+    if len(published_by_seq) != len(published):
+        raise ValueError("publisher trace contains duplicate sequences")
+
+    received_counts = Counter(row["seq"] for row in received)
+    unexpected = sorted(set(received_counts) - set(published_by_seq))
+    if unexpected:
+        raise ValueError(f"received unexpected sequences: {unexpected}")
+    for row in received:
+        expected_ts = published_by_seq[row["seq"]]
+        if row["payload_ts_ns"] != expected_ts:
+            raise ValueError(f"timestamp changed for sequence {row['seq']}")
+        if row["receive_ns"] < row["payload_ts_ns"]:
+            raise ValueError(f"negative latency for sequence {row['seq']}")
+        if row["latency_ns"] != row["receive_ns"] - row["payload_ts_ns"]:
+            raise ValueError(f"latency mismatch for sequence {row['seq']}")
+
+    metadata = json.loads(subscriber_metadata_path.read_text())
+    if metadata.get("parse_errors") != 0 or metadata.get("negative_latency_count") != 0:
+        raise ValueError("subscriber reported parse errors or negative latency")
+    if metadata.get("total_messages") != len(received) or metadata.get("total_recorded") != len(received):
+        raise ValueError("subscriber metadata count differs from received trace")
+    sequence = metadata.get("sequence", {})
+    duplicates = sum(count - 1 for count in received_counts.values() if count > 1)
+    if sequence.get("total_received") != len(received) or sequence.get("total_duplicates") != duplicates:
+        raise ValueError("subscriber sequence metadata differs from received trace")
+    unique_received = len(received_counts)
+    offered = len(published_by_seq)
+    return {
+        "messages": {
+            "offered": offered,
+            "received": unique_received,
+            "lost": max(0, offered - unique_received),
+            "duplicates": duplicates,
+        },
+        "latency_ns": {
+            "p50": int(metadata["latency_p50_ns"]),
+            "p95": int(metadata["latency_p95_ns"]),
+            "p99": int(metadata["latency_p99_ns"]),
+        },
+    }
+
+
+def summarize_process_resources(path: Path, clock_ticks: int | None = None) -> dict:
+    rows = _read_integer_csv(
+        path,
+        ("timestamp_ns", "cpu_time_ticks", "rss_bytes", "process_count"),
+    )
+    if not rows:
+        raise ValueError("resource-usage.csv contains no samples")
+    scope = "sut" if any(row["process_count"] > 0 for row in rows) else "no-sut"
+    if scope == "sut" and any(row["process_count"] == 0 for row in rows):
+        raise ValueError("SUT disappeared during resource sampling")
+    ticks_per_second = clock_ticks or int(os.sysconf("SC_CLK_TCK"))
+    elapsed_ns = rows[-1]["timestamp_ns"] - rows[0]["timestamp_ns"]
+    elapsed_cpu_ticks = rows[-1]["cpu_time_ticks"] - rows[0]["cpu_time_ticks"]
+    cpu_percent = 0.0
+    if elapsed_ns > 0 and elapsed_cpu_ticks >= 0:
+        cpu_percent = (
+            elapsed_cpu_ticks / ticks_per_second / (elapsed_ns / 1_000_000_000) * 100
+        )
+    return {
+        "scope": scope,
+        "cpu_percent": cpu_percent,
+        "max_rss_bytes": max(row["rss_bytes"] for row in rows),
+    }
+
+
+class ProcessResourceSampler:
+    def __init__(self, path: Path, pids: list[int], interval_secs: float = 1.0):
+        self.path = path
+        self.pids = pids
+        self.interval_secs = interval_secs
+        self.stop_event = threading.Event()
+        self.error: Exception | None = None
+        self.thread: threading.Thread | None = None
+
+    def _sample(self) -> dict[str, int]:
+        cpu_time_ticks = 0
+        rss_bytes = 0
+        process_count = 0
+        page_size = int(os.sysconf("SC_PAGE_SIZE"))
+        for pid in self.pids:
+            try:
+                stat = Path(f"/proc/{pid}/stat").read_text()
+                fields = stat[stat.rfind(")") + 2 :].split()
+                resident_pages = int(Path(f"/proc/{pid}/statm").read_text().split()[1])
+                cpu_time_ticks += int(fields[11]) + int(fields[12])
+                rss_bytes += resident_pages * page_size
+                process_count += 1
+            except (OSError, IndexError, ValueError):
+                continue
+        return {
+            "timestamp_ns": time.time_ns(),
+            "cpu_time_ticks": cpu_time_ticks,
+            "rss_bytes": rss_bytes,
+            "process_count": process_count,
+        }
+
+    def _run(self) -> None:
+        try:
+            with self.path.open("w", newline="") as stream:
+                writer = csv.DictWriter(
+                    stream,
+                    fieldnames=("timestamp_ns", "cpu_time_ticks", "rss_bytes", "process_count"),
+                )
+                writer.writeheader()
+                while True:
+                    writer.writerow(self._sample())
+                    stream.flush()
+                    if self.stop_event.wait(self.interval_secs):
+                        writer.writerow(self._sample())
+                        stream.flush()
+                        break
+        except (OSError, ValueError) as error:
+            self.error = error
+
+    def start(self) -> None:
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread is not None:
+            self.thread.join(timeout=max(5.0, self.interval_secs * 2))
+            if self.thread.is_alive():
+                raise RuntimeError("process resource sampler did not stop")
+        if self.error is not None:
+            raise RuntimeError(f"process resource sampler failed: {self.error}")
+
+
+def validate_rate_sweep_result(result: dict) -> None:
+    required = {
+        "schema_version",
+        "experiment",
+        "system",
+        "thesis_evidence",
+        "measurement_boundary",
+        "units",
+        "offered_rate_msg_s",
+        "actual_offered_rate_msg_s",
+        "achieved_rate_msg_s",
+        "measurement_duration_ns",
+        "messages",
+        "loss_percent",
+        "latency_ns",
+        "resources",
+        "throttled",
+        "profile",
+        "process_audit",
+        "traces",
+    }
+    missing = sorted(required - result.keys())
+    if missing:
+        raise ValueError(f"rate-sweep result missing fields: {', '.join(missing)}")
+
+    nested = {
+        "messages": {"offered", "received", "lost", "duplicates"},
+        "latency_ns": {"p50", "p95", "p99"},
+        "resources": {"scope", "cpu_percent", "max_rss_bytes"},
+        "profile": {"path", "sha256", "payload_template_sha256"},
+        "process_audit": {"path", "sha256"},
+        "traces": {"published", "received"},
+    }
+    for section, fields in nested.items():
+        value = result.get(section)
+        if not isinstance(value, dict):
+            raise ValueError(f"rate-sweep result {section} must be an object")
+        absent = sorted(fields - value.keys())
+        if absent:
+            raise ValueError(
+                f"rate-sweep result {section} missing fields: {', '.join(absent)}"
+            )
+
+    if result["experiment"] != "e-perf-10":
+        raise ValueError("rate-sweep result experiment must be e-perf-10")
+    if result["system"] not in RATE_SWEEP_SYSTEMS:
+        raise ValueError(f"rate-sweep result has unknown system {result['system']!r}")
+    if result["thesis_evidence"] is not False:
+        raise ValueError("rate-sweep result must set thesis_evidence=false")
+    if result["offered_rate_msg_s"] not in RATE_SWEEP_RATES:
+        raise ValueError("rate-sweep result offered_rate_msg_s is not frozen")
+
+    messages = result["messages"]
+    numeric_values = (
+        result["actual_offered_rate_msg_s"],
+        result["achieved_rate_msg_s"],
+        result["measurement_duration_ns"],
+        result["loss_percent"],
+        messages["offered"],
+        messages["received"],
+        messages["lost"],
+        messages["duplicates"],
+        result["latency_ns"]["p50"],
+        result["latency_ns"]["p95"],
+        result["latency_ns"]["p99"],
+        result["resources"]["cpu_percent"],
+        result["resources"]["max_rss_bytes"],
+    )
+    if any(not isinstance(value, (int, float)) or value < 0 for value in numeric_values):
+        raise ValueError("rate-sweep result numeric fields must be non-negative")
+    if messages["lost"] != max(0, messages["offered"] - messages["received"]):
+        raise ValueError("rate-sweep result lost count is inconsistent")
+
+    for name, trace in result["traces"].items():
+        if not isinstance(trace, dict):
+            raise ValueError(f"rate-sweep result trace {name} must be an object")
+        absent = {"path", "sha256", "samples"} - trace.keys()
+        if absent:
+            raise ValueError(
+                f"rate-sweep result trace {name} missing fields: {', '.join(sorted(absent))}"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", str(trace["sha256"])):
+            raise ValueError(f"rate-sweep result trace {name} has invalid sha256")
+
+
+def classify_sustainable_throughput(
+    samples: list[dict],
+    baseline_rate_msg_s: int = RATE_SWEEP_BASELINE,
+    p99_multiplier_limit: float = RATE_SWEEP_P99_MULTIPLIER,
+    max_loss_percent: float = RATE_SWEEP_MAX_LOSS_PERCENT,
+) -> dict:
+    by_rate: dict[int, list[dict]] = {}
+    for sample in samples:
+        by_rate.setdefault(int(sample["offered_rate_msg_s"]), []).append(sample)
+    if baseline_rate_msg_s not in by_rate:
+        raise ValueError(f"missing {baseline_rate_msg_s} msg/s baseline")
+
+    baseline_p99_ns = statistics.median(
+        int(sample["p99_ns"]) for sample in by_rate[baseline_rate_msg_s]
+    )
+    threshold_p99_ns = baseline_p99_ns * p99_multiplier_limit
+    rates = []
+    for rate, rate_samples in sorted(by_rate.items()):
+        p99_ns = statistics.median(int(sample["p99_ns"]) for sample in rate_samples)
+        offered = sum(int(sample["offered"]) for sample in rate_samples)
+        lost = sum(int(sample["lost"]) for sample in rate_samples)
+        loss_percent = 100.0 * lost / offered if offered else 100.0
+        breaches = []
+        if p99_ns > threshold_p99_ns:
+            breaches.append("p99")
+        if loss_percent > max_loss_percent:
+            breaches.append("loss")
+        rates.append(
+            {
+                "offered_rate_msg_s": rate,
+                "sample_count": len(rate_samples),
+                "median_p99_ns": p99_ns,
+                "loss_percent": loss_percent,
+                "breaches": breaches,
+                "sustainable": not breaches,
+            }
+        )
+
+    last_good = None
+    first_bad = None
+    for rate in (entry for entry in rates if entry["offered_rate_msg_s"] >= baseline_rate_msg_s):
+        if rate["sustainable"] and first_bad is None:
+            last_good = rate["offered_rate_msg_s"]
+        elif not rate["sustainable"] and first_bad is None:
+            first_bad = rate["offered_rate_msg_s"]
+
+    return {
+        "baseline_rate_msg_s": baseline_rate_msg_s,
+        "baseline_p99_ns": baseline_p99_ns,
+        "p99_threshold_ns": threshold_p99_ns,
+        "max_loss_percent": max_loss_percent,
+        "last_good_rate_msg_s": last_good,
+        "first_bad_rate_msg_s": first_bad,
+        "highest_tested_rate_msg_s": max(by_rate),
+        "no_saturation_within_range": first_bad is None,
+        "rates": rates,
     }
 
 
@@ -666,25 +1218,35 @@ def loadgen_command(
     action: str,
     output: Path | None = None,
     duration: int | None = None,
+    topic: str | None = None,
+    trace_file: Path | None = None,
 ) -> list[str]:
     loadgen = root / "target/release/wafer-loadgen"
     if action == "subscribe":
         if output is None:
             raise ValueError("subscriber requires an output directory")
-        return [
+        command = [
             "taskset", "-c", item.support_cpus,
             str(loadgen), "subscribe", "--broker", "127.0.0.1:1883",
-            "--topic", "wafer/telemetry/hot", "--output-dir", str(output),
+            "--topic", topic or "wafer/telemetry/hot", "--output-dir", str(output),
             "--total-messages", str(item.total_messages or 0),
             "--host-tag", "rpi5",
         ]
-    return [
+        if trace_file is not None:
+            command.extend(["--trace-file", str(trace_file)])
+        return command
+    command = [
         "taskset", "-c", item.support_cpus,
         str(loadgen), "publish",
         "--broker-host", "127.0.0.1", "--broker-port", "1883",
-        "--topic", "wafer/telemetry", "--profile-file", str(root / str(item.loadgen_profile)),
+        "--topic", topic or "wafer/telemetry", "--profile-file", str(root / str(item.loadgen_profile)),
         "--duration-secs", str(duration if duration is not None else item.measurement_secs),
     ]
+    if item.offered_rate_msg_s is not None:
+        command.extend(["--rate", str(item.offered_rate_msg_s)])
+    if trace_file is not None:
+        command.extend(["--trace-file", str(trace_file)])
+    return command
 
 
 def run_restart_item(
@@ -1167,6 +1729,401 @@ def run_ekuiper_item(
     return True
 
 
+def _running_sut_processes() -> list[dict]:
+    output = subprocess.check_output(
+        ["ps", "-e", "-o", "pid=,ppid=,comm=,args="], text=True
+    )
+    processes = []
+    for line in output.splitlines():
+        fields = line.strip().split(maxsplit=3)
+        if len(fields) < 3 or Path(fields[2]).name not in {"wafer", "wafer-runtime", "kuiperd"}:
+            continue
+        pid = int(fields[0])
+        status = Path(f"/proc/{pid}/status").read_text()
+        affinity = next(
+            value.split(":", maxsplit=1)[1].strip()
+            for value in status.splitlines()
+            if value.startswith("Cpus_allowed_list:")
+        )
+        processes.append(
+            {
+                "pid": pid,
+                "ppid": int(fields[1]),
+                "name": Path(fields[2]).name,
+                "args": fields[3] if len(fields) == 4 else "",
+                "cpus_allowed_list": affinity,
+            }
+        )
+    return processes
+
+
+def _write_process_audit(
+    output: Path,
+    item: RunItem,
+    processes: list[dict],
+) -> Path:
+    allowed = _expand_cpu_list(item.runtime_cpus)
+    for process in processes:
+        observed = _expand_cpu_list(process["cpus_allowed_list"])
+        if not observed or not observed <= allowed:
+            raise ValueError(
+                f"SUT PID {process['pid']} affinity {sorted(observed)} is outside {item.runtime_cpus}"
+            )
+    audit = {
+        "captured_at": utc_now(),
+        "system": item.system,
+        "exclusive_sut": item.exclusive_sut,
+        "allowed_cpus": item.runtime_cpus,
+        "processes": processes,
+        "concurrent_suts": len(processes) > 1 and item.system != "ekuiper",
+    }
+    if audit["concurrent_suts"]:
+        raise ValueError(f"concurrent SUT processes detected: {processes}")
+    path = output / "process-audit.json"
+    path.write_text(json.dumps(audit, indent=2) + "\n")
+    return path
+
+
+def _file_receipt(path: Path) -> dict:
+    with path.open() as stream:
+        samples = max(0, sum(1 for _ in stream) - 1)
+    return {
+        "path": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "samples": samples,
+    }
+
+
+def _rate_sweep_throttled(path: Path) -> bool:
+    with path.open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    if not rows:
+        raise ValueError("pi-telemetry.csv contains no samples")
+    return any(row.get("throttled") != "0x0" for row in rows)
+
+
+def write_rate_sweep_result(
+    root: Path,
+    item: RunItem,
+    output: Path,
+    measurement_duration_ns: int,
+) -> dict:
+    if measurement_duration_ns <= 0:
+        raise ValueError("rate-sweep measurement duration must be positive")
+    traces = analyze_rate_sweep_traces(
+        output / "published.csv",
+        output / "received.csv",
+        output / "subscriber-metadata.json",
+    )
+    messages = traces["messages"]
+    loss_percent = (
+        100.0 * messages["lost"] / messages["offered"]
+        if messages["offered"]
+        else 100.0
+    )
+    profile_path = root / str(item.loadgen_profile)
+    profile = tomllib.loads(profile_path.read_text())["loadgen"]
+    process_audit = output / "process-audit.json"
+    if (output / "telemetry-error.json").exists():
+        raise ValueError("Pi telemetry failed during rate-sweep measurement")
+    resources = summarize_process_resources(output / "resource-usage.csv")
+    expected_scope = "no-sut" if item.system == "mqtt-loopback" else "sut"
+    if resources["scope"] != expected_scope:
+        raise ValueError(
+            f"rate-sweep resource scope {resources['scope']!r}, expected {expected_scope!r}"
+        )
+    result = {
+        "schema_version": 1,
+        "experiment": item.experiment,
+        "system": item.system,
+        "thesis_evidence": False,
+        "measurement_boundary": "publisher run window to subscriber receive timestamp",
+        "units": {
+            "rate": "messages/second",
+            "latency": "nanoseconds",
+            "duration": "nanoseconds",
+            "timestamps": "nanoseconds since Unix epoch",
+            "counts": "messages",
+            "cpu": "percent of one logical CPU",
+            "rss": "bytes",
+        },
+        "offered_rate_msg_s": item.offered_rate_msg_s,
+        "actual_offered_rate_msg_s": messages["offered"] / (measurement_duration_ns / 1_000_000_000),
+        "achieved_rate_msg_s": messages["received"] / (measurement_duration_ns / 1_000_000_000),
+        "measurement_duration_ns": measurement_duration_ns,
+        "messages": messages,
+        "loss_percent": loss_percent,
+        "latency_ns": traces["latency_ns"],
+        "resources": resources,
+        "throttled": _rate_sweep_throttled(output / "pi-telemetry.csv"),
+        "profile": {
+            "path": item.loadgen_profile,
+            "sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
+            "payload_template_sha256": profile["payload_template_sha256"],
+        },
+        "process_audit": {
+            "path": process_audit.name,
+            "sha256": hashlib.sha256(process_audit.read_bytes()).hexdigest(),
+        },
+        "traces": {
+            "published": _file_receipt(output / "published.csv"),
+            "received": _file_receipt(output / "received.csv"),
+        },
+    }
+    validate_rate_sweep_result(result)
+    (output / "rate-sweep.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
+
+
+def run_rate_sweep_item(
+    root: Path,
+    item: RunItem,
+    selection: AttemptSelection,
+) -> bool:
+    output = selection.path
+    output.mkdir(parents=True)
+    config = root / item.config
+    shutil.copy2(config, output / "config.toml")
+    print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
+    started_ns = time.time_ns()
+    started_at = utc_now()
+    runtime: subprocess.Popen | None = None
+    publisher: subprocess.Popen | None = None
+    subscriber: subprocess.Popen | None = None
+    sampler: ProcessResourceSampler | None = None
+    telemetry = start_pi_telemetry(root, output)
+    ekuiper_active = False
+    runtime_exit = 0
+    ekuiper_audit: Path | None = None
+    try:
+        set_ekuiper_active(root, False)
+        existing = _running_sut_processes()
+        if existing:
+            raise RuntimeError(f"SUT process already active before rate sweep: {existing}")
+
+        if item.system == "ekuiper":
+            set_ekuiper_active(root, True)
+            ekuiper_active = True
+
+        facts_path = output / "host-facts.json"
+        host_command = [
+            sys.executable,
+            str(root / "eval/scripts/validate-canonical.py"),
+            "host",
+            "--root",
+            str(root),
+            "--output",
+            str(facts_path),
+        ]
+        if item.system == "ekuiper":
+            host_command.append("--require-ekuiper")
+        subprocess.run(host_command, cwd=root, check=True)
+        facts = json.loads(facts_path.read_text())
+        environment = os.environ.copy()
+        environment["WAFER_GIT_SHA"] = facts["git_sha"]
+        environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
+
+        if item.system in {"wafer", "native"}:
+            with (output / "stdout.log").open("ab") as log:
+                runtime = subprocess.Popen(
+                    [
+                        "taskset",
+                        "-c",
+                        item.runtime_cpus,
+                        str(root / "target/release/wafer"),
+                        "--config",
+                        str(config),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    stdout=log,
+                    stderr=log,
+                )
+            time.sleep(1)
+            if runtime.poll() is not None:
+                raise RuntimeError("wafer runtime exited during startup")
+            processes = _running_sut_processes()
+            if {process["pid"] for process in processes} != {runtime.pid}:
+                raise RuntimeError(f"unexpected active SUT processes: {processes}")
+        elif item.system == "ekuiper":
+            ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
+            processes = json.loads(ekuiper_audit.read_text())["process_snapshot"]["processes"]
+        else:
+            processes = []
+        _write_process_audit(output, item, processes)
+
+        input_topic = "wafer/telemetry"
+        output_topic = input_topic if item.system == "mqtt-loopback" else "wafer/telemetry/hot"
+        with (output / "stdout.log").open("ab") as log:
+            subprocess.run(
+                loadgen_command(
+                    root,
+                    item,
+                    "publish",
+                    duration=item.warmup_secs,
+                    topic=input_topic,
+                ),
+                cwd=root,
+                env=environment,
+                stdout=log,
+                stderr=log,
+                check=True,
+            )
+            subscriber = subprocess.Popen(
+                loadgen_command(
+                    root,
+                    item,
+                    "subscribe",
+                    output=output,
+                    topic=output_topic,
+                    trace_file=output / "received.csv",
+                ),
+                cwd=root,
+                env=environment,
+                stdout=log,
+                stderr=log,
+            )
+            time.sleep(0.5)
+            sampler = ProcessResourceSampler(
+                output / "resource-usage.csv",
+                [process["pid"] for process in processes],
+            )
+            sampler.start()
+            measurement_started_ns = time.time_ns()
+            publisher = subprocess.Popen(
+                loadgen_command(
+                    root,
+                    item,
+                    "publish",
+                    topic=input_topic,
+                    trace_file=output / "published.csv",
+                ),
+                cwd=root,
+                env=environment,
+                stdout=log,
+                stderr=log,
+            )
+            publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
+            measurement_finished_ns = time.time_ns()
+            if subscriber.poll() is None:
+                subscriber.send_signal(signal.SIGINT)
+            subscriber_code = subscriber.wait(timeout=10)
+        sampler.stop()
+        sampler = None
+        if publisher_code != 0 or subscriber_code != 0:
+            raise RuntimeError(
+                f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
+            )
+        measurement_duration_ns = measurement_finished_ns - measurement_started_ns
+        (output / "measurement-window.json").write_text(
+            json.dumps(
+                {"started_ns": measurement_started_ns, "finished_ns": measurement_finished_ns},
+                indent=2,
+            )
+            + "\n"
+        )
+
+        if runtime is not None:
+            runtime.terminate()
+            try:
+                runtime_exit = runtime.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                runtime.kill()
+                runtime_exit = runtime.wait(timeout=5)
+            runtime = None
+            if runtime_exit != 0:
+                raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
+        if ekuiper_active:
+            set_ekuiper_active(root, False)
+            ekuiper_active = False
+        stop_pi_telemetry(telemetry)
+        telemetry = None
+
+        finished_ns = time.time_ns()
+        config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
+        if item.system in {"ekuiper", "mqtt-loopback"}:
+            exit_codes = (
+                {"ekuiper": 0}
+                if item.system == "ekuiper"
+                else {"publisher": publisher_code, "subscriber": subscriber_code}
+            )
+            metadata = {
+                "experiment": item.experiment,
+                "system": item.system,
+                "condition": item.condition,
+                "run_index": item.run_index,
+                "host_tag": "rpi5",
+                "generated_at": utc_now(),
+                "started_at": started_at,
+                "duration_ns": finished_ns - started_ns,
+                "config_path": item.config,
+                "config_sha256": config_sha,
+                "loadgen": {
+                    "profile_path": item.loadgen_profile,
+                    "warmup_secs": item.warmup_secs,
+                    "offered_rate_msg_s": item.offered_rate_msg_s,
+                },
+                "exit_codes": exit_codes,
+                **facts,
+            }
+            if ekuiper_audit is not None:
+                metadata["comparator_audit"] = {
+                    "path": ekuiper_audit.name,
+                    "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
+                }
+            (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        else:
+            provenance_path = output / "runtime-provenance.json"
+            provenance = provenance_path.read_text() if provenance_path.is_file() else "null"
+            merge_metadata(
+                str(output / "metadata.json"),
+                item.experiment,
+                "rpi5",
+                utc_now(),
+                started_at,
+                str(finished_ns - started_ns),
+                item.config,
+                config_sha,
+                json.dumps(
+                    {
+                        "profile_path": item.loadgen_profile,
+                        "warmup_secs": item.warmup_secs,
+                        "offered_rate_msg_s": item.offered_rate_msg_s,
+                    }
+                ),
+                json.dumps({"broker": "127.0.0.1:1883", "managed_by_harness": False}),
+                str(runtime_exit),
+                provenance,
+            )
+        postprocess_run(root, item, output)
+        result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
+        if result["throttled"]:
+            raise RuntimeError("Pi throttling occurred during rate-sweep measurement")
+        verify_result(root, output)
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as error:
+        for process in (publisher, subscriber, runtime):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.wait()
+        if sampler is not None:
+            sampler.stop()
+        if ekuiper_active:
+            set_ekuiper_active(root, False)
+        stop_pi_telemetry(telemetry)
+        write_status(output, item, "failed", str(error))
+        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
+        return False
+    write_status(output, item, "passed")
+    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
+    return True
+
+
 def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
     condition_dir = (
         root
@@ -1192,6 +2149,8 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
             print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
             return False
 
+    if item.experiment == "e-perf-10":
+        return run_rate_sweep_item(root, item, selection)
     if item.experiment in {"e-swap-1", "e-swap-4", "e-swap-5"}:
         return run_hot_swap_item(root, item, selection)
     if item.experiment == "e-swap-3" and item.condition != "wafer-hotswap":
@@ -1260,6 +2219,9 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata["condition"] = item.condition
     metadata["run_index"] = item.run_index
     metadata["config_path"] = item.config
+    if item.experiment == "e-perf-10":
+        metadata["thesis_evidence"] = False
+        metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
         loadgen = metadata.get("loadgen") or {}
@@ -1277,6 +2239,13 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             and not (output / "telemetry-error.json").exists()
         )
         metadata["power_measurement"] = boundary
+    if item.experiment == "e-iso-7":
+        metadata["branch_measurement"] = {
+            "boundary": "branch_sink_post_warmup",
+            "warmup_secs": item.warmup_secs,
+            "measurement_secs": item.measurement_secs,
+            "artifact_directories": {"branch_a": "branch-a", "branch_b": "branch-b"},
+        }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
 
     subscriber_metadata = output / "subscriber-metadata.json"
@@ -1291,6 +2260,42 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             check=True,
         )
 
+    loadgen = root / "target/release/wafer-loadgen"
+    if item.experiment == "e-iso-7":
+        for branch_dir in ("branch-a", "branch-b"):
+            branch = output / branch_dir
+            subprocess.run(
+                [
+                    str(loadgen),
+                    "hdr-summary",
+                    "--hdr",
+                    str(branch / "latency.hdr"),
+                    "--output",
+                    str(branch / "percentiles.json"),
+                ],
+                check=True,
+            )
+        config = tomllib.loads((root / item.config).read_text())
+        source = next(
+            node
+            for node in config["nodes"].values()
+            if node.get("kind") == "bench-source"
+        )
+        branch_isolation = derive_branch_isolation(
+            output,
+            warmup_secs=item.warmup_secs,
+            measurement_secs=item.measurement_secs,
+            offered_messages=int(source["total_messages"]),
+        )
+        branch_isolation["condition"] = item.condition
+        branch_isolation["run_index"] = item.run_index
+        (output / "branch-isolation.json").write_text(
+            json.dumps(branch_isolation, indent=2) + "\n"
+        )
+        branch_a_window = output / "branch-a/measurement-window.json"
+        if branch_a_window.is_file():
+            shutil.copyfile(branch_a_window, output / "measurement-window.json")
+
     if item.experiment.startswith("e-iso-"):
         containment = derive_containment(output)
         containment["experiment"] = item.experiment
@@ -1300,7 +2305,6 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             recovery = summarize_recovery(output / "recovery.csv")
             (output / "recovery.json").write_text(json.dumps(recovery, indent=2) + "\n")
 
-    loadgen = root / "target/release/wafer-loadgen"
     hdr = output / "latency.hdr"
     subscriber_metadata = output / "subscriber-metadata.json"
     if subscriber_metadata.is_file():
@@ -1340,7 +2344,100 @@ def verify_result(root: Path, output: Path) -> None:
     )
 
 
+def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
+    result_root = root / "eval/results/e-iso-7" / f"rpi5-{batch_id}"
+    runs: dict[str, list[dict]] = {
+        "control": [],
+        "panic-attack": [],
+        "epoch-loop-attack": [],
+    }
+    for path in result_root.rglob("branch-isolation.json"):
+        status_path = path.parent / "canonical-status.json"
+        try:
+            if json.loads(status_path.read_text()).get("status") != "passed":
+                continue
+            result = json.loads(path.read_text())
+            runs[result["condition"]].append(result)
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+
+    summary = {
+        "schema_version": 1,
+        "experiment": "e-iso-7",
+        "batch_id": batch_id,
+        "sample_unit": "run",
+        "comparisons": compare_branch_conditions(runs),
+    }
+    path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "branch-isolation-summary.json"
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
+    result_root = root / "eval/results/e-perf-10" / f"rpi5-{batch_id}"
+    by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
+    for path in result_root.rglob("rate-sweep.json"):
+        status_path = path.parent / "canonical-status.json"
+        try:
+            if json.loads(status_path.read_text()).get("status") != "passed":
+                continue
+            result = json.loads(path.read_text())
+            validate_rate_sweep_result(result)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        messages = result["messages"]
+        by_system[result["system"]].append(
+            {
+                "offered_rate_msg_s": result["offered_rate_msg_s"],
+                "p99_ns": result["latency_ns"]["p99"],
+                "offered": messages["offered"],
+                "lost": messages["lost"],
+            }
+        )
+
+    definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"]["e-perf-10"]
+    expected_repetitions = int(definition["repetitions"])
+    systems = {}
+    for system, samples in by_system.items():
+        observed = Counter(sample["offered_rate_msg_s"] for sample in samples)
+        complete = all(
+            observed[rate] == expected_repetitions for rate in RATE_SWEEP_RATES
+        )
+        if RATE_SWEEP_BASELINE not in observed:
+            systems[system] = {
+                "complete": False,
+                "error": f"missing {RATE_SWEEP_BASELINE} msg/s baseline",
+                "observed_samples": dict(sorted(observed.items())),
+            }
+            continue
+        systems[system] = {
+            "complete": complete,
+            "observed_samples": dict(sorted(observed.items())),
+            **classify_sustainable_throughput(samples),
+        }
+
+    summary = {
+        "schema_version": 1,
+        "experiment": "e-perf-10",
+        "batch_id": batch_id,
+        "thesis_evidence": False,
+        "criteria": {
+            "baseline_rate_msg_s": RATE_SWEEP_BASELINE,
+            "p99_multiplier_limit": RATE_SWEEP_P99_MULTIPLIER,
+            "max_loss_percent": RATE_SWEEP_MAX_LOSS_PERCENT,
+        },
+        "systems": systems,
+    }
+    path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "rate-sweep-summary.json"
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
 def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
+    if "e-perf-10" in experiments:
+        summarize_rate_sweep(root, batch_id)
+    if "e-iso-7" in experiments:
+        summarize_branch_isolation(root, batch_id)
     scripts = {
         "e-perf-4": "summarise-e-perf-4.sh",
         "e-perf-6": "summarise-e-perf-6-8.sh",

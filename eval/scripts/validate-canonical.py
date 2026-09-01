@@ -12,7 +12,7 @@ from pathlib import Path
 
 EXPECTED_EXPERIMENTS = {
     "e-val-1",
-    *(f"e-perf-{i}" for i in range(1, 10)),
+    *(f"e-perf-{i}" for i in range(1, 11)),
     *(f"e-iso-{i}" for i in range(1, 9)),
     *(f"e-swap-{i}" for i in range(1, 7)),
     "e-backpressure",
@@ -164,6 +164,8 @@ def validate_matrix(matrix: dict) -> list[str]:
 
         sample_unit = experiment["sample_unit"]
         repetitions = experiment["repetitions"]
+        if experiment_id == "e-perf-10" and experiment.get("thesis_evidence") is not False:
+            errors.append("e-perf-10 must set thesis_evidence=false")
         warmup_secs = experiment["warmup_secs"]
         measurement_secs = experiment["measurement_secs"]
         conditions = experiment["conditions"]
@@ -173,7 +175,14 @@ def validate_matrix(matrix: dict) -> list[str]:
             errors.append(f"{experiment_id} has invalid sample_unit {sample_unit!r}")
         if not isinstance(repetitions, int) or repetitions < 1:
             errors.append(f"{experiment_id} repetitions must be a positive integer")
-        elif sample_unit == "run" and repetitions < 30:
+        elif (
+            sample_unit == "run"
+            and repetitions < 30
+            and not (
+                experiment_id == "e-perf-10"
+                and experiment.get("thesis_evidence") is False
+            )
+        ):
             errors.append(f"{experiment_id} repetitions must be >= 30")
         if sample_unit == "event":
             events = experiment.get("events_per_run")

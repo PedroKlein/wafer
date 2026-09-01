@@ -101,6 +101,59 @@ def experiment_of(path: Path) -> str | None:
     return None
 
 
+def check_rate_sweep_result(path: Path) -> list[str]:
+    required = {
+        "schema_version",
+        "experiment",
+        "system",
+        "thesis_evidence",
+        "measurement_boundary",
+        "units",
+        "offered_rate_msg_s",
+        "actual_offered_rate_msg_s",
+        "achieved_rate_msg_s",
+        "measurement_duration_ns",
+        "messages",
+        "loss_percent",
+        "latency_ns",
+        "resources",
+        "throttled",
+        "profile",
+        "process_audit",
+        "traces",
+    }
+    nested = {
+        "messages": {"offered", "received", "lost", "duplicates"},
+        "latency_ns": {"p50", "p95", "p99"},
+        "resources": {"scope", "cpu_percent", "max_rss_bytes"},
+        "profile": {"path", "sha256", "payload_template_sha256"},
+        "process_audit": {"path", "sha256"},
+        "traces": {"published", "received"},
+    }
+    try:
+        result = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        return [f"rate-sweep.json is unreadable: {error}"]
+    violations = [
+        f"rate-sweep.json missing field: {field}"
+        for field in sorted(required - result.keys())
+    ]
+    for section, fields in nested.items():
+        value = result.get(section)
+        if not isinstance(value, dict):
+            violations.append(f"rate-sweep.json {section} must be an object")
+            continue
+        violations.extend(
+            f"rate-sweep.json {section} missing field: {field}"
+            for field in sorted(fields - value.keys())
+        )
+    if result.get("experiment") != "e-perf-10":
+        violations.append("rate-sweep.json experiment must be e-perf-10")
+    if result.get("thesis_evidence") is not False:
+        violations.append("rate-sweep.json must set thesis_evidence=false")
+    return violations
+
+
 def check_leaf(
     leaf: Path,
     experiment: str,
@@ -135,7 +188,7 @@ def check_leaf(
             with meta_path.open() as fh:
                 metadata = json.load(fh)
             missing = [k for k in MERGED_PROVENANCE_KEYS if k not in metadata]
-            if missing and metadata.get("system") != "ekuiper":
+            if missing and metadata.get("system") not in {"ekuiper", "mqtt-loopback"}:
                 message = (
                     f"metadata.json lacks merged provenance keys: {sorted(missing)} "
                     f"(legacy shakedown script; canonical runs source "
@@ -169,15 +222,23 @@ def check_leaf(
                 if metadata.get("system") == "ekuiper":
                     if exit_codes.get("ekuiper") != 0:
                         violations.append("Pi 5 metadata records a non-zero eKuiper exit")
+                elif metadata.get("system") == "mqtt-loopback":
+                    if exit_codes.get("publisher") != 0 or exit_codes.get("subscriber") != 0:
+                        violations.append("Pi 5 metadata records a non-zero loopback loadgen exit")
                 elif exit_codes.get("wafer_runtime") != 0:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
+                if experiment == "e-perf-10" and metadata.get("thesis_evidence") is not False:
+                    violations.append("E-Perf-10 metadata must set thesis_evidence=false")
                 if canonical:
                     if metadata.get("git_dirty") is not False:
                         violations.append("canonical result records dirty source")
                     tags = metadata.get("git_tags")
                     if not isinstance(tags, list) or not tags:
                         violations.append("canonical result lacks tagged source provenance")
-                    if metadata.get("system") != "ekuiper" and "runtime-provenance.json" not in files:
+                    if (
+                        metadata.get("system") not in {"ekuiper", "mqtt-loopback"}
+                        and "runtime-provenance.json" not in files
+                    ):
                         violations.append("missing canonical runtime provenance: runtime-provenance.json")
         except (OSError, ValueError) as exc:
             warnings.append(f"metadata.json unreadable: {exc}")
@@ -205,6 +266,9 @@ def check_leaf(
                     violations.append(
                         f"missing required canonical artefact for {experiment}: {required}"
                     )
+
+    if experiment == "e-perf-10" and "rate-sweep.json" in files:
+        violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
 
     matrix = OPTIONAL_MATRIX.get(experiment)
     if matrix is None:

@@ -13,13 +13,23 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
 from canonical_runner import (  # noqa: E402
+    analyze_rate_sweep_traces,
     build_schedule,
+    classify_sustainable_throughput,
+    compare_branch_a,
+    compare_branch_conditions,
+    derive_branch_isolation,
     derive_containment,
     evaluate_validation_gate,
+    loadgen_command,
     postprocess_run,
     select_attempt,
+    summarize_branch_isolation,
+    summarize_process_resources,
+    summarize_rate_sweep,
     summarize_recovery,
     validate_ekuiper_process_snapshot,
+    validate_rate_sweep_result,
     write_progress,
 )
 
@@ -64,6 +74,251 @@ def test_schedule_covers_performance_matrix() -> None:
     assert len({item.result_key for item in schedule}) == len(schedule)
 
 
+def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
+    schedule = build_schedule({"e-perf-10"}, seed=1729)
+    systems = ("mqtt-loopback", "native", "wafer", "ekuiper")
+    rates = (500, 1000, 2000, 4000, 8000, 16000)
+
+    assert len(schedule) == 4 * len(systems) * len(rates)
+    assert {
+        (item.system, item.offered_rate_msg_s)
+        for item in schedule
+    } == set((system, rate) for system in systems for rate in rates)
+    assert all(item.exclusive_sut for item in schedule)
+    assert all(item.total_messages == item.offered_rate_msg_s * 60 for item in schedule)
+    assert all(item.loadgen_profile == "eval/loadgen/canonical-rate-sweep.toml" for item in schedule)
+    assert schedule == build_schedule({"e-perf-10"}, seed=1729)
+    assert schedule != build_schedule({"e-perf-10"}, seed=1730)
+
+    for rate in rates:
+        positions = {position: [] for position in range(len(systems))}
+        for run_index in range(1, 5):
+            block = [
+                item
+                for item in schedule
+                if item.run_index == run_index and item.offered_rate_msg_s == rate
+            ]
+            assert len(block) == len(systems)
+            for position, item in enumerate(block):
+                positions[position].append(item.system)
+        assert all(set(observed) == set(systems) for observed in positions.values())
+
+
+def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
+    item = next(
+        item
+        for item in build_schedule({"e-perf-10"}, seed=1729)
+        if item.system == "wafer" and item.offered_rate_msg_s == 4000
+    )
+    output = Path("/tmp/rate-sweep")
+    publisher = loadgen_command(
+        ROOT,
+        item,
+        "publish",
+        topic="wafer/telemetry",
+        trace_file=output / "published.csv",
+    )
+    subscriber = loadgen_command(
+        ROOT,
+        item,
+        "subscribe",
+        output=output,
+        topic="wafer/telemetry/hot",
+        trace_file=output / "received.csv",
+    )
+
+    assert publisher[publisher.index("--rate") + 1] == "4000"
+    assert publisher[publisher.index("--topic") + 1] == "wafer/telemetry"
+    assert publisher[publisher.index("--trace-file") + 1] == str(output / "published.csv")
+    assert subscriber[subscriber.index("--total-messages") + 1] == "240000"
+    assert subscriber[subscriber.index("--topic") + 1] == "wafer/telemetry/hot"
+    assert subscriber[subscriber.index("--trace-file") + 1] == str(output / "received.csv")
+
+
+def test_rate_sweep_result_schema_rejects_every_required_field() -> None:
+    result = {
+        "schema_version": 1,
+        "experiment": "e-perf-10",
+        "system": "wafer",
+        "thesis_evidence": False,
+        "measurement_boundary": "publisher run window to subscriber receive timestamp",
+        "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
+        "offered_rate_msg_s": 1000,
+        "actual_offered_rate_msg_s": 999.0,
+        "achieved_rate_msg_s": 998.5,
+        "measurement_duration_ns": 60_000_000_000,
+        "messages": {"offered": 60_000, "received": 59_910, "lost": 90, "duplicates": 0},
+        "loss_percent": 0.15,
+        "latency_ns": {"p50": 100_000, "p95": 200_000, "p99": 300_000},
+        "resources": {"scope": "sut", "cpu_percent": 42.0, "max_rss_bytes": 32_000_000},
+        "throttled": False,
+        "profile": {
+            "path": "eval/loadgen/canonical-rate-sweep.toml",
+            "sha256": "1" * 64,
+            "payload_template_sha256": "4" * 64,
+        },
+        "process_audit": {"path": "process-audit.json", "sha256": "5" * 64},
+        "traces": {
+            "published": {"path": "published.csv", "sha256": "2" * 64, "samples": 60_000},
+            "received": {"path": "received.csv", "sha256": "3" * 64, "samples": 59_910},
+        },
+    }
+    validate_rate_sweep_result(result)
+
+    for field in tuple(result):
+        invalid = {**result}
+        invalid.pop(field)
+        with pytest.raises(ValueError, match=field):
+            validate_rate_sweep_result(invalid)
+
+    for section, fields in {
+        "messages": ("offered", "received", "lost", "duplicates"),
+        "latency_ns": ("p50", "p95", "p99"),
+        "resources": ("scope", "cpu_percent", "max_rss_bytes"),
+        "profile": ("path", "sha256", "payload_template_sha256"),
+        "process_audit": ("path", "sha256"),
+        "traces": ("published", "received"),
+    }.items():
+        for field in fields:
+            invalid = json.loads(json.dumps(result))
+            invalid[section].pop(field)
+            with pytest.raises(ValueError, match=field):
+                validate_rate_sweep_result(invalid)
+
+
+def test_rate_sweep_trace_analysis_preserves_pairs_and_counts_loss() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        published = root / "published.csv"
+        received = root / "received.csv"
+        metadata = root / "subscriber-metadata.json"
+        published.write_text("seq,ts_ns\n0,100\n1,200\n2,300\n3,400\n")
+        received.write_text(
+            "seq,payload_ts_ns,receive_ns,latency_ns\n"
+            "0,100,110,10\n1,200,220,20\n1,200,225,25\n"
+        )
+        metadata.write_text(
+            json.dumps(
+                {
+                    "total_messages": 3,
+                    "total_recorded": 3,
+                    "parse_errors": 0,
+                    "negative_latency_count": 0,
+                    "sequence": {"total_received": 3, "total_duplicates": 1},
+                    "latency_p50_ns": 20,
+                    "latency_p95_ns": 25,
+                    "latency_p99_ns": 25,
+                }
+            )
+        )
+        result = analyze_rate_sweep_traces(published, received, metadata)
+        assert result["messages"] == {
+            "offered": 4,
+            "received": 2,
+            "lost": 2,
+            "duplicates": 1,
+        }
+        assert result["latency_ns"] == {"p50": 20, "p95": 25, "p99": 25}
+
+        received.write_text(
+            "seq,payload_ts_ns,receive_ns,latency_ns\n0,101,110,9\n"
+        )
+        with pytest.raises(ValueError, match="timestamp changed"):
+            analyze_rate_sweep_traces(published, received, metadata)
+
+
+def test_process_resource_summary_reports_average_cpu_and_peak_rss() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "resource-usage.csv"
+        path.write_text(
+            "timestamp_ns,cpu_time_ticks,rss_bytes,process_count\n"
+            "1000000000,100,10000000,1\n"
+            "3000000000,300,20000000,1\n"
+        )
+        result = summarize_process_resources(path, clock_ticks=100)
+    assert result == {
+        "scope": "sut",
+        "cpu_percent": 100.0,
+        "max_rss_bytes": 20_000_000,
+    }
+
+
+def test_sustainable_throughput_classifies_last_good_and_first_bad() -> None:
+    samples = [
+        {"offered_rate_msg_s": 1000, "p99_ns": 1_000_000, "offered": 1000, "lost": 0},
+        {"offered_rate_msg_s": 2000, "p99_ns": 1_900_000, "offered": 2000, "lost": 10},
+        {"offered_rate_msg_s": 4000, "p99_ns": 2_100_000, "offered": 4000, "lost": 0},
+        {"offered_rate_msg_s": 8000, "p99_ns": 1_500_000, "offered": 8000, "lost": 200},
+    ]
+    result = classify_sustainable_throughput(samples)
+    assert result["baseline_p99_ns"] == 1_000_000
+    assert result["last_good_rate_msg_s"] == 2000
+    assert result["first_bad_rate_msg_s"] == 4000
+    assert result["no_saturation_within_range"] is False
+    assert result["rates"][2]["breaches"] == ["p99"]
+    assert result["rates"][3]["breaches"] == ["loss"]
+
+
+def test_sustainable_throughput_reports_no_saturation_within_range() -> None:
+    samples = [
+        {"offered_rate_msg_s": rate, "p99_ns": p99, "offered": rate, "lost": 0}
+        for rate, p99 in ((1000, 1_000_000), (2000, 1_500_000), (4000, 2_000_000))
+    ]
+    result = classify_sustainable_throughput(samples)
+    assert result["last_good_rate_msg_s"] == 4000
+    assert result["first_bad_rate_msg_s"] is None
+    assert result["highest_tested_rate_msg_s"] == 4000
+    assert result["no_saturation_within_range"] is True
+
+
+def test_rate_sweep_summary_uses_only_passed_attempts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        ledger = root / "eval/results/canonical-batches/rpi5-test"
+        ledger.mkdir(parents=True)
+        matrix = root / "eval/canonical-matrix.json"
+        matrix.parent.mkdir(parents=True, exist_ok=True)
+        matrix.write_text((ROOT / "eval/canonical-matrix.json").read_text())
+        for rate, p99, status in ((1000, 1_000_000, "passed"), (2000, 3_000_000, "passed"), (4000, 500_000, "failed")):
+            run = root / f"eval/results/e-perf-10/rpi5-test/wafer/rate-{rate:05d}/run-01"
+            run.mkdir(parents=True)
+            result = {
+                "schema_version": 1,
+                "experiment": "e-perf-10",
+                "system": "wafer",
+                "thesis_evidence": False,
+                "measurement_boundary": "publisher run window to subscriber receive timestamp",
+                "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
+                "offered_rate_msg_s": rate,
+                "actual_offered_rate_msg_s": float(rate),
+                "achieved_rate_msg_s": float(rate),
+                "measurement_duration_ns": 1_000_000_000,
+                "messages": {"offered": rate, "received": rate, "lost": 0, "duplicates": 0},
+                "loss_percent": 0.0,
+                "latency_ns": {"p50": p99, "p95": p99, "p99": p99},
+                "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},
+                "throttled": False,
+                "profile": {
+                    "path": "profile.toml",
+                    "sha256": "1" * 64,
+                    "payload_template_sha256": "4" * 64,
+                },
+                "process_audit": {"path": "process-audit.json", "sha256": "5" * 64},
+                "traces": {
+                    "published": {"path": "published.csv", "sha256": "2" * 64, "samples": rate},
+                    "received": {"path": "received.csv", "sha256": "3" * 64, "samples": rate},
+                },
+            }
+            (run / "rate-sweep.json").write_text(json.dumps(result))
+            (run / "canonical-status.json").write_text(json.dumps({"status": status}))
+        summary_path = summarize_rate_sweep(root, "test")
+        summary = json.loads(summary_path.read_text())
+    wafer = summary["systems"]["wafer"]
+    assert wafer["first_bad_rate_msg_s"] == 2000
+    assert "4000" not in wafer["observed_samples"]
+    assert summary["thesis_evidence"] is False
+
+
 def test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial() -> None:
     schedule = build_schedule(T3_EXPERIMENTS, seed=1729)
     by_experiment: dict[str, list] = {}
@@ -95,6 +350,11 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     for index in range(1, 9):
         assert len(by_experiment[f"e-iso-{index}"]) >= 30
     assert all(item.warmup_secs == 0 for index in range(1, 7) for item in by_experiment[f"e-iso-{index}"])
+    assert {item.condition for item in by_experiment["e-iso-7"]} == {
+        "control",
+        "panic-attack",
+        "epoch-loop-attack",
+    }
     assert len(by_experiment["e-swap-1"]) == 1
     assert len(by_experiment["e-swap-2"]) == 1
     assert len(by_experiment["e-swap-4"]) == 1
@@ -107,6 +367,9 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]
     for index in range(1, 9):
         assert "per_node_metrics.csv" in matrix[f"e-iso-{index}"]["required_outputs"]
+    iso_7_outputs = set(matrix["e-iso-7"]["required_outputs"])
+    assert "branch-isolation.json" in iso_7_outputs
+    assert not {"latency.hdr", "throughput.csv", "sequence.csv"} & iso_7_outputs
     assert {"recovery.csv", "recovery.json"} <= set(matrix["e-iso-8"]["required_outputs"])
     for index in range(1, 7):
         assert "swap_timeline.json" in matrix[f"e-swap-{index}"]["required_outputs"]
@@ -136,6 +399,117 @@ def test_isolation_derivations_use_raw_runtime_metrics() -> None:
         assert recovery["sample_count"] == 3
         assert recovery["p50_ns"] == 200
         assert recovery["p99_ns"] == 1000
+
+
+def test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "throughput.csv").write_text("elapsed_secs,msg_count,bytes\n1.0,999999,1\n")
+        (root / "sequence.csv").write_text(
+            "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+            "180000,180000,0,0,90000\n"
+        )
+        (root / "percentiles.json").write_text(
+            json.dumps({"total_count": 180000, "p50_ns": 1, "p95_ns": 1, "p99_ns": 1, "p999_ns": 1})
+        )
+
+        for branch, received, p95 in (("branch-a", 60000, 250000), ("branch-b", 0, 0)):
+            branch_dir = root / branch
+            branch_dir.mkdir()
+            branch_dir.joinpath("throughput.csv").write_text(
+                "elapsed_secs,msg_count,bytes\n30.0,30000,3840000\n60.0,30000,3840000\n"
+                if received
+                else "elapsed_secs,msg_count,bytes\n"
+            )
+            branch_dir.joinpath("sequence.csv").write_text(
+                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+                f"{received},{received},0,0,0\n"
+            )
+            branch_dir.joinpath("percentiles.json").write_text(
+                json.dumps(
+                    {
+                        "total_count": received,
+                        "p50_ns": p95 // 2,
+                        "p95_ns": p95,
+                        "p99_ns": p95 + 10000 if received else 0,
+                        "p999_ns": p95 + 20000 if received else 0,
+                    }
+                )
+            )
+            if received:
+                branch_dir.joinpath("measurement-window.json").write_text(
+                    json.dumps({"started_ns": 1_000_000_000, "finished_ns": 61_000_000_000})
+                )
+
+        summary = derive_branch_isolation(root, warmup_secs=30, measurement_secs=60)
+        branch_a = summary["branches"]["branch_a"]
+        assert branch_a["offered_messages"] == 60000
+        assert branch_a["received_messages"] == 60000
+        assert branch_a["gap_messages"] == 0
+        assert branch_a["duplicates"] == 0
+        assert branch_a["throughput"]["total_messages"] == 60000
+        assert branch_a["throughput"]["samples"][0]["msg_count"] == 30000
+        assert branch_a["latency_ns"]["p95"] == 250000
+        assert summary["branches"]["branch_b"]["received_messages"] == 0
+        assert summary["measurement_boundary"]["warmup_secs"] == 30
+        assert summary["measurement_boundary"]["measurement_secs"] == 60
+
+        attack = json.loads(json.dumps(summary))
+        attack["branches"]["branch_a"]["throughput"]["mean_messages_per_second"] = 900.0
+        attack["branches"]["branch_a"]["latency_ns"]["p95"] = 300000
+        comparison = compare_branch_a([summary], [attack])
+        assert comparison["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(10.0)
+        assert comparison["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(20.0)
+        assert comparison["units"]["latency"] == "nanoseconds"
+
+        epoch_attack = json.loads(json.dumps(attack))
+        epoch_attack["branches"]["branch_a"]["latency_ns"]["p95"] = 325000
+        comparisons = compare_branch_conditions(
+            {
+                "control": [summary],
+                "panic-attack": [attack],
+                "epoch-loop-attack": [epoch_attack],
+            }
+        )
+        assert set(comparisons) == {"panic-attack", "epoch-loop-attack"}
+        assert comparisons["panic-attack"]["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(10.0)
+        assert comparisons["epoch-loop-attack"]["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(30.0)
+        assert all(result["units"]["latency"] == "nanoseconds" for result in comparisons.values())
+
+
+def test_branch_isolation_batch_summary_contains_both_attack_rows() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        batch = root / "eval/results/e-iso-7/rpi5-diagnostic"
+        for condition, throughput, p95 in (
+            ("control", 1000.0, 100000),
+            ("panic-attack", 990.0, 110000),
+            ("epoch-loop-attack", 950.0, 130000),
+        ):
+            run = batch / condition / "run-01-attempt-01"
+            run.mkdir(parents=True)
+            run.joinpath("canonical-status.json").write_text(json.dumps({"status": "passed"}))
+            run.joinpath("branch-isolation.json").write_text(
+                json.dumps(
+                    {
+                        "condition": condition,
+                        "branches": {
+                            "branch_a": {
+                                "throughput": {"mean_messages_per_second": throughput},
+                                "latency_ns": {"p95": p95},
+                            }
+                        },
+                    }
+                )
+            )
+        (root / "eval/results/canonical-batches/rpi5-diagnostic").mkdir(parents=True)
+        path = summarize_branch_isolation(root, "diagnostic")
+        summary = json.loads(path.read_text())
+
+    assert set(summary["comparisons"]) == {"panic-attack", "epoch-loop-attack"}
+    assert summary["comparisons"]["panic-attack"]["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(1.0)
+    assert summary["comparisons"]["epoch-loop-attack"]["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(30.0)
+    assert summary["sample_unit"] == "run"
 
 
 def test_containment_derivation_rejects_placeholder_metrics() -> None:
@@ -417,6 +791,8 @@ if __name__ == "__main__":
     test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial()
     test_isolation_and_swap_schedule_preserves_experiment_semantics()
     test_isolation_derivations_use_raw_runtime_metrics()
+    test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in()
+    test_branch_isolation_batch_summary_contains_both_attack_rows()
     test_canonical_configs_match_frozen_windows()
     test_external_subscriber_percentiles_do_not_parse_binary_hdr()
     test_progress_log_records_counts_and_temperature_field()

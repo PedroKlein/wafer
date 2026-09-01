@@ -20,7 +20,13 @@ eval/results/
         ├── memory.csv
         ├── per_node_metrics.csv
         ├── sequence.csv                ← where applicable
-        └── swap_timeline.json          ← where applicable
+        ├── swap_timeline.json          ← where applicable
+        ├── branch-a/                   ← E-Iso-7 only
+        │   ├── latency.hdr
+        │   ├── throughput.csv
+        │   ├── sequence.csv
+        │   └── measurement-window.json
+        └── branch-b/                   ← E-Iso-7 only; same branch-local files
 ```
 
 **Host tags** (explicit whitelist — the harness rejects anything else):
@@ -62,9 +68,9 @@ before reading. The matrix below is authoritative:
 
 | File | Experiments | Producer | Description |
 | --- | --- | --- | --- |
-| `latency.hdr` | Every experiment with a BenchSink or `wafer-loadgen subscribe` (E-Val-1, E-Perf-1..9, E-Backpressure, E-Iso-*, E-Swap-*) | `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2 latency in nanoseconds. In-process: per-hop source-to-sink. E2E: MQTT publish → MQTT consume with intended-publish timestamp (avoids coordinated omission). |
+| `latency.hdr` | Every experiment with a BenchSink or `wafer-loadgen subscribe` (E-Val-1, E-Perf-1..10, E-Backpressure, E-Iso-*, E-Swap-*) | `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2 latency in nanoseconds. In-process: per-hop source-to-sink. E2E: MQTT publish → MQTT consume with intended-publish timestamp (avoids coordinated omission). |
 | `throughput.csv` | Same as `latency.hdr` | `BenchSink` or `wafer-loadgen subscribe` | Periodic throughput samples: `timestamp_ns,messages_per_sec,total_messages`. |
-| `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
+| `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Perf-10, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
 | `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and any run with `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `MemoryRecorder::sample_loop` (1 Hz, cross-platform via `memory-stats` crate). Flush on graceful shutdown. | 1 Hz process-RSS timeline of `wafer-runtime`: `elapsed_ms,rss_bytes`. Runtime-owned since A19 closure (thesis-hardening T4). Legacy harness `ps` polling removed. |
 | `per_node_metrics.csv` | All experiments (emitted on graceful shutdown when `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Runtime-owned since A19 closure (thesis-hardening T4). |
 | `recovery.csv` | E-Iso-8 and any run with recovery events | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | Exact recovery samples: `node_id,sample_index,duration_ns`. Retains nanosecond precision for trap-to-running percentiles. |
@@ -72,6 +78,13 @@ before reading. The matrix below is authoritative:
 | `pi-telemetry.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Timestamped temperature, CPU frequency, governor, throttling state, and summed PMIC internal-rail proxy watts. |
 | `pmic-rails.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Long-form named PMIC rail voltage/current/power samples. Rails without both voltage and current are not included. |
 | `power-boundary.json` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Declares that telemetry is an internal-rail proxy, not total USB-C input power, and records excluded consumers and the source limitation. |
+| `published.csv`, `received.csv` | E-Perf-10 | `wafer-loadgen` opt-in tracing | Raw publisher and subscriber timestamp/sequence samples used to verify preservation and account for loss and duplication. |
+| `resource-usage.csv` | E-Perf-10 | `canonical_runner.py` | One-second SUT samples: wall-clock timestamp, aggregate process CPU ticks, RSS bytes, and process count. MQTT loopback records the explicit no-SUT zero baseline. |
+| `process-audit.json` | E-Perf-10 | `canonical_runner.py` | Active SUT PID, process affinity, exclusivity, and allowed CPU set captured before measurement. |
+| `rate-sweep.json` | E-Perf-10 | `canonical_runner.py` | Per-run offered/achieved rates, loss/duplication, p50/p95/p99, CPU/RSS, throttling, and trace/profile hashes. Always labelled `thesis_evidence=false` for the focused diagnostic. |
+| `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent latency histogram, throughput series, sequence accounting, and measurement window for each branch. Root-level fan-in measurements are forbidden for branch-impact analysis. |
+| `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local offered/received counts, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
+| `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
 | `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `wafer-runtime` orchestrator's `SwapTimeline` emitter | Per-swap phase decomposition: `{node_id, request_id, compile_ns, instantiate_ns, signal_ns, ack_ns, first_v2_ns, convergence_ns}`. |
 | `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
 
@@ -83,7 +96,11 @@ before reading. The matrix below is authoritative:
   `memory.csv` (via `MemoryRecorder`), `recovery.csv` (exact recovery samples),
   and `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
-  `latency.hdr` (E2E path), `sequence.csv`.
+  `latency.hdr` (E2E path), `sequence.csv`, and opt-in `received.csv` traces.
+- `wafer-loadgen publish` owns opt-in `published.csv` traces.
+- `canonical_runner.py` owns E-Perf-10 `resource-usage.csv`,
+  `process-audit.json`, and `rate-sweep.json`, plus E-Iso-7
+  `branch-isolation.json` and the batch-level branch-A impact summary.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
   `metadata.json`, `config.toml`, and `stdout.log`.
 

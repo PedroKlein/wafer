@@ -20,7 +20,7 @@ plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_
 
 [nodes.branch_b]
 type = "transform"
-plugin = "../../../plugins/attacks/panic/target/wasm32-wasip2/release/wafer_attack_panic.wasm"
+plugin = "../../../plugins/attacks/infinite-loop/target/wasm32-wasip2/release/wafer_attack_infinite_loop.wasm"
 
 [nodes.branch_a_sink]
 type = "sink"

@@ -85,7 +85,7 @@ Three complementary mechanisms:
 
 ### Decision 8: Attack Scenario Measurement
 
-E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fail assertions). E-Iso-7 uses a parallel-branch topology where the fault node and measured node are on separate DAG branches to prove task-per-node isolation. E-Iso-8 measures recovery time from trap to first successful message after re-instantiation from `InstancePre`.
+E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fail assertions). E-Iso-7 uses separate sinks for the healthy and fault branches, and reports branch-A throughput and latency under matched panic and epoch-loop attacks. E-Iso-8 measures recovery time from trap to first successful message after re-instantiation from `InstancePre`.
 
 ### Decision 9: Statistical Analysis — UV-Managed Python Notebooks
 
@@ -103,9 +103,9 @@ Published alongside thesis: git repository, raw results tarball (Zenodo), exact 
 
 30s warmup exclusion (messages discarded by `BenchSink`) with post-hoc Augmented Dickey-Fuller stationarity verification in notebook `00-warmup-validation.ipynb`. At 1000 msg/s = 30,000 discarded messages, more than sufficient for Tokio stabilization and cache warming. ADF provides statistical proof that remaining data is stationary.
 
-### Decision 12: Throughput Saturation — Ramp + Latency Threshold
+### Decision 12: Throughput Saturation — Frozen Fixed-Rate Sweep
 
-"Saturated" = the rate where p99 latency exceeds 2× the p99 at steady-state (1000 msg/s) OR message loss exceeds 1%. Procedure: establish baseline at 1000 msg/s, run ramp profile (100→5000), binary search refinement between last-good and first-bad rates (30s steady runs). Follows Karimov 2018's "sustainable throughput" definition.
+"Saturated" = the first frozen rate where the median run p99 exceeds 2× the median p99 at 1000 msg/s or aggregate loss exceeds 1%. E-Perf-10 uses open-loop steady points at 500, 1000, 2000, 4000, 8000, and 16000 msg/s for MQTT loopback, native Rust, WAFER, and eKuiper. Four diagnostic repetitions use seeded rate blocks with rotated system order. Sustainable throughput is the last contiguous good point at or above the baseline; if no point fails, the result states that saturation was not observed within the tested range. Rates are not refined after results are observed. This follows Karimov 2018's sustainable-throughput definition while preventing comparator-specific adaptive sampling.
 
 ### Decision 13: Cross-Architecture — Same Source Revision, Ratio Reporting
 

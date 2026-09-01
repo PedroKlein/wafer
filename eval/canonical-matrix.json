@@ -29,7 +29,7 @@
     },
     "e-perf-1": {
       "research_question": "rq1",
-      "purpose": "Compare achieved throughput for the matched Pipeline A workload at 1000 messages per second.",
+      "purpose": "Compare target-load delivery and latency for the matched Pipeline A workload at 1000 messages per second; this is not a saturation-capacity measurement.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -132,6 +132,33 @@
       "required_outputs": ["startup.json"],
       "analysis": "10-aot-startup.ipynb"
     },
+    "e-perf-10": {
+      "research_question": "rq1",
+      "purpose": "Determine sustainable throughput for matched Pipeline A comparators and the MQTT loopback floor.",
+      "sample_unit": "run",
+      "repetitions": 4,
+      "warmup_secs": 30,
+      "measurement_secs": 60,
+      "conditions": ["mqtt-loopback", "native", "wafer", "ekuiper"],
+      "systems": ["mqtt-loopback", "native", "wafer", "ekuiper"],
+      "rate_points_msg_s": [500, 1000, 2000, 4000, 8000, 16000],
+      "loadgen_profile": "eval/loadgen/canonical-rate-sweep.toml",
+      "ordering": {
+        "method": "seeded rate blocks with four-run rotated system order",
+        "default_seed": 1729
+      },
+      "sustainable_throughput": {
+        "baseline_rate_msg_s": 1000,
+        "p99_multiplier_limit": 2.0,
+        "max_loss_percent": 1.0,
+        "p99_aggregation": "median across repetitions",
+        "loss_aggregation": "sum(lost) / sum(offered)",
+        "selection": "last contiguous good rate at or above baseline before first bad rate"
+      },
+      "thesis_evidence": false,
+      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "percentiles.json", "published.csv", "received.csv", "resource-usage.csv", "process-audit.json", "rate-sweep.json"],
+      "analysis": "09-saturation.ipynb"
+    },
     "e-iso-1": {
       "research_question": "rq2",
       "purpose": "Contain an out-of-bounds buffer access.",
@@ -206,13 +233,13 @@
     },
     "e-iso-7": {
       "research_question": "rq2",
-      "purpose": "Compare healthy-branch throughput with and without a parallel fault.",
+      "purpose": "Compare healthy-branch throughput and latency under parallel panic and epoch-loop faults.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["control", "attack"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "per_node_metrics.csv", "containment.json"],
+      "conditions": ["control", "panic-attack", "epoch-loop-attack"],
+      "required_outputs": ["branch-isolation.json", "per_node_metrics.csv", "containment.json"],
       "analysis": "06-fault-injection.ipynb"
     },
     "e-iso-8": {

@@ -104,6 +104,68 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_rate_sweep_contract_rejects_missing_resource_field() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        result = root / "e-perf-10" / "rpi5-test" / "mqtt-loopback" / "rate-01000" / "run-01"
+        result.mkdir(parents=True)
+        required = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]["e-perf-10"]["required_outputs"]
+        for name in {"config.toml", "stdout.log", *required, "pi-telemetry.csv", "pmic-rails.csv", "power-boundary.json"}:
+            (result / name).write_text("fixture\n")
+        (result / "measurement-window.json").write_text('{"started_ns":100,"finished_ns":200}\n')
+        (result / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "experiment": "e-perf-10",
+                    "system": "mqtt-loopback",
+                    "thesis_evidence": False,
+                    "host_tag": "rpi5",
+                    "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+                    "arch": "aarch64",
+                    "isolated_cpus": "1-3",
+                    "cpu_governors": ["performance"],
+                    "throttled": "0x0",
+                    "git_sha": "1" * 40,
+                    "git_dirty": False,
+                    "git_tags": ["rpi5-eval-v1"],
+                    "exit_codes": {"publisher": 0, "subscriber": 0},
+                }
+            )
+        )
+        sweep = {
+            "schema_version": 1,
+            "experiment": "e-perf-10",
+            "system": "mqtt-loopback",
+            "thesis_evidence": False,
+            "measurement_boundary": "publisher run window to subscriber receive timestamp",
+            "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
+            "offered_rate_msg_s": 1000,
+            "actual_offered_rate_msg_s": 1000.0,
+            "achieved_rate_msg_s": 999.0,
+            "measurement_duration_ns": 60_000_000_000,
+            "messages": {"offered": 60_000, "received": 60_000, "lost": 0, "duplicates": 0},
+            "loss_percent": 0.0,
+            "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+            "resources": {"scope": "no-sut", "cpu_percent": 0.0, "max_rss_bytes": 0},
+            "throttled": False,
+            "profile": {
+                "path": "profile.toml",
+                "sha256": "2" * 64,
+                "payload_template_sha256": "3" * 64,
+            },
+            "process_audit": {"path": "process-audit.json", "sha256": "4" * 64},
+            "traces": {"published": {}, "received": {}},
+        }
+        (result / "rate-sweep.json").write_text(json.dumps(sweep))
+        assert run(result).returncode == 0
+
+        sweep["resources"].pop("cpu_percent")
+        (result / "rate-sweep.json").write_text(json.dumps(sweep))
+        completed = run(result)
+    assert completed.returncode == 1
+    assert "resources missing field: cpu_percent" in completed.stdout
+
+
 def test_canonical_result_rejects_dirty_untagged_and_missing_output() -> None:
     mutations = {
         "dirty source": lambda result, metadata: metadata.update(git_dirty=True),
