@@ -763,6 +763,44 @@ gap.
 
 ---
 
+## A21 — Per-message Wasm execution retains anonymous RSS 🟡
+
+**Severity:** moderate. The runtime remains functionally correct, but the
+observed growth blocks long-running resource-efficiency claims.
+
+**Symptom.** Raspberry Pi 5 diagnostics with a 30-second warmup and 300-second
+measurement window found almost linear WAFER RSS growth:
+
+- threshold filter at 4,000 msg/s: 51.53 MiB, approximately 42.78 bytes per offered message;
+- pass-through transform at 4,000 msg/s: 51.56 MiB, approximately 42.86 bytes per offered message;
+- threshold filter at 1,000 msg/s: 12.98 MiB, approximately 43.77 bytes per offered message.
+
+All three slopes had R² above 0.999. The added memory was anonymous and
+private-dirty rather than file-backed or swap. A separate 4,000 msg/s probe
+observed `tokio-runtime-worker` threads grow from 9 to 35. Setting
+`MALLOC_ARENA_MAX=1` reduced virtual-address expansion but did not materially
+change RSS growth or worker proliferation. These runs are diagnostic only
+and use one complete run per condition.
+
+**Candidate cause.** Transform, filter, and router runners call
+`tokio::task::block_in_place` for every synchronous Wasmtime guest call. The
+correlation with worker-thread growth makes this the strongest current
+candidate, but the retained owner and a safe replacement have not been
+proved. The existing call also prevents nested-runtime panics when sync WASI
+adapters enter async host operations, so removing it directly would regress
+A16.
+
+**Required investigation.** Build a regression harness that reproduces the
+per-message RSS and worker growth, then compare the current path with a bounded
+execution design while preserving WASI async behavior, epoch interruption,
+backpressure, and shutdown semantics. Repeat 300–600 second blocks with 1 Hz
+RSS-region and thread-count evidence after any change.
+
+**Blocker for:** unqualified long-running memory-efficiency claims and final
+selection of the confirmatory measurement duration.
+
+---
+
 ## How to close a gap
 
 1. Land the code fix.
