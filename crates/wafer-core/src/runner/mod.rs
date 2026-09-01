@@ -29,51 +29,6 @@ use std::time::Instant;
 
 use wafer_types::config::HotSwapConfig;
 
-async fn run_wasm_blocking<T, R>(
-    mut node: T,
-    operation: impl FnOnce(&mut T) -> R + Send + 'static,
-) -> (T, R)
-where
-    T: Send + 'static,
-    R: Send + 'static,
-{
-    match tokio::task::spawn_blocking(move || {
-        let result = operation(&mut node);
-        (node, result)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(error) => std::panic::resume_unwind(Box::new(error)),
-    }
-}
-
-#[cfg(test)]
-mod blocking_tests {
-    use std::collections::HashSet;
-
-    use super::run_wasm_blocking;
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn repeated_wasm_calls_reuse_blocking_workers_and_state() {
-        let mut state = 0_u64;
-        let mut threads = HashSet::new();
-        for _ in 0..10_000 {
-            let (next_state, thread) = run_wasm_blocking(state, |value| {
-                *value += 1;
-                std::thread::current().id()
-            })
-            .await;
-            state = next_state;
-            threads.insert(thread);
-        }
-
-        assert_eq!(state, 10_000);
-        assert!(threads.len() <= 2, "blocking work used {} threads", threads.len());
-    }
-}
-
 // =============================================================================
 // Hot-swap progress (A3b): runner-reported ACK and first-v2 convergence
 // =============================================================================

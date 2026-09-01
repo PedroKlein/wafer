@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, run_wasm_blocking, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, send_downstream};
 
 fn recover_after_timeout(
     filter: &mut FilterNode,
@@ -117,16 +117,13 @@ pub async fn run_filter_loop(
         };
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        // A blocking-pool worker avoids per-message async-worker handoff while
-        // allowing sync WASI adapters to drive their ambient runtime.
+        // `block_in_place` signals the multi-thread runtime that this worker
+        // is about to block synchronously, so it can migrate other tasks and
+        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
+        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
-        let (next_filter, (envelope, result)) = run_wasm_blocking(filter, move |node| {
-            let result = node.evaluate(&envelope);
-            (envelope, result)
-        })
-        .await;
-        filter = next_filter;
+        let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
