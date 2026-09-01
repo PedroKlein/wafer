@@ -21,7 +21,7 @@ This RFC designs the measurement infrastructure for WAFER's thesis evaluation: 2
 
 With the complete runtime architecture designed and optimized (Sessions 1–7), this session designs the evaluation harness — the measurement infrastructure that connects the runtime to the thesis evaluation plan. The harness must satisfy 22 experiments across 3 RQs with statistical rigor: N≥30, open-loop load generation, HdrHistogram recording, and warmup exclusion. Reproducibility is mandatory — any figure must be regenerable from published scripts and configs. The observer effect must remain below 0.1%.
 
-Key constraints from prior sessions include: 4 metering configurations (Session 7 D6), AOT cache availability for cold/warm measurements (Session 7 D1), StoreLimits per node type (Session 7 D9), unconditional `NodeMetrics` with AtomicU64 counters (Session 5 D10), the 3-layer baseline stack (Session 5 D13), and the TestPipeline E2E builder (Session 6 D6).
+Key constraints from prior sessions include: 4 metering configurations (Session 7 D6), a dormant compiled-component cache design (Session 7 D1), StoreLimits per node type (Session 7 D9), unconditional `NodeMetrics` with AtomicU64 counters (Session 5 D10), the 3-layer baseline stack (Session 5 D13), and the TestPipeline E2E builder (Session 6 D6).
 
 The measurement infrastructure IS the pipeline — just with special source/sink adapters. No mocks, no separate benchmark binary, no observer effect >0.1%.
 
@@ -136,7 +136,7 @@ Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1
 
 - **RFC-005** (Orchestrator) — provides the unconditional `NodeMetrics` (AtomicU64 counters, D10) and task-per-node structure (D1) that the harness instruments.
 - **RFC-006** (Plugin SDK) — provides the `TestPipeline` builder concept (D6) generalized here into the shared `PipelineBuilder` with pluggable I/O adapters.
-- **RFC-007** (Performance Optimizations) — provides the 4 metering configurations (D6), AOT cache (D1), StoreLimits (D9), and epoch ticker (C1) that the harness decomposes in E-Perf-7.
+- **RFC-007** (Performance Optimizations) — defines the 4 metering configurations (D6), a compiled-cache design that is not wired into runtime startup (D1), StoreLimits (D9), and the epoch ticker (C1).
 - **RFC-001** (WIT Contracts) — defines the typed boundary being measured in per-hop overhead experiments.
 - **RFC-003** (Node Types) — defines the five node categories whose overhead is measured individually.
 

@@ -1,11 +1,12 @@
 # RFC-007: Performance Optimizations
 
-- **Status:** Implemented — AOT caching, epoch ticker, code-quality optimizations, per-type fuel + `StoreLimits` wired in the launcher (A8 closed 2026-07-20), and criterion benchmarks run against the production Wasm path (A15 closed 2026-07-20).
+- **Status:** Partially implemented — the compiled-component cache exists but is not wired into runtime startup; the epoch ticker, code-quality optimizations, per-type fuel, and `StoreLimits` are wired in the launcher, and criterion benchmarks run against the production Wasm path.
 - **Original session date:** 2026-07-12
 - **Amends:** RFC-002 (WaferState gains `limits: StoreLimits` field), RFC-004 (`[engine]` section gains fuel/epoch toggles)
 
-> **Implementation notes.** AOT caching, the epoch OS-thread ticker, and
-> the code-quality optimizations are live. `[engine.fuel]` and
+> **Implementation notes.** The compiled-component cache implementation exists,
+> but production startup constructs a memory-only cache. The epoch OS-thread
+> ticker and code-quality optimizations are live. `[engine.fuel]` and
 > `[engine.memory]` per-node-kind budgets are honored by the launcher
 > (A8). `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
 > production `PluginTestHarness` and `prepare_transform_swap_timed`
@@ -101,7 +102,7 @@ Replace manual `set_processing(true)` / `set_processing(false)` with a Drop guar
 
 ## Implementation Notes
 
-- **Decision 1 (AOT cache):** Implemented in `crates/wafer-core/src/engine/cache.rs` (or equivalent). Uses blake3 for hashing and platform-qualified filenames for the disk tier.
+- **Decision 1 (compiled cache):** The two-tier implementation exists in `crates/wafer-core/src/engine/cache.rs`, but `launch_pipeline` constructs `WaferEngine::from_engine_config`, so the disk tier is not active in production startup. E-Perf-9 must not claim a compiled-cache hit until that wiring and artifact provenance exist.
 - **Decision 6 (fuel/epoch flags):** Implemented in `crates/wafer-types/src/config/engine.rs` — `EngineConfig` struct with `fuel_enabled`, `epoch_enabled`, `epoch_tick_ms`, `epoch_deadline` fields and `FuelBudgets` sub-struct.
 - **Decision 9 (StoreLimits):** Implemented via `StoreLimitsBuilder` in the Store constructor per-node, with `trap_on_grow_failure(true)`.
 - **Decision C1 (epoch OS thread):** Implemented in the engine/orchestrator startup path using `std::thread::Builder::new().name("wafer-epoch-ticker")`.

@@ -1,8 +1,8 @@
-# E-Perf-9 AOT cold/warm — large tier (vibration-features, ~375 KB .wasm).
+# E-Perf-9 filesystem-cache cold/warm — large tier (vibration-features, ~375 KB .wasm).
 
 [pipeline]
 name = "e-perf-9-tier-large"
-description = "AOT startup measurement — large plugin (vibration-features, 375 KB)"
+description = "Filesystem-cache startup measurement — large plugin (vibration-features, 375 KB)"
 
 [nodes.source]
 type = "source"

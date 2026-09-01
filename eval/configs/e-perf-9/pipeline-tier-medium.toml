@@ -1,8 +1,8 @@
-# E-Perf-9 AOT cold/warm — medium tier (tensor-prep, ~97 KB .wasm).
+# E-Perf-9 filesystem-cache cold/warm — medium tier (tensor-prep, ~97 KB .wasm).
 
 [pipeline]
 name = "e-perf-9-tier-medium"
-description = "AOT startup measurement — medium plugin (tensor-prep, 97 KB)"
+description = "Filesystem-cache startup measurement — medium plugin (tensor-prep, 97 KB)"
 
 [nodes.source]
 type = "source"

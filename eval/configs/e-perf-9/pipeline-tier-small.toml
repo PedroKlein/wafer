@@ -1,11 +1,11 @@
-# E-Perf-9 AOT cold/warm — small tier (pass-through, ~57 KB .wasm).
+# E-Perf-9 filesystem-cache cold/warm — small tier (pass-through, ~57 KB .wasm).
 #
 # Minimal pipeline for startup latency measurement: bench-source emits one
 # message so process completion closely follows the first sink observation.
 
 [pipeline]
 name = "e-perf-9-tier-small"
-description = "AOT startup measurement — small plugin (pass-through, 57 KB)"
+description = "Filesystem-cache startup measurement — small plugin (pass-through, 57 KB)"
 
 [nodes.source]
 type = "source"
