@@ -8,8 +8,9 @@
 //! only exposition, not measurement."
 
 use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 
 const MAX_RECOVERY_SAMPLES: usize = 65_536;
 
@@ -22,6 +23,7 @@ const MAX_RECOVERY_SAMPLES: usize = 65_536;
 pub struct NodeMetrics {
     /// Total messages successfully processed.
     processed: AtomicU64,
+    first_processed_at: OnceLock<Instant>,
     /// Total messages that resulted in a process error.
     failed: AtomicU64,
     /// Cumulative processing time in nanoseconds.
@@ -56,6 +58,7 @@ impl NodeMetrics {
     pub const fn new() -> Self {
         Self {
             processed: AtomicU64::new(0),
+            first_processed_at: OnceLock::new(),
             failed: AtomicU64::new(0),
             process_ns: AtomicU64::new(0),
             retries: AtomicU64::new(0),
@@ -72,7 +75,10 @@ impl NodeMetrics {
     /// Record a successful message processing.
     #[inline]
     pub fn record_processed(&self, duration_ns: u64) {
-        self.processed.fetch_add(1, Ordering::Relaxed);
+        if self.processed.fetch_add(1, Ordering::Relaxed) == 0 {
+            let inserted = self.first_processed_at.set(Instant::now()).is_ok();
+            debug_assert!(inserted, "first processed timestamp is set once");
+        }
         self.process_ns.fetch_add(duration_ns, Ordering::Relaxed);
     }
 
@@ -168,6 +174,12 @@ impl NodeMetrics {
         self.processed.load(Ordering::Relaxed)
     }
 
+    /// Monotonic timestamp of the first successful message.
+    #[must_use]
+    pub fn first_processed_at(&self) -> Option<Instant> {
+        self.first_processed_at.get().copied()
+    }
+
     /// Total processing failures.
     #[inline]
     pub fn failed(&self) -> u64 {
@@ -235,9 +247,12 @@ mod tests {
     #[test]
     fn record_processed() {
         let m = NodeMetrics::new();
+        assert!(m.first_processed_at().is_none());
         m.record_processed(1000);
+        let first = m.first_processed_at().expect("first processed timestamp");
         m.record_processed(2000);
         assert_eq!(m.processed(), 2);
+        assert_eq!(m.first_processed_at(), Some(first));
         assert_eq!(m.process_ns(), 3000);
         assert_eq!(m.avg_process_ns(), 1500);
     }

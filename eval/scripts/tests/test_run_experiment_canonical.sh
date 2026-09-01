@@ -128,7 +128,35 @@ to = "sink"
 TOML
 cat >"$harness_root/target/release/wafer" <<'SH'
 #!/usr/bin/env bash
-exit 0
+set -euo pipefail
+printf 'runtime\n' >>"${ORDER_LOG:?}"
+cat >"${WAFER_STARTUP_OUTPUT:?}" <<JSON
+{
+  "schema_version": 1,
+  "clock": "monotonic",
+  "cache_state": "${WAFER_STARTUP_CACHE_STATE:?}",
+  "cache_preparation": {
+    "action": "${WAFER_STARTUP_CACHE_PREPARATION:?}",
+    "completed_before_timing": true
+  },
+  "compiled_component_cache": {
+    "mode": "disabled",
+    "hit": false,
+    "artifact": null,
+    "identity": null
+  },
+  "plugin_sha256": {},
+  "processed_messages": 1,
+  "phases_ns": {
+    "process_config": 10,
+    "component_load_compile": 20,
+    "instantiation": 30,
+    "pipeline_setup": 5,
+    "first_process": 35
+  },
+  "total_wall_duration_ns": 100
+}
+JSON
 SH
 cat >"$harness_root/target/release/wafer-loadgen" <<'SH'
 #!/usr/bin/env bash
@@ -140,19 +168,64 @@ chmod +x \
   "$harness_root/target/release/wafer" \
   "$harness_root/target/release/wafer-loadgen"
 
+ORDER_LOG="$tmp/warm-order.log" \
 "$harness_root/eval/scripts/run-experiment.sh" \
   --config "$harness_root/eval/startup.toml" \
   --experiment e-perf-9 \
+  --startup-cache-state warm \
   --host shakedown-macos \
   --skip-build \
   --duration 5 \
   --output-dir "$tmp/startup-result" >"$tmp/startup.log" 2>&1
-python3 - "$tmp/startup-result/metadata.json" <<'PY'
+python3 - "$tmp/startup-result/metadata.json" "$tmp/startup-result/startup-preparation.json" "$tmp/startup-result/startup.json" <<'PY'
 import json
 import sys
 metadata = json.load(open(sys.argv[1]))
+preparation = json.load(open(sys.argv[2]))
+startup = json.load(open(sys.argv[3]))
 assert metadata["exit_codes"]["wafer_runtime"] == 0
 assert metadata["duration_ns"] < 500_000_000, metadata["duration_ns"]
+assert preparation == {
+    "cache_state": "warm",
+    "action": "none",
+    "completed_before_timing": True,
+}
+assert startup["cache_state"] == "warm"
+assert startup["cache_preparation"] == {
+    "action": "none",
+    "completed_before_timing": True,
+}
 PY
+[ "$(cat "$tmp/warm-order.log")" = "runtime" ]
+grep -q 'startup preparation: cache_state=warm action=none' "$tmp/startup.log"
+[ "$(grep -n 'startup preparation:' "$tmp/startup.log" | cut -d: -f1)" -lt \
+  "$(grep -n 'launching wafer-runtime:' "$tmp/startup.log" | cut -d: -f1)" ]
+
+mkdir -p "$tmp/bin"
+cat >"$tmp/bin/sudo" <<'SH'
+#!/usr/bin/env bash
+printf 'drop-cache %s\n' "$*" >>"${ORDER_LOG:?}"
+SH
+chmod +x "$tmp/bin/sudo"
+ORDER_LOG="$tmp/cold-order.log" PATH="$tmp/bin:$PATH" \
+"$harness_root/eval/scripts/run-experiment.sh" \
+  --config "$harness_root/eval/startup.toml" \
+  --experiment e-perf-9 \
+  --startup-cache-state cold \
+  --host shakedown-macos \
+  --skip-build \
+  --duration 5 \
+  --output-dir "$tmp/startup-cold-result" >"$tmp/startup-cold.log" 2>&1
+python3 - "$tmp/startup-cold-result/startup-preparation.json" <<'PY'
+import json
+import sys
+assert json.load(open(sys.argv[1])) == {
+    "cache_state": "cold",
+    "action": "drop-linux-page-cache",
+    "completed_before_timing": True,
+}
+PY
+sed -n '1p' "$tmp/cold-order.log" | grep -Fq 'drop-cache sh -c sync; echo 3 > /proc/sys/vm/drop_caches'
+[ "$(sed -n '2p' "$tmp/cold-order.log")" = "runtime" ]
 
 echo 'canonical run-experiment tests: PASS'

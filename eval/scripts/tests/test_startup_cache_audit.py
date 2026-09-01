@@ -29,6 +29,7 @@ def test_repository_labels_match_filesystem_cache_evidence() -> None:
     assert result["os_page_cache"]["cold_preparation_present"] is True
     assert result["in_memory_component_cache"] == {
         "implemented": True,
+        "initial_launch_uses_cache": False,
         "lifetime": "one wafer-runtime process",
         "survives_process_restart": False,
     }

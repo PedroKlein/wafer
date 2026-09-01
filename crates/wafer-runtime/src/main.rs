@@ -6,7 +6,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
@@ -20,10 +20,11 @@ use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, Metr
 use wafer_core::bench::MemoryRecorder;
 use wafer_core::engine::Capabilities;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
-use wafer_core::orchestrator::launch_pipeline;
+use wafer_core::orchestrator::launch_pipeline_timed;
 use wafer_core::orchestrator::PipelineOrchestrator;
 
 mod metadata;
+mod startup;
 
 /// Global handle to the background `MemoryRecorder` so `flush_bench_artifacts`
 /// can retrieve samples after cancellation. Only populated when
@@ -101,6 +102,7 @@ struct Args {
     reason = "main() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
 )]
 async fn main() -> Result<()> {
+    let process_started = Instant::now();
     let args = Args::parse();
 
     // Initialize tracing
@@ -134,10 +136,12 @@ async fn main() -> Result<()> {
         .unwrap_or("wafer-pipeline");
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
-    // Launch pipeline (engine, plugins, sources, sinks, topology)
-    let mut orchestrator = launch_pipeline(config, Some(&args.config))
+    let launch_started = Instant::now();
+    let launched = launch_pipeline_timed(config, Some(&args.config))
         .await
         .context("Failed to launch pipeline")?;
+    let launch_completed = Instant::now();
+    let (mut orchestrator, launch_timings) = launched.into_parts();
 
     info!(
         tasks = orchestrator.task_count(),
@@ -276,6 +280,18 @@ async fn main() -> Result<()> {
     match orchestrator.run_until_complete().await {
         Ok(()) => info!("Pipeline completed"),
         Err(e) => error!(error = %e, "Pipeline exited with error"),
+    }
+
+    if let Some(path) = startup::resolve_output_path() {
+        startup::write_startup(
+            &path,
+            &orchestrator,
+            process_started,
+            launch_started,
+            launch_completed,
+            launch_timings,
+        )?;
+        info!(path = %path.display(), "Startup phases written");
     }
 
     flush_bench_artifacts(&orchestrator, &bench_cancel).await;

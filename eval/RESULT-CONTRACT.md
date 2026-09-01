@@ -82,6 +82,8 @@ before reading. The matrix below is authoritative:
 | `resource-usage.csv` | E-Perf-10 | `canonical_runner.py` | One-second SUT samples: wall-clock timestamp, aggregate process CPU ticks, RSS bytes, and process count. MQTT loopback records the explicit no-SUT zero baseline. |
 | `process-audit.json` | E-Perf-10 | `canonical_runner.py` | Active SUT PID, process affinity, exclusivity, and allowed CPU set captured before measurement. |
 | `rate-sweep.json` | E-Perf-10 | `canonical_runner.py` | Per-run offered/achieved rates, loss/duplication, p50/p95/p99, CPU/RSS, throttling, and trace/profile hashes. Always labelled `thesis_evidence=false` for the focused diagnostic. |
+| `startup-preparation.json` | E-Perf-9 | `run-experiment.sh` | Filesystem-cache condition and preparation action completed before the timed runtime process starts. |
+| `startup.json` | E-Perf-9 | `wafer-runtime` | Monotonic process/config, component load/compile, instantiation, pipeline setup, and first-process durations; total startup duration; exactly-one-message proof; plugin SHA-256; and explicit compiled-component cache state. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent latency histogram, throughput series, sequence accounting, and measurement window for each branch. Root-level fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local offered/received counts, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
 | `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
@@ -90,8 +92,8 @@ before reading. The matrix below is authoritative:
 
 ### Ownership summary
 
-- `wafer-runtime` owns `runtime-provenance.json`, `latency.hdr` (via
-  `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
+- `wafer-runtime` owns `runtime-provenance.json`, E-Perf-9 `startup.json`,
+  `latency.hdr` (via `BenchSink`), `throughput.csv` (via `BenchSink`), `sequence.csv`
   (via `BenchSink` when `track_sequences=true`), `swap_timeline.json`,
   `memory.csv` (via `MemoryRecorder`), `recovery.csv` (exact recovery samples),
   and `per_node_metrics.csv` (via `PipelineOrchestrator::export_per_node_metrics`).
@@ -102,7 +104,25 @@ before reading. The matrix below is authoritative:
   `process-audit.json`, and `rate-sweep.json`, plus E-Iso-7
   `branch-isolation.json` and the batch-level branch-A impact summary.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
-  `metadata.json`, `config.toml`, and `stdout.log`.
+  `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9
+  `startup-preparation.json`.
+
+### `startup.json` schema
+
+E-Perf-9 measures startup from runtime process entry through the first successful
+sink collection. All durations use the runtime's monotonic clock and exclude
+shutdown, result export, and analysis. `phases_ns` contains non-overlapping
+`process_config`, `component_load_compile`, `instantiation`, `pipeline_setup`,
+and `first_process` durations. Their sum must not exceed
+`total_wall_duration_ns`; unmeasured transition overhead may be at most 5 ms.
+
+The one-message probe requires `processed_messages = 1`. `plugin_sha256` maps
+each Wasm node to the exact loaded component digest. The
+`compiled_component_cache` object records `mode`, `hit`, `artifact`, and
+`identity`; a hit is invalid unless both artifact and identity are present.
+Current production startup reports `mode = "disabled"`, `hit = false`, and null
+artifact/identity because initial component loading does not use the dormant
+serialized-component cache.
 
 ## `metadata.json` schema
 

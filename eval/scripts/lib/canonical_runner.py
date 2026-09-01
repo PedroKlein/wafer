@@ -82,6 +82,14 @@ RATE_SWEEP_BASELINE = 1_000
 RATE_SWEEP_P99_MULTIPLIER = 2.0
 RATE_SWEEP_MAX_LOSS_PERCENT = 1.0
 RATE_SWEEP_PROFILE = "eval/loadgen/canonical-rate-sweep.toml"
+STARTUP_PHASES = (
+    "process_config",
+    "component_load_compile",
+    "instantiation",
+    "pipeline_setup",
+    "first_process",
+)
+STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS = 5_000_000
 
 
 def _validate_rate_sweep_definition(root: Path, definition: dict) -> None:
@@ -786,6 +794,84 @@ class ProcessResourceSampler:
                 raise RuntimeError("process resource sampler did not stop")
         if self.error is not None:
             raise RuntimeError(f"process resource sampler failed: {self.error}")
+
+
+def validate_startup_artifact(result: dict) -> None:
+    required = {
+        "schema_version",
+        "clock",
+        "cache_state",
+        "cache_preparation",
+        "compiled_component_cache",
+        "plugin_sha256",
+        "processed_messages",
+        "phases_ns",
+        "total_wall_duration_ns",
+        "harness_overhead_tolerance_ns",
+    }
+    missing = sorted(required - result.keys())
+    if missing:
+        raise ValueError(f"startup artifact missing fields: {', '.join(missing)}")
+    if result["schema_version"] != 1 or result["clock"] != "monotonic":
+        raise ValueError("startup artifact must use schema version 1 and monotonic durations")
+    if result["cache_state"] not in {"cold", "warm"}:
+        raise ValueError("startup cache_state must be cold or warm")
+
+    preparation = result["cache_preparation"]
+    expected_action = (
+        "drop-linux-page-cache" if result["cache_state"] == "cold" else "none"
+    )
+    if preparation != {
+        "action": expected_action,
+        "completed_before_timing": True,
+    }:
+        raise ValueError("startup cache preparation does not match cache_state")
+
+    compiled_cache = result["compiled_component_cache"]
+    for field in ("mode", "hit", "artifact", "identity"):
+        if field not in compiled_cache:
+            raise ValueError(f"compiled component cache missing field: {field}")
+    if compiled_cache["hit"] and not (
+        compiled_cache["artifact"] and compiled_cache["identity"]
+    ):
+        raise ValueError("compiled component cache hit requires artifact and identity")
+    if compiled_cache["mode"] == "disabled" and (
+        compiled_cache["hit"]
+        or compiled_cache["artifact"] is not None
+        or compiled_cache["identity"] is not None
+    ):
+        raise ValueError("disabled compiled component cache cannot report hit evidence")
+
+    hashes = result["plugin_sha256"]
+    if not isinstance(hashes, dict) or not hashes:
+        raise ValueError("startup artifact requires at least one plugin SHA-256")
+    if any(
+        not isinstance(value, str)
+        or len(value) != 64
+        or any(char not in "0123456789abcdef" for char in value.lower())
+        for value in hashes.values()
+    ):
+        raise ValueError("startup plugin SHA-256 values must be 64 hexadecimal characters")
+    if result["processed_messages"] != 1:
+        raise ValueError("startup artifact must contain exactly one processed message")
+
+    phases = result["phases_ns"]
+    missing_phases = [phase for phase in STARTUP_PHASES if phase not in phases]
+    if missing_phases:
+        raise ValueError(f"missing startup phase: {', '.join(missing_phases)}")
+    durations = [phases[phase] for phase in STARTUP_PHASES]
+    if any(not isinstance(value, int) or value < 0 for value in durations):
+        raise ValueError("startup phase durations must be non-negative integer nanoseconds")
+    total = result["total_wall_duration_ns"]
+    if not isinstance(total, int) or total <= 0:
+        raise ValueError("startup total wall duration must be positive integer nanoseconds")
+    phase_total = sum(durations)
+    if phase_total > total:
+        raise ValueError("startup phases exceed total wall duration")
+    if result["harness_overhead_tolerance_ns"] != STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS:
+        raise ValueError("startup harness-overhead tolerance differs from the frozen value")
+    if total - phase_total > STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS:
+        raise ValueError("startup unmeasured harness overhead exceeds tolerance")
 
 
 def validate_rate_sweep_result(result: dict) -> None:
@@ -2189,17 +2275,14 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
         )
     if item.total_messages is not None:
         command.extend(["--total-messages", str(item.total_messages)])
+    if item.startup_mode is not None:
+        command.extend(["--startup-cache-state", item.startup_mode])
 
     env = os.environ.copy()
     env["WAFER_RUNTIME_CPUSET"] = item.runtime_cpus
     env["WAFER_LOADGEN_CPUSET"] = item.support_cpus
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     try:
-        if item.startup_mode == "cold":
-            subprocess.run(
-                ["sudo", "sh", "-c", "sync; echo 3 > /proc/sys/vm/drop_caches"],
-                check=True,
-            )
         subprocess.run(command, cwd=root, env=env, check=True)
         postprocess_run(root, item, output)
         verify_result(root, output)
@@ -2323,12 +2406,14 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             check=True,
         )
     if item.experiment == "e-perf-9":
-        metadata = json.loads((output / "metadata.json").read_text())
-        startup = {
-            "cache_state": item.startup_mode,
-            "wall_duration_ns": metadata["duration_ns"],
-        }
-        (output / "startup.json").write_text(json.dumps(startup, indent=2) + "\n")
+        startup_path = output / "startup.json"
+        startup = json.loads(startup_path.read_text())
+        validate_startup_artifact(startup)
+        if startup["cache_state"] != item.startup_mode:
+            raise ValueError(
+                f"startup cache state {startup['cache_state']!r} does not match "
+                f"condition {item.startup_mode!r}"
+            )
 
 
 def verify_result(root: Path, output: Path) -> None:

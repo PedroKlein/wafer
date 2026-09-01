@@ -23,6 +23,7 @@ from canonical_runner import (  # noqa: E402
     evaluate_validation_gate,
     loadgen_command,
     postprocess_run,
+    RunItem,
     select_attempt,
     summarize_branch_isolation,
     summarize_process_resources,
@@ -30,6 +31,7 @@ from canonical_runner import (  # noqa: E402
     summarize_recovery,
     validate_ekuiper_process_snapshot,
     validate_rate_sweep_result,
+    validate_startup_artifact,
     write_progress,
 )
 
@@ -67,11 +69,114 @@ def test_schedule_covers_performance_matrix() -> None:
     )
     assert len(by_experiment["e-perf-7"]) == 4 * 30
     assert len(by_experiment["e-perf-9"]) == 6 * 30
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    assert set(matrix["experiments"]["e-perf-9"]["required_outputs"]) == {
+        "startup-preparation.json",
+        "startup.json",
+    }
     assert len(by_experiment["e-backpressure"]) == 30
     assert all(item.warmup_secs == 30 for item in by_experiment["e-perf-4"])
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
     assert len({item.result_key for item in schedule}) == len(schedule)
+
+
+def _startup_artifact() -> dict:
+    return {
+        "schema_version": 1,
+        "clock": "monotonic",
+        "cache_state": "warm",
+        "cache_preparation": {
+            "action": "none",
+            "completed_before_timing": True,
+        },
+        "compiled_component_cache": {
+            "mode": "disabled",
+            "hit": False,
+            "artifact": None,
+            "identity": None,
+        },
+        "plugin_sha256": {
+            "t1": "a" * 64,
+        },
+        "processed_messages": 1,
+        "phases_ns": {
+            "process_config": 10,
+            "component_load_compile": 20,
+            "instantiation": 30,
+            "pipeline_setup": 5,
+            "first_process": 35,
+        },
+        "total_wall_duration_ns": 105,
+        "harness_overhead_tolerance_ns": 5_000_000,
+    }
+
+
+def test_startup_artifact_accepts_explicit_non_overlapping_phases() -> None:
+    artifact = _startup_artifact()
+    validate_startup_artifact(artifact)
+
+
+def test_startup_artifact_rejects_missing_or_impossible_phases() -> None:
+    missing = _startup_artifact()
+    del missing["phases_ns"]["instantiation"]
+    with pytest.raises(ValueError, match="missing startup phase"):
+        validate_startup_artifact(missing)
+
+    impossible = _startup_artifact()
+    impossible["total_wall_duration_ns"] = 90
+    with pytest.raises(ValueError, match="exceed total wall duration"):
+        validate_startup_artifact(impossible)
+
+
+def test_startup_artifact_rejects_unproven_cache_hit() -> None:
+    artifact = _startup_artifact()
+    artifact["compiled_component_cache"]["hit"] = True
+    with pytest.raises(ValueError, match="cache hit requires"):
+        validate_startup_artifact(artifact)
+
+
+def test_startup_postprocessing_preserves_runtime_measurement() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        artifact = _startup_artifact()
+        (output / "metadata.json").write_text("{}")
+        (output / "startup.json").write_text(json.dumps(artifact))
+        item = RunItem(
+            experiment="e-perf-9",
+            condition="small-warm",
+            run_index=1,
+            config="eval/configs/e-perf-9/pipeline-tier-small.toml",
+            warmup_secs=0,
+            measurement_secs=0,
+            startup_mode="warm",
+        )
+
+        postprocess_run(ROOT, item, output)
+
+        assert json.loads((output / "startup.json").read_text()) == artifact
+
+
+def test_startup_postprocessing_rejects_condition_mismatch() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        artifact = _startup_artifact()
+        artifact["cache_state"] = "cold"
+        artifact["cache_preparation"]["action"] = "drop-linux-page-cache"
+        (output / "metadata.json").write_text("{}")
+        (output / "startup.json").write_text(json.dumps(artifact))
+        item = RunItem(
+            experiment="e-perf-9",
+            condition="small-warm",
+            run_index=1,
+            config="eval/configs/e-perf-9/pipeline-tier-small.toml",
+            warmup_secs=0,
+            measurement_secs=0,
+            startup_mode="warm",
+        )
+
+        with pytest.raises(ValueError, match="does not match condition"):
+            postprocess_run(ROOT, item, output)
 
 
 def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use wasmtime::Store;
 
@@ -24,6 +25,52 @@ use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
 use crate::orchestrator::pipeline::PipelineOrchestrator;
 use crate::registry::{OciReference, PluginSource, RegistryConfig, WaferRegistry};
+
+/// Aggregate monotonic durations for one pipeline launch.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct LaunchTimings {
+    component_load_compile: Duration,
+    instantiation: Duration,
+    pipeline_setup: Duration,
+}
+
+impl LaunchTimings {
+    /// Time spent resolving, reading, hashing, and compiling Wasm components.
+    #[must_use]
+    pub fn component_load_compile_ns(self) -> u64 {
+        duration_ns(self.component_load_compile)
+    }
+
+    /// Time spent pre-linking, instantiating, validating, and initializing Wasm nodes.
+    #[must_use]
+    pub fn instantiation_ns(self) -> u64 {
+        duration_ns(self.instantiation)
+    }
+
+    /// Remaining launch time spent creating the engine, topology, I/O, and tasks.
+    #[must_use]
+    pub fn pipeline_setup_ns(self) -> u64 {
+        duration_ns(self.pipeline_setup)
+    }
+}
+
+/// A running pipeline paired with its completed launch timings.
+pub struct TimedPipelineLaunch {
+    orchestrator: PipelineOrchestrator,
+    timings: LaunchTimings,
+}
+
+impl TimedPipelineLaunch {
+    /// Split the running orchestrator from its immutable launch timing snapshot.
+    #[must_use]
+    pub fn into_parts(self) -> (PipelineOrchestrator, LaunchTimings) {
+        (self.orchestrator, self.timings)
+    }
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
 
 /// Launch a fully-wired pipeline from configuration.
 ///
@@ -47,6 +94,24 @@ pub async fn launch_pipeline(
     config: Config,
     config_path: Option<&Path>,
 ) -> Result<PipelineOrchestrator> {
+    Ok(launch_pipeline_timed(config, config_path).await?.orchestrator)
+}
+
+/// Launch a pipeline and report non-overlapping startup phase durations.
+///
+/// # Errors
+///
+/// Returns the same startup errors as [`launch_pipeline`].
+#[expect(
+    clippy::large_futures,
+    reason = "pipeline launch holds WASM Store/Component across sequential .await points; called once at startup, not per-message hot path"
+)]
+pub async fn launch_pipeline_timed(
+    config: Config,
+    config_path: Option<&Path>,
+) -> Result<TimedPipelineLaunch> {
+    let launch_started = Instant::now();
+    let mut timings = LaunchTimings::default();
     let engine = WaferEngine::from_engine_config(&config.engine)?;
     engine.ensure_epoch_ticker();
     let engine = Arc::new(engine);
@@ -97,6 +162,7 @@ pub async fn launch_pipeline(
                     &registry,
                     config_path,
                     &mut plugin_hashes,
+                    &mut timings,
                 ).await?);
             }
             (NodeBundleKind::Filter { node, .. }, NodeDef::Filter(wasm)) => {
@@ -109,6 +175,7 @@ pub async fn launch_pipeline(
                     &registry,
                     config_path,
                     &mut plugin_hashes,
+                    &mut timings,
                 ).await?);
             }
             (NodeBundleKind::Router { node, .. }, NodeDef::Router(wasm)) => {
@@ -121,6 +188,7 @@ pub async fn launch_pipeline(
                     &registry,
                     config_path,
                     &mut plugin_hashes,
+                    &mut timings,
                 ).await?);
             }
             _ => {}
@@ -132,7 +200,11 @@ pub async fn launch_pipeline(
     for (node_id, hash) in plugin_hashes {
         handle.record_plugin_hash(&node_id, hash);
     }
-    Ok(orchestrator)
+    timings.pipeline_setup = launch_started
+        .elapsed()
+        .saturating_sub(timings.component_load_compile)
+        .saturating_sub(timings.instantiation);
+    Ok(TimedPipelineLaunch { orchestrator, timings })
 }
 
 // =============================================================================
@@ -236,6 +308,7 @@ async fn load_transform_node_dispatch(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
     plugin_hashes: &mut HashMap<Box<str>, String>,
+    timings: &mut LaunchTimings,
 ) -> Result<crate::node::TransformNode> {
     if let Some(function) = wasm.plugin.native_function() {
         let native = build_native_transform(node_id, function)?;
@@ -243,7 +316,7 @@ async fn load_transform_node_dispatch(
     }
     let wasm_node = load_transform_node(
         node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
-        plugin_hashes,
+        plugin_hashes, timings,
     )
     .await?;
     Ok(crate::node::TransformNode::from(wasm_node))
@@ -275,10 +348,17 @@ async fn load_transform_node(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
     plugin_hashes: &mut HashMap<Box<str>, String>,
+    timings: &mut LaunchTimings,
 ) -> Result<WasmTransformNode> {
+    let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    timings.component_load_compile = timings
+        .component_load_compile
+        .saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
+
+    let phase_started = Instant::now();
     let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -316,6 +396,7 @@ async fn load_transform_node(
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
+    timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }
 
@@ -400,6 +481,7 @@ async fn load_filter_node_dispatch(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
     plugin_hashes: &mut HashMap<Box<str>, String>,
+    timings: &mut LaunchTimings,
 ) -> Result<crate::node::FilterNode> {
     if let Some(function) = wasm.plugin.native_function() {
         let native = build_native_filter(node_id, function, wasm)?;
@@ -407,7 +489,7 @@ async fn load_filter_node_dispatch(
     }
     let wasm_node = load_filter_node(
         node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
-        plugin_hashes,
+        plugin_hashes, timings,
     )
     .await?;
     Ok(crate::node::FilterNode::from(wasm_node))
@@ -442,10 +524,17 @@ async fn load_filter_node(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
     plugin_hashes: &mut HashMap<Box<str>, String>,
+    timings: &mut LaunchTimings,
 ) -> Result<WasmFilterNode> {
+    let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    timings.component_load_compile = timings
+        .component_load_compile
+        .saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
+
+    let phase_started = Instant::now();
     let pre = Arc::new(engine.pre_instantiate_filter(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -480,6 +569,7 @@ async fn load_filter_node(
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
+    timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }
 
@@ -494,10 +584,17 @@ async fn load_router_node(
     registry: &WaferRegistry,
     config_path: Option<&Path>,
     plugin_hashes: &mut HashMap<Box<str>, String>,
+    timings: &mut LaunchTimings,
 ) -> Result<WasmRouterNode> {
+    let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
+    timings.component_load_compile = timings
+        .component_load_compile
+        .saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
+
+    let phase_started = Instant::now();
     let pre = Arc::new(engine.pre_instantiate_router(&component)?);
 
     let state = WaferState::new_with_memory_limit(
@@ -532,6 +629,7 @@ async fn load_router_node(
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
     node.validate_and_init(&config_json)?;
+    timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }
 

@@ -129,7 +129,7 @@
       "warmup_exception": "Startup is the measured event; warming would destroy the cold-start condition.",
       "measurement_secs": 1,
       "conditions": ["small-cold", "small-warm", "medium-cold", "medium-warm", "large-cold", "large-warm"],
-      "required_outputs": ["startup.json"],
+      "required_outputs": ["startup-preparation.json", "startup.json"],
       "analysis": "10-aot-startup.ipynb"
     },
     "e-perf-10": {

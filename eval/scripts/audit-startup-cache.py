@@ -22,7 +22,7 @@ def audit_repository(root: Path) -> dict:
     launcher = (root / "crates/wafer-core/src/orchestrator/launcher.rs").read_text()
     loader = (root / "crates/wafer-core/src/engine/loader.rs").read_text()
     cache = (root / "crates/wafer-core/src/engine/cache.rs").read_text()
-    runner = (root / "eval/scripts/lib/canonical_runner.py").read_text()
+    run_experiment = (root / "eval/scripts/run-experiment.sh").read_text()
     matrix = json.loads((root / "eval/canonical-matrix.json").read_text())
     config_paths = sorted((root / "eval/configs/e-perf-9").glob("*.toml"))
     notebook_path = root / "eval/analysis/notebooks/10-aot-startup.ipynb"
@@ -57,11 +57,12 @@ def audit_repository(root: Path) -> dict:
         "experiment": "e-perf-9",
         "os_page_cache": {
             "cold_preparation": "sync; echo 3 > /proc/sys/vm/drop_caches",
-            "cold_preparation_present": "sync; echo 3 > /proc/sys/vm/drop_caches" in runner,
+            "cold_preparation_present": "sync; echo 3 > /proc/sys/vm/drop_caches" in run_experiment,
             "warm_preparation": "no page-cache drop before the paired warm process",
         },
         "in_memory_component_cache": {
             "implemented": "ComponentCache::memory_only()" in loader,
+            "initial_launch_uses_cache": "engine.compile_cached" in launcher,
             "lifetime": "one wafer-runtime process",
             "survives_process_restart": False,
         },

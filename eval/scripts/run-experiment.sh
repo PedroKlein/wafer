@@ -52,6 +52,8 @@ Common options:
   --total-messages <N>       Subscriber completion count. Defaults to run-until-signal.
   --warmup-secs <secs>       MQTT warmup publisher duration before measurement.
   --duration <secs>          Hard cap on measured runtime duration. Default: 300.
+  --startup-cache-state <state>
+                             Required for E-Perf-9: cold or warm filesystem cache.
   --output-dir <path>        Exact result leaf. Must not already exist.
   --broker <host:port>       Reuse an existing MQTT broker.
   --skip-build               Assume wafer-runtime + wafer-loadgen are built.
@@ -77,6 +79,7 @@ subscribe_topic=""
 total_messages=""
 warmup_secs=0
 duration=300
+startup_cache_state=""
 output_dir=""
 broker="${WAFER_HARNESS_MQTT:-}"
 skip_build=0
@@ -95,6 +98,7 @@ while [ $# -gt 0 ]; do
         --total-messages)    total_messages="${2:?}"; shift 2 ;;
         --warmup-secs)       warmup_secs="${2:?}"; shift 2 ;;
         --duration)          duration="${2:?}"; shift 2 ;;
+        --startup-cache-state) startup_cache_state="${2:?}"; shift 2 ;;
         --output-dir)        output_dir="${2:?}"; shift 2 ;;
         --broker)            broker="${2:?}"; shift 2 ;;
         --skip-build)        skip_build=1; shift ;;
@@ -110,6 +114,15 @@ done
 [ -n "$config" ]     || { printf 'ERROR: --config is required\n' >&2; usage >&2; exit 2; }
 [ -n "$experiment" ] || { printf 'ERROR: --experiment is required\n' >&2; usage >&2; exit 2; }
 [ -f "$config" ]     || { printf 'ERROR: config not found: %s\n' "$config" >&2; exit 2; }
+if [ "$experiment" = "e-perf-9" ]; then
+    case "$startup_cache_state" in
+        cold|warm) ;;
+        *) printf 'ERROR: E-Perf-9 requires --startup-cache-state cold|warm\n' >&2; exit 2 ;;
+    esac
+elif [ -n "$startup_cache_state" ]; then
+    printf 'ERROR: --startup-cache-state is valid only for E-Perf-9\n' >&2
+    exit 2
+fi
 
 # ============================================================================
 # Helpers
@@ -264,6 +277,7 @@ if [ "$dry_run" -eq 1 ]; then
     _log "  broker           = ${broker:-<auto-mosquitto>}"
     _log "  duration_secs    = $duration"
     _log "  warmup_secs      = $warmup_secs"
+    _log "  startup_cache    = ${startup_cache_state:-<none>}"
     exit 0
 fi
 
@@ -373,6 +387,20 @@ _stop_mem_sampler() {
     # No-op post-A19: runtime owns memory.csv.
     :
 }
+
+if [ "$experiment" = "e-perf-9" ]; then
+    startup_preparation="none"
+    if [ "$startup_cache_state" = "cold" ]; then
+        startup_preparation="drop-linux-page-cache"
+        sudo sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+    fi
+    printf '{"cache_state":"%s","action":"%s","completed_before_timing":true}\n' \
+        "$startup_cache_state" "$startup_preparation" > "$OUT_DIR/startup-preparation.json"
+    export WAFER_STARTUP_OUTPUT="$OUT_DIR/startup.json"
+    export WAFER_STARTUP_CACHE_STATE="$startup_cache_state"
+    export WAFER_STARTUP_CACHE_PREPARATION="$startup_preparation"
+    _log "startup preparation: cache_state=$startup_cache_state action=$startup_preparation"
+fi
 
 STARTED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 started_ns=$(python3 -c 'import time; print(int(time.time()*1e9))' 2>/dev/null || perl -MTime::HiRes=time -e 'printf "%d\n", time() * 1e9')
