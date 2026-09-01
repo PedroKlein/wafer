@@ -51,8 +51,15 @@ For every paired WAFER/eKuiper run:
 6. Record the eKuiper package version and SHA256 in run metadata.
 7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, MQTT source configuration, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check.
 
+## Diagnostic finding
+
+The v11 pilot omitted the eKuiper sink `qos` field, selecting QoS 0 and producing an approximately 20 ms periodic release pattern. A matched Raspberry Pi 5 diagnostic reproduced the pattern with sink QoS 0 and removed it with sink QoS 1. The old v11 eKuiper result is therefore not a valid comparator result and must not be pooled with corrected runs.
+
+See [Why the v11 eKuiper latency tail was misleading](ekuiper-tail-diagnostic.md) for the one-variable evidence, corrected small-N results, and claim boundaries.
+
 ## Known limitations
 
+- Corrected small-N diagnostics characterize the frozen default-style comparator, not eKuiper's best achievable tuning. The operator-concurrency choice must be audited and frozen before confirmatory collection.
 - Native Pi 5 results are not directly comparable to the old Docker Desktop macOS shakedowns. The latter include a Linux VM and bridge-network overhead.
 - Raspberry Pi 5 results are not numerically interchangeable with Raspberry Pi 4 results from prior literature. Report absolute values and WAFER/native/eKuiper ratios.
 - eKuiper and WAFER/native Pipeline A all decode the telemetry field used by the filter. Their output schemas, predicate bounds, topics, and QoS are matched; their internal JSON implementations remain engine-specific.

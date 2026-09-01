@@ -37,6 +37,24 @@ def _read_csv(path: Path, required_fields: tuple[str, ...]) -> list[dict[str, in
             raise DiagnosticError(f"{path}: invalid integer field: {error}") from error
 
 
+def _autocorrelation(values: list[int], lag: int) -> float:
+    if lag <= 0 or len(values) <= lag:
+        return 0.0
+    left = values[:-lag]
+    right = values[lag:]
+    left_mean = statistics.fmean(left)
+    right_mean = statistics.fmean(right)
+    left_variance = sum((value - left_mean) ** 2 for value in left)
+    right_variance = sum((value - right_mean) ** 2 for value in right)
+    if left_variance == 0 or right_variance == 0:
+        return 0.0
+    covariance = sum(
+        (left_value - left_mean) * (right_value - right_mean)
+        for left_value, right_value in zip(left, right)
+    )
+    return covariance / (left_variance * right_variance) ** 0.5
+
+
 def analyze_latency_pattern(pairs: list[dict[str, Any]]) -> dict[str, Any]:
     if len(pairs) < 40:
         return {
@@ -48,6 +66,8 @@ def analyze_latency_pattern(pairs: list[dict[str, Any]]) -> dict[str, Any]:
 
     ordered = sorted(pairs, key=lambda pair: pair["published"]["seq"])
     latencies = [int(pair["latency_ns"]) for pair in ordered]
+    published = [int(pair["published"]["ts_ns"]) for pair in ordered]
+    publish_intervals = [right - left for left, right in zip(published, published[1:]) if right > left]
     latency_deltas = [right - left for left, right in zip(latencies, latencies[1:])]
     typical_step = statistics.median(abs(delta) for delta in latency_deltas)
     reset_threshold = max(2_000_000, typical_step * 5)
@@ -60,32 +80,59 @@ def analyze_latency_pattern(pairs: list[dict[str, Any]]) -> dict[str, Any]:
         else 0.0
     )
 
-    if len(periods) < 2 or descending_fraction < 0.8:
-        return {
-            "classification": "no-periodic-sawtooth",
-            "period_messages": None,
-            "period_ns": None,
-            "reset_count": len(resets),
-        }
+    if len(periods) >= 2 and descending_fraction >= 0.8 and publish_intervals:
+        period_messages = int(statistics.median(periods))
+        stable = all(
+            abs(period - period_messages) <= max(1, period_messages // 10)
+            for period in periods
+        )
+        if stable:
+            return {
+                "classification": "periodic-sawtooth",
+                "period_messages": period_messages,
+                "period_ns": int(period_messages * statistics.median(publish_intervals)),
+                "reset_count": len(resets),
+                "descending_step_fraction": descending_fraction,
+                "detection": "latency-resets",
+            }
 
-    period_messages = int(statistics.median(periods))
-    stable = all(abs(period - period_messages) <= max(1, period_messages // 10) for period in periods)
-    published = [int(pair["published"]["ts_ns"]) for pair in ordered]
-    publish_intervals = [right - left for left, right in zip(published, published[1:]) if right > left]
-    if not stable or not publish_intervals:
-        return {
-            "classification": "no-periodic-sawtooth",
-            "period_messages": None,
-            "period_ns": None,
-            "reset_count": len(resets),
-        }
+    received = [int(pair["received"]["receive_ns"]) for pair in ordered]
+    receive_gaps = [right - left for left, right in zip(received, received[1:])]
+    if publish_intervals:
+        gap_threshold = max(5_000_000, statistics.median(publish_intervals) * 5)
+        releases = [index + 1 for index, gap in enumerate(receive_gaps) if gap > gap_threshold]
+        release_periods = [right - left for left, right in zip(releases, releases[1:])]
+        if len(release_periods) >= 2:
+            period_messages = int(statistics.median(release_periods))
+            tolerance = max(1, period_messages // 10)
+            periodic_gap_fraction = sum(
+                abs(period - period_messages) <= tolerance for period in release_periods
+            ) / len(release_periods)
+            autocorrelation = _autocorrelation(latencies, period_messages)
+            if periodic_gap_fraction >= 0.8 and autocorrelation >= 0.75:
+                release_period_ns = statistics.median(
+                    right - left
+                    for left, right in zip(
+                        (received[index] for index in releases),
+                        (received[index] for index in releases[1:]),
+                    )
+                )
+                return {
+                    "classification": "periodic-sawtooth",
+                    "period_messages": period_messages,
+                    "period_ns": int(release_period_ns),
+                    "reset_count": len(releases),
+                    "descending_step_fraction": descending_fraction,
+                    "periodic_gap_fraction": periodic_gap_fraction,
+                    "latency_autocorrelation": autocorrelation,
+                    "detection": "receive-gaps",
+                }
 
     return {
-        "classification": "periodic-sawtooth",
-        "period_messages": period_messages,
-        "period_ns": int(period_messages * statistics.median(publish_intervals)),
+        "classification": "no-periodic-sawtooth",
+        "period_messages": None,
+        "period_ns": None,
         "reset_count": len(resets),
-        "descending_step_fraction": descending_fraction,
     }
 
 

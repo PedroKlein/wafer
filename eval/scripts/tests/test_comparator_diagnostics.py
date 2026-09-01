@@ -158,6 +158,34 @@ def test_periodicity_analysis_detects_twenty_millisecond_sawtooth() -> None:
     assert result["reset_count"] == 3
 
 
+def test_periodicity_analysis_detects_noisy_periodic_release() -> None:
+    pairs = []
+    for seq in range(100):
+        published_ns = seq * 1_000_000
+        cycle = seq // 20
+        offset = min(seq % 20, 6) * 2_000_000
+        receive_ns = cycle * 20_000_000 + 10_000_000 + offset
+        pairs.append(
+            {
+                "published": {"seq": seq, "ts_ns": published_ns},
+                "received": {
+                    "seq": seq,
+                    "payload_ts_ns": published_ns,
+                    "receive_ns": receive_ns,
+                },
+                "latency_ns": receive_ns - published_ns,
+            }
+        )
+
+    result = analyze_latency_pattern(pairs)
+
+    assert result["classification"] == "periodic-sawtooth"
+    assert result["period_messages"] == 20
+    assert result["period_ns"] == 20_000_000
+    assert result["periodic_gap_fraction"] == 1.0
+    assert result["latency_autocorrelation"] > 0.8
+
+
 def test_periodicity_analysis_does_not_invent_pattern_from_short_trace() -> None:
     result = analyze_latency_pattern(
         [
