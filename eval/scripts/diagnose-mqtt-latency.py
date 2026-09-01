@@ -7,6 +7,7 @@ import json
 import os
 import re
 import signal
+import statistics
 import subprocess
 import sys
 import time
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 SUT_PROCESS_NAMES = ("wafer-runtime", "kuiperd")
+DIAGNOSTIC_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
 
 
 class DiagnosticError(ValueError):
@@ -33,6 +35,58 @@ def _read_csv(path: Path, required_fields: tuple[str, ...]) -> list[dict[str, in
             return [{field: int(row[field]) for field in required_fields} for row in reader]
         except (TypeError, ValueError) as error:
             raise DiagnosticError(f"{path}: invalid integer field: {error}") from error
+
+
+def analyze_latency_pattern(pairs: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(pairs) < 40:
+        return {
+            "classification": "insufficient-samples",
+            "period_messages": None,
+            "period_ns": None,
+            "reset_count": 0,
+        }
+
+    ordered = sorted(pairs, key=lambda pair: pair["published"]["seq"])
+    latencies = [int(pair["latency_ns"]) for pair in ordered]
+    latency_deltas = [right - left for left, right in zip(latencies, latencies[1:])]
+    typical_step = statistics.median(abs(delta) for delta in latency_deltas)
+    reset_threshold = max(2_000_000, typical_step * 5)
+    resets = [index + 1 for index, delta in enumerate(latency_deltas) if delta > reset_threshold]
+    periods = [right - left for left, right in zip(resets, resets[1:])]
+    non_reset_deltas = [delta for delta in latency_deltas if delta <= reset_threshold]
+    descending_fraction = (
+        sum(delta < 0 for delta in non_reset_deltas) / len(non_reset_deltas)
+        if non_reset_deltas
+        else 0.0
+    )
+
+    if len(periods) < 2 or descending_fraction < 0.8:
+        return {
+            "classification": "no-periodic-sawtooth",
+            "period_messages": None,
+            "period_ns": None,
+            "reset_count": len(resets),
+        }
+
+    period_messages = int(statistics.median(periods))
+    stable = all(abs(period - period_messages) <= max(1, period_messages // 10) for period in periods)
+    published = [int(pair["published"]["ts_ns"]) for pair in ordered]
+    publish_intervals = [right - left for left, right in zip(published, published[1:]) if right > left]
+    if not stable or not publish_intervals:
+        return {
+            "classification": "no-periodic-sawtooth",
+            "period_messages": None,
+            "period_ns": None,
+            "reset_count": len(resets),
+        }
+
+    return {
+        "classification": "periodic-sawtooth",
+        "period_messages": period_messages,
+        "period_ns": int(period_messages * statistics.median(publish_intervals)),
+        "reset_count": len(resets),
+        "descending_step_fraction": descending_fraction,
+    }
 
 
 def analyze_traces(published_path: Path, received_path: Path, metadata_path: Path) -> dict[str, Any]:
@@ -113,6 +167,7 @@ def analyze_traces(published_path: Path, received_path: Path, metadata_path: Pat
             "p95": int(metadata["latency_p95_ns"]),
             "p99": int(metadata["latency_p99_ns"]),
         },
+        "periodicity": analyze_latency_pattern(paired),
         "raw_pairs": paired,
     }
 
@@ -157,12 +212,17 @@ def build_artifact(
     measurements: dict[str, Any],
     provenance: dict[str, str],
     audit: dict[str, Any],
+    system: str = "mqtt-loopback",
+    condition: str | None = None,
 ) -> dict[str, Any]:
-    if audit.get("sut_pids"):
+    if system not in DIAGNOSTIC_SYSTEMS:
+        raise DiagnosticError(f"unsupported diagnostic system: {system}")
+    if system == "mqtt-loopback" and audit.get("sut_pids"):
         raise DiagnosticError("SUT process detected during MQTT loopback diagnostic")
     return {
         "schema_version": 1,
-        "system": "mqtt-loopback",
+        "system": system,
+        "condition": condition,
         "thesis_evidence": False,
         "measurement_boundary": "publisher wall-clock ts_ns to subscriber wall-clock receive_ns",
         "units": {"timestamps": "ns since Unix epoch", "latency": "ns", "counts": "messages"},
@@ -329,6 +389,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     check.add_argument("--profile", type=Path, required=True)
     check.add_argument("--template-sha256", required=True)
     check.add_argument("--output", type=Path, required=True)
+    check.add_argument("--system", choices=DIAGNOSTIC_SYSTEMS, default="mqtt-loopback")
+    check.add_argument("--condition")
+    check.add_argument("--process-audit", type=Path)
 
     run = subparsers.add_parser("run", help="run a live loopback through an existing Mosquitto broker")
     run.add_argument("--wafer-loadgen", type=Path, default=Path("target/release/wafer-loadgen"))
@@ -349,7 +412,20 @@ def main(argv: list[str] | None = None) -> int:
         else:
             measurements = analyze_traces(args.published, args.received, args.subscriber_metadata)
             provenance = profile_provenance(args.profile, args.template_sha256)
-            artifact = build_artifact(measurements, provenance, process_audit())
+            if args.system != "mqtt-loopback" and args.process_audit is None:
+                raise DiagnosticError("non-loopback diagnostics require --process-audit from the active run")
+            audit = (
+                json.loads(args.process_audit.read_text())
+                if args.process_audit is not None
+                else process_audit()
+            )
+            artifact = build_artifact(
+                measurements,
+                provenance,
+                audit,
+                system=args.system,
+                condition=args.condition,
+            )
             artifact_path = args.output
             artifact_path.write_text(json.dumps(artifact, indent=2) + "\n")
         print(artifact_path)

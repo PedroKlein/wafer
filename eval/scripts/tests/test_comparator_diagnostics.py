@@ -3,6 +3,7 @@
 import csv
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -17,6 +18,7 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 
 DiagnosticError = module.DiagnosticError
+analyze_latency_pattern = module.analyze_latency_pattern
 analyze_traces = module.analyze_traces
 profile_provenance = module.profile_provenance
 
@@ -131,6 +133,75 @@ def test_trace_analysis_rejects_missing_message(tmp_path: Path) -> None:
         analyze_traces(published, received, metadata)
 
 
+def test_periodicity_analysis_detects_twenty_millisecond_sawtooth() -> None:
+    pairs = []
+    for seq in range(80):
+        published_ns = seq * 1_000_000
+        latency_ns = (20 - seq % 20) * 1_000_000
+        pairs.append(
+            {
+                "published": {"seq": seq, "ts_ns": published_ns},
+                "received": {
+                    "seq": seq,
+                    "payload_ts_ns": published_ns,
+                    "receive_ns": published_ns + latency_ns,
+                },
+                "latency_ns": latency_ns,
+            }
+        )
+
+    result = analyze_latency_pattern(pairs)
+
+    assert result["classification"] == "periodic-sawtooth"
+    assert result["period_messages"] == 20
+    assert result["period_ns"] == 20_000_000
+    assert result["reset_count"] == 3
+
+
+def test_periodicity_analysis_does_not_invent_pattern_from_short_trace() -> None:
+    result = analyze_latency_pattern(
+        [
+            {
+                "published": {"seq": seq, "ts_ns": seq * 1_000_000},
+                "received": {},
+                "latency_ns": latency,
+            }
+            for seq, latency in enumerate((1_000, 3_000, 2_000))
+        ]
+    )
+
+    assert result["classification"] == "insufficient-samples"
+    assert result["period_messages"] is None
+    assert result["period_ns"] is None
+
+
+def test_passthrough_rule_changes_only_sql_logic() -> None:
+    matched = json.loads(
+        subprocess.run(
+            [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+    passthrough = json.loads(
+        subprocess.run(
+            [str(ROOT / "eval/ekuiper/seed-passthrough-diagnostic.sh"), "--dry-run"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+    )
+
+    assert matched["stream_payload"] == passthrough["stream_payload"]
+    matched_rule = matched["rule_payload"]
+    passthrough_rule = passthrough["rule_payload"]
+    assert " WHERE " in matched_rule["sql"]
+    assert " WHERE " not in passthrough_rule["sql"]
+    matched_rule["sql"] = passthrough_rule["sql"]
+    assert matched_rule == passthrough_rule
+
+
 def test_profile_provenance_hashes_profile_and_checks_template(tmp_path: Path) -> None:
     profile = tmp_path / "profile.toml"
     profile.write_text(
@@ -185,3 +256,14 @@ def test_artifact_metadata_is_diagnostic_only_and_has_no_sut_pid(tmp_path: Path)
             provenance,
             {"checked_processes": ["wafer-runtime", "kuiperd"], "sut_pids": [{"pid": 42}]},
         )
+
+    ekuiper = module.build_artifact(
+        analyze_traces(published, received, metadata),
+        provenance,
+        {"sut_pids": [{"pid": 42, "command": "kuiperd"}]},
+        system="ekuiper",
+        condition="passthrough",
+    )
+    assert ekuiper["system"] == "ekuiper"
+    assert ekuiper["condition"] == "passthrough"
+    assert ekuiper["thesis_evidence"] is False
