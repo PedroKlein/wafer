@@ -26,6 +26,7 @@ from canonical_runner import (  # noqa: E402
     evaluate_validation_gate,
     loadgen_command,
     postprocess_run,
+    ProcessResourceSampler,
     RunItem,
     select_attempt,
     summarize_branch_isolation,
@@ -527,6 +528,35 @@ def test_rate_sweep_trace_analysis_preserves_pairs_and_counts_loss() -> None:
         )
         with pytest.raises(ValueError, match="timestamp changed"):
             analyze_rate_sweep_traces(published, received, metadata)
+
+
+def test_process_resource_sampler_records_memory_regions_and_threads() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        proc = Path(tmp)
+        pid = proc / "10"
+        (pid / "task/10").mkdir(parents=True)
+        (pid / "task/11").mkdir()
+        (pid / "stat").write_text("10 (wafer) S " + " ".join(["0"] * 10 + ["5", "7"]) + "\n")
+        (pid / "statm").write_text("100 3\n")
+        (pid / "status").write_text(
+            "VmSize:\t1000 kB\nVmRSS:\t600 kB\nRssAnon:\t400 kB\n"
+            "RssFile:\t180 kB\nVmData:\t500 kB\n"
+        )
+        (pid / "smaps_rollup").write_text(
+            "Pss_Anon:\t350 kB\nPrivate_Dirty:\t430 kB\n"
+        )
+
+        sample = ProcessResourceSampler(Path(tmp) / "out.csv", [10], proc_root=proc)._sample()
+
+    assert sample["cpu_time_ticks"] == 12
+    assert sample["process_count"] == 1
+    assert sample["thread_count"] == 2
+    assert sample["rss_anon_bytes"] == 400 * 1024
+    assert sample["rss_file_bytes"] == 180 * 1024
+    assert sample["vm_data_bytes"] == 500 * 1024
+    assert sample["vm_size_bytes"] == 1000 * 1024
+    assert sample["pss_anon_bytes"] == 350 * 1024
+    assert sample["private_dirty_bytes"] == 430 * 1024
 
 
 def test_process_resource_summary_reports_average_cpu_and_peak_rss() -> None:

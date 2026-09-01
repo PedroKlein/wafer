@@ -909,43 +909,85 @@ def summarize_process_resources(path: Path, clock_ticks: int | None = None) -> d
 
 
 class ProcessResourceSampler:
-    def __init__(self, path: Path, pids: list[int], interval_secs: float = 1.0):
+    FIELDNAMES = (
+        "timestamp_ns",
+        "cpu_time_ticks",
+        "rss_bytes",
+        "process_count",
+        "thread_count",
+        "rss_anon_bytes",
+        "rss_file_bytes",
+        "vm_data_bytes",
+        "vm_size_bytes",
+        "pss_anon_bytes",
+        "private_dirty_bytes",
+    )
+
+    def __init__(
+        self,
+        path: Path,
+        pids: list[int],
+        interval_secs: float = 1.0,
+        proc_root: Path = Path("/proc"),
+    ):
         self.path = path
         self.pids = pids
         self.interval_secs = interval_secs
+        self.proc_root = proc_root
         self.stop_event = threading.Event()
         self.error: Exception | None = None
         self.thread: threading.Thread | None = None
 
+    @staticmethod
+    def _memory_kib(path: Path, fields: dict[str, str]) -> dict[str, int]:
+        values = {name: 0 for name in fields.values()}
+        for line in path.read_text().splitlines():
+            key, separator, raw = line.partition(":")
+            if not separator or key not in fields:
+                continue
+            values[fields[key]] = int(raw.strip().split()[0])
+        return values
+
     def _sample(self) -> dict[str, int]:
-        cpu_time_ticks = 0
-        rss_bytes = 0
-        process_count = 0
+        sample = {field: 0 for field in self.FIELDNAMES}
+        sample["timestamp_ns"] = time.time_ns()
         page_size = int(os.sysconf("SC_PAGE_SIZE"))
         for pid in self.pids:
+            process = self.proc_root / str(pid)
             try:
-                stat = Path(f"/proc/{pid}/stat").read_text()
+                stat = (process / "stat").read_text()
                 fields = stat[stat.rfind(")") + 2 :].split()
-                resident_pages = int(Path(f"/proc/{pid}/statm").read_text().split()[1])
-                cpu_time_ticks += int(fields[11]) + int(fields[12])
-                rss_bytes += resident_pages * page_size
-                process_count += 1
+                resident_pages = int((process / "statm").read_text().split()[1])
+                sample["cpu_time_ticks"] += int(fields[11]) + int(fields[12])
+                sample["rss_bytes"] += resident_pages * page_size
+                sample["thread_count"] += sum(1 for _ in (process / "task").iterdir())
+                sample["process_count"] += 1
+                status = self._memory_kib(
+                    process / "status",
+                    {
+                        "RssAnon": "rss_anon_bytes",
+                        "RssFile": "rss_file_bytes",
+                        "VmData": "vm_data_bytes",
+                        "VmSize": "vm_size_bytes",
+                    },
+                )
+                smaps = self._memory_kib(
+                    process / "smaps_rollup",
+                    {
+                        "Pss_Anon": "pss_anon_bytes",
+                        "Private_Dirty": "private_dirty_bytes",
+                    },
+                )
+                for field, value_kib in status.items() | smaps.items():
+                    sample[field] += value_kib * 1024
             except (OSError, IndexError, ValueError):
                 continue
-        return {
-            "timestamp_ns": time.time_ns(),
-            "cpu_time_ticks": cpu_time_ticks,
-            "rss_bytes": rss_bytes,
-            "process_count": process_count,
-        }
+        return sample
 
     def _run(self) -> None:
         try:
             with self.path.open("w", newline="") as stream:
-                writer = csv.DictWriter(
-                    stream,
-                    fieldnames=("timestamp_ns", "cpu_time_ticks", "rss_bytes", "process_count"),
-                )
+                writer = csv.DictWriter(stream, fieldnames=self.FIELDNAMES)
                 writer.writeheader()
                 while True:
                     writer.writerow(self._sample())
