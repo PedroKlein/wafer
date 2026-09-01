@@ -49,10 +49,13 @@
 //!   integration-tested elsewhere.
 
 use std::path::Path;
+use std::time::Duration;
 
+use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::runner::error_policy::WasmProcessError;
 use wafer_core::testing::PluginTestHarness;
+use wafer_types::config::Config;
 
 /// Pass-through plugin acts as the co-resident "healthy" transform.
 /// If this is missing we cannot prove the isolation invariant, so we
@@ -250,6 +253,94 @@ fn infinite_loop_contained() {
         "S3 infinite-loop",
         &[ContainedAs::TimedOut, ContainedAs::Trap],
         None,
+    );
+}
+
+#[test]
+fn epoch_recovery_uses_a_fresh_store() {
+    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
+        return;
+    }
+    let harness = PluginTestHarness::new().expect("engine must construct");
+    let mut attacker = harness
+        .load_transform(ATK_INFINITE_LOOP)
+        .expect("attack plugin must load");
+
+    let first = attacker
+        .process(RuntimeEnvelope::from_string("attacker", "first"))
+        .expect_err("first infinite-loop call must be interrupted");
+    assert!(matches!(first, WasmProcessError::TimedOut));
+    attacker
+        .node_mut()
+        .recover_from_cached_pre()
+        .expect("recovery must instantiate from cached InstancePre");
+    let second = attacker
+        .process(RuntimeEnvelope::from_string("attacker", "second"))
+        .expect_err("second infinite-loop call must be independently interrupted");
+    assert!(
+        matches!(second, WasmProcessError::TimedOut),
+        "fresh Store must reach the epoch deadline instead of returning an unusable-instance trap: {second:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn consecutive_epoch_interruptions_each_recover_before_the_next_message() {
+    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
+        return;
+    }
+    let config: Config = toml::from_str(&format!(
+        r#"
+[pipeline]
+name = "epoch-recovery-regression"
+
+[engine]
+epoch_deadline = 10
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 2
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = {ATK_INFINITE_LOOP:?}
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"
+"#,
+    ))
+    .expect("inline config must parse");
+
+    let mut orchestrator = Box::pin(launch_pipeline(config, None))
+        .await
+        .expect("pipeline must launch");
+    let handle = orchestrator.handle();
+    tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete())
+        .await
+        .expect("two epoch interruptions must complete within five seconds")
+        .expect("pipeline must shut down cleanly");
+
+    let metrics = handle.node_metrics("attack").expect("attack metrics");
+    assert_eq!(metrics.failed(), 2, "both infinite-loop calls must trap");
+    assert_eq!(
+        metrics.recovery_count(),
+        2,
+        "each epoch interruption must replace its Store before the next message"
     );
 }
 

@@ -17,6 +17,36 @@ use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, fan_out};
 
+fn recover_after_timeout(
+    router: &mut WasmRouterNode,
+    state: &NodeStateTracker,
+    metrics: &NodeMetrics,
+    policy: &mut ErrorPolicyExecutor,
+    envelope: RuntimeEnvelope,
+) -> bool {
+    if !policy.handle(&WasmProcessError::TimedOut, envelope) {
+        return false;
+    }
+    tracing::warn!(
+        node = router.node_id(),
+        "timed-out Wasm call — replacing Store before continuing"
+    );
+    state.transition_to_error();
+    state.transition_to_recovering();
+    match router.recover_from_cached_pre() {
+        Ok(()) => {
+            if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                metrics.record_recovery(duration_ns);
+            }
+            true
+        }
+        Err(error) => {
+            tracing::error!(node = router.node_id(), %error, "recovery failed");
+            false
+        }
+    }
+}
+
 /// Run the router processing loop until cancellation or channel close.
 ///
 /// # Cancel Safety
@@ -120,6 +150,12 @@ pub async fn run_router_loop(
                 metrics.record_failed();
                 let wasm_err = WasmProcessError::ProcessingFailed(e.message);
                 policy.handle(&wasm_err, envelope);
+            }
+            Err(WasmProcessError::TimedOut) => {
+                metrics.record_failed();
+                if !recover_after_timeout(&mut router, &state, &metrics, &mut policy, envelope) {
+                    break;
+                }
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {
                 metrics.record_failed();

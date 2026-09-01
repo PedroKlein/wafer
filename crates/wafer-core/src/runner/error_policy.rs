@@ -228,8 +228,8 @@ impl ErrorPolicyExecutor {
 
     /// Dispatch an error according to its category.
     ///
-    /// Returns `true` if the loop should continue processing, `false` if
-    /// the node should enter recovery (Unrecoverable).
+    /// Returns `true` if the loop should continue processing, or `false`
+    /// when the configured action requires the loop to stop.
     pub fn handle(&mut self, error: &WasmProcessError, envelope: RuntimeEnvelope) -> bool {
         match error {
             WasmProcessError::BadInput(msg) => {

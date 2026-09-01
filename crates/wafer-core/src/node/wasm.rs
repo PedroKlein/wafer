@@ -43,9 +43,8 @@ fn map_process_error(err: transform_node::wafer::pipeline::types::ProcessError) 
 /// Epoch interruption → TimedOut; all others → Unrecoverable.
 fn map_trap(err: &wasmtime::Error) -> WasmProcessError {
     // Debug repr surfaces the `Caused by:` chain (which carries the trap
-    // variant); Display shows only the top frame. Missing the chain would
-    // misclassify epoch interrupts as Unrecoverable and route them to
-    // recovery instead of retry.
+    // variant); Display shows only the top frame. The timeout classification
+    // preserves error-policy handling before the runner replaces the Store.
     let msg = err.to_string();
     let dbg = format!("{err:?}");
     if msg.contains("epoch") || msg.contains("interrupt") || dbg.contains("wasm trap: interrupt") {

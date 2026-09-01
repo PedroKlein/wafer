@@ -18,6 +18,36 @@ use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TransformCanaryState, send_downstream};
 use wafer_types::config::HotSwapConfig;
 
+fn recover_after_timeout(
+    transform: &mut TransformNode,
+    state: &NodeStateTracker,
+    metrics: &NodeMetrics,
+    policy: &mut ErrorPolicyExecutor,
+    envelope: RuntimeEnvelope,
+) -> bool {
+    if !policy.handle(&WasmProcessError::TimedOut, envelope) {
+        return false;
+    }
+    tracing::warn!(
+        node = transform.node_id(),
+        "timed-out Wasm call — replacing Store before continuing"
+    );
+    state.transition_to_error();
+    state.transition_to_recovering();
+    match transform.recover_from_cached_pre() {
+        Ok(()) => {
+            if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                metrics.record_recovery(duration_ns);
+            }
+            true
+        }
+        Err(error) => {
+            tracing::error!(node = transform.node_id(), %error, "recovery failed");
+            false
+        }
+    }
+}
+
 /// Run the transform processing loop until cancellation or channel close.
 ///
 /// # Cancel Safety
@@ -173,6 +203,12 @@ pub async fn run_transform_loop_with_config(
                 // Record success in canary window
                 if let Some(ref mut c) = canary {
                     c.record_success();
+                }
+            }
+            Err(WasmProcessError::TimedOut) => {
+                metrics.record_failed();
+                if !recover_after_timeout(&mut transform, &state, &metrics, &mut policy, safety) {
+                    break;
                 }
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {

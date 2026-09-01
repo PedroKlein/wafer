@@ -16,6 +16,37 @@ use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstream};
 
+fn recover_after_timeout(
+    filter: &mut FilterNode,
+    state: &NodeStateTracker,
+    metrics: &NodeMetrics,
+    policy: &mut ErrorPolicyExecutor,
+    envelope: RuntimeEnvelope,
+) -> bool {
+    metrics.record_failed();
+    if !policy.handle(&WasmProcessError::TimedOut, envelope) {
+        return false;
+    }
+    tracing::warn!(
+        node = filter.node_id(),
+        "timed-out Wasm call — replacing Store before continuing"
+    );
+    state.transition_to_error();
+    state.transition_to_recovering();
+    match filter.recover_from_cached_pre() {
+        Ok(()) => {
+            if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                metrics.record_recovery(duration_ns);
+            }
+            true
+        }
+        Err(error) => {
+            tracing::error!(node = filter.node_id(), %error, "recovery failed");
+            false
+        }
+    }
+}
+
 /// Run the filter processing loop until cancellation or channel close.
 ///
 /// # Cancel Safety
@@ -24,6 +55,7 @@ use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, send_downstr
 /// Filter borrows the envelope — no safety clone needed. If the evaluation
 /// errors, we still own the envelope and can pass it to the error policy.
 #[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
+#[expect(clippy::too_many_lines, reason = "keeping the linear message and recovery state machine in one function preserves control-flow locality")]
 pub async fn run_filter_loop(
     mut filter: FilterNode,
     mut receiver: mpsc::Receiver<RuntimeEnvelope>,
@@ -70,11 +102,9 @@ pub async fn run_filter_loop(
             }
         }
 
-        // 2. Retry buffer priority
         let envelope = if let Some(retry) = policy.next_ready_retry() {
             retry
         } else {
-            // 3. Receive (cancel-safe: ONLY recv in select!)
             let msg = tokio::select! {
                 biased;
                 () = cancel.cancelled() => None,
@@ -97,7 +127,6 @@ pub async fn run_filter_loop(
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
-        // 5. Dispatch result
         match result {
             Ok(FilterOutcome::Forward) => {
                 metrics.record_processed(duration_ns);
@@ -108,9 +137,13 @@ pub async fn run_filter_loop(
             }
             Ok(FilterOutcome::Drop) => {
                 metrics.record_processed(duration_ns);
-                // Message intentionally discarded by filter logic
                 if let Some(progress) = pending_swap_progress.take() {
                     progress.mark_first_v2();
+                }
+            }
+            Err(WasmProcessError::TimedOut) => {
+                if !recover_after_timeout(&mut filter, &state, &metrics, &mut policy, envelope) {
+                    break;
                 }
             }
             Err(WasmProcessError::Unrecoverable(ref msg)) => {
