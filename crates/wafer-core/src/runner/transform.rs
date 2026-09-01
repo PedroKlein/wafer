@@ -14,7 +14,7 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::node::TransformNode;
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState, send_downstream};
+use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState, run_wasm_blocking, send_downstream};
 use wafer_types::config::HotSwapConfig;
 
 fn recover_after_timeout(
@@ -182,13 +182,13 @@ pub async fn run_transform_loop_with_config(
         let safety = envelope.clone();
 
         // 5. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        // `block_in_place` signals the multi-thread runtime that this worker
-        // is about to block synchronously, so it can migrate other tasks and
-        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
-        // WASI async host calls (clock waits, sleeps, I/O). See A16.
+        // A blocking-pool worker avoids per-message async-worker handoff while
+        // allowing sync WASI adapters to drive their ambient runtime.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
-        let result = tokio::task::block_in_place(|| transform.process(envelope));
+        let (next_transform, result) =
+            run_wasm_blocking(transform, move |node| node.process(envelope)).await;
+        transform = next_transform;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
