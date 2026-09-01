@@ -937,11 +937,13 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
         "retained": False,
         "sendSingle": True,
     }
+    assert rule["options"] == {"concurrency": 1}
     comparator = tomllib.loads(
         (ROOT / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
     )["comparator"]
     assert comparator["stream"] == stream_sql
     assert comparator["rule"] == rule["sql"]
+    assert comparator["operator_concurrency"] == rule["options"]["concurrency"] == 1
     assert comparator["source_qos"] == comparator["sink_qos"] == 1
     assert comparator["source_protocol_version"] == "3.1.1"
     assert comparator["sink_protocol_version"] == "3.1.1"
@@ -973,6 +975,29 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
             "min": 50.0,
             "max": 99999.0,
         }
+
+
+def test_ekuiper_concurrency_diagnostic_changes_only_rule_concurrency() -> None:
+    rendered = []
+    for concurrency in (1, 3):
+        result = subprocess.run(
+            [
+                str(ROOT / "eval/ekuiper/seed-pipeline-a.sh"),
+                "--concurrency",
+                str(concurrency),
+                "--dry-run",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        rendered.append(json.loads(result.stdout))
+
+    concurrency_one, concurrency_three = rendered
+    assert concurrency_one["rule_payload"]["options"] == {"concurrency": 1}
+    assert concurrency_three["rule_payload"]["options"] == {"concurrency": 3}
+    concurrency_one["rule_payload"]["options"] = {"concurrency": 3}
+    assert concurrency_one == concurrency_three
 
 
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:

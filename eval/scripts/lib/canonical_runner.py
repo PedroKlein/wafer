@@ -1824,6 +1824,16 @@ def _url_value(url: str) -> object:
         return text
 
 
+def ekuiper_operator_concurrency(root: Path) -> int:
+    config = tomllib.loads(
+        (root / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
+    )
+    concurrency = config["comparator"].get("operator_concurrency")
+    if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+        raise ValueError("eKuiper operator_concurrency must be a positive integer")
+    return concurrency
+
+
 def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
     service = _service_properties()
     main_pid = int(service.get("MainPID", "0"))
@@ -1872,7 +1882,12 @@ def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
         "rule": _url_value("http://127.0.0.1:9081/rules/pipeline_a"),
         "seed_dry_run": json.loads(
             subprocess.check_output(
-                [str(root / "eval/ekuiper/seed-pipeline-a.sh"), "--dry-run"],
+                [
+                    str(root / "eval/ekuiper/seed-pipeline-a.sh"),
+                    "--concurrency",
+                    str(ekuiper_operator_concurrency(root)),
+                    "--dry-run",
+                ],
                 cwd=root,
                 text=True,
             )
@@ -1887,7 +1902,15 @@ def set_ekuiper_active(root: Path, active: bool) -> None:
     action = "start" if active else "stop"
     subprocess.run(["sudo", "systemctl", action, "kuiper.service"], check=True)
     if active:
-        subprocess.run([str(root / "eval/ekuiper/seed-pipeline-a.sh")], cwd=root, check=True)
+        subprocess.run(
+            [
+                str(root / "eval/ekuiper/seed-pipeline-a.sh"),
+                "--concurrency",
+                str(ekuiper_operator_concurrency(root)),
+            ],
+            cwd=root,
+            check=True,
+        )
 
 
 def run_ekuiper_item(
