@@ -29,6 +29,41 @@ REQUIRED_FIELDS = {
     "required_outputs",
     "analysis",
 }
+FOCUSED_REQUIRED_FIELDS = {
+    "sample_unit",
+    "repetitions",
+    "warmup_secs",
+    "measurement_secs",
+    "measurement_boundary",
+    "condition_runs",
+    "required_outputs",
+    "analysis",
+    "thesis_evidence",
+}
+FOCUSED_CONDITION_RUNS = {
+    "e-perf-10": {
+        f"{system}/rate-{rate:05d}": [1, 2, 3, 4]
+        for system in ("mqtt-loopback", "native", "wafer", "ekuiper")
+        for rate in (500, 1000, 2000, 4000, 8000, 16000)
+    },
+    "e-perf-9": {
+        f"{tier}-{cache}": [1, 2, 3]
+        for tier in ("small", "medium", "large")
+        for cache in ("cold", "warm")
+    },
+    "e-backpressure": {"saturated-slow-consumer": [1, 2, 3]},
+    "e-iso-4": {"infinite-loop": [1, 2, 3]},
+    "e-iso-7": {
+        condition: [1, 2, 3]
+        for condition in ("control", "panic-attack", "epoch-loop-attack")
+    },
+    "e-swap-1": {"steady": [1]},
+    "e-swap-2": {"steady": [1]},
+    "e-swap-3": {"wafer-hotswap": [1, 2, 3]},
+    "e-swap-4": {"burst-2x": [1]},
+    "e-swap-5": {"process-trap-rollback": [1]},
+    "e-swap-6": {"steady": [1]},
+}
 
 
 def load_object(path: Path) -> dict:
@@ -136,6 +171,79 @@ def collect_host_facts(root: Path) -> dict:
     }
 
 
+def validate_focused_pilot(matrix: dict, experiments: dict) -> list[str]:
+    errors: list[str] = []
+    focused = matrix.get("focused_pilot")
+    if not isinstance(focused, dict):
+        return ["focused_pilot must be an object"]
+    if focused.get("schema_version") != 1:
+        errors.append("focused_pilot schema_version must be 1")
+    if focused.get("id") != "rpi5-focused-pilot-followups":
+        errors.append("focused_pilot id must be rpi5-focused-pilot-followups")
+    if focused.get("seed") != 1729:
+        errors.append("focused_pilot seed must be 1729")
+    if focused.get("thesis_evidence") is not False:
+        errors.append("focused_pilot must set thesis_evidence=false")
+
+    selected = focused.get("experiments")
+    if not isinstance(selected, dict):
+        return errors + ["focused_pilot experiments must be an object"]
+    if set(selected) != set(FOCUSED_CONDITION_RUNS):
+        errors.append("focused_pilot experiment selection differs from the frozen set")
+
+    for experiment_id, expected_runs in FOCUSED_CONDITION_RUNS.items():
+        definition = selected.get(experiment_id)
+        if not isinstance(definition, dict):
+            continue
+        absent = sorted(FOCUSED_REQUIRED_FIELDS - definition.keys())
+        if absent:
+            errors.append(
+                f"focused_pilot {experiment_id} missing fields: {', '.join(absent)}"
+            )
+            continue
+        if definition["condition_runs"] != expected_runs:
+            errors.append(f"focused_pilot {experiment_id} condition_runs differ from the frozen set")
+        if definition["thesis_evidence"] is not False:
+            errors.append(f"focused_pilot {experiment_id} must set thesis_evidence=false")
+        if not isinstance(definition["measurement_boundary"], str) or not definition["measurement_boundary"]:
+            errors.append(f"focused_pilot {experiment_id} measurement_boundary must be non-empty")
+        canonical = experiments.get(experiment_id, {})
+        for field in ("sample_unit", "warmup_secs", "measurement_secs", "required_outputs", "analysis"):
+            if definition[field] != canonical.get(field):
+                errors.append(f"focused_pilot {experiment_id} {field} differs from canonical experiment")
+        repetitions = definition["repetitions"]
+        if not isinstance(repetitions, int) or repetitions < 1:
+            errors.append(f"focused_pilot {experiment_id} repetitions must be positive")
+        elif any(len(runs) != repetitions for runs in definition["condition_runs"].values()):
+            errors.append(f"focused_pilot {experiment_id} repetitions differ from condition runs")
+        if definition["sample_unit"] == "event" and definition.get("events_per_run") != 50:
+            errors.append(f"focused_pilot {experiment_id} events_per_run must be 50")
+
+    decisions = focused.get("decisions")
+    if not isinstance(decisions, dict):
+        return errors + ["focused_pilot decisions must be an object"]
+    if decisions.get("ekuiper_operator_concurrency") != {
+        "value": 1,
+        "comparison": "default-system",
+    }:
+        errors.append("focused_pilot eKuiper operator concurrency must be default-system value 1")
+    memory = decisions.get("memory_retention")
+    if not isinstance(memory, dict):
+        errors.append("focused_pilot memory_retention decision must be an object")
+    else:
+        if memory.get("status") != "fixed":
+            errors.append("focused_pilot memory_retention status must be fixed")
+        if not re.fullmatch(r"[0-9a-f]{40}", str(memory.get("fix_commit", ""))):
+            errors.append("focused_pilot memory_retention fix_commit must be a full SHA")
+        if memory.get("diagnostic_runs") != 2:
+            errors.append("focused_pilot memory_retention diagnostic_runs must be 2")
+        if memory.get("max_observed_slope_bytes_per_message") != 0.0:
+            errors.append("focused_pilot memory_retention slope must be 0 bytes/message")
+        if memory.get("canonical_measurement_secs_adequate") is not True:
+            errors.append("focused_pilot memory_retention must approve the canonical window")
+    return errors
+
+
 def validate_matrix(matrix: dict) -> list[str]:
     errors: list[str] = []
     experiments = matrix.get("experiments")
@@ -152,6 +260,8 @@ def validate_matrix(matrix: dict) -> list[str]:
 
     if matrix.get("host_tag") != "rpi5":
         errors.append("host_tag must be rpi5")
+
+    errors.extend(validate_focused_pilot(matrix, experiments))
 
     for experiment_id, experiment in sorted(experiments.items()):
         if not isinstance(experiment, dict):

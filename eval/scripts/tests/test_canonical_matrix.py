@@ -33,6 +33,88 @@ def test_matrix_accepts_frozen_experiments() -> None:
     assert "27 experiments" in result.stdout
 
 
+def test_focused_pilot_selection_is_exact_and_diagnostic() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    focused = matrix["focused_pilot"]
+    expected = {
+        "e-perf-10": {
+            f"{system}/rate-{rate:05d}": [1, 2, 3, 4]
+            for system in ("mqtt-loopback", "native", "wafer", "ekuiper")
+            for rate in (500, 1000, 2000, 4000, 8000, 16000)
+        },
+        "e-perf-9": {
+            f"{tier}-{cache}": [1, 2, 3]
+            for tier in ("small", "medium", "large")
+            for cache in ("cold", "warm")
+        },
+        "e-backpressure": {"saturated-slow-consumer": [1, 2, 3]},
+        "e-iso-4": {"infinite-loop": [1, 2, 3]},
+        "e-iso-7": {
+            condition: [1, 2, 3]
+            for condition in ("control", "panic-attack", "epoch-loop-attack")
+        },
+        "e-swap-1": {"steady": [1]},
+        "e-swap-2": {"steady": [1]},
+        "e-swap-3": {"wafer-hotswap": [1, 2, 3]},
+        "e-swap-4": {"burst-2x": [1]},
+        "e-swap-5": {"process-trap-rollback": [1]},
+        "e-swap-6": {"steady": [1]},
+    }
+
+    assert focused["thesis_evidence"] is False
+    assert {key: value["condition_runs"] for key, value in focused["experiments"].items()} == expected
+    assert focused["decisions"]["ekuiper_operator_concurrency"] == {
+        "value": 1,
+        "comparison": "default-system",
+    }
+    assert focused["decisions"]["memory_retention"] == {
+        "status": "fixed",
+        "fix_commit": "042575458dd809c5ed410bbde1b087a924cc81c2",
+        "diagnostic_runs": 2,
+        "max_observed_slope_bytes_per_message": 0.0,
+        "canonical_measurement_secs_adequate": True,
+    }
+
+    inherited = {
+        "sample_unit",
+        "repetitions",
+        "warmup_secs",
+        "measurement_secs",
+        "measurement_boundary",
+        "required_outputs",
+        "analysis",
+        "thesis_evidence",
+    }
+    for definition in focused["experiments"].values():
+        assert inherited <= definition.keys()
+        assert definition["thesis_evidence"] is False
+        if definition["sample_unit"] == "event":
+            assert definition["events_per_run"] == 50
+
+
+def test_focused_pilot_rejects_each_missing_condition_contract_field() -> None:
+    required = {
+        "sample_unit",
+        "repetitions",
+        "warmup_secs",
+        "measurement_secs",
+        "measurement_boundary",
+        "condition_runs",
+        "required_outputs",
+        "analysis",
+        "thesis_evidence",
+    }
+    for field in required:
+        matrix = json.loads(MATRIX.read_text())
+        del matrix["focused_pilot"]["experiments"]["e-iso-7"][field]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "matrix.json"
+            write_json(path, matrix)
+            result = run_validator("matrix", str(path))
+        assert result.returncode == 1, (field, result.stdout, result.stderr)
+        assert f"focused_pilot e-iso-7 missing fields: {field}" in result.stderr
+
+
 def test_rate_sweep_is_frozen_and_diagnostic() -> None:
     matrix = json.loads(MATRIX.read_text())
     sweep = matrix["experiments"]["e-perf-10"]

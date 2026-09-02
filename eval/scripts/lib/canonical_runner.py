@@ -98,6 +98,7 @@ HOTSWAP_PHASE_FIELDS = (
     "ack_ns",
     "convergence_ns",
 )
+FOCUSED_MATRIX_SHA_ENV = "WAFER_FOCUSED_MATRIX_SHA256"
 
 
 def derive_hotswap_evidence(
@@ -549,6 +550,21 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
                     )
                 )
     return schedule
+
+
+def build_focused_schedule(seed: int) -> list[RunItem]:
+    matrix_path = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
+    focused = json.loads(matrix_path.read_text())["focused_pilot"]
+    if seed != focused["seed"]:
+        raise ValueError(f"focused pilot seed must be {focused['seed']}")
+    selected = focused["experiments"]
+    schedule = build_schedule(set(selected), seed)
+    return [
+        item
+        for item in schedule
+        if item.condition in selected[item.experiment]["condition_runs"]
+        and item.run_index in selected[item.experiment]["condition_runs"][item.condition]
+    ]
 
 
 def select_attempt(condition_dir: Path, run_index: int) -> AttemptSelection:
@@ -1290,6 +1306,21 @@ def find_passed_attempt(condition_dir: Path, run_index: int) -> Path | None:
     return selection.path if selection.skip else None
 
 
+def stamp_focused_metadata(root: Path, metadata: dict) -> None:
+    matrix_sha256 = os.environ.get(FOCUSED_MATRIX_SHA_ENV)
+    if matrix_sha256 is None:
+        return
+    focused = json.loads((root / "eval/canonical-matrix.json").read_text())["focused_pilot"]
+    decisions = focused["decisions"]
+    metadata["thesis_evidence"] = False
+    metadata["focused_pilot"] = {
+        "id": focused["id"],
+        "matrix_sha256": matrix_sha256,
+        "memory_retention_fix_commit": decisions["memory_retention"]["fix_commit"],
+        "ekuiper_operator_concurrency": decisions["ekuiper_operator_concurrency"]["value"],
+    }
+
+
 def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if item.shared_from is None:
         raise ValueError("shared result has no source experiment")
@@ -1323,6 +1354,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     metadata["shared_from"] = source_leaf
     metadata["measurement_source_leaf"] = source_leaf
     metadata["shared_measurement"] = True
+    stamp_focused_metadata(root, metadata)
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     analysis_path = selection.path / "hotswap-analysis.json"
     if analysis_path.is_file():
@@ -2566,6 +2598,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     if item.experiment in HOTSWAP_SHARED_EXPERIMENTS:
         metadata["measurement_source_leaf"] = str(output.relative_to(root))
         metadata["shared_measurement"] = False
+    stamp_focused_metadata(root, metadata)
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
         loadgen = metadata.get("loadgen") or {}
@@ -2741,6 +2774,24 @@ def verify_result(root: Path, output: Path) -> None:
     )
 
 
+def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> None:
+    result_dirs = [
+        root / "eval/results" / experiment / f"rpi5-{batch_id}"
+        for experiment in sorted(experiments)
+    ]
+    subprocess.run(
+        [
+            sys.executable,
+            str(root / "eval/scripts/verify-result-contract.py"),
+            "--canonical",
+            "--focused",
+            *map(str, result_dirs),
+        ],
+        cwd=root,
+        check=True,
+    )
+
+
 def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
     result_root = root / "eval/results/e-iso-7" / f"rpi5-{batch_id}"
     runs: dict[str, list[dict]] = {
@@ -2849,6 +2900,22 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
         subprocess.run([str(root / "eval/scripts" / script), str(result_root)], check=True)
 
 
+def validate_focused_freeze(root: Path, matrix_path: Path) -> dict:
+    receipt_path = root / "eval/focused-pilot-freeze.json"
+    receipt = json.loads(receipt_path.read_text())
+    matrix_sha256 = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
+    if receipt.get("status") != "frozen-before-execution":
+        raise ValueError("focused-pilot freeze receipt is not frozen-before-execution")
+    if receipt.get("canonical_matrix_sha256") != matrix_sha256:
+        raise ValueError("focused-pilot matrix changed after freeze")
+    schedule_path = root / str(receipt.get("schedule_path", ""))
+    if receipt.get("schedule_sha256") != hashlib.sha256(schedule_path.read_bytes()).hexdigest():
+        raise ValueError("focused-pilot schedule changed after freeze")
+    if receipt.get("thesis_evidence") is not False:
+        raise ValueError("focused-pilot freeze receipt must set thesis_evidence=false")
+    return receipt
+
+
 def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
     print(f"batch_id={batch_id} seed={seed} host=rpi5")
     seen: set[tuple[str, str]] = set()
@@ -2879,6 +2946,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run resumable canonical Pi 5 evaluations")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--experiments", default="all")
+    parser.add_argument("--focused", action="store_true")
     parser.add_argument("--batch-id")
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--dry-run", action="store_true")
@@ -2889,9 +2957,23 @@ def main() -> int:
 
     root = args.root.resolve()
     try:
-        experiments = parse_experiments(args.experiments)
-        schedule = build_schedule(experiments, args.seed)
-    except ValueError as error:
+        focused_freeze = None
+        if args.focused:
+            if args.experiments != "all":
+                raise ValueError("--focused cannot be combined with --experiments")
+            matrix_path = root / "eval/canonical-matrix.json"
+            focused_freeze = validate_focused_freeze(root, matrix_path)
+            schedule = build_focused_schedule(args.seed)
+            frozen_schedule = json.loads(
+                (root / focused_freeze["schedule_path"]).read_text()
+            )
+            if frozen_schedule != [item.__dict__ for item in schedule]:
+                raise ValueError("focused-pilot runner schedule differs from frozen snapshot")
+            experiments = {item.experiment for item in schedule}
+        else:
+            experiments = parse_experiments(args.experiments)
+            schedule = build_schedule(experiments, args.seed)
+    except (KeyError, OSError, TypeError, ValueError) as error:
         parser.error(str(error))
 
     batch_id = args.batch_id or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
@@ -2901,11 +2983,34 @@ def main() -> int:
     if args.dry_run:
         return 0
 
+    if focused_freeze is not None:
+        os.environ[FOCUSED_MATRIX_SHA_ENV] = focused_freeze["canonical_matrix_sha256"]
+
     ledger = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}"
     ledger.mkdir(parents=True, exist_ok=True)
-    (ledger / "schedule.json").write_text(
-        json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
-    )
+    schedule_json = json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
+    (ledger / "schedule.json").write_text(schedule_json)
+    if focused_freeze is not None:
+        (ledger / "focused-pilot-execution.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "batch_id": batch_id,
+                    "thesis_evidence": False,
+                    "source_git_sha": subprocess.check_output(
+                        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+                    ).strip(),
+                    "canonical_matrix_sha256": focused_freeze["canonical_matrix_sha256"],
+                    "freeze_receipt_sha256": hashlib.sha256(
+                        (root / "eval/focused-pilot-freeze.json").read_bytes()
+                    ).hexdigest(),
+                    "schedule_sha256": hashlib.sha256(schedule_json.encode()).hexdigest(),
+                    "started_at": utc_now(),
+                },
+                indent=2,
+            )
+            + "\n"
+        )
 
     failures: list[str] = []
     completed = 0
@@ -2938,6 +3043,8 @@ def main() -> int:
         completed += 1
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
     summarise(root, batch_id, experiments)
+    if focused_freeze is not None and not failures:
+        verify_focused_batch(root, batch_id, experiments)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
     write_progress(ledger, "batch-finished", completed, total, failures=len(failures))
     return 1 if failures else 0

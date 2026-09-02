@@ -117,6 +117,54 @@ before reading. The matrix below is authoritative:
   `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9
   `startup-preparation.json`.
 
+### Focused-pilot contract
+
+The follow-up pilot is selected by `focused_pilot` in
+`eval/canonical-matrix.json` and launched with:
+
+```sh
+python3 eval/scripts/lib/canonical_runner.py --focused --execute --batch-id <new-id>
+```
+
+This mode is diagnostic only. Every selected experiment declares its exact
+condition/run indices, sample unit, repetitions, event count where applicable,
+warmup, measurement boundary, required outputs, and analysis consumer. The
+runner rejects a non-frozen seed and requires the committed
+`eval/focused-pilot-schedule.json` snapshot. It writes both `schedule.json` and
+`focused-pilot-execution.json` in the batch ledger. The execution receipt binds
+the schedule and source revision to `eval/focused-pilot-freeze.json`; execution
+stops if either the canonical-matrix or schedule SHA-256 no longer matches the
+freeze receipt.
+
+Every focused leaf records `thesis_evidence=false` and a `focused_pilot`
+metadata object containing the matrix hash, memory-retention fix commit, and
+eKuiper operator concurrency. Validate focused results with:
+
+```sh
+python3 eval/scripts/verify-result-contract.py --canonical --focused \
+  eval/results/<experiment>/rpi5-<batch-id>
+```
+
+In addition to file presence and canonical host provenance, focused validation
+enforces these semantic invariants:
+
+- E-Perf-10 result status, counts, units, trace hashes, and system identity;
+- eKuiper's captured rule uses the frozen default operator concurrency of one;
+- E-Backpressure crossed its queue threshold, drained, remained lossless, and
+  stayed within the frozen RSS bound;
+- E-Iso-4 recorded contained traps with one recovery per trap and no reuse of
+  an interrupted component instance;
+- E-Iso-7 uses a branch-local measurement boundary and lossless branch-A
+  counts rather than aggregate fan-in values;
+- E-Perf-9 records every monotonic startup phase, one processed message, and
+  valid compiled-cache state;
+- E-Swap-1/2/4/6 keep internal phases and sink-observed gaps as distinct
+  nanosecond fields with the frozen event count;
+- E-Swap-3 and E-Swap-5 preserve sequence integrity, and E-Swap-5 records all
+  requested rollbacks;
+- the matrix records the closed memory-retention decision and its verified
+  zero-byte/message diagnostic slope.
+
 ### `startup.json` schema
 
 E-Perf-9 measures startup from runtime process entry through the first successful

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -15,6 +16,7 @@ sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 from canonical_runner import (  # noqa: E402
     analyze_backpressure,
     analyze_rate_sweep_traces,
+    build_focused_schedule,
     build_schedule,
     classify_sustainable_throughput,
     compare_branch_a,
@@ -35,6 +37,7 @@ from canonical_runner import (  # noqa: E402
     summarize_recovery,
     validate_backpressure_result,
     validate_ekuiper_process_snapshot,
+    validate_focused_freeze,
     validate_rate_sweep_result,
     validate_startup_artifact,
     write_progress,
@@ -84,6 +87,56 @@ def test_schedule_covers_performance_matrix() -> None:
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
     assert len({item.result_key for item in schedule}) == len(schedule)
+
+
+def test_focused_schedule_matches_frozen_condition_runs() -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    selected = matrix["focused_pilot"]["experiments"]
+    expected = {
+        f"{experiment}/{condition}/run-{run_index:02d}"
+        for experiment, definition in selected.items()
+        for condition, run_indices in definition["condition_runs"].items()
+        for run_index in run_indices
+    }
+
+    schedule = build_focused_schedule(seed=matrix["focused_pilot"]["seed"])
+
+    assert {item.result_key for item in schedule} == expected
+    assert len(schedule) == len(expected) == 137
+    assert [item.run_index for item in schedule if item.experiment == "e-swap-3"] == [1, 2, 3]
+    assert {item.condition for item in schedule if item.experiment == "e-swap-3"} == {
+        "wafer-hotswap"
+    }
+    assert len([item for item in schedule if item.experiment == "e-swap-5"]) == 1
+    assert all(item.system != "ekuiper" or item.experiment == "e-perf-10" for item in schedule)
+
+
+def test_focused_freeze_matches_canonical_matrix_and_schedule() -> None:
+    receipt = validate_focused_freeze(ROOT, ROOT / "eval/canonical-matrix.json")
+    schedule_path = ROOT / "eval/focused-pilot-schedule.json"
+    schedule_bytes = schedule_path.read_bytes()
+    schedule = json.loads(schedule_bytes)
+    expected = [item.__dict__ for item in build_focused_schedule(seed=1729)]
+
+    assert schedule == expected
+    assert receipt["selected_leaf_count"] == len(schedule) == 137
+    assert receipt["schedule_sha256"] == hashlib.sha256(schedule_bytes).hexdigest()
+    assert receipt["thesis_evidence"] is False
+
+
+def test_focused_freeze_rejects_matrix_drift(tmp_path: Path) -> None:
+    matrix = tmp_path / "eval/canonical-matrix.json"
+    matrix.parent.mkdir(parents=True)
+    matrix.write_text('{"focused_pilot": {}}\n')
+    receipt = tmp_path / "eval/focused-pilot-freeze.json"
+    receipt.write_text(json.dumps({
+        "status": "frozen-before-execution",
+        "thesis_evidence": False,
+        "canonical_matrix_sha256": "0" * 64,
+    }))
+
+    with pytest.raises(ValueError, match="matrix changed after freeze"):
+        validate_focused_freeze(tmp_path, matrix)
 
 
 def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:

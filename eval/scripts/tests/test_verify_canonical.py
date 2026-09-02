@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -56,6 +57,213 @@ def make_result(root: Path) -> Path:
     }
     (result / "metadata.json").write_text(json.dumps(metadata))
     return result
+
+
+def run_focused(path: Path, matrix: Path | None = None) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(VERIFIER), "--canonical", "--focused"]
+    if matrix is not None:
+        command.extend(["--matrix", str(matrix)])
+    command.append(str(path))
+    return subprocess.run(command, cwd=ROOT, capture_output=True, text=True, check=False)
+
+
+def make_focused_result(root: Path, experiment: str, condition: str, system: str = "wafer") -> Path:
+    result = root / experiment / "rpi5-focused-test" / Path(condition) / "run-01-attempt-01"
+    result.mkdir(parents=True)
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    required = matrix["experiments"][experiment]["required_outputs"]
+    for name in {
+        "config.toml",
+        "stdout.log",
+        "runtime-provenance.json",
+        "pi-telemetry.csv",
+        "pmic-rails.csv",
+        "power-boundary.json",
+        *required,
+    }:
+        (result / name).write_text("fixture\n")
+    (result / "measurement-window.json").write_text('{"started_ns":100,"finished_ns":200}\n')
+    metadata = {
+        "experiment": experiment,
+        "condition": condition,
+        "system": system,
+        "thesis_evidence": False,
+        "host_tag": "rpi5",
+        "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+        "arch": "aarch64",
+        "isolated_cpus": "1-3",
+        "cpu_governors": ["performance"],
+        "throttled": "0x0",
+        "git_sha": "1" * 40,
+        "git_dirty": False,
+        "git_tags": ["rpi5-eval-v1"],
+        "wasmtime_version": "43.0.0",
+        "wafer_runtime_sha256": "2" * 64,
+        "wafer_plugin_hashes": {"filter": "3" * 64},
+        "exit_codes": {"wafer_runtime": 0},
+        "focused_pilot": {
+            "id": matrix["focused_pilot"]["id"],
+            "matrix_sha256": hashlib.sha256(
+                (ROOT / "eval/canonical-matrix.json").read_bytes()
+            ).hexdigest(),
+            "memory_retention_fix_commit": matrix["focused_pilot"]["decisions"]["memory_retention"]["fix_commit"],
+            "ekuiper_operator_concurrency": 1,
+        },
+    }
+    if system == "ekuiper":
+        metadata["exit_codes"] = {"ekuiper": 0}
+        (result / "runtime-provenance.json").unlink()
+    (result / "metadata.json").write_text(json.dumps(metadata))
+    if "sequence.csv" in required:
+        (result / "sequence.csv").write_text(
+            "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+            "1000,1000,0,0,0\n"
+        )
+    if experiment == "e-perf-10":
+        sweep = {
+            "schema_version": 1,
+            "experiment": experiment,
+            "system": system,
+            "thesis_evidence": False,
+            "measurement_boundary": "publisher run window to subscriber receive timestamp",
+            "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
+            "offered_rate_msg_s": 1000,
+            "actual_offered_rate_msg_s": 1000.0,
+            "achieved_rate_msg_s": 1000.0,
+            "measurement_duration_ns": 60_000_000_000,
+            "messages": {"offered": 60_000, "received": 60_000, "lost": 0, "duplicates": 0},
+            "loss_percent": 0.0,
+            "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+            "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},
+            "throttled": False,
+            "profile": {"path": "profile.toml", "sha256": "2" * 64, "payload_template_sha256": "3" * 64},
+            "process_audit": {"path": "process-audit.json", "sha256": "4" * 64},
+            "traces": {
+                "published": {"path": "published.csv", "sha256": "5" * 64, "samples": 60_000},
+                "received": {"path": "received.csv", "sha256": "6" * 64, "samples": 60_000},
+            },
+        }
+        (result / "rate-sweep.json").write_text(json.dumps(sweep))
+        if system == "ekuiper":
+            (result / "ekuiper-audit.json").write_text(
+                json.dumps({"rule": {"options": {"concurrency": 1}}})
+            )
+    if experiment == "e-backpressure":
+        (result / "backpressure.json").write_text(json.dumps({
+            "classification": "saturated-and-drained",
+            "threshold_crossed": True,
+            "recovered": True,
+            "peak_occupancy": 1.0,
+            "occupancy_threshold": 0.8,
+            "rates_msg_s": {"offered": 1000.0, "accepted": 150.0, "processed": 150.0, "drained": 140.0},
+            "sequence": {"lossless": True},
+            "memory": {"within_limit": True},
+        }))
+    if experiment == "e-iso-4":
+        (result / "containment.json").write_text(json.dumps({
+            "contained": True,
+            "traps_total": 2,
+            "nodes": [{"node_id": "attack", "traps_total": "2", "recovery_count": "2"}],
+        }))
+    if experiment == "e-iso-7":
+        (result / "branch-isolation.json").write_text(json.dumps({
+            "condition": condition,
+            "measurement_boundary": {"kind": "branch_sink_post_warmup"},
+            "branches": {
+                "branch_a": {
+                    "artifact_dir": "branch-a",
+                    "offered_messages": 1000,
+                    "received_messages": 1000,
+                    "lost_messages": 0,
+                    "gap_messages": 0,
+                    "duplicates": 0,
+                },
+                "branch_b": {"artifact_dir": "branch-b"},
+            },
+        }))
+    if experiment == "e-perf-9":
+        (result / "startup.json").write_text(json.dumps({
+            "schema_version": 1,
+            "clock": "monotonic",
+            "cache_state": condition.rsplit("-", 1)[1],
+            "cache_preparation": {
+                "action": "drop-linux-page-cache" if condition.endswith("-cold") else "none",
+                "completed_before_timing": True,
+            },
+            "compiled_component_cache": {"mode": "disabled", "hit": False, "artifact": None, "identity": None},
+            "plugin_sha256": {"filter": "3" * 64},
+            "processed_messages": 1,
+            "phases_ns": {
+                "process_config": 1,
+                "component_load_compile": 1,
+                "instantiation": 1,
+                "pipeline_setup": 1,
+                "first_process": 1,
+            },
+            "total_wall_duration_ns": 5,
+            "harness_overhead_tolerance_ns": 5_000_000,
+        }))
+    if experiment in {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-6"}:
+        event = {
+            "compile_ns": 1,
+            "instantiate_ns": 1,
+            "signal_ns": 1,
+            "ack_ns": 1,
+            "convergence_ns": 1,
+            "http_total_ns": 5,
+            "sink_observed_output_gap_ns": 1,
+        }
+        (result / "hotswap-analysis.json").write_text(json.dumps({
+            "duration_unit": "ns", "sample_count": 50, "events": [event] * 50,
+        }))
+    if experiment == "e-swap-5":
+        (result / "rollback.json").write_text(json.dumps({
+            "attempts": 50, "rolled_back": 50, "all_rolled_back": True,
+        }))
+    return result
+
+
+def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
+    cases = [
+        ("e-backpressure", "saturated-slow-consumer", "wafer", "backpressure.json", lambda value: value.update(classification="not-saturated"), "backpressure classification"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(recovery_count="1"), "epoch recovery count"),
+        ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(gap_messages=1), "branch A is not lossless"),
+        ("e-perf-9", "small-cold", "wafer", "startup.json", lambda value: value.update(processed_messages=2), "exactly one processed message"),
+        ("e-swap-1", "steady", "wafer", "hotswap-analysis.json", lambda value: value.update(sample_count=49), "must contain 50 events"),
+        ("e-swap-5", "process-trap-rollback", "wafer", "rollback.json", lambda value: value.update(rolled_back=49), "50 successful rollbacks"),
+        ("e-perf-10", "ekuiper/rate-01000", "ekuiper", "ekuiper-audit.json", lambda value: value["rule"]["options"].update(concurrency=3), "frozen operator concurrency 1"),
+        ("e-swap-3", "wafer-hotswap", "wafer", "sequence.csv", None, "sequence.csv is not lossless"),
+    ]
+    for experiment, condition, system, filename, mutate, expected in cases:
+        with tempfile.TemporaryDirectory() as tmp:
+            result = make_focused_result(Path(tmp), experiment, condition, system)
+            assert run_focused(result).returncode == 0, (experiment, run_focused(result).stdout)
+            path = result / filename
+            if mutate is None:
+                path.write_text(
+                    "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+                    "1000,999,1,1,0\n"
+                )
+            else:
+                value = json.loads(path.read_text())
+                mutate(value)
+                path.write_text(json.dumps(value))
+            completed = run_focused(result)
+        assert completed.returncode == 1, (experiment, completed.stdout, completed.stderr)
+        assert expected in completed.stdout, (experiment, completed.stdout)
+
+
+def test_focused_verifier_rejects_unresolved_memory_decision() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        result = make_focused_result(root, "e-iso-4", "infinite-loop")
+        matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+        matrix["focused_pilot"]["decisions"]["memory_retention"]["status"] = "unresolved"
+        matrix_path = root / "matrix.json"
+        matrix_path.write_text(json.dumps(matrix))
+        completed = run_focused(result, matrix_path)
+    assert completed.returncode == 1
+    assert "memory-retention status is not fixed" in completed.stdout
 
 
 def test_canonical_result_accepts_complete_leaf() -> None:

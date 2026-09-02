@@ -15,6 +15,457 @@
     "support_cpus": "0",
     "throttled": "0x0"
   },
+  "focused_pilot": {
+    "schema_version": 1,
+    "id": "rpi5-focused-pilot-followups",
+    "seed": 1729,
+    "thesis_evidence": false,
+    "experiments": {
+      "e-perf-10": {
+        "sample_unit": "run",
+        "repetitions": 4,
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "measurement_boundary": "publisher run window to subscriber receive timestamp",
+        "condition_runs": {
+          "mqtt-loopback/rate-00500": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "mqtt-loopback/rate-01000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "mqtt-loopback/rate-02000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "mqtt-loopback/rate-04000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "mqtt-loopback/rate-08000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "mqtt-loopback/rate-16000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-00500": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-01000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-02000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-04000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-08000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "native/rate-16000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-00500": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-01000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-02000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-04000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-08000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "wafer/rate-16000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-00500": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-01000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-02000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-04000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-08000": [
+            1,
+            2,
+            3,
+            4
+          ],
+          "ekuiper/rate-16000": [
+            1,
+            2,
+            3,
+            4
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "percentiles.json",
+          "published.csv",
+          "received.csv",
+          "resource-usage.csv",
+          "process-audit.json",
+          "rate-sweep.json"
+        ],
+        "analysis": "09-saturation.ipynb",
+        "thesis_evidence": false
+      },
+      "e-perf-9": {
+        "sample_unit": "run",
+        "repetitions": 3,
+        "warmup_secs": 0,
+        "measurement_secs": 1,
+        "measurement_boundary": "runtime process entry through first successful sink collection",
+        "condition_runs": {
+          "small-cold": [
+            1,
+            2,
+            3
+          ],
+          "small-warm": [
+            1,
+            2,
+            3
+          ],
+          "medium-cold": [
+            1,
+            2,
+            3
+          ],
+          "medium-warm": [
+            1,
+            2,
+            3
+          ],
+          "large-cold": [
+            1,
+            2,
+            3
+          ],
+          "large-warm": [
+            1,
+            2,
+            3
+          ]
+        },
+        "required_outputs": [
+          "startup-preparation.json",
+          "startup.json"
+        ],
+        "analysis": "10-aot-startup.ipynb",
+        "thesis_evidence": false
+      },
+      "e-backpressure": {
+        "sample_unit": "run",
+        "repetitions": 3,
+        "warmup_secs": 0,
+        "measurement_secs": 10,
+        "measurement_boundary": "first offered message through bounded-queue drain recovery",
+        "condition_runs": {
+          "saturated-slow-consumer": [
+            1,
+            2,
+            3
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "memory.csv",
+          "per_node_metrics.csv",
+          "queue-depth.csv",
+          "backpressure.json"
+        ],
+        "analysis": "09-backpressure.ipynb",
+        "thesis_evidence": false
+      },
+      "e-iso-4": {
+        "sample_unit": "run",
+        "repetitions": 3,
+        "warmup_secs": 0,
+        "measurement_secs": 120,
+        "measurement_boundary": "complete configured attack interval with no excluded warmup",
+        "condition_runs": {
+          "infinite-loop": [
+            1,
+            2,
+            3
+          ]
+        },
+        "required_outputs": [
+          "per_node_metrics.csv",
+          "containment.json"
+        ],
+        "analysis": "06-fault-injection.ipynb",
+        "thesis_evidence": false
+      },
+      "e-iso-7": {
+        "sample_unit": "run",
+        "repetitions": 3,
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "measurement_boundary": "branch-local sink observations after the excluded warmup",
+        "condition_runs": {
+          "control": [
+            1,
+            2,
+            3
+          ],
+          "panic-attack": [
+            1,
+            2,
+            3
+          ],
+          "epoch-loop-attack": [
+            1,
+            2,
+            3
+          ]
+        },
+        "required_outputs": [
+          "branch-isolation.json",
+          "per_node_metrics.csv",
+          "containment.json"
+        ],
+        "analysis": "06-fault-injection.ipynb",
+        "thesis_evidence": false
+      },
+      "e-swap-1": {
+        "sample_unit": "event",
+        "repetitions": 1,
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "measurement_boundary": "internal monotonic swap phases and sink-observed output interarrival gaps",
+        "condition_runs": {
+          "steady": [
+            1
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_requests.json",
+          "swap_timeline.json",
+          "hotswap-analysis.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false,
+        "events_per_run": 50,
+        "shares_measurements_with": [
+          "e-swap-2",
+          "e-swap-6"
+        ]
+      },
+      "e-swap-2": {
+        "sample_unit": "event",
+        "repetitions": 1,
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "measurement_boundary": "shared E-Swap-1 sequence population",
+        "condition_runs": {
+          "steady": [
+            1
+          ]
+        },
+        "required_outputs": [
+          "sequence.csv",
+          "swap_requests.json",
+          "swap_timeline.json",
+          "hotswap-analysis.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false,
+        "events_per_run": 50,
+        "shares_measurements_with": [
+          "e-swap-1",
+          "e-swap-6"
+        ]
+      },
+      "e-swap-3": {
+        "sample_unit": "run",
+        "repetitions": 3,
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "measurement_boundary": "publisher run window containing one restart or hot-swap disruption",
+        "condition_runs": {
+          "wafer-hotswap": [
+            1,
+            2,
+            3
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_timeline.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false
+      },
+      "e-swap-4": {
+        "sample_unit": "event",
+        "repetitions": 1,
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "measurement_boundary": "internal monotonic swap phases and sink-observed output interarrival gaps under burst load",
+        "condition_runs": {
+          "burst-2x": [
+            1
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_requests.json",
+          "swap_timeline.json",
+          "hotswap-analysis.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false,
+        "events_per_run": 50
+      },
+      "e-swap-5": {
+        "sample_unit": "event",
+        "repetitions": 1,
+        "warmup_secs": 30,
+        "measurement_secs": 300,
+        "measurement_boundary": "publisher run window containing process-time trap and rollback events",
+        "condition_runs": {
+          "process-trap-rollback": [
+            1
+          ]
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_timeline.json",
+          "rollback.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false,
+        "events_per_run": 50
+      },
+      "e-swap-6": {
+        "sample_unit": "event",
+        "repetitions": 1,
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "measurement_boundary": "shared E-Swap-1 internal phase population",
+        "condition_runs": {
+          "steady": [
+            1
+          ]
+        },
+        "required_outputs": [
+          "swap_requests.json",
+          "swap_timeline.json",
+          "hotswap-analysis.json"
+        ],
+        "analysis": "05-hotswap-timeline.ipynb",
+        "thesis_evidence": false,
+        "events_per_run": 50,
+        "shares_measurements_with": [
+          "e-swap-1",
+          "e-swap-2"
+        ]
+      }
+    },
+    "decisions": {
+      "ekuiper_operator_concurrency": {
+        "value": 1,
+        "comparison": "default-system"
+      },
+      "memory_retention": {
+        "status": "fixed",
+        "fix_commit": "042575458dd809c5ed410bbde1b087a924cc81c2",
+        "diagnostic_runs": 2,
+        "max_observed_slope_bytes_per_message": 0.0,
+        "canonical_measurement_secs_adequate": true
+      }
+    }
+  },
   "experiments": {
     "e-val-1": {
       "research_question": "all",

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "status": "frozen-before-execution",
+  "frozen_at": "2026-09-02T01:45:00Z",
+  "thesis_evidence": false,
+  "matrix_path": "eval/canonical-matrix.json",
+  "canonical_matrix_sha256": "999778fddacc511c8613980984532a0475cdb64ae6872d8b6546f9d5877c54db",
+  "focused_selection_sha256": "d7df6ce0249d60861ec2f2c8d4a7ec8056ff7daf5134588f66cffd1f48d8a191",
+  "acceptance_criteria_sha256": "49d6a0d187448f942800e4f3cb2c8f57674cb91628f28013578faf6a9f4b07b6",
+  "selected_leaf_count": 137,
+  "execution_batch_id": null,
+  "schedule_path": "eval/focused-pilot-schedule.json",
+  "schedule_sha256": "d470d8f558b48b2113c92120ca3c47cfb1bd94c20d6ec26dcf6b18989587a4fd"
+}
