@@ -264,6 +264,20 @@ def check_focused_leaf(
             violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
             if sweep.get("system") != metadata.get("system"):
                 violations.append("rate-sweep system differs from metadata")
+        subscriber = _load_json(
+            leaf / "subscriber-metadata.json", "subscriber-metadata.json", violations
+        )
+        if subscriber is not None and sweep is not None:
+            offered = sweep.get("messages", {}).get("offered")
+            if subscriber.get("sequence_end_exclusive") != offered:
+                violations.append(
+                    "E-Perf-10 subscriber sequence boundary differs from offered messages"
+                )
+            ignored = subscriber.get("ignored_sequence_count")
+            if not isinstance(ignored, int) or ignored < 0:
+                violations.append(
+                    "E-Perf-10 subscriber ignored sequence count is missing or invalid"
+                )
         if metadata.get("system") == "ekuiper":
             audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", violations)
             expected = focused["decisions"]["ekuiper_operator_concurrency"]["value"]

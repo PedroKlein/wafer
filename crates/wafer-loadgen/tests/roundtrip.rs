@@ -116,6 +116,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         host_tag: Some("shakedown-macos".into()),
         qos: 1,
         trace_file: Some(received_trace.clone()),
+        sequence_end_exclusive: Some(TOTAL_MESSAGES),
     };
     let sub_handle = tokio::spawn(async move { run_subscriber(sub_args).await });
 
@@ -148,7 +149,17 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         hotswap_api_url: "http://localhost:9090".into(),
         hotswap_result_path: None,
         trace_file: Some(published_trace.clone()),
+        sequence_start: 0,
+        drop_when_full: false,
     };
+    let mut warmup_args = pub_args.clone();
+    warmup_args.rate = 100;
+    warmup_args.duration_secs = 1;
+    warmup_args.sequence_start = TOTAL_MESSAGES;
+    warmup_args.trace_file = None;
+    let warmup_report = run_publisher(warmup_args).await?;
+    assert_eq!(warmup_report.published, 100);
+
     let pub_report = run_publisher(pub_args).await?;
     assert_eq!(
         pub_report.published, TOTAL_MESSAGES,
@@ -174,6 +185,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         sub_report.total_recorded
     );
     assert_eq!(sub_report.parse_errors, 0, "unexpected JSON parse errors");
+    assert_eq!(sub_report.ignored_sequences, 100, "warmup sequences entered measurement");
 
     // AC3b + AC3c: zero loss, zero duplicates.
     assert_eq!(sub_report.total_gaps, 0, "expected zero gaps, got {}", sub_report.total_gaps);
@@ -201,6 +213,8 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     let meta_text = std::fs::read_to_string(output_dir.join("subscriber-metadata.json"))?;
     let meta: SubscriberMetadata = serde_json::from_str(&meta_text)?;
     assert_eq!(meta.total_recorded, TOTAL_MESSAGES);
+    assert_eq!(meta.sequence_end_exclusive, Some(TOTAL_MESSAGES));
+    assert_eq!(meta.ignored_sequence_count, 100);
     assert_eq!(meta.sequence.total_received, TOTAL_MESSAGES);
     assert_eq!(meta.sequence.total_gaps, 0);
     assert_eq!(meta.sequence.total_duplicates, 0);

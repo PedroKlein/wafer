@@ -474,6 +474,14 @@ def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
         topic="wafer/telemetry",
         trace_file=output / "published.csv",
     )
+    warmup = loadgen_command(
+        ROOT,
+        item,
+        "publish",
+        duration=item.warmup_secs,
+        topic="wafer/telemetry",
+        sequence_start=item.total_messages,
+    )
     subscriber = loadgen_command(
         ROOT,
         item,
@@ -486,7 +494,11 @@ def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
     assert publisher[publisher.index("--rate") + 1] == "4000"
     assert publisher[publisher.index("--topic") + 1] == "wafer/telemetry"
     assert publisher[publisher.index("--trace-file") + 1] == str(output / "published.csv")
+    assert "--drop-when-full" in publisher
+    assert warmup[warmup.index("--sequence-start") + 1] == "240000"
+    assert "--drop-when-full" in warmup
     assert subscriber[subscriber.index("--total-messages") + 1] == "240000"
+    assert subscriber[subscriber.index("--sequence-end-exclusive") + 1] == "240000"
     assert subscriber[subscriber.index("--topic") + 1] == "wafer/telemetry/hot"
     assert subscriber[subscriber.index("--trace-file") + 1] == str(output / "received.csv")
 

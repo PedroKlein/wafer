@@ -62,6 +62,10 @@ pub struct SubscribeArgs {
     /// Intended for diagnostics; omit during canonical measurements.
     #[arg(long)]
     pub trace_file: Option<PathBuf>,
+
+    /// Ignore messages at or above this sequence number.
+    #[arg(long)]
+    pub sequence_end_exclusive: Option<u64>,
 }
 
 fn parse_broker(s: &str) -> (String, u16) {
@@ -100,6 +104,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         topic = %args.topic,
         output_dir = %args.output_dir.display(),
         total_messages = args.total_messages,
+        sequence_end_exclusive = args.sequence_end_exclusive,
         "Starting WAFER loadgen subscriber"
     );
 
@@ -167,7 +172,11 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
             recv = rx.recv() => {
                 match recv {
                     Some((receive_ns, payload)) => {
-                        if let RecordOutcome::Recorded { latency_ns, seq } = recorder.record_json(&payload, receive_ns) {
+                        let outcome = match args.sequence_end_exclusive {
+                            Some(end) => recorder.record_json_before(&payload, receive_ns, end),
+                            None => recorder.record_json(&payload, receive_ns),
+                        };
+                        if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
                             if let Some(trace) = &mut trace {
                                 let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
                                 writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
@@ -205,6 +214,8 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         exit_reason: exit_reason.to_owned(),
         git_sha: std::env::var("WAFER_GIT_SHA").ok(),
         host_tag: args.host_tag.clone(),
+        sequence_end_exclusive: args.sequence_end_exclusive,
+        ignored_sequence_count: 0,
         // Measurement fields are filled by write_artifacts.
         total_recorded: 0,
         total_messages: 0,
@@ -235,6 +246,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         total_messages: recorder.total_messages(),
         total_recorded: recorder.total_recorded(),
         parse_errors: recorder.parse_errors(),
+        ignored_sequences: recorder.ignored_sequences(),
         total_gaps: recorder.sequence().total_gaps(),
         total_duplicates: recorder.sequence().total_duplicates(),
         p50_ns: recorder.p50_ns(),
@@ -244,6 +256,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     info!(
         total = report.total_messages,
+        ignored_sequences = report.ignored_sequences,
         gaps = report.total_gaps,
         duplicates = report.total_duplicates,
         p50_ms = ms_from_ns(report.p50_ns),
@@ -260,6 +273,7 @@ pub struct SubscriberReport {
     pub total_messages: u64,
     pub total_recorded: u64,
     pub parse_errors: u64,
+    pub ignored_sequences: u64,
     pub total_gaps: u64,
     pub total_duplicates: u64,
     pub p50_ns: u64,

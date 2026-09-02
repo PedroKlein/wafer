@@ -144,6 +144,9 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
             },
         }
         (result / "rate-sweep.json").write_text(json.dumps(sweep))
+        (result / "subscriber-metadata.json").write_text(
+            json.dumps({"sequence_end_exclusive": 60_000, "ignored_sequence_count": 0})
+        )
         if system == "ekuiper":
             (result / "ekuiper-audit.json").write_text(
                 json.dumps({"rule": {"options": {"concurrency": 1}}})
@@ -232,6 +235,7 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
         ("e-swap-1", "steady", "wafer", "hotswap-analysis.json", lambda value: value.update(sample_count=49), "must contain 50 events"),
         ("e-swap-5", "process-trap-rollback", "wafer", "rollback.json", lambda value: value.update(rolled_back=49), "50 successful rollbacks"),
         ("e-perf-10", "ekuiper/rate-01000", "ekuiper", "ekuiper-audit.json", lambda value: value["rule"]["options"].update(concurrency=3), "frozen operator concurrency 1"),
+        ("e-perf-10", "wafer/rate-01000", "wafer", "subscriber-metadata.json", lambda value: value.update(sequence_end_exclusive=None), "subscriber sequence boundary"),
         ("e-swap-3", "wafer-hotswap", "wafer", "sequence.csv", None, "sequence.csv is not lossless"),
     ]
     for experiment, condition, system, filename, mutate, expected in cases:

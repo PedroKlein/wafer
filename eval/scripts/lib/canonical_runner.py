@@ -1572,6 +1572,7 @@ def loadgen_command(
     duration: int | None = None,
     topic: str | None = None,
     trace_file: Path | None = None,
+    sequence_start: int | None = None,
 ) -> list[str]:
     loadgen = root / "target/release/wafer-loadgen"
     if action == "subscribe":
@@ -1584,6 +1585,8 @@ def loadgen_command(
             "--total-messages", str(item.total_messages or 0),
             "--host-tag", "rpi5",
         ]
+        if item.experiment == "e-perf-10" and item.total_messages is not None:
+            command.extend(["--sequence-end-exclusive", str(item.total_messages)])
         if trace_file is not None:
             command.extend(["--trace-file", str(trace_file)])
         return command
@@ -1596,6 +1599,10 @@ def loadgen_command(
     ]
     if item.offered_rate_msg_s is not None:
         command.extend(["--rate", str(item.offered_rate_msg_s)])
+    if item.experiment == "e-perf-10":
+        command.append("--drop-when-full")
+    if sequence_start is not None:
+        command.extend(["--sequence-start", str(sequence_start)])
     if trace_file is not None:
         command.extend(["--trace-file", str(trace_file)])
     return command
@@ -2341,6 +2348,7 @@ def run_rate_sweep_item(
                     "publish",
                     duration=item.warmup_secs,
                     topic=input_topic,
+                    sequence_start=item.total_messages,
                 ),
                 cwd=root,
                 env=environment,

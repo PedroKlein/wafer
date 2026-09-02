@@ -134,6 +134,14 @@ pub struct PublishArgs {
     #[arg(long)]
     pub trace_file: Option<PathBuf>,
 
+    /// First sequence number emitted by this publisher process.
+    #[arg(long, default_value_t = 0)]
+    pub sequence_start: u64,
+
+    /// Reject messages when the MQTT client queue is full instead of waiting.
+    #[arg(long, default_value_t = false)]
+    pub drop_when_full: bool,
+
     /// Write the hot-swap HTTP response as a canonical timeline artifact.
     #[arg(long)]
     pub hotswap_result_path: Option<PathBuf>,
@@ -317,6 +325,8 @@ impl PublishArgs {
         let _r = writeln!(out, "  base_rate      = {} msg/s", self.rate);
         let _r = writeln!(out, "  duration_secs  = {}", self.duration_secs);
         let _r = writeln!(out, "  profile        = {}", self.profile);
+        let _r = writeln!(out, "  sequence_start = {}", self.sequence_start);
+        let _r = writeln!(out, "  drop_when_full = {}", self.drop_when_full);
         match self.profile.as_str() {
             "burst" => {
                 let _r = writeln!(
@@ -422,6 +432,19 @@ fn spawn_hotswap_trigger(
     }))
 }
 
+async fn enqueue_publish(
+    client: &AsyncClient,
+    topic: &str,
+    payload: Vec<u8>,
+    drop_when_full: bool,
+) -> Result<(), rumqttc::ClientError> {
+    if drop_when_full {
+        client.try_publish(topic, QoS::AtLeastOnce, false, payload)
+    } else {
+        client.publish(topic, QoS::AtLeastOnce, false, payload).await
+    }
+}
+
 /// Drive the publisher until `--duration-secs * --rate` messages have been sent.
 ///
 /// # Errors
@@ -505,7 +528,8 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         writeln!(trace, "seq,ts_ns")?;
     }
     let mut scheduler = Scheduler::new(shape);
-    let mut seq: u64 = 0;
+    let mut seq = args.sequence_start;
+    let mut offered: u64 = 0;
     let mut errors: u64 = 0;
 
     loop {
@@ -531,15 +555,22 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             writeln!(trace, "{seq},{ts}")?;
         }
 
-        if let Err(e) = client
-            .publish(&args.topic, QoS::AtLeastOnce, false, payload_vec.as_slice())
-            .await
+        if let Err(error) = enqueue_publish(
+            &client,
+            &args.topic,
+            payload_vec,
+            args.drop_when_full,
+        )
+        .await
         {
-            warn!("Publish error (seq={seq}): {e}");
+            if !args.drop_when_full {
+                warn!("Publish error (seq={seq}): {error}");
+            }
             errors = errors.saturating_add(1);
         }
 
         seq = seq.saturating_add(1);
+        offered = offered.saturating_add(1);
     }
 
     if let Some(trace) = &mut trace {
@@ -560,16 +591,16 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         #[expect(
             clippy::cast_precision_loss,
             clippy::as_conversions,
-            reason = "seq bounded by (base_rate * duration_secs) which fits in f64 mantissa for any realistic run"
+            reason = "offered count is bounded by rate times duration and fits in f64 mantissa for any realistic run"
         )]
-        let rate = seq as f64 / elapsed.as_secs_f64();
+        let rate = offered as f64 / elapsed.as_secs_f64();
         rate
     } else {
         0.0
     };
 
     info!(
-        total = seq,
+        total = offered,
         errors = errors,
         elapsed_ms = elapsed.as_millis(),
         actual_rate = format!("{actual_rate:.1}"),
@@ -577,7 +608,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     );
 
     Ok(PublisherReport {
-        published: seq,
+        published: offered,
         errors,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
@@ -595,4 +626,31 @@ pub struct PublisherReport {
     /// If profile = hotswap-trigger, the offset (secs) at which the trigger
     /// task was scheduled to fire. `None` for other profiles.
     pub hotswap_triggered_at_secs: Option<f64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use rumqttc::{AsyncClient, MqttOptions};
+
+    use super::enqueue_publish;
+
+    #[tokio::test]
+    async fn drop_when_full_never_waits_for_publish_queue_capacity() {
+        let options = MqttOptions::new("queue-test", "127.0.0.1", 1883);
+        let (client, _eventloop) = AsyncClient::new(options, 1);
+
+        enqueue_publish(&client, "test/topic", vec![1], true)
+            .await
+            .expect("first publish should fill the queue");
+        let result = tokio::time::timeout(
+            Duration::from_millis(50),
+            enqueue_publish(&client, "test/topic", vec![2], true),
+        )
+        .await
+        .expect("open-loop publish must not wait for queue capacity");
+
+        assert!(result.is_err(), "full queue must reject the offered message");
+    }
 }

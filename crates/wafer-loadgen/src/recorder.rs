@@ -39,6 +39,8 @@ pub enum RecordOutcome {
     ParseError,
     /// `ts` is in the future (clock skew or non-monotonic publisher). Not recorded.
     NegativeLatency,
+    /// Message belongs to an excluded sequence range, such as warmup traffic.
+    IgnoredSequence { seq: u64 },
 }
 
 /// Tracks message sequence numbers to detect gaps (lost messages) and duplicates.
@@ -147,6 +149,12 @@ pub struct SubscriberMetadata {
     pub git_sha: Option<String>,
     /// Host tag as passed by the eval scripts (P1.1 result contract).
     pub host_tag: Option<String>,
+    /// Exclusive upper sequence bound for the measured population.
+    #[serde(default)]
+    pub sequence_end_exclusive: Option<u64>,
+    /// Parsed messages excluded because they were outside the measured range.
+    #[serde(default)]
+    pub ignored_sequence_count: u64,
 
     // --- Measurement summary (also fully preserved in latency.hdr) ---
     pub total_recorded: u64,
@@ -178,6 +186,7 @@ pub struct LatencyRecorder {
     total_messages: u64,
     parse_errors: u64,
     negative_latency: u64,
+    ignored_sequences: u64,
 }
 
 impl LatencyRecorder {
@@ -209,24 +218,50 @@ impl LatencyRecorder {
             total_messages: 0,
             parse_errors: 0,
             negative_latency: 0,
+            ignored_sequences: 0,
         }
     }
 
     /// Parse a JSON payload (with `ts` = intended-publish-ns and `seq` = u64)
     /// and record the observed latency against `receive_ns`.
     pub fn record_json(&mut self, payload: &[u8], receive_ns: u64) -> RecordOutcome {
-        self.total_messages = self.total_messages.saturating_add(1);
+        self.record_json_with_sequence_end(payload, receive_ns, None)
+    }
+
+    /// Record only messages whose sequence is below `sequence_end_exclusive`.
+    pub(crate) fn record_json_before(
+        &mut self,
+        payload: &[u8],
+        receive_ns: u64,
+        sequence_end_exclusive: u64,
+    ) -> RecordOutcome {
+        self.record_json_with_sequence_end(payload, receive_ns, Some(sequence_end_exclusive))
+    }
+
+    fn record_json_with_sequence_end(
+        &mut self,
+        payload: &[u8],
+        receive_ns: u64,
+        sequence_end_exclusive: Option<u64>,
+    ) -> RecordOutcome {
         let parsed: serde_json::Result<serde_json::Value> = serde_json::from_slice(payload);
         let Ok(json) = parsed else {
+            self.total_messages = self.total_messages.saturating_add(1);
             self.parse_errors = self.parse_errors.saturating_add(1);
             return RecordOutcome::ParseError;
         };
         let ts = json.get("ts").and_then(serde_json::Value::as_u64);
         let seq = json.get("seq").and_then(serde_json::Value::as_u64);
         let (Some(ts), Some(seq)) = (ts, seq) else {
+            self.total_messages = self.total_messages.saturating_add(1);
             self.parse_errors = self.parse_errors.saturating_add(1);
             return RecordOutcome::ParseError;
         };
+        if sequence_end_exclusive.is_some_and(|end| seq >= end) {
+            self.ignored_sequences = self.ignored_sequences.saturating_add(1);
+            return RecordOutcome::IgnoredSequence { seq };
+        }
+        self.total_messages = self.total_messages.saturating_add(1);
         self.record(ts, receive_ns, seq)
     }
 
@@ -264,6 +299,11 @@ impl LatencyRecorder {
     #[must_use]
     pub const fn parse_errors(&self) -> u64 {
         self.parse_errors
+    }
+
+    #[must_use]
+    pub(crate) const fn ignored_sequences(&self) -> u64 {
+        self.ignored_sequences
     }
 
     #[must_use]
@@ -363,6 +403,7 @@ impl LatencyRecorder {
         metadata.total_messages = self.total_messages;
         metadata.parse_errors = self.parse_errors;
         metadata.negative_latency_count = self.negative_latency;
+        metadata.ignored_sequence_count = self.ignored_sequences;
         metadata.latency_min_ns = self.min_ns();
         metadata.latency_max_ns = self.max_ns();
         metadata.latency_mean_ns = self.mean_ns();
@@ -454,6 +495,28 @@ mod tests {
         assert_eq!(outcome, RecordOutcome::Recorded { latency_ns: 250_000, seq: 7 });
         assert_eq!(rec.total_recorded(), 1);
         assert_eq!(rec.parse_errors(), 0);
+    }
+
+    #[test]
+    fn record_json_before_sequence_ignores_delayed_warmup_messages() {
+        let intended = 42_000_000_000_u64;
+        let receive = intended + 250_000;
+        let stale = format!(r#"{{"ts":{intended},"seq":60000}}"#);
+        let measured = format!(r#"{{"ts":{intended},"seq":0}}"#);
+        let mut rec = LatencyRecorder::new();
+
+        assert_eq!(
+            rec.record_json_before(stale.as_bytes(), receive, 60_000),
+            RecordOutcome::IgnoredSequence { seq: 60_000 }
+        );
+        assert_eq!(
+            rec.record_json_before(measured.as_bytes(), receive, 60_000),
+            RecordOutcome::Recorded { latency_ns: 250_000, seq: 0 }
+        );
+        assert_eq!(rec.ignored_sequences(), 1);
+        assert_eq!(rec.total_messages(), 1);
+        assert_eq!(rec.total_recorded(), 1);
+        assert_eq!(rec.sequence().total_gaps(), 0);
     }
 
     #[test]
@@ -553,6 +616,8 @@ mod tests {
             exit_reason: "total-messages".into(),
             git_sha: Some("deadbeef".into()),
             host_tag: Some("shakedown-macos".into()),
+            sequence_end_exclusive: None,
+            ignored_sequence_count: 0,
             total_recorded: 0,
             total_messages: 0,
             parse_errors: 0,
