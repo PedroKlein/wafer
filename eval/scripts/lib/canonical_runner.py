@@ -78,6 +78,9 @@ class ValidationGate:
 
 RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
 RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
+E_VAL_1_MIN_P99_NS = 45_000_000
+# HdrHistogram reports the upper bound of the 3-significant-digit bucket containing 55 ms.
+E_VAL_1_MAX_P99_NS = 55_017_471
 RATE_SWEEP_BASELINE = 1_000
 RATE_SWEEP_P99_MULTIPLIER = 2.0
 RATE_SWEEP_MAX_LOSS_PERCENT = 1.0
@@ -603,12 +606,12 @@ def evaluate_validation_gate(root: Path, expected_runs: int) -> ValidationGate:
         observed += 1
         try:
             summary = json.loads((passed_attempt / "percentiles.json").read_text())
-            p99_ms = int(summary["p99_ns"]) / 1_000_000
+            p99_ns = int(summary["p99_ns"])
             count = int(summary["total_count"])
         except (OSError, ValueError, KeyError, TypeError):
             failed.append(run_index)
             continue
-        if count <= 0 or not 45 <= p99_ms <= 55:
+        if count <= 0 or not E_VAL_1_MIN_P99_NS <= p99_ns <= E_VAL_1_MAX_P99_NS:
             failed.append(run_index)
 
     return ValidationGate(not failed and observed == expected_runs, failed, observed)

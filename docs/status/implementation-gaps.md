@@ -441,15 +441,16 @@ surface changes.
 `crates/wafer-core/tests/wasi_async_runner.rs`
 (`delay_injector_runs_without_wasi_runtime_panic`) drives the real
 runner (not the harness) with the delay-injector plugin end-to-end,
-asserts (a) no panic and (b) p99 lands in the E-Val-1 honesty window
-[45, 55] ms. FAILS on `main` before the fix, PASSES after.
+asserts (a) no panic and (b) the median lands within [45, 55] ms. The
+canonical Raspberry Pi E-Val-1 gate separately checks p99 over 30 longer runs.
+The integration test FAILS on `main` before the fix and PASSES after.
 
 **Related methodology finding (not a runtime bug).** The initial P3.1
 config generated at 100 msg/s through a 20 msg/s sink (50 ms delay);
 queue back-pressure inflated recorded p99 to ~4700 ms even after the
 runner fix. Corrected `eval/configs/pipeline-c-with-delay.toml` and
 the regression test to generate at 10 msg/s (below sink capacity), so
-recorded p99 reflects only injected delay. This is the exact class of
+the recorded median reflects only injected delay. This is the exact class of
 methodology error E-Val-1 exists to catch — documenting here so future
 plugin-level delay tests use safe rate/delay ratios.
 

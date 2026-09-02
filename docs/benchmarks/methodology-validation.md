@@ -87,7 +87,8 @@ without this shakedown).
 ## Related
 
 - **RFC-008 §D9** — measurement infrastructure design.
-- **crates/wafer-core/tests/wasi_async_runner.rs** — CI regression test
-  covering the same invariant at test scale.
+- **crates/wafer-core/tests/wasi_async_runner.rs** — CI regression test for
+  the same runtime path using a median injected-delay check; the canonical
+  Raspberry Pi gate retains the p99 invariant.
 - **docs/status/canonical-readiness.md** — E-Val-1 readiness row.
 - **plans/evaluation-infrastructure/plan.json** — P3.1 task.

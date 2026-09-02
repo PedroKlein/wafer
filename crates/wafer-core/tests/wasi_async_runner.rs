@@ -1,10 +1,8 @@
 #![cfg(test)]
 #![expect(
     clippy::print_stderr,
-    clippy::as_conversions,
-    clippy::cast_precision_loss,
     clippy::large_futures,
-    reason = "integration test: diagnostic output, timing conversions, and large launch_pipeline future"
+    reason = "integration test: diagnostic output and large launch_pipeline future"
 )]
 //! P0.14 regression: WASI async host calls (`std::thread::sleep` in guest,
 //! `wasi:clocks/monotonic-clock.subscribe-duration` on the wire) must NOT
@@ -17,7 +15,7 @@
 //!
 //! This test drives the real runner (not the harness) end-to-end with the
 //! delay-injector plugin. Passes iff (a) the pipeline completes without
-//! panicking and (b) recorded p99 lands in the E-Val-1 honesty window.
+//! panicking and (b) the recorded median preserves the injected delay.
 //!
 //! See docs/status/implementation-gaps.md §A16.
 
@@ -33,14 +31,16 @@ const DELAY_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
 );
+const EXPECTED_MIN_MEDIAN_NS: u64 = 45_000_000;
+const EXPECTED_MAX_MEDIAN_NS: u64 = 55_000_000;
 
 /// Inline TOML for a tiny pipeline. Uses the same node types as
 /// `eval/configs/pipeline-c-with-delay.toml` but scaled down so the test
 /// finishes in ~3 s wall time.
 ///
 /// Source rate (10 msg/s) sits below sink capacity (1 s / 50 ms = 20 msg/s)
-/// so the queue never back-pressures and recorded p99 reflects only the
-/// injected delay, not queue wait. This is the E-Val-1 methodology
+/// so the queue never back-pressures and the recorded median reflects only
+/// the injected delay, not queue wait. This is the E-Val-1 methodology
 /// invariant: measurement rig must not exaggerate latency via queueing.
 fn build_config(bench_dir: &Path) -> Config {
     let toml = format!(
@@ -86,15 +86,15 @@ to = "sink"
     toml::from_str(&toml).expect("inline config must parse")
 }
 
-/// Read p99 from the latency.hdr the `BenchSink` wrote. Uses `wafer-loadgen
+/// Read p50 from the latency.hdr the `BenchSink` wrote. Uses `wafer-loadgen
 /// hdr-summary` — same tool the shakedown scripts use — so this test
 /// exercises the same path we'd exercise on Pi.
-fn p99_ms_from(bench_dir: &Path) -> f64 {
+fn p50_ns_from(bench_dir: &Path) -> u64 {
     let hdr = bench_dir.join("latency.hdr");
     assert!(hdr.exists(), "latency.hdr missing at {hdr:?}");
 
-    let loadgen = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../target/release/wafer-loadgen");
+    let loadgen =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/wafer-loadgen");
     assert!(
         loadgen.exists(),
         "wafer-loadgen binary missing at {loadgen:?} — run `cargo build --release -p wafer-loadgen`"
@@ -110,7 +110,7 @@ fn p99_ms_from(bench_dir: &Path) -> f64 {
     let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     let count = json["total_count"].as_u64().unwrap_or(0);
     assert!(count > 0, "empty histogram — runner never recorded a sample: {json}");
-    json["p99_ns"].as_u64().unwrap() as f64 / 1_000_000.0
+    json["p50_ns"].as_u64().unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -125,12 +125,12 @@ async fn delay_injector_runs_without_wasi_runtime_panic() {
     // BenchSink honours this env var; run_until_complete drives the sink to
     // flush latency.hdr into it.
     // SAFETY: single-threaded test setup; no other thread reads env yet.
-    unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", &bench_dir); }
+    unsafe {
+        std::env::set_var("WAFER_BENCH_OUTPUT_DIR", &bench_dir);
+    }
 
     let config = build_config(&bench_dir);
-    let mut orchestrator = launch_pipeline(config, None)
-        .await
-        .expect("launch_pipeline");
+    let mut orchestrator = launch_pipeline(config, None).await.expect("launch_pipeline");
 
     // 30 s wall-time ceiling: 100 × 50 ms sleep = 5 s ideal. Anything over
     // 30 s means something is hung — fail fast.
@@ -140,9 +140,9 @@ async fn delay_injector_runs_without_wasi_runtime_panic() {
     let result = bounded.expect("pipeline exceeded 30 s wall time");
     result.expect("pipeline must complete without a task panic");
 
-    let p99 = p99_ms_from(&bench_dir);
+    let p50_ns = p50_ns_from(&bench_dir);
     assert!(
-        (45.0..=55.0).contains(&p99),
-        "E-Val-1 honesty window violated: p99 = {p99} ms, expected [45, 55]"
+        (EXPECTED_MIN_MEDIAN_NS..=EXPECTED_MAX_MEDIAN_NS).contains(&p50_ns),
+        "delay-injector median = {p50_ns} ns, expected [45, 55] ms"
     );
 }

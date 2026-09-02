@@ -1192,6 +1192,27 @@ def test_validation_gate_accepts_all_repetitions() -> None:
     assert result.failed_runs == []
 
 
+def test_validation_gate_accepts_hdr_bucket_containing_55_ms() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        run = root / "run-01-attempt-01"
+        run.mkdir()
+        (run / "percentiles.json").write_text(
+            json.dumps({"total_count": 600, "p99_ns": 55_017_471})
+        )
+        (run / "canonical-status.json").write_text(json.dumps({"status": "passed"}))
+        result = evaluate_validation_gate(root, expected_runs=1)
+        assert result.passed is True
+        assert result.failed_runs == []
+
+        (run / "percentiles.json").write_text(
+            json.dumps({"total_count": 600, "p99_ns": 55_017_472})
+        )
+        result = evaluate_validation_gate(root, expected_runs=1)
+    assert result.passed is False
+    assert result.failed_runs == [1]
+
+
 if __name__ == "__main__":
     test_schedule_covers_performance_matrix()
     test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial()
