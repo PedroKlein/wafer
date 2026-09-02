@@ -63,19 +63,26 @@ def build_complete_fixture(root: Path) -> None:
                     "elapsed_ms,rss_bytes\n0,67108864\n1000,67108864\n"
                 )
 
-    write_passed_artifact(
-        root / "e-swap-1" / "steady" / "run-01",
-        "hotswap-analysis.json",
+    hotswap_events = [
         {
-            "measurement_source_leaf": "synthetic/run-01",
-            "events": [
-                {
-                    "http_total_ns": 2_000_000,
-                    "sink_observed_output_gap_ns": 1_000_000,
-                }
-            ],
-        },
-    )
+            "http_total_ns": 2_000_000,
+            "sink_observed_output_gap_ns": 1_000_000,
+        }
+    ]
+    for experiment, condition, source in (
+        ("e-swap-1", "steady", "synthetic/steady/run-01"),
+        ("e-swap-2", "steady", "synthetic/steady/run-01"),
+        ("e-swap-4", "burst-2x", "synthetic/burst/run-01"),
+        ("e-swap-6", "steady", "synthetic/steady/run-01"),
+    ):
+        write_passed_artifact(
+            root / experiment / condition / "run-01",
+            "hotswap-analysis.json",
+            {
+                "measurement_source_leaf": source,
+                "events": hotswap_events,
+            },
+        )
     write_passed_artifact(
         root / "e-iso-4" / "infinite-loop" / "run-01",
         "containment.json",
@@ -163,7 +170,10 @@ def execute_notebooks(monkeypatch, fixture: Path) -> list[str]:
         "E_PERF_6_DIR": "e-perf-6",
         "E_PERF_7_DIR": "e-perf-7",
         "E_PERF_8_DIR": "e-perf-8",
-        "E_SWAP_DIR": "e-swap-1",
+        "E_SWAP_1_DIR": "e-swap-1",
+        "E_SWAP_2_DIR": "e-swap-2",
+        "E_SWAP_4_DIR": "e-swap-4",
+        "E_SWAP_6_DIR": "e-swap-6",
         "E_ISO_4_DIR": "e-iso-4",
         "E_ISO_7_DIR": "e-iso-7",
         "E_PERF_10_DIR": "e-perf-10",
@@ -200,10 +210,11 @@ def test_all_notebooks_execute_against_complete_focused_fixture(tmp_path, monkey
         assert "uncertainty" in output.lower(), path.name
 
     hotswap_output = outputs[next(i for i, path in enumerate(NOTEBOOKS) if path.name == "05-hotswap-timeline.ipynb")]
-    assert "N=1" in hotswap_output
+    assert "N=2" in hotswap_output
+    assert "independent runs=2" in hotswap_output
     assert "e-swap-1" in hotswap_output
     assert "e-swap-2" not in hotswap_output
-    assert "e-swap-4" not in hotswap_output
+    assert "e-swap-4" in hotswap_output
     assert "e-swap-6" not in hotswap_output
 
 
