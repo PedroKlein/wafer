@@ -199,6 +199,13 @@ def test_all_notebooks_execute_against_complete_focused_fixture(tmp_path, monkey
         assert "unit" in output.lower(), path.name
         assert "uncertainty" in output.lower(), path.name
 
+    hotswap_output = outputs[next(i for i, path in enumerate(NOTEBOOKS) if path.name == "05-hotswap-timeline.ipynb")]
+    assert "N=1" in hotswap_output
+    assert "e-swap-1" in hotswap_output
+    assert "e-swap-2" not in hotswap_output
+    assert "e-swap-4" not in hotswap_output
+    assert "e-swap-6" not in hotswap_output
+
 
 def test_all_notebooks_render_missing_conditions_as_pending(tmp_path, monkeypatch) -> None:
     outputs = execute_notebooks(monkeypatch, tmp_path)

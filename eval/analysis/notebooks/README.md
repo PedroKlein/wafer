@@ -71,7 +71,7 @@ uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
 
 ## Run an explicit diagnostic directory
 
-Each notebook accepts experiment-specific directory variables such as `E_PERF_10_DIR`, `E_ISO_7_DIR`, and `E_SWAP_DIR`:
+Each notebook accepts experiment-specific directory variables such as `E_PERF_10_DIR` and `E_ISO_7_DIR`. The hot-swap notebook accepts `E_SWAP_1_DIR`, `E_SWAP_2_DIR`, `E_SWAP_4_DIR`, and `E_SWAP_6_DIR`; `E_SWAP_DIR` remains an alias for `E_SWAP_1_DIR`.
 
 ```bash
 cd eval/analysis
