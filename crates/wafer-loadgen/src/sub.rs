@@ -144,12 +144,8 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     });
 
     let mut recorder = LatencyRecorder::new();
-    let mut trace = args
-        .trace_file
-        .as_ref()
-        .map(std::fs::File::create)
-        .transpose()?
-        .map(BufWriter::new);
+    let mut trace =
+        args.trace_file.as_ref().map(std::fs::File::create).transpose()?.map(BufWriter::new);
     if let Some(trace) = &mut trace {
         writeln!(trace, "seq,payload_ts_ns,receive_ns,latency_ns")?;
     }
