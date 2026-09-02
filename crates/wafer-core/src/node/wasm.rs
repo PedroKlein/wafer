@@ -80,11 +80,12 @@ fn build_wit_message(
     store: &mut Store<WaferState>,
     envelope: &RuntimeEnvelope,
 ) -> Result<transform_node::wafer::pipeline::types::Message, WasmProcessError> {
-    // Push payload into ResourceTable so guest gets a borrow<buffer> handle
-    let resource = store
+    let resource_rep = store
         .data_mut()
         .push_buffer(envelope.payload.clone())
-        .map_err(|e| WasmProcessError::Unrecoverable(format!("failed to push buffer: {e}")))?;
+        .map_err(|e| WasmProcessError::Unrecoverable(format!("failed to push buffer: {e}")))?
+        .rep();
+    let resource = wasmtime::component::Resource::new_borrow(resource_rep);
 
     let metadata: Vec<(String, String)> = envelope
         .header
@@ -983,6 +984,7 @@ mod tests {
         assert_eq!(msg.source, envelope.header.source.to_string());
         assert_eq!(msg.timestamp, envelope.header.timestamp);
         assert_eq!(msg.content_type, "application/octet-stream");
+        assert!(!msg.payload.owned(), "borrow<buffer> must use a borrowed host handle");
     }
 
     #[test]

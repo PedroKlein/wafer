@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn pass_through_multiple_messages() {
+    fn pass_through_sustains_repeated_guest_calls() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built");
             return;
@@ -246,11 +246,10 @@ mod tests {
         let harness = PluginTestHarness::new().unwrap();
         let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
 
-        for i in 0..10 {
-            let msg = format!("message-{i}");
-            let input = RuntimeEnvelope::from_string("src", &msg);
+        for _ in 0..10_000 {
+            let input = RuntimeEnvelope::from_string("src", "message");
             let output = transform.process(input).unwrap();
-            assert_eq!(std::str::from_utf8(&output.payload).unwrap(), msg);
+            assert_eq!(&*output.payload, b"message");
         }
     }
 
