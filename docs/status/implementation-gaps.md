@@ -763,41 +763,45 @@ gap.
 
 ---
 
-## A21 — Per-message Wasm execution retains anonymous RSS 🟡
+## A21 — Per-message Wasm execution retains anonymous RSS (Closed 2026-09-02) 🟢
 
-**Severity:** moderate. The runtime remains functionally correct, but the
-observed growth blocks long-running resource-efficiency claims.
+**Symptom.** Two Raspberry Pi 5 reproductions at 4,000 messages/s, each with a
+30-second warmup and 300-second measurement, retained 51.625 and 51.750 MiB of
+anonymous/private-dirty RSS. The fitted slopes were 45.111 and 45.220 bytes per
+offered message with R² above 0.9998. Both runs delivered 1,200,000 messages
+without loss or duplication and observed no throttling. These runs are
+diagnostic, not thesis evidence.
 
-**Symptom.** Raspberry Pi 5 diagnostics with a 30-second warmup and 300-second
-measurement window found almost linear WAFER RSS growth:
+**Root cause.** `build_wit_message` inserted each payload into the host
+`ResourceTable` but passed the WIT `borrow<buffer>` field as
+`Resource::new_own`. Wasmtime therefore appended one owned entry per message
+to both `HostResourceData.table_slot_metadata` and the component
+`HandleTable`. A 120-second heaptrack run at 1,000 messages/s attributed
+3.15 MiB and 2.62 MiB of peak live heap to those two growing vectors. The
+application-level table entry was deleted correctly, which had hidden the
+second ownership record from earlier inspection.
 
-- threshold filter at 4,000 msg/s: 51.53 MiB, approximately 42.78 bytes per offered message;
-- pass-through transform at 4,000 msg/s: 51.56 MiB, approximately 42.86 bytes per offered message;
-- threshold filter at 1,000 msg/s: 12.98 MiB, approximately 43.77 bytes per offered message.
+**Fix.** The shared transform/filter/router message builder now passes
+`Resource::new_borrow(resource_rep)` and retains the host-owned table entry
+only until the guest call returns. A regression test rejects owned handles for
+the borrowed WIT field, and the direct component harness covers 10,000
+consecutive guest calls.
 
-All three slopes had R² above 0.999. The added memory was anonymous and
-private-dirty rather than file-backed or swap. A separate 4,000 msg/s probe
-observed `tokio-runtime-worker` threads grow from 9 to 35. Setting
-`MALLOC_ARENA_MAX=1` reduced virtual-address expansion but did not materially
-change RSS growth or worker proliferation. These runs are diagnostic only
-and use one complete run per condition.
+A separate scheduler change keeps each Wasm runner on one long-lived Tokio
+blocking worker. It held the process at nine threads but did not affect the
+pre-fix memory slope, proving thread proliferation was not the memory cause.
 
-**Candidate cause.** Transform, filter, and router runners call
-`tokio::task::block_in_place` for every synchronous Wasmtime guest call. The
-correlation with worker-thread growth makes this the strongest current
-candidate, but the retained owner and a safe replacement have not been
-proved. The existing call also prevents nested-runtime panics when sync WASI
-adapters enter async host operations, so removing it directly would regress
-A16.
+**Verification.** On source `042575458dd809c5ed410bbde1b087a924cc81c2`, two
+fresh 300-second Raspberry Pi runs at 4,000 messages/s each delivered
+1,200,000/1,200,000 messages with zero loss, duplication, timestamp mutation,
+or throttling. Across 296 one-second in-window samples per run, RSS,
+anonymous RSS, and private-dirty RSS were constant; the observed slope was
+0 bytes/message at 1 KiB sampling resolution. A matched post-fix heaptrack run
+no longer listed either retained-resource vector among its top 30 peak
+consumers, and peak heap fell from 6.76 to 4.83 MiB.
 
-**Required investigation.** Build a regression harness that reproduces the
-per-message RSS and worker growth, then compare the current path with a bounded
-execution design while preserving WASI async behavior, epoch interruption,
-backpressure, and shutdown semantics. Repeat 300–600 second blocks with 1 Hz
-RSS-region and thread-count evidence after any change.
-
-**Blocker for:** unqualified long-running memory-efficiency claims and final
-selection of the confirmatory measurement duration.
+- **Closed by:** `bae2892` bounds Wasm runner threads; `0425754` fixes the
+  retained Wasmtime host-resource handles.
 
 ---
 
