@@ -1,8 +1,4 @@
-"""Path-discovery helpers for WAFER evaluation notebooks.
-
-Centralises shakedown result-directory resolution so notebooks never
-hardcode timestamps that rot as new runs land.
-"""
+"""Explicit result-batch resolution for WAFER evaluation notebooks."""
 
 from __future__ import annotations
 
@@ -12,54 +8,28 @@ import pathlib
 from typing import Optional
 
 
-def find_latest_shakedown(
+def resolve_result_batch(
     experiment_id: str,
-    host_tag: str = "shakedown-macos",
-    pinned: Optional[str] = None,
+    diagnostic_path: Optional[str] = None,
+    batch_id: Optional[str] = None,
 ) -> pathlib.Path:
-    """Return the newest shakedown result directory for *experiment_id*.
-
-    Globs ``eval/results/{experiment_id}/{host_tag}-*`` relative to the
-    repository root and returns the lexicographically last match.  Because
-    timestamps are ISO-8601 UTC (``YYYY-MM-DDTHH-MM-SSZ``), lex sort equals
-    time sort — no datetime parsing needed.
-
-    Parameters
-    ----------
-    experiment_id:
-        Experiment identifier, e.g. ``"e-perf-1"``.
-    host_tag:
-        Directory-name prefix before the timestamp. Default ``"shakedown-macos"``.
-    pinned:
-        When set, bypasses the glob and returns this exact path (resolved).
-        Useful for notebooks that need reproducible figure output pinned to
-        a specific run.
-
-    Raises
-    ------
-    FileNotFoundError
-        When no matching directories exist (and *pinned* is not set).
-    """
+    """Resolve one explicit diagnostic path or canonical batch."""
     repo = _find_repo_root()
-
-    if pinned is not None:
-        path = pathlib.Path(pinned)
+    if diagnostic_path is not None:
+        path = pathlib.Path(diagnostic_path)
         if not path.is_absolute():
             path = repo / path
-        return path.resolve()
+        path = path.resolve()
+        if not path.is_dir():
+            raise FileNotFoundError(f"Explicit diagnostic path does not exist: {path}")
+        return path
 
-    batch_id = os.environ.get("WAFER_EVAL_BATCH_ID")
-    if batch_id:
-        return find_canonical_batch(experiment_id, batch_id)
-
-    pattern = f"{host_tag}-*"
-    parent = repo / "eval" / "results" / experiment_id
-    candidates = sorted(parent.glob(pattern))
-    if not candidates:
-        raise FileNotFoundError(
-            f"No shakedown directories matching {parent / pattern}"
+    selected_batch = batch_id or os.environ.get("WAFER_EVAL_BATCH_ID")
+    if not selected_batch:
+        raise RuntimeError(
+            "WAFER_EVAL_BATCH_ID or an explicit diagnostic_path is required"
         )
-    return candidates[-1]
+    return find_canonical_batch(experiment_id, selected_batch)
 
 
 def find_canonical_batch(experiment_id: str, batch_id: str) -> pathlib.Path:

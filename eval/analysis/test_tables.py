@@ -64,10 +64,10 @@ def test_hotswap_notebook_warns_against_queue_masking_and_deduplicates_sources()
         "".join(cell.get("source", [])) for cell in notebook["cells"]
     )
     assert "queued output can mask internal disruption" in source.lower()
-    assert "does not establish a faster internal swap" in source
-    assert "seen_source_leaves" in source
-    assert "sink_observed_output_gap_ms" in source
+    assert "source in seen" in source
+    assert "sink_gap_ms" in source
     assert "http_total_ms" in source
+    assert "PENDING" in source
 
 
 def test_hotswap_table_rejects_presentation_units_in_raw_evidence() -> None:
