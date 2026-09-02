@@ -756,8 +756,8 @@ mod tests {
         send_downstream(&senders, envelope).await;
         assert_eq!(metrics.depth(), 1);
 
-        let received = receiver.recv().await.expect("should receive");
-        assert_eq!(received.payload_as_string(), "hello");
+        let message = receiver.recv().await.expect("should receive");
+        assert_eq!(message.payload_as_string(), "hello");
         assert_eq!(metrics.depth(), 0);
     }
 
