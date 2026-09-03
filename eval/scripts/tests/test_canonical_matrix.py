@@ -166,6 +166,17 @@ def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
         tomllib.loads((ROOT / "eval/configs/e-iso-7" / path).read_text())
         for path in paths
     ]
+    for config in configs:
+        assert {"source_a", "source_b"} <= config["nodes"].keys()
+        assert "source" not in config["nodes"]
+        assert {("source_a", "branch_a"), ("source_b", "branch_b")} <= {
+            (edge["from"], edge["to"]) for edge in config["edges"]
+        }
+        for source in ("source_a", "source_b"):
+            assert config["nodes"][source]["kind"] == "bench-source"
+            assert config["nodes"][source]["warmup_messages"] == 30_000
+            assert config["nodes"][source]["total_messages"] == 90_000
+
     plugins = [config["nodes"]["branch_b"]["plugin"] for config in configs]
     assert plugins[0].endswith("pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm")
     assert plugins[1].endswith("panic/target/wasm32-wasip2/release/wafer_attack_panic.wasm")

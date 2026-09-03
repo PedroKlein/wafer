@@ -74,7 +74,7 @@ before reading. The matrix below is authoritative:
 | --- | --- | --- | --- |
 | `latency.hdr` | Every experiment with a BenchSink or `wafer-loadgen subscribe` (E-Val-1, E-Perf-1..10, E-Backpressure, E-Iso-*, E-Swap-*) | `BenchSink` (in-process) or `wafer-loadgen subscribe` (E2E) | HdrHistogram V2 latency in nanoseconds. In-process: per-hop source-to-sink. E2E: MQTT publish → MQTT consume with intended-publish timestamp (avoids coordinated omission). |
 | `throughput.csv` | Same as `latency.hdr` | `BenchSink` or `wafer-loadgen subscribe` | Periodic throughput samples: `timestamp_ns,messages_per_sec,total_messages`. |
-| `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Perf-10, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Gap and duplicate accounting: `total_expected,total_received,gaps_count,duplicates_count,first_seq,last_seq`. Zero rows when there were no gaps/dups. |
+| `sequence.csv` | Loadgen with sequence tracking, or `BenchSink.track_sequences = true` (E-Perf-1..3, E-Perf-8, E-Perf-10, E-Backpressure, E-Swap-*) | `wafer-loadgen subscribe` / `BenchSink` | Producer-specific sequence accounting. `BenchSink` writes one summary row (`total_expected,total_received,gap_ranges,gap_msgs,duplicates_count`); for `BenchSource` input, its `bench.warmup` marker makes this the exact post-warmup population. `wafer-loadgen subscribe` writes long-form gap/duplicate events (`event_type,seq_start,seq_end,count`), with zero data rows when lossless; its totals live in `subscriber-metadata.json`. |
 | `memory.csv` | E-Perf-6, E-Perf-7, E-Perf-8, E-Backpressure (and any run with `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `MemoryRecorder::sample_loop` (1 Hz, cross-platform via `memory-stats` crate). Flush on graceful shutdown. | 1 Hz process-RSS timeline of `wafer-runtime`: `elapsed_ms,rss_bytes`. Runtime-owned since A19 closure (thesis-hardening T4). Legacy harness `ps` polling removed. |
 | `per_node_metrics.csv` | All experiments (emitted on graceful shutdown when `WAFER_BENCH_OUTPUT_DIR` set) | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | One row per pipeline node: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`. Runtime-owned since A19 closure (thesis-hardening T4). |
 | `queue-depth.csv` | E-Backpressure, when `WAFER_QUEUE_DEPTH_OUTPUT` is set | `wafer-runtime` via `QueueDepthRecorder` | Bounded internal Tokio queue samples at 10 ms intervals: `elapsed_ns,queue,depth,capacity,accepted,dequeued,processed`. Counters are internal pipeline observations; broker backlog is excluded. Collection is capped at 131,072 rows and reports truncation in the runtime log. |
@@ -90,8 +90,8 @@ before reading. The matrix below is authoritative:
 | `rate-sweep.json` | E-Perf-10 | `canonical_runner.py` | Per-run offered/achieved rates, loss/duplication, p50/p95/p99, CPU/RSS, throttling, and trace/profile hashes. Always labelled `thesis_evidence=false` for the focused diagnostic. |
 | `startup-preparation.json` | E-Perf-9 | `run-experiment.sh` | Filesystem-cache condition and preparation action completed before the timed runtime process starts. |
 | `startup.json` | E-Perf-9 | `wafer-runtime` | Monotonic process/config, component load/compile, instantiation, pipeline setup, and first-process durations; total startup duration; exactly-one-message proof; plugin SHA-256; and explicit compiled-component cache state. |
-| `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent latency histogram, throughput series, sequence accounting, and measurement window for each branch. Root-level fan-in measurements are forbidden for branch-impact analysis. |
-| `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local offered/received counts, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
+| `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
+| `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local source identity, configured post-warmup target count, actually offered/received post-warmup counts, target shortfall, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
 | `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
 | `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with wall-clock request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's internal `compile_ns`, `instantiate_ns`, `signal_ns`, `ack_ns`, and `convergence_ns` phases. |
 | `swap_timeline.json` | E-Swap-1..6 (any config that exercises at least one hot-swap) | `BenchSink` | Sink-observed plugin-version transitions. Each `pause_ns` is an output interarrival gap and is not an internal swap duration. |
@@ -154,8 +154,9 @@ enforces these semantic invariants:
   stayed within the frozen RSS bound;
 - E-Iso-4 recorded contained traps with one recovery per trap and no reuse of
   an interrupted component instance;
-- E-Iso-7 uses a branch-local measurement boundary and lossless branch-A
-  counts rather than aggregate fan-in values;
+- E-Iso-7 uses independent source and sink populations, a branch-local
+  post-warmup measurement boundary, and lossless branch-A counts rather than
+  shared-source or aggregate fan-in values;
 - E-Perf-9 records every monotonic startup phase, one processed message, and
   valid compiled-cache state;
 - E-Swap-1/2/4/6 keep internal phases and sink-observed gaps as distinct

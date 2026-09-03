@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use wafer_config::{load_config, validate};
-use wafer_types::config::{NodeCategory, NodeDef, SinkDef};
+use wafer_types::config::{NodeCategory, NodeDef, SinkDef, SourceDef};
 
 #[expect(
     clippy::expect_used,
@@ -102,7 +102,7 @@ fn every_eval_config_loads_and_validates() {
 }
 
 #[test]
-fn e_iso_7_records_each_branch_in_a_distinct_sink() {
+fn e_iso_7_uses_independent_source_and_sink_populations() {
     let root = workspace_root();
     let control = load_config(&root.join("eval/configs/e-iso-7/pipeline-control.toml"))
         .expect("load E-Iso-7 control config");
@@ -114,17 +114,25 @@ fn e_iso_7_records_each_branch_in_a_distinct_sink() {
     for config in [&control, &attack, &epoch_attack] {
         assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), Some(2));
         assert_eq!(config.engine.epoch_tick_ms, 1);
-        for (node_id, expected_dir) in [
-            ("branch_a_sink", "branch-a"),
-            ("branch_b_sink", "branch-b"),
+        for (source_id, branch_id, sink_id, expected_dir) in [
+            ("source_a", "branch_a", "branch_a_sink", "branch-a"),
+            ("source_b", "branch_b", "branch_b_sink", "branch-b"),
         ] {
-            let NodeDef::Sink(SinkDef::BenchSink(sink)) = &config.nodes[node_id] else {
-                panic!("{node_id} must be a bench sink");
+            let NodeDef::Source(SourceDef::BenchSource(source)) = &config.nodes[source_id] else {
+                panic!("{source_id} must be a bench source");
+            };
+            assert!((source.rate - 1000.0).abs() < f64::EPSILON);
+            assert_eq!(source.total_messages, 90_000);
+            assert_eq!(source.warmup_messages, 30_000);
+            let NodeDef::Sink(SinkDef::BenchSink(sink)) = &config.nodes[sink_id] else {
+                panic!("{sink_id} must be a bench sink");
             };
             assert_eq!(sink.output_dir.as_deref(), Some(expected_dir));
+            assert!(config.edges.iter().any(|edge| edge.from == source_id && edge.to == branch_id));
+            assert!(config.edges.iter().any(|edge| edge.from == branch_id && edge.to == sink_id));
         }
-        assert!(config.edges.iter().any(|edge| edge.from == "branch_a" && edge.to == "branch_a_sink"));
-        assert!(config.edges.iter().any(|edge| edge.from == "branch_b" && edge.to == "branch_b_sink"));
+        assert!(!config.nodes.contains_key("source"));
+        assert!(!config.edges.iter().any(|edge| edge.from == "source"));
         assert!(!config.edges.iter().any(|edge| edge.to == "sink"));
     }
 

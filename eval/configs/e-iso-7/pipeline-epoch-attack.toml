@@ -1,12 +1,20 @@
 [pipeline]
-name = "e-iso-7-diamond"
-description = "Matched diamond topology with independently measured branches"
+name = "e-iso-7-independent-branches"
+description = "Matched independent branch populations"
 
 [engine]
 epoch_deadline = 2
 epoch_tick_ms = 1
 
-[nodes.source]
+[nodes.source_a]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 90000
+warmup_messages = 30000
+payload_size = 128
+
+[nodes.source_b]
 type = "source"
 kind = "bench-source"
 rate = 1000.0
@@ -39,11 +47,11 @@ track_hotswap = false
 output_dir = "branch-b"
 
 [[edges]]
-from = "source"
+from = "source_a"
 to = "branch_a"
 
 [[edges]]
-from = "source"
+from = "source_b"
 to = "branch_b"
 
 [[edges]]

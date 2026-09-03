@@ -115,10 +115,27 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
         (result / "runtime-provenance.json").unlink()
     (result / "metadata.json").write_text(json.dumps(metadata))
     if "sequence.csv" in required:
-        (result / "sequence.csv").write_text(
-            "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
-            "1000,1000,0,0,0\n"
-        )
+        if experiment == "e-swap-3":
+            (result / "sequence.csv").write_text(
+                "event_type,seq_start,seq_end,count\n"
+            )
+            (result / "subscriber-metadata.json").write_text(json.dumps({
+                "exit_reason": "total-messages",
+                "total_messages": 120_000,
+                "total_recorded": 120_000,
+                "sequence": {
+                    "total_received": 120_000,
+                    "total_gaps": 0,
+                    "total_duplicates": 0,
+                    "gap_ranges": [],
+                    "duplicate_seqs": [],
+                },
+            }))
+        else:
+            (result / "sequence.csv").write_text(
+                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+                "1000,1000,0,0,0\n"
+            )
     if experiment == "e-perf-10":
         sweep = {
             "schema_version": 1,
@@ -175,13 +192,34 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
             "branches": {
                 "branch_a": {
                     "artifact_dir": "branch-a",
+                    "source_node": "source_a",
+                    "target_messages": 1000,
+                    "target_shortfall_messages": 0,
+                    "sequence_scope": "post_warmup",
                     "offered_messages": 1000,
                     "received_messages": 1000,
                     "lost_messages": 0,
                     "gap_messages": 0,
                     "duplicates": 0,
+                    "measurement_window": {
+                        "started_ns": 1_000_000_000,
+                        "finished_ns": 61_000_000_000,
+                    },
+                    "throughput": {"total_messages": 1000},
+                    "latency_ns": {"sample_count": 1000},
                 },
-                "branch_b": {"artifact_dir": "branch-b"},
+                "branch_b": {
+                    "artifact_dir": "branch-b",
+                    "source_node": "source_b",
+                    "target_messages": 1000,
+                    "target_shortfall_messages": 1000,
+                    "sequence_scope": "post_warmup",
+                    "offered_messages": 0,
+                    "received_messages": 0,
+                    "lost_messages": 0,
+                    "gap_messages": 0,
+                    "duplicates": 0,
+                },
             },
         }))
     if experiment == "e-perf-9":
@@ -230,13 +268,23 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
     cases = [
         ("e-backpressure", "saturated-slow-consumer", "wafer", "backpressure.json", lambda value: value.update(classification="not-saturated"), "backpressure classification"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(recovery_count="1"), "epoch recovery count"),
+        ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(target_shortfall_messages=1, offered_messages=999, received_messages=999, throughput={"total_messages": 999}, latency_ns={"sample_count": 999}), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(gap_messages=1), "branch A is not lossless"),
+        ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_b"].update(source_node="source_a"), "independent source populations"),
+        ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"]["latency_ns"].update(sample_count=999), "counts do not share the measurement boundary"),
         ("e-perf-9", "small-cold", "wafer", "startup.json", lambda value: value.update(processed_messages=2), "exactly one processed message"),
         ("e-swap-1", "steady", "wafer", "hotswap-analysis.json", lambda value: value.update(sample_count=49), "must contain 50 events"),
         ("e-swap-5", "process-trap-rollback", "wafer", "rollback.json", lambda value: value.update(rolled_back=49), "50 successful rollbacks"),
         ("e-perf-10", "ekuiper/rate-01000", "ekuiper", "ekuiper-audit.json", lambda value: value["rule"]["options"].update(concurrency=3), "frozen operator concurrency 1"),
         ("e-perf-10", "wafer/rate-01000", "wafer", "subscriber-metadata.json", lambda value: value.update(sequence_end_exclusive=None), "subscriber sequence boundary"),
-        ("e-swap-3", "wafer-hotswap", "wafer", "sequence.csv", None, "sequence.csv is not lossless"),
+        (
+            "e-swap-3",
+            "wafer-hotswap",
+            "wafer",
+            "subscriber-metadata.json",
+            lambda value: value["sequence"].update(total_gaps=1),
+            "sequence.csv events differ from subscriber metadata",
+        ),
     ]
     for experiment, condition, system, filename, mutate, expected in cases:
         with tempfile.TemporaryDirectory() as tmp:
@@ -255,6 +303,39 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
             completed = run_focused(result)
         assert completed.returncode == 1, (experiment, completed.stdout, completed.stderr)
         assert expected in completed.stdout, (experiment, completed.stdout)
+
+
+def test_focused_verifier_rejects_loss_in_loadgen_sequence_schema() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = make_focused_result(
+            Path(tmp), "e-swap-3", "wafer-hotswap", "wafer"
+        )
+        metadata_path = result / "subscriber-metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["sequence"]["total_gaps"] = 1
+        metadata["sequence"]["gap_ranges"] = [[42, 42]]
+        metadata_path.write_text(json.dumps(metadata))
+        (result / "sequence.csv").write_text(
+            "event_type,seq_start,seq_end,count\n"
+            "gap,42,42,1\n"
+        )
+        completed = run_focused(result)
+    assert completed.returncode == 1
+    assert "sequence.csv is not lossless" in completed.stdout
+
+
+def test_focused_verifier_rejects_incomplete_loadgen_sequence_capture() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = make_focused_result(
+            Path(tmp), "e-swap-3", "wafer-hotswap", "wafer"
+        )
+        metadata_path = result / "subscriber-metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["exit_reason"] = "signal"
+        metadata_path.write_text(json.dumps(metadata))
+        completed = run_focused(result)
+    assert completed.returncode == 1
+    assert "subscriber sequence metadata is inconsistent" in completed.stdout
 
 
 def test_focused_verifier_rejects_unresolved_memory_decision() -> None:

@@ -841,8 +841,17 @@ def test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in() -> None:
                     json.dumps({"started_ns": 1_000_000_000, "finished_ns": 61_000_000_000})
                 )
 
-        summary = derive_branch_isolation(root, warmup_secs=30, measurement_secs=60)
+        summary = derive_branch_isolation(
+            root,
+            warmup_secs=30,
+            measurement_secs=60,
+            branch_sources={"branch-a": "source_a", "branch-b": "source_b"},
+            target_messages=60_000,
+        )
         branch_a = summary["branches"]["branch_a"]
+        assert branch_a["source_node"] == "source_a"
+        assert branch_a["sequence_scope"] == "post_warmup"
+        assert branch_a["target_messages"] == 60_000
         assert branch_a["offered_messages"] == 60000
         assert branch_a["received_messages"] == 60000
         assert branch_a["gap_messages"] == 0
@@ -875,6 +884,49 @@ def test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in() -> None:
         assert comparisons["panic-attack"]["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(10.0)
         assert comparisons["epoch-loop-attack"]["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(30.0)
         assert all(result["units"]["latency"] == "nanoseconds" for result in comparisons.values())
+
+
+def test_branch_isolation_distinguishes_target_from_actual_offered_population() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for branch in ("branch-a", "branch-b"):
+            branch_dir = root / branch
+            branch_dir.mkdir()
+            branch_dir.joinpath("throughput.csv").write_text(
+                "elapsed_secs,msg_count,bytes\n60.0,28000,3584000\n"
+            )
+            branch_dir.joinpath("sequence.csv").write_text(
+                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+                "28000,28000,0,0,0\n"
+            )
+            branch_dir.joinpath("percentiles.json").write_text(
+                json.dumps(
+                    {
+                        "total_count": 28_000,
+                        "p50_ns": 100_000,
+                        "p95_ns": 200_000,
+                        "p99_ns": 300_000,
+                        "p999_ns": 400_000,
+                    }
+                )
+            )
+            branch_dir.joinpath("measurement-window.json").write_text(
+                json.dumps({"started_ns": 1_000_000_000, "finished_ns": 61_000_000_000})
+            )
+
+        summary = derive_branch_isolation(
+            root,
+            warmup_secs=30,
+            measurement_secs=60,
+            branch_sources={"branch-a": "source_a", "branch-b": "source_b"},
+            target_messages=60_000,
+        )
+        branch_a = summary["branches"]["branch_a"]
+        assert branch_a["target_messages"] == 60_000
+        assert branch_a["offered_messages"] == 28_000
+        assert branch_a["received_messages"] == 28_000
+        assert branch_a["lost_messages"] == 0
+        assert branch_a["target_shortfall_messages"] == 32_000
 
 
 def test_branch_isolation_batch_summary_contains_both_attack_rows() -> None:

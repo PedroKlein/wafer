@@ -29,6 +29,7 @@ use crate::queue::RuntimeEnvelope;
 /// Validates E-Swap-2: zero loss, zero duplication during hot-swap.
 #[derive(Debug)]
 pub struct SequenceTracker {
+    first_expected: Option<u64>,
     expected_next: u64,
     gaps: Vec<(u64, u64)>,
     duplicates: u64,
@@ -39,6 +40,18 @@ impl SequenceTracker {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            first_expected: Some(0),
+            expected_next: 0,
+            gaps: Vec::new(),
+            duplicates: 0,
+            total_received: 0,
+        }
+    }
+
+    #[must_use]
+    const fn from_first_observed() -> Self {
+        Self {
+            first_expected: None,
             expected_next: 0,
             gaps: Vec::new(),
             duplicates: 0,
@@ -48,6 +61,10 @@ impl SequenceTracker {
 
     /// Record a received sequence number.
     pub fn record(&mut self, seq: u64) {
+        if self.first_expected.is_none() {
+            self.first_expected = Some(seq);
+            self.expected_next = seq;
+        }
         self.total_received = self.total_received.saturating_add(1);
 
         match seq.cmp(&self.expected_next) {
@@ -64,6 +81,13 @@ impl SequenceTracker {
                 self.duplicates = self.duplicates.saturating_add(1);
             }
         }
+    }
+
+    /// Number of sequence positions spanned since tracking began.
+    #[must_use]
+    pub fn total_expected(&self) -> u64 {
+        self.first_expected
+            .map_or(0, |first| self.expected_next.saturating_sub(first))
     }
 
     /// Total number of missing message slots.
@@ -318,7 +342,11 @@ impl BenchSink {
     #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
     pub fn new(config: BenchSinkConfig) -> Self {
         let sequence_tracker = if config.track_sequences {
-            Some(SequenceTracker::new())
+            Some(if config.warmup_secs == 0 {
+                SequenceTracker::new()
+            } else {
+                SequenceTracker::from_first_observed()
+            })
         } else {
             None
         };
@@ -541,7 +569,7 @@ impl BenchSink {
         // Absence of the file signals "not tracked" — the P1.1 result contract
         // treats sequence.csv as conditional-on-configuration.
         if let Some(tracker) = &self.sequence_tracker {
-            let total_expected = tracker.expected_next;
+            let total_expected = tracker.total_expected();
             let mut seq_file = std::fs::File::create(dir.join("sequence.csv"))?;
             writeln!(
                 seq_file,
@@ -688,6 +716,28 @@ impl Sink for BenchSink {
 
         self.message_count = self.message_count.saturating_add(1);
 
+        // BenchSource marks the exact warmup population. Other sources retain
+        // the wall-clock fallback because they do not know the benchmark phase.
+        let warmup_marker = envelope
+            .header
+            .metadata
+            .iter()
+            .find(|(key, _)| key.as_ref() == "bench.warmup")
+            .and_then(|(_, value)| value.parse::<bool>().ok());
+        let in_warmup = warmup_marker
+            .unwrap_or_else(|| self.warmup_until.is_some_and(|until| Instant::now() < until));
+        if in_warmup {
+            return Box::pin(async { Ok(()) });
+        }
+
+        // Initialize measurement tracking on first post-warmup message
+        let now = Instant::now();
+        if self.measurement_start.is_none() {
+            self.measurement_start = Some(now);
+            self.current_bucket_start = Some(now);
+            self.start_wall_time = Some(SystemTime::now());
+        }
+
         if let Some(ref mut tracker) = self.sequence_tracker
             && let Some(seq) = envelope
                 .header
@@ -697,21 +747,6 @@ impl Sink for BenchSink {
                 .and_then(|(_, v)| v.parse::<u64>().ok())
         {
             tracker.record(seq);
-        }
-
-        // Skip recording during warmup
-        if let Some(until) = self.warmup_until {
-            if Instant::now() < until {
-                return Box::pin(async { Ok(()) });
-            }
-        }
-
-        // Initialize measurement tracking on first post-warmup message
-        let now = Instant::now();
-        if self.measurement_start.is_none() {
-            self.measurement_start = Some(now);
-            self.current_bucket_start = Some(now);
-            self.start_wall_time = Some(SystemTime::now());
         }
 
         // Throughput tracking
@@ -790,7 +825,7 @@ mod tests {
         assert_eq!(sink.recorded_count(), 0);
         assert_eq!(sink.message_count(), 1);
         let tracker = sink.sequence_tracker().unwrap();
-        assert_eq!(tracker.total_received(), 1);
+        assert_eq!(tracker.total_received(), 0);
         assert!(!tracker.has_gaps());
 
         let tmp_dir = std::env::temp_dir()
@@ -802,7 +837,14 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(1_010)).await;
         let before_measurement_ns = current_time_ns();
         sink.collect(make_bench_envelope(1)).await.unwrap();
+        let tracker = sink.sequence_tracker().unwrap();
+        assert_eq!(tracker.total_expected(), 1);
+        assert_eq!(tracker.total_received(), 1);
+        assert!(!tracker.has_gaps());
         sink.export_to_dir(&tmp_dir).unwrap();
+
+        let sequence = std::fs::read_to_string(tmp_dir.join("sequence.csv")).unwrap();
+        assert!(sequence.contains("1,1,0,0,0"));
 
         let window: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(tmp_dir.join("measurement-window.json")).unwrap(),
@@ -810,6 +852,34 @@ mod tests {
         .unwrap();
         assert!(window["started_ns"].as_u64().unwrap() >= before_measurement_ns);
         let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[tokio::test]
+    async fn bench_sink_uses_source_warmup_marker_for_sequence_population() {
+        let config = BenchSinkConfig {
+            warmup_secs: 30,
+            track_sequences: true,
+            track_hotswap: false,
+            output_dir: None,
+        };
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        sink.collect(make_bench_envelope(29_999).with_metadata("bench.warmup", "true"))
+            .await
+            .unwrap();
+        sink.collect(make_bench_envelope(30_000).with_metadata("bench.warmup", "false"))
+            .await
+            .unwrap();
+        sink.collect(make_bench_envelope(30_001).with_metadata("bench.warmup", "false"))
+            .await
+            .unwrap();
+
+        let tracker = sink.sequence_tracker().unwrap();
+        assert_eq!(tracker.total_expected(), 2);
+        assert_eq!(tracker.total_received(), 2);
+        assert!(!tracker.has_gaps());
+        assert_eq!(sink.recorded_count(), 2);
     }
 
     #[tokio::test]
@@ -827,6 +897,17 @@ mod tests {
         assert_eq!(sink.recorded_count(), 10);
         assert!(sink.p50_ns() > 0);
         assert!(sink.p99_ns() >= sink.p50_ns());
+    }
+
+    #[test]
+    fn sequence_tracker_can_anchor_at_first_observed_value() {
+        let mut tracker = SequenceTracker::from_first_observed();
+        tracker.record(30_001);
+        tracker.record(30_002);
+
+        assert_eq!(tracker.total_expected(), 2);
+        assert_eq!(tracker.total_received(), 2);
+        assert!(!tracker.has_gaps());
     }
 
     #[tokio::test]

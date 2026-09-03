@@ -53,15 +53,15 @@ healthy branches; sub-ms recovery.
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
 | Attack containment (6 scenarios) | 6/6 contained | ✅ | buffer-overflow, cross-read, fs-access, infinite-loop, memory-exhaust, panic | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
-| Branch isolation (E-Iso-7) | -0.04% throughput drop | ✅ <1% | Task-per-node + channel decoupling | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Branch isolation (E-Iso-7) | Corrected independent-population Pi rerun pending | ⏳ | Earlier shared-source result cannot isolate fault-branch backpressure | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 | Recovery time (E-Iso-8) | ~0.136 ms | ✅ sub-ms | InstancePre cache enables instant re-instantiation | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 | Source throughput under attack | 100% across all 6 | ✅ | Channel buffer absorbs trap delay | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 
-**Key finding**: The combination of wasmtime's per-Store memory isolation,
-epoch-based preemption, and tokio's task-per-node architecture provides
-complete fault containment. A trapping node cannot affect any other node
-in the pipeline — they share no memory, no Store, and communicate only
-through bounded channels.
+**Current finding**: wasmtime's per-Store memory isolation and epoch-based
+preemption contain memory and execution faults. The stronger claim that a
+trapping node does not reduce a healthy branch's throughput remains pending a
+fresh E-Iso-7 run with independent source and sink populations; bounded
+backpressure in the earlier shared-source topology coupled the branches.
 
 ## RQ3 — Live Update (Hot-Swap)
 

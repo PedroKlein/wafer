@@ -620,7 +620,8 @@ def evaluate_validation_gate(root: Path, expected_runs: int) -> ValidationGate:
 def _summarize_branch_artifacts(
     output: Path,
     branch_dir: str,
-    offered_messages: int | None,
+    source_node: str,
+    target_messages: int,
 ) -> dict:
     branch = output / branch_dir
     with (branch / "sequence.csv").open(newline="") as stream:
@@ -677,16 +678,29 @@ def _summarize_branch_artifacts(
             raise ValueError(f"{branch_dir}/measurement-window.json is empty or reversed")
 
     total_messages = sum(sample["msg_count"] for sample in throughput)
+    if total_messages != sequence["total_received"]:
+        raise ValueError(
+            f"{branch_dir} throughput and sequence populations differ: "
+            f"{total_messages} != {sequence['total_received']}"
+        )
+    if latency["sample_count"] != sequence["total_received"]:
+        raise ValueError(
+            f"{branch_dir} latency and sequence populations differ: "
+            f"{latency['sample_count']} != {sequence['total_received']}"
+        )
     duration_seconds = (
         (window["finished_ns"] - window["started_ns"]) / 1_000_000_000
         if window
         else 0.0
     )
-    offered = offered_messages or sequence["total_expected"]
+    offered = sequence["total_expected"]
     return {
         "artifact_dir": branch_dir,
+        "source_node": source_node,
+        "target_messages": target_messages,
+        "target_shortfall_messages": max(0, target_messages - offered),
+        "sequence_scope": "post_warmup",
         "offered_messages": offered,
-        "expected_next_sequence": sequence["total_expected"],
         "received_messages": sequence["total_received"],
         "lost_messages": max(0, offered - sequence["total_received"]),
         "gap_messages": sequence["gap_msgs"],
@@ -705,7 +719,8 @@ def derive_branch_isolation(
     output: Path,
     warmup_secs: int,
     measurement_secs: int,
-    offered_messages: int | None = None,
+    branch_sources: dict[str, str],
+    target_messages: int,
 ) -> dict:
     return {
         "schema_version": 1,
@@ -722,8 +737,12 @@ def derive_branch_isolation(
             "timestamps": "unix_epoch_nanoseconds",
         },
         "branches": {
-            "branch_a": _summarize_branch_artifacts(output, "branch-a", offered_messages),
-            "branch_b": _summarize_branch_artifacts(output, "branch-b", offered_messages),
+            "branch_a": _summarize_branch_artifacts(
+                output, "branch-a", branch_sources["branch-a"], target_messages
+            ),
+            "branch_b": _summarize_branch_artifacts(
+                output, "branch-b", branch_sources["branch-b"], target_messages
+            ),
         },
     }
 
@@ -2633,6 +2652,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             "warmup_secs": item.warmup_secs,
             "measurement_secs": item.measurement_secs,
             "artifact_directories": {"branch_a": "branch-a", "branch_b": "branch-b"},
+            "source_nodes": {"branch_a": "source_a", "branch_b": "source_b"},
         }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
 
@@ -2664,16 +2684,31 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
                 check=True,
             )
         config = tomllib.loads((root / item.config).read_text())
-        source = next(
-            node
-            for node in config["nodes"].values()
-            if node.get("kind") == "bench-source"
-        )
+        branch_sources = {
+            branch_dir: next(
+                edge["from"]
+                for edge in config["edges"]
+                if edge["to"] == branch_node
+                and config["nodes"][edge["from"]].get("kind") == "bench-source"
+            )
+            for branch_dir, branch_node in (
+                ("branch-a", "branch_a"),
+                ("branch-b", "branch_b"),
+            )
+        }
+        source_configs = [config["nodes"][source] for source in branch_sources.values()]
+        target_messages = {
+            int(float(source["rate"]) * item.measurement_secs)
+            for source in source_configs
+        }
+        if len(target_messages) != 1:
+            raise ValueError("E-Iso-7 branch sources must use the same target measurement load")
         branch_isolation = derive_branch_isolation(
             output,
             warmup_secs=item.warmup_secs,
             measurement_secs=item.measurement_secs,
-            offered_messages=int(source["total_messages"]),
+            branch_sources=branch_sources,
+            target_messages=target_messages.pop(),
         )
         branch_isolation["condition"] = item.condition
         branch_isolation["run_index"] = item.run_index

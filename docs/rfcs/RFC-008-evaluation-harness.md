@@ -85,7 +85,7 @@ Three complementary mechanisms:
 
 ### Decision 8: Attack Scenario Measurement
 
-E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fail assertions). E-Iso-7 uses separate sinks for the healthy and fault branches, and reports branch-A throughput and latency under matched panic and epoch-loop attacks. E-Iso-8 measures recovery time from trap to first successful message after re-instantiation from `InstancePre`.
+E-Iso-1 to E-Iso-6 are automated correctness tests using `TestPipeline` (pass/fail assertions). E-Iso-7 uses independent source and sink populations for the healthy and fault branches, and reports branch-A throughput and latency under matched panic and epoch-loop attacks. A shared source is invalid for this experiment because lossless fan-out propagates a fault branch's backpressure into the healthy branch before either sink. `BenchSource` marks the exact warmup population, and `BenchSink` applies that marker to sequence, latency, and throughput accounting. E-Iso-8 measures recovery time from trap to first successful message after re-instantiation from `InstancePre`.
 
 ### Decision 9: Statistical Analysis — UV-Managed Python Notebooks
 

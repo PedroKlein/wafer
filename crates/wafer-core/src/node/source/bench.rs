@@ -171,9 +171,13 @@ impl Source for BenchSource {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, crate::util::duration_ns_saturating);
 
-            let envelope = RuntimeEnvelope::new("bench-source", self.payload.clone())
+            let envelope = RuntimeEnvelope::new(self.id.clone(), self.payload.clone())
                 .with_metadata("bench.sequence", seq.to_string())
-                .with_metadata("bench.intended_ns", now_ns.to_string());
+                .with_metadata("bench.intended_ns", now_ns.to_string())
+                .with_metadata(
+                    "bench.warmup",
+                    (seq < self.config.warmup_messages).to_string(),
+                );
 
             Ok(Some(envelope))
         })
@@ -232,6 +236,36 @@ mod tests {
         let keys: Vec<&str> = msg.header.metadata.iter().map(|(k, _)| k.as_ref()).collect();
         assert!(keys.contains(&"bench.sequence"));
         assert!(keys.contains(&"bench.intended_ns"));
+        assert!(keys.contains(&"bench.warmup"));
+    }
+
+    #[tokio::test]
+    async fn metadata_marks_the_exact_warmup_population() {
+        let config = BenchSourceConfig::new(100_000.0, 3).with_warmup(2);
+        let mut source = BenchSource::new(config);
+        source.init().await.unwrap();
+
+        for expected in [true, true, false] {
+            let message = source.poll().await.unwrap().unwrap();
+            let warmup = message
+                .header
+                .metadata
+                .iter()
+                .find(|(key, _)| key.as_ref() == "bench.warmup")
+                .map(|(_, value)| value.as_ref())
+                .unwrap();
+            assert_eq!(warmup, expected.to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn emitted_envelope_uses_configured_source_id() {
+        let config = BenchSourceConfig::new(100_000.0, 1);
+        let mut source = BenchSource::new(config).with_id("source-a");
+        source.init().await.unwrap();
+
+        let message = source.poll().await.unwrap().unwrap();
+        assert_eq!(&*message.header.source, "source-a");
     }
 
     #[tokio::test]

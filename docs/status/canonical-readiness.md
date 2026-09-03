@@ -639,24 +639,14 @@ after source EOF propagates.
 
 ### E-Iso-7 — parallel-branch fault isolation (P4.7)
 
-- **Status**: 🟢 branch-A throughput drop <1% on macOS.
-- **Shakedown**: `eval/results/e-iso-7/shakedown-macos-<ts>/`
-- **Config**: `eval/configs/e-iso-7/pipeline.toml` (attack) + `pipeline-control.toml` (control)
+- **Status**: 🟡 corrected independent-population Pi rerun required.
+- **Historical shakedown**: `eval/results/e-iso-7/shakedown-macos-<ts>/` used a shared source and cannot establish throughput isolation from fault-branch backpressure.
+- **Config**: `eval/configs/e-iso-7/pipeline.toml` (attack) + `pipeline-control.toml` (control) + `pipeline-epoch-attack.toml` (epoch attack)
 - **Script**: `eval/scripts/run-e-iso-7-8.sh --iso 7`
 
-Topology: diamond `bench-source (1000 msg/s, 5000 msgs)` → { `branch_a` (pass-through), `branch_b` (panic) } → `bench-sink`.
-Control run uses pass-through in both branches; attack run panics branch_b.
+The corrected topology uses two matched, independent `BenchSource → transform → BenchSink` paths. Branch-A sequence, throughput, and latency accounting all exclude the source-marked warmup population. Control and attack configs differ only in the branch-B plugin.
 
-| Metric | Control | Attack | Delta |
-| ------ | ------- | ------ | ----- |
-| Branch-A thr (msg/s) | ~998.6 | ~999.0 | -0.04% (within ±1%) |
-| Branch-B traps | 0 | 5000 | N/A |
-| Branch-A errors | 0 | 0 | — |
-
-**What this proves.** Task-per-node isolation: a trapping branch does not
-affect throughput of a parallel healthy branch in the same diamond topology.
-The runtime's tokio-task-per-node + channel decoupling ensures fault
-containment across DAG branches.
+No branch-isolation result is promoted until a fresh Pi batch passes the focused semantic verifier. The earlier shared-source result remains diagnostic-only because lossless backpressure from branch B could throttle branch A before either sink.
 
 ### E-Iso-8 — recovery time (P4.8)
 

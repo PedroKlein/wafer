@@ -122,10 +122,10 @@ Per the plan (`P0.8 constraints`):
 
 ## Follow-ups (out of scope for P0.8)
 
-- **E-Iso-7 — parallel-branch topology (plan task P4.7).** Wires the
-  attacker and healthy nodes into a real 2-branch DAG through the
-  orchestrator so healthy-node throughput can be measured while the
-  attacker traps. This file's harness-level proof is a strictly
+- **E-Iso-7 — independent parallel branches (plan task P4.7).** Wires
+  separate matched BenchSource → transform → BenchSink paths for the healthy
+  and fault populations so a fault branch cannot throttle the measured branch
+  through shared-source backpressure. This file's harness-level proof is a strictly
   weaker claim (isolation-in-principle); E-Iso-7 supplies the
   quantitative version (isolation-in-practice).
 - **E-Iso-8 — recovery latency (plan task P4.8).** Measures the time

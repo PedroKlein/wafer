@@ -171,13 +171,46 @@ def _load_json(path: Path, label: str, violations: list[str]) -> dict | None:
 def _sequence_violations(path: Path) -> list[str]:
     try:
         with path.open(newline="") as stream:
-            rows = list(csv.DictReader(stream))
-        if len(rows) != 1:
-            return ["sequence.csv must contain one summary row"]
-        expected = int(rows[0]["total_expected"])
-        received = int(rows[0]["total_received"])
-        gaps = int(rows[0]["gap_msgs"])
-        duplicates = int(rows[0]["duplicates_count"])
+            reader = csv.DictReader(stream)
+            rows = list(reader)
+            fields = set(reader.fieldnames or [])
+
+        summary_fields = {
+            "total_expected",
+            "total_received",
+            "gap_msgs",
+            "duplicates_count",
+        }
+        event_fields = {"event_type", "seq_start", "seq_end", "count"}
+        if summary_fields <= fields:
+            if len(rows) != 1:
+                return ["sequence.csv must contain one summary row"]
+            expected = int(rows[0]["total_expected"])
+            received = int(rows[0]["total_received"])
+            gaps = int(rows[0]["gap_msgs"])
+            duplicates = int(rows[0]["duplicates_count"])
+        elif event_fields <= fields:
+            metadata = json.loads((path.parent / "subscriber-metadata.json").read_text())
+            sequence = metadata["sequence"]
+            expected = int(metadata["total_messages"])
+            received = int(sequence["total_received"])
+            gaps = int(sequence["total_gaps"])
+            duplicates = int(sequence["total_duplicates"])
+            event_gaps = sum(int(row["count"]) for row in rows if row["event_type"] == "gap")
+            event_duplicates = sum(
+                int(row["count"]) for row in rows if row["event_type"] == "duplicate"
+            )
+            if event_gaps != gaps or event_duplicates != duplicates:
+                return ["sequence.csv events differ from subscriber metadata"]
+            if (
+                metadata.get("exit_reason") != "total-messages"
+                or int(metadata["total_recorded"]) != received
+                or int(metadata.get("parse_errors", 0)) != 0
+                or int(metadata.get("negative_latency_count", 0)) != 0
+            ):
+                return ["subscriber sequence metadata is inconsistent"]
+        else:
+            return ["sequence.csv has an unknown schema"]
     except (KeyError, OSError, TypeError, ValueError) as error:
         return [f"sequence.csv is invalid: {error}"]
     if expected != received or gaps != 0 or duplicates != 0:
@@ -339,12 +372,42 @@ def check_focused_leaf(
             ):
                 violations.append("branch-isolation evidence does not use independent branch sinks")
             if (
-                branch_a.get("offered_messages") != branch_a.get("received_messages")
+                branch_a.get("source_node") != "source_a"
+                or branch_b.get("source_node") != "source_b"
+                or branch_a.get("source_node") == branch_b.get("source_node")
+            ):
+                violations.append("branch-isolation evidence does not use independent source populations")
+            target = branch_a.get("target_messages")
+            offered = branch_a.get("offered_messages")
+            received = branch_a.get("received_messages")
+            if (
+                branch_a.get("sequence_scope") != "post_warmup"
+                or not isinstance(target, int)
+                or not isinstance(offered, int)
+                or target < offered
+                or branch_a.get("target_shortfall_messages") != target - offered
+                or branch_a.get("target_shortfall_messages") != 0
+                or offered != received
                 or branch_a.get("lost_messages") != 0
                 or branch_a.get("gap_messages") != 0
                 or branch_a.get("duplicates") != 0
             ):
                 violations.append("branch A is not lossless and independently attributed")
+            throughput = branch_a.get("throughput", {})
+            latency = branch_a.get("latency_ns", {})
+            window = branch_a.get("measurement_window", {})
+            duration_ns = (
+                window.get("finished_ns", 0) - window.get("started_ns", 0)
+                if isinstance(window, dict)
+                else 0
+            )
+            expected_duration_ns = int(definition["measurement_secs"]) * 1_000_000_000
+            if (
+                throughput.get("total_messages") != received
+                or latency.get("sample_count") != received
+                or abs(duration_ns - expected_duration_ns) > 2_000_000_000
+            ):
+                violations.append("branch A counts do not share the measurement boundary")
 
     if experiment == "e-perf-9":
         result = _load_json(leaf / "startup.json", "startup.json", violations)
