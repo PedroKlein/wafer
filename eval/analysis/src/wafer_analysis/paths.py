@@ -34,14 +34,31 @@ def resolve_result_batch(
 
 def find_canonical_batch(experiment_id: str, batch_id: str) -> pathlib.Path:
     """Resolve one explicitly named Pi 5 batch and validate its provenance."""
-    if not batch_id or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-" for character in batch_id):
-        raise ValueError("batch_id contains unsafe characters")
-    name = batch_id if batch_id.startswith("rpi5-") else f"rpi5-{batch_id}"
+    name = _canonical_batch_name(batch_id)
     path = _find_repo_root() / "eval" / "results" / experiment_id / name
     if not path.is_dir():
         raise FileNotFoundError(f"Canonical batch does not exist: {path}")
     validate_canonical_batch(path)
     return path
+
+
+def find_canonical_ledger(batch_id: str) -> pathlib.Path:
+    """Resolve the ledger for one explicitly named canonical batch."""
+    name = _canonical_batch_name(batch_id)
+    path = _find_repo_root() / "eval" / "results" / "canonical-batches" / name
+    if not path.is_dir():
+        raise FileNotFoundError(f"Canonical batch ledger does not exist: {path}")
+    return path
+
+
+def _canonical_batch_name(batch_id: str) -> str:
+    if not batch_id or any(
+        character
+        not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+        for character in batch_id
+    ):
+        raise ValueError("batch_id contains unsafe characters")
+    return batch_id if batch_id.startswith("rpi5-") else f"rpi5-{batch_id}"
 
 
 def validate_canonical_batch(path: pathlib.Path) -> str:

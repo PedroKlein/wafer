@@ -78,6 +78,19 @@ def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
         assert "PENDING" in source, name
         assert "never zero" in source, name
 
+    saturation = json.loads((notebook_dir / "09-saturation.ipynb").read_text())
+    saturation_source = "".join(
+        "".join(cell.get("source", [])) for cell in saturation["cells"]
+    )
+    assert "set_yscale('log')" in saturation_source
+
+    hotswap = json.loads((notebook_dir / "05-hotswap-timeline.ipynb").read_text())
+    hotswap_source = "".join(
+        "".join(cell.get("source", [])) for cell in hotswap["cells"]
+    )
+    assert "set_xscale('log')" in hotswap_source
+    assert "set_yscale('symlog'" in hotswap_source
+
     summary = json.loads((notebook_dir / "10-summary-stats.ipynb").read_text())
     summary_source = "".join(
         "".join(cell.get("source", [])) for cell in summary["cells"]

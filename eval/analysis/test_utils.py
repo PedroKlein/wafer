@@ -67,6 +67,19 @@ def test_batch_environment_requires_explicit_canonical_input(
     assert utils.resolve_result_batch("e-val-1") == batch
 
 
+def test_explicit_canonical_ledger_requires_a_named_existing_batch(
+    fake_results: pathlib.Path,
+):
+    ledger = fake_results / "eval/results/canonical-batches/rpi5-batch-a"
+    ledger.mkdir(parents=True)
+    assert utils.find_canonical_ledger("batch-a") == ledger
+
+    with pytest.raises(FileNotFoundError, match="Canonical batch ledger does not exist"):
+        utils.find_canonical_ledger("missing")
+    with pytest.raises(ValueError, match="unsafe characters"):
+        utils.find_canonical_ledger("../batch-a")
+
+
 def test_explicit_canonical_batch_rejects_bad_provenance(fake_results: pathlib.Path):
     batch = fake_results / "eval/results/e-val-1/rpi5-batch-a"
     leaf = batch / "delay-50ms/run-01-attempt-01"

@@ -83,71 +83,88 @@ def build_complete_fixture(root: Path) -> None:
                 "events": hotswap_events,
             },
         )
-    write_passed_artifact(
-        root / "e-iso-4" / "infinite-loop" / "run-01",
-        "containment.json",
-        {"condition": "infinite-loop", "traps_total": 2, "nodes": [{"recovery_count": 2}]},
-    )
-    for condition in ("control", "panic-attack", "epoch-loop-attack"):
+    for run in (1, 2):
         write_passed_artifact(
-            root / "e-iso-7" / condition / "run-01",
-            "branch-isolation.json",
-            {
-                "condition": condition,
-                "branches": {
-                    "branch_a": {
-                        "throughput": {"mean_messages_per_second": 1_000},
-                        "latency_ns": {"p95": 120_000},
-                    }
-                },
-            },
+            root / "e-iso-4" / "infinite-loop" / f"run-{run:02d}",
+            "containment.json",
+            {"condition": "infinite-loop", "traps_total": 2, "nodes": [{"recovery_count": 2}]},
         )
-    for system in ("mqtt-loopback", "native", "wafer", "ekuiper"):
-        for rate in (500, 1_000, 2_000, 4_000, 8_000, 16_000):
+    for condition in ("control", "panic-attack", "epoch-loop-attack"):
+        for run in (1, 2):
             write_passed_artifact(
-                root / "e-perf-10" / f"{system}-{rate}" / "run-01",
-                "rate-sweep.json",
+                root / "e-iso-7" / condition / f"run-{run:02d}",
+                "branch-isolation.json",
                 {
-                    "system": system,
-                    "offered_rate_msg_s": rate,
-                    "achieved_rate_msg_s": rate,
-                    "latency_ns": {"p95": 120_000, "p99": 140_000},
-                    "loss_percent": 0,
-                },
-            )
-    write_passed_artifact(
-        root / "e-perf-10" / "summary" / "run-01",
-        "rate-sweep-summary.json",
-        {"status": "diagnostic"},
-    )
-    write_passed_artifact(
-        root / "e-backpressure" / "saturated" / "run-01",
-        "backpressure.json",
-        {
-            "classification": "saturated-and-drained",
-            "peak_occupancy": 1,
-            "rates_msg_s": {"offered": 1_000, "accepted": 150, "processed": 150, "drained": 140},
-            "memory": {"within_limit": True},
-        },
-    )
-    for tier in ("small", "medium", "large"):
-        for cache_state in ("cold", "warm"):
-            write_passed_artifact(
-                root / "e-perf-9" / f"{tier}-{cache_state}" / "run-01",
-                "startup.json",
-                {
-                    "cache_state": cache_state,
-                    "total_wall_duration_ns": 1_000_000,
-                    "compiled_component_cache": {"mode": "disabled", "hit": False},
-                    "phases_ns": {
-                        "process_config": 100_000,
-                        "component_load_compile": 200_000,
-                        "instantiation": 300_000,
-                        "pipeline_setup": 200_000,
-                        "first_process": 200_000,
+                    "condition": condition,
+                    "branches": {
+                        "branch_a": {
+                            "throughput": {"mean_messages_per_second": 1_000},
+                            "latency_ns": {"p95": 120_000},
+                        }
                     },
                 },
             )
+    for system in ("mqtt-loopback", "native", "wafer", "ekuiper"):
+        for rate in (500, 1_000, 2_000, 4_000, 8_000, 16_000):
+            for run in (1, 2):
+                write_passed_artifact(
+                    root / "e-perf-10" / f"{system}-{rate}" / f"run-{run:02d}",
+                    "rate-sweep.json",
+                    {
+                        "system": system,
+                        "offered_rate_msg_s": rate,
+                        "achieved_rate_msg_s": rate,
+                        "latency_ns": {"p95": 120_000, "p99": 140_000},
+                        "loss_percent": 0,
+                    },
+                )
+    write_passed_artifact(
+        root / "e-perf-10" / "summary" / "run-01",
+        "rate-sweep-summary.json",
+        {
+            "status": "diagnostic",
+            "systems": {
+                system: {
+                    "observed_samples": {str(rate): 2 for rate in (500, 1_000, 2_000, 4_000, 8_000, 16_000)},
+                    "baseline_rate_msg_s": 1_000,
+                    "last_good_rate_msg_s": 4_000,
+                    "first_bad_rate_msg_s": 8_000,
+                    "highest_tested_rate_msg_s": 16_000,
+                }
+                for system in ("mqtt-loopback", "native", "wafer", "ekuiper")
+            },
+        },
+    )
+    for run in (1, 2):
+        write_passed_artifact(
+            root / "e-backpressure" / "saturated" / f"run-{run:02d}",
+            "backpressure.json",
+            {
+                "classification": "saturated-and-drained",
+                "peak_occupancy": 1,
+                "rates_msg_s": {"offered": 1_000, "accepted": 150, "processed": 150, "drained": 140},
+                "memory": {"within_limit": True},
+            },
+        )
+    for tier in ("small", "medium", "large"):
+        for cache_state in ("cold", "warm"):
+            for run in (1, 2):
+                write_passed_artifact(
+                    root / "e-perf-9" / f"{tier}-{cache_state}" / f"run-{run:02d}",
+                    "startup.json",
+                    {
+                        "cache_state": cache_state,
+                        "total_wall_duration_ns": 1_000_000,
+                        "compiled_component_cache": {"mode": "disabled", "hit": False},
+                        "phases_ns": {
+                            "process_config": 100_000,
+                            "component_load_compile": 200_000,
+                            "instantiation": 300_000,
+                            "pipeline_setup": 200_000,
+                            "first_process": 200_000,
+                        },
+                    },
+                )
 
 
 def notebook_output(notebook: dict) -> str:
@@ -155,7 +172,10 @@ def notebook_output(notebook: dict) -> str:
     for cell in notebook["cells"]:
         for item in cell.get("outputs", []):
             output.append(item.get("text", ""))
-            output.append(item.get("data", {}).get("text/plain", ""))
+            data = item.get("data", {})
+            output.append(data.get("text/plain", ""))
+            if "image/png" in data:
+                output.append("[image/png]")
     return "\n".join(output)
 
 
@@ -209,13 +229,34 @@ def test_all_notebooks_execute_against_complete_focused_fixture(tmp_path, monkey
         assert "unit" in output.lower(), path.name
         assert "uncertainty" in output.lower(), path.name
 
-    hotswap_output = outputs[next(i for i, path in enumerate(NOTEBOOKS) if path.name == "05-hotswap-timeline.ipynb")]
+    output_by_name = dict(zip((path.name for path in NOTEBOOKS), outputs))
+    hotswap_output = output_by_name["05-hotswap-timeline.ipynb"]
     assert "N=2" in hotswap_output
     assert "independent runs=2" in hotswap_output
     assert "e-swap-1" in hotswap_output
     assert "e-swap-2" not in hotswap_output
     assert "e-swap-4" in hotswap_output
     assert "e-swap-6" not in hotswap_output
+
+    expected_independent_runs = {
+        "06-fault-injection.ipynb": ("N=8", "N_runs"),
+        "09-backpressure.ipynb": ("N=2", "N_runs"),
+        "09-saturation.ipynb": ("N=48", "N_runs"),
+        "10-aot-startup.ipynb": ("N=12", "N_runs"),
+    }
+    for name, expected in expected_independent_runs.items():
+        assert all(value in output_by_name[name] for value in expected), name
+
+    for name in {
+        "00-warmup-validation.ipynb",
+        "02-per-hop-overhead.ipynb",
+        "03-memory-scaling.ipynb",
+        "04b-depth-scaling.ipynb",
+        "05-hotswap-timeline.ipynb",
+        "08-depth-scaling.ipynb",
+        "09-saturation.ipynb",
+    }:
+        assert "[image/png]" in output_by_name[name], name
 
 
 def test_all_notebooks_render_missing_conditions_as_pending(tmp_path, monkeypatch) -> None:
