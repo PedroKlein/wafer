@@ -58,21 +58,13 @@ fn every_eval_config_loads_and_validates() {
             }
         };
         if let Err(errs) = validate(&config) {
-            failures.push(format!(
-                "{display}: validate returned {} error(s): {errs:?}",
-                errs.len()
-            ));
+            failures
+                .push(format!("{display}: validate returned {} error(s): {errs:?}", errs.len()));
             continue;
         }
         // Topology sanity — the historical bug was silent zero-node parsing.
-        let has_source = config
-            .nodes
-            .values()
-            .any(|n| n.category() == NodeCategory::Source);
-        let has_sink = config
-            .nodes
-            .values()
-            .any(|n| n.category() == NodeCategory::Sink);
+        let has_source = config.nodes.values().any(|n| n.category() == NodeCategory::Source);
+        let has_sink = config.nodes.values().any(|n| n.category() == NodeCategory::Sink);
         let edges = config.edges.len();
         if !has_source || !has_sink || edges == 0 {
             failures.push(format!(
@@ -112,8 +104,8 @@ fn e_iso_7_uses_independent_source_and_sink_populations() {
         .expect("load E-Iso-7 epoch-loop config");
 
     for config in [&control, &attack, &epoch_attack] {
-        assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), Some(2));
-        assert_eq!(config.engine.epoch_tick_ms, 1);
+        assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), Some(100));
+        assert_eq!(config.engine.epoch_tick_ms, 10);
         for (source_id, branch_id, sink_id, expected_dir) in [
             ("source_a", "branch_a", "branch_a_sink", "branch-a"),
             ("source_b", "branch_b", "branch_b_sink", "branch-b"),
