@@ -59,12 +59,16 @@ impl SequenceTracker {
         }
     }
 
+    const fn anchor_at(&mut self, expected: u64) {
+        if self.first_expected.is_none() {
+            self.first_expected = Some(expected);
+            self.expected_next = expected;
+        }
+    }
+
     /// Record a received sequence number.
     pub fn record(&mut self, seq: u64) {
-        if self.first_expected.is_none() {
-            self.first_expected = Some(seq);
-            self.expected_next = seq;
-        }
+        self.anchor_at(seq);
         self.total_received = self.total_received.saturating_add(1);
 
         match seq.cmp(&self.expected_next) {
@@ -746,6 +750,15 @@ impl Sink for BenchSink {
                 .find(|(k, _)| k.as_ref() == "bench.sequence")
                 .and_then(|(_, v)| v.parse::<u64>().ok())
         {
+            if let Some(start) = envelope
+                .header
+                .metadata
+                .iter()
+                .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
+                .and_then(|(_, value)| value.parse::<u64>().ok())
+            {
+                tracker.anchor_at(start);
+            }
             tracker.record(seq);
         }
 
@@ -880,6 +893,32 @@ mod tests {
         assert_eq!(tracker.total_received(), 2);
         assert!(!tracker.has_gaps());
         assert_eq!(sink.recorded_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn bench_sink_detects_missing_first_measurement_message() {
+        let config = BenchSinkConfig {
+            warmup_secs: 30,
+            track_sequences: true,
+            track_hotswap: false,
+            output_dir: None,
+        };
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+
+        sink.collect(
+            make_bench_envelope(30_001)
+                .with_metadata("bench.warmup", "false")
+                .with_metadata("bench.measurement_start_seq", "30000"),
+        )
+        .await
+        .unwrap();
+
+        let tracker = sink.sequence_tracker().unwrap();
+        assert_eq!(tracker.total_expected(), 2);
+        assert_eq!(tracker.total_received(), 1);
+        assert_eq!(tracker.total_gaps(), 1);
+        assert_eq!(tracker.gaps(), &[(30_000, 30_000)]);
     }
 
     #[tokio::test]

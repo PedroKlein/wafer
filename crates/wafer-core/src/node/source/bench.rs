@@ -177,6 +177,10 @@ impl Source for BenchSource {
                 .with_metadata(
                     "bench.warmup",
                     (seq < self.config.warmup_messages).to_string(),
+                )
+                .with_metadata(
+                    "bench.measurement_start_seq",
+                    self.config.warmup_messages.to_string(),
                 );
 
             Ok(Some(envelope))
@@ -237,6 +241,7 @@ mod tests {
         assert!(keys.contains(&"bench.sequence"));
         assert!(keys.contains(&"bench.intended_ns"));
         assert!(keys.contains(&"bench.warmup"));
+        assert!(keys.contains(&"bench.measurement_start_seq"));
     }
 
     #[tokio::test]
@@ -255,6 +260,25 @@ mod tests {
                 .map(|(_, value)| value.as_ref())
                 .unwrap();
             assert_eq!(warmup, expected.to_string());
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_carries_measurement_start_sequence() {
+        let config = BenchSourceConfig::new(100_000.0, 3).with_warmup(2);
+        let mut source = BenchSource::new(config);
+        source.init().await.unwrap();
+
+        for _ in 0..3 {
+            let message = source.poll().await.unwrap().unwrap();
+            let boundary = message
+                .header
+                .metadata
+                .iter()
+                .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
+                .map(|(_, value)| value.as_ref())
+                .unwrap();
+            assert_eq!(boundary, "2");
         }
     }
 
