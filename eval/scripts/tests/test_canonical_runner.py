@@ -52,6 +52,7 @@ from canonical_runner import (  # noqa: E402
     validate_capacity_scout_decision_replay,
     validate_capacity_run_result,
     validate_capacity_scout_result,
+    verify_capacity_result_files,
     validate_ekuiper_process_snapshot,
     verify_capacity_scout_result_files,
     write_capacity_scout_progress,
@@ -599,10 +600,10 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
             json.dumps(
                 {
                     "schema_version": 1,
-                    "intended": 4000,
+                    "intended": 240_000,
                     "rejected": 10,
-                    "enqueued": 3990,
-                    "measurement_duration_ns": 1_000_000_000,
+                    "enqueued": 239_990,
+                    "measurement_duration_ns": 60_000_000_000,
                     "deadline_misses": 12,
                 }
             )
@@ -610,8 +611,8 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
         (output / "subscriber-metadata.json").write_text(
             json.dumps(
                 {
-                    "total_recorded": 3985,
-                    "total_messages": 3985,
+                    "total_recorded": 239_985,
+                    "total_messages": 239_985,
                     "parse_errors": 0,
                     "negative_latency_count": 0,
                     "ignored_sequence_count": 0,
@@ -622,7 +623,7 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
                     "histogram_lowest_ns": 1_000,
                     "histogram_highest_ns": 10_000_000_000,
                     "histogram_sig_digits": 3,
-                    "sequence": {"total_received": 3985, "total_duplicates": 5},
+                    "sequence": {"total_received": 239_985, "total_duplicates": 5},
                 }
             )
         )
@@ -654,18 +655,54 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
 
         assert result["batch_class"] == "final-capacity"
         assert result["thesis_evidence"] is True
-        assert result["messages"] == capacity_scout_fixture()["messages"]
-        assert result["rates_msg_s"]["achieved_ratio"] == 0.995
+        assert result["messages"] == {
+            "intended": 240_000,
+            "rejected": 10,
+            "enqueued": 239_990,
+            "received_events": 239_985,
+            "received_unique": 239_980,
+            "downstream_lost": 10,
+            "total_undelivered": 20,
+            "duplicates": 5,
+            "unexpected": 0,
+            "ignored_warmup": 0,
+        }
+        assert result["rates_msg_s"]["achieved_ratio"] == pytest.approx(0.9999166667)
         assert result["latency_hdr"]["significant_digits"] == 3
         assert (output / "capacity-run.json").is_file()
         assert not (output / "published.csv").exists()
         assert not (output / "received.csv").exists()
         validate_capacity_run_result(result)
+        verify_capacity_result_files(output, result)
 
         invalid = json.loads(json.dumps(result))
         invalid["messages"]["downstream_lost"] += 1
         with pytest.raises(ValueError, match="message counters do not reconcile"):
             validate_capacity_run_result(invalid)
+
+        (output / "config.toml").write_text("tampered\n")
+        with pytest.raises(ValueError, match="config receipt checksum mismatch"):
+            verify_capacity_result_files(output, result)
+
+
+def test_final_capacity_validator_rejects_wrong_duration_and_population() -> None:
+    result = capacity_run_fixture("wafer", 1000)
+    result["measurement_duration_ns"] = 30_000_000_000
+    with pytest.raises(ValueError, match="measurement duration differs"):
+        validate_capacity_run_result(result)
+
+    result = capacity_run_fixture("wafer", 1000)
+    result["messages"].update(
+        intended=999,
+        rejected=0,
+        enqueued=999,
+        received_events=999,
+        received_unique=999,
+    )
+    result["rates_msg_s"].update(intended=16.65, achieved=16.65, achieved_ratio=0.01665)
+    result["latency_hdr"]["samples"] = 999
+    with pytest.raises(ValueError, match="intended population differs"):
+        validate_capacity_run_result(result)
 
 
 def test_capacity_scout_validator_rejects_counter_drift_and_evidence_promotion() -> None:
@@ -1132,13 +1169,14 @@ def capacity_run_fixture(
     system: str,
     rate: int,
     *,
+    run_index: int = 1,
     loss_ratio: float = 0.0,
     achieved_ratio: float = 1.0,
     p99_ns: int = 1_000_000,
 ) -> dict:
-    intended = rate
+    intended = rate * 60
     total_undelivered = round(intended * loss_ratio)
-    received_unique = round(rate * achieved_ratio)
+    received_unique = round(intended * achieved_ratio)
     rejected = min(total_undelivered, intended - received_unique)
     enqueued = intended - rejected
     downstream_lost = enqueued - received_unique
@@ -1150,6 +1188,8 @@ def capacity_run_fixture(
             "thesis_evidence": True,
             "system": system,
             "rate_msg_s": rate,
+            "run_index": run_index,
+            "measurement_duration_ns": 60_000_000_000,
             "messages": {
                 "intended": intended,
                 "rejected": rejected,
@@ -1164,7 +1204,7 @@ def capacity_run_fixture(
             },
             "rates_msg_s": {
                 "intended": float(rate),
-                "achieved": float(received_unique),
+                "achieved": float(received_unique) / 60,
                 "achieved_ratio": achieved_ratio,
             },
             "loss_percent": 100.0 * loss_ratio,
@@ -1191,15 +1231,29 @@ def capacity_batch(
             capacity_run_fixture(
                 system,
                 rate,
+                run_index=run_index,
                 loss_ratio=loss,
                 achieved_ratio=achieved,
                 p99_ns=p99,
             )
             for rate, (loss, achieved, p99) in rates.items()
-            for _ in range(30)
+            for run_index in range(1, 31)
         ]
         for system, rates in classifications.items()
     }
+
+
+def test_capacity_estimator_rejects_duplicate_run_indices() -> None:
+    rates = {
+        rate: (0.0, 1.0, 1_000_000)
+        for rate in (1000, 4000, 8000, 15000, 16000)
+    }
+    runs = capacity_batch(
+        {system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")}
+    )
+    runs["wafer"][1]["run_index"] = 1
+    with pytest.raises(ValueError, match="duplicate run_index"):
+        estimate_capacity_envelope(runs)
 
 
 def test_capacity_estimator_handles_first_rate_failure() -> None:

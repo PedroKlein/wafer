@@ -552,6 +552,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "system": "wafer",
             "thesis_evidence": True,
             "rate_msg_s": 1000,
+            "run_index": 1,
             "measurement_duration_ns": 60_000_000_000,
             "messages": {
                 "intended": 60_000,
@@ -587,10 +588,41 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         path = Path(tmp) / "capacity-run.json"
         path.write_text(json.dumps(capacity))
         assert CONTRACT.check_capacity_run_result(path) == []
+        capacity["measurement_duration_ns"] = 30_000_000_000
+        path.write_text(json.dumps(capacity))
+        assert "measurement duration differs" in " ".join(
+            CONTRACT.check_capacity_run_result(path)
+        )
+        capacity["measurement_duration_ns"] = 60_000_000_000
         capacity["messages"]["received_unique"] -= 1
         path.write_text(json.dumps(capacity))
         assert "enqueued counters do not reconcile" in " ".join(
             CONTRACT.check_capacity_run_result(path)
+        )
+
+        publisher["rejected"] = 0
+        publisher["enqueued"] = 60_000
+        subscriber["unexpected_sequence_count"] = 0
+        capacity["messages"]["received_unique"] = 60_000
+        capacity["messages"]["ignored_warmup"] = 0
+        leaf = Path(tmp)
+        (leaf / "publisher-summary.json").write_text(json.dumps(publisher))
+        (leaf / "subscriber-metadata.json").write_text(json.dumps(subscriber))
+        for field, name in {
+            "latency_hdr": "latency.hdr",
+            "process_audit": "process-audit.json",
+            "config": "config.toml",
+            "loadgen_profile": "loadgen-profile.toml",
+            "provenance": "metadata.json",
+        }.items():
+            artifact = leaf / name
+            artifact.write_text(field)
+            capacity[field]["sha256"] = hashlib.sha256(artifact.read_bytes()).hexdigest()
+        (leaf / "capacity-run.json").write_text(json.dumps(capacity))
+        assert CONTRACT.check_capacity_artifact_reconciliation(leaf) == []
+        (leaf / "config.toml").write_text("tampered")
+        assert "config receipt checksum mismatch" in " ".join(
+            CONTRACT.check_capacity_artifact_reconciliation(leaf)
         )
 
 

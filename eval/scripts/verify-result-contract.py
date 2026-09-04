@@ -47,6 +47,8 @@ CANONICAL_PI_FILES = {
     "power-boundary.json",
 }
 CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
+FINAL_CAPACITY_REPETITIONS = 30
+FINAL_CAPACITY_MEASUREMENT_SECS = 60
 
 # Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
 # when it merges `runtime-provenance.json` (emitted by wafer-runtime) into
@@ -236,7 +238,7 @@ def check_capacity_run_result(path: Path) -> list[str]:
         return violations
     required = {
         "schema_version", "experiment", "system", "thesis_evidence", "rate_msg_s",
-        "measurement_duration_ns", "messages", "rates_msg_s", "loss_percent",
+        "run_index", "measurement_duration_ns", "messages", "rates_msg_s", "loss_percent",
         "latency_ns", "latency_hdr", "resources", "thermal", "process_audit", "config",
         "loadgen_profile", "provenance", "controlled_factors", "traces",
     }
@@ -272,6 +274,17 @@ def check_capacity_run_result(path: Path) -> list[str]:
                 violations.append("capacity-run.json message counters must be integers")
     if value.get("experiment") != "e-perf-10":
         violations.append("capacity-run.json experiment must be e-perf-10")
+    try:
+        measurement_secs = FINAL_CAPACITY_MEASUREMENT_SECS
+        repetitions = FINAL_CAPACITY_REPETITIONS
+        if not 1 <= int(value.get("run_index")) <= repetitions:
+            violations.append("capacity-run.json run_index is outside the frozen repetitions")
+        if int(value.get("measurement_duration_ns")) != measurement_secs * 1_000_000_000:
+            violations.append("capacity-run.json measurement duration differs from the frozen matrix")
+        if int(messages.get("intended")) != int(value.get("rate_msg_s")) * measurement_secs:
+            violations.append("capacity-run.json intended population differs from rate times duration")
+    except (KeyError, TypeError, ValueError):
+        violations.append("capacity-run.json frozen duration/population fields are invalid")
     if value.get("batch_class") != "final-capacity":
         violations.append("capacity-run.json batch_class must be final-capacity")
     if value.get("thesis_evidence") is not True:
@@ -321,6 +334,24 @@ def check_capacity_artifact_reconciliation(leaf: Path) -> list[str]:
             violations.append(
                 f"capacity-run.json {percentile} differs from subscriber-metadata.json"
             )
+    expected_receipts = {
+        "latency_hdr": "latency.hdr",
+        "process_audit": "process-audit.json",
+        "config": "config.toml",
+        "loadgen_profile": "loadgen-profile.toml",
+        "provenance": "metadata.json",
+    }
+    for field, expected_name in expected_receipts.items():
+        receipt = capacity.get(field)
+        if not isinstance(receipt, dict) or receipt.get("path") != expected_name:
+            violations.append(f"capacity-run.json {field} receipt path is invalid")
+            continue
+        artifact = leaf / expected_name
+        if not artifact.is_file():
+            violations.append(f"capacity-run.json {field} receipt path is missing")
+            continue
+        if hashlib.sha256(artifact.read_bytes()).hexdigest() != receipt.get("sha256"):
+            violations.append(f"capacity-run.json {field} receipt checksum mismatch")
     return violations
 
 

@@ -79,11 +79,11 @@ class ValidationGate:
 
 RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
 CANONICAL_MATRIX_PATH = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
-RATE_SWEEP_RATES = tuple(
-    json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"][
-        "rate_points_msg_s"
-    ]
-)
+RATE_SWEEP_DEFINITION = json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"]
+RATE_SWEEP_RATES = tuple(RATE_SWEEP_DEFINITION["rate_points_msg_s"])
+RATE_SWEEP_REPETITIONS = int(RATE_SWEEP_DEFINITION["repetitions"])
+RATE_SWEEP_WARMUP_SECS = int(RATE_SWEEP_DEFINITION["warmup_secs"])
+RATE_SWEEP_MEASUREMENT_SECS = int(RATE_SWEEP_DEFINITION["measurement_secs"])
 HISTORICAL_RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
 E_VAL_1_MIN_P99_NS = 45_000_000
 # HdrHistogram reports the upper bound of the 3-significant-digit bucket containing 55 ms.
@@ -275,7 +275,7 @@ def verify_capacity_scout_result_files(output: Path, result: dict) -> None:
 def validate_capacity_run_result(result: dict) -> None:
     required = {
         "schema_version", "batch_class", "experiment", "thesis_evidence", "system",
-        "rate_msg_s", "source_git_sha", "source_dirty", "measurement_duration_ns",
+        "rate_msg_s", "run_index", "source_git_sha", "source_dirty", "measurement_duration_ns",
         "messages", "rates_msg_s", "loss_percent", "latency_ns", "latency_hdr",
         "resources", "thermal", "process_audit", "config", "loadgen_profile",
         "provenance", "controlled_factors", "traces",
@@ -299,6 +299,19 @@ def validate_capacity_run_result(result: dict) -> None:
         raise ValueError("capacity-run controlled factors are incomplete")
     if result["rate_msg_s"] not in RATE_SWEEP_RATES:
         raise ValueError("capacity-run result rate is outside the frozen grid")
+    run_index = result.get("run_index")
+    if type(run_index) is not int or not 1 <= run_index <= RATE_SWEEP_REPETITIONS:
+        raise ValueError("capacity-run run_index is outside the frozen repetitions")
+    controlled = result["controlled_factors"]
+    if controlled.get("warmup_secs") != RATE_SWEEP_WARMUP_SECS:
+        raise ValueError("capacity-run warmup differs from the frozen matrix")
+    if controlled.get("measurement_secs") != RATE_SWEEP_MEASUREMENT_SECS:
+        raise ValueError("capacity-run controlled measurement duration differs from the frozen matrix")
+    expected_duration_ns = RATE_SWEEP_MEASUREMENT_SECS * 1_000_000_000
+    if result["measurement_duration_ns"] != expected_duration_ns:
+        raise ValueError("capacity-run measurement duration differs from the frozen matrix")
+    if result["messages"].get("intended") != result["rate_msg_s"] * RATE_SWEEP_MEASUREMENT_SECS:
+        raise ValueError("capacity-run intended population differs from rate times duration")
     if not re.fullmatch(r"[0-9a-f]{40}", str(result["source_git_sha"])):
         raise ValueError("capacity-run source_git_sha is invalid")
     if result["source_dirty"] is not False:
@@ -350,6 +363,26 @@ def validate_capacity_run_result(result: dict) -> None:
             raise ValueError(f"capacity-run {receipt} receipt has invalid sha256")
 
 
+def verify_capacity_result_files(output: Path, result: dict) -> None:
+    validate_capacity_run_result(result)
+    expected_paths = {
+        "latency_hdr": "latency.hdr",
+        "process_audit": "process-audit.json",
+        "config": "config.toml",
+        "loadgen_profile": "loadgen-profile.toml",
+        "provenance": "metadata.json",
+    }
+    for name, expected_path in expected_paths.items():
+        receipt = result[name]
+        if receipt.get("path") != expected_path:
+            raise ValueError(f"capacity-run {name} receipt path is invalid")
+        path = output / expected_path
+        if not path.is_file():
+            raise ValueError(f"capacity-run {name} receipt path is missing")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != receipt["sha256"]:
+            raise ValueError(f"capacity-run {name} receipt checksum mismatch")
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     if not ordered:
@@ -388,15 +421,22 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
     by_system_rate: dict[str, dict[int, list[dict]]] = {}
     for system, runs in runs_by_system.items():
         by_rate = {rate: [] for rate in RATE_SWEEP_RATES}
+        seen_runs: set[tuple[int, int]] = set()
         for run in runs:
             validate_capacity_run_result(run)
             if run["system"] != system:
                 raise ValueError("capacity run stored under the wrong system")
+            identity = (run["rate_msg_s"], run["run_index"])
+            if identity in seen_runs:
+                raise ValueError(
+                    f"duplicate run_index {run['run_index']} for {system} at {run['rate_msg_s']} msg/s"
+                )
+            seen_runs.add(identity)
             by_rate[run["rate_msg_s"]].append(run)
         by_system_rate[system] = by_rate
 
     def raw_classification(rate_runs: list[dict]) -> str:
-        if len(rate_runs) != 30:
+        if len(rate_runs) != RATE_SWEEP_REPETITIONS:
             return "incomplete"
         intended = sum(run["messages"]["intended"] for run in rate_runs)
         undelivered = sum(run["messages"]["total_undelivered"] for run in rate_runs)
@@ -418,7 +458,7 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
         baseline_runs = by_system_rate[system][RATE_SWEEP_BASELINE]
         baseline_p99 = (
             statistics.median(run["latency_ns"]["p99"] for run in baseline_runs)
-            if len(baseline_runs) == 30
+            if len(baseline_runs) == RATE_SWEEP_REPETITIONS
             else None
         )
         rates = []
@@ -514,7 +554,7 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
             knee_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
 
         systems[system] = {
-            "complete": all(entry["run_count"] == 30 for entry in rates),
+            "complete": all(entry["run_count"] == RATE_SWEEP_REPETITIONS for entry in rates),
             "non_monotonic": non_monotonic,
             "support_censoring": {
                 "from_rate_msg_s": first_support_bad,
@@ -533,7 +573,7 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
         "experiment": "e-perf-10",
         "thesis_evidence": True,
         "sample_unit": "run",
-        "required_runs_per_rate": 30,
+        "required_runs_per_rate": RATE_SWEEP_REPETITIONS,
         "rate_points_msg_s": list(RATE_SWEEP_RATES),
         "systems": systems,
     }
@@ -3129,6 +3169,7 @@ def _write_capacity_result(
         "thesis_evidence": final,
         "system": item.system,
         "rate_msg_s": item.offered_rate_msg_s,
+        "run_index": item.run_index,
         "source_git_sha": metadata.get("git_sha"),
         "source_dirty": metadata.get("git_dirty"),
         "measurement_duration_ns": measurement_duration_ns,
@@ -3161,6 +3202,8 @@ def _write_capacity_result(
         validate_capacity_scout_result(result)
         name = "capacity-scout.json"
     (output / name).write_text(json.dumps(result, indent=2) + "\n")
+    if final:
+        verify_capacity_result_files(output, result)
     return result
 
 
