@@ -439,7 +439,7 @@ def _capacity_scout_decision(index: int, kind: str, rate: int, systems: tuple[st
 
 
 def replay_capacity_scout_decisions(decisions: list[dict], accepted: dict[str, dict]) -> dict:
-    histories: dict[str, list[tuple[int, str]]] = {system: [] for system in CAPACITY_SCOUT_SYSTEMS}
+    histories: dict[str, list[list[int | str]]] = {system: [] for system in CAPACITY_SCOUT_SYSTEMS}
     classifications = []
     pending_mqtt_bad_rate = None
     support_censor_bound = None
@@ -486,18 +486,18 @@ def replay_capacity_scout_decisions(decisions: list[dict], accepted: dict[str, d
                         if system != "mqtt-loopback"
                     }
                 )
-            histories["mqtt-loopback"].append((rate, mqtt_result))
+            histories["mqtt-loopback"].append([rate, mqtt_result])
             if mqtt_result == "good":
                 pending_mqtt_bad_rate = None
                 for system in CAPACITY_SCOUT_SUTS:
                     if system in classified:
-                        histories[system].append((rate, classified[system]))
+                        histories[system].append([rate, classified[system]])
             else:
                 pending_mqtt_bad_rate = rate
         elif decision["kind"] == "mqtt-confirmation":
             if set(classified) != {"mqtt-loopback"}:
                 raise ValueError("MQTT confirmation must be MQTT-only")
-            histories["mqtt-loopback"].append((rate, mqtt_result))
+            histories["mqtt-loopback"].append([rate, mqtt_result])
             if mqtt_result == "bad" and pending_mqtt_bad_rate is not None:
                 good_rates = [
                     candidate_rate
@@ -513,7 +513,7 @@ def replay_capacity_scout_decisions(decisions: list[dict], accepted: dict[str, d
             system, results = next(iter(by_system.items()))
             result = classify_capacity_scout_probe(results)
             classified[system] = result
-            histories[system].append((rate, result))
+            histories[system].append([rate, result])
         else:
             raise ValueError(f"unknown capacity-scout decision kind: {decision['kind']}")
         classifications.append({"decision_index": decision["decision_index"], "results": classified})

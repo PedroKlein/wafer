@@ -48,6 +48,7 @@ from canonical_runner import (  # noqa: E402
     summarize_rate_sweep,
     summarize_recovery,
     validate_backpressure_result,
+    validate_capacity_scout_decision_replay,
     validate_capacity_scout_result,
     validate_ekuiper_process_snapshot,
     verify_capacity_scout_result_files,
@@ -667,6 +668,27 @@ def test_capacity_scout_replay_starts_with_full_500_block_and_resumes_incomplete
     assert len(resumed["pending_result_keys"]) == 11
     with pytest.raises(ValueError, match="lack a decision"):
         replay_capacity_scout_decisions([], accepted)
+
+
+def test_capacity_scout_decision_replay_survives_json_roundtrip() -> None:
+    decisions: list[dict] = []
+    accepted: dict[str, dict] = {}
+    first = replay_capacity_scout_decisions(decisions, accepted)["decision"]
+    accept_capacity_scout_decision(
+        decisions,
+        accepted,
+        first,
+        {system: "good" for system in CAPACITY_SCOUT_SYSTEMS},
+    )
+    second = replay_capacity_scout_decisions(decisions, accepted)["decision"]
+    accept_capacity_scout_decision(
+        decisions,
+        accepted,
+        second,
+        {system: "good" for system in CAPACITY_SCOUT_SYSTEMS},
+    )
+
+    validate_capacity_scout_decision_replay(json.loads(json.dumps(decisions)), accepted)
 
 
 def test_capacity_scout_loader_rejects_tampered_decision_chain_and_schedule() -> None:
