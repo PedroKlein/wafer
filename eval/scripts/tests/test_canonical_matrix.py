@@ -31,6 +31,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
+    assert "schedule_records=2105" in result.stdout
+    assert "measured_leaves=1893" in result.stdout
 
 
 def test_focused_pilot_selection_is_exact_and_diagnostic() -> None:
@@ -115,41 +117,86 @@ def test_focused_pilot_rejects_each_missing_condition_contract_field() -> None:
         assert f"focused_pilot e-iso-7 missing fields: {field}" in result.stderr
 
 
-def test_rate_sweep_is_frozen_and_diagnostic() -> None:
+def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     matrix = json.loads(MATRIX.read_text())
+    campaign = matrix["final_campaign"]
     sweep = matrix["experiments"]["e-perf-10"]
-    profile = ROOT / sweep["loadgen_profile"]
 
-    assert sweep["purpose"] == (
-        "Determine sustainable throughput for matched Pipeline A comparators and the MQTT loopback floor."
-    )
+    assert campaign["status"] == "frozen-before-execution"
+    assert campaign["seed"] == 1729
+    assert campaign["thesis_evidence"] is True
+    assert campaign["expected_schedule_records"] == 2105
+    assert campaign["expected_measured_leaves"] == 1893
+    assert campaign["capacity_grid"] == {
+        "source_batch_id": "capacity-scout-v3-20260904T045000Z",
+        "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
+        "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
+        "common_rate_points_msg_s": [1000, 4000, 8000, 15000, 16000],
+    }
+    assert campaign["canonical_metering"] == {
+        "policy": "explicit-fuel-and-epoch",
+        "fuel": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+    }
+    assert campaign["ekuiper_operator_concurrency"] == 1
     assert sweep["systems"] == ["mqtt-loopback", "native", "wafer", "ekuiper"]
-    assert sweep["rate_points_msg_s"] == [500, 1000, 2000, 4000, 8000, 16000]
-    assert sweep["repetitions"] == 4
-    assert sweep["thesis_evidence"] is False
+    assert sweep["rate_points_msg_s"] == [1000, 4000, 8000, 15000, 16000]
+    assert sweep["repetitions"] == 30
+    assert sweep["sample_unit"] == "run"
+    assert sweep["thesis_evidence"] is True
     assert sweep["ordering"] == {
-        "method": "seeded rate blocks with four-run rotated system order",
+        "method": "seeded rate blocks with thirty-run balanced system order",
         "default_seed": 1729,
     }
-    assert sweep["sustainable_throughput"] == {
-        "baseline_rate_msg_s": 1000,
-        "p99_multiplier_limit": 2.0,
-        "max_loss_percent": 1.0,
-        "p99_aggregation": "median across repetitions",
-        "loss_aggregation": "sum(lost) / sum(offered)",
-        "selection": "last contiguous good rate at or above baseline before first bad rate",
+    assert sweep["capacity_envelope"]["support_path_censoring"] == "mqtt-loopback"
+    assert sweep["capacity_envelope"]["competitive_ratio_threshold"] == 0.70
+    assert {"publisher-summary.json", "capacity-run.json", "subscriber-metadata.json"} <= set(
+        sweep["required_outputs"]
+    )
+
+    assert matrix["experiments"]["e-perf-9"]["cache_scope"] == "linux-filesystem-page-cache"
+    assert matrix["experiments"]["e-perf-5"]["incomplete_until"] == "matching x86 Linux batch"
+    assert matrix["experiments"]["e-swap-3"]["conditions"] == [
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-restart",
+    ]
+    burst = matrix["experiments"]["e-swap-4"]
+    assert burst["sample_unit"] == "run"
+    assert burst["repetitions"] == 30
+    assert "events_per_run" not in burst
+    assert burst["burst_profile"] == {
+        "before_rate_msg_s": 1000,
+        "burst_rate_msg_s": 2000,
+        "after_rate_msg_s": 1000,
+        "burst_start_secs": 55,
+        "swap_secs": 60,
+        "burst_end_secs": 65,
+        "swaps_per_run": 1,
     }
-    assert profile.is_file()
-    configured = tomllib.loads(profile.read_text())["sweep"]
-    assert configured["rate_points_msg_s"] == sweep["rate_points_msg_s"]
-    assert configured["repetitions"] == sweep["repetitions"]
-    assert configured["baseline_rate_msg_s"] == sweep["sustainable_throughput"]["baseline_rate_msg_s"]
-    assert configured["p99_multiplier_limit"] == sweep["sustainable_throughput"]["p99_multiplier_limit"]
-    assert configured["max_loss_percent"] == sweep["sustainable_throughput"]["max_loss_percent"]
-    assert configured["ordering"] == sweep["ordering"]["method"]
-    assert configured["p99_aggregation"] == sweep["sustainable_throughput"]["p99_aggregation"]
-    assert configured["loss_aggregation"] == sweep["sustainable_throughput"]["loss_aggregation"]
-    assert configured["thesis_evidence"] is False
+    assert all(
+        definition["thesis_evidence"] is True
+        for definition in matrix["experiments"].values()
+    )
+
+
+def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
+    mutations = (
+        ("e-perf-10 repetitions", lambda value: value["experiments"]["e-perf-10"].update(repetitions=29)),
+        ("e-swap-4 repetitions", lambda value: value["experiments"]["e-swap-4"].update(repetitions=29)),
+        ("e-perf-10 rate grid", lambda value: value["experiments"]["e-perf-10"].update(rate_points_msg_s=[1000, 4000])),
+        ("e-swap-4 sample_unit", lambda value: value["experiments"]["e-swap-4"].update(sample_unit="")),
+    )
+    for expected, mutate in mutations:
+        matrix = json.loads(MATRIX.read_text())
+        mutate(matrix)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "matrix.json"
+            write_json(path, matrix)
+            result = run_validator("matrix", str(path))
+        assert result.returncode == 1, expected
+        assert expected in result.stderr
 
 
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
@@ -216,20 +263,20 @@ def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
 
     assert "target-load" in purpose
     assert "not a saturation-capacity measurement" in purpose
-    assert "Target-Load Comparison" in notebook_text
-    assert "Target-Load Delivery Summary" in notebook_text
+    assert "target-load comparison" in notebook_text.lower()
+    assert "target-load delivery summary" in notebook_text.lower()
     assert "Compares sustainable throughput" not in notebook_text
 
 
-def test_subcanonical_repetitions_require_diagnostic_label() -> None:
+def test_final_capacity_repetitions_cannot_drop_below_30() -> None:
     matrix = json.loads(MATRIX.read_text())
-    matrix["experiments"]["e-perf-10"]["thesis_evidence"] = True
+    matrix["experiments"]["e-perf-10"]["repetitions"] = 29
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "matrix.json"
         write_json(path, matrix)
         result = run_validator("matrix", str(path))
     assert result.returncode == 1
-    assert "e-perf-10 repetitions must be >= 30" in result.stderr
+    assert "e-perf-10 repetitions must be exactly 30" in result.stderr
 
 
 def test_matrix_rejects_missing_experiment() -> None:

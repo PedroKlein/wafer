@@ -28,7 +28,12 @@ REQUIRED_FIELDS = {
     "conditions",
     "required_outputs",
     "analysis",
+    "thesis_evidence",
+    "evidence_class",
 }
+FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
+FINAL_SCHEDULE_RECORDS = 2_105
+FINAL_MEASURED_LEAVES = 1_893
 FOCUSED_REQUIRED_FIELDS = {
     "sample_unit",
     "repetitions",
@@ -207,10 +212,6 @@ def validate_focused_pilot(matrix: dict, experiments: dict) -> list[str]:
             errors.append(f"focused_pilot {experiment_id} must set thesis_evidence=false")
         if not isinstance(definition["measurement_boundary"], str) or not definition["measurement_boundary"]:
             errors.append(f"focused_pilot {experiment_id} measurement_boundary must be non-empty")
-        canonical = experiments.get(experiment_id, {})
-        for field in ("sample_unit", "warmup_secs", "measurement_secs", "required_outputs", "analysis"):
-            if definition[field] != canonical.get(field):
-                errors.append(f"focused_pilot {experiment_id} {field} differs from canonical experiment")
         repetitions = definition["repetitions"]
         if not isinstance(repetitions, int) or repetitions < 1:
             errors.append(f"focused_pilot {experiment_id} repetitions must be positive")
@@ -274,8 +275,10 @@ def validate_matrix(matrix: dict) -> list[str]:
 
         sample_unit = experiment["sample_unit"]
         repetitions = experiment["repetitions"]
-        if experiment_id == "e-perf-10" and experiment.get("thesis_evidence") is not False:
-            errors.append("e-perf-10 must set thesis_evidence=false")
+        if experiment.get("thesis_evidence") is not True:
+            errors.append(f"{experiment_id} thesis_evidence must be true for the final campaign")
+        if experiment.get("evidence_class") != "final":
+            errors.append(f"{experiment_id} evidence_class must be final")
         warmup_secs = experiment["warmup_secs"]
         measurement_secs = experiment["measurement_secs"]
         conditions = experiment["conditions"]
@@ -285,14 +288,7 @@ def validate_matrix(matrix: dict) -> list[str]:
             errors.append(f"{experiment_id} has invalid sample_unit {sample_unit!r}")
         if not isinstance(repetitions, int) or repetitions < 1:
             errors.append(f"{experiment_id} repetitions must be a positive integer")
-        elif (
-            sample_unit == "run"
-            and repetitions < 30
-            and not (
-                experiment_id == "e-perf-10"
-                and experiment.get("thesis_evidence") is False
-            )
-        ):
+        elif sample_unit == "run" and repetitions < 30:
             errors.append(f"{experiment_id} repetitions must be >= 30")
         if sample_unit == "event":
             events = experiment.get("events_per_run")
@@ -325,6 +321,119 @@ def validate_matrix(matrix: dict) -> list[str]:
         analysis = experiment["analysis"]
         if not isinstance(analysis, str) or not analysis.endswith(".ipynb"):
             errors.append(f"{experiment_id} analysis must name a notebook")
+
+    campaign = matrix.get("final_campaign")
+    if not isinstance(campaign, dict):
+        errors.append("final_campaign must be an object")
+        return errors
+    if campaign.get("status") != "frozen-before-execution":
+        errors.append("final_campaign status must be frozen-before-execution")
+    if campaign.get("seed") != 1729:
+        errors.append("final_campaign seed must be 1729")
+    if campaign.get("thesis_evidence") is not True:
+        errors.append("final_campaign thesis_evidence must be true")
+    grid = campaign.get("capacity_grid", {})
+    if grid != {
+        "source_batch_id": "capacity-scout-v3-20260904T045000Z",
+        "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
+        "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
+        "common_rate_points_msg_s": FINAL_CAPACITY_RATES,
+    }:
+        errors.append("final_campaign capacity grid differs from the frozen scout-derived grid")
+    metering = campaign.get("canonical_metering", {})
+    if metering != {
+        "policy": "explicit-fuel-and-epoch",
+        "fuel": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+    }:
+        errors.append("final_campaign canonical metering policy is invalid")
+    if campaign.get("ekuiper_operator_concurrency") != 1:
+        errors.append("final_campaign eKuiper operator concurrency must be 1")
+    if campaign.get("diagnostic_batches_excluded") is not True:
+        errors.append("final_campaign must exclude diagnostic batches")
+
+    metering_modes = experiments.get("e-perf-7", {}).get("metering_modes")
+    if metering_modes != {
+        "neither": {"fuel": None, "epoch_deadline": None},
+        "fuel-only": {"fuel": 10_000_000, "epoch_deadline": None},
+        "epoch-only": {"fuel": None, "epoch_deadline": 100},
+        "both": {"fuel": 10_000_000, "epoch_deadline": 100},
+    }:
+        errors.append("e-perf-7 metering modes differ from the Option-value truth table")
+
+    sweep = experiments.get("e-perf-10", {})
+    if sweep.get("repetitions") != 30:
+        errors.append("e-perf-10 repetitions must be exactly 30")
+    if sweep.get("sample_unit") != "run":
+        errors.append("e-perf-10 sample_unit must be run")
+    if sweep.get("rate_points_msg_s") != FINAL_CAPACITY_RATES:
+        errors.append("e-perf-10 rate grid differs from the frozen scout-derived grid")
+    if sweep.get("rate_points_msg_s") != grid.get("common_rate_points_msg_s"):
+        errors.append("e-perf-10 rate grid differs from final_campaign capacity grid")
+    capacity_outputs = {
+        "latency.hdr", "throughput.csv", "sequence.csv", "subscriber-metadata.json",
+        "publisher-summary.json", "capacity-run.json", "resource-usage.csv",
+        "process-audit.json",
+    }
+    if set(sweep.get("required_outputs", [])) != capacity_outputs:
+        errors.append("e-perf-10 required outputs differ from the trace-free final contract")
+
+    swap3 = experiments.get("e-swap-3", {})
+    if swap3.get("sample_unit") != "run" or swap3.get("repetitions") != 30:
+        errors.append("e-swap-3 must use 30 run-level repetitions")
+    if swap3.get("conditions") != ["wafer-hotswap", "wafer-restart", "ekuiper-restart"]:
+        errors.append("e-swap-3 conditions differ from the frozen strategies")
+    alignment = swap3.get("event_alignment", {})
+    if alignment != {
+        "event_at_secs": 60,
+        "bucket_width_ms": 100,
+        "series_start_secs": -10,
+        "series_end_secs": 10,
+        "baseline_window_secs": [-10, -2],
+        "event_window_secs": [-2, 2],
+        "recovery_window_secs": [2, 10],
+        "recovery_fraction": 0.95,
+        "recovery_consecutive_buckets": 5,
+        "max_hot_swap_dip_percent": 5.0,
+    }:
+        errors.append("e-swap-3 event alignment differs from the frozen estimator")
+
+    swap4 = experiments.get("e-swap-4", {})
+    if swap4.get("repetitions") != 30:
+        errors.append("e-swap-4 repetitions must be exactly 30")
+    if swap4.get("sample_unit") != "run":
+        errors.append("e-swap-4 sample_unit must be run")
+    if "events_per_run" in swap4:
+        errors.append("e-swap-4 must not declare correlated events_per_run")
+    if swap4.get("burst_profile") != {
+        "before_rate_msg_s": 1_000,
+        "burst_rate_msg_s": 2_000,
+        "after_rate_msg_s": 1_000,
+        "burst_start_secs": 55,
+        "swap_secs": 60,
+        "burst_end_secs": 65,
+        "swaps_per_run": 1,
+    }:
+        errors.append("e-swap-4 burst profile differs from the frozen one-swap design")
+
+    if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
+        errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
+    if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
+        errors.append("e-perf-5 must remain incomplete until matching x86 Linux batch")
+
+    records = 0
+    for experiment_id, definition in experiments.items():
+        multiplier = len(definition.get("conditions", []))
+        if experiment_id == "e-perf-10":
+            multiplier *= len(definition.get("rate_points_msg_s", []))
+        records += int(definition.get("repetitions", 0)) * multiplier
+    if records != FINAL_SCHEDULE_RECORDS:
+        errors.append(f"final schedule record count must be {FINAL_SCHEDULE_RECORDS}, got {records}")
+    if campaign.get("expected_schedule_records") != records:
+        errors.append("final_campaign expected_schedule_records differs from calculated count")
+    if campaign.get("expected_measured_leaves") != FINAL_MEASURED_LEAVES:
+        errors.append(f"final_campaign expected_measured_leaves must be {FINAL_MEASURED_LEAVES}")
 
     return errors
 
@@ -415,7 +524,13 @@ def main() -> int:
     if args.command == "matrix":
         errors = validate_matrix(value)
         count = len(value.get("experiments", {}))
-        return report(errors, f"canonical matrix: PASS ({count} experiments)")
+        campaign = value.get("final_campaign", {})
+        return report(
+            errors,
+            f"canonical matrix: PASS ({count} experiments, "
+            f"schedule_records={campaign.get('expected_schedule_records')}, "
+            f"measured_leaves={campaign.get('expected_measured_leaves')})",
+        )
 
     return report(
         validate_preflight(value, args.require_ekuiper),

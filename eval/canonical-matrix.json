@@ -9,7 +9,9 @@
   "host_policy": {
     "arch": "aarch64",
     "hardware_model_contains": "Raspberry Pi 5",
-    "cpu_governors": ["performance"],
+    "cpu_governors": [
+      "performance"
+    ],
     "isolated_cpus": "1-3",
     "sut_cpus": "1-3",
     "support_cpus": "0",
@@ -474,9 +476,18 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["delay-50ms"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "percentiles.json"],
-      "analysis": "00-warmup-validation.ipynb"
+      "conditions": [
+        "delay-50ms"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "percentiles.json"
+      ],
+      "analysis": "00-warmup-validation.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-1": {
       "research_question": "rq1",
@@ -485,10 +496,24 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["wafer", "native", "ekuiper"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
+      "conditions": [
+        "wafer",
+        "native",
+        "ekuiper"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
       "analysis": "09-saturation.ipynb",
-      "shares_measurements_with": ["e-perf-2"]
+      "shares_measurements_with": [
+        "e-perf-2"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "target_rate_msg_s": 1000,
+      "canonical_metering": "explicit-fuel-and-epoch"
     },
     "e-perf-2": {
       "research_question": "rq1",
@@ -497,10 +522,22 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["wafer", "native", "ekuiper"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
+      "conditions": [
+        "wafer",
+        "native",
+        "ekuiper"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
       "analysis": "01-latency-cdf.ipynb",
-      "shares_measurements_with": ["e-perf-1"]
+      "shares_measurements_with": [
+        "e-perf-1"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-3": {
       "research_question": "rq1",
@@ -509,9 +546,20 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["depth-1", "depth-3", "depth-5", "depth-10"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
-      "analysis": "08-depth-scaling.ipynb"
+      "conditions": [
+        "depth-1",
+        "depth-3",
+        "depth-5",
+        "depth-10"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
+      "analysis": "08-depth-scaling.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-4": {
       "research_question": "rq1",
@@ -520,9 +568,20 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["120b", "1kb", "10kb", "100kb"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
-      "analysis": "02-per-hop-overhead.ipynb"
+      "conditions": [
+        "120b",
+        "1kb",
+        "10kb",
+        "100kb"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
+      "analysis": "02-per-hop-overhead.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-5": {
       "research_question": "rq1",
@@ -531,10 +590,20 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["wafer", "native"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
+      "conditions": [
+        "wafer",
+        "native"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
       "analysis": "04-cross-arch.ipynb",
-      "incomplete_until": "matching x86 Linux batch"
+      "incomplete_until": "matching x86 Linux batch",
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "claim_status": "pending-until-x86"
     },
     "e-perf-6": {
       "research_question": "rq1",
@@ -543,10 +612,24 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["depth-1", "depth-3", "depth-5", "depth-10"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "memory.csv"],
+      "conditions": [
+        "depth-1",
+        "depth-3",
+        "depth-5",
+        "depth-10"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "memory.csv"
+      ],
       "analysis": "03-memory-scaling.ipynb",
-      "shares_measurements_with": ["e-perf-8"]
+      "shares_measurements_with": [
+        "e-perf-8"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-7": {
       "research_question": "rq1",
@@ -555,9 +638,39 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["neither", "fuel-only", "epoch-only", "passthrough"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
-      "analysis": "07-metering-decomp.ipynb"
+      "conditions": [
+        "neither",
+        "fuel-only",
+        "epoch-only",
+        "both"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
+      "analysis": "07-metering-decomp.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "metering_modes": {
+        "neither": {
+          "fuel": null,
+          "epoch_deadline": null
+        },
+        "fuel-only": {
+          "fuel": 10000000,
+          "epoch_deadline": null
+        },
+        "epoch-only": {
+          "fuel": null,
+          "epoch_deadline": 100
+        },
+        "both": {
+          "fuel": 10000000,
+          "epoch_deadline": 100
+        }
+      },
+      "epoch_tick_ms": 10
     },
     "e-perf-8": {
       "research_question": "rq1",
@@ -566,10 +679,23 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["depth-1", "depth-3", "depth-5", "depth-10"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv"],
+      "conditions": [
+        "depth-1",
+        "depth-3",
+        "depth-5",
+        "depth-10"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv"
+      ],
       "analysis": "08-depth-scaling.ipynb",
-      "shares_measurements_with": ["e-perf-6"]
+      "shares_measurements_with": [
+        "e-perf-6"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-perf-9": {
       "research_question": "rq1",
@@ -579,36 +705,80 @@
       "warmup_secs": 0,
       "warmup_exception": "Startup is the measured event; warming would destroy the cold-start condition.",
       "measurement_secs": 1,
-      "conditions": ["small-cold", "small-warm", "medium-cold", "medium-warm", "large-cold", "large-warm"],
-      "required_outputs": ["startup-preparation.json", "startup.json"],
-      "analysis": "10-aot-startup.ipynb"
+      "conditions": [
+        "small-cold",
+        "small-warm",
+        "medium-cold",
+        "medium-warm",
+        "large-cold",
+        "large-warm"
+      ],
+      "required_outputs": [
+        "startup-preparation.json",
+        "startup.json"
+      ],
+      "analysis": "10-aot-startup.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "cache_scope": "linux-filesystem-page-cache",
+      "compiled_component_cache": "disabled"
     },
     "e-perf-10": {
       "research_question": "rq1",
-      "purpose": "Determine sustainable throughput for matched Pipeline A comparators and the MQTT loopback floor.",
+      "purpose": "Confirm the co-located Raspberry Pi 5 gateway-capacity envelope over the scout-derived common rate grid.",
       "sample_unit": "run",
-      "repetitions": 4,
+      "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["mqtt-loopback", "native", "wafer", "ekuiper"],
-      "systems": ["mqtt-loopback", "native", "wafer", "ekuiper"],
-      "rate_points_msg_s": [500, 1000, 2000, 4000, 8000, 16000],
+      "conditions": [
+        "mqtt-loopback",
+        "native",
+        "wafer",
+        "ekuiper"
+      ],
+      "systems": [
+        "mqtt-loopback",
+        "native",
+        "wafer",
+        "ekuiper"
+      ],
+      "rate_points_msg_s": [
+        1000,
+        4000,
+        8000,
+        15000,
+        16000
+      ],
       "loadgen_profile": "eval/loadgen/canonical-rate-sweep.toml",
       "ordering": {
-        "method": "seeded rate blocks with four-run rotated system order",
+        "method": "seeded rate blocks with thirty-run balanced system order",
         "default_seed": 1729
       },
-      "sustainable_throughput": {
+      "thesis_evidence": true,
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "subscriber-metadata.json",
+        "publisher-summary.json",
+        "capacity-run.json",
+        "resource-usage.csv",
+        "process-audit.json"
+      ],
+      "analysis": "09-saturation.ipynb",
+      "evidence_class": "final",
+      "measurement_boundary": "publisher intended-offer window to subscriber receive timestamp",
+      "capacity_envelope": {
         "baseline_rate_msg_s": 1000,
-        "p99_multiplier_limit": 2.0,
         "max_loss_percent": 1.0,
-        "p99_aggregation": "median across repetitions",
-        "loss_aggregation": "sum(lost) / sum(offered)",
-        "selection": "last contiguous good rate at or above baseline before first bad rate"
-      },
-      "thesis_evidence": false,
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "percentiles.json", "published.csv", "received.csv", "resource-usage.csv", "process-audit.json", "rate-sweep.json"],
-      "analysis": "09-saturation.ipynb"
+        "min_achieved_ratio": 0.99,
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "delivery_ceiling": "highest tested delivery-good rate",
+        "normalized_p99_knee_multiplier": 2.0,
+        "support_path_censoring": "mqtt-loopback",
+        "competitive_ratio_threshold": 0.7
+      }
     },
     "e-iso-1": {
       "research_question": "rq2",
@@ -618,9 +788,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["buffer-overflow"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "buffer-overflow"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-2": {
       "research_question": "rq2",
@@ -630,9 +807,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["cross-read"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "cross-read"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-3": {
       "research_question": "rq2",
@@ -642,9 +826,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["fs-access"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "fs-access"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-4": {
       "research_question": "rq2",
@@ -654,9 +845,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["infinite-loop"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "infinite-loop"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-5": {
       "research_question": "rq2",
@@ -666,9 +864,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["memory-exhaust"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "memory-exhaust"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-6": {
       "research_question": "rq2",
@@ -678,9 +883,16 @@
       "warmup_secs": 0,
       "warmup_exception": "The first attack is observable correctness evidence and must not be excluded.",
       "measurement_secs": 120,
-      "conditions": ["panic"],
-      "required_outputs": ["per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "panic"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-7": {
       "research_question": "rq2",
@@ -689,9 +901,19 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 60,
-      "conditions": ["control", "panic-attack", "epoch-loop-attack"],
-      "required_outputs": ["branch-isolation.json", "per_node_metrics.csv", "containment.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "control",
+        "panic-attack",
+        "epoch-loop-attack"
+      ],
+      "required_outputs": [
+        "branch-isolation.json",
+        "per_node_metrics.csv",
+        "containment.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-iso-8": {
       "research_question": "rq2",
@@ -701,9 +923,17 @@
       "warmup_secs": 0,
       "warmup_exception": "Recovery begins at the first injected trap and every recovery sample is retained.",
       "measurement_secs": 60,
-      "conditions": ["panic-recovery"],
-      "required_outputs": ["per_node_metrics.csv", "recovery.csv", "recovery.json"],
-      "analysis": "06-fault-injection.ipynb"
+      "conditions": [
+        "panic-recovery"
+      ],
+      "required_outputs": [
+        "per_node_metrics.csv",
+        "recovery.csv",
+        "recovery.json"
+      ],
+      "analysis": "06-fault-injection.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-swap-1": {
       "research_question": "rq3",
@@ -713,10 +943,24 @@
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
-      "conditions": ["steady"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
+      "conditions": [
+        "steady"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "swap_requests.json",
+        "swap_timeline.json",
+        "hotswap-analysis.json"
+      ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": ["e-swap-2", "e-swap-6"]
+      "shares_measurements_with": [
+        "e-swap-2",
+        "e-swap-6"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-swap-2": {
       "research_question": "rq3",
@@ -726,10 +970,22 @@
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
-      "conditions": ["steady"],
-      "required_outputs": ["sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
+      "conditions": [
+        "steady"
+      ],
+      "required_outputs": [
+        "sequence.csv",
+        "swap_requests.json",
+        "swap_timeline.json",
+        "hotswap-analysis.json"
+      ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": ["e-swap-1", "e-swap-6"]
+      "shares_measurements_with": [
+        "e-swap-1",
+        "e-swap-6"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-swap-3": {
       "research_question": "rq3",
@@ -738,21 +994,79 @@
       "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 120,
-      "conditions": ["wafer-hotswap", "wafer-restart", "ekuiper-restart"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_timeline.json"],
-      "analysis": "05-hotswap-timeline.ipynb"
+      "conditions": [
+        "wafer-hotswap",
+        "wafer-restart",
+        "ekuiper-restart"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "disruption-timeline.json",
+        "swap_timeline.json"
+      ],
+      "analysis": "05-hotswap-timeline.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "measurement_boundary": "event-aligned subscriber output around one disruption at measured t=60s",
+      "event_alignment": {
+        "event_at_secs": 60,
+        "bucket_width_ms": 100,
+        "series_start_secs": -10,
+        "series_end_secs": 10,
+        "baseline_window_secs": [
+          -10,
+          -2
+        ],
+        "event_window_secs": [
+          -2,
+          2
+        ],
+        "recovery_window_secs": [
+          2,
+          10
+        ],
+        "recovery_fraction": 0.95,
+        "recovery_consecutive_buckets": 5,
+        "max_hot_swap_dip_percent": 5.0
+      }
     },
     "e-swap-4": {
       "research_question": "rq3",
-      "purpose": "Measure hot-swap pause under a two-times burst.",
-      "sample_unit": "event",
-      "repetitions": 1,
-      "events_per_run": 50,
+      "purpose": "Measure one stateless hot-swap centered in a true 1,000 to 2,000 to 1,000 msg/s burst per independent run.",
+      "sample_unit": "run",
+      "repetitions": 30,
       "warmup_secs": 30,
       "measurement_secs": 120,
-      "conditions": ["burst-2x"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
-      "analysis": "05-hotswap-timeline.ipynb"
+      "conditions": [
+        "burst-2x"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "throughput-buckets.json",
+        "burst-timeline.json",
+        "swap_timeline.json",
+        "hotswap-analysis.json",
+        "swap_requests.json"
+      ],
+      "analysis": "05-hotswap-timeline.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final",
+      "measurement_boundary": "one source-driven burst and one centered swap per complete run",
+      "burst_profile": {
+        "before_rate_msg_s": 1000,
+        "burst_rate_msg_s": 2000,
+        "after_rate_msg_s": 1000,
+        "burst_start_secs": 55,
+        "swap_secs": 60,
+        "burst_end_secs": 65,
+        "swaps_per_run": 1
+      }
     },
     "e-swap-5": {
       "research_question": "rq3",
@@ -762,9 +1076,19 @@
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 300,
-      "conditions": ["process-trap-rollback"],
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "swap_timeline.json", "rollback.json"],
-      "analysis": "05-hotswap-timeline.ipynb"
+      "conditions": [
+        "process-trap-rollback"
+      ],
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "swap_timeline.json",
+        "rollback.json"
+      ],
+      "analysis": "05-hotswap-timeline.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-swap-6": {
       "research_question": "rq3",
@@ -774,10 +1098,21 @@
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
-      "conditions": ["steady"],
-      "required_outputs": ["swap_requests.json", "swap_timeline.json", "hotswap-analysis.json"],
+      "conditions": [
+        "steady"
+      ],
+      "required_outputs": [
+        "swap_requests.json",
+        "swap_timeline.json",
+        "hotswap-analysis.json"
+      ],
       "analysis": "05-hotswap-timeline.ipynb",
-      "shares_measurements_with": ["e-swap-1", "e-swap-2"]
+      "shares_measurements_with": [
+        "e-swap-1",
+        "e-swap-2"
+      ],
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-backpressure": {
       "research_question": "rq1",
@@ -787,15 +1122,27 @@
       "warmup_secs": 0,
       "warmup_exception": "Queue fill and drain are the measured transient; warmup would remove the event.",
       "measurement_secs": 10,
-      "conditions": ["saturated-slow-consumer"],
+      "conditions": [
+        "saturated-slow-consumer"
+      ],
       "config": "eval/configs/e-backpressure/pipeline-saturated.toml",
       "offered_messages": 1000,
       "offered_rate_msg_s": 1000,
       "queue_occupancy_threshold": 0.8,
       "queue_recovery_threshold": 0.1,
       "rss_limit_bytes": 268435456,
-      "required_outputs": ["latency.hdr", "throughput.csv", "sequence.csv", "memory.csv", "per_node_metrics.csv", "queue-depth.csv", "backpressure.json"],
-      "analysis": "09-backpressure.ipynb"
+      "required_outputs": [
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "memory.csv",
+        "per_node_metrics.csv",
+        "queue-depth.csv",
+        "backpressure.json"
+      ],
+      "analysis": "09-backpressure.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     },
     "e-density-1": {
       "research_question": "all",
@@ -805,9 +1152,49 @@
       "warmup_secs": 0,
       "warmup_exception": "Static binary size has no runtime warmup.",
       "measurement_secs": 0,
-      "conditions": ["release-components"],
-      "required_outputs": ["binary-sizes.csv"],
-      "analysis": "10-summary-stats.ipynb"
+      "conditions": [
+        "release-components"
+      ],
+      "required_outputs": [
+        "binary-sizes.csv"
+      ],
+      "analysis": "10-summary-stats.ipynb",
+      "thesis_evidence": true,
+      "evidence_class": "final"
     }
+  },
+  "final_campaign": {
+    "schema_version": 1,
+    "id": "rpi5-final-campaign-v1",
+    "status": "frozen-before-execution",
+    "seed": 1729,
+    "thesis_evidence": true,
+    "expected_schedule_records": 2105,
+    "expected_measured_leaves": 1893,
+    "capacity_grid": {
+      "source_batch_id": "capacity-scout-v3-20260904T045000Z",
+      "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
+      "candidate_sha256": "5f2231ef541c36c4fef3655ed25239ca028fb7ed7cd1387a3dd6644818cbfc3f",
+      "common_rate_points_msg_s": [
+        1000,
+        4000,
+        8000,
+        15000,
+        16000
+      ]
+    },
+    "canonical_metering": {
+      "policy": "explicit-fuel-and-epoch",
+      "fuel": {
+        "transform": 10000000,
+        "filter": 500000,
+        "router": 500000
+      },
+      "epoch_deadline": 100,
+      "epoch_tick_ms": 10
+    },
+    "ekuiper_operator_concurrency": 1,
+    "support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
+    "diagnostic_batches_excluded": true
   }
 }

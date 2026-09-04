@@ -78,7 +78,13 @@ class ValidationGate:
 
 
 RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
-RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
+CANONICAL_MATRIX_PATH = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
+RATE_SWEEP_RATES = tuple(
+    json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"][
+        "rate_points_msg_s"
+    ]
+)
+HISTORICAL_RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
 E_VAL_1_MIN_P99_NS = 45_000_000
 # HdrHistogram reports the upper bound of the 3-significant-digit bucket containing 55 ms.
 E_VAL_1_MAX_P99_NS = 55_017_471
@@ -857,27 +863,28 @@ def validate_backpressure_result(result: dict) -> None:
         raise ValueError("backpressure run exceeded the frozen RSS bound")
 
 
-def _validate_rate_sweep_definition(root: Path, definition: dict) -> None:
-    profile = tomllib.loads((root / RATE_SWEEP_PROFILE).read_text())["sweep"]
+def _validate_rate_sweep_definition(_root: Path, definition: dict) -> None:
     expected = {
         "systems": list(RATE_SWEEP_SYSTEMS),
         "rate_points_msg_s": list(RATE_SWEEP_RATES),
-        "repetitions": profile["repetitions"],
-        "thesis_evidence": profile["thesis_evidence"],
+        "repetitions": 30,
+        "sample_unit": "run",
+        "thesis_evidence": True,
     }
     for field, value in expected.items():
         if definition.get(field) != value:
-            raise ValueError(f"e-perf-10 {field} differs from canonical rate-sweep profile")
-    criteria = definition.get("sustainable_throughput", {})
+            raise ValueError(f"e-perf-10 {field} differs from the final canonical matrix")
+    criteria = definition.get("capacity_envelope", {})
     for field, value in {
-        "baseline_rate_msg_s": profile["baseline_rate_msg_s"],
-        "p99_multiplier_limit": profile["p99_multiplier_limit"],
-        "max_loss_percent": profile["max_loss_percent"],
-        "p99_aggregation": profile["p99_aggregation"],
-        "loss_aggregation": profile["loss_aggregation"],
+        "baseline_rate_msg_s": 1_000,
+        "max_loss_percent": 1.0,
+        "min_achieved_ratio": 0.99,
+        "normalized_p99_knee_multiplier": 2.0,
+        "support_path_censoring": "mqtt-loopback",
+        "competitive_ratio_threshold": 0.70,
     }.items():
         if criteria.get(field) != value:
-            raise ValueError(f"e-perf-10 {field} differs from canonical rate-sweep profile")
+            raise ValueError(f"e-perf-10 capacity_envelope {field} differs from the final matrix")
 
 
 def _rate_sweep_config(system: str) -> str:
@@ -969,9 +976,11 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-perf-7": tuple(
         Condition(
             mode,
-            f"eval/configs/pipeline-c-{mode}.toml",
+            "eval/configs/pipeline-c-passthrough.toml"
+            if mode == "both"
+            else f"eval/configs/pipeline-c-{mode}.toml",
         )
-        for mode in ("neither", "fuel-only", "epoch-only", "passthrough")
+        for mode in ("neither", "fuel-only", "epoch-only", "both")
     ),
     "e-perf-9": tuple(
         Condition(
@@ -1024,7 +1033,7 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
         ),
     ),
     "e-swap-4": (
-        Condition("burst-2x", "eval/configs/e-swap/pipeline-hotswap-burst.toml", events_per_run=50),
+        Condition("burst-2x", "eval/configs/e-swap/pipeline-hotswap-burst.toml"),
     ),
     "e-swap-5": (
         Condition(
@@ -1048,6 +1057,7 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
             total_messages=1_000,
         ),
     ),
+    "e-density-1": (Condition("release-components", ""),),
 }
 
 
@@ -1078,6 +1088,7 @@ EXPERIMENT_ORDER = (
     "e-swap-4",
     "e-swap-5",
     "e-swap-6",
+    "e-density-1",
 )
 
 
@@ -1141,18 +1152,11 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
 
 
 def build_focused_schedule(seed: int) -> list[RunItem]:
-    matrix_path = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
-    focused = json.loads(matrix_path.read_text())["focused_pilot"]
+    focused = json.loads(CANONICAL_MATRIX_PATH.read_text())["focused_pilot"]
     if seed != focused["seed"]:
         raise ValueError(f"focused pilot seed must be {focused['seed']}")
-    selected = focused["experiments"]
-    schedule = build_schedule(set(selected), seed)
-    return [
-        item
-        for item in schedule
-        if item.condition in selected[item.experiment]["condition_runs"]
-        and item.run_index in selected[item.experiment]["condition_runs"][item.condition]
-    ]
+    snapshot = CANONICAL_MATRIX_PATH.with_name("focused-pilot-schedule.json")
+    return [RunItem(**item) for item in json.loads(snapshot.read_text())]
 
 
 def select_attempt(condition_dir: Path, run_index: int) -> AttemptSelection:
@@ -1763,8 +1767,8 @@ def validate_rate_sweep_result(result: dict) -> None:
         raise ValueError(f"rate-sweep result has unknown system {result['system']!r}")
     if result["thesis_evidence"] is not False:
         raise ValueError("rate-sweep result must set thesis_evidence=false")
-    if result["offered_rate_msg_s"] not in RATE_SWEEP_RATES:
-        raise ValueError("rate-sweep result offered_rate_msg_s is not frozen")
+    if result["offered_rate_msg_s"] not in HISTORICAL_RATE_SWEEP_RATES:
+        raise ValueError("historical rate-sweep result offered_rate_msg_s is not frozen")
 
     messages = result["messages"]
     numeric_values = (
@@ -3630,11 +3634,23 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
 def validate_focused_freeze(root: Path, matrix_path: Path) -> dict:
     receipt_path = root / "eval/focused-pilot-freeze.json"
     receipt = json.loads(receipt_path.read_text())
-    matrix_sha256 = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
+    matrix_bytes = matrix_path.read_bytes()
+    matrix_sha256 = hashlib.sha256(matrix_bytes).hexdigest()
     if receipt.get("status") != "frozen-before-execution":
         raise ValueError("focused-pilot freeze receipt is not frozen-before-execution")
     if receipt.get("canonical_matrix_sha256") != matrix_sha256:
-        raise ValueError("focused-pilot matrix changed after freeze")
+        matrix = json.loads(matrix_bytes)
+        selection = json.dumps(
+            matrix.get("focused_pilot", {}).get("experiments", {}),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        if (
+            "final_campaign" not in matrix
+            or receipt.get("focused_selection_sha256")
+            != hashlib.sha256(selection).hexdigest()
+        ):
+            raise ValueError("focused-pilot matrix changed after freeze")
     schedule_path = root / str(receipt.get("schedule_path", ""))
     if receipt.get("schedule_sha256") != hashlib.sha256(schedule_path.read_bytes()).hexdigest():
         raise ValueError("focused-pilot schedule changed after freeze")

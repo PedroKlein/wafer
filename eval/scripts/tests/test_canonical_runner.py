@@ -929,12 +929,26 @@ def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free(
     assert wafer["config"] == "eval/configs/capacity-scout-wafer.toml"
 
 
+def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    schedule = build_schedule(set(matrix["experiments"]), seed=1729)
+    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_105
+    keys = [item.result_key for item in schedule]
+    assert len(keys) == len(set(keys))
+    for experiment, definition in matrix["experiments"].items():
+        items = [item for item in schedule if item.experiment == experiment]
+        expected = definition["repetitions"] * len(definition["conditions"])
+        if experiment == "e-perf-10":
+            expected *= len(definition["rate_points_msg_s"])
+        assert len(items) == expected, experiment
+
+
 def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
     schedule = build_schedule({"e-perf-10"}, seed=1729)
     systems = ("mqtt-loopback", "native", "wafer", "ekuiper")
-    rates = (500, 1000, 2000, 4000, 8000, 16000)
+    rates = (1000, 4000, 8000, 15000, 16000)
 
-    assert len(schedule) == 4 * len(systems) * len(rates)
+    assert len(schedule) == 30 * len(systems) * len(rates)
     assert {
         (item.system, item.offered_rate_msg_s)
         for item in schedule
@@ -947,7 +961,7 @@ def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
 
     for rate in rates:
         positions = {position: [] for position in range(len(systems))}
-        for run_index in range(1, 5):
+        for run_index in range(1, 31):
             block = [
                 item
                 for item in schedule
@@ -1253,7 +1267,8 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     }
     assert len(by_experiment["e-swap-1"]) == 1
     assert len(by_experiment["e-swap-2"]) == 1
-    assert len(by_experiment["e-swap-4"]) == 1
+    assert len(by_experiment["e-swap-4"]) == 30
+    assert all(item.events_per_run is None for item in by_experiment["e-swap-4"])
     assert len(by_experiment["e-swap-5"]) == 1
     assert len(by_experiment["e-swap-6"]) == 1
     assert by_experiment["e-swap-2"][0].shared_from == "e-swap-1"

@@ -156,6 +156,174 @@ def check_rate_sweep_result(path: Path) -> list[str]:
     return violations
 
 
+def check_publisher_summary(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "publisher-summary.json", violations)
+    if value is None:
+        return violations
+    required = {"schema_version", "intended", "rejected", "enqueued", "measurement_duration_ns"}
+    violations.extend(
+        f"publisher-summary.json missing field: {field}"
+        for field in sorted(required - value.keys())
+    )
+    if all(field in value for field in ("intended", "rejected", "enqueued")):
+        try:
+            if int(value["intended"]) != int(value["rejected"]) + int(value["enqueued"]):
+                violations.append("publisher-summary.json counters do not reconcile")
+        except (TypeError, ValueError):
+            violations.append("publisher-summary.json counters must be integers")
+    return violations
+
+
+def check_subscriber_metadata(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "subscriber-metadata.json", violations)
+    if value is None:
+        return violations
+    required = {
+        "started_at_ns", "ended_at_ns", "exit_reason", "git_sha", "host_tag",
+        "sequence_end_exclusive", "ignored_sequence_count", "unexpected_sequence_count",
+        "total_recorded", "total_messages", "parse_errors", "negative_latency_count",
+        "latency_p50_ns", "latency_p95_ns", "latency_p99_ns", "sequence",
+    }
+    violations.extend(
+        f"subscriber-metadata.json missing field: {field}"
+        for field in sorted(required - value.keys())
+    )
+    if not required <= value.keys():
+        return violations
+    sequence = value["sequence"]
+    sequence_fields = {"total_received", "total_gaps", "total_duplicates"}
+    if not isinstance(sequence, dict) or not sequence_fields <= sequence.keys():
+        return violations + ["subscriber-metadata.json sequence summary is invalid"]
+    try:
+        if int(value["ended_at_ns"]) <= int(value["started_at_ns"]):
+            violations.append("subscriber-metadata.json measurement interval is invalid")
+        if int(value["total_recorded"]) != int(sequence["total_received"]):
+            violations.append("subscriber-metadata.json recorded count does not reconcile")
+        for field in ("unexpected_sequence_count", "parse_errors", "negative_latency_count"):
+            if int(value[field]) != 0:
+                violations.append(f"subscriber-metadata.json {field} must be zero")
+    except (TypeError, ValueError):
+        violations.append("subscriber-metadata.json counters and timestamps must be integers")
+    return violations
+
+
+def check_capacity_run_result(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "capacity-run.json", violations)
+    if value is None:
+        return violations
+    required = {
+        "schema_version", "experiment", "system", "thesis_evidence", "rate_msg_s",
+        "measurement_duration_ns", "messages", "rates_msg_s", "loss_percent",
+        "latency_ns", "resources", "thermal", "process_audit", "config",
+        "controlled_factors", "traces",
+    }
+    violations.extend(
+        f"capacity-run.json missing field: {field}"
+        for field in sorted(required - value.keys())
+    )
+    messages = value.get("messages", {})
+    message_fields = {
+        "intended", "rejected", "enqueued", "received_events", "received_unique",
+        "downstream_lost", "total_undelivered", "duplicates", "unexpected",
+    }
+    if not isinstance(messages, dict):
+        violations.append("capacity-run.json messages must be an object")
+    else:
+        violations.extend(
+            f"capacity-run.json messages missing field: {field}"
+            for field in sorted(message_fields - messages.keys())
+        )
+        if message_fields <= messages.keys():
+            try:
+                if int(messages["intended"]) != int(messages["rejected"]) + int(messages["enqueued"]):
+                    violations.append("capacity-run.json intended counters do not reconcile")
+                if int(messages["enqueued"]) != int(messages["received_unique"]) + int(messages["downstream_lost"]):
+                    violations.append("capacity-run.json enqueued counters do not reconcile")
+                if int(messages["received_events"]) != int(messages["received_unique"]) + int(messages["duplicates"]):
+                    violations.append("capacity-run.json received counters do not reconcile")
+                if int(messages["total_undelivered"]) != int(messages["rejected"]) + int(messages["downstream_lost"]):
+                    violations.append("capacity-run.json undelivered counters do not reconcile")
+                if int(messages["unexpected"]) != 0:
+                    violations.append("capacity-run.json contains unexpected sequences")
+            except (TypeError, ValueError):
+                violations.append("capacity-run.json message counters must be integers")
+    if value.get("experiment") != "e-perf-10":
+        violations.append("capacity-run.json experiment must be e-perf-10")
+    if value.get("thesis_evidence") is not True:
+        violations.append("capacity-run.json must set thesis_evidence=true")
+    if value.get("traces") is not False:
+        violations.append("capacity-run.json final capture must be trace-free")
+    return violations
+
+
+def check_throughput_buckets(path: Path, expected_count: int | None = None) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "throughput-buckets.json", violations)
+    if value is None:
+        return violations
+    if value.get("clock") != "monotonic" or value.get("bucket_width_ns") != 100_000_000:
+        violations.append("throughput-buckets.json must use monotonic 100 ms buckets")
+    buckets = value.get("buckets")
+    if not isinstance(buckets, list) or not buckets:
+        return violations + ["throughput-buckets.json buckets must be non-empty"]
+    if expected_count is not None and len(buckets) != expected_count:
+        violations.append(f"throughput-buckets.json must contain {expected_count} buckets")
+    previous_end = None
+    total = 0
+    for bucket in buckets:
+        required = {"start_offset_ns", "end_offset_ns", "received_unique", "received_events", "duplicates", "rate_msg_s"}
+        if not isinstance(bucket, dict) or not required <= bucket.keys():
+            violations.append("throughput-buckets.json bucket schema is invalid")
+            continue
+        if int(bucket["end_offset_ns"]) - int(bucket["start_offset_ns"]) != 100_000_000:
+            violations.append("throughput-buckets.json bucket width is inconsistent")
+        if previous_end is not None and int(bucket["start_offset_ns"]) != previous_end:
+            violations.append("throughput-buckets.json buckets are not contiguous")
+        previous_end = int(bucket["end_offset_ns"])
+        total += int(bucket["received_events"])
+    if value.get("received_events") != total:
+        violations.append("throughput-buckets.json totals do not reconcile")
+    return violations
+
+
+def check_disruption_timeline(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "disruption-timeline.json", violations)
+    if value is None:
+        return violations
+    required = {"clock", "strategy", "event_ns", "action_start_ns", "action_end_ns"}
+    if not required <= value.keys():
+        return violations + ["disruption-timeline.json is missing event fields"]
+    if value["clock"] != "monotonic" or not (
+        int(value["action_start_ns"]) <= int(value["event_ns"]) <= int(value["action_end_ns"])
+    ):
+        violations.append("disruption-timeline.json event/action clocks are invalid")
+    return violations
+
+
+def check_burst_timeline(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "burst-timeline.json", violations)
+    if value is None:
+        return violations
+    expected = {
+        "before_rate_msg_s": 1_000,
+        "burst_rate_msg_s": 2_000,
+        "after_rate_msg_s": 1_000,
+        "burst_start_offset_ns": 55_000_000_000,
+        "swap_offset_ns": 60_000_000_000,
+        "burst_end_offset_ns": 65_000_000_000,
+        "successful_swaps": 1,
+    }
+    for field, expected_value in expected.items():
+        if value.get(field) != expected_value:
+            violations.append(f"burst-timeline.json {field} must be {expected_value}")
+    return violations
+
+
 def _load_json(path: Path, label: str, violations: list[str]) -> dict | None:
     try:
         value = json.loads(path.read_text())
@@ -539,8 +707,12 @@ def check_leaf(
                         violations.append("Pi 5 metadata records a non-zero loopback loadgen exit")
                 elif exit_codes.get("wafer_runtime") != 0:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
-                if experiment == "e-perf-10" and metadata.get("thesis_evidence") is not False:
-                    violations.append("E-Perf-10 metadata must set thesis_evidence=false")
+                if experiment == "e-perf-10":
+                    expected_evidence = False if focused else True
+                    if metadata.get("thesis_evidence") is not expected_evidence:
+                        violations.append(
+                            f"E-Perf-10 metadata must set thesis_evidence={str(expected_evidence).lower()}"
+                        )
                 if canonical:
                     if metadata.get("git_dirty") is not False:
                         violations.append("canonical result records dirty source")
@@ -569,7 +741,11 @@ def check_leaf(
                 violations.append("canonical measurement window is invalid")
 
     if canonical and canonical_matrix is not None:
-        experiment_contract = canonical_matrix.get("experiments", {}).get(experiment)
+        experiment_contract = (
+            canonical_matrix.get("focused_pilot", {}).get("experiments", {}).get(experiment)
+            if focused
+            else canonical_matrix.get("experiments", {}).get(experiment)
+        )
         if not isinstance(experiment_contract, dict):
             violations.append(f"experiment {experiment} is absent from canonical matrix")
         else:
@@ -581,6 +757,27 @@ def check_leaf(
 
     if experiment == "e-perf-10" and "rate-sweep.json" in files:
         violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
+    if experiment == "e-perf-10" and not focused:
+        for historical in ("rate-sweep.json", "published.csv", "received.csv"):
+            if historical in files:
+                violations.append(f"final E-Perf-10 must not contain historical trace artifact: {historical}")
+    if experiment == "e-perf-10" and "capacity-run.json" in files:
+        violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
+        violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
+        violations.extend(check_capacity_run_result(leaf / "capacity-run.json"))
+    if experiment == "e-swap-3" and not focused:
+        violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 200))
+        violations.extend(check_disruption_timeline(leaf / "disruption-timeline.json"))
+    if experiment == "e-swap-4" and not focused:
+        violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json"))
+        violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
+        analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
+        if analysis is not None and (
+            analysis.get("sample_count") != 1
+            or not isinstance(analysis.get("events"), list)
+            or len(analysis["events"]) != 1
+        ):
+            violations.append("final E-Swap-4 must contain exactly one swap event")
 
     if focused and canonical_matrix is not None:
         violations.extend(
@@ -626,6 +823,12 @@ def main() -> int:
             matrix_bytes = args.matrix.read_bytes()
             canonical_matrix = json.loads(matrix_bytes)
             matrix_sha256 = hashlib.sha256(matrix_bytes).hexdigest()
+            if args.focused:
+                freeze_path = args.matrix.with_name("focused-pilot-freeze.json")
+                if not freeze_path.is_file():
+                    freeze_path = CANONICAL_MATRIX.with_name("focused-pilot-freeze.json")
+                freeze = json.loads(freeze_path.read_text())
+                matrix_sha256 = freeze["canonical_matrix_sha256"]
         except (OSError, ValueError) as exc:
             print(f"error: cannot load canonical matrix: {exc}", file=sys.stderr)
             return 2

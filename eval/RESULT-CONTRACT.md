@@ -84,10 +84,16 @@ before reading. The matrix below is authoritative:
 | `pi-telemetry.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Timestamped temperature, CPU frequency, governor, throttling state, and summed PMIC internal-rail proxy watts. |
 | `pmic-rails.csv` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Long-form named PMIC rail voltage/current/power samples. Rails without both voltage and current are not included. |
 | `power-boundary.json` | Canonical Pi 5 runs | `eval/scripts/lib/pi_telemetry.py` | Declares that telemetry is an internal-rail proxy, not total USB-C input power, and records excluded consumers and the source limitation. |
-| `published.csv`, `received.csv` | E-Perf-10 | `wafer-loadgen` opt-in tracing | Raw measurement-phase publisher and subscriber timestamp/sequence samples used to verify preservation and account for loss and duplication. The publisher offers without waiting when its bounded MQTT client queue is full. Warmup uses a disjoint sequence range; `subscriber-metadata.json` records the exclusive measurement sequence bound and the number of delayed warmup messages ignored. |
+| `published.csv`, `received.csv` | Historical focused E-Perf-10 diagnostics only | `wafer-loadgen` opt-in tracing | Raw publisher/subscriber timestamp and sequence samples retained for v11-v17 compatibility. Final E-Perf-10 rejects these mandatory traces and uses bounded summaries. |
+| `publisher-summary.json` | Final E-Perf-10 | `wafer-loadgen publish` | Bounded `intended`, `rejected`, and `enqueued` counters plus measured duration. `intended = rejected + enqueued` is mandatory. |
+| `subscriber-metadata.json` | Final E-Perf-10 and external-MQTT experiments | `wafer-loadgen subscribe` | Bounded receive, duplicate, ignored-warmup, unexpected-sequence, parse, latency, and sequence totals. The HDR count and received-event population must match. |
+| `capacity-run.json` | Final E-Perf-10 | `canonical_runner.py` | Trace-free run summary containing intended/rejected/enqueued/received/lost/duplicate counts, offered and achieved rates, loss, p50/p95/p99, CPU, RSS, thermal state, process/config receipts, controlled factors, and `thesis_evidence=true`. |
 | `resource-usage.csv` | E-Perf-10 | `canonical_runner.py` | One-second SUT samples: wall-clock timestamp, aggregate process CPU ticks, RSS bytes, and process count. MQTT loopback records the explicit no-SUT zero baseline. |
 | `process-audit.json` | E-Perf-10 | `canonical_runner.py` | Active SUT PID, process affinity, exclusivity, and allowed CPU set captured before measurement. |
-| `rate-sweep.json` | E-Perf-10 | `canonical_runner.py` | Per-run offered/achieved rates, loss/duplication, p50/p95/p99, CPU/RSS, throttling, and trace/profile hashes. Always labelled `thesis_evidence=false` for the focused diagnostic. |
+| `rate-sweep.json` | Historical focused E-Perf-10 diagnostics only | `canonical_runner.py` | Legacy trace-backed run summary, always `thesis_evidence=false`. It remains readable but is not accepted as a final-capacity leaf. |
+| `throughput-buckets.json` | Final E-Swap-3 and E-Swap-4 | `wafer-loadgen subscribe` / `canonical_runner.py` | Contiguous monotonic 100 ms output-rate buckets with unique/event/duplicate counts. E-Swap-3 spans exactly -10 s through +10 s around the disruption event. |
+| `disruption-timeline.json` | Final E-Swap-3 | `canonical_runner.py` | Strategy plus monotonic event, action-start, and action-end timestamps used for aligned dip, interruption, and recovery estimators. |
+| `burst-timeline.json` | Final E-Swap-4 | `BenchSource` / `canonical_runner.py` | One 1,000 to 2,000 to 1,000 msg/s burst with boundaries at measured seconds 55 and 65 and exactly one successful swap at second 60. |
 | `startup-preparation.json` | E-Perf-9 | `run-experiment.sh` | Filesystem-cache condition and preparation action completed before the timed runtime process starts. |
 | `startup.json` | E-Perf-9 | `wafer-runtime` | Monotonic process/config, component load/compile, instantiation, pipeline setup, and first-process durations; total startup duration; exactly-one-message proof; plugin SHA-256; and explicit compiled-component cache state. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
@@ -107,15 +113,36 @@ before reading. The matrix below is authoritative:
   `recovery.csv` (exact recovery samples), and `per_node_metrics.csv`
   (via `PipelineOrchestrator::export_per_node_metrics`).
 - `wafer-loadgen subscribe` owns `subscriber-metadata.json`,
-  `latency.hdr` (E2E path), `sequence.csv`, and opt-in `received.csv` traces.
-- `wafer-loadgen publish` owns opt-in `published.csv` traces.
-- `canonical_runner.py` owns E-Perf-10 `resource-usage.csv`,
-  `process-audit.json`, and `rate-sweep.json`, E-Backpressure `backpressure.json`,
+  `latency.hdr` (E2E path), `sequence.csv`, bounded `throughput-buckets.json`,
+  and historical opt-in `received.csv` traces.
+- `wafer-loadgen publish` owns `publisher-summary.json` and historical opt-in
+  `published.csv` traces.
+- `canonical_runner.py` owns final E-Perf-10 `capacity-run.json`,
+  `resource-usage.csv`, and `process-audit.json`; historical diagnostics retain
+  `rate-sweep.json`. It also owns final E-Swap `disruption-timeline.json` and
+  `burst-timeline.json`, E-Backpressure `backpressure.json`,
   E-Swap `swap_requests.json` and `hotswap-analysis.json`, plus E-Iso-7
   `branch-isolation.json` and the batch-level branch-A impact summary.
 - `run-experiment.sh` and the per-experiment shakedown scripts own
   `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9
   `startup-preparation.json`.
+
+### Final amended contract
+
+The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,105 schedule records, and 1,893 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`; diagnostic and focused entries remain in the separate `focused_pilot` object with `thesis_evidence=false`.
+
+Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`. `capacity-run.json` uses this counter identity:
+
+```text
+intended = rejected + enqueued
+enqueued = received_unique + downstream_lost
+received_events = received_unique + duplicates
+total_undelivered = rejected + downstream_lost
+```
+
+It must contain no mandatory per-message traces. `check_capacity_run_result` rejects missing fields, inconsistent counters, non-final evidence labels, unexpected sequences, or trace mode.
+
+Final E-Swap-3 requires 200 contiguous monotonic 100 ms buckets in `throughput-buckets.json`, plus `disruption-timeline.json` with `action_start_ns <= event_ns <= action_end_ns`. Final E-Swap-4 requires `burst-timeline.json` with rates 1,000/2,000/1,000, offsets 55/60/65 seconds, and one successful swap. Missing required files fail through the matrix contract; malformed files fail through experiment-specific semantic checks.
 
 ### Focused-pilot contract
 

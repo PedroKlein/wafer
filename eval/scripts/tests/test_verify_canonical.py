@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import hashlib
+import importlib.util
 import json
 import subprocess
 import sys
@@ -9,6 +10,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER = ROOT / "eval/scripts/verify-result-contract.py"
+SPEC = importlib.util.spec_from_file_location("verify_result_contract", VERIFIER)
+assert SPEC is not None and SPEC.loader is not None
+CONTRACT = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CONTRACT)
 
 
 def run(path: Path) -> subprocess.CompletedProcess[str]:
@@ -71,7 +76,7 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
     result = root / experiment / "rpi5-focused-test" / Path(condition) / "run-01-attempt-01"
     result.mkdir(parents=True)
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
-    required = matrix["experiments"][experiment]["required_outputs"]
+    required = matrix["focused_pilot"]["experiments"][experiment]["required_outputs"]
     for name in {
         "config.toml",
         "stdout.log",
@@ -103,9 +108,9 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
         "exit_codes": {"wafer_runtime": 0},
         "focused_pilot": {
             "id": matrix["focused_pilot"]["id"],
-            "matrix_sha256": hashlib.sha256(
-                (ROOT / "eval/canonical-matrix.json").read_bytes()
-            ).hexdigest(),
+            "matrix_sha256": json.loads(
+                (ROOT / "eval/focused-pilot-freeze.json").read_text()
+            )["canonical_matrix_sha256"],
             "memory_retention_fix_commit": matrix["focused_pilot"]["decisions"]["memory_retention"]["fix_commit"],
             "ekuiper_operator_concurrency": 1,
         },
@@ -397,67 +402,39 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
-def test_rate_sweep_contract_rejects_missing_resource_field() -> None:
+def test_historical_rate_sweep_contract_rejects_missing_resource_field() -> None:
+    result = {
+        "schema_version": 1,
+        "experiment": "e-perf-10",
+        "system": "mqtt-loopback",
+        "thesis_evidence": False,
+        "measurement_boundary": "publisher run window to subscriber receive timestamp",
+        "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
+        "offered_rate_msg_s": 1000,
+        "actual_offered_rate_msg_s": 1000.0,
+        "achieved_rate_msg_s": 999.0,
+        "measurement_duration_ns": 60_000_000_000,
+        "messages": {"offered": 60_000, "received": 60_000, "lost": 0, "duplicates": 0},
+        "loss_percent": 0.0,
+        "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+        "resources": {"scope": "no-sut", "cpu_percent": 0.0, "max_rss_bytes": 0},
+        "throttled": False,
+        "profile": {
+            "path": "profile.toml",
+            "sha256": "2" * 64,
+            "payload_template_sha256": "3" * 64,
+        },
+        "process_audit": {"path": "process-audit.json", "sha256": "4" * 64},
+        "traces": {"published": {}, "received": {}},
+    }
     with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        result = root / "e-perf-10" / "rpi5-test" / "mqtt-loopback" / "rate-01000" / "run-01"
-        result.mkdir(parents=True)
-        required = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]["e-perf-10"]["required_outputs"]
-        for name in {"config.toml", "stdout.log", *required, "pi-telemetry.csv", "pmic-rails.csv", "power-boundary.json"}:
-            (result / name).write_text("fixture\n")
-        (result / "measurement-window.json").write_text('{"started_ns":100,"finished_ns":200}\n')
-        (result / "metadata.json").write_text(
-            json.dumps(
-                {
-                    "experiment": "e-perf-10",
-                    "system": "mqtt-loopback",
-                    "thesis_evidence": False,
-                    "host_tag": "rpi5",
-                    "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
-                    "arch": "aarch64",
-                    "isolated_cpus": "1-3",
-                    "cpu_governors": ["performance"],
-                    "throttled": "0x0",
-                    "git_sha": "1" * 40,
-                    "git_dirty": False,
-                    "git_tags": ["rpi5-eval-v1"],
-                    "exit_codes": {"publisher": 0, "subscriber": 0},
-                }
-            )
-        )
-        sweep = {
-            "schema_version": 1,
-            "experiment": "e-perf-10",
-            "system": "mqtt-loopback",
-            "thesis_evidence": False,
-            "measurement_boundary": "publisher run window to subscriber receive timestamp",
-            "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
-            "offered_rate_msg_s": 1000,
-            "actual_offered_rate_msg_s": 1000.0,
-            "achieved_rate_msg_s": 999.0,
-            "measurement_duration_ns": 60_000_000_000,
-            "messages": {"offered": 60_000, "received": 60_000, "lost": 0, "duplicates": 0},
-            "loss_percent": 0.0,
-            "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
-            "resources": {"scope": "no-sut", "cpu_percent": 0.0, "max_rss_bytes": 0},
-            "throttled": False,
-            "profile": {
-                "path": "profile.toml",
-                "sha256": "2" * 64,
-                "payload_template_sha256": "3" * 64,
-            },
-            "process_audit": {"path": "process-audit.json", "sha256": "4" * 64},
-            "traces": {"published": {}, "received": {}},
-        }
-        (result / "rate-sweep.json").write_text(json.dumps(sweep))
-        assert run(result).returncode == 0
-
-        sweep["resources"].pop("cpu_percent")
-        (result / "rate-sweep.json").write_text(json.dumps(sweep))
-        completed = run(result)
-    assert completed.returncode == 1
-    assert "resources missing field: cpu_percent" in completed.stdout
-
+        path = Path(tmp) / "rate-sweep.json"
+        path.write_text(json.dumps(result))
+        assert CONTRACT.check_rate_sweep_result(path) == []
+        result["resources"].pop("cpu_percent")
+        path.write_text(json.dumps(result))
+        violations = CONTRACT.check_rate_sweep_result(path)
+    assert "resources missing field: cpu_percent" in " ".join(violations)
 
 def test_canonical_result_rejects_dirty_untagged_and_missing_output() -> None:
     mutations = {
@@ -483,6 +460,161 @@ def test_canonical_result_rejects_dirty_untagged_and_missing_output() -> None:
             completed = run(result)
         assert completed.returncode == 1, (expected, completed.stdout, completed.stderr)
         assert expected in completed.stdout, (expected, completed.stdout)
+
+
+def test_final_matrix_missing_new_artifacts_has_experiment_diagnostics() -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    with tempfile.TemporaryDirectory() as tmp:
+        leaf = Path(tmp)
+        for name in ("config.toml", "metadata.json", "stdout.log"):
+            (leaf / name).write_text("{}\n")
+        capacity, _ = CONTRACT.check_leaf(
+            leaf, "e-perf-10", canonical=True, canonical_matrix=matrix
+        )
+        swap, _ = CONTRACT.check_leaf(
+            leaf, "e-swap-3", canonical=True, canonical_matrix=matrix
+        )
+    assert "missing required canonical artefact for e-perf-10: capacity-run.json" in capacity
+    assert "missing required canonical artefact for e-swap-3: throughput-buckets.json" in swap
+    assert "missing required canonical artefact for e-swap-3: disruption-timeline.json" in swap
+
+
+def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
+    publisher = {
+        "schema_version": 1,
+        "intended": 60_000,
+        "rejected": 100,
+        "enqueued": 59_900,
+        "measurement_duration_ns": 60_000_000_000,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "publisher-summary.json"
+        path.write_text(json.dumps(publisher))
+        assert CONTRACT.check_publisher_summary(path) == []
+        publisher["enqueued"] += 1
+        path.write_text(json.dumps(publisher))
+        assert "counters do not reconcile" in " ".join(CONTRACT.check_publisher_summary(path))
+
+        subscriber = {
+            "started_at_ns": 1,
+            "ended_at_ns": 2,
+            "exit_reason": "total-messages",
+            "git_sha": "1" * 40,
+            "host_tag": "rpi5",
+            "sequence_end_exclusive": 60_000,
+            "ignored_sequence_count": 0,
+            "unexpected_sequence_count": 0,
+            "total_recorded": 60_000,
+            "total_messages": 60_000,
+            "parse_errors": 0,
+            "negative_latency_count": 0,
+            "latency_p50_ns": 1,
+            "latency_p95_ns": 2,
+            "latency_p99_ns": 3,
+            "sequence": {"total_received": 60_000, "total_gaps": 0, "total_duplicates": 0},
+        }
+        path = Path(tmp) / "subscriber-metadata.json"
+        path.write_text(json.dumps(subscriber))
+        assert CONTRACT.check_subscriber_metadata(path) == []
+        subscriber["unexpected_sequence_count"] = 1
+        path.write_text(json.dumps(subscriber))
+        assert "unexpected_sequence_count must be zero" in " ".join(
+            CONTRACT.check_subscriber_metadata(path)
+        )
+
+        capacity = {
+            "schema_version": 1,
+            "experiment": "e-perf-10",
+            "system": "wafer",
+            "thesis_evidence": True,
+            "rate_msg_s": 1000,
+            "measurement_duration_ns": 60_000_000_000,
+            "messages": {
+                "intended": 60_000,
+                "rejected": 0,
+                "enqueued": 60_000,
+                "received_events": 60_000,
+                "received_unique": 60_000,
+                "downstream_lost": 0,
+                "total_undelivered": 0,
+                "duplicates": 0,
+                "unexpected": 0,
+            },
+            "rates_msg_s": {"intended": 1000.0, "achieved": 1000.0},
+            "loss_percent": 0.0,
+            "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+            "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},
+            "thermal": {"max_temperature_millicelsius": 60_000, "throttled": False},
+            "process_audit": {"path": "process-audit.json", "sha256": "1" * 64},
+            "config": {"path": "config.toml", "sha256": "2" * 64},
+            "controlled_factors": {"qos": 1},
+            "traces": False,
+        }
+        path = Path(tmp) / "capacity-run.json"
+        path.write_text(json.dumps(capacity))
+        assert CONTRACT.check_capacity_run_result(path) == []
+        capacity["messages"]["received_unique"] -= 1
+        path.write_text(json.dumps(capacity))
+        assert "enqueued counters do not reconcile" in " ".join(
+            CONTRACT.check_capacity_run_result(path)
+        )
+
+
+def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
+    buckets = {
+        "schema_version": 1,
+        "clock": "monotonic",
+        "bucket_width_ns": 100_000_000,
+        "received_events": 200,
+        "buckets": [
+            {
+                "start_offset_ns": -10_000_000_000 + index * 100_000_000,
+                "end_offset_ns": -10_000_000_000 + (index + 1) * 100_000_000,
+                "received_unique": 1,
+                "received_events": 1,
+                "duplicates": 0,
+                "rate_msg_s": 10.0,
+            }
+            for index in range(200)
+        ],
+    }
+    disruption = {
+        "schema_version": 1,
+        "clock": "monotonic",
+        "strategy": "wafer-hotswap",
+        "event_ns": 60,
+        "action_start_ns": 60,
+        "action_end_ns": 61,
+    }
+    burst = {
+        "schema_version": 1,
+        "before_rate_msg_s": 1000,
+        "burst_rate_msg_s": 2000,
+        "after_rate_msg_s": 1000,
+        "burst_start_offset_ns": 55_000_000_000,
+        "swap_offset_ns": 60_000_000_000,
+        "burst_end_offset_ns": 65_000_000_000,
+        "successful_swaps": 1,
+    }
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        bucket_path = root / "throughput-buckets.json"
+        disruption_path = root / "disruption-timeline.json"
+        burst_path = root / "burst-timeline.json"
+        bucket_path.write_text(json.dumps(buckets))
+        disruption_path.write_text(json.dumps(disruption))
+        burst_path.write_text(json.dumps(burst))
+        assert CONTRACT.check_throughput_buckets(bucket_path, 200) == []
+        assert CONTRACT.check_disruption_timeline(disruption_path) == []
+        assert CONTRACT.check_burst_timeline(burst_path) == []
+        buckets["buckets"][1]["start_offset_ns"] += 1
+        bucket_path.write_text(json.dumps(buckets))
+        assert "not contiguous" in " ".join(CONTRACT.check_throughput_buckets(bucket_path, 200))
+        burst["successful_swaps"] = 2
+        burst_path.write_text(json.dumps(burst))
+        assert "successful_swaps must be 1" in " ".join(
+            CONTRACT.check_burst_timeline(burst_path)
+        )
 
 
 if __name__ == "__main__":
