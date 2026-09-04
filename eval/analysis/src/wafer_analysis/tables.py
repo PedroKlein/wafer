@@ -1,7 +1,8 @@
 """LaTeX table generation from analysis results."""
 
-import pandas as pd
+from pathlib import Path
 
+import pandas as pd
 
 HOTSWAP_DURATION_FIELDS = (
     "compile_ns",
@@ -28,7 +29,9 @@ def hotswap_timeline_table(evidence: dict) -> tuple[pd.DataFrame, str]:
     for event in evidence.get("events", []):
         missing = [field for field in HOTSWAP_DURATION_FIELDS if field not in event]
         if missing:
-            raise ValueError(f"hot-swap event missing raw nanosecond fields: {', '.join(missing)}")
+            raise ValueError(
+                f"hot-swap event missing raw nanosecond fields: {', '.join(missing)}"
+            )
         if any(key.endswith("_ms") for key in event):
             raise ValueError("hot-swap raw evidence must use nanosecond field names")
         row = {
@@ -55,6 +58,17 @@ def hotswap_timeline_table(evidence: dict) -> tuple[pd.DataFrame, str]:
     return pd.DataFrame(rows, columns=columns), HOTSWAP_INTERPRETATION
 
 
+def save_table(df: pd.DataFrame, name: str, directory: str | Path) -> tuple[Path, Path]:
+    """Write one reproducible table as CSV data and LaTeX presentation."""
+    output = Path(directory)
+    output.mkdir(parents=True, exist_ok=True)
+    csv_path = output / f"{name}.csv"
+    tex_path = output / f"{name}.tex"
+    df.to_csv(csv_path, index=False)
+    tex_path.write_text(df.to_latex(index=False, escape=True))
+    return csv_path, tex_path
+
+
 def results_to_latex(
     df: pd.DataFrame,
     caption: str,
@@ -62,21 +76,21 @@ def results_to_latex(
     columns: list[str] | None = None,
 ) -> str:
     """Convert a DataFrame to a LaTeX table string.
-    
+
     Args:
         df: Data to render.
         caption: Table caption.
         label: LaTeX label for cross-referencing.
         columns: Subset of columns to include (None = all).
-    
+
     Returns:
         Complete LaTeX table environment string.
     """
     if columns:
         df = df[columns]
-    
+
     latex = df.to_latex(index=False, escape=True)
-    
+
     return (
         f"\\begin{{table}}[htbp]\n"
         f"\\centering\n"

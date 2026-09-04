@@ -22,9 +22,22 @@ The notebooks consume one explicitly identified result batch. They never select 
 | `10-aot-startup.ipynb` | E-Perf-9 | Filesystem and compiled-component cache state by startup phase |
 | `10-summary-stats.ipynb` | Focused set | Artifact availability inventory without repeated headline claims |
 
-All output is inline. Figures and tables label the independent run count, units, evidence status, and uncertainty status. Diagnostic focused-pilot data use `thesis_evidence=false` and descriptive uncertainty. Power values, when present, are labelled **Raspberry Pi 5 PMIC internal-rail proxy** rather than total board power.
+Tables remain inline. Final figures are also written as PDF and PNG, and final tables as CSV and LaTeX, when `WAFER_ANALYSIS_OUTPUT_DIR` is set. Every output labels the independent run count, units, estimator, evidence status, uncertainty, and claim boundary. Explicit diagnostic inputs are always forced to `thesis_evidence=false` with descriptive uncertainty, regardless of labels inside historical metadata. Power values, when present, are labelled **Raspberry Pi 5 PMIC internal-rail proxy** rather than total board power.
 
-Missing and failed conditions remain `PENDING` with a null value. They are not converted to zero or omitted.
+Missing and failed diagnostic conditions remain `PENDING` with a null value. They are not converted to zero or omitted. Canonical mode is different: wrong-host, dirty, mixed-SHA, throttled, failed, malformed, incomplete, or unapproved input raises an error instead of rendering a partial result.
+
+## Final visual manifest
+
+`wafer_analysis.canonical.FINAL_VISUAL_MANIFEST` is the machine-readable manifest. It keeps these metric groups separate:
+
+- E-Perf-1/2 run-level target-load latency;
+- E-Perf-7 metering effect;
+- E-Perf-10 offered versus achieved rate, pooled loss, p99 latency, delivery ceiling, normalized p99 knee, and MQTT support-path limitation;
+- E-Swap internal phases and sink-observed gaps;
+- E-Swap-3 event-aligned dip, action duration, recovery, and sequence integrity;
+- E-Swap-4 one event from each independent burst run.
+
+Percentile summaries are never presented as an empirical CDF.
 
 ## Focused-pilot artifact inventory
 
@@ -57,17 +70,21 @@ The complete and missing-leaf synthetic executions are reviewed for these proper
 
 ## Run an explicit canonical batch
 
-Install the analysis environment, export the batch identifier once, then execute a notebook:
+Install the analysis environment, provide the human approval receipt, export the batch identifier once, then execute a notebook:
 
 ```bash
 cd eval/analysis
 uv sync
+export WAFER_FULL_RUN_APPROVAL=/path/to/full-run-approval.json
 export WAFER_EVAL_BATCH_ID=<batch-id>
+export WAFER_ANALYSIS_OUTPUT_DIR=/path/to/generated-analysis
 uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
   notebooks/09-saturation.ipynb
 ```
 
-`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies Raspberry Pi 5 provenance, a clean tagged source, zero throttling, passed completion receipts, and one source SHA.
+`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the approval decision and batch identity, Raspberry Pi 5 provenance, final-evidence labeling, a clean tagged source, zero throttling, passed completion receipts, one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
+
+The analysis gate consumes a minimal approval subset: `schema_version=1`, `decision=APPROVE`, `batch_id`, `wafer_git_sha`, and `canonical_matrix_sha256`. The T14 launch receipt is a strict superset and additionally records its timestamp, release tag, tcc-doc SHA, schedule hash, binary/plugin receipts, targeted-pilot ID, runtime/storage estimates, and `campaign_started=false`. Explicit diagnostic paths never consume or satisfy the approval gate.
 
 ## Run an explicit diagnostic directory
 

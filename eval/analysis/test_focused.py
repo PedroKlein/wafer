@@ -21,8 +21,14 @@ def test_artifact_inventory_covers_every_followup_question() -> None:
         "bounded queue pressure",
         "internal and sink-observed hot-swap timing",
     }
-    assert inventory.loc[inventory["artifact"] == "backpressure.json", "status"].item() == "READY"
-    assert inventory.loc[inventory["artifact"] == "branch-isolation.json", "status"].item() == "PENDING"
+    assert (
+        inventory.loc[inventory["artifact"] == "backpressure.json", "status"].item()
+        == "READY"
+    )
+    assert (
+        inventory.loc[inventory["artifact"] == "branch-isolation.json", "status"].item()
+        == "PENDING"
+    )
     assert inventory["thesis_evidence"].eq(False).all()
 
 
@@ -63,18 +69,18 @@ def test_evidence_label_exposes_sample_units_and_claim_boundary() -> None:
 
 def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
     notebook_dir = Path(__file__).parent / "notebooks"
-    for name in {
+    for name in (
         "05-hotswap-timeline.ipynb",
         "06-fault-injection.ipynb",
         "09-saturation.ipynb",
         "09-backpressure.ipynb",
         "10-aot-startup.ipynb",
-    }:
+    ):
         notebook = json.loads((notebook_dir / name).read_text())
         source = "".join("".join(cell.get("source", [])) for cell in notebook["cells"])
         assert "N" in source, name
-        assert "thesis_evidence=false" in source, name
-        assert "descriptive-only uncertainty" in source, name
+        assert "thesis_evidence" in source, name
+        assert "descriptive" in source, name
         assert "PENDING" in source, name
         assert "never zero" in source, name
 
@@ -83,13 +89,17 @@ def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
         "".join(cell.get("source", [])) for cell in saturation["cells"]
     )
     assert "set_yscale('log')" in saturation_source
+    assert "SYSTEM_COLORS" in saturation_source
+    assert "axhline(.01" in saturation_source
+    assert "axhline(2.0" in saturation_source
 
     hotswap = json.loads((notebook_dir / "05-hotswap-timeline.ipynb").read_text())
     hotswap_source = "".join(
         "".join(cell.get("source", [])) for cell in hotswap["cells"]
     )
-    assert "set_xscale('log')" in hotswap_source
-    assert "set_yscale('symlog'" in hotswap_source
+    assert "median_dip_percent" in hotswap_source
+    assert "median_action_duration_ns" in hotswap_source
+    assert "median_recovery_ns" in hotswap_source
 
     summary = json.loads((notebook_dir / "10-summary-stats.ipynb").read_text())
     summary_source = "".join(
