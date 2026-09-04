@@ -22,6 +22,7 @@ from canonical_runner import (  # noqa: E402
     capacity_scout_failed_attempt_stop_reason,
     capacity_scout_next_rate,
     capacity_scout_safety_action,
+    capacity_scout_source_state,
     persist_capacity_scout_decision,
     replay_capacity_scout_decisions,
     build_focused_schedule,
@@ -806,6 +807,19 @@ def test_capacity_scout_progress_has_one_complete_schema() -> None:
     assert entry["attempt"] == 2
     assert entry["temperature_millicelsius"] == 64_000
     assert entry["counters"] == counters
+
+
+def test_capacity_scout_source_state_uses_deploy_receipt_without_git_checkout() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        receipt = {
+            "git_sha": "a" * 40,
+            "git_dirty": False,
+            "git_tags": ["rpi5-capacity-scout-v2"],
+        }
+        (root / "SOURCE_STATE.json").write_text(json.dumps(receipt))
+
+        assert capacity_scout_source_state(root) == receipt
 
 
 def test_capacity_scout_safety_boundaries() -> None:

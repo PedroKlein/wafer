@@ -3717,6 +3717,45 @@ def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], d
     return decisions, accepted
 
 
+def capacity_scout_source_state(root: Path) -> dict:
+    try:
+        sha = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "-C", str(root), "status", "--porcelain"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+        )
+        tags = [
+            tag
+            for tag in subprocess.check_output(
+                ["git", "-C", str(root), "tag", "--points-at", sha],
+                text=True,
+                stderr=subprocess.DEVNULL,
+            ).splitlines()
+            if tag
+        ]
+        state = {"git_sha": sha, "git_dirty": dirty, "git_tags": tags}
+    except (OSError, subprocess.CalledProcessError):
+        try:
+            state = json.loads((root / "SOURCE_STATE.json").read_text())
+        except (OSError, ValueError) as error:
+            raise ValueError("capacity-scout source provenance is unavailable") from error
+    if not re.fullmatch(r"[0-9a-f]{40}", str(state.get("git_sha", ""))):
+        raise ValueError("capacity-scout source SHA is invalid")
+    if not isinstance(state.get("git_dirty"), bool):
+        raise ValueError("capacity-scout source dirty flag is invalid")
+    tags = state.get("git_tags")
+    if not isinstance(tags, list) or not all(isinstance(tag, str) and tag for tag in tags):
+        raise ValueError("capacity-scout source tags are invalid")
+    return {"git_sha": state["git_sha"], "git_dirty": state["git_dirty"], "git_tags": tags}
+
+
 def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoch: float) -> dict:
     telemetry_available = True
     try:
@@ -3748,14 +3787,17 @@ def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoc
     if failures:
         repeated = max(Counter(failures).values())
     batch_meta = json.loads((ledger / "batch.json").read_text())
-    current_sha = subprocess.check_output(
-        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-    ).strip()
-    clean = not subprocess.check_output(
-        ["git", "-C", str(root), "status", "--porcelain"], text=True
-    ).strip()
+    try:
+        source = capacity_scout_source_state(root)
+        provenance_matches = (
+            source["git_sha"] == batch_meta["source_git_sha"]
+            and source["git_dirty"] is False
+            and source["git_tags"] == batch_meta["source_git_tags"]
+        )
+    except ValueError:
+        provenance_matches = False
     return {
-        "provenance_matches": current_sha == batch_meta["source_git_sha"] and clean,
+        "provenance_matches": provenance_matches,
         "telemetry_available": telemetry_available,
         "throttled": throttled,
         "temperature_millicelsius": temperature,
@@ -3924,15 +3966,18 @@ def main() -> int:
         if batch_path.is_file():
             batch = json.loads(batch_path.read_text())
         else:
-            source_sha = subprocess.check_output(
-                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-            ).strip()
+            source = capacity_scout_source_state(root)
+            if not args.dry_run and source["git_dirty"]:
+                raise ValueError("capacity-scout source must be clean")
+            if not args.dry_run and not source["git_tags"]:
+                raise ValueError("capacity-scout source must be tagged")
             batch = {
                 "schema_version": 1,
                 "batch_class": "capacity-scout",
                 "thesis_evidence": False,
                 "batch_id": batch_id,
-                "source_git_sha": source_sha,
+                "source_git_sha": source["git_sha"],
+                "source_git_tags": source["git_tags"],
                 "started_at": utc_now(),
                 "started_at_epoch": time.time(),
             }
