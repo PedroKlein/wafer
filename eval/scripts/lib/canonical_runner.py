@@ -2872,6 +2872,7 @@ def run_restart_item(
             time.sleep(max(0.0, action_wait_target - time.monotonic()))
             action_started_ns = time.time_ns()
             action_started_monotonic_ns = time.monotonic_ns()
+            alignment_error_ns = action_started_ns - scheduled_event_ns
             if item.condition == "wafer-hotswap":
                 plugin = root / "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
                 response = post_hot_swap("transform", plugin)
