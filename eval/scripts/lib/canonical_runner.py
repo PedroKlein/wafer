@@ -272,6 +272,273 @@ def verify_capacity_scout_result_files(output: Path, result: dict) -> None:
             raise ValueError(f"capacity-scout {name} receipt checksum mismatch")
 
 
+def validate_capacity_run_result(result: dict) -> None:
+    required = {
+        "schema_version", "batch_class", "experiment", "thesis_evidence", "system",
+        "rate_msg_s", "source_git_sha", "source_dirty", "measurement_duration_ns",
+        "messages", "rates_msg_s", "loss_percent", "latency_ns", "latency_hdr",
+        "resources", "thermal", "process_audit", "config", "loadgen_profile",
+        "provenance", "controlled_factors", "traces",
+    }
+    missing = sorted(required - result.keys())
+    if missing:
+        raise ValueError(f"capacity-run result missing fields: {', '.join(missing)}")
+    if result["batch_class"] != "final-capacity":
+        raise ValueError("capacity-run result requires batch_class=final-capacity")
+    if result["experiment"] != "e-perf-10" or result["thesis_evidence"] is not True:
+        raise ValueError("capacity-run result must be final E-Perf-10 evidence")
+    if result["traces"] is not False:
+        raise ValueError("capacity-run result must not contain per-message traces")
+    if result["system"] not in RATE_SWEEP_SYSTEMS:
+        raise ValueError("capacity-run result has an unknown system")
+    controlled_fields = {
+        "broker", "topic", "payload_template_sha256", "qos", "warmup_secs",
+        "measurement_secs", "load_shape", "sequence_example_limit", "support_cpus", "sut_cpus",
+    }
+    if set(result["controlled_factors"]) != controlled_fields:
+        raise ValueError("capacity-run controlled factors are incomplete")
+    if result["rate_msg_s"] not in RATE_SWEEP_RATES:
+        raise ValueError("capacity-run result rate is outside the frozen grid")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(result["source_git_sha"])):
+        raise ValueError("capacity-run source_git_sha is invalid")
+    if result["source_dirty"] is not False:
+        raise ValueError("capacity-run source must be clean")
+    summary = analyze_capacity_scout_summary(
+        {field: result["messages"][field] for field in ("intended", "rejected", "enqueued")},
+        {
+            "total_recorded": result["messages"]["received_events"],
+            "total_messages": result["messages"]["received_events"],
+            "ignored_sequence_count": result["messages"].get("ignored_warmup", 0),
+            "unexpected_sequence_count": result["messages"]["unexpected"],
+            "parse_errors": 0,
+            "negative_latency_count": 0,
+            **{f"latency_{name}_ns": result["latency_ns"][name] for name in ("p50", "p95", "p99")},
+            "sequence": {
+                "total_received": result["messages"]["received_events"],
+                "total_duplicates": result["messages"]["duplicates"],
+            },
+        },
+        int(result["measurement_duration_ns"]),
+    )
+    if summary["messages"] != result["messages"]:
+        raise ValueError("capacity-run message counters do not reconcile")
+    for field in ("intended", "achieved"):
+        if not math.isclose(float(result["rates_msg_s"].get(field, -1)), summary["rates_msg_s"][field]):
+            raise ValueError(f"capacity-run {field} rate differs from counters")
+    achieved_ratio = summary["rates_msg_s"]["achieved"] / result["rate_msg_s"]
+    if not math.isclose(float(result["rates_msg_s"].get("achieved_ratio", -1)), achieved_ratio):
+        raise ValueError("capacity-run achieved ratio differs from counters")
+    if not math.isclose(float(result["loss_percent"]), summary["loss_percent"]):
+        raise ValueError("capacity-run loss_percent differs from counters")
+    if result["latency_ns"] != summary["latency_ns"]:
+        raise ValueError("capacity-run latency summary differs from subscriber metadata")
+    histogram = result["latency_hdr"]
+    if int(histogram.get("samples", -1)) != result["messages"]["received_events"]:
+        raise ValueError("capacity-run HDR count differs from received events")
+    if {
+        "lowest_ns": histogram.get("lowest_ns"),
+        "highest_ns": histogram.get("highest_ns"),
+        "significant_digits": histogram.get("significant_digits"),
+    } != {"lowest_ns": 1_000, "highest_ns": 10_000_000_000, "significant_digits": 3}:
+        raise ValueError("capacity-run HDR precision differs from the frozen recorder")
+    if result["thermal"].get("throttled") is not False:
+        raise ValueError("capacity-run result is throttled")
+    if result["messages"]["unexpected"] != 0:
+        raise ValueError("capacity-run result contains unexpected sequences")
+    for receipt in ("latency_hdr", "process_audit", "config", "loadgen_profile", "provenance"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(result[receipt].get("sha256", ""))):
+            raise ValueError(f"capacity-run {receipt} receipt has invalid sha256")
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    if not ordered:
+        raise ValueError("cannot summarize an empty sample")
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return ordered[lower]
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
+
+
+def _bootstrap_median_ci(values: list[float], seed: str) -> list[float]:
+    generator = random.Random(int(hashlib.sha256(seed.encode()).hexdigest(), 16))
+    medians = [
+        statistics.median(generator.choices(values, k=len(values)))
+        for _ in range(2_000)
+    ]
+    return [_percentile(medians, 0.025), _percentile(medians, 0.975)]
+
+
+def _run_summary(values: list[float], seed: str) -> dict:
+    return {
+        "min": min(values),
+        "median": statistics.median(values),
+        "q1": _percentile(values, 0.25),
+        "q3": _percentile(values, 0.75),
+        "max": max(values),
+        "bootstrap_median_ci95": _bootstrap_median_ci(values, seed),
+    }
+
+
+def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
+    if set(runs_by_system) != set(RATE_SWEEP_SYSTEMS):
+        raise ValueError("capacity envelope requires all four frozen systems")
+    by_system_rate: dict[str, dict[int, list[dict]]] = {}
+    for system, runs in runs_by_system.items():
+        by_rate = {rate: [] for rate in RATE_SWEEP_RATES}
+        for run in runs:
+            validate_capacity_run_result(run)
+            if run["system"] != system:
+                raise ValueError("capacity run stored under the wrong system")
+            by_rate[run["rate_msg_s"]].append(run)
+        by_system_rate[system] = by_rate
+
+    def raw_classification(rate_runs: list[dict]) -> str:
+        if len(rate_runs) != 30:
+            return "incomplete"
+        intended = sum(run["messages"]["intended"] for run in rate_runs)
+        undelivered = sum(run["messages"]["total_undelivered"] for run in rate_runs)
+        pooled_loss = undelivered / intended if intended else 1.0
+        mean_achieved_ratio = statistics.mean(
+            run["rates_msg_s"]["achieved_ratio"] for run in rate_runs
+        )
+        return "good" if pooled_loss <= 0.01 and mean_achieved_ratio >= 0.99 else "bad"
+
+    mqtt_classifications = {
+        rate: raw_classification(by_system_rate["mqtt-loopback"][rate])
+        for rate in RATE_SWEEP_RATES
+    }
+    first_support_bad = next(
+        (rate for rate in RATE_SWEEP_RATES if mqtt_classifications[rate] == "bad"), None
+    )
+    systems = {}
+    for system in RATE_SWEEP_SYSTEMS:
+        baseline_runs = by_system_rate[system][RATE_SWEEP_BASELINE]
+        baseline_p99 = (
+            statistics.median(run["latency_ns"]["p99"] for run in baseline_runs)
+            if len(baseline_runs) == 30
+            else None
+        )
+        rates = []
+        for rate in RATE_SWEEP_RATES:
+            rate_runs = by_system_rate[system][rate]
+            classification = raw_classification(rate_runs)
+            support_confounded = (
+                system != "mqtt-loopback"
+                and first_support_bad is not None
+                and rate >= first_support_bad
+            )
+            if support_confounded:
+                classification = "support-confounded"
+            intended = sum(run["messages"]["intended"] for run in rate_runs)
+            undelivered = sum(run["messages"]["total_undelivered"] for run in rate_runs)
+            pooled_loss = undelivered / intended if intended else None
+            mean_achieved_ratio = (
+                statistics.mean(run["rates_msg_s"]["achieved_ratio"] for run in rate_runs)
+                if rate_runs
+                else None
+            )
+            metrics = {
+                "loss": [run["messages"]["total_undelivered"] / run["messages"]["intended"] for run in rate_runs],
+                "achieved_rate_msg_s": [run["rates_msg_s"]["achieved"] for run in rate_runs],
+                "achieved_ratio": [run["rates_msg_s"]["achieved_ratio"] for run in rate_runs],
+                "p99_ns": [run["latency_ns"]["p99"] for run in rate_runs],
+            }
+            normalized = (
+                [value / baseline_p99 for value in metrics["p99_ns"]]
+                if baseline_p99
+                else []
+            )
+            rates.append(
+                {
+                    "rate_msg_s": rate,
+                    "run_count": len(rate_runs),
+                    "classification": classification,
+                    "pooled_loss": pooled_loss,
+                    "mean_achieved_ratio": mean_achieved_ratio,
+                    "run_summary": {
+                        name: _run_summary(values, f"{system}:{rate}:{name}")
+                        for name, values in metrics.items()
+                    } if rate_runs else None,
+                    "normalized_p99": (
+                        _run_summary(normalized, f"{system}:{rate}:normalized-p99")
+                        if normalized
+                        else None
+                    ),
+                }
+            )
+
+        classifications = [entry["classification"] for entry in rates]
+        seen_bad = False
+        non_monotonic = False
+        for classification in classifications:
+            if classification == "bad":
+                seen_bad = True
+            elif classification == "good" and seen_bad:
+                non_monotonic = True
+        good_rates = [entry["rate_msg_s"] for entry in rates if entry["classification"] == "good"]
+        highest_good = max(good_rates, default=None)
+        if highest_good is None:
+            ceiling_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
+        elif non_monotonic:
+            ceiling_censoring = "non-monotonic"
+        elif system != "mqtt-loopback" and first_support_bad is not None:
+            ceiling_censoring = f"right-censored-above-{highest_good}-by-support-path"
+        elif rates[-1]["classification"] == "good":
+            ceiling_censoring = f"right-censored-above-{highest_good}"
+        else:
+            ceiling_censoring = "none"
+
+        eligible = [
+            entry
+            for entry in rates
+            if entry["classification"] not in {"support-confounded", "incomplete"}
+        ]
+        knee_rate = next(
+            (
+                entry["rate_msg_s"]
+                for entry in eligible
+                if entry["normalized_p99"]["median"] > RATE_SWEEP_P99_MULTIPLIER
+            ),
+            None,
+        )
+        if knee_rate is not None:
+            knee_censoring = "none"
+        elif eligible:
+            knee_censoring = f"right-censored-above-{eligible[-1]['rate_msg_s']}"
+            if system != "mqtt-loopback" and first_support_bad is not None:
+                knee_censoring += "-by-support-path"
+        else:
+            knee_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
+
+        systems[system] = {
+            "complete": all(entry["run_count"] == 30 for entry in rates),
+            "non_monotonic": non_monotonic,
+            "support_censoring": {
+                "from_rate_msg_s": first_support_bad,
+                "highest_support_uncensored_rate_msg_s": (
+                    max((rate for rate in RATE_SWEEP_RATES if first_support_bad is None or rate < first_support_bad), default=None)
+                    if system != "mqtt-loopback"
+                    else max(RATE_SWEEP_RATES)
+                ),
+            },
+            "delivery_ceiling": {"rate_msg_s": highest_good, "censoring": ceiling_censoring},
+            "normalized_p99_knee": {"rate_msg_s": knee_rate, "censoring": knee_censoring},
+            "rates": rates,
+        }
+    return {
+        "schema_version": 1,
+        "experiment": "e-perf-10",
+        "thesis_evidence": True,
+        "sample_unit": "run",
+        "required_runs_per_rate": 30,
+        "rate_points_msg_s": list(RATE_SWEEP_RATES),
+        "systems": systems,
+    }
+
+
 def classify_capacity_scout_probe(results: list[dict]) -> str:
     if len(results) != CAPACITY_SCOUT_REPETITIONS:
         raise ValueError("capacity-scout probe requires exactly three complete runs")
@@ -379,27 +646,20 @@ def build_capacity_scout_rate_block(
     return items
 
 
-def build_capacity_scout_invocation(
-    root: Path, system: str, rate_msg_s: int, run_index: int, output: Path
-) -> dict:
-    item = next(
-        item
-        for item in build_capacity_scout_rate_block(rate_msg_s, (system,))
-        if item.run_index == run_index
-    )
+def build_capacity_invocation(root: Path, item: RunItem, output: Path) -> dict:
     input_topic = "wafer/telemetry"
-    subscriber_topic = input_topic if system == "mqtt-loopback" else "wafer/telemetry/hot"
-    profile = tomllib.loads((root / RATE_SWEEP_PROFILE).read_text())["loadgen"]
+    subscriber_topic = input_topic if item.system == "mqtt-loopback" else "wafer/telemetry/hot"
+    profile = tomllib.loads((root / str(item.loadgen_profile)).read_text())["loadgen"]
     return {
-        "system": system,
+        "system": item.system,
         "config": item.config,
         "controlled_factors": {
             "broker": "127.0.0.1:1883",
             "topic": input_topic,
             "payload_template_sha256": profile["payload_template_sha256"],
             "qos": 1,
-            "warmup_secs": CAPACITY_SCOUT_WARMUP_SECS,
-            "measurement_secs": CAPACITY_SCOUT_MEASUREMENT_SECS,
+            "warmup_secs": item.warmup_secs,
+            "measurement_secs": item.measurement_secs,
             "load_shape": "steady",
             "sequence_example_limit": 1_024,
             "support_cpus": item.support_cpus,
@@ -414,6 +674,17 @@ def build_capacity_scout_invocation(
             root, item, "subscribe", output=output, topic=subscriber_topic
         ),
     }
+
+
+def build_capacity_scout_invocation(
+    root: Path, system: str, rate_msg_s: int, run_index: int, output: Path
+) -> dict:
+    item = next(
+        item
+        for item in build_capacity_scout_rate_block(rate_msg_s, (system,))
+        if item.run_index == run_index
+    )
+    return build_capacity_invocation(root, item, output)
 
 
 def persist_capacity_scout_decision(path: Path, decision: dict) -> bool:
@@ -2205,7 +2476,7 @@ def loadgen_command(
         ]
         if item.experiment in {"e-perf-10", "capacity-scout"} and item.total_messages is not None:
             command.extend(["--sequence-end-exclusive", str(item.total_messages)])
-        if item.experiment == "capacity-scout":
+        if item.experiment in {"e-perf-10", "capacity-scout"}:
             command.extend(["--sequence-example-limit", "1024"])
         if trace_file is not None:
             command.extend(["--trace-file", str(trace_file)])
@@ -2829,20 +3100,19 @@ def _binary_file_receipt(path: Path, samples: int | None = None) -> dict:
     return receipt
 
 
-def write_capacity_scout_result(
-    root: Path,
+def _write_capacity_result(
     item: RunItem,
     output: Path,
-    measurement_duration_ns: int,
     controlled_factors: dict,
+    *,
+    final: bool,
 ) -> dict:
     if (output / "published.csv").exists() or (output / "received.csv").exists():
-        raise ValueError("capacity-scout run must not contain per-message traces")
+        raise ValueError("capacity run must not contain per-message traces")
     publisher = json.loads((output / "publisher-summary.json").read_text())
     subscriber = json.loads((output / "subscriber-metadata.json").read_text())
-    summary = analyze_capacity_scout_summary(
-        publisher, subscriber, measurement_duration_ns
-    )
+    measurement_duration_ns = int(publisher["measurement_duration_ns"])
+    summary = analyze_capacity_scout_summary(publisher, subscriber, measurement_duration_ns)
     config = output / "config.toml"
     profile = output / "loadgen-profile.toml"
     process_audit = output / "process-audit.json"
@@ -2851,24 +3121,28 @@ def write_capacity_scout_result(
     expected_scope = "no-sut" if item.system == "mqtt-loopback" else "sut"
     if resources["scope"] != expected_scope:
         raise ValueError(
-            f"capacity-scout resource scope {resources['scope']!r}, expected {expected_scope!r}"
+            f"capacity resource scope {resources['scope']!r}, expected {expected_scope!r}"
         )
-    thermal = _read_pi_thermal(output / "pi-telemetry.csv")
     result = {
         "schema_version": 1,
-        "batch_class": "capacity-scout",
-        "thesis_evidence": False,
+        "batch_class": "final-capacity" if final else "capacity-scout",
+        "thesis_evidence": final,
         "system": item.system,
         "rate_msg_s": item.offered_rate_msg_s,
         "source_git_sha": metadata.get("git_sha"),
         "source_dirty": metadata.get("git_dirty"),
         "measurement_duration_ns": measurement_duration_ns,
         **summary,
-        "latency_hdr": _binary_file_receipt(
-            output / "latency.hdr", summary["messages"]["received_events"]
-        ),
+        "latency_hdr": {
+            **_binary_file_receipt(
+                output / "latency.hdr", summary["messages"]["received_events"]
+            ),
+            "lowest_ns": int(subscriber["histogram_lowest_ns"]),
+            "highest_ns": int(subscriber["histogram_highest_ns"]),
+            "significant_digits": int(subscriber["histogram_sig_digits"]),
+        },
         "resources": resources,
-        "thermal": thermal,
+        "thermal": _read_pi_thermal(output / "pi-telemetry.csv"),
         "process_audit": _binary_file_receipt(process_audit),
         "config": _binary_file_receipt(config),
         "loadgen_profile": _binary_file_receipt(profile),
@@ -2876,9 +3150,36 @@ def write_capacity_scout_result(
         "controlled_factors": controlled_factors,
         "traces": False,
     }
-    validate_capacity_scout_result(result)
-    (output / "capacity-scout.json").write_text(json.dumps(result, indent=2) + "\n")
+    if final:
+        result["experiment"] = "e-perf-10"
+        result["rates_msg_s"]["achieved_ratio"] = (
+            result["rates_msg_s"]["achieved"] / item.offered_rate_msg_s
+        )
+        validate_capacity_run_result(result)
+        name = "capacity-run.json"
+    else:
+        validate_capacity_scout_result(result)
+        name = "capacity-scout.json"
+    (output / name).write_text(json.dumps(result, indent=2) + "\n")
     return result
+
+
+def write_capacity_scout_result(
+    root: Path,
+    item: RunItem,
+    output: Path,
+    measurement_duration_ns: int,
+    controlled_factors: dict,
+) -> dict:
+    del root
+    publisher = json.loads((output / "publisher-summary.json").read_text())
+    publisher.setdefault("measurement_duration_ns", measurement_duration_ns)
+    (output / "publisher-summary.json").write_text(json.dumps(publisher, indent=2) + "\n")
+    return _write_capacity_result(item, output, controlled_factors, final=False)
+
+
+def write_capacity_result(item: RunItem, output: Path, controlled_factors: dict) -> dict:
+    return _write_capacity_result(item, output, controlled_factors, final=True)
 
 
 def write_rate_sweep_result(
@@ -2963,11 +3264,10 @@ def run_rate_sweep_item(
     output.mkdir(parents=True)
     config = root / item.config
     shutil.copy2(config, output / "config.toml")
-    if item.experiment == "capacity-scout":
+    final_capacity = item.experiment == "e-perf-10" and FOCUSED_MATRIX_SHA_ENV not in os.environ
+    if item.experiment == "capacity-scout" or final_capacity:
         shutil.copy2(root / str(item.loadgen_profile), output / "loadgen-profile.toml")
-        invocation = build_capacity_scout_invocation(
-            root, item.system, int(item.offered_rate_msg_s or 0), item.run_index, output
-        )
+        invocation = build_capacity_invocation(root, item, output)
         (output / "invocation-receipt.json").write_text(
             json.dumps(invocation, indent=2) + "\n"
         )
@@ -3064,7 +3364,7 @@ def run_rate_sweep_item(
                     "subscribe",
                     output=output,
                     topic=output_topic,
-                    trace_file=(output / "received.csv") if item.experiment == "e-perf-10" else None,
+                    trace_file=(output / "received.csv") if item.experiment == "e-perf-10" and not final_capacity else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -3084,8 +3384,8 @@ def run_rate_sweep_item(
                     item,
                     "publish",
                     topic=input_topic,
-                    trace_file=(output / "published.csv") if item.experiment == "e-perf-10" else None,
-                    summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" else None,
+                    trace_file=(output / "published.csv") if item.experiment == "e-perf-10" and not final_capacity else None,
+                    summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" or final_capacity else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -3192,6 +3492,10 @@ def run_rate_sweep_item(
             )
             if result["thermal"]["throttled"]:
                 raise RuntimeError("Pi throttling occurred during capacity-scout measurement")
+        elif final_capacity:
+            invocation = json.loads((output / "invocation-receipt.json").read_text())
+            write_capacity_result(item, output, invocation["controlled_factors"])
+            verify_result(root, output)
         else:
             result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
             if result["throttled"]:
@@ -3315,10 +3619,11 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata["run_index"] = item.run_index
     metadata["config_path"] = item.config
     if item.experiment in {"e-perf-10", "capacity-scout"}:
-        metadata["thesis_evidence"] = False
+        metadata["thesis_evidence"] = item.experiment == "e-perf-10"
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
-    if item.experiment == "capacity-scout":
-        metadata["batch_class"] = "capacity-scout"
+        metadata["batch_class"] = (
+            "final-capacity" if item.experiment == "e-perf-10" else "capacity-scout"
+        )
     if item.experiment in HOTSWAP_SHARED_EXPERIMENTS:
         metadata["measurement_source_leaf"] = str(output.relative_to(root))
         metadata["shared_measurement"] = False
@@ -3564,6 +3869,31 @@ def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
 def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
     result_root = root / "eval/results/e-perf-10" / f"rpi5-{batch_id}"
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
+    capacity_paths = list(result_root.rglob("capacity-run.json"))
+    if capacity_paths:
+        for path in capacity_paths:
+            status_path = path.parent / "canonical-status.json"
+            try:
+                if json.loads(status_path.read_text()).get("status") != "passed":
+                    continue
+                result = json.loads(path.read_text())
+                validate_capacity_run_result(result)
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            by_system[result["system"]].append(result)
+        summary = {
+            **estimate_capacity_envelope(by_system),
+            "batch_id": batch_id,
+            "criteria": {
+                "max_pooled_loss": RATE_SWEEP_MAX_LOSS_PERCENT / 100,
+                "min_mean_achieved_ratio": 0.99,
+                "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
+            },
+        }
+        path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "rate-sweep-summary.json"
+        path.write_text(json.dumps(summary, indent=2) + "\n")
+        return path
+
     for path in result_root.rglob("rate-sweep.json"):
         status_path = path.parent / "canonical-status.json"
         try:

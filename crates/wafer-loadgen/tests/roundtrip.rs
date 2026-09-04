@@ -161,9 +161,12 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     assert_eq!(pub_report.published, TOTAL_MESSAGES, "publisher reported unexpected sent count");
     let summary: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&publisher_summary)?)?;
+    assert_eq!(summary["schema_version"], 1);
     assert_eq!(summary["intended"], TOTAL_MESSAGES);
     assert_eq!(summary["rejected"], 0);
     assert_eq!(summary["enqueued"], TOTAL_MESSAGES);
+    assert_eq!(summary["measurement_duration_ns"], 2_000_000_000_u64);
+    assert!(summary["deadline_misses"].is_u64());
 
     // Subscriber will exit once TOTAL_MESSAGES observed. Cap the wait so a
     // hung test fails loudly instead of blocking CI.

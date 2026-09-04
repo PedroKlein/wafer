@@ -481,11 +481,14 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     if args.dry_run {
         info!(target: "wafer_loadgen::publish::dry_run", "{}", args.dry_run_report());
         return Ok(PublisherReport {
+            schema_version: 1,
             published: 0,
             errors: 0,
             intended: 0,
             rejected: 0,
             enqueued: 0,
+            measurement_duration_ns: 0,
+            deadline_misses: 0,
             elapsed_ms: 0,
             actual_rate: 0.0,
             hotswap_triggered_at_secs: None,
@@ -547,6 +550,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let mut seq = args.sequence_start;
     let mut offered: u64 = 0;
     let mut errors: u64 = 0;
+    let mut deadline_misses: u64 = 0;
 
     loop {
         // Fetch next publish offset and sleep until then. Open-loop: even if
@@ -578,6 +582,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
                 warn!("Publish error (seq={seq}): {error}");
             }
             errors = errors.saturating_add(1);
+        }
+        if start.elapsed() >= scheduler.peek() {
+            deadline_misses = deadline_misses.saturating_add(1);
         }
 
         seq = seq.saturating_add(1);
@@ -619,11 +626,14 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     );
 
     let report = PublisherReport {
+        schema_version: 1,
         published: offered,
         errors,
         intended: offered,
         rejected: errors,
         enqueued: offered.saturating_sub(errors),
+        measurement_duration_ns: args.duration_secs.saturating_mul(1_000_000_000),
+        deadline_misses,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
         hotswap_triggered_at_secs: hotswap_target,
@@ -637,11 +647,14 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
 /// Post-run summary returned by `run_publisher`.
 #[derive(Debug, Clone, Serialize)]
 pub struct PublisherReport {
+    pub schema_version: u8,
     pub published: u64,
     pub errors: u64,
     pub intended: u64,
     pub rejected: u64,
     pub enqueued: u64,
+    pub measurement_duration_ns: u64,
+    pub deadline_misses: u64,
     pub elapsed_ms: u64,
     pub actual_rate: f64,
     /// If profile = hotswap-trigger, the offset (secs) at which the trigger

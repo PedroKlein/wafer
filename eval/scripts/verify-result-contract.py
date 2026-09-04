@@ -161,13 +161,24 @@ def check_publisher_summary(path: Path) -> list[str]:
     value = _load_json(path, "publisher-summary.json", violations)
     if value is None:
         return violations
-    required = {"schema_version", "intended", "rejected", "enqueued", "measurement_duration_ns"}
+    required = {
+        "schema_version", "intended", "rejected", "enqueued",
+        "measurement_duration_ns", "deadline_misses",
+    }
     violations.extend(
         f"publisher-summary.json missing field: {field}"
         for field in sorted(required - value.keys())
     )
-    if all(field in value for field in ("intended", "rejected", "enqueued")):
+    if required <= value.keys():
         try:
+            counters = [
+                int(value[field])
+                for field in ("intended", "rejected", "enqueued", "deadline_misses")
+            ]
+            if any(counter < 0 for counter in counters):
+                violations.append("publisher-summary.json counters must be non-negative")
+            if int(value["measurement_duration_ns"]) <= 0:
+                violations.append("publisher-summary.json measurement duration must be positive")
             if int(value["intended"]) != int(value["rejected"]) + int(value["enqueued"]):
                 violations.append("publisher-summary.json counters do not reconcile")
         except (TypeError, ValueError):
@@ -184,7 +195,8 @@ def check_subscriber_metadata(path: Path) -> list[str]:
         "started_at_ns", "ended_at_ns", "exit_reason", "git_sha", "host_tag",
         "sequence_end_exclusive", "ignored_sequence_count", "unexpected_sequence_count",
         "total_recorded", "total_messages", "parse_errors", "negative_latency_count",
-        "latency_p50_ns", "latency_p95_ns", "latency_p99_ns", "sequence",
+        "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
+        "histogram_lowest_ns", "histogram_highest_ns", "histogram_sig_digits", "sequence",
     }
     violations.extend(
         f"subscriber-metadata.json missing field: {field}"
@@ -201,6 +213,14 @@ def check_subscriber_metadata(path: Path) -> list[str]:
             violations.append("subscriber-metadata.json measurement interval is invalid")
         if int(value["total_recorded"]) != int(sequence["total_received"]):
             violations.append("subscriber-metadata.json recorded count does not reconcile")
+        if int(value["total_messages"]) != int(value["total_recorded"]):
+            violations.append("subscriber-metadata.json message and HDR populations differ")
+        if (
+            int(value["histogram_lowest_ns"]) != 1_000
+            or int(value["histogram_highest_ns"]) != 10_000_000_000
+            or int(value["histogram_sig_digits"]) != 3
+        ):
+            violations.append("subscriber-metadata.json histogram precision differs from the frozen recorder")
         for field in ("unexpected_sequence_count", "parse_errors", "negative_latency_count"):
             if int(value[field]) != 0:
                 violations.append(f"subscriber-metadata.json {field} must be zero")
@@ -217,8 +237,8 @@ def check_capacity_run_result(path: Path) -> list[str]:
     required = {
         "schema_version", "experiment", "system", "thesis_evidence", "rate_msg_s",
         "measurement_duration_ns", "messages", "rates_msg_s", "loss_percent",
-        "latency_ns", "resources", "thermal", "process_audit", "config",
-        "controlled_factors", "traces",
+        "latency_ns", "latency_hdr", "resources", "thermal", "process_audit", "config",
+        "loadgen_profile", "provenance", "controlled_factors", "traces",
     }
     violations.extend(
         f"capacity-run.json missing field: {field}"
@@ -252,10 +272,55 @@ def check_capacity_run_result(path: Path) -> list[str]:
                 violations.append("capacity-run.json message counters must be integers")
     if value.get("experiment") != "e-perf-10":
         violations.append("capacity-run.json experiment must be e-perf-10")
+    if value.get("batch_class") != "final-capacity":
+        violations.append("capacity-run.json batch_class must be final-capacity")
     if value.get("thesis_evidence") is not True:
         violations.append("capacity-run.json must set thesis_evidence=true")
     if value.get("traces") is not False:
         violations.append("capacity-run.json final capture must be trace-free")
+    histogram = value.get("latency_hdr")
+    if not isinstance(histogram, dict) or not {
+        "path", "sha256", "samples", "lowest_ns", "highest_ns", "significant_digits"
+    } <= histogram.keys():
+        violations.append("capacity-run.json latency_hdr summary is invalid")
+    elif (
+        histogram["samples"] != messages.get("received_events")
+        or histogram["lowest_ns"] != 1_000
+        or histogram["highest_ns"] != 10_000_000_000
+        or histogram["significant_digits"] != 3
+    ):
+        violations.append("capacity-run.json latency_hdr does not match received events or precision")
+    return violations
+
+
+def check_capacity_artifact_reconciliation(leaf: Path) -> list[str]:
+    violations: list[str] = []
+    publisher = _load_json(leaf / "publisher-summary.json", "publisher-summary.json", violations)
+    subscriber = _load_json(leaf / "subscriber-metadata.json", "subscriber-metadata.json", violations)
+    capacity = _load_json(leaf / "capacity-run.json", "capacity-run.json", violations)
+    if publisher is None or subscriber is None or capacity is None:
+        return violations
+    expected = {
+        "intended": publisher.get("intended"),
+        "rejected": publisher.get("rejected"),
+        "enqueued": publisher.get("enqueued"),
+        "received_events": subscriber.get("total_recorded"),
+        "duplicates": subscriber.get("sequence", {}).get("total_duplicates"),
+        "unexpected": subscriber.get("unexpected_sequence_count"),
+        "ignored_warmup": subscriber.get("ignored_sequence_count"),
+    }
+    for field, value in expected.items():
+        if capacity.get("messages", {}).get(field) != value:
+            violations.append(f"capacity-run.json {field} differs from bounded source summary")
+    if capacity.get("measurement_duration_ns") != publisher.get("measurement_duration_ns"):
+        violations.append("capacity-run.json duration differs from publisher-summary.json")
+    for percentile in ("p50", "p95", "p99"):
+        if capacity.get("latency_ns", {}).get(percentile) != subscriber.get(
+            f"latency_{percentile}_ns"
+        ):
+            violations.append(
+                f"capacity-run.json {percentile} differs from subscriber-metadata.json"
+            )
     return violations
 
 
@@ -803,6 +868,7 @@ def check_leaf(
         violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
         violations.extend(check_capacity_run_result(leaf / "capacity-run.json"))
+        violations.extend(check_capacity_artifact_reconciliation(leaf))
     if experiment == "e-swap-3" and not focused:
         violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 200))
         violations.extend(check_disruption_timeline(leaf / "disruption-timeline.json"))

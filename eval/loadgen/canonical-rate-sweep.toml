@@ -1,5 +1,5 @@
-# Diagnostic fixed-rate sweep for matched Pipeline A comparators.
-# Rate points and thresholds are frozen before Raspberry Pi 5 execution.
+# Final trace-free E-Perf-10 load profile. Rates and repetitions come from
+# eval/canonical-matrix.json, the sole executable source of truth.
 
 [loadgen]
 rate = 1000
@@ -11,12 +11,14 @@ payload_template_sha256 = "fffb14064f8d7956b5ce410c8298ab5c511bd46e5dffcde838997
 profile = "steady"
 
 [sweep]
-rate_points_msg_s = [500, 1000, 2000, 4000, 8000, 16000]
+rate_points_msg_s = [1000, 4000, 8000, 15000, 16000]
 baseline_rate_msg_s = 1000
-p99_multiplier_limit = 2.0
+normalized_p99_knee_multiplier = 2.0
 max_loss_percent = 1.0
-repetitions = 4
-ordering = "seeded rate blocks with four-run rotated system order"
-p99_aggregation = "median across repetitions"
-loss_aggregation = "sum(lost) / sum(offered)"
-thesis_evidence = false
+min_achieved_ratio = 0.99
+repetitions = 30
+ordering = "seeded rate blocks with thirty-run balanced system order"
+p99_aggregation = "median of run p99 normalized to system baseline median"
+loss_aggregation = "sum(total_undelivered) / sum(intended)"
+achieved_aggregation = "mean(run achieved_rate / intended_rate)"
+thesis_evidence = true

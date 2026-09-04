@@ -505,6 +505,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         "rejected": 100,
         "enqueued": 59_900,
         "measurement_duration_ns": 60_000_000_000,
+        "deadline_misses": 0,
     }
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "publisher-summary.json"
@@ -530,6 +531,9 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "latency_p50_ns": 1,
             "latency_p95_ns": 2,
             "latency_p99_ns": 3,
+            "histogram_lowest_ns": 1_000,
+            "histogram_highest_ns": 10_000_000_000,
+            "histogram_sig_digits": 3,
             "sequence": {"total_received": 60_000, "total_gaps": 0, "total_duplicates": 0},
         }
         path = Path(tmp) / "subscriber-metadata.json"
@@ -543,6 +547,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
 
         capacity = {
             "schema_version": 1,
+            "batch_class": "final-capacity",
             "experiment": "e-perf-10",
             "system": "wafer",
             "thesis_evidence": True,
@@ -562,10 +567,20 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "rates_msg_s": {"intended": 1000.0, "achieved": 1000.0},
             "loss_percent": 0.0,
             "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+            "latency_hdr": {
+                "path": "latency.hdr",
+                "sha256": "3" * 64,
+                "samples": 60_000,
+                "lowest_ns": 1_000,
+                "highest_ns": 10_000_000_000,
+                "significant_digits": 3,
+            },
             "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},
             "thermal": {"max_temperature_millicelsius": 60_000, "throttled": False},
             "process_audit": {"path": "process-audit.json", "sha256": "1" * 64},
             "config": {"path": "config.toml", "sha256": "2" * 64},
+            "loadgen_profile": {"path": "loadgen-profile.toml", "sha256": "4" * 64},
+            "provenance": {"path": "metadata.json", "sha256": "5" * 64},
             "controlled_factors": {"qos": 1},
             "traces": False,
         }

@@ -17,6 +17,7 @@ from canonical_runner import (  # noqa: E402
     analyze_backpressure,
     analyze_capacity_scout_summary,
     analyze_rate_sweep_traces,
+    estimate_capacity_envelope,
     build_capacity_scout_invocation,
     build_capacity_scout_rate_block,
     capacity_scout_failed_attempt_stop_reason,
@@ -49,10 +50,12 @@ from canonical_runner import (  # noqa: E402
     summarize_recovery,
     validate_backpressure_result,
     validate_capacity_scout_decision_replay,
+    validate_capacity_run_result,
     validate_capacity_scout_result,
     validate_ekuiper_process_snapshot,
     verify_capacity_scout_result_files,
     write_capacity_scout_progress,
+    write_capacity_result,
     write_capacity_scout_result,
     validate_focused_freeze,
     validate_rate_sweep_result,
@@ -550,6 +553,9 @@ def test_capacity_scout_result_is_emitted_from_bounded_artifacts() -> None:
             "latency_p50_ns": 100,
             "latency_p95_ns": 200,
             "latency_p99_ns": 300,
+            "histogram_lowest_ns": 1_000,
+            "histogram_highest_ns": 10_000_000_000,
+            "histogram_sig_digits": 3,
             "sequence": {"total_received": 3985, "total_duplicates": 5},
         }))
         (output / "latency.hdr").write_bytes(b"hdr")
@@ -584,6 +590,82 @@ def test_capacity_scout_result_is_emitted_from_bounded_artifacts() -> None:
         (output / "config.toml").write_text("tampered\n")
         with pytest.raises(ValueError, match="config receipt checksum mismatch"):
             verify_capacity_scout_result_files(output, result)
+
+
+def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        (output / "publisher-summary.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "intended": 4000,
+                    "rejected": 10,
+                    "enqueued": 3990,
+                    "measurement_duration_ns": 1_000_000_000,
+                    "deadline_misses": 12,
+                }
+            )
+        )
+        (output / "subscriber-metadata.json").write_text(
+            json.dumps(
+                {
+                    "total_recorded": 3985,
+                    "total_messages": 3985,
+                    "parse_errors": 0,
+                    "negative_latency_count": 0,
+                    "ignored_sequence_count": 0,
+                    "unexpected_sequence_count": 0,
+                    "latency_p50_ns": 100,
+                    "latency_p95_ns": 200,
+                    "latency_p99_ns": 300,
+                    "histogram_lowest_ns": 1_000,
+                    "histogram_highest_ns": 10_000_000_000,
+                    "histogram_sig_digits": 3,
+                    "sequence": {"total_received": 3985, "total_duplicates": 5},
+                }
+            )
+        )
+        for name, contents in {
+            "latency.hdr": "hdr",
+            "process-audit.json": "{}\n",
+            "config.toml": "[pipeline]\n",
+            "loadgen-profile.toml": "[loadgen]\n",
+            "metadata.json": json.dumps({"git_sha": "a" * 40, "git_dirty": False}),
+        }.items():
+            (output / name).write_text(contents)
+        (output / "resource-usage.csv").write_text(
+            "timestamp_ns,cpu_time_ticks,rss_bytes,process_count\n"
+            "1000000000,100,10000000,1\n2000000000,150,20000000,1\n"
+        )
+        (output / "pi-telemetry.csv").write_text(
+            "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,rail_proxy_watts\n"
+            "1,64000,2400000000,performance,0x0,4.2\n"
+        )
+        item = next(
+            item
+            for item in build_schedule({"e-perf-10"}, seed=1729)
+            if item.system == "wafer" and item.offered_rate_msg_s == 4000
+        )
+        controlled = build_capacity_scout_invocation(
+            ROOT, item.system, 4000, 1, output
+        )["controlled_factors"]
+        result = write_capacity_result(item, output, controlled)
+
+        assert result["batch_class"] == "final-capacity"
+        assert result["thesis_evidence"] is True
+        assert result["messages"] == capacity_scout_fixture()["messages"]
+        assert result["rates_msg_s"]["achieved_ratio"] == 0.995
+        assert result["latency_hdr"]["significant_digits"] == 3
+        assert (output / "capacity-run.json").is_file()
+        assert not (output / "published.csv").exists()
+        assert not (output / "received.csv").exists()
+        validate_capacity_run_result(result)
+
+        invalid = json.loads(json.dumps(result))
+        invalid["messages"]["downstream_lost"] += 1
+        with pytest.raises(ValueError, match="message counters do not reconcile"):
+            validate_capacity_run_result(invalid)
 
 
 def test_capacity_scout_validator_rejects_counter_drift_and_evidence_promotion() -> None:
@@ -968,11 +1050,14 @@ def test_final_schedule_contains_every_declared_condition_once_per_run() -> None
 
 
 def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
-    schedule = build_schedule({"e-perf-10"}, seed=1729)
-    systems = ("mqtt-loopback", "native", "wafer", "ekuiper")
-    rates = (1000, 4000, 8000, 15000, 16000)
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    definition = matrix["experiments"]["e-perf-10"]
+    schedule = build_schedule({"e-perf-10"}, seed=matrix["final_campaign"]["seed"])
+    systems = tuple(definition["systems"])
+    rates = tuple(definition["rate_points_msg_s"])
 
-    assert len(schedule) == 30 * len(systems) * len(rates)
+    assert rates == (1000, 4000, 8000, 15000, 16000)
+    assert len(schedule) == 30 * len(systems) * len(rates) == 600
     assert {
         (item.system, item.offered_rate_msg_s)
         for item in schedule
@@ -997,7 +1082,7 @@ def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
         assert all(set(observed) == set(systems) for observed in positions.values())
 
 
-def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
+def test_final_capacity_loadgen_commands_use_bounded_summaries_without_raw_traces() -> None:
     item = next(
         item
         for item in build_schedule({"e-perf-10"}, seed=1729)
@@ -1009,7 +1094,7 @@ def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
         item,
         "publish",
         topic="wafer/telemetry",
-        trace_file=output / "published.csv",
+        summary_file=output / "publisher-summary.json",
     )
     warmup = loadgen_command(
         ROOT,
@@ -1025,19 +1110,210 @@ def test_rate_sweep_loadgen_commands_bind_rate_topics_and_raw_traces() -> None:
         "subscribe",
         output=output,
         topic="wafer/telemetry/hot",
-        trace_file=output / "received.csv",
     )
 
     assert publisher[publisher.index("--rate") + 1] == "4000"
     assert publisher[publisher.index("--topic") + 1] == "wafer/telemetry"
-    assert publisher[publisher.index("--trace-file") + 1] == str(output / "published.csv")
+    assert publisher[publisher.index("--summary-file") + 1] == str(
+        output / "publisher-summary.json"
+    )
+    assert "--trace-file" not in publisher
     assert "--drop-when-full" in publisher
     assert warmup[warmup.index("--sequence-start") + 1] == "240000"
     assert "--drop-when-full" in warmup
     assert subscriber[subscriber.index("--total-messages") + 1] == "240000"
     assert subscriber[subscriber.index("--sequence-end-exclusive") + 1] == "240000"
     assert subscriber[subscriber.index("--topic") + 1] == "wafer/telemetry/hot"
-    assert subscriber[subscriber.index("--trace-file") + 1] == str(output / "received.csv")
+    assert subscriber[subscriber.index("--sequence-example-limit") + 1] == "1024"
+    assert "--trace-file" not in subscriber
+
+
+def capacity_run_fixture(
+    system: str,
+    rate: int,
+    *,
+    loss_ratio: float = 0.0,
+    achieved_ratio: float = 1.0,
+    p99_ns: int = 1_000_000,
+) -> dict:
+    intended = rate
+    total_undelivered = round(intended * loss_ratio)
+    received_unique = round(rate * achieved_ratio)
+    rejected = min(total_undelivered, intended - received_unique)
+    enqueued = intended - rejected
+    downstream_lost = enqueued - received_unique
+    result = capacity_scout_fixture()
+    result.update(
+        {
+            "batch_class": "final-capacity",
+            "experiment": "e-perf-10",
+            "thesis_evidence": True,
+            "system": system,
+            "rate_msg_s": rate,
+            "messages": {
+                "intended": intended,
+                "rejected": rejected,
+                "enqueued": enqueued,
+                "received_events": received_unique,
+                "received_unique": received_unique,
+                "downstream_lost": downstream_lost,
+                "total_undelivered": total_undelivered,
+                "duplicates": 0,
+                "unexpected": 0,
+                "ignored_warmup": 0,
+            },
+            "rates_msg_s": {
+                "intended": float(rate),
+                "achieved": float(received_unique),
+                "achieved_ratio": achieved_ratio,
+            },
+            "loss_percent": 100.0 * loss_ratio,
+            "latency_ns": {"p50": p99_ns // 2, "p95": p99_ns, "p99": p99_ns},
+            "latency_hdr": {
+                "path": "latency.hdr",
+                "sha256": "1" * 64,
+                "samples": received_unique,
+                "lowest_ns": 1_000,
+                "highest_ns": 10_000_000_000,
+                "significant_digits": 3,
+            },
+            "traces": False,
+        }
+    )
+    return result
+
+
+def capacity_batch(
+    classifications: dict[str, dict[int, tuple[float, float, int]]],
+) -> dict[str, list[dict]]:
+    return {
+        system: [
+            capacity_run_fixture(
+                system,
+                rate,
+                loss_ratio=loss,
+                achieved_ratio=achieved,
+                p99_ns=p99,
+            )
+            for rate, (loss, achieved, p99) in rates.items()
+            for _ in range(30)
+        ]
+        for system, rates in classifications.items()
+    }
+
+
+def test_capacity_estimator_handles_first_rate_failure() -> None:
+    runs = capacity_batch(
+        {
+            system: {
+                1000: (0.02, 0.98, 1_000_000),
+                4000: (0.02, 0.98, 1_000_000),
+                8000: (0.02, 0.98, 1_000_000),
+                15000: (0.02, 0.98, 1_000_000),
+                16000: (0.02, 0.98, 1_000_000),
+            }
+            for system in ("mqtt-loopback", "native", "wafer", "ekuiper")
+        }
+    )
+    summary = estimate_capacity_envelope(runs)
+    assert summary["systems"]["mqtt-loopback"]["delivery_ceiling"] == {
+        "rate_msg_s": None,
+        "censoring": "left-censored-below-1000",
+    }
+    assert summary["systems"]["wafer"]["support_censoring"]["from_rate_msg_s"] == 1000
+
+
+def test_capacity_estimator_handles_interior_failure_and_normalized_knee() -> None:
+    rates = {
+        1000: (0.0, 1.0, 1_000_000),
+        4000: (0.0, 1.0, 1_900_000),
+        8000: (0.02, 0.98, 2_100_000),
+        15000: (0.02, 0.98, 3_000_000),
+        16000: (0.02, 0.98, 4_000_000),
+    }
+    summary = estimate_capacity_envelope(
+        capacity_batch({system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")})
+    )
+    mqtt = summary["systems"]["mqtt-loopback"]
+    assert mqtt["delivery_ceiling"] == {"rate_msg_s": 4000, "censoring": "none"}
+    assert mqtt["normalized_p99_knee"] == {"rate_msg_s": 8000, "censoring": "none"}
+    assert mqtt["rates"][1]["pooled_loss"] == 0.0
+    assert mqtt["rates"][1]["mean_achieved_ratio"] == 1.0
+    assert mqtt["rates"][1]["run_summary"]["p99_ns"]["median"] == 1_900_000
+
+
+def test_capacity_estimator_handles_all_rates_good() -> None:
+    rates = {
+        rate: (0.0, 1.0, 1_000_000)
+        for rate in (1000, 4000, 8000, 15000, 16000)
+    }
+    summary = estimate_capacity_envelope(
+        capacity_batch({system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")})
+    )
+    assert summary["systems"]["wafer"]["delivery_ceiling"] == {
+        "rate_msg_s": 16000,
+        "censoring": "right-censored-above-16000",
+    }
+    assert summary["systems"]["wafer"]["normalized_p99_knee"] == {
+        "rate_msg_s": None,
+        "censoring": "right-censored-above-16000",
+    }
+
+
+def test_capacity_estimator_flags_non_contiguous_good_rates() -> None:
+    rates = {
+        1000: (0.0, 1.0, 1_000_000),
+        4000: (0.02, 0.98, 1_000_000),
+        8000: (0.0, 1.0, 1_000_000),
+        15000: (0.02, 0.98, 1_000_000),
+        16000: (0.02, 0.98, 1_000_000),
+    }
+    summary = estimate_capacity_envelope(
+        capacity_batch({system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")})
+    )
+    mqtt = summary["systems"]["mqtt-loopback"]
+    assert mqtt["non_monotonic"] is True
+    assert mqtt["delivery_ceiling"] == {"rate_msg_s": 8000, "censoring": "non-monotonic"}
+
+
+def test_capacity_estimator_marks_sut_rates_support_censored() -> None:
+    mqtt = {
+        1000: (0.0, 1.0, 1_000_000),
+        4000: (0.0, 1.0, 1_000_000),
+        8000: (0.02, 0.98, 1_000_000),
+        15000: (0.02, 0.98, 1_000_000),
+        16000: (0.02, 0.98, 1_000_000),
+    }
+    sut = {
+        rate: (0.0, 1.0, 1_000_000)
+        for rate in (1000, 4000, 8000, 15000, 16000)
+    }
+    summary = estimate_capacity_envelope(
+        capacity_batch(
+            {
+                "mqtt-loopback": mqtt,
+                "native": sut,
+                "wafer": sut,
+                "ekuiper": sut,
+            }
+        )
+    )
+    wafer = summary["systems"]["wafer"]
+    assert wafer["support_censoring"] == {
+        "from_rate_msg_s": 8000,
+        "highest_support_uncensored_rate_msg_s": 4000,
+    }
+    assert wafer["delivery_ceiling"] == {
+        "rate_msg_s": 4000,
+        "censoring": "right-censored-above-4000-by-support-path",
+    }
+    assert [rate["classification"] for rate in wafer["rates"]] == [
+        "good",
+        "good",
+        "support-confounded",
+        "support-confounded",
+        "support-confounded",
+    ]
 
 
 def test_rate_sweep_result_schema_rejects_every_required_field() -> None:
