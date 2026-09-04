@@ -1,6 +1,4 @@
 # Passthrough with fuel and epoch metering disabled by omission.
-#
-# Ablation for E-Perf-7 metering-overhead decomposition. This is the
 
 [pipeline]
 name = "bench-passthrough-no-metering"

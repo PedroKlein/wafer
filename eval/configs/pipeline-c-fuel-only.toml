@@ -1,6 +1,4 @@
 # Passthrough with fuel metering only; epoch is disabled by omission.
-#
-# Ablation for E-Perf-7 metering-overhead decomposition. Epoch is set to a
 
 [pipeline]
 name = "bench-passthrough-fuel-only"

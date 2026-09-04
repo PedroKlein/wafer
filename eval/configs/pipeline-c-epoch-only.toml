@@ -1,7 +1,4 @@
 # Passthrough with epoch metering only; fuel is disabled by omission.
-#
-# Ablation for E-Perf-7 metering-overhead decomposition. Fuel is set to a
-# never trips. The runtime does NOT treat `fuel = 0` as unlimited; that
 
 [pipeline]
 name = "bench-passthrough-epoch-only"
