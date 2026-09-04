@@ -206,6 +206,26 @@ def test_canonical_batch_rejects_failed_leaf(fake_results: pathlib.Path):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
+def test_canonical_batch_selects_one_passed_retry_without_pooling_failed_attempt(
+    fake_results: pathlib.Path,
+):
+    batch = canonical_batch(fake_results)
+    next(batch.rglob("canonical-status.json")).write_text('{"status":"failed"}')
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-02")
+
+    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
+
+
+def test_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
+    fake_results: pathlib.Path,
+):
+    batch = canonical_batch(fake_results)
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-02")
+
+    with pytest.raises(ValueError, match="duplicate canonical run"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
 def test_canonical_batch_rejects_malformed_schema(fake_results: pathlib.Path):
     batch = canonical_batch(fake_results)
     metadata_path = next(batch.rglob("metadata.json"))

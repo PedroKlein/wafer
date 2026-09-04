@@ -200,27 +200,46 @@ def validate_canonical_batch(
     if not isinstance(definition, dict):
         raise TypeError(f"canonical matrix experiment {experiment} is malformed")
 
+    expected = _expected_units(definition)
     status_paths = sorted(path.rglob("canonical-status.json"))
     if not status_paths:
         raise ValueError(f"canonical batch has no completion receipts: {path}")
+    attempts: dict[tuple[str, int], list[tuple[pathlib.Path, dict]]] = {}
     for status_path in status_paths:
         status = _read_object(status_path, "canonical status")
-        if status.get("status") != "passed":
-            raise ValueError(f"failed canonical input: {status_path.parent}")
-        if not (status_path.parent / "metadata.json").is_file():
-            raise ValueError(f"canonical input lacks metadata: {status_path.parent}")
+        leaf = status_path.parent
+        relative = leaf.relative_to(path)
+        match = re.fullmatch(r"run-(\d+)(?:-attempt-\d+)?", relative.name)
+        if match is None or len(relative.parts) < 2:
+            raise ValueError(f"malformed canonical status path: {status_path}")
+        unit = ("/".join(relative.parts[:-1]), int(match.group(1)))
+        if unit not in expected:
+            raise ValueError(f"unexpected canonical attempt: {unit}")
+        attempts.setdefault(unit, []).append((status_path, status))
 
-    metadata_paths = sorted(path.rglob("metadata.json"))
-    if not metadata_paths:
-        raise ValueError(f"canonical batch has no metadata leaves: {path}")
+    selected: list[pathlib.Path] = []
+    for unit, unit_attempts in attempts.items():
+        passed = [
+            status_path.parent
+            for status_path, status in unit_attempts
+            if status.get("status") == "passed"
+        ]
+        if not passed:
+            raise ValueError(f"failed canonical input: {unit}")
+        if len(passed) != 1:
+            raise ValueError(f"duplicate canonical run: {unit}")
+        selected.extend(passed)
+
     shas: set[str] = set()
     observed: set[tuple[str, int]] = set()
     required_outputs = definition.get("required_outputs", [])
     if not isinstance(required_outputs, list):
         raise TypeError("canonical matrix required_outputs is malformed")
 
-    for metadata_path in metadata_paths:
-        leaf = metadata_path.parent
+    for leaf in selected:
+        metadata_path = leaf / "metadata.json"
+        if not metadata_path.is_file():
+            raise ValueError(f"canonical input lacks metadata: {leaf}")
         metadata = _read_object(metadata_path, "metadata schema")
         required_metadata = {
             "experiment",
@@ -283,7 +302,6 @@ def validate_canonical_batch(
     source_sha = next(iter(shas))
     if source_sha != approval["wafer_git_sha"]:
         raise ValueError("canonical input SHA differs from approval")
-    expected = _expected_units(definition)
     if observed != expected:
         missing = sorted(expected - observed)
         extra = sorted(observed - expected)
