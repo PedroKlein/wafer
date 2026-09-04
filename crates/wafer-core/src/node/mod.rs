@@ -12,7 +12,7 @@ pub mod wasm;
 
 pub use router::{RouterInstance, WasmRouter};
 pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition, ThroughputSample};
-pub use source::{BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
+pub use source::{BenchBurstSchedule, BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use native::{NativeFilter, NativeRouter, NativeTransform, ProcessNode};
 // Re-export the runner-side TransformNode enum near the top.
 // (Full definition below in this module.)

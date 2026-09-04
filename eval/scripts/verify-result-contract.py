@@ -547,13 +547,113 @@ def check_burst_timeline(path: Path) -> list[str]:
         "burst_rate_msg_s": 2_000,
         "after_rate_msg_s": 1_000,
         "burst_start_offset_ns": 55_000_000_000,
-        "swap_offset_ns": 60_000_000_000,
+        "scheduled_swap_offset_ns": 60_000_000_000,
         "burst_end_offset_ns": 65_000_000_000,
         "successful_swaps": 1,
     }
     for field, expected_value in expected.items():
         if value.get(field) != expected_value:
             violations.append(f"burst-timeline.json {field} must be {expected_value}")
+    try:
+        measurement_start = int(value["measurement_start_ns"])
+        burst_start = int(value["burst_start_ns"])
+        scheduled_swap = int(value["scheduled_swap_ns"])
+        actual_swap = int(value["swap_ns"])
+        burst_end = int(value["burst_end_ns"])
+        if (
+            value.get("timestamp_clock") != "unix-epoch"
+            or value.get("timestamp_clock_purpose") != "cross-process-alignment"
+            or value.get("scheduling_clock") != "monotonic"
+            or burst_start != measurement_start + 55_000_000_000
+            or scheduled_swap - burst_start != 5_000_000_000
+            or burst_end - scheduled_swap != 5_000_000_000
+            or int(value["actual_swap_offset_ns"]) != actual_swap - measurement_start
+            or int(value["swap_alignment_error_ns"]) != actual_swap - scheduled_swap
+            or int(value["swap_alignment_tolerance_ns"]) != 10_000_000
+            or abs(actual_swap - scheduled_swap) > 10_000_000
+            or not burst_start < actual_swap < burst_end
+            or int(value["measurement_end_ns"]) <= burst_end
+        ):
+            violations.append("burst-timeline.json clocks or centered swap are invalid")
+    except (KeyError, TypeError, ValueError):
+        violations.append("burst-timeline.json is missing timing evidence")
+    phases = value.get("phases")
+    expected_phases = {
+        "before": (1_000, 0, 55_000_000_000, 55_000),
+        "burst": (2_000, 55_000_000_000, 65_000_000_000, 20_000),
+        "after": (1_000, 65_000_000_000, 120_000_000_000, 55_000),
+    }
+    if not isinstance(phases, dict) or set(phases) != set(expected_phases):
+        return violations + ["burst-timeline.json phases are missing"]
+    for name, (rate, start, end, intended) in expected_phases.items():
+        phase = phases[name]
+        if (
+            phase.get("rate_msg_s") != rate
+            or phase.get("start_offset_ns") != start
+            or phase.get("end_offset_ns") != end
+            or phase.get("intended") != intended
+            or phase.get("emitted") != intended
+            or not isinstance(phase.get("received"), int)
+        ):
+            violations.append(f"burst-timeline.json {name} phase is invalid")
+    sequence = value.get("sequence")
+    if not isinstance(sequence, dict) or set(sequence) != {
+        "expected", "received", "gaps", "duplicates"
+    }:
+        violations.append("burst-timeline.json sequence evidence is invalid")
+    elif (
+        sequence["expected"] != 130_000
+        or sum(phases[name]["received"] for name in expected_phases) != sequence["received"]
+        or value.get("loss") != 130_000 - (sequence["received"] - sequence["duplicates"])
+        or sequence["gaps"] != value.get("loss")
+    ):
+        violations.append("burst-timeline.json sequence totals do not reconcile")
+    internal_phases = value.get("internal_swap_phases_ns", {})
+    if set(internal_phases) != {
+        "compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns"
+    } or any(type(duration) is not int or duration < 0 for duration in internal_phases.values()):
+        violations.append("burst-timeline.json internal swap phases are invalid")
+    return violations
+
+
+def check_swap4_reconciliation(leaf: Path) -> list[str]:
+    violations: list[str] = []
+    timeline = _load_json(leaf / "burst-timeline.json", "burst-timeline.json", violations)
+    throughput = _load_json(
+        leaf / "throughput-buckets.json", "throughput-buckets.json", violations
+    )
+    sink_timeline = _load_json(leaf / "swap_timeline.json", "swap_timeline.json", violations)
+    analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
+    try:
+        requests = json.loads((leaf / "swap_requests.json").read_text())
+    except (OSError, ValueError) as error:
+        return violations + [f"swap_requests.json is unreadable: {error}"]
+    if None in (timeline, throughput, sink_timeline, analysis):
+        return violations
+    try:
+        transitions = sink_timeline["transitions"]
+        events = analysis["events"]
+        if not isinstance(requests, list) or len(requests) != 1:
+            violations.append("final E-Swap-4 must contain exactly one swap request")
+        elif timeline["swap_ns"] != requests[0]["request_started_ns"]:
+            violations.append("E-Swap-4 actual swap timestamp differs from its request")
+        if len(transitions) != 1 or len(events) != 1 or analysis.get("sample_count") != 1:
+            violations.append("final E-Swap-4 must contain exactly one swap event")
+        elif (
+            timeline["sink_observed_output_gap_ns"] != transitions[0]["pause_ns"]
+            or timeline["sink_observed_output_gap_ns"]
+                != events[0]["sink_observed_output_gap_ns"]
+        ):
+            violations.append("E-Swap-4 sink gap evidence does not reconcile")
+        phase_received = [
+            timeline["phases"][name]["received"] for name in ("before", "burst", "after")
+        ]
+        if phase_received != throughput["phase_received_messages"]:
+            violations.append("E-Swap-4 phase receive populations do not reconcile")
+        if timeline["sequence"]["received"] != throughput["received_events"]:
+            violations.append("E-Swap-4 sequence and bucket populations do not reconcile")
+    except (KeyError, TypeError, ValueError):
+        violations.append("E-Swap-4 cross-artifact evidence is invalid")
     return violations
 
 
@@ -1045,8 +1145,9 @@ def check_leaf(
         violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
         violations.extend(check_swap3_reconciliation(leaf, metadata))
     if experiment == "e-swap-4" and not focused:
-        violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json"))
+        violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 1_200))
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
+        violations.extend(check_swap4_reconciliation(leaf))
         analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
         if analysis is not None and (
             analysis.get("sample_count") != 1

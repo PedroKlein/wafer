@@ -18,8 +18,8 @@ use crate::config::{
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{ConfigError, Result, WaferError};
 use crate::node::{
-    BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink, FileSource, HttpSink,
-    HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink,
+    BenchBurstSchedule, BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink,
+    FileSource, HttpSink, HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink,
 };
 use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
@@ -232,9 +232,17 @@ fn create_source(node_id: &str, source_def: &SourceDef) -> Box<dyn Source + Send
 }
 
 fn bench_source_from_toml(node_id: &str, cfg: &BenchSourceConfigToml) -> BenchSource {
-    let core = BenchSourceConfig::new(cfg.rate, cfg.total_messages)
+    let mut core = BenchSourceConfig::new(cfg.rate, cfg.total_messages)
         .with_warmup(cfg.warmup_messages)
-        .with_payload_size(cfg.payload_size);
+        .with_payload_size(cfg.payload_size)
+        .with_evidence_dir(std::env::var_os("WAFER_BENCH_OUTPUT_DIR").map(PathBuf::from));
+    if let Some(burst) = &cfg.burst {
+        core = core.with_burst(BenchBurstSchedule::new(
+            burst.rate,
+            burst.start_secs,
+            burst.end_secs,
+        ));
+    }
     BenchSource::new(core).with_id(node_id.to_owned())
 }
 
@@ -760,6 +768,7 @@ mod tests {
             total_messages: 100,
             warmup_messages: 10,
             payload_size: 200,
+            burst: None,
         };
         let src = bench_source_from_toml("my-src", &src_cfg);
         assert_eq!(src.id(), "my-src");

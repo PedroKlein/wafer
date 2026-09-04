@@ -1,8 +1,4 @@
-# E-Swap-4 pipeline: same topology but with burst load profile.
-#
-# Uses 2× rate for BenchSource to simulate burst. Total messages bumped to
-# accommodate the higher rate over the same duration window. API enabled
-# for mid-burst swap trigger.
+# E-Swap-4: one source-driven 1,000→2,000→1,000 msg/s burst and one centered swap.
 
 [pipeline]
 name = "e-swap-4-burst"
@@ -20,10 +16,15 @@ router = 500000
 [nodes.source]
 type = "source"
 kind = "bench-source"
-rate = 2000.0
-total_messages = 300000
-warmup_messages = 60000
+rate = 1000.0
+total_messages = 160000
+warmup_messages = 30000
 payload_size = 128
+
+[nodes.source.burst]
+rate = 2000.0
+start_secs = 55
+end_secs = 65
 
 [nodes.transform]
 type = "transform"

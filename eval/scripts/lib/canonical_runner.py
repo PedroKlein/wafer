@@ -126,6 +126,12 @@ SWAP3_BUCKET_WIDTH_NS = 100_000_000
 SWAP3_COVERAGE_START_NS = -10_000_000_000
 SWAP3_COVERAGE_END_NS = 10_000_000_000
 SWAP3_ALIGNMENT_TOLERANCE_NS = 10_000_000
+SWAP4_ALIGNMENT_TOLERANCE_NS = 10_000_000
+SWAP4_PHASES = (
+    ("before", 1_000, 0, 55_000_000_000, 55_000),
+    ("burst", 2_000, 55_000_000_000, 65_000_000_000, 20_000),
+    ("after", 1_000, 65_000_000_000, 120_000_000_000, 55_000),
+)
 
 
 def analyze_capacity_scout_summary(
@@ -1093,6 +1099,200 @@ def derive_hotswap_evidence(
             "Internal swap phases, HTTP request duration, and sink-observed output gaps are "
             "separate measurements. A smaller sink-observed output gap does not imply a faster "
             "internal swap because queued output can mask internal disruption."
+        ),
+    }
+
+
+def build_swap4_timeline(
+    source_timing: dict,
+    source_summary: dict,
+    requests: list[dict],
+    sink_timeline: dict,
+    throughput: dict,
+    sequence: dict,
+) -> dict:
+    if len(requests) != 1 or len(sink_timeline.get("transitions", [])) != 1:
+        raise ValueError("E-Swap-4 requires exactly one request and one sink transition")
+    measurement_start = int(source_timing["measurement_start_ns"])
+    if int(source_summary["measurement_start_ns"]) != measurement_start:
+        raise ValueError("E-Swap-4 source timing and summary disagree")
+    request = requests[0]
+    swap_ns = int(request["request_started_ns"])
+    scheduled_swap_ns = int(source_timing["scheduled_swap_ns"])
+    successful_swaps = sum(int(item.get("http_status", 0)) == 200 for item in requests)
+    emitted = [int(value) for value in source_summary["emitted_phase_messages"]]
+    intended = [int(value) for value in source_summary["intended_phase_messages"]]
+    received = [int(value) for value in throughput["phase_received_messages"]]
+    phases = {
+        name: {
+            "rate_msg_s": rate,
+            "start_offset_ns": start,
+            "end_offset_ns": end,
+            "intended": intended[index],
+            "emitted": emitted[index],
+            "received": received[index],
+        }
+        for index, (name, rate, start, end, _) in enumerate(SWAP4_PHASES)
+    }
+    sequence_summary = {
+        "expected": int(sequence["total_expected"]),
+        "received": int(sequence["total_received"]),
+        "gaps": int(sequence["gap_msgs"]),
+        "duplicates": int(sequence["duplicates_count"]),
+    }
+    response_timeline = request.get("body", {}).get("timeline", {})
+    return {
+        "schema_version": 1,
+        "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
+        "measurement_start_ns": measurement_start,
+        "burst_start_ns": int(source_timing["burst_start_ns"]),
+        "scheduled_swap_ns": scheduled_swap_ns,
+        "swap_ns": swap_ns,
+        "burst_end_ns": int(source_timing["burst_end_ns"]),
+        "measurement_end_ns": int(source_summary["measurement_end_ns"]),
+        "burst_start_offset_ns": 55_000_000_000,
+        "scheduled_swap_offset_ns": 60_000_000_000,
+        "actual_swap_offset_ns": swap_ns - measurement_start,
+        "burst_end_offset_ns": 65_000_000_000,
+        "swap_alignment_error_ns": swap_ns - scheduled_swap_ns,
+        "swap_alignment_tolerance_ns": SWAP4_ALIGNMENT_TOLERANCE_NS,
+        "before_rate_msg_s": 1_000,
+        "burst_rate_msg_s": 2_000,
+        "after_rate_msg_s": 1_000,
+        "successful_swaps": successful_swaps,
+        "phases": phases,
+        "sequence": sequence_summary,
+        "loss": sum(emitted) - (sequence_summary["received"] - sequence_summary["duplicates"]),
+        "sink_observed_output_gap_ns": int(sink_timeline["transitions"][0]["pause_ns"]),
+        "internal_swap_phases_ns": {
+            field: int(response_timeline[field]) for field in HOTSWAP_PHASE_FIELDS
+        },
+    }
+
+
+def validate_swap4_artifacts(
+    timeline: dict,
+    throughput: dict,
+    requests: list[dict],
+    sink_timeline: dict,
+) -> None:
+    if len(requests) != 1 or len(sink_timeline.get("transitions", [])) != 1:
+        raise ValueError("E-Swap-4 requires exactly one request and one sink transition")
+    if timeline.get("successful_swaps") != 1 or requests[0].get("http_status") != 200:
+        raise ValueError("E-Swap-4 requires exactly one successful swap")
+    measurement_start = int(timeline["measurement_start_ns"])
+    burst_start = int(timeline["burst_start_ns"])
+    scheduled_swap = int(timeline["scheduled_swap_ns"])
+    actual_swap = int(timeline["swap_ns"])
+    burst_end = int(timeline["burst_end_ns"])
+    if (
+        timeline.get("timestamp_clock") != "unix-epoch"
+        or timeline.get("timestamp_clock_purpose") != "cross-process-alignment"
+        or timeline.get("scheduling_clock") != "monotonic"
+        or burst_start != measurement_start + 55_000_000_000
+        or scheduled_swap - burst_start != 5_000_000_000
+        or burst_end - scheduled_swap != 5_000_000_000
+        or int(timeline.get("scheduled_swap_offset_ns", -1)) != 60_000_000_000
+        or int(timeline.get("actual_swap_offset_ns", -1)) != actual_swap - measurement_start
+        or int(timeline.get("swap_alignment_error_ns", SWAP4_ALIGNMENT_TOLERANCE_NS + 1))
+            != actual_swap - scheduled_swap
+        or int(timeline.get("swap_alignment_tolerance_ns", -1))
+            != SWAP4_ALIGNMENT_TOLERANCE_NS
+        or abs(actual_swap - scheduled_swap) > SWAP4_ALIGNMENT_TOLERANCE_NS
+        or not burst_start < actual_swap < burst_end
+    ):
+        raise ValueError("E-Swap-4 swap is not centered in the declared burst")
+    buckets = throughput.get("buckets")
+    if (
+        throughput.get("clock") != "monotonic"
+        or throughput.get("bucket_width_ns") != 100_000_000
+        or throughput.get("coverage_start_offset_ns") != 0
+        or throughput.get("coverage_end_offset_ns") != 120_000_000_000
+        or not isinstance(buckets, list)
+        or len(buckets) != 1_200
+    ):
+        raise ValueError("E-Swap-4 requires 1200 contiguous 100 ms sink buckets")
+    expected_start = 0
+    totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
+    for bucket in buckets:
+        if (
+            int(bucket["start_offset_ns"]) != expected_start
+            or int(bucket["end_offset_ns"]) != expected_start + 100_000_000
+            or int(bucket["received_events"])
+                != int(bucket["received_unique"]) + int(bucket["duplicates"])
+            or float(bucket["rate_msg_s"]) != int(bucket["received_unique"]) * 10.0
+        ):
+            raise ValueError("E-Swap-4 sink buckets are not contiguous or reconciled")
+        for field in totals:
+            totals[field] += int(bucket[field])
+        expected_start += 100_000_000
+    if any(int(throughput.get(field, -1)) != total for field, total in totals.items()):
+        raise ValueError("E-Swap-4 sink bucket totals do not reconcile")
+    phases = timeline.get("phases")
+    if not isinstance(phases, dict) or set(phases) != {row[0] for row in SWAP4_PHASES}:
+        raise ValueError("E-Swap-4 phases are missing")
+    for index, (name, rate, start, end, intended) in enumerate(SWAP4_PHASES):
+        phase = phases[name]
+        if (
+            phase.get("rate_msg_s") != rate
+            or phase.get("start_offset_ns") != start
+            or phase.get("end_offset_ns") != end
+            or phase.get("intended") != intended
+            or phase.get("emitted") != intended
+            or phase.get("received") != throughput["phase_received_messages"][index]
+        ):
+            raise ValueError("E-Swap-4 phase counts or rates do not reconcile")
+    sequence = timeline["sequence"]
+    if (
+        sum(phase["received"] for phase in phases.values()) != sequence["received"]
+        or sequence["received"] != totals["received_events"]
+        or sequence["expected"] != 130_000
+        or timeline.get("loss")
+            != 130_000 - (sequence["received"] - sequence["duplicates"])
+        or sequence["gaps"] != timeline["loss"]
+        or sequence["duplicates"] != totals["duplicates"]
+    ):
+        raise ValueError("E-Swap-4 sequence totals do not reconcile")
+    if timeline.get("sink_observed_output_gap_ns") != sink_timeline["transitions"][0].get(
+        "pause_ns"
+    ):
+        raise ValueError("E-Swap-4 sink gap differs from the transition timeline")
+    for field in HOTSWAP_PHASE_FIELDS:
+        if timeline.get("internal_swap_phases_ns", {}).get(field) != requests[0].get(
+            "body", {}
+        ).get("timeline", {}).get(field):
+            raise ValueError("E-Swap-4 internal swap phases do not reconcile")
+
+
+def summarize_swap4_runs(runs: list[dict]) -> dict:
+    if len(runs) != 30 or {int(run.get("run_index", 0)) for run in runs} != set(range(1, 31)):
+        raise ValueError("E-Swap-4 summary requires 30 independent run indices")
+    gaps = []
+    for run in runs:
+        analysis = run.get("hotswap_analysis", {})
+        events = analysis.get("events")
+        if analysis.get("sample_count") != 1 or not isinstance(events, list) or len(events) != 1:
+            raise ValueError("E-Swap-4 requires one event from each run")
+        if run.get("burst_timeline", {}).get("successful_swaps") != 1:
+            raise ValueError("E-Swap-4 run is missing its successful swap")
+        gaps.append(int(events[0]["sink_observed_output_gap_ns"]))
+    ordered = sorted(gaps)
+    run_level = _run_summary([float(value) for value in gaps], "e-swap-4:sink-gap")
+    return {
+        "schema_version": 1,
+        "experiment": "e-swap-4",
+        "sample_unit": "run",
+        "n_runs": len(runs),
+        "n_events": len(gaps),
+        "median_sink_observed_output_gap_ns": statistics.median(ordered),
+        "iqr_sink_observed_output_gap_ns": run_level["q3"] - run_level["q1"],
+        "bootstrap_median_ci95_ns": run_level["bootstrap_median_ci95"],
+        "p95_sink_observed_output_gap_ns": ordered[math.ceil(len(ordered) * 0.95) - 1],
+        "total_loss": sum(int(run["burst_timeline"].get("loss", 0)) for run in runs),
+        "total_duplicates": sum(
+            int(run["burst_timeline"].get("sequence", {}).get("duplicates", 0)) for run in runs
         ),
     }
 
@@ -2540,6 +2740,14 @@ def wait_for_ekuiper_rule_ready(rule_id: str, timeout_secs: float = 10.0) -> Non
     raise RuntimeError(f"eKuiper rule did not become ready: {rule_id}")
 
 
+def hot_swap_offsets(item: RunItem) -> list[float]:
+    if item.experiment == "e-swap-4":
+        return [60.0]
+    event_count = item.events_per_run or 50
+    interval = item.measurement_secs / event_count
+    return [index * interval for index in range(event_count)]
+
+
 def post_hot_swap(node_id: str, plugin: Path) -> dict:
     request = urllib.request.Request(
         f"http://127.0.0.1:9090/api/v1/nodes/{node_id}/hot-swap",
@@ -2593,39 +2801,70 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 stderr=log,
             )
             wait_for_api("http://127.0.0.1:9090/health")
-            time.sleep(item.warmup_secs)
             v1 = root / "plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
             v2 = root / "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
             panics = root / "plugins/pass-through-v2-panics/target/wasm32-wasip2/release/wafer_pass_through_v2_panics.wasm"
-            event_count = item.events_per_run or 50
-            interval = item.measurement_secs / event_count
             requests: list[dict] = []
-            for event_index in range(event_count):
-                event_started = time.monotonic()
-                plugin = panics if item.experiment == "e-swap-5" else (v2 if event_index % 2 == 0 else v1)
+            if item.experiment == "e-swap-4":
+                timing_path = output / "burst-source-timing.json"
+                deadline = time.monotonic() + item.warmup_secs + 10
+                while not timing_path.is_file() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                source_timing = json.loads(timing_path.read_text())
+                scheduled_swap_ns = int(source_timing["scheduled_swap_ns"])
+                wait_secs = max(0.0, (scheduled_swap_ns - time.time_ns()) / 1_000_000_000)
+                action_target = time.monotonic() + wait_secs
+                time.sleep(max(0.0, action_target - time.monotonic()))
                 request_started_ns = time.time_ns()
                 request_started_monotonic_ns = time.monotonic_ns()
-                response = post_hot_swap("transform", plugin)
+                response = post_hot_swap("transform", v2)
                 request_duration_ns = time.monotonic_ns() - request_started_monotonic_ns
-                request_finished_ns = time.time_ns()
                 requests.append(
                     {
-                        "event_index": event_index,
-                        "plugin": plugin.name,
+                        "event_index": 0,
+                        "plugin": v2.name,
                         "request_started_ns": request_started_ns,
-                        "request_finished_ns": request_finished_ns,
+                        "request_finished_ns": time.time_ns(),
                         "request_timestamp_clock": "unix-epoch",
                         "request_duration_ns": request_duration_ns,
                         "request_duration_clock": "monotonic",
                         **response,
                     }
                 )
-                remaining = interval - (time.monotonic() - event_started)
-                if remaining > 0:
-                    time.sleep(remaining)
+                if abs(request_started_ns - scheduled_swap_ns) > SWAP4_ALIGNMENT_TOLERANCE_NS:
+                    raise RuntimeError("E-Swap-4 swap missed measured t=60 by more than 10 ms")
+            else:
+                time.sleep(item.warmup_secs)
+                offsets = hot_swap_offsets(item)
+                interval = item.measurement_secs / len(offsets)
+                for event_index, _ in enumerate(offsets):
+                    event_started = time.monotonic()
+                    plugin = panics if item.experiment == "e-swap-5" else (v2 if event_index % 2 == 0 else v1)
+                    request_started_ns = time.time_ns()
+                    request_started_monotonic_ns = time.monotonic_ns()
+                    response = post_hot_swap("transform", plugin)
+                    request_duration_ns = time.monotonic_ns() - request_started_monotonic_ns
+                    request_finished_ns = time.time_ns()
+                    requests.append(
+                        {
+                            "event_index": event_index,
+                            "plugin": plugin.name,
+                            "request_started_ns": request_started_ns,
+                            "request_finished_ns": request_finished_ns,
+                            "request_timestamp_clock": "unix-epoch",
+                            "request_duration_ns": request_duration_ns,
+                            "request_duration_clock": "monotonic",
+                            **response,
+                        }
+                    )
+                    remaining = interval - (time.monotonic() - event_started)
+                    if remaining > 0:
+                        time.sleep(remaining)
             (output / "swap_requests.json").write_text(json.dumps(requests, indent=2) + "\n")
             try:
-                runtime_exit = runtime.wait(timeout=30)
+                runtime_exit = runtime.wait(
+                    timeout=item.measurement_secs + 30 if item.experiment == "e-swap-4" else 30
+                )
             except subprocess.TimeoutExpired:
                 runtime.terminate()
                 runtime_exit = runtime.wait(timeout=10)
@@ -4063,6 +4302,20 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             source_leaf=str(output.relative_to(root)),
         )
         (output / "hotswap-analysis.json").write_text(json.dumps(evidence, indent=2) + "\n")
+        if item.experiment == "e-swap-4":
+            with (output / "sequence.csv").open(newline="") as stream:
+                sequence = next(csv.DictReader(stream))
+            throughput = json.loads((output / "throughput-buckets.json").read_text())
+            timeline = build_swap4_timeline(
+                json.loads((output / "burst-source-timing.json").read_text()),
+                json.loads((output / "burst-source-summary.json").read_text()),
+                requests,
+                sink_timeline,
+                throughput,
+                sequence,
+            )
+            validate_swap4_artifacts(timeline, throughput, requests, sink_timeline)
+            (output / "burst-timeline.json").write_text(json.dumps(timeline, indent=2) + "\n")
 
     if item.experiment == "e-backpressure":
         definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"][
@@ -4200,6 +4453,37 @@ def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
     return path
 
 
+def summarize_swap4(root: Path, batch_id: str) -> Path:
+    result_root = root / "eval/results/e-swap-4" / f"rpi5-{batch_id}"
+    runs = []
+    for timeline_path in result_root.rglob("burst-timeline.json"):
+        leaf = timeline_path.parent
+        try:
+            if json.loads((leaf / "canonical-status.json").read_text()).get("status") != "passed":
+                continue
+            run_match = re.fullmatch(r"run-(\d+)-attempt-\d+", leaf.name)
+            if run_match is None:
+                raise ValueError(f"invalid E-Swap-4 leaf name: {leaf.name}")
+            runs.append(
+                {
+                    "run_index": int(run_match.group(1)),
+                    "burst_timeline": json.loads(timeline_path.read_text()),
+                    "hotswap_analysis": json.loads((leaf / "hotswap-analysis.json").read_text()),
+                }
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    summary = {**summarize_swap4_runs(runs), "batch_id": batch_id}
+    path = (
+        root
+        / "eval/results/canonical-batches"
+        / f"rpi5-{batch_id}"
+        / "swap4-summary.json"
+    )
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
 def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
     result_root = root / "eval/results/e-perf-10" / f"rpi5-{batch_id}"
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
@@ -4290,6 +4574,8 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
         summarize_rate_sweep(root, batch_id)
     if "e-iso-7" in experiments:
         summarize_branch_isolation(root, batch_id)
+    if "e-swap-4" in experiments:
+        summarize_swap4(root, batch_id)
     scripts = {
         "e-perf-4": "summarise-e-perf-4.sh",
         "e-perf-6": "summarise-e-perf-6-8.sh",

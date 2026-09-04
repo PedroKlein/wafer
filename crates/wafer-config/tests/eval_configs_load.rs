@@ -147,6 +147,22 @@ fn e_iso_7_uses_independent_source_and_sink_populations() {
 }
 
 #[test]
+fn e_swap_4_uses_the_frozen_source_driven_burst() {
+    let config =
+        load_config(&workspace_root().join("eval/configs/e-swap/pipeline-hotswap-burst.toml"))
+            .expect("load E-Swap-4 config");
+    let NodeDef::Source(SourceDef::BenchSource(source)) = &config.nodes["source"] else {
+        panic!("E-Swap-4 source must be a bench source");
+    };
+    assert!((source.rate - 1_000.0).abs() < f64::EPSILON);
+    assert_eq!(source.warmup_messages, 30_000);
+    assert_eq!(source.total_messages, 160_000);
+    let burst = source.burst.as_ref().expect("E-Swap-4 burst schedule");
+    assert!((burst.rate - 2_000.0).abs() < f64::EPSILON);
+    assert_eq!((burst.start_secs, burst.end_secs), (55, 65));
+}
+
+#[test]
 fn final_wafer_catalog_has_explicit_effective_metering() {
     let root = workspace_root();
     let matrix: serde_json::Value = serde_json::from_str(

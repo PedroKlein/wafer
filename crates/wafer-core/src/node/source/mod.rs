@@ -6,7 +6,7 @@ mod http;
 mod mqtt;
 mod stdin;
 
-pub use bench::{BenchSource, BenchSourceConfig};
+pub use bench::{BenchBurstSchedule, BenchSource, BenchSourceConfig};
 pub use file::FileSource;
 pub use http::HttpSource;
 pub use mqtt::MqttSource;

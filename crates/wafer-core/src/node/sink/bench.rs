@@ -66,23 +66,24 @@ impl SequenceTracker {
         }
     }
 
-    /// Record a received sequence number.
-    pub fn record(&mut self, seq: u64) {
+    /// Record a received sequence number. Returns whether it was a duplicate.
+    pub fn record(&mut self, seq: u64) -> bool {
         self.anchor_at(seq);
         self.total_received = self.total_received.saturating_add(1);
 
         match seq.cmp(&self.expected_next) {
             std::cmp::Ordering::Equal => {
                 self.expected_next = self.expected_next.saturating_add(1);
+                false
             }
             std::cmp::Ordering::Greater => {
-                // Gap detected: missing [expected_next, seq)
                 self.gaps.push((self.expected_next, seq.saturating_sub(1)));
                 self.expected_next = seq.saturating_add(1);
+                false
             }
             std::cmp::Ordering::Less => {
-                // seq < expected_next means duplicate or out-of-order
                 self.duplicates = self.duplicates.saturating_add(1);
+                true
             }
         }
     }
@@ -303,6 +304,16 @@ pub struct ThroughputSample {
     pub bytes: u64,
 }
 
+const BURST_BUCKET_WIDTH_NS: u64 = 100_000_000;
+const BURST_BUCKET_COUNT: usize = 1_200;
+
+#[derive(Debug, Clone, Copy, Default)]
+struct BurstBucket {
+    received_unique: u64,
+    received_events: u64,
+    duplicates: u64,
+}
+
 // =============================================================================
 // BenchSink
 // =============================================================================
@@ -334,6 +345,8 @@ pub struct BenchSink {
     bucket_bytes: u64,
     /// Completed throughput samples.
     throughput_samples: Vec<ThroughputSample>,
+    burst_buckets: Option<Box<[BurstBucket]>>,
+    burst_phase_received: [u64; 3],
 }
 
 impl BenchSink {
@@ -379,6 +392,8 @@ impl BenchSink {
             bucket_msg_count: 0,
             bucket_bytes: 0,
             throughput_samples: Vec::new(),
+            burst_buckets: None,
+            burst_phase_received: [0; 3],
         }
     }
 
@@ -557,6 +572,41 @@ impl BenchSink {
         let mut csv_file = std::fs::File::create(dir.join("throughput.csv"))?;
         csv_file.write_all(csv_content.as_bytes())?;
 
+        if let Some(buckets) = &self.burst_buckets {
+            let rows = buckets.iter().enumerate().map(|(index, bucket)| {
+                let start_offset_ns = u64::try_from(index)
+                    .unwrap_or(u64::MAX)
+                    .saturating_mul(BURST_BUCKET_WIDTH_NS);
+                serde_json::json!({
+                    "start_offset_ns": start_offset_ns,
+                    "end_offset_ns": start_offset_ns.saturating_add(BURST_BUCKET_WIDTH_NS),
+                    "received_unique": bucket.received_unique,
+                    "received_events": bucket.received_events,
+                    "duplicates": bucket.duplicates,
+                    "rate_msg_s": bucket.received_unique.saturating_mul(10),
+                })
+            }).collect::<Vec<_>>();
+            let received_unique = buckets.iter().map(|bucket| bucket.received_unique).sum::<u64>();
+            let received_events = buckets.iter().map(|bucket| bucket.received_events).sum::<u64>();
+            let duplicates = buckets.iter().map(|bucket| bucket.duplicates).sum::<u64>();
+            let value = serde_json::json!({
+                "schema_version": 1,
+                "clock": "monotonic",
+                "bucket_width_ns": BURST_BUCKET_WIDTH_NS,
+                "coverage_start_offset_ns": 0,
+                "coverage_end_offset_ns": 120_000_000_000_u64,
+                "received_unique": received_unique,
+                "received_events": received_events,
+                "duplicates": duplicates,
+                "phase_received_messages": self.burst_phase_received,
+                "buckets": rows,
+            });
+            std::fs::write(
+                dir.join("throughput-buckets.json"),
+                format!("{}\n", serde_json::to_string_pretty(&value)?),
+            )?;
+        }
+
         if let Some(started) = self.start_wall_time {
             let started_ns = started
                 .duration_since(UNIX_EPOCH)
@@ -620,6 +670,49 @@ impl BenchSink {
         }
 
         Ok(())
+    }
+
+    fn record_sequence(&mut self, envelope: &RuntimeEnvelope) -> bool {
+        let Some(tracker) = &mut self.sequence_tracker else { return false };
+        let Some(seq) = envelope.header.metadata.iter()
+            .find(|(key, _)| key.as_ref() == "bench.sequence")
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+        else { return false };
+        if let Some(start) = envelope.header.metadata.iter()
+            .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+        {
+            tracker.anchor_at(start);
+        }
+        tracker.record(seq)
+    }
+
+    fn record_burst_bucket(&mut self, envelope: &RuntimeEnvelope, now: Instant, duplicate: bool) {
+        let Some((_, phase)) = envelope.header.metadata.iter()
+            .find(|(key, _)| key.as_ref() == "bench.phase")
+        else { return };
+        let buckets = self.burst_buckets.get_or_insert_with(|| {
+            vec![BurstBucket::default(); BURST_BUCKET_COUNT].into_boxed_slice()
+        });
+        if let Some(start) = self.measurement_start {
+            let elapsed_ns = crate::util::duration_ns_saturating(now.duration_since(start));
+            let index = usize::try_from(elapsed_ns / BURST_BUCKET_WIDTH_NS)
+                .unwrap_or(BURST_BUCKET_COUNT);
+            if let Some(bucket) = buckets.get_mut(index) {
+                bucket.received_events = bucket.received_events.saturating_add(1);
+                if duplicate {
+                    bucket.duplicates = bucket.duplicates.saturating_add(1);
+                } else {
+                    bucket.received_unique = bucket.received_unique.saturating_add(1);
+                }
+            }
+        }
+        if let Some(count) = ["before", "burst", "after"].iter()
+            .position(|candidate| candidate == &phase.as_ref())
+            .and_then(|index| self.burst_phase_received.get_mut(index))
+        {
+            *count = count.saturating_add(1);
+        }
     }
 
     /// Flush current throughput bucket if ≥1s has elapsed.
@@ -742,25 +835,8 @@ impl Sink for BenchSink {
             self.start_wall_time = Some(SystemTime::now());
         }
 
-        if let Some(ref mut tracker) = self.sequence_tracker
-            && let Some(seq) = envelope
-                .header
-                .metadata
-                .iter()
-                .find(|(k, _)| k.as_ref() == "bench.sequence")
-                .and_then(|(_, v)| v.parse::<u64>().ok())
-        {
-            if let Some(start) = envelope
-                .header
-                .metadata
-                .iter()
-                .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
-                .and_then(|(_, value)| value.parse::<u64>().ok())
-            {
-                tracker.anchor_at(start);
-            }
-            tracker.record(seq);
-        }
+        let duplicate = self.record_sequence(&envelope);
+        self.record_burst_bucket(&envelope, now, duplicate);
 
         // Throughput tracking
         let payload_len = crate::util::usize_as_u64(envelope.payload.len());
@@ -1132,6 +1208,37 @@ mod tests {
 
         let csv = sink.throughput_csv();
         assert!(csv.starts_with("elapsed_secs,msg_count,bytes\n"));
+    }
+
+    #[tokio::test]
+    async fn burst_metadata_writes_bounded_100ms_sink_buckets() {
+        let mut sink = BenchSink::new(BenchSinkConfig::for_test());
+        sink.init().await.unwrap();
+        for (sequence, phase) in [(0, "before"), (1, "burst"), (2, "after")] {
+            let envelope = make_bench_envelope(sequence)
+                .with_metadata("bench.measurement_start_seq", "0")
+                .with_metadata("bench.warmup", "false")
+                .with_metadata("bench.phase", phase);
+            sink.collect(envelope).await.unwrap();
+        }
+
+        let dir = std::env::temp_dir().join(format!(
+            "wafer-burst-buckets-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        sink.export_to_dir(&dir).unwrap();
+        let value: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("throughput-buckets.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["bucket_width_ns"], 100_000_000);
+        assert_eq!(value["buckets"].as_array().unwrap().len(), 1_200);
+        assert_eq!(value["received_events"], 3);
+        assert_eq!(value["received_unique"], 3);
+        assert_eq!(value["duplicates"], 0);
+        assert_eq!(value["phase_received_messages"], serde_json::json!([1, 1, 1]));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]

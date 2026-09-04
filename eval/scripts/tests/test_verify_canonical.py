@@ -677,15 +677,36 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         "action_end_monotonic_ns": 5_000_000_001,
         "action_duration_ns": 1,
     }
+    burst_measurement_start = 1_000_000_000_000
     burst = {
         "schema_version": 1,
+        "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
+        "measurement_start_ns": burst_measurement_start,
+        "burst_start_ns": burst_measurement_start + 55_000_000_000,
+        "scheduled_swap_ns": burst_measurement_start + 60_000_000_000,
+        "swap_ns": burst_measurement_start + 60_005_000_000,
+        "burst_end_ns": burst_measurement_start + 65_000_000_000,
+        "measurement_end_ns": burst_measurement_start + 120_000_000_000,
         "before_rate_msg_s": 1000,
         "burst_rate_msg_s": 2000,
         "after_rate_msg_s": 1000,
         "burst_start_offset_ns": 55_000_000_000,
-        "swap_offset_ns": 60_000_000_000,
+        "scheduled_swap_offset_ns": 60_000_000_000,
+        "actual_swap_offset_ns": 60_005_000_000,
         "burst_end_offset_ns": 65_000_000_000,
+        "swap_alignment_error_ns": 5_000_000,
+        "swap_alignment_tolerance_ns": 10_000_000,
         "successful_swaps": 1,
+        "phases": {
+            "before": {"rate_msg_s": 1000, "start_offset_ns": 0, "end_offset_ns": 55_000_000_000, "intended": 55_000, "emitted": 55_000, "received": 55_000},
+            "burst": {"rate_msg_s": 2000, "start_offset_ns": 55_000_000_000, "end_offset_ns": 65_000_000_000, "intended": 20_000, "emitted": 20_000, "received": 20_000},
+            "after": {"rate_msg_s": 1000, "start_offset_ns": 65_000_000_000, "end_offset_ns": 120_000_000_000, "intended": 55_000, "emitted": 55_000, "received": 55_000},
+        },
+        "sequence": {"expected": 130_000, "received": 130_000, "gaps": 0, "duplicates": 0},
+        "loss": 0,
+        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "ack_ns": 1, "convergence_ns": 1},
     }
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -715,6 +736,12 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         burst["successful_swaps"] = 2
         burst_path.write_text(json.dumps(burst))
         assert "successful_swaps must be 1" in " ".join(
+            CONTRACT.check_burst_timeline(burst_path)
+        )
+        burst["successful_swaps"] = 1
+        burst["phases"]["burst"]["rate_msg_s"] = 1000
+        burst_path.write_text(json.dumps(burst))
+        assert "burst phase is invalid" in " ".join(
             CONTRACT.check_burst_timeline(burst_path)
         )
 

@@ -165,6 +165,17 @@ pub struct BenchSourceConfigToml {
     /// deterministic filler pattern (see `BenchSource::with_payload_size`).
     #[serde(default = "default_bench_payload_size")]
     pub payload_size: usize,
+
+    /// Optional one-burst schedule relative to the first measured message.
+    #[serde(default)]
+    pub burst: Option<BenchBurstConfigToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct BenchBurstConfigToml {
+    pub rate: f64,
+    pub start_secs: u64,
+    pub end_secs: u64,
 }
 
 /// Config-file form of `wafer_core::node::sink::BenchSinkConfig`.

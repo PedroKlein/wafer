@@ -22,6 +22,7 @@ from canonical_runner import (  # noqa: E402
     build_capacity_scout_invocation,
     build_capacity_scout_rate_block,
     build_swap3_invocation,
+    build_swap4_timeline,
     capacity_scout_failed_attempt_stop_reason,
     capacity_scout_next_rate,
     capacity_scout_safety_action,
@@ -40,6 +41,7 @@ from canonical_runner import (  # noqa: E402
     derive_containment,
     evaluate_validation_gate,
     load_capacity_scout_replay,
+    hot_swap_offsets,
     loadgen_command,
     postprocess_run,
     CAPACITY_SCOUT_SYSTEMS,
@@ -48,6 +50,7 @@ from canonical_runner import (  # noqa: E402
     select_attempt,
     summarize_branch_isolation,
     summarize_process_resources,
+    summarize_swap4_runs,
     summarize_rate_sweep,
     summarize_recovery,
     validate_backpressure_result,
@@ -64,6 +67,7 @@ from canonical_runner import (  # noqa: E402
     validate_rate_sweep_result,
     validate_startup_artifact,
     validate_swap3_artifacts,
+    validate_swap4_artifacts,
     write_progress,
 )
 
@@ -443,6 +447,117 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
     assert all("--action-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
     assert all(invocation["controlled_factors"]["event_offset_ns"] == 60_000_000_000 for invocation in invocations)
+
+
+def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
+    measurement_start = 1_000_000_000_000
+    timing = {
+        "measurement_start_ns": measurement_start,
+        "burst_start_ns": measurement_start + 55_000_000_000,
+        "scheduled_swap_ns": measurement_start + 60_000_000_000,
+        "burst_end_ns": measurement_start + 65_000_000_000,
+        "scheduled_measurement_end_ns": measurement_start + 120_000_000_000,
+    }
+    source = {
+        "measurement_start_ns": measurement_start,
+        "measurement_end_ns": measurement_start + 120_001_000_000,
+        "rates_msg_s": [1_000.0, 2_000.0, 1_000.0],
+        "phase_offsets_ns": [0, 55_000_000_000, 65_000_000_000, 120_000_000_000],
+        "warmup_messages": 30_000,
+        "intended_phase_messages": [55_000, 20_000, 55_000],
+        "emitted_phase_messages": [55_000, 20_000, 55_000],
+        "intended_measurement_messages": 130_000,
+        "emitted_measurement_messages": 130_000,
+        "total_emitted_messages": 160_000,
+    }
+    request = [{
+        "event_index": 0,
+        "request_started_ns": measurement_start + 60_005_000_000,
+        "request_finished_ns": measurement_start + 60_010_000_000,
+        "request_timestamp_clock": "unix-epoch",
+        "request_duration_ns": 5_000_000,
+        "request_duration_clock": "monotonic",
+        "http_status": 200,
+        "body": {"timeline": {field: 1 for field in ("compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns")}},
+    }]
+    sink = {"transitions": [{"from": "v1", "to": "v2", "pause_ns": 80_000_000}]}
+    buckets = []
+    for index in range(1_200):
+        count = 200 if 550 <= index < 650 else 100
+        buckets.append({
+            "start_offset_ns": index * 100_000_000,
+            "end_offset_ns": (index + 1) * 100_000_000,
+            "received_unique": count,
+            "received_events": count,
+            "duplicates": 0,
+            "rate_msg_s": count * 10,
+        })
+    throughput = {
+        "clock": "monotonic",
+        "bucket_width_ns": 100_000_000,
+        "coverage_start_offset_ns": 0,
+        "coverage_end_offset_ns": 120_000_000_000,
+        "received_unique": 130_000,
+        "received_events": 130_000,
+        "duplicates": 0,
+        "phase_received_messages": [55_000, 20_000, 55_000],
+        "buckets": buckets,
+    }
+    sequence = {"total_expected": "130000", "total_received": "130000", "gap_msgs": "0", "duplicates_count": "0"}
+    return timing, source, request, sink, throughput, sequence
+
+
+def test_swap4_schedule_has_30_runs_with_one_event_at_measured_t60() -> None:
+    runs = build_schedule({"e-swap-4"}, seed=1729)
+    assert len(runs) == 30
+    assert {run.run_index for run in runs} == set(range(1, 31))
+    assert all(hot_swap_offsets(run) == [60.0] for run in runs)
+
+
+def test_swap4_timeline_requires_one_centered_swap_and_reconciled_phases() -> None:
+    timing, source, requests, sink, throughput, sequence = swap4_fixture()
+    timeline = build_swap4_timeline(timing, source, requests, sink, throughput, sequence)
+
+    assert timeline["successful_swaps"] == 1
+    assert timeline["swap_ns"] == timing["scheduled_swap_ns"] + 5_000_000
+    assert timeline["swap_alignment_error_ns"] == 5_000_000
+    assert timeline["phases"]["before"]["intended"] == 55_000
+    assert timeline["phases"]["burst"]["received"] == 20_000
+    assert timeline["sequence"] == {"expected": 130_000, "received": 130_000, "gaps": 0, "duplicates": 0}
+    validate_swap4_artifacts(timeline, throughput, requests, sink)
+
+    invalid = json.loads(json.dumps(timeline))
+    invalid["successful_swaps"] = 0
+    with pytest.raises(ValueError, match="exactly one"):
+        validate_swap4_artifacts(invalid, throughput, requests, sink)
+    invalid = json.loads(json.dumps(timeline))
+    invalid["scheduled_swap_offset_ns"] += 1
+    with pytest.raises(ValueError, match="centered"):
+        validate_swap4_artifacts(invalid, throughput, requests, sink)
+    invalid = json.loads(json.dumps(timeline))
+    invalid["phases"]["burst"]["received"] -= 1
+    with pytest.raises(ValueError, match="phase counts"):
+        validate_swap4_artifacts(invalid, throughput, requests, sink)
+
+
+def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
+    runs = [
+        {
+            "run_index": index,
+            "burst_timeline": {"successful_swaps": 1, "sequence": {"gaps": 0, "duplicates": 0}},
+            "hotswap_analysis": {"sample_count": 1, "events": [{"sink_observed_output_gap_ns": index * 1_000_000}]},
+        }
+        for index in range(1, 31)
+    ]
+    summary = summarize_swap4_runs(runs)
+    assert summary["n_runs"] == 30
+    assert summary["n_events"] == 30
+    assert summary["p95_sink_observed_output_gap_ns"] == 29_000_000
+    assert len(summary["bootstrap_median_ci95_ns"]) == 2
+
+    runs[0]["hotswap_analysis"]["events"].append({"sink_observed_output_gap_ns": 1})
+    with pytest.raises(ValueError, match="one event"):
+        summarize_swap4_runs(runs)
 
 
 def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:
