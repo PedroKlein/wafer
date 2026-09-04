@@ -104,6 +104,30 @@ def test_schedule_covers_performance_matrix() -> None:
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
     assert len({item.result_key for item in schedule}) == len(schedule)
+    catalog = {
+        (entry["experiment"], entry["condition"]): entry["config"]
+        for entry in matrix["final_campaign"]["wafer_config_catalog"]
+    }
+    assert all(
+        item.config == catalog[(item.experiment, item.condition)]
+        for item in schedule
+        if item.system == "wafer" and item.config
+    )
+
+
+def test_final_wafer_catalog_exactly_matches_runner_schedule() -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    schedule = build_schedule(set(matrix["experiments"]), seed=matrix["final_campaign"]["seed"])
+    expected = {
+        (item.experiment, item.condition, item.config)
+        for item in schedule
+        if item.system == "wafer" and item.config
+    }
+    catalog = {
+        (entry["experiment"], entry["condition"], entry["config"])
+        for entry in matrix["final_campaign"]["wafer_config_catalog"]
+    }
+    assert catalog == expected
 
 
 def test_focused_schedule_matches_frozen_condition_runs() -> None:

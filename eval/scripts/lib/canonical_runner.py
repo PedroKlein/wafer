@@ -1098,9 +1098,14 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
         raise ValueError(f"unsupported experiments: {', '.join(sorted(unknown))}")
 
     matrix_path = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
-    matrix = json.loads(matrix_path.read_text())["experiments"]
+    matrix_document = json.loads(matrix_path.read_text())
+    matrix = matrix_document["experiments"]
     if "e-perf-10" in experiments:
         _validate_rate_sweep_definition(matrix_path.parents[1], matrix["e-perf-10"])
+    wafer_configs = {
+        (entry["experiment"], entry["condition"]): entry["config"]
+        for entry in matrix_document["final_campaign"]["wafer_config_catalog"]
+    }
     schedule: list[RunItem] = []
 
     for experiment in (item for item in EXPERIMENT_ORDER if item in experiments):
@@ -1135,7 +1140,11 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
                         experiment=experiment,
                         condition=condition.name,
                         run_index=run_index,
-                        config=condition.config,
+                        config=(
+                            wafer_configs[(experiment, condition.name)]
+                            if condition.system == "wafer" and condition.config
+                            else condition.config
+                        ),
                         warmup_secs=definition["warmup_secs"],
                         measurement_secs=definition["measurement_secs"],
                         loadgen_profile=condition.loadgen_profile,

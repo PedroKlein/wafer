@@ -19,6 +19,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use wafer_core::orchestrator::PipelineOrchestrator;
+use wafer_types::config::Config;
 
 /// Filename written under `$WAFER_BENCH_OUTPUT_DIR` when the more specific
 /// `WAFER_METADATA_OUTPUT` env var is not set. Consumed by
@@ -51,6 +52,7 @@ pub fn write_provenance(
     path: &Path,
     orchestrator: &PipelineOrchestrator,
     config_path: &Path,
+    config: &Config,
 ) -> Result<()> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
@@ -58,9 +60,8 @@ pub fn write_provenance(
                 .with_context(|| format!("create provenance parent dir {}", parent.display()))?;
         }
     }
-    let payload = provenance_json(orchestrator, config_path)?;
-    let text = serde_json::to_string_pretty(&payload)
-        .context("serialize runtime provenance")?;
+    let payload = provenance_json(orchestrator, config_path, config)?;
+    let text = serde_json::to_string_pretty(&payload).context("serialize runtime provenance")?;
     std::fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
     Ok(())
 }
@@ -70,6 +71,7 @@ pub fn write_provenance(
 pub fn provenance_json(
     orchestrator: &PipelineOrchestrator,
     config_path: &Path,
+    config: &Config,
 ) -> Result<Value> {
     let config_sha256 = sha256_of_file(config_path)
         .with_context(|| format!("hash config file {}", config_path.display()))?;
@@ -81,6 +83,16 @@ pub fn provenance_json(
         .map(|(k, v)| (k, Value::String(v)))
         .collect();
 
+    let fuel = &config.engine.fuel;
+    let has_fuel = fuel.transform.is_some() || fuel.filter.is_some() || fuel.router.is_some();
+    let has_epoch = config.engine.epoch_deadline.is_some();
+    let effective_metering_mode = match (has_fuel, has_epoch) {
+        (false, false) => "neither",
+        (true, false) => "fuel-only",
+        (false, true) => "epoch-only",
+        (true, true) => "fuel-and-epoch",
+    };
+
     Ok(json!({
         "wasmtime_version": env!("WAFER_WASMTIME_VERSION"),
         "rustc_version": env!("WAFER_RUSTC_VERSION"),
@@ -89,6 +101,14 @@ pub fn provenance_json(
         "config_path": config_path.display().to_string(),
         "config_sha256": config_sha256,
         "wafer_plugin_hashes": Value::Object(plugin_hashes_map),
+        "engine_fuel_budgets": {
+            "transform": fuel.transform.map(std::num::NonZeroU64::get),
+            "filter": fuel.filter.map(std::num::NonZeroU64::get),
+            "router": fuel.router.map(std::num::NonZeroU64::get),
+        },
+        "epoch_deadline": config.engine.epoch_deadline.map(std::num::NonZeroU64::get),
+        "epoch_tick_ms": config.engine.epoch_tick_ms,
+        "effective_metering_mode": effective_metering_mode,
         "kernel": kernel_string(),
     }))
 }

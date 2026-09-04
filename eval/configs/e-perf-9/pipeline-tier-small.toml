@@ -7,6 +7,15 @@
 name = "e-perf-9-tier-small"
 description = "Filesystem-cache startup measurement — small plugin (pass-through, 57 KB)"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

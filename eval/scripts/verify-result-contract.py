@@ -632,6 +632,35 @@ def check_focused_leaf(
     return violations
 
 
+def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
+    if experiment == "e-perf-7":
+        values = matrix["experiments"][experiment]["metering_modes"][condition]
+    else:
+        values = matrix["experiments"][experiment].get("metering_exceptions", {}).get(
+            condition, matrix["final_campaign"]["canonical_metering"]
+        )
+    fuel = values.get("fuel")
+    budgets = (
+        {"transform": fuel, "filter": None, "router": None}
+        if not isinstance(fuel, dict)
+        else fuel
+    )
+    epoch = values.get("epoch_deadline")
+    has_fuel = any(value is not None for value in budgets.values())
+    mode = {
+        (False, False): "neither",
+        (True, False): "fuel-only",
+        (False, True): "epoch-only",
+        (True, True): "fuel-and-epoch",
+    }[(has_fuel, epoch is not None)]
+    return {
+        "engine_fuel_budgets": budgets,
+        "epoch_deadline": epoch,
+        "epoch_tick_ms": values.get("epoch_tick_ms", 10),
+        "effective_metering_mode": mode,
+    }
+
+
 def check_leaf(
     leaf: Path,
     experiment: str,
@@ -714,6 +743,15 @@ def check_leaf(
                             f"E-Perf-10 metadata must set thesis_evidence={str(expected_evidence).lower()}"
                         )
                 if canonical:
+                    if not focused and metadata.get("system") == "wafer" and canonical_matrix is not None:
+                        expected = expected_metering(
+                            canonical_matrix, experiment, str(metadata.get("condition", ""))
+                        )
+                        actual = {key: metadata.get(key) for key in expected}
+                        if actual != expected:
+                            violations.append(
+                                f"metering provenance differs from matrix/condition: {actual!r} != {expected!r}"
+                            )
                     if metadata.get("git_dirty") is not False:
                         violations.append("canonical result records dirty source")
                     tags = metadata.get("git_tags")

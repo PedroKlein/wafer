@@ -2,6 +2,15 @@
 name = "e-val-1-canonical"
 description = "50 ms injected delay with 30 s warmup and 30 s measurement"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

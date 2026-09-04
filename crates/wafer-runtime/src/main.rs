@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
     let launch_started = Instant::now();
-    let launched = launch_pipeline_timed(config, Some(&args.config))
+    let launched = launch_pipeline_timed(config.clone(), Some(&args.config))
         .await
         .context("Failed to launch pipeline")?;
     let launch_completed = Instant::now();
@@ -155,7 +155,7 @@ async fn main() -> Result<()> {
     // the runtime traps mid-run — canonical-runs reproducibility depends on
     // seeing which wasmtime + rustc + plugin bytes were live at launch.
     if let Some(provenance_path) = metadata::resolve_output_path() {
-        match metadata::write_provenance(&provenance_path, &orchestrator, &args.config) {
+        match metadata::write_provenance(&provenance_path, &orchestrator, &args.config, &config) {
             Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
             Err(e) => warn!(path = %provenance_path.display(), error = %e, "provenance write failed"),
         }

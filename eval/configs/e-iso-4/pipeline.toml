@@ -9,6 +9,7 @@ description = "Infinite-loop attack in position 2 of 3-node linear pipeline"
 
 [engine]
 epoch_deadline = 1
+epoch_tick_ms = 10
 
 [nodes.source]
 type = "source"

@@ -140,6 +140,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "epoch_tick_ms": 10,
     }
     assert campaign["ekuiper_operator_concurrency"] == 1
+    assert len(campaign["wafer_config_catalog"]) == 53
+    assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
+    assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
+    assert matrix["experiments"]["e-iso-5"]["metering_exceptions"]["memory-exhaust"]["fuel"] is None
+    assert set(matrix["experiments"]["e-iso-7"]["metering_exceptions"]) == {"epoch-loop-attack"}
     assert sweep["systems"] == ["mqtt-loopback", "native", "wafer", "ekuiper"]
     assert sweep["rate_points_msg_s"] == [1000, 4000, 8000, 15000, 16000]
     assert sweep["repetitions"] == 30
@@ -230,6 +235,7 @@ def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
     assert plugins[2].endswith("infinite-loop/target/wasm32-wasip2/release/wafer_attack_infinite_loop.wasm")
     for config in configs:
         config["nodes"]["branch_b"]["plugin"] = "<fault>"
+        config.pop("engine")
     assert configs[0] == configs[1] == configs[2]
 
 

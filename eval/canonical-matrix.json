@@ -854,7 +854,16 @@
       ],
       "analysis": "06-fault-injection.ipynb",
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "metering_exceptions": {
+        "infinite-loop": {
+          "type": "epoch-containment-stimulus",
+          "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
+          "fuel": null,
+          "epoch_deadline": 1,
+          "epoch_tick_ms": 10
+        }
+      }
     },
     "e-iso-5": {
       "research_question": "rq2",
@@ -873,7 +882,16 @@
       ],
       "analysis": "06-fault-injection.ipynb",
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "metering_exceptions": {
+        "memory-exhaust": {
+          "type": "memory-limit-stimulus",
+          "rationale": "Fuel must not preempt the intended memory-limit mechanism.",
+          "fuel": null,
+          "epoch_deadline": 100,
+          "epoch_tick_ms": 10
+        }
+      }
     },
     "e-iso-6": {
       "research_question": "rq2",
@@ -913,7 +931,16 @@
       ],
       "analysis": "06-fault-injection.ipynb",
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "metering_exceptions": {
+        "epoch-loop-attack": {
+          "type": "epoch-containment-stimulus",
+          "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
+          "fuel": null,
+          "epoch_deadline": 100,
+          "epoch_tick_ms": 10
+        }
+      }
     },
     "e-iso-8": {
       "research_question": "rq2",
@@ -1195,6 +1222,273 @@
     },
     "ekuiper_operator_concurrency": 1,
     "support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
-    "diagnostic_batches_excluded": true
+    "diagnostic_batches_excluded": true,
+    "wafer_config_catalog": [
+      {
+        "experiment": "e-backpressure",
+        "condition": "saturated-slow-consumer",
+        "config": "eval/configs/e-backpressure/pipeline-saturated.toml"
+      },
+      {
+        "experiment": "e-iso-1",
+        "condition": "buffer-overflow",
+        "config": "eval/configs/e-iso-1/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-2",
+        "condition": "cross-read",
+        "config": "eval/configs/e-iso-2/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-3",
+        "condition": "fs-access",
+        "config": "eval/configs/e-iso-3/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-4",
+        "condition": "infinite-loop",
+        "config": "eval/configs/e-iso-4/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-5",
+        "condition": "memory-exhaust",
+        "config": "eval/configs/e-iso-5/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-6",
+        "condition": "panic",
+        "config": "eval/configs/e-iso-6/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-7",
+        "condition": "control",
+        "config": "eval/configs/e-iso-7/pipeline-control.toml"
+      },
+      {
+        "experiment": "e-iso-7",
+        "condition": "epoch-loop-attack",
+        "config": "eval/configs/e-iso-7/pipeline-epoch-attack.toml"
+      },
+      {
+        "experiment": "e-iso-7",
+        "condition": "panic-attack",
+        "config": "eval/configs/e-iso-7/pipeline.toml"
+      },
+      {
+        "experiment": "e-iso-8",
+        "condition": "panic-recovery",
+        "config": "eval/configs/e-iso-8/pipeline.toml"
+      },
+      {
+        "experiment": "e-perf-1",
+        "condition": "wafer",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-10",
+        "condition": "wafer/rate-01000",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-10",
+        "condition": "wafer/rate-04000",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-10",
+        "condition": "wafer/rate-08000",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-10",
+        "condition": "wafer/rate-15000",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-10",
+        "condition": "wafer/rate-16000",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-2",
+        "condition": "wafer",
+        "config": "eval/configs/pipeline-a-wafer.toml"
+      },
+      {
+        "experiment": "e-perf-3",
+        "condition": "depth-1",
+        "config": "eval/configs/e-perf-3/pipeline-mqtt-depth-1.toml"
+      },
+      {
+        "experiment": "e-perf-3",
+        "condition": "depth-10",
+        "config": "eval/configs/e-perf-3/pipeline-mqtt-depth-10.toml"
+      },
+      {
+        "experiment": "e-perf-3",
+        "condition": "depth-3",
+        "config": "eval/configs/e-perf-3/pipeline-mqtt-depth-3.toml"
+      },
+      {
+        "experiment": "e-perf-3",
+        "condition": "depth-5",
+        "config": "eval/configs/e-perf-3/pipeline-mqtt-depth-5.toml"
+      },
+      {
+        "experiment": "e-perf-4",
+        "condition": "100kb",
+        "config": "eval/configs/canonical/e-perf-4-100kb.toml"
+      },
+      {
+        "experiment": "e-perf-4",
+        "condition": "10kb",
+        "config": "eval/configs/canonical/e-perf-4-10kb.toml"
+      },
+      {
+        "experiment": "e-perf-4",
+        "condition": "120b",
+        "config": "eval/configs/canonical/e-perf-4-120b.toml"
+      },
+      {
+        "experiment": "e-perf-4",
+        "condition": "1kb",
+        "config": "eval/configs/canonical/e-perf-4-1kb.toml"
+      },
+      {
+        "experiment": "e-perf-5",
+        "condition": "wafer",
+        "config": "eval/configs/pipeline-c-passthrough.toml"
+      },
+      {
+        "experiment": "e-perf-6",
+        "condition": "depth-1",
+        "config": "eval/configs/pipeline-depth-1.toml"
+      },
+      {
+        "experiment": "e-perf-6",
+        "condition": "depth-10",
+        "config": "eval/configs/pipeline-depth-10.toml"
+      },
+      {
+        "experiment": "e-perf-6",
+        "condition": "depth-3",
+        "config": "eval/configs/pipeline-depth-3.toml"
+      },
+      {
+        "experiment": "e-perf-6",
+        "condition": "depth-5",
+        "config": "eval/configs/pipeline-depth-5.toml"
+      },
+      {
+        "experiment": "e-perf-7",
+        "condition": "both",
+        "config": "eval/configs/pipeline-c-passthrough.toml"
+      },
+      {
+        "experiment": "e-perf-7",
+        "condition": "epoch-only",
+        "config": "eval/configs/pipeline-c-epoch-only.toml"
+      },
+      {
+        "experiment": "e-perf-7",
+        "condition": "fuel-only",
+        "config": "eval/configs/pipeline-c-fuel-only.toml"
+      },
+      {
+        "experiment": "e-perf-7",
+        "condition": "neither",
+        "config": "eval/configs/pipeline-c-neither.toml"
+      },
+      {
+        "experiment": "e-perf-8",
+        "condition": "depth-1",
+        "config": "eval/configs/pipeline-depth-1.toml"
+      },
+      {
+        "experiment": "e-perf-8",
+        "condition": "depth-10",
+        "config": "eval/configs/pipeline-depth-10.toml"
+      },
+      {
+        "experiment": "e-perf-8",
+        "condition": "depth-3",
+        "config": "eval/configs/pipeline-depth-3.toml"
+      },
+      {
+        "experiment": "e-perf-8",
+        "condition": "depth-5",
+        "config": "eval/configs/pipeline-depth-5.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "large-cold",
+        "config": "eval/configs/e-perf-9/pipeline-tier-large.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "large-warm",
+        "config": "eval/configs/e-perf-9/pipeline-tier-large.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "medium-cold",
+        "config": "eval/configs/e-perf-9/pipeline-tier-medium.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "medium-warm",
+        "config": "eval/configs/e-perf-9/pipeline-tier-medium.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "small-cold",
+        "config": "eval/configs/e-perf-9/pipeline-tier-small.toml"
+      },
+      {
+        "experiment": "e-perf-9",
+        "condition": "small-warm",
+        "config": "eval/configs/e-perf-9/pipeline-tier-small.toml"
+      },
+      {
+        "experiment": "e-swap-1",
+        "condition": "steady",
+        "config": "eval/configs/e-swap/pipeline-hotswap.toml"
+      },
+      {
+        "experiment": "e-swap-2",
+        "condition": "steady",
+        "config": "eval/configs/e-swap/pipeline-hotswap.toml"
+      },
+      {
+        "experiment": "e-swap-3",
+        "condition": "wafer-hotswap",
+        "config": "eval/configs/e-swap/pipeline-swap3-mqtt.toml"
+      },
+      {
+        "experiment": "e-swap-3",
+        "condition": "wafer-restart",
+        "config": "eval/configs/e-swap/pipeline-swap3-mqtt.toml"
+      },
+      {
+        "experiment": "e-swap-4",
+        "condition": "burst-2x",
+        "config": "eval/configs/e-swap/pipeline-hotswap-burst.toml"
+      },
+      {
+        "experiment": "e-swap-5",
+        "condition": "process-trap-rollback",
+        "config": "eval/configs/e-swap/pipeline-hotswap-rollback.toml"
+      },
+      {
+        "experiment": "e-swap-6",
+        "condition": "steady",
+        "config": "eval/configs/e-swap/pipeline-hotswap.toml"
+      },
+      {
+        "experiment": "e-val-1",
+        "condition": "delay-50ms",
+        "config": "eval/configs/canonical/e-val-1.toml"
+      }
+    ]
   }
 }

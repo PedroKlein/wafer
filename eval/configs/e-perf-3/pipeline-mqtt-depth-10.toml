@@ -6,6 +6,15 @@
 name = "e-perf-3-depth-10"
 description = "MQTT-bookend depth scaling — 10 pass-through hops"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

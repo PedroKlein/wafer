@@ -58,6 +58,12 @@ def make_result(root: Path) -> Path:
         "wasmtime_version": "43.0.0",
         "wafer_runtime_sha256": "2" * 64,
         "wafer_plugin_hashes": {"transform": "3" * 64},
+        "engine_fuel_budgets": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
+        "condition": "120b",
+        "system": "wafer",
         "exit_codes": {"wafer_runtime": 0},
     }
     (result / "metadata.json").write_text(json.dumps(metadata))
@@ -362,6 +368,19 @@ def test_canonical_result_accepts_complete_leaf() -> None:
         completed = run(result)
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
+
+
+def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = make_result(Path(tmp))
+        metadata_path = result / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["epoch_deadline"] = None
+        metadata["effective_metering_mode"] = "fuel-only"
+        metadata_path.write_text(json.dumps(metadata))
+        completed = run(result)
+    assert completed.returncode == 1
+    assert "metering provenance differs" in completed.stdout
 
 def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None:
     with tempfile.TemporaryDirectory() as tmp:

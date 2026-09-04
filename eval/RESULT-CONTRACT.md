@@ -218,7 +218,8 @@ mosquitto blocks, exit codes) while **wafer-runtime** emits a
 `runtime-provenance.json` sidecar with the fields only the runtime can
 produce authoritatively (`wasmtime_version` from the resolved lockfile,
 `config_sha256`, `wafer_plugin_hashes` sharing the P0.12 hot-swap guard
-cache, `wafer_runtime_sha256`, `rustc_version`, `kernel`). `_write_metadata`
+cache, `wafer_runtime_sha256`, `rustc_version`, `kernel`, effective engine fuel
+budgets, epoch deadline/tick, and effective metering mode). `_write_metadata`
 prefers the runtime's values for those keys so provenance stays
 authoritative through cross-compilation.
 
@@ -253,6 +254,14 @@ authoritative through cross-compilation.
   },
   "config_path": "eval/configs/pipeline-c-passthrough.toml",
   "config_sha256": "…",
+  "engine_fuel_budgets": {
+    "transform": 10000000,
+    "filter": 500000,
+    "router": 500000
+  },
+  "epoch_deadline": 100,
+  "epoch_tick_ms": 10,
+  "effective_metering_mode": "fuel-and-epoch",
   "loadgen": {
     "profile_path": "eval/loadgen/generic-1kb.toml",
     "subscribe_topic": "wafer/bench/output"
@@ -266,6 +275,8 @@ authoritative through cross-compilation.
   }
 }
 ```
+
+For final WAFER leaves, the verifier compares these effective metering fields with the condition in `canonical-matrix.json`. E-Perf-7 uses its four-way `metering_modes` table; declared attack stimuli use their condition-specific exceptions; all other WAFER conditions use `final_campaign.canonical_metering`. A missing or mismatched value is a contract violation.
 
 Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the Pi 5 host fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
 
@@ -299,6 +310,9 @@ The preflight rejects a host that does not meet these conditions. Smoke runs may
 | `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch AND after every hot-swap by `PipelineHandle::record_plugin_hash`; the P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). |
 | `config_sha256` | Runtime `Sha256` of the effective config file at load time | Notebook cross-references use this as the provenance root. |
 | `kernel` | `uname -r` via subprocess from the runtime | Kept in both the runtime provenance and the shell metadata; the runtime version wins on merge. |
+| `engine_fuel_budgets` | Parsed effective engine config | Per-category fuel budgets; absent limits are JSON `null`. Node overrides remain represented by the config digest. |
+| `epoch_deadline`, `epoch_tick_ms` | Parsed effective engine config | Effective epoch deadline and tick; an omitted deadline is JSON `null`. |
+| `effective_metering_mode` | Derived from parsed fuel and epoch options | Stable value: `neither`, `fuel-only`, `epoch-only`, or `fuel-and-epoch`. |
 
 ### Sidecar file
 

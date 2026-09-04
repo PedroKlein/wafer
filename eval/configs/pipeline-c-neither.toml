@@ -1,23 +1,13 @@
-# Passthrough with no metering trap possible (both fuel and epoch use
-# large sentinels so neither budget trips inside a single hop).
+# Passthrough with fuel and epoch metering disabled by omission.
 #
 # Ablation for E-Perf-7 metering-overhead decomposition. This is the
-# closest we can get to "just Wasm execution cost" from the config layer.
-# Note that `set_fuel` and `set_epoch_deadline` still run per call — the
-# ablation isolates trap-check cost, not the API-call cost, which is
-# unavoidable on the current runtime.
 
 [pipeline]
 name = "bench-passthrough-no-metering"
 description = "Passthrough with no metering trap — reference for E-Perf-7"
 
 [engine]
-epoch_deadline = 1000000000
-
-[engine.fuel]
-transform = 999999999999
-filter = 999999999999
-router = 999999999999
+epoch_tick_ms = 10
 
 [nodes.source]
 type = "source"

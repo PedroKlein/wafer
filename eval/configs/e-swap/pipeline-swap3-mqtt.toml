@@ -6,6 +6,15 @@
 name = "e-swap-3-hotswap"
 description = "E-Swap-3: MQTT → pass-through (v1, swappable) → MQTT"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

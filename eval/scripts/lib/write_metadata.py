@@ -163,6 +163,10 @@ def merge_metadata(
             "wafer_runtime_version",
             "wafer_runtime_sha256",
             "wafer_plugin_hashes",
+            "engine_fuel_budgets",
+            "epoch_deadline",
+            "epoch_tick_ms",
+            "effective_metering_mode",
             "kernel",
             "config_sha256",
         ):

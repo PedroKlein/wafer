@@ -7,6 +7,15 @@
 name = "e-iso-2-cross-read"
 description = "Cross-read attack in position 2 of 3-node linear pipeline"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

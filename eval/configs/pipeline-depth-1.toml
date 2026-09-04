@@ -5,6 +5,15 @@
 name = "bench-depth-1"
 description = "1 pass-through transform between bench source and bench sink"
 
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

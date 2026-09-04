@@ -353,6 +353,46 @@ def validate_matrix(matrix: dict) -> list[str]:
     if campaign.get("diagnostic_batches_excluded") is not True:
         errors.append("final_campaign must exclude diagnostic batches")
 
+    expected_metering_exceptions = {
+        "e-iso-4": {
+            "infinite-loop": {
+                "type": "epoch-containment-stimulus",
+                "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
+                "fuel": None,
+                "epoch_deadline": 1,
+                "epoch_tick_ms": 10,
+            }
+        },
+        "e-iso-5": {
+            "memory-exhaust": {
+                "type": "memory-limit-stimulus",
+                "rationale": "Fuel must not preempt the intended memory-limit mechanism.",
+                "fuel": None,
+                "epoch_deadline": 100,
+                "epoch_tick_ms": 10,
+            }
+        },
+        "e-iso-7": {
+            "epoch-loop-attack": {
+                "type": "epoch-containment-stimulus",
+                "rationale": "Fuel must not preempt the intended epoch-containment mechanism.",
+                "fuel": None,
+                "epoch_deadline": 100,
+                "epoch_tick_ms": 10,
+            }
+        },
+    }
+    for experiment_id, expected in expected_metering_exceptions.items():
+        if experiments.get(experiment_id, {}).get("metering_exceptions") != expected:
+            errors.append(f"{experiment_id} metering exceptions differ from the frozen policy")
+    undeclared = sorted(
+        experiment_id
+        for experiment_id, definition in experiments.items()
+        if "metering_exceptions" in definition and experiment_id not in expected_metering_exceptions
+    )
+    if undeclared:
+        errors.append(f"undeclared metering exceptions: {', '.join(undeclared)}")
+
     metering_modes = experiments.get("e-perf-7", {}).get("metering_modes")
     if metering_modes != {
         "neither": {"fuel": None, "epoch_deadline": None},

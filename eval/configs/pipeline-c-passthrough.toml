@@ -1,6 +1,6 @@
 # Passthrough micro-benchmark. Bench source → pass-through Wasm transform → bench sink.
 #
-# All metering enabled (default engine config). Baseline for E-Perf-4 /
+# Explicit fuel and epoch metering. Baseline for E-Perf-4 /
 # E-Perf-7 / E-Perf-8. Also serves as the reference for the pipeline-c-*.toml
 # variants that ablate metering.
 #
@@ -10,6 +10,13 @@
 [pipeline]
 name = "bench-passthrough"
 description = "Minimal in-process bench: bench-source → pass-through (Wasm) → bench-sink"
+
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
 
 [nodes.source]
 type = "source"

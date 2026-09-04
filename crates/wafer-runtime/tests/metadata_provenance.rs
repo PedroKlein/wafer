@@ -36,16 +36,20 @@ use wafer_core::orchestrator::launch_pipeline;
 /// Absolute path to a repo-relative artefact (uses `CARGO_MANIFEST_DIR`
 /// so the test works regardless of the cwd cargo picks).
 fn repo_path(rel: &str) -> PathBuf {
-    let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo");
+    let manifest =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is always set by cargo");
     PathBuf::from(manifest).join("..").join("..").join(rel)
 }
 
 fn pass_through_plugin_bytes() -> Vec<u8> {
-    let path = repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-    std::fs::read(&path).unwrap_or_else(|e| panic!(
-        "pass-through plugin missing at {} — run `just build-plugins` first: {e}",
-        path.display()
-    ))
+    let path =
+        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+    std::fs::read(&path).unwrap_or_else(|e| {
+        panic!(
+            "pass-through plugin missing at {} — run `just build-plugins` first: {e}",
+            path.display()
+        )
+    })
 }
 
 /// AC1 + AC2 + AC3: fresh launch produces a provenance JSON containing all
@@ -66,9 +70,7 @@ async fn metadata_provenance_complete() {
     let config = load_config(&config_path).expect("load pipeline-shakedown.toml");
     validate(&config).expect("shakedown config validates");
 
-    let orchestrator = launch_pipeline(config, Some(&config_path))
-        .await
-        .expect("launch_pipeline");
+    let orchestrator = launch_pipeline(config, Some(&config_path)).await.expect("launch_pipeline");
 
     // Access the metadata module by re-declaring it here (integration tests
     // don't share the binary's private modules); the module functions are
@@ -119,9 +121,7 @@ async fn metadata_provenance_complete() {
     }
 
     // Drain the child so it exits cleanly.
-    let _ = output
-        .wait_with_output()
-        .expect("wait wafer binary");
+    let _ = output.wait_with_output().expect("wait wafer binary");
 
     let text = std::fs::read_to_string(&provenance_path).expect("read provenance");
     let json: serde_json::Value = serde_json::from_str(&text).expect("parse provenance JSON");
@@ -134,6 +134,10 @@ async fn metadata_provenance_complete() {
         "config_path",
         "config_sha256",
         "wafer_plugin_hashes",
+        "engine_fuel_budgets",
+        "epoch_deadline",
+        "epoch_tick_ms",
+        "effective_metering_mode",
         "kernel",
     ] {
         assert!(json.get(key).is_some(), "provenance missing key: {key}");
@@ -149,9 +153,8 @@ async fn metadata_provenance_complete() {
         let value = json[key].as_str().unwrap_or_else(|| panic!("{key} not a string"));
         assert!(!value.is_empty(), "{key} must be non-empty");
     }
-    let plugin_map = json["wafer_plugin_hashes"]
-        .as_object()
-        .expect("wafer_plugin_hashes must be an object");
+    let plugin_map =
+        json["wafer_plugin_hashes"].as_object().expect("wafer_plugin_hashes must be an object");
     assert!(!plugin_map.is_empty(), "wafer_plugin_hashes empty on a Wasm pipeline");
     for (node, hash_value) in plugin_map {
         let hash_str = hash_value.as_str().expect("hash must be string");
@@ -161,6 +164,10 @@ async fn metadata_provenance_complete() {
             "plugin hash for '{node}' must match the on-disk .wasm sha256"
         );
     }
+    assert!(json["engine_fuel_budgets"]["transform"].is_null());
+    assert!(json["epoch_deadline"].is_null());
+    assert_eq!(json["epoch_tick_ms"], 10);
+    assert_eq!(json["effective_metering_mode"], "neither");
     assert_eq!(json["config_sha256"].as_str().unwrap().len(), 64);
     assert_eq!(json["wafer_runtime_sha256"].as_str().unwrap().len(), 64);
 }

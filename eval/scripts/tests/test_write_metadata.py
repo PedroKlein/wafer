@@ -56,6 +56,10 @@ def test_merge_promotes_runtime_provenance() -> None:
         "wafer_plugin_hashes": {"pass-through": "c" * 64},
         "kernel": "runtime-24.0.0-arm64",
         "config_sha256": "d" * 64,
+        "engine_fuel_budgets": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
     }
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "metadata.json"

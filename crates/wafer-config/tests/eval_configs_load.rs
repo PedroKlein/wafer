@@ -140,7 +140,99 @@ fn e_iso_7_uses_independent_source_and_sink_populations() {
     let normalized = [&control, &attack, &epoch_attack].map(|config| {
         let mut value = toml::Value::try_from(config).expect("serialize E-Iso-7 config");
         value["nodes"]["branch_b"]["plugin"] = toml::Value::String(String::new());
+        value.as_table_mut().expect("config table").remove("engine");
         value
     });
     assert!(normalized.windows(2).all(|pair| pair[0] == pair[1]));
+}
+
+#[test]
+fn final_wafer_catalog_has_explicit_effective_metering() {
+    let root = workspace_root();
+    let matrix: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("eval/canonical-matrix.json")).expect("read matrix"),
+    )
+    .expect("parse matrix");
+    let campaign = &matrix["final_campaign"];
+    let canonical = &campaign["canonical_metering"];
+    let catalog =
+        campaign["wafer_config_catalog"].as_array().expect("wafer_config_catalog must be an array");
+    assert!(!catalog.is_empty());
+
+    for entry in catalog {
+        let experiment = entry["experiment"].as_str().expect("catalog experiment");
+        let condition = entry["condition"].as_str().expect("catalog condition");
+        let path = entry["config"].as_str().expect("catalog config");
+        let config = load_config(&root.join(path)).unwrap_or_else(|error| {
+            panic!("{experiment}/{condition} failed to load {path}: {error}")
+        });
+        let expected = if experiment == "e-perf-7" {
+            &matrix["experiments"][experiment]["metering_modes"][condition]
+        } else if let Some(exception) = matrix["experiments"][experiment]
+            .get("metering_exceptions")
+            .and_then(|value| value.get(condition))
+        {
+            exception
+        } else {
+            canonical
+        };
+        let expected_epoch = expected["epoch_deadline"].as_u64();
+        assert_eq!(
+            config.engine.epoch_deadline.map(std::num::NonZeroU64::get),
+            expected_epoch,
+            "{experiment}/{condition} epoch deadline differs in {path}"
+        );
+        assert_eq!(
+            config.engine.epoch_tick_ms,
+            expected.get("epoch_tick_ms").and_then(serde_json::Value::as_u64).unwrap_or(10),
+            "{experiment}/{condition} epoch tick differs in {path}"
+        );
+        for node in config.nodes.values() {
+            let (category, override_fuel) = match node {
+                NodeDef::Transform(node) if node.plugin.wasm_path().is_some() => {
+                    ("transform", node.fuel)
+                }
+                NodeDef::Filter(node) if node.plugin.wasm_path().is_some() => ("filter", node.fuel),
+                NodeDef::Router(node) if node.plugin.wasm_path().is_some() => ("router", node.fuel),
+                _ => continue,
+            };
+            let expected_fuel = expected.get("fuel").and_then(|fuel| {
+                fuel.as_u64().or_else(|| fuel.get(category).and_then(serde_json::Value::as_u64))
+            });
+            let engine_fuel = match node {
+                NodeDef::Transform(_) => config.engine.fuel.transform,
+                NodeDef::Filter(_) => config.engine.fuel.filter,
+                NodeDef::Router(_) => config.engine.fuel.router,
+                _ => None,
+            };
+            assert_eq!(
+                override_fuel.or(engine_fuel).map(std::num::NonZeroU64::get),
+                expected_fuel,
+                "{experiment}/{condition} {category} fuel differs in {path}"
+            );
+        }
+    }
+}
+
+#[test]
+fn e_perf_7_uses_true_option_ablation_modes_without_sentinels() {
+    let root = workspace_root();
+    for (condition, fuel, epoch) in [
+        ("neither", None, None),
+        ("fuel-only", Some(10_000_000), None),
+        ("epoch-only", None, Some(100)),
+        ("both", Some(10_000_000), Some(100)),
+    ] {
+        let file = if condition == "both" {
+            "pipeline-c-passthrough.toml".to_owned()
+        } else {
+            format!("pipeline-c-{condition}.toml")
+        };
+        let path = root.join("eval/configs").join(file);
+        let text = std::fs::read_to_string(&path).expect("read E-Perf-7 config");
+        assert!(!text.contains("999999999999") && !text.contains("1000000000"));
+        let config = load_config(&path).expect("load E-Perf-7 config");
+        assert_eq!(config.engine.fuel.transform.map(std::num::NonZeroU64::get), fuel);
+        assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), epoch);
+    }
 }
