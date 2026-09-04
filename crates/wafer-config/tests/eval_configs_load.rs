@@ -94,6 +94,15 @@ fn every_eval_config_loads_and_validates() {
 }
 
 #[test]
+fn capacity_scout_wafer_is_explicitly_metered() {
+    let config = load_config(&workspace_root().join("eval/configs/capacity-scout-wafer.toml"))
+        .expect("load capacity scout config");
+    assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), Some(100));
+    assert_eq!(config.engine.epoch_tick_ms, 10);
+    assert_eq!(config.engine.fuel.filter.map(std::num::NonZeroU64::get), Some(500_000));
+}
+
+#[test]
 fn e_iso_7_uses_independent_source_and_sink_populations() {
     let root = workspace_root();
     let control = load_config(&root.join("eval/configs/e-iso-7/pipeline-control.toml"))

@@ -53,12 +53,25 @@ pub struct SequenceTracker {
     gaps: Vec<(u64, u64)>,
     duplicates: Vec<u64>,
     total_received: u64,
+    total_gaps: u64,
+    total_duplicates: u64,
+    max_examples: Option<usize>,
+    examples_truncated: bool,
 }
 
 impl SequenceTracker {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    #[must_use]
+    pub(crate) fn with_max_examples(max_examples: usize) -> Self {
+        Self { max_examples: Some(max_examples), ..Self::default() }
+    }
+
+    fn can_store_example(&self, count: usize) -> bool {
+        self.max_examples.is_none_or(|limit| count < limit)
     }
 
     /// Record a received sequence number.
@@ -70,27 +83,40 @@ impl SequenceTracker {
             }
             std::cmp::Ordering::Greater => {
                 // seq > expected_next, so subtraction cannot underflow
-                #[expect(clippy::arithmetic_side_effects, reason = "seq > expected_next checked by match arm; seq - 1 safe because seq > 0 (seq > expected_next >= 0)")]
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "seq > expected_next checked by match arm; seq - 1 safe because seq > 0 (seq > expected_next >= 0)"
+                )]
                 {
-                    self.gaps.push((self.expected_next, seq - 1));
+                    self.total_gaps =
+                        self.total_gaps.saturating_add(seq.saturating_sub(self.expected_next));
+                    if self.can_store_example(self.gaps.len()) {
+                        self.gaps.push((self.expected_next, seq - 1));
+                    } else {
+                        self.examples_truncated = true;
+                    }
                     self.expected_next = seq + 1;
                 }
             }
             std::cmp::Ordering::Less => {
-                self.duplicates.push(seq);
+                self.total_duplicates = self.total_duplicates.saturating_add(1);
+                if self.can_store_example(self.duplicates.len()) {
+                    self.duplicates.push(seq);
+                } else {
+                    self.examples_truncated = true;
+                }
             }
         }
     }
 
     #[must_use]
-    pub fn total_gaps(&self) -> u64 {
-        self.gaps.iter().map(|(s, e)| e.saturating_sub(*s).saturating_add(1)).sum()
+    pub const fn total_gaps(&self) -> u64 {
+        self.total_gaps
     }
 
     #[must_use]
-    pub fn total_duplicates(&self) -> u64 {
-        #[expect(clippy::as_conversions, reason = "Vec::len() is usize which fits in u64 on all targets")]
-        { self.duplicates.len() as u64 }
+    pub const fn total_duplicates(&self) -> u64 {
+        self.total_duplicates
     }
 
     #[must_use]
@@ -119,6 +145,8 @@ pub struct SequenceReport {
     pub total_duplicates: u64,
     pub gap_ranges: Vec<(u64, u64)>,
     pub duplicate_seqs: Vec<u64>,
+    #[serde(default)]
+    pub examples_truncated: bool,
 }
 
 impl From<&SequenceTracker> for SequenceReport {
@@ -129,6 +157,7 @@ impl From<&SequenceTracker> for SequenceReport {
             total_duplicates: t.total_duplicates(),
             gap_ranges: t.gaps().to_vec(),
             duplicate_seqs: t.duplicates().to_vec(),
+            examples_truncated: t.examples_truncated,
         }
     }
 }
@@ -152,9 +181,12 @@ pub struct SubscriberMetadata {
     /// Exclusive upper sequence bound for the measured population.
     #[serde(default)]
     pub sequence_end_exclusive: Option<u64>,
-    /// Parsed messages excluded because they were outside the measured range.
+    /// Parsed warmup messages excluded because they were outside the measured range.
     #[serde(default)]
     pub ignored_sequence_count: u64,
+    /// Parsed measured messages outside the publisher's declared sequence range.
+    #[serde(default)]
+    pub unexpected_sequence_count: u64,
 
     // --- Measurement summary (also fully preserved in latency.hdr) ---
     pub total_recorded: u64,
@@ -195,26 +227,26 @@ impl LatencyRecorder {
     pub const HIGHEST_NS: u64 = 10_000_000_000;
     pub const SIG_DIGITS: u8 = 3;
 
+    #[must_use]
+    pub fn new() -> Self {
+        Self::with_sequence_example_limit(None)
+    }
+
     /// # Panics
-    /// Never in practice. The three histogram parameters are compile-time
-    /// constants proven valid by the `record_ten_ms_latency*` unit test
-    /// (which constructs an instance) and by hdrhistogram's contract:
-    /// `new_with_bounds` only fails for `low >= high` or `sig_digits > 5`.
+    /// Never in practice. The histogram parameters are compile-time constants.
     #[must_use]
     #[expect(
         clippy::expect_used,
-        reason = "HdrHistogram bounds are compile-time constants proven valid by the unit tests below; new_with_bounds cannot fail with these arguments"
+        reason = "HdrHistogram bounds are compile-time constants proven valid by unit tests"
     )]
-    pub fn new() -> Self {
-        let histogram = Histogram::<u64>::new_with_bounds(
-            Self::LOWEST_NS,
-            Self::HIGHEST_NS,
-            Self::SIG_DIGITS,
-        )
-        .expect("HdrHistogram bounds are compile-time constants and known valid");
+    pub(crate) fn with_sequence_example_limit(max_examples: Option<usize>) -> Self {
+        let histogram =
+            Histogram::<u64>::new_with_bounds(Self::LOWEST_NS, Self::HIGHEST_NS, Self::SIG_DIGITS)
+                .expect("HdrHistogram bounds are compile-time constants and known valid");
         Self {
             histogram,
-            sequence: SequenceTracker::new(),
+            sequence: max_examples
+                .map_or_else(SequenceTracker::new, SequenceTracker::with_max_examples),
             total_messages: 0,
             parse_errors: 0,
             negative_latency: 0,
@@ -273,7 +305,10 @@ impl LatencyRecorder {
             return RecordOutcome::NegativeLatency;
         }
         // receive_ns >= intended_publish_ns checked above
-        #[expect(clippy::arithmetic_side_effects, reason = "subtraction safe: receive_ns >= intended_publish_ns guarded by the if-check above")]
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "subtraction safe: receive_ns >= intended_publish_ns guarded by the if-check above"
+        )]
         let latency_ns = receive_ns - intended_publish_ns;
         // Clamp below-histogram-floor values to the floor rather than dropping.
         // Sub-microsecond latencies are physically impossible over MQTT, but a
@@ -417,9 +452,8 @@ impl LatencyRecorder {
         metadata.sequence = SequenceReport::from(&self.sequence);
 
         // latency.hdr — raw V2 bytes.
-        let hdr_bytes = self
-            .serialize_v2()
-            .map_err(|e| anyhow::anyhow!("hdr V2 serialize: {e:?}"))?;
+        let hdr_bytes =
+            self.serialize_v2().map_err(|e| anyhow::anyhow!("hdr V2 serialize: {e:?}"))?;
         let mut hdr_file = fs::File::create(dir.join("latency.hdr"))?;
         hdr_file.write_all(&hdr_bytes)?;
 
@@ -583,6 +617,21 @@ mod tests {
     }
 
     #[test]
+    fn sequence_examples_are_bounded_without_losing_totals() {
+        let mut tracker = SequenceTracker::with_max_examples(1_024);
+        for seq in (1..=2_050).step_by(2) {
+            tracker.record(seq);
+            tracker.record(seq);
+        }
+        let report = SequenceReport::from(&tracker);
+        assert_eq!(report.total_gaps, 1_025);
+        assert_eq!(report.total_duplicates, 1_025);
+        assert_eq!(report.gap_ranges.len(), 1_024);
+        assert_eq!(report.duplicate_seqs.len(), 1_024);
+        assert!(report.examples_truncated);
+    }
+
+    #[test]
     fn sequence_csv_shape_is_adf_ready() {
         let mut rec = LatencyRecorder::new();
         for s in [0_u64, 1, 3, 3] {
@@ -618,6 +667,7 @@ mod tests {
             host_tag: Some("shakedown-macos".into()),
             sequence_end_exclusive: None,
             ignored_sequence_count: 0,
+            unexpected_sequence_count: 0,
             total_recorded: 0,
             total_messages: 0,
             parse_errors: 0,
@@ -638,6 +688,7 @@ mod tests {
                 total_duplicates: 0,
                 gap_ranges: vec![],
                 duplicate_seqs: vec![],
+                examples_truncated: false,
             },
         };
         rec.write_artifacts(dir.path(), meta).unwrap();

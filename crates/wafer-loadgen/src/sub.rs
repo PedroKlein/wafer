@@ -63,6 +63,10 @@ pub struct SubscribeArgs {
     #[arg(long)]
     pub trace_file: Option<PathBuf>,
 
+    /// Retain at most this many gap and duplicate examples while preserving exact totals.
+    #[arg(long)]
+    pub sequence_example_limit: Option<usize>,
+
     /// Ignore messages at or above this sequence number.
     #[arg(long)]
     pub sequence_end_exclusive: Option<u64>,
@@ -148,7 +152,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         }
     });
 
-    let mut recorder = LatencyRecorder::new();
+    let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit);
     let mut trace =
         args.trace_file.as_ref().map(std::fs::File::create).transpose()?.map(BufWriter::new);
     if let Some(trace) = &mut trace {
@@ -216,6 +220,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         host_tag: args.host_tag.clone(),
         sequence_end_exclusive: args.sequence_end_exclusive,
         ignored_sequence_count: 0,
+        unexpected_sequence_count: 0,
         // Measurement fields are filled by write_artifacts.
         total_recorded: 0,
         total_messages: 0,
@@ -237,6 +242,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
             total_duplicates: 0,
             gap_ranges: vec![],
             duplicate_seqs: vec![],
+            examples_truncated: false,
         },
     };
 

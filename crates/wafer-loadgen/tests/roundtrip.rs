@@ -49,14 +49,8 @@ fn ensure_docker_host() {
     }
     let candidates = [
         "/var/run/docker.sock".to_owned(),
-        format!(
-            "{}/.colima/default/docker.sock",
-            std::env::var("HOME").unwrap_or_default()
-        ),
-        format!(
-            "{}/.docker/run/docker.sock",
-            std::env::var("HOME").unwrap_or_default()
-        ),
+        format!("{}/.colima/default/docker.sock", std::env::var("HOME").unwrap_or_default()),
+        format!("{}/.docker/run/docker.sock", std::env::var("HOME").unwrap_or_default()),
     ];
     for path in candidates {
         if std::path::Path::new(&path).exists() {
@@ -101,6 +95,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     let topic = format!("wafer/roundtrip/{}", std::process::id());
     let output_dir: PathBuf = tempfile::tempdir()?.keep(); // keep on failure for post-mortem
     let published_trace = output_dir.join("published.csv");
+    let publisher_summary = output_dir.join("publisher-summary.json");
     let received_trace = output_dir.join("received.csv");
 
     // Subscriber: start FIRST so it is subscribed before the publisher fires
@@ -116,6 +111,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         host_tag: Some("shakedown-macos".into()),
         qos: 1,
         trace_file: Some(received_trace.clone()),
+        sequence_example_limit: None,
         sequence_end_exclusive: Some(TOTAL_MESSAGES),
     };
     let sub_handle = tokio::spawn(async move { run_subscriber(sub_args).await });
@@ -128,7 +124,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         broker_host: host.to_string(),
         broker_port: port,
         topic: topic.clone(),
-        rate: 5_000,             // 10k msgs / 2s
+        rate: 5_000, // 10k msgs / 2s
         duration_secs: 2,
         payload_size: 120,
         payload_template: Some(PayloadTemplate::Telemetry120b),
@@ -149,6 +145,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         hotswap_api_url: "http://localhost:9090".into(),
         hotswap_result_path: None,
         trace_file: Some(published_trace.clone()),
+        summary_file: Some(publisher_summary.clone()),
         sequence_start: 0,
         drop_when_full: false,
     };
@@ -161,17 +158,19 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     assert_eq!(warmup_report.published, 100);
 
     let pub_report = run_publisher(pub_args).await?;
-    assert_eq!(
-        pub_report.published, TOTAL_MESSAGES,
-        "publisher reported unexpected sent count"
-    );
+    assert_eq!(pub_report.published, TOTAL_MESSAGES, "publisher reported unexpected sent count");
+    let summary: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&publisher_summary)?)?;
+    assert_eq!(summary["intended"], TOTAL_MESSAGES);
+    assert_eq!(summary["rejected"], 0);
+    assert_eq!(summary["enqueued"], TOTAL_MESSAGES);
 
     // Subscriber will exit once TOTAL_MESSAGES observed. Cap the wait so a
     // hung test fails loudly instead of blocking CI.
-    let sub_report = tokio::time::timeout(Duration::from_secs(30), sub_handle)
-        .await
-        .map_err(|e| anyhow::anyhow!("subscriber did not finish within 30s of publisher exit: {e}"))?
-        ??;
+    let sub_report =
+        tokio::time::timeout(Duration::from_secs(30), sub_handle).await.map_err(|e| {
+            anyhow::anyhow!("subscriber did not finish within 30s of publisher exit: {e}")
+        })???;
 
     // AC3a: 10k messages observed.
     assert_eq!(
@@ -197,11 +196,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
 
     // AC3d: latency.hdr magic bytes.
     let hdr = std::fs::read(output_dir.join("latency.hdr"))?;
-    assert!(
-        hdr.len() > 4,
-        "latency.hdr suspiciously small: {} bytes",
-        hdr.len()
-    );
+    assert!(hdr.len() > 4, "latency.hdr suspiciously small: {} bytes", hdr.len());
     assert_eq!(
         &hdr[..3],
         &[0x1c, 0x84, 0x93],

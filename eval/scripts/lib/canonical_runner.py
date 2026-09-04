@@ -5,6 +5,7 @@ import csv
 import datetime as dt
 import hashlib
 import json
+import math
 import os
 import random
 import re
@@ -102,7 +103,591 @@ HOTSWAP_PHASE_FIELDS = (
     "convergence_ns",
 )
 FOCUSED_MATRIX_SHA_ENV = "WAFER_FOCUSED_MATRIX_SHA256"
+CAPACITY_SCOUT_SYSTEMS = RATE_SWEEP_SYSTEMS
+CAPACITY_SCOUT_SUTS = ("native", "wafer", "ekuiper")
+CAPACITY_SCOUT_BASE_RATE = 500
+CAPACITY_SCOUT_REPETITIONS = 3
+CAPACITY_SCOUT_WARMUP_SECS = 30
+CAPACITY_SCOUT_MEASUREMENT_SECS = 60
+CAPACITY_SCOUT_SEED = 1729
+CAPACITY_SCOUT_WAFER_CONFIG = "eval/configs/capacity-scout-wafer.toml"
+CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS = 240
+CAPACITY_SCOUT_BATCH_TIMEOUT_SECS = 18 * 60 * 60
+CAPACITY_SCOUT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024
 
+
+def analyze_capacity_scout_summary(
+    publisher: dict, subscriber: dict, measurement_duration_ns: int
+) -> dict:
+    if measurement_duration_ns <= 0:
+        raise ValueError("capacity-scout measurement duration must be positive")
+    try:
+        intended = int(publisher["intended"])
+        rejected = int(publisher["rejected"])
+        enqueued = int(publisher["enqueued"])
+        received_events = int(subscriber["total_recorded"])
+        duplicates = int(subscriber["sequence"]["total_duplicates"])
+        ignored_warmup = int(subscriber.get("ignored_sequence_count", 0))
+        unexpected = int(subscriber["unexpected_sequence_count"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("capacity-scout counters are missing or invalid") from error
+    if min(intended, rejected, enqueued, received_events, duplicates, ignored_warmup, unexpected) < 0:
+        raise ValueError("capacity-scout counters must be non-negative")
+    if intended != rejected + enqueued:
+        raise ValueError("counter identity failed: intended = rejected + enqueued")
+    if subscriber.get("parse_errors") != 0 or subscriber.get("negative_latency_count") != 0:
+        raise ValueError("subscriber reported parse errors or negative latency")
+    if int(subscriber.get("sequence", {}).get("total_received", -1)) != received_events:
+        raise ValueError("subscriber received counters do not reconcile")
+    if int(subscriber.get("total_messages", received_events)) != received_events:
+        raise ValueError("subscriber message and HDR populations differ")
+    if duplicates > received_events:
+        raise ValueError("duplicates exceed received events")
+    received_unique = received_events - duplicates
+    if received_unique > enqueued:
+        raise ValueError("unique receipts exceed enqueued messages")
+    downstream_lost = enqueued - received_unique
+    total_undelivered = rejected + downstream_lost
+    duration_secs = measurement_duration_ns / 1_000_000_000
+    return {
+        "messages": {
+            "intended": intended,
+            "rejected": rejected,
+            "enqueued": enqueued,
+            "received_events": received_events,
+            "received_unique": received_unique,
+            "downstream_lost": downstream_lost,
+            "total_undelivered": total_undelivered,
+            "duplicates": duplicates,
+            "unexpected": unexpected,
+            "ignored_warmup": ignored_warmup,
+        },
+        "rates_msg_s": {
+            "intended": intended / duration_secs,
+            "achieved": received_unique / duration_secs,
+        },
+        "loss_percent": 100.0 * total_undelivered / intended if intended else 100.0,
+        "latency_ns": {
+            "p50": int(subscriber["latency_p50_ns"]),
+            "p95": int(subscriber["latency_p95_ns"]),
+            "p99": int(subscriber["latency_p99_ns"]),
+        },
+    }
+
+
+def validate_capacity_scout_result(result: dict) -> None:
+    required = {
+        "schema_version", "batch_class", "thesis_evidence", "system", "rate_msg_s",
+        "source_git_sha", "source_dirty", "measurement_duration_ns", "messages", "rates_msg_s",
+        "loss_percent", "latency_hdr", "resources", "thermal", "process_audit",
+        "config", "loadgen_profile", "provenance", "controlled_factors", "traces",
+    }
+    missing = sorted(required - result.keys())
+    if missing:
+        raise ValueError(f"capacity-scout result missing fields: {', '.join(missing)}")
+    if result["batch_class"] != "capacity-scout":
+        raise ValueError("capacity-scout result requires batch_class=capacity-scout")
+    if result["thesis_evidence"] is not False:
+        raise ValueError("capacity-scout result requires thesis_evidence=false")
+    if result["traces"] is not False:
+        raise ValueError("capacity-scout result must not contain per-message traces")
+    if result["system"] not in CAPACITY_SCOUT_SYSTEMS:
+        raise ValueError("capacity-scout result has an unknown system")
+    controlled_fields = {
+        "broker", "topic", "payload_template_sha256", "qos", "warmup_secs",
+        "measurement_secs", "load_shape", "sequence_example_limit", "support_cpus", "sut_cpus",
+    }
+    if set(result["controlled_factors"]) != controlled_fields:
+        raise ValueError("capacity-scout controlled factors are incomplete")
+    if type(result["rate_msg_s"]) is not int or result["rate_msg_s"] <= 0:
+        raise ValueError("capacity-scout rate must be a positive integer")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(result["source_git_sha"])):
+        raise ValueError("capacity-scout source_git_sha is invalid")
+    if result["source_dirty"] is not False:
+        raise ValueError("capacity-scout source must be clean")
+    if set(result["resources"]) != {"scope", "cpu_percent", "max_rss_bytes"}:
+        raise ValueError("capacity-scout resource summary is incomplete")
+    if result["resources"]["scope"] != (
+        "no-sut" if result["system"] == "mqtt-loopback" else "sut"
+    ):
+        raise ValueError("capacity-scout resource scope differs from system")
+    if set(result["thermal"]) != {"max_temperature_millicelsius", "throttled"}:
+        raise ValueError("capacity-scout thermal summary is incomplete")
+    summary = analyze_capacity_scout_summary(
+        {field: result["messages"][field] for field in ("intended", "rejected", "enqueued")},
+        {
+            "total_recorded": result["messages"]["received_events"],
+            "total_messages": result["messages"]["received_events"],
+            "ignored_sequence_count": result["messages"]["ignored_warmup"],
+            "unexpected_sequence_count": result["messages"]["unexpected"],
+            "parse_errors": 0,
+            "negative_latency_count": 0,
+            "latency_p50_ns": 0,
+            "latency_p95_ns": 0,
+            "latency_p99_ns": 0,
+            "sequence": {
+                "total_received": result["messages"]["received_events"],
+                "total_duplicates": result["messages"]["duplicates"],
+            },
+        },
+        int(result["measurement_duration_ns"]),
+    )
+    for field, value in summary["messages"].items():
+        if result["messages"].get(field) != value:
+            raise ValueError(f"capacity-scout message counter differs: {field}")
+    for field, value in summary["rates_msg_s"].items():
+        if not math.isclose(float(result["rates_msg_s"].get(field, -1)), value):
+            raise ValueError(f"capacity-scout rate differs: {field}")
+    if not math.isclose(float(result["loss_percent"]), summary["loss_percent"]):
+        raise ValueError("capacity-scout loss_percent differs from counters")
+    if int(result["latency_hdr"].get("samples", -1)) != result["messages"]["received_events"]:
+        raise ValueError("latency HDR count differs from received events")
+    if result["thermal"].get("throttled") is not False:
+        raise ValueError("capacity-scout result is throttled")
+    if int(result["thermal"].get("max_temperature_millicelsius", 0)) >= 75_000:
+        raise ValueError("capacity-scout result reached the 75 C thermal stop")
+    if result["messages"]["unexpected"] != 0:
+        raise ValueError("capacity-scout result contains unexpected sequences")
+    for receipt in (
+        "latency_hdr", "process_audit", "config", "loadgen_profile", "provenance"
+    ):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(result[receipt].get("sha256", ""))):
+            raise ValueError(f"capacity-scout {receipt} receipt has invalid sha256")
+
+
+def verify_capacity_scout_result_files(output: Path, result: dict) -> None:
+    validate_capacity_scout_result(result)
+    for name in ("latency_hdr", "process_audit", "config", "loadgen_profile", "provenance"):
+        receipt = result[name]
+        path = output / receipt["path"]
+        if not path.is_file():
+            raise ValueError(f"capacity-scout {name} receipt path is missing")
+        if hashlib.sha256(path.read_bytes()).hexdigest() != receipt["sha256"]:
+            raise ValueError(f"capacity-scout {name} receipt checksum mismatch")
+
+
+def classify_capacity_scout_probe(results: list[dict]) -> str:
+    if len(results) != CAPACITY_SCOUT_REPETITIONS:
+        raise ValueError("capacity-scout probe requires exactly three complete runs")
+    for result in results:
+        validate_capacity_scout_result(result)
+    return (
+        "good"
+        if all(
+            result["loss_percent"] <= 1.0
+            and result["rates_msg_s"]["achieved"] >= 0.99 * result["rates_msg_s"]["intended"]
+            for result in results
+        )
+        else "bad"
+    )
+
+
+def capacity_scout_next_rate(history: list[tuple[int, str]], mqtt: bool = False) -> dict:
+    classified = [(int(rate), result) for rate, result in history if result != "invalid"]
+    if not classified:
+        return {"phase": "geometric", "rate_msg_s": CAPACITY_SCOUT_BASE_RATE}
+    last_good = None
+    first_bad = None
+    confirming_bad = None
+    bracket_index = None
+    bad_streak = 0
+    for index, (rate, result) in enumerate(classified):
+        if result == "good":
+            last_good = rate
+            first_bad = None
+            bad_streak = 0
+        elif result == "bad":
+            if bad_streak == 0:
+                first_bad = rate
+            bad_streak += 1
+            if bad_streak == 2:
+                confirming_bad = rate
+                bracket_index = index
+                break
+        else:
+            raise ValueError(f"unknown capacity-scout classification: {result}")
+    if confirming_bad is None:
+        return {"phase": "geometric", "rate_msg_s": classified[-1][0] * 2}
+    if last_good is None or first_bad is None:
+        return {"phase": "left-censored", "rate_msg_s": CAPACITY_SCOUT_BASE_RATE}
+    lower = last_good
+    upper = first_bad
+    for rate, result in classified[(bracket_index or 0) + 1 :]:
+        if not lower < rate < upper:
+            continue
+        if result == "good":
+            lower = rate
+        elif result == "bad":
+            upper = rate
+    target = max(500, (lower + 9) // 10)
+    if upper - lower <= target:
+        answer = {
+            "phase": "resolved",
+            "lower_good_rate_msg_s": lower,
+            "upper_bad_rate_msg_s": upper,
+        }
+    else:
+        answer = {"phase": "refine", "rate_msg_s": (lower + upper) // 2}
+    if mqtt:
+        answer["support_censor_above_rate_msg_s"] = last_good
+    return answer
+
+
+def _capacity_scout_config(system: str) -> str:
+    return CAPACITY_SCOUT_WAFER_CONFIG if system == "wafer" else _rate_sweep_config(system)
+
+
+def build_capacity_scout_rate_block(
+    rate_msg_s: int, systems: tuple[str, ...] = CAPACITY_SCOUT_SYSTEMS
+) -> list[RunItem]:
+    if rate_msg_s <= 0:
+        raise ValueError("capacity-scout rate must be positive")
+    if not systems or any(system not in CAPACITY_SCOUT_SYSTEMS for system in systems):
+        raise ValueError("capacity-scout systems are empty or invalid")
+    base = sorted(
+        systems,
+        key=lambda system: (
+            hashlib.sha256(f"{CAPACITY_SCOUT_SEED}:{rate_msg_s}:{system}".encode()).hexdigest(),
+            system,
+        ),
+    )
+    items = []
+    for run_index in range(1, CAPACITY_SCOUT_REPETITIONS + 1):
+        ordered = base[run_index - 1 :] + base[: run_index - 1]
+        for system in ordered:
+            items.append(
+                RunItem(
+                    experiment="capacity-scout",
+                    condition=f"{system}/rate-{rate_msg_s:05d}",
+                    run_index=run_index,
+                    config=_capacity_scout_config(system),
+                    warmup_secs=CAPACITY_SCOUT_WARMUP_SECS,
+                    measurement_secs=CAPACITY_SCOUT_MEASUREMENT_SECS,
+                    loadgen_profile=RATE_SWEEP_PROFILE,
+                    total_messages=rate_msg_s * CAPACITY_SCOUT_MEASUREMENT_SECS,
+                    system=system,
+                    offered_rate_msg_s=rate_msg_s,
+                    exclusive_sut=True,
+                )
+            )
+    return items
+
+
+def build_capacity_scout_invocation(
+    root: Path, system: str, rate_msg_s: int, run_index: int, output: Path
+) -> dict:
+    item = next(
+        item
+        for item in build_capacity_scout_rate_block(rate_msg_s, (system,))
+        if item.run_index == run_index
+    )
+    input_topic = "wafer/telemetry"
+    subscriber_topic = input_topic if system == "mqtt-loopback" else "wafer/telemetry/hot"
+    profile = tomllib.loads((root / RATE_SWEEP_PROFILE).read_text())["loadgen"]
+    return {
+        "system": system,
+        "config": item.config,
+        "controlled_factors": {
+            "broker": "127.0.0.1:1883",
+            "topic": input_topic,
+            "payload_template_sha256": profile["payload_template_sha256"],
+            "qos": 1,
+            "warmup_secs": CAPACITY_SCOUT_WARMUP_SECS,
+            "measurement_secs": CAPACITY_SCOUT_MEASUREMENT_SECS,
+            "load_shape": "steady",
+            "sequence_example_limit": 1_024,
+            "support_cpus": item.support_cpus,
+            "sut_cpus": item.runtime_cpus,
+        },
+        "subscriber_topic": subscriber_topic,
+        "publisher_command": loadgen_command(
+            root, item, "publish", topic=input_topic,
+            summary_file=output / "publisher-summary.json",
+        ),
+        "subscriber_command": loadgen_command(
+            root, item, "subscribe", output=output, topic=subscriber_topic
+        ),
+    }
+
+
+def persist_capacity_scout_decision(path: Path, decision: dict) -> bool:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    encoded = json.dumps(decision, sort_keys=True, separators=(",", ":")) + "\n"
+    try:
+        with path.open("x") as stream:
+            stream.write(encoded)
+        return True
+    except FileExistsError:
+        if path.read_text() != encoded:
+            raise ValueError("capacity-scout decision path already contains another decision")
+        return False
+
+
+def _capacity_scout_decision(index: int, kind: str, rate: int, systems: tuple[str, ...], state: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "decision_index": index,
+        "batch_class": "capacity-scout",
+        "thesis_evidence": False,
+        "previous_decision_sha256": None,
+        "kind": kind,
+        "rate_msg_s": rate,
+        "systems": list(systems),
+        "state_before": state,
+        "schedule": [item.__dict__ for item in build_capacity_scout_rate_block(rate, systems)],
+    }
+
+
+def replay_capacity_scout_decisions(decisions: list[dict], accepted: dict[str, dict]) -> dict:
+    histories: dict[str, list[tuple[int, str]]] = {system: [] for system in CAPACITY_SCOUT_SYSTEMS}
+    classifications = []
+    pending_mqtt_bad_rate = None
+    support_censor_bound = None
+    for decision in decisions:
+        schedule = decision["schedule"]
+        missing = [
+            f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}"
+            for item in schedule
+            if f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}" not in accepted
+        ]
+        if missing:
+            return {"action": "resume", "decision": decision, "pending_result_keys": missing}
+        by_system: dict[str, list[dict]] = {}
+        for item in schedule:
+            key = f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}"
+            result = accepted[key]
+            validate_capacity_scout_result(result)
+            if result["system"] != item["system"] or result["rate_msg_s"] != item["offered_rate_msg_s"]:
+                raise ValueError("accepted result does not match persisted decision")
+            by_system.setdefault(item["system"], []).append(result)
+        classified = {}
+        if "mqtt-loopback" in by_system:
+            classified["mqtt-loopback"] = classify_capacity_scout_probe(
+                by_system["mqtt-loopback"]
+            )
+        rate = int(decision["rate_msg_s"])
+        mqtt_result = classified.get("mqtt-loopback")
+        if decision["kind"] == "geometric":
+            if mqtt_result is None:
+                raise ValueError("geometric decision must include MQTT loopback")
+            if mqtt_result == "good":
+                classified.update(
+                    {
+                        system: classify_capacity_scout_probe(results)
+                        for system, results in by_system.items()
+                        if system != "mqtt-loopback"
+                    }
+                )
+            else:
+                classified.update(
+                    {
+                        system: "support-confounded"
+                        for system in by_system
+                        if system != "mqtt-loopback"
+                    }
+                )
+            histories["mqtt-loopback"].append((rate, mqtt_result))
+            if mqtt_result == "good":
+                pending_mqtt_bad_rate = None
+                for system in CAPACITY_SCOUT_SUTS:
+                    if system in classified:
+                        histories[system].append((rate, classified[system]))
+            else:
+                pending_mqtt_bad_rate = rate
+        elif decision["kind"] == "mqtt-confirmation":
+            if set(classified) != {"mqtt-loopback"}:
+                raise ValueError("MQTT confirmation must be MQTT-only")
+            histories["mqtt-loopback"].append((rate, mqtt_result))
+            if mqtt_result == "bad" and pending_mqtt_bad_rate is not None:
+                good_rates = [
+                    candidate_rate
+                    for candidate_rate, result in histories["mqtt-loopback"]
+                    if result == "good"
+                ]
+                support_censor_bound = max(good_rates) if good_rates else None
+            elif mqtt_result == "good":
+                pending_mqtt_bad_rate = None
+        elif decision["kind"] == "refinement":
+            if len(by_system) != 1:
+                raise ValueError("refinement decision must contain one system")
+            system, results = next(iter(by_system.items()))
+            result = classify_capacity_scout_probe(results)
+            classified[system] = result
+            histories[system].append((rate, result))
+        else:
+            raise ValueError(f"unknown capacity-scout decision kind: {decision['kind']}")
+        classifications.append({"decision_index": decision["decision_index"], "results": classified})
+
+    referenced = {
+        f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}"
+        for decision in decisions
+        for item in decision["schedule"]
+    }
+    orphaned = sorted(set(accepted) - referenced)
+    if orphaned:
+        raise ValueError(f"accepted capacity-scout results lack a decision: {orphaned}")
+
+    next_index = len(decisions) + 1
+    states = {
+        system: capacity_scout_next_rate(history, mqtt=system == "mqtt-loopback")
+        for system, history in histories.items()
+    }
+    mqtt_history = histories["mqtt-loopback"]
+    mqtt_bad_pair = any(
+        previous[1] == "bad" and current[1] == "bad"
+        for previous, current in zip(mqtt_history, mqtt_history[1:])
+    )
+    if mqtt_bad_pair:
+        for system in CAPACITY_SCOUT_SUTS:
+            state = states[system]
+            exceeds_support = (
+                state["phase"] == "refine"
+                and (
+                    support_censor_bound is None
+                    or state["rate_msg_s"] > support_censor_bound
+                )
+            )
+            if state["phase"] == "geometric" or exceeds_support:
+                states[system] = {
+                    "phase": "support-censored",
+                    "censor_above_rate_msg_s": support_censor_bound,
+                }
+
+    if mqtt_history and mqtt_history[-1][1] == "bad" and not mqtt_bad_pair:
+        rate = mqtt_history[-1][0] * 2
+        return {
+            "action": "launch",
+            "decision": _capacity_scout_decision(
+                next_index, "mqtt-confirmation", rate, ("mqtt-loopback",),
+                {"histories": histories, "states": states, "classifications": classifications},
+            ),
+        }
+
+    unresolved = tuple(
+        system for system in CAPACITY_SCOUT_SUTS if states[system]["phase"] == "geometric"
+    )
+    if unresolved and not mqtt_bad_pair:
+        rate = states["mqtt-loopback"]["rate_msg_s"]
+        return {
+            "action": "launch",
+            "decision": _capacity_scout_decision(
+                next_index, "geometric", rate, ("mqtt-loopback", *unresolved),
+                {"histories": histories, "states": states, "classifications": classifications},
+            ),
+        }
+
+    refinement_order = ("mqtt-loopback", *CAPACITY_SCOUT_SUTS)
+    for system in refinement_order:
+        state = states[system]
+        if state["phase"] == "refine":
+            return {
+                "action": "launch",
+                "decision": _capacity_scout_decision(
+                    next_index,
+                    "refinement",
+                    state["rate_msg_s"],
+                    (system,),
+                    {"histories": histories, "states": states, "classifications": classifications},
+                ),
+            }
+
+    if all(
+        states[system]["phase"] in {"resolved", "left-censored", "support-censored"}
+        for system in CAPACITY_SCOUT_SUTS
+    ):
+        return {
+            "action": "stop",
+            "reason": "all-suts-resolved-or-support-censored",
+            "states": states,
+            "classifications": classifications,
+        }
+    raise ValueError("capacity-scout replay reached an unhandled state")
+
+
+def validate_capacity_scout_decision_replay(
+    decisions: list[dict], accepted: dict[str, dict]
+) -> None:
+    comparable_fields = {
+        "schema_version",
+        "decision_index",
+        "batch_class",
+        "thesis_evidence",
+        "kind",
+        "rate_msg_s",
+        "systems",
+        "state_before",
+        "schedule",
+    }
+    prefix: list[dict] = []
+    referenced: set[str] = set()
+    for decision in decisions:
+        prefix_accepted = {key: accepted[key] for key in referenced if key in accepted}
+        expected = replay_capacity_scout_decisions(prefix, prefix_accepted)
+        if expected["action"] != "launch":
+            raise ValueError("capacity-scout decision exists before its predecessor completed")
+        expected_decision = expected["decision"]
+        if any(decision.get(field) != expected_decision.get(field) for field in comparable_fields):
+            raise ValueError("capacity-scout decision was not derived from immutable history")
+        prefix.append(decision)
+        referenced.update(
+            f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}"
+            for item in decision["schedule"]
+        )
+
+
+def capacity_scout_safety_action(snapshot: dict) -> dict:
+    if snapshot["provenance_matches"] is not True:
+        return {"action": "stop", "reason": "provenance-drift"}
+    if snapshot["telemetry_available"] is not True:
+        return {"action": "stop", "reason": "telemetry-unavailable"}
+    if snapshot["throttled"] is True:
+        return {"action": "stop", "reason": "throttling"}
+    if snapshot["temperature_millicelsius"] >= 75_000:
+        return {"action": "stop", "reason": "temperature-75c"}
+    if snapshot.get("attempt_elapsed_secs", 0) >= CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS:
+        return {"action": "stop", "reason": "attempt-240s"}
+    if snapshot["elapsed_secs"] >= CAPACITY_SCOUT_BATCH_TIMEOUT_SECS:
+        return {"action": "stop", "reason": "batch-18h"}
+    required_free = max(CAPACITY_SCOUT_DISK_FLOOR_BYTES, 2 * snapshot["largest_probe_bytes"])
+    if snapshot["free_bytes"] < required_free:
+        return {"action": "stop", "reason": "disk-floor", "required_free_bytes": required_free}
+    if snapshot["repeated_systemic_failures"] >= 3:
+        return {"action": "stop", "reason": "repeated-systemic-failure"}
+    if snapshot["temperature_millicelsius"] >= 70_000:
+        return {"action": "pause", "reason": "temperature-cool-below-65c"}
+    return {"action": "proceed"}
+
+
+def write_capacity_scout_progress(
+    ledger: Path,
+    event: str,
+    item: RunItem | None,
+    attempt: int | None,
+    temperature_millicelsius: int | None,
+    throttled: bool | None,
+    counters: dict | None = None,
+    error: str | None = None,
+) -> None:
+    entry = {
+        "timestamp": utc_now(),
+        "event": event,
+        "probe": f"{item.system}@{item.offered_rate_msg_s}" if item else None,
+        "condition": item.condition if item else None,
+        "run": item.run_index if item else None,
+        "attempt": attempt,
+        "temperature_millicelsius": temperature_millicelsius,
+        "throttled": throttled,
+        "counters": counters,
+        "error": error,
+    }
+    with (ledger / "progress.jsonl").open("a") as stream:
+        stream.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    print(
+        f"[{entry['timestamp']}] SCOUT event={event} probe={entry['probe']} "
+        f"run={entry['run']} attempt={attempt} temp_mc={temperature_millicelsius} "
+        f"throttled={throttled} counters={counters} error={error or '-'}",
+        flush=True,
+    )
 
 def derive_hotswap_evidence(
     requests: list[dict],
@@ -1592,6 +2177,7 @@ def loadgen_command(
     topic: str | None = None,
     trace_file: Path | None = None,
     sequence_start: int | None = None,
+    summary_file: Path | None = None,
 ) -> list[str]:
     loadgen = root / "target/release/wafer-loadgen"
     if action == "subscribe":
@@ -1604,8 +2190,10 @@ def loadgen_command(
             "--total-messages", str(item.total_messages or 0),
             "--host-tag", "rpi5",
         ]
-        if item.experiment == "e-perf-10" and item.total_messages is not None:
+        if item.experiment in {"e-perf-10", "capacity-scout"} and item.total_messages is not None:
             command.extend(["--sequence-end-exclusive", str(item.total_messages)])
+        if item.experiment == "capacity-scout":
+            command.extend(["--sequence-example-limit", "1024"])
         if trace_file is not None:
             command.extend(["--trace-file", str(trace_file)])
         return command
@@ -1618,12 +2206,14 @@ def loadgen_command(
     ]
     if item.offered_rate_msg_s is not None:
         command.extend(["--rate", str(item.offered_rate_msg_s)])
-    if item.experiment == "e-perf-10":
+    if item.experiment in {"e-perf-10", "capacity-scout"}:
         command.append("--drop-when-full")
     if sequence_start is not None:
         command.extend(["--sequence-start", str(sequence_start)])
     if trace_file is not None:
         command.extend(["--trace-file", str(trace_file)])
+    if summary_file is not None:
+        command.extend(["--summary-file", str(summary_file)])
     return command
 
 
@@ -2199,12 +2789,83 @@ def _file_receipt(path: Path) -> dict:
     }
 
 
-def _rate_sweep_throttled(path: Path) -> bool:
+def _read_pi_thermal(path: Path) -> dict:
     with path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     if not rows:
         raise ValueError("pi-telemetry.csv contains no samples")
-    return any(row.get("throttled") != "0x0" for row in rows)
+    return {
+        "max_temperature_millicelsius": max(
+            int(row["temperature_millicelsius"]) for row in rows
+        ),
+        "throttled": any(row.get("throttled") != "0x0" for row in rows),
+    }
+
+
+def _rate_sweep_throttled(path: Path) -> bool:
+    return bool(_read_pi_thermal(path)["throttled"])
+
+
+def _binary_file_receipt(path: Path, samples: int | None = None) -> dict:
+    receipt = {
+        "path": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+    }
+    if samples is not None:
+        receipt["samples"] = samples
+    return receipt
+
+
+def write_capacity_scout_result(
+    root: Path,
+    item: RunItem,
+    output: Path,
+    measurement_duration_ns: int,
+    controlled_factors: dict,
+) -> dict:
+    if (output / "published.csv").exists() or (output / "received.csv").exists():
+        raise ValueError("capacity-scout run must not contain per-message traces")
+    publisher = json.loads((output / "publisher-summary.json").read_text())
+    subscriber = json.loads((output / "subscriber-metadata.json").read_text())
+    summary = analyze_capacity_scout_summary(
+        publisher, subscriber, measurement_duration_ns
+    )
+    config = output / "config.toml"
+    profile = output / "loadgen-profile.toml"
+    process_audit = output / "process-audit.json"
+    metadata = json.loads((output / "metadata.json").read_text())
+    resources = summarize_process_resources(output / "resource-usage.csv")
+    expected_scope = "no-sut" if item.system == "mqtt-loopback" else "sut"
+    if resources["scope"] != expected_scope:
+        raise ValueError(
+            f"capacity-scout resource scope {resources['scope']!r}, expected {expected_scope!r}"
+        )
+    thermal = _read_pi_thermal(output / "pi-telemetry.csv")
+    result = {
+        "schema_version": 1,
+        "batch_class": "capacity-scout",
+        "thesis_evidence": False,
+        "system": item.system,
+        "rate_msg_s": item.offered_rate_msg_s,
+        "source_git_sha": metadata.get("git_sha"),
+        "source_dirty": metadata.get("git_dirty"),
+        "measurement_duration_ns": measurement_duration_ns,
+        **summary,
+        "latency_hdr": _binary_file_receipt(
+            output / "latency.hdr", summary["messages"]["received_events"]
+        ),
+        "resources": resources,
+        "thermal": thermal,
+        "process_audit": _binary_file_receipt(process_audit),
+        "config": _binary_file_receipt(config),
+        "loadgen_profile": _binary_file_receipt(profile),
+        "provenance": _binary_file_receipt(output / "metadata.json"),
+        "controlled_factors": controlled_factors,
+        "traces": False,
+    }
+    validate_capacity_scout_result(result)
+    (output / "capacity-scout.json").write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def write_rate_sweep_result(
@@ -2289,6 +2950,14 @@ def run_rate_sweep_item(
     output.mkdir(parents=True)
     config = root / item.config
     shutil.copy2(config, output / "config.toml")
+    if item.experiment == "capacity-scout":
+        shutil.copy2(root / str(item.loadgen_profile), output / "loadgen-profile.toml")
+        invocation = build_capacity_scout_invocation(
+            root, item.system, int(item.offered_rate_msg_s or 0), item.run_index, output
+        )
+        (output / "invocation-receipt.json").write_text(
+            json.dumps(invocation, indent=2) + "\n"
+        )
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     started_ns = time.time_ns()
     started_at = utc_now()
@@ -2382,7 +3051,7 @@ def run_rate_sweep_item(
                     "subscribe",
                     output=output,
                     topic=output_topic,
-                    trace_file=output / "received.csv",
+                    trace_file=(output / "received.csv") if item.experiment == "e-perf-10" else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -2402,7 +3071,8 @@ def run_rate_sweep_item(
                     item,
                     "publish",
                     topic=input_topic,
-                    trace_file=output / "published.csv",
+                    trace_file=(output / "published.csv") if item.experiment == "e-perf-10" else None,
+                    summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -2502,16 +3172,25 @@ def run_rate_sweep_item(
                 provenance,
             )
         postprocess_run(root, item, output)
-        result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
-        if result["throttled"]:
-            raise RuntimeError("Pi throttling occurred during rate-sweep measurement")
-        verify_result(root, output)
+        if item.experiment == "capacity-scout":
+            invocation = json.loads((output / "invocation-receipt.json").read_text())
+            result = write_capacity_scout_result(
+                root, item, output, measurement_duration_ns, invocation["controlled_factors"]
+            )
+            if result["thermal"]["throttled"]:
+                raise RuntimeError("Pi throttling occurred during capacity-scout measurement")
+        else:
+            result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
+            if result["throttled"]:
+                raise RuntimeError("Pi throttling occurred during rate-sweep measurement")
+            verify_result(root, output)
     except (
         OSError,
         ValueError,
         RuntimeError,
         subprocess.CalledProcessError,
         subprocess.TimeoutExpired,
+        TimeoutError,
     ) as error:
         for process in (publisher, subscriber, runtime):
             if process is not None and process.poll() is None:
@@ -2555,7 +3234,7 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
             print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
             return False
 
-    if item.experiment == "e-perf-10":
+    if item.experiment in {"e-perf-10", "capacity-scout"}:
         return run_rate_sweep_item(root, item, selection)
     if item.experiment in {"e-swap-1", "e-swap-4", "e-swap-5"}:
         return run_hot_swap_item(root, item, selection)
@@ -2622,9 +3301,11 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata["condition"] = item.condition
     metadata["run_index"] = item.run_index
     metadata["config_path"] = item.config
-    if item.experiment == "e-perf-10":
+    if item.experiment in {"e-perf-10", "capacity-scout"}:
         metadata["thesis_evidence"] = False
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
+    if item.experiment == "capacity-scout":
+        metadata["batch_class"] = "capacity-scout"
     if item.experiment in HOTSWAP_SHARED_EXPERIMENTS:
         metadata["measurement_source_leaf"] = str(output.relative_to(root))
         metadata["shared_measurement"] = False
@@ -2988,11 +3669,213 @@ def parse_experiments(raw: str) -> set[str]:
     return values
 
 
+def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], dict[str, dict]]:
+    batch_root = root / "eval/results/capacity-scout" / f"rpi5-{batch_id}"
+    decisions = []
+    previous_sha256 = None
+    for path in sorted((batch_root / "decisions").glob("decision-*.json")):
+        raw = path.read_bytes()
+        decision = json.loads(raw)
+        if decision.get("decision_index") != len(decisions) + 1:
+            raise ValueError("capacity-scout decisions are missing, duplicated, or out of order")
+        if decision.get("previous_decision_sha256") != previous_sha256:
+            raise ValueError("capacity-scout decision hash chain is invalid")
+        expected_schedule = [
+            item.__dict__
+            for item in build_capacity_scout_rate_block(
+                int(decision["rate_msg_s"]), tuple(decision["systems"])
+            )
+        ]
+        if decision.get("schedule") != expected_schedule:
+            raise ValueError("capacity-scout decision schedule is not reproducible")
+        decisions.append(decision)
+        previous_sha256 = hashlib.sha256(raw).hexdigest()
+    accepted_paths = {}
+    for path in batch_root.rglob("capacity-scout.json"):
+        status_path = path.parent / "canonical-status.json"
+        if not status_path.is_file() or json.loads(status_path.read_text()).get("status") != "passed":
+            continue
+        relative = path.parent.relative_to(batch_root)
+        parts = relative.parts
+        if len(parts) != 3:
+            raise ValueError(f"unexpected capacity-scout result path: {relative}")
+        system, rate_part, run_part = parts
+        logical = f"capacity-scout/{system}/{rate_part}/{run_part.rsplit('-attempt-', 1)[0]}"
+        if logical in accepted_paths:
+            raise ValueError(f"duplicate accepted capacity-scout logical run: {logical}")
+        accepted_paths[logical] = path
+    accepted = {}
+    batch_path = batch_root / "batch.json"
+    expected_sha = json.loads(batch_path.read_text())["source_git_sha"] if batch_path.is_file() else None
+    for logical, path in accepted_paths.items():
+        result = json.loads(path.read_text())
+        verify_capacity_scout_result_files(path.parent, result)
+        if expected_sha is not None and result["source_git_sha"] != expected_sha:
+            raise ValueError("capacity-scout result source SHA differs from batch")
+        accepted[logical] = result
+    validate_capacity_scout_decision_replay(decisions, accepted)
+    return decisions, accepted
+
+
+def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoch: float) -> dict:
+    telemetry_available = True
+    try:
+        temperature = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text())
+        throttle_text = subprocess.check_output(
+            ["vcgencmd", "get_throttled"], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+        throttled = throttle_text != "throttled=0x0"
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        telemetry_available = False
+        temperature = 0
+        throttled = False
+    largest_probe = 0
+    for rate_dir in ledger.glob("**/rate-*"):
+        if rate_dir.is_dir():
+            largest_probe = max(
+                largest_probe,
+                sum(path.stat().st_size for path in rate_dir.rglob("*") if path.is_file()),
+            )
+    failures = []
+    for status_path in ledger.rglob("canonical-status.json"):
+        try:
+            status = json.loads(status_path.read_text())
+        except (OSError, ValueError):
+            continue
+        if status.get("status") == "failed":
+            failures.append(str(status.get("detail", "unknown")))
+    repeated = 0
+    if failures:
+        repeated = max(Counter(failures).values())
+    batch_meta = json.loads((ledger / "batch.json").read_text())
+    current_sha = subprocess.check_output(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+    ).strip()
+    clean = not subprocess.check_output(
+        ["git", "-C", str(root), "status", "--porcelain"], text=True
+    ).strip()
+    return {
+        "provenance_matches": current_sha == batch_meta["source_git_sha"] and clean,
+        "telemetry_available": telemetry_available,
+        "throttled": throttled,
+        "temperature_millicelsius": temperature,
+        "elapsed_secs": time.time() - batch_started_epoch,
+        "free_bytes": shutil.disk_usage(ledger).free,
+        "largest_probe_bytes": largest_probe,
+        "repeated_systemic_failures": repeated,
+    }
+
+
+def wait_for_capacity_scout_safety(
+    root: Path, ledger: Path, batch_started_epoch: float, item: RunItem, attempt: int
+) -> dict:
+    wait_started = time.monotonic()
+    cooling = False
+    cool_since = None
+    while True:
+        snapshot = capacity_scout_current_snapshot(root, ledger, batch_started_epoch)
+        action = capacity_scout_safety_action(snapshot)
+        write_capacity_scout_progress(
+            ledger,
+            f"safety-{action['action']}",
+            item,
+            attempt,
+            snapshot["temperature_millicelsius"],
+            snapshot["throttled"],
+            error=action.get("reason"),
+        )
+        if action["action"] == "stop":
+            return action
+        if action["action"] == "pause":
+            cooling = True
+        if not cooling:
+            return action
+        if snapshot["temperature_millicelsius"] < 65_000:
+            cool_since = cool_since or time.monotonic()
+            if time.monotonic() - cool_since >= 10 * 60:
+                return {"action": "proceed"}
+        else:
+            cool_since = None
+        if time.monotonic() - wait_started >= 30 * 60:
+            stopped = {"action": "stop", "reason": "thermal-cooldown-timeout"}
+            write_capacity_scout_progress(
+                ledger,
+                "safety-stop",
+                item,
+                attempt,
+                snapshot["temperature_millicelsius"],
+                snapshot["throttled"],
+                error=stopped["reason"],
+            )
+            return stopped
+        time.sleep(60)
+
+
+def capacity_scout_failed_attempt_evidence(output: Path) -> dict:
+    try:
+        detail = str(json.loads((output / "canonical-status.json").read_text()).get("detail", ""))
+    except (OSError, ValueError):
+        detail = "missing or invalid canonical-status.json"
+    thermal = None
+    telemetry_path = output / "pi-telemetry.csv"
+    if telemetry_path.is_file():
+        try:
+            thermal = _read_pi_thermal(telemetry_path)
+        except (OSError, ValueError):
+            thermal = None
+    counters = None
+    for name in ("capacity-scout.json", "publisher-summary.json"):
+        path = output / name
+        if path.is_file():
+            try:
+                counters = json.loads(path.read_text()).get("messages") or json.loads(path.read_text())
+            except (OSError, ValueError):
+                counters = None
+            break
+    return {"detail": detail, "thermal": thermal, "counters": counters}
+
+
+def capacity_scout_failed_attempt_stop_reason(output: Path) -> str | None:
+    evidence = capacity_scout_failed_attempt_evidence(output)
+    detail = evidence["detail"]
+    lowered = detail.lower()
+    if "provenance" in lowered or "counter" in lowered or "reconcile" in lowered:
+        return "provenance-or-counter-drift"
+    if "capacity-scout" in lowered and any(
+        marker in lowered for marker in ("differs", "unexpected", "checksum", "invalid", "requires", "must")
+    ):
+        return "invalid-capacity-scout-evidence"
+    telemetry_path = output / "pi-telemetry.csv"
+    if telemetry_path.is_file() and evidence["thermal"] is None:
+        return "telemetry-invalid"
+    thermal = evidence["thermal"]
+    if thermal is not None:
+        if thermal["throttled"]:
+            return "throttling"
+        if thermal["max_temperature_millicelsius"] >= 75_000:
+            return "temperature-75c"
+    return None
+
+
+def run_capacity_scout_item_with_timeout(root: Path, batch_id: str, item: RunItem) -> bool:
+    def timeout_handler(_signum: int, _frame: object) -> None:
+        raise TimeoutError(f"capacity-scout attempt exceeded {CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS}s")
+
+    previous = signal.signal(signal.SIGALRM, timeout_handler)
+    signal.alarm(CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS)
+    try:
+        return run_item(root, batch_id, item)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run resumable canonical Pi 5 evaluations")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--experiments", default="all")
     parser.add_argument("--focused", action="store_true")
+    parser.add_argument("--capacity-scout", action="store_true")
     parser.add_argument("--batch-id")
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--dry-run", action="store_true")
@@ -3004,7 +3887,17 @@ def main() -> int:
     root = args.root.resolve()
     try:
         focused_freeze = None
-        if args.focused:
+        capacity_scout = args.capacity_scout
+        if capacity_scout:
+            if args.focused or args.experiments != "all":
+                raise ValueError("--capacity-scout cannot be combined with --focused or --experiments")
+            if args.seed != CAPACITY_SCOUT_SEED:
+                raise ValueError(f"capacity-scout seed must be {CAPACITY_SCOUT_SEED}")
+            if not args.batch_id:
+                raise ValueError("--capacity-scout requires --batch-id")
+            schedule = []
+            experiments = {"capacity-scout"}
+        elif args.focused:
             if args.experiments != "all":
                 raise ValueError("--focused cannot be combined with --experiments")
             matrix_path = root / "eval/canonical-matrix.json"
@@ -3025,6 +3918,120 @@ def main() -> int:
     batch_id = args.batch_id or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H-%M-%SZ")
     if not all(character.isalnum() or character in "._-" for character in batch_id):
         parser.error("--batch-id contains unsafe characters")
+    if capacity_scout:
+        ledger = root / "eval/results/capacity-scout" / f"rpi5-{batch_id}"
+        batch_path = ledger / "batch.json"
+        if batch_path.is_file():
+            batch = json.loads(batch_path.read_text())
+        else:
+            source_sha = subprocess.check_output(
+                ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
+            ).strip()
+            batch = {
+                "schema_version": 1,
+                "batch_class": "capacity-scout",
+                "thesis_evidence": False,
+                "batch_id": batch_id,
+                "source_git_sha": source_sha,
+                "started_at": utc_now(),
+                "started_at_epoch": time.time(),
+            }
+            if not args.dry_run:
+                ledger.mkdir(parents=True, exist_ok=True)
+                batch_path.write_text(json.dumps(batch, indent=2) + "\n")
+        decisions, accepted = load_capacity_scout_replay(root, batch_id)
+        outcome = replay_capacity_scout_decisions(decisions, accepted)
+        if outcome["action"] == "stop":
+            print(json.dumps(outcome, indent=2))
+            if not args.dry_run:
+                (ledger / "scout-complete.json").write_text(json.dumps(outcome, indent=2) + "\n")
+            return 0
+        decision = outcome["decision"]
+        if outcome["action"] == "launch":
+            previous_decision = (
+                ledger / "decisions" / f"decision-{decision['decision_index'] - 1:04d}.json"
+            )
+            previous_sha256 = (
+                hashlib.sha256(previous_decision.read_bytes()).hexdigest()
+                if previous_decision.is_file()
+                else None
+            )
+            decision = {
+                **decision,
+                "previous_decision_sha256": previous_sha256,
+                "persisted_at": utc_now(),
+            }
+            decision_path = ledger / "decisions" / f"decision-{decision['decision_index']:04d}.json"
+            if not args.dry_run:
+                persist_capacity_scout_decision(decision_path, decision)
+        schedule = [RunItem(**item) for item in decision["schedule"]]
+        if outcome["action"] == "resume":
+            pending = set(outcome["pending_result_keys"])
+            schedule = [item for item in schedule if item.result_key in pending]
+        print_plan(schedule, CAPACITY_SCOUT_SEED, batch_id)
+        print(json.dumps({"action": outcome["action"], "decision": decision}, indent=2))
+        if args.dry_run:
+            return 0
+
+        write_capacity_scout_progress(
+            ledger, "decision-started", None, None, None, None,
+            counters={"pending_runs": len(schedule)},
+        )
+        for item in schedule:
+            condition_dir = ledger / item.condition
+            selection = select_attempt(condition_dir, item.run_index)
+            attempt = int(selection.path.name.rsplit("-attempt-", 1)[-1])
+            safety = wait_for_capacity_scout_safety(
+                root, ledger, float(batch["started_at_epoch"]), item, attempt
+            )
+            if safety["action"] == "stop":
+                stopped = {"timestamp": utc_now(), "item": item.result_key, **safety}
+                (ledger / "safety-stop.json").write_text(json.dumps(stopped, indent=2) + "\n")
+                return 2
+            write_capacity_scout_progress(
+                ledger, "probe-started", item, attempt,
+                None, None,
+            )
+            passed = run_capacity_scout_item_with_timeout(root, batch_id, item)
+            accepted_path = find_passed_attempt(condition_dir, item.run_index) if passed else None
+            result = (
+                json.loads((accepted_path / "capacity-scout.json").read_text())
+                if accepted_path is not None
+                else None
+            )
+            failure = capacity_scout_failed_attempt_evidence(selection.path) if not passed else None
+            thermal = result.get("thermal") if result else (failure or {}).get("thermal")
+            write_capacity_scout_progress(
+                ledger,
+                "probe-finished" if passed else "probe-invalid",
+                item,
+                attempt,
+                thermal.get("max_temperature_millicelsius") if thermal else None,
+                thermal.get("throttled") if thermal else None,
+                result.get("messages") if result else (failure or {}).get("counters"),
+                None if passed else (failure or {}).get("detail"),
+            )
+            if not passed:
+                stop_reason = capacity_scout_failed_attempt_stop_reason(selection.path)
+                if stop_reason is not None:
+                    stopped = {
+                        "timestamp": utc_now(),
+                        "item": item.result_key,
+                        "attempt": attempt,
+                        "action": "stop",
+                        "reason": stop_reason,
+                    }
+                    (ledger / "safety-stop.json").write_text(
+                        json.dumps(stopped, indent=2) + "\n"
+                    )
+                    return 2
+                return 1
+        write_capacity_scout_progress(
+            ledger, "decision-finished", None, None, None, None,
+            counters={"completed_runs": len(schedule)},
+        )
+        return 0
+
     print_plan(schedule, args.seed, batch_id)
     if args.dry_run:
         return 0

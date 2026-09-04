@@ -1,0 +1,45 @@
+[pipeline]
+name = "capacity-scout-wafer"
+description = "Diagnostic metered Pipeline A capacity scout"
+
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+filter = 500000
+
+[nodes.mqtt-in]
+type = "source"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry"
+qos = 1
+client_id = "wafer-capacity-scout-in"
+
+[nodes.filter]
+type = "filter"
+plugin = "../../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
+
+[nodes.filter.config]
+field = "temperature"
+min = 50.0
+max = 99999.0
+
+[nodes.mqtt-out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+port = 1883
+topic = "wafer/telemetry/hot"
+qos = 1
+client_id = "wafer-capacity-scout-out"
+
+[[edges]]
+from = "mqtt-in"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "mqtt-out"

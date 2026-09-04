@@ -12,7 +12,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, Instant};
 
-use axum::{Router, extract::{Path, State}, http::StatusCode, routing::post};
+use axum::{
+    Router,
+    extract::{Path, State},
+    http::StatusCode,
+    routing::post,
+};
 use tokio::net::TcpListener;
 
 use wafer_loadgen::{PublishArgs, run_publisher};
@@ -40,15 +45,9 @@ async fn record_swap(
 ) -> (StatusCode, &'static str) {
     let elapsed_ms = i64::try_from(state.start.elapsed().as_millis()).unwrap_or(i64::MAX);
     // Only record the FIRST POST to catch spurious retries.
-    let _prev = state.recorded_ms.compare_exchange(
-        -1,
-        elapsed_ms,
-        Ordering::AcqRel,
-        Ordering::Acquire,
-    );
-    state
-        .body_len
-        .store(i64::try_from(body.len()).unwrap_or(i64::MAX), Ordering::Release);
+    let _prev =
+        state.recorded_ms.compare_exchange(-1, elapsed_ms, Ordering::AcqRel, Ordering::Acquire);
+    state.body_len.store(i64::try_from(body.len()).unwrap_or(i64::MAX), Ordering::Release);
     if let Ok(mut g) = state.node_id.lock() {
         *g = Some(id);
     }
@@ -60,9 +59,7 @@ async fn record_swap(
     clippy::panic_in_result_fn,
     reason = "integration test asserts on captured POST timing via unwrap/assert"
 )]
-async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
-    -> anyhow::Result<()>
-{
+async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow::Result<()> {
     let _init = tracing_subscriber::fmt()
         .with_env_filter("info,wafer_loadgen=debug")
         .with_test_writer()
@@ -118,6 +115,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: Some(result_path.clone()),
         trace_file: None,
+        summary_file: None,
         sequence_start: 0,
         drop_when_full: false,
     };
@@ -163,8 +161,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset()
     // Verify the {id} captured is our target node.
     let captured_id = state.node_id.lock().unwrap().clone();
     assert_eq!(captured_id.as_deref(), Some("transform"));
-    let artifact: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&result_path)?)?;
+    let artifact: serde_json::Value = serde_json::from_slice(&std::fs::read(&result_path)?)?;
     assert_eq!(artifact["requests"][0]["http_status"], 200);
     assert_eq!(artifact["requests"][0]["body"], "ok");
 
@@ -219,6 +216,7 @@ async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Res
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: None,
         trace_file: None,
+        summary_file: None,
         sequence_start: 0,
         drop_when_full: false,
     };

@@ -23,7 +23,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use clap::Args;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
@@ -133,6 +133,10 @@ pub struct PublishArgs {
     /// Intended for diagnostics; omit during canonical measurements.
     #[arg(long)]
     pub trace_file: Option<PathBuf>,
+
+    /// Write bounded publisher counters as JSON.
+    #[arg(long)]
+    pub summary_file: Option<PathBuf>,
 
     /// First sequence number emitted by this publisher process.
     #[arg(long, default_value_t = 0)]
@@ -276,6 +280,9 @@ impl PublishArgs {
     /// # Errors
     /// Unknown `profile` or missing hotswap fields.
     pub fn resolve_shape(&self) -> anyhow::Result<LoadShape> {
+        if self.rate == 0 {
+            anyhow::bail!("--rate must be positive");
+        }
         match self.profile.as_str() {
             "steady" => Ok(LoadShape::Steady { rate: self.rate.max(1) }),
             "burst" => Ok(LoadShape::Burst {
@@ -291,14 +298,12 @@ impl PublishArgs {
                 max_rate: self.ramp_max_rate.max(self.ramp_start_rate),
             }),
             "hotswap-trigger" => {
-                let target_node = self
-                    .hotswap_target_node
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("--hotswap-target-node required for hotswap-trigger profile"))?;
-                let wasm_path = self
-                    .hotswap_wasm_path
-                    .clone()
-                    .ok_or_else(|| anyhow::anyhow!("--hotswap-wasm-path required for hotswap-trigger profile"))?;
+                let target_node = self.hotswap_target_node.clone().ok_or_else(|| {
+                    anyhow::anyhow!("--hotswap-target-node required for hotswap-trigger profile")
+                })?;
+                let wasm_path = self.hotswap_wasm_path.clone().ok_or_else(|| {
+                    anyhow::anyhow!("--hotswap-wasm-path required for hotswap-trigger profile")
+                })?;
                 Ok(LoadShape::HotswapTrigger {
                     base_rate: self.rate.max(1),
                     swap_at_secs: self.hotswap_swap_at_secs,
@@ -339,24 +344,36 @@ impl PublishArgs {
                 let _r = writeln!(
                     out,
                     "    ramp_start_rate={} ramp_step_rate={} ramp_step_interval_secs={} ramp_max_rate={}",
-                    self.ramp_start_rate, self.ramp_step_rate, self.ramp_step_interval_secs, self.ramp_max_rate,
+                    self.ramp_start_rate,
+                    self.ramp_step_rate,
+                    self.ramp_step_interval_secs,
+                    self.ramp_max_rate,
                 );
             }
             "hotswap-trigger" => {
                 let _r = writeln!(
                     out,
                     "    target_node={:?} wasm_path={:?} swap_at_secs={} api_url={}",
-                    self.hotswap_target_node, self.hotswap_wasm_path, self.hotswap_swap_at_secs, self.hotswap_api_url,
+                    self.hotswap_target_node,
+                    self.hotswap_wasm_path,
+                    self.hotswap_swap_at_secs,
+                    self.hotswap_api_url,
                 );
             }
             _ => {}
         }
         if let Some(tpl) = self.payload_template {
             let bytes = tpl.render(crate::payload::CANONICAL_TS_NS, crate::payload::CANONICAL_SEQ);
-            let _r = writeln!(out, "  payload        = template `{}` ({} bytes at canonical ts/seq)", tpl.name(), bytes.len());
+            let _r = writeln!(
+                out,
+                "  payload        = template `{}` ({} bytes at canonical ts/seq)",
+                tpl.name(),
+                bytes.len()
+            );
             let _r = writeln!(out, "  fingerprint    = sha256:{}", tpl.fingerprint_hex());
         } else {
-            let _r = writeln!(out, "  payload        = size {} (legacy 'x' filler)", self.payload_size);
+            let _r =
+                writeln!(out, "  payload        = size {} (legacy 'x' filler)", self.payload_size);
         }
         if let Some(pf) = &self.profile_file {
             let _r = writeln!(out, "  profile_file   = {}", pf.display());
@@ -383,7 +400,8 @@ fn spawn_hotswap_trigger(
     start: Instant,
     result_path: Option<PathBuf>,
 ) -> Option<tokio::task::JoinHandle<anyhow::Result<()>>> {
-    let LoadShape::HotswapTrigger { swap_at_secs, target_node, wasm_path, api_url, .. } = shape else {
+    let LoadShape::HotswapTrigger { swap_at_secs, target_node, wasm_path, api_url, .. } = shape
+    else {
         return None;
     };
     let swap_at = *swap_at_secs;
@@ -391,8 +409,7 @@ fn spawn_hotswap_trigger(
     let wasm_path = wasm_path.clone();
     let api_url = api_url.clone();
     Some(tokio::spawn(async move {
-        let target = start.checked_add(Duration::from_secs_f64(swap_at))
-            .unwrap_or(start);
+        let target = start.checked_add(Duration::from_secs_f64(swap_at)).unwrap_or(start);
         tokio::time::sleep_until(target).await;
         let url = format!("{api_url}/api/v1/nodes/{target_node}/hot-swap");
         let body = serde_json::json!({ "wasm_path": wasm_path });
@@ -400,9 +417,7 @@ fn spawn_hotswap_trigger(
             "Firing hot-swap POST to {url} (target elapsed = {swap_at:.3}s; actual delta = {:.3}s)",
             start.elapsed().as_secs_f64()
         );
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()?;
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
         let request_started_ns = now_ns();
         let response = client.post(&url).json(&body).send().await?;
         let status = response.status();
@@ -426,7 +441,8 @@ fn spawn_hotswap_trigger(
                     "body": body,
                 }]
             });
-            tokio::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?)).await?;
+            tokio::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))
+                .await?;
         }
         Ok(())
     }))
@@ -467,6 +483,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         return Ok(PublisherReport {
             published: 0,
             errors: 0,
+            intended: 0,
+            rejected: 0,
+            enqueued: 0,
             elapsed_ms: 0,
             actual_rate: 0.0,
             hotswap_triggered_at_secs: None,
@@ -505,25 +524,22 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let start = Instant::now();
-    let deadline = start.checked_add(Duration::from_secs(args.duration_secs))
-        .unwrap_or(start);
+    let deadline = start.checked_add(Duration::from_secs(args.duration_secs)).unwrap_or(start);
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. }
-            if Duration::from_secs_f64(*swap_at_secs) < Duration::from_secs(args.duration_secs) => Some(*swap_at_secs),
+            if Duration::from_secs_f64(*swap_at_secs) < Duration::from_secs(args.duration_secs) =>
+        {
+            Some(*swap_at_secs)
+        }
         _ => None,
     };
-    let hotswap_task = hotswap_target.and_then(|_| {
-        spawn_hotswap_trigger(&shape, start, args.hotswap_result_path.clone())
-    });
+    let hotswap_task = hotswap_target
+        .and_then(|_| spawn_hotswap_trigger(&shape, start, args.hotswap_result_path.clone()));
 
     let padding: String = "x".repeat(args.payload_size.saturating_sub(80));
     let payload_template = args.payload_template;
-    let mut trace = args
-        .trace_file
-        .as_ref()
-        .map(std::fs::File::create)
-        .transpose()?
-        .map(BufWriter::new);
+    let mut trace =
+        args.trace_file.as_ref().map(std::fs::File::create).transpose()?.map(BufWriter::new);
     if let Some(trace) = &mut trace {
         writeln!(trace, "seq,ts_ns")?;
     }
@@ -555,13 +571,8 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             writeln!(trace, "{seq},{ts}")?;
         }
 
-        if let Err(error) = enqueue_publish(
-            &client,
-            &args.topic,
-            payload_vec,
-            args.drop_when_full,
-        )
-        .await
+        if let Err(error) =
+            enqueue_publish(&client, &args.topic, payload_vec, args.drop_when_full).await
         {
             if !args.drop_when_full {
                 warn!("Publish error (seq={seq}): {error}");
@@ -607,20 +618,30 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         "Load generation complete"
     );
 
-    Ok(PublisherReport {
+    let report = PublisherReport {
         published: offered,
         errors,
+        intended: offered,
+        rejected: errors,
+        enqueued: offered.saturating_sub(errors),
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
         hotswap_triggered_at_secs: hotswap_target,
-    })
+    };
+    if let Some(path) = args.summary_file {
+        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&report)?))?;
+    }
+    Ok(report)
 }
 
 /// Post-run summary returned by `run_publisher`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct PublisherReport {
     pub published: u64,
     pub errors: u64,
+    pub intended: u64,
+    pub rejected: u64,
+    pub enqueued: u64,
     pub elapsed_ms: u64,
     pub actual_rate: f64,
     /// If profile = hotswap-trigger, the offset (secs) at which the trigger
@@ -634,7 +655,41 @@ mod tests {
 
     use rumqttc::{AsyncClient, MqttOptions};
 
-    use super::enqueue_publish;
+    use super::{PublishArgs, enqueue_publish};
+
+    #[test]
+    fn rejects_zero_rate() {
+        let args = PublishArgs {
+            broker_host: "localhost".into(),
+            broker_port: 1883,
+            topic: "test/topic".into(),
+            rate: 0,
+            duration_secs: 1,
+            payload_size: 128,
+            payload_template: None,
+            profile: "steady".into(),
+            client_id: "test".into(),
+            profile_file: None,
+            dry_run: false,
+            burst_multiplier: 2,
+            burst_on_secs: 1,
+            burst_cycle_secs: 2,
+            ramp_start_rate: 1,
+            ramp_step_rate: 1,
+            ramp_step_interval_secs: 1,
+            ramp_max_rate: 2,
+            hotswap_target_node: None,
+            hotswap_wasm_path: None,
+            hotswap_swap_at_secs: 1.0,
+            hotswap_api_url: "http://localhost".into(),
+            trace_file: None,
+            summary_file: None,
+            sequence_start: 0,
+            drop_when_full: false,
+            hotswap_result_path: None,
+        };
+        assert!(args.resolve_shape().is_err(), "zero is not a positive scout rate");
+    }
 
     #[tokio::test]
     async fn drop_when_full_never_waits_for_publish_queue_capacity() {

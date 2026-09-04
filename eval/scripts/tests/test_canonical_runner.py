@@ -15,9 +15,18 @@ sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
 from canonical_runner import (  # noqa: E402
     analyze_backpressure,
+    analyze_capacity_scout_summary,
     analyze_rate_sweep_traces,
+    build_capacity_scout_invocation,
+    build_capacity_scout_rate_block,
+    capacity_scout_failed_attempt_stop_reason,
+    capacity_scout_next_rate,
+    capacity_scout_safety_action,
+    persist_capacity_scout_decision,
+    replay_capacity_scout_decisions,
     build_focused_schedule,
     build_schedule,
+    classify_capacity_scout_probe,
     classify_sustainable_throughput,
     compare_branch_a,
     compare_branch_conditions,
@@ -26,8 +35,10 @@ from canonical_runner import (  # noqa: E402
     derive_hotswap_evidence,
     derive_containment,
     evaluate_validation_gate,
+    load_capacity_scout_replay,
     loadgen_command,
     postprocess_run,
+    CAPACITY_SCOUT_SYSTEMS,
     ProcessResourceSampler,
     RunItem,
     select_attempt,
@@ -36,7 +47,11 @@ from canonical_runner import (  # noqa: E402
     summarize_rate_sweep,
     summarize_recovery,
     validate_backpressure_result,
+    validate_capacity_scout_result,
     validate_ekuiper_process_snapshot,
+    verify_capacity_scout_result_files,
+    write_capacity_scout_progress,
+    write_capacity_scout_result,
     validate_focused_freeze,
     validate_rate_sweep_result,
     validate_startup_artifact,
@@ -428,6 +443,454 @@ def test_startup_postprocessing_rejects_condition_mismatch() -> None:
 
         with pytest.raises(ValueError, match="does not match condition"):
             postprocess_run(ROOT, item, output)
+
+
+def capacity_scout_fixture() -> dict:
+    return {
+        "schema_version": 1,
+        "batch_class": "capacity-scout",
+        "thesis_evidence": False,
+        "system": "wafer",
+        "rate_msg_s": 4000,
+        "source_git_sha": "a" * 40,
+        "source_dirty": False,
+        "measurement_duration_ns": 1_000_000_000,
+        "messages": {
+            "intended": 4000,
+            "rejected": 10,
+            "enqueued": 3990,
+            "received_events": 3985,
+            "received_unique": 3980,
+            "downstream_lost": 10,
+            "total_undelivered": 20,
+            "duplicates": 5,
+            "unexpected": 0,
+            "ignored_warmup": 0,
+        },
+        "rates_msg_s": {"intended": 4000.0, "achieved": 3980.0},
+        "loss_percent": 0.5,
+        "latency_hdr": {"path": "latency.hdr", "sha256": "1" * 64, "samples": 3985},
+        "resources": {"scope": "sut", "cpu_percent": 42.0, "max_rss_bytes": 32_000_000},
+        "thermal": {"max_temperature_millicelsius": 65000, "throttled": False},
+        "process_audit": {"path": "process-audit.json", "sha256": "2" * 64},
+        "config": {"path": "config.toml", "sha256": "3" * 64},
+        "loadgen_profile": {"path": "canonical-rate-sweep.toml", "sha256": "4" * 64},
+        "provenance": {"path": "metadata.json", "sha256": "5" * 64},
+        "controlled_factors": {
+            "broker": "127.0.0.1:1883",
+            "topic": "wafer/telemetry",
+            "payload_template_sha256": "4" * 64,
+            "qos": 1,
+            "warmup_secs": 30,
+            "measurement_secs": 60,
+            "load_shape": "steady",
+            "sequence_example_limit": 1_024,
+            "support_cpus": "0",
+            "sut_cpus": "1-3",
+        },
+        "traces": False,
+    }
+
+
+def test_capacity_scout_summary_reconciles_without_per_message_traces() -> None:
+    publisher = {"intended": 4000, "rejected": 10, "enqueued": 3990}
+    subscriber = {
+        "total_recorded": 3985,
+        "parse_errors": 0,
+        "negative_latency_count": 0,
+        "ignored_sequence_count": 0,
+        "unexpected_sequence_count": 0,
+        "latency_p50_ns": 100,
+        "latency_p95_ns": 200,
+        "latency_p99_ns": 300,
+        "sequence": {"total_received": 3985, "total_duplicates": 5},
+    }
+    summary = analyze_capacity_scout_summary(publisher, subscriber, 1_000_000_000)
+    assert summary["messages"] == capacity_scout_fixture()["messages"]
+    assert summary["rates_msg_s"] == {"intended": 4000.0, "achieved": 3980.0}
+
+
+def test_capacity_scout_result_is_emitted_from_bounded_artifacts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        (output / "publisher-summary.json").write_text(json.dumps({"intended": 4000, "rejected": 10, "enqueued": 3990}))
+        (output / "subscriber-metadata.json").write_text(json.dumps({
+            "total_recorded": 3985,
+            "total_messages": 3985,
+            "parse_errors": 0,
+            "negative_latency_count": 0,
+            "ignored_sequence_count": 0,
+            "unexpected_sequence_count": 0,
+            "latency_p50_ns": 100,
+            "latency_p95_ns": 200,
+            "latency_p99_ns": 300,
+            "sequence": {"total_received": 3985, "total_duplicates": 5},
+        }))
+        (output / "latency.hdr").write_bytes(b"hdr")
+        (output / "resource-usage.csv").write_text(
+            "timestamp_ns,cpu_time_ticks,rss_bytes,process_count\n"
+            "1000000000,100,10000000,1\n2000000000,150,20000000,1\n"
+        )
+        (output / "pi-telemetry.csv").write_text(
+            "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,rail_proxy_watts\n"
+            "1,64000,2400000000,performance,0x0,4.2\n"
+        )
+        (output / "process-audit.json").write_text("{}\n")
+        (output / "config.toml").write_text("[pipeline]\n")
+        (output / "loadgen-profile.toml").write_text("[loadgen]\n")
+        (output / "metadata.json").write_text(
+            json.dumps({"git_sha": "a" * 40, "git_dirty": False}) + "\n"
+        )
+        item = build_capacity_scout_rate_block(4000)[0]
+        result = write_capacity_scout_result(
+            ROOT,
+            item,
+            output,
+            1_000_000_000,
+            build_capacity_scout_invocation(ROOT, item.system, 4000, item.run_index, output)["controlled_factors"],
+        )
+        assert (output / "capacity-scout.json").is_file()
+        assert result["resources"]["max_rss_bytes"] == 20_000_000
+        assert result["thermal"] == {"max_temperature_millicelsius": 64000, "throttled": False}
+        assert not (output / "published.csv").exists()
+        assert not (output / "received.csv").exists()
+        verify_capacity_scout_result_files(output, result)
+        (output / "config.toml").write_text("tampered\n")
+        with pytest.raises(ValueError, match="config receipt checksum mismatch"):
+            verify_capacity_scout_result_files(output, result)
+
+
+def test_capacity_scout_validator_rejects_counter_drift_and_evidence_promotion() -> None:
+    result = capacity_scout_fixture()
+    validate_capacity_scout_result(result)
+    invalid = json.loads(json.dumps(result))
+    invalid["messages"]["enqueued"] += 1
+    with pytest.raises(ValueError, match=r"intended = rejected \+ enqueued"):
+        validate_capacity_scout_result(invalid)
+    canonical = json.loads(json.dumps(result))
+    canonical["thesis_evidence"] = True
+    with pytest.raises(ValueError, match="thesis_evidence=false"):
+        validate_capacity_scout_result(canonical)
+    traced = json.loads(json.dumps(result))
+    traced["traces"] = True
+    with pytest.raises(ValueError, match="must not contain per-message traces"):
+        validate_capacity_scout_result(traced)
+    unexpected = json.loads(json.dumps(result))
+    unexpected["messages"]["unexpected"] = 1
+    with pytest.raises(ValueError, match="unexpected"):
+        validate_capacity_scout_result(unexpected)
+
+
+def test_capacity_scout_probe_requires_three_good_runs() -> None:
+    good = capacity_scout_fixture()
+    assert classify_capacity_scout_probe([good, good, good]) == "good"
+    bad = json.loads(json.dumps(good))
+    bad["messages"].update({
+        "received_events": 3905,
+        "received_unique": 3900,
+        "downstream_lost": 90,
+        "total_undelivered": 100,
+    })
+    bad["rates_msg_s"]["achieved"] = 3900.0
+    bad["loss_percent"] = 2.5
+    bad["latency_hdr"]["samples"] = 3905
+    assert classify_capacity_scout_probe([good, bad, good]) == "bad"
+    with pytest.raises(ValueError, match="exactly three"):
+        classify_capacity_scout_probe([good, good])
+
+
+def scout_result(system: str, rate: int, classification: str = "good") -> dict:
+    result = capacity_scout_fixture()
+    result["system"] = system
+    result["rate_msg_s"] = rate
+    result["resources"]["scope"] = "no-sut" if system == "mqtt-loopback" else "sut"
+    intended = rate
+    rejected = 0 if classification == "good" else max(1, rate // 50)
+    enqueued = intended - rejected
+    result["messages"].update({
+        "intended": intended,
+        "rejected": rejected,
+        "enqueued": enqueued,
+        "received_events": enqueued,
+        "received_unique": enqueued,
+        "downstream_lost": 0,
+        "total_undelivered": rejected,
+        "duplicates": 0,
+        "unexpected": 0,
+        "ignored_warmup": 0,
+    })
+    result["rates_msg_s"] = {"intended": float(intended), "achieved": float(enqueued)}
+    result["loss_percent"] = 100.0 * rejected / intended
+    result["latency_hdr"]["samples"] = enqueued
+    return result
+
+
+def accept_capacity_scout_decision(
+    decisions: list[dict], accepted: dict[str, dict], decision: dict, classifications: dict[str, str]
+) -> None:
+    decisions.append(decision)
+    for item in decision["schedule"]:
+        key = f"{item['experiment']}/{item['condition']}/run-{item['run_index']:02d}"
+        accepted[key] = scout_result(
+            item["system"], item["offered_rate_msg_s"], classifications[item["system"]]
+        )
+
+
+def test_capacity_scout_cli_derives_initial_decision_without_rate_override() -> None:
+    command = [
+        sys.executable,
+        str(ROOT / "eval/scripts/lib/canonical_runner.py"),
+        "--capacity-scout",
+        "--batch-id",
+        "test-dry-run",
+        "--dry-run",
+    ]
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=True)
+    assert '"rate_msg_s": 500' in result.stdout
+    assert '"kind": "geometric"' in result.stdout
+    assert "--capacity-scout-rate" not in result.stdout
+
+
+def test_capacity_scout_replay_starts_with_full_500_block_and_resumes_incomplete() -> None:
+    first = replay_capacity_scout_decisions([], {})
+    assert first["action"] == "launch"
+    assert first["decision"]["kind"] == "geometric"
+    assert first["decision"]["rate_msg_s"] == 500
+    assert set(first["decision"]["systems"]) == {"mqtt-loopback", "native", "wafer", "ekuiper"}
+    one_item = first["decision"]["schedule"][0]
+    key = f"{one_item['experiment']}/{one_item['condition']}/run-{one_item['run_index']:02d}"
+    accepted = {key: scout_result(one_item["system"], 500)}
+    resumed = replay_capacity_scout_decisions([first["decision"]], accepted)
+    assert resumed["action"] == "resume"
+    assert key not in resumed["pending_result_keys"]
+    assert len(resumed["pending_result_keys"]) == 11
+    with pytest.raises(ValueError, match="lack a decision"):
+        replay_capacity_scout_decisions([], accepted)
+
+
+def test_capacity_scout_loader_rejects_tampered_decision_chain_and_schedule() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        decisions_dir = root / "eval/results/capacity-scout/rpi5-test/decisions"
+        decisions_dir.mkdir(parents=True)
+        first = replay_capacity_scout_decisions([], {})["decision"]
+        first_path = decisions_dir / "decision-0001.json"
+        first_path.write_text(json.dumps(first))
+        second = {**first, "decision_index": 2, "previous_decision_sha256": "0" * 64}
+        (decisions_dir / "decision-0002.json").write_text(json.dumps(second))
+        with pytest.raises(ValueError, match="hash chain"):
+            load_capacity_scout_replay(root, "test")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        decisions_dir = root / "eval/results/capacity-scout/rpi5-test/decisions"
+        decisions_dir.mkdir(parents=True)
+        first = replay_capacity_scout_decisions([], {})["decision"]
+        first["schedule"][0]["offered_rate_msg_s"] = 999
+        (decisions_dir / "decision-0001.json").write_text(json.dumps(first))
+        with pytest.raises(ValueError, match="not reproducible"):
+            load_capacity_scout_replay(root, "test")
+
+
+def test_capacity_scout_loader_rejects_duplicate_passed_logical_runs() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        batch = root / "eval/results/capacity-scout/rpi5-test"
+        decision = replay_capacity_scout_decisions([], {})["decision"]
+        decisions = batch / "decisions"
+        decisions.mkdir(parents=True)
+        (decisions / "decision-0001.json").write_text(json.dumps(decision))
+        for attempt in (1, 2):
+            path = batch / "wafer/rate-00500" / f"run-01-attempt-{attempt:02d}"
+            path.mkdir(parents=True)
+            (path / "capacity-scout.json").write_text(json.dumps(scout_result("wafer", 500)))
+            (path / "canonical-status.json").write_text(json.dumps({"status": "passed"}))
+        with pytest.raises(ValueError, match="duplicate accepted"):
+            load_capacity_scout_replay(root, "test")
+
+
+def test_capacity_scout_replay_doubles_past_16000() -> None:
+    decisions: list[dict] = []
+    accepted: dict[str, dict] = {}
+    outcome = replay_capacity_scout_decisions(decisions, accepted)
+    for rate in (500, 1000, 2000, 4000, 8000, 16000):
+        assert outcome["decision"]["rate_msg_s"] == rate
+        accept_capacity_scout_decision(
+            decisions, accepted, outcome["decision"],
+            {system: "good" for system in CAPACITY_SCOUT_SYSTEMS},
+        )
+        outcome = replay_capacity_scout_decisions(decisions, accepted)
+    assert outcome["decision"]["kind"] == "geometric"
+    assert outcome["decision"]["rate_msg_s"] == 32000
+
+
+def test_capacity_scout_replay_mqtt_bad_confirmation_censors_suts() -> None:
+    decisions: list[dict] = []
+    accepted: dict[str, dict] = {}
+    first = replay_capacity_scout_decisions(decisions, accepted)
+    accept_capacity_scout_decision(
+        decisions, accepted, first["decision"],
+        {system: "good" for system in CAPACITY_SCOUT_SYSTEMS},
+    )
+    second = replay_capacity_scout_decisions(decisions, accepted)
+    accept_capacity_scout_decision(
+        decisions, accepted, second["decision"],
+        {"mqtt-loopback": "bad", "native": "good", "wafer": "good", "ekuiper": "good"},
+    )
+    confirmation = replay_capacity_scout_decisions(decisions, accepted)
+    assert confirmation["decision"]["kind"] == "mqtt-confirmation"
+    assert confirmation["decision"]["systems"] == ["mqtt-loopback"]
+    classified = confirmation["decision"]["state_before"]["classifications"][-1]["results"]
+    assert classified["mqtt-loopback"] == "bad"
+    assert all(classified[system] == "support-confounded" for system in ("native", "wafer", "ekuiper"))
+    accept_capacity_scout_decision(
+        decisions, accepted, confirmation["decision"], {"mqtt-loopback": "bad"}
+    )
+    after_confirmation = replay_capacity_scout_decisions(decisions, accepted)
+    assert after_confirmation["action"] == "stop"
+    states = after_confirmation["states"]
+    assert all(states[system] == {"phase": "support-censored", "censor_above_rate_msg_s": 500} for system in ("native", "wafer", "ekuiper"))
+    assert states["mqtt-loopback"] == {
+        "phase": "resolved",
+        "lower_good_rate_msg_s": 500,
+        "upper_bad_rate_msg_s": 1000,
+        "support_censor_above_rate_msg_s": 500,
+    }
+
+
+def test_capacity_scout_replay_refines_each_sut_then_stops() -> None:
+    decisions: list[dict] = []
+    accepted: dict[str, dict] = {}
+    outcome = replay_capacity_scout_decisions(decisions, accepted)
+    for rate, sut_classification in ((500, "good"), (1000, "good"), (2000, "bad"), (4000, "bad")):
+        assert outcome["decision"]["rate_msg_s"] == rate
+        classifications = {"mqtt-loopback": "good"} | {
+            system: sut_classification for system in ("native", "wafer", "ekuiper")
+        }
+        accept_capacity_scout_decision(decisions, accepted, outcome["decision"], classifications)
+        outcome = replay_capacity_scout_decisions(decisions, accepted)
+    for system in ("native", "wafer", "ekuiper"):
+        assert outcome["decision"]["kind"] == "refinement"
+        assert outcome["decision"]["systems"] == [system]
+        assert outcome["decision"]["rate_msg_s"] == 1500
+        accept_capacity_scout_decision(
+            decisions, accepted, outcome["decision"], {system: "bad"}
+        )
+        outcome = replay_capacity_scout_decisions(decisions, accepted)
+    assert outcome["action"] == "stop"
+    assert outcome["reason"] == "all-suts-resolved-or-support-censored"
+
+
+def test_capacity_scout_invalid_counter_attempt_is_a_hard_stop() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        output = Path(tmp)
+        (output / "canonical-status.json").write_text(
+            json.dumps({"status": "failed", "detail": "capacity-scout message counter differs: enqueued"})
+        )
+        assert capacity_scout_failed_attempt_stop_reason(output) == "provenance-or-counter-drift"
+
+
+def test_capacity_scout_progress_has_one_complete_schema() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        ledger = Path(tmp)
+        item = build_capacity_scout_rate_block(500)[0]
+        counters = capacity_scout_fixture()["messages"]
+        write_capacity_scout_progress(
+            ledger, "probe-finished", item, 2, 64_000, False, counters, None
+        )
+        entry = json.loads((ledger / "progress.jsonl").read_text())
+    assert set(entry) == {
+        "timestamp", "event", "probe", "condition", "run", "attempt",
+        "temperature_millicelsius", "throttled", "counters", "error",
+    }
+    assert entry["attempt"] == 2
+    assert entry["temperature_millicelsius"] == 64_000
+    assert entry["counters"] == counters
+
+
+def test_capacity_scout_safety_boundaries() -> None:
+    safe = {
+        "provenance_matches": True,
+        "telemetry_available": True,
+        "throttled": False,
+        "temperature_millicelsius": 65_000,
+        "attempt_elapsed_secs": 1,
+        "elapsed_secs": 1,
+        "free_bytes": 4 * 1024**3,
+        "largest_probe_bytes": 1024**3,
+        "repeated_systemic_failures": 0,
+    }
+    assert capacity_scout_safety_action(safe) == {"action": "proceed"}
+    for field, value, reason in (
+        ("provenance_matches", False, "provenance-drift"),
+        ("telemetry_available", False, "telemetry-unavailable"),
+        ("throttled", True, "throttling"),
+        ("temperature_millicelsius", 75_000, "temperature-75c"),
+        ("attempt_elapsed_secs", 240, "attempt-240s"),
+        ("elapsed_secs", 18 * 60 * 60, "batch-18h"),
+        ("free_bytes", 2 * 1024**3 - 1, "disk-floor"),
+        ("repeated_systemic_failures", 3, "repeated-systemic-failure"),
+    ):
+        snapshot = {**safe, field: value}
+        assert capacity_scout_safety_action(snapshot)["reason"] == reason
+    assert capacity_scout_safety_action({**safe, "temperature_millicelsius": 70_000}) == {
+        "action": "pause",
+        "reason": "temperature-cool-below-65c",
+    }
+
+
+def test_capacity_scout_state_machine_doubles_refines_and_censors() -> None:
+    history = [(500, "good"), (1000, "good"), (2000, "good"), (4000, "bad"), (8000, "bad")]
+    assert capacity_scout_next_rate(history) == {"phase": "refine", "rate_msg_s": 3000}
+    assert capacity_scout_next_rate(history + [(3000, "bad")]) == {"phase": "refine", "rate_msg_s": 2500}
+    assert capacity_scout_next_rate(history + [(3000, "bad"), (2500, "good")]) == {
+        "phase": "resolved",
+        "lower_good_rate_msg_s": 2500,
+        "upper_bad_rate_msg_s": 3000,
+    }
+    assert capacity_scout_next_rate([(rate, "good") for rate in (500, 1000, 2000, 4000, 8000, 16000)]) == {
+        "phase": "geometric",
+        "rate_msg_s": 32000,
+    }
+    assert capacity_scout_next_rate([(8000, "good"), (16000, "bad"), (32000, "bad")], mqtt=True)["support_censor_above_rate_msg_s"] == 8000
+
+
+def test_capacity_scout_rate_block_is_seeded_balanced_and_positive() -> None:
+    block = build_capacity_scout_rate_block(3000)
+    assert len(block) == 12
+    assert [item.system for item in block[:4]] == ["wafer", "mqtt-loopback", "ekuiper", "native"]
+    positions = {index: [] for index in range(4)}
+    for run_index in range(1, 4):
+        run = [item for item in block if item.run_index == run_index]
+        for position, item in enumerate(run):
+            positions[position].append(item.system)
+    assert all(len(set(systems)) == 3 for systems in positions.values())
+    with pytest.raises(ValueError, match="positive"):
+        build_capacity_scout_rate_block(0)
+
+
+def test_capacity_scout_decision_is_persisted_once() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "decision.json"
+        decision = {"phase": "geometric", "rate_msg_s": 500}
+        assert persist_capacity_scout_decision(path, decision) is True
+        assert path.exists()
+        assert persist_capacity_scout_decision(path, decision) is False
+        with pytest.raises(ValueError, match="another decision"):
+            persist_capacity_scout_decision(path, {"phase": "geometric", "rate_msg_s": 1000})
+
+
+def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free() -> None:
+    receipts = [build_capacity_scout_invocation(ROOT, system, 3000, 2, Path("/tmp/scout")) for system in ("mqtt-loopback", "native", "wafer", "ekuiper")]
+    controlled = [receipt["controlled_factors"] for receipt in receipts]
+    assert all(value == controlled[0] for value in controlled[1:])
+    assert {receipt["system"] for receipt in receipts} == {"mqtt-loopback", "native", "wafer", "ekuiper"}
+    assert all("--trace-file" not in receipt["publisher_command"] for receipt in receipts)
+    assert all("--trace-file" not in receipt["subscriber_command"] for receipt in receipts)
+    assert all("--sequence-example-limit" in receipt["subscriber_command"] for receipt in receipts)
+    assert all(receipt["publisher_command"][receipt["publisher_command"].index("--rate") + 1] == "3000" for receipt in receipts)
+    wafer = next(receipt for receipt in receipts if receipt["system"] == "wafer")
+    assert wafer["config"] == "eval/configs/capacity-scout-wafer.toml"
 
 
 def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
