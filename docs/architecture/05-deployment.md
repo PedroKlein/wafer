@@ -8,7 +8,7 @@ plugin `.wasm` components (target-independent).
 
 ## Deployment targets
 
-### Raspberry Pi 5 — primary edge gateway
+### Raspberry Pi 5: primary edge gateway
 
 **Hardware:** Broadcom BCM2712, ARM Cortex-A76 quad-core @ stock 2.4 GHz maximum,
 4 GB LPDDR4X RAM, `aarch64-unknown-linux-gnu`. Storage: microSD or NVMe/USB
@@ -17,21 +17,17 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
 
 **Role in the evaluation:**
 
-- **RQ1 primary hardware.** Per-hop latency and end-to-end throughput
-  numbers reported in the thesis are measured here. The pass criterion
-  (within 30 % of eKuiper throughput, p95 within 2× eKuiper, per-hop
-  < 50 µs) is defined against this hardware.
+- **RQ1 primary hardware.** Per-hop latency, matched 1,000 msg/s delivery and latency, and the common-grid gateway-capacity envelope are measured here. The MQTT loopback condition bounds support-path claims; SUT-only ceilings are not inferred beyond that boundary.
 - **RQ2 measurement.** All six attack scenarios (`buffer-overflow`,
   `cross-read`, `fs-access`, `infinite-loop`, `memory-exhaust`, `panic`)
-  are exercised here. `StoreLimits`, fuel, and epoch defaults are
-  tuned for a 4 GB device.
+  are exercised here. `StoreLimits` defaults and explicit evaluation fuel/epoch policies are configured for a 4 GB device.
 - **RQ3 measurement.** Hot-swap phase decomposition (compile,
   instantiate, signal, ack, convergence) is measured here; the < 100 ms
   p95 pause budget is validated against this hardware.
 
-**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1–3 are isolated and assigned to exactly one active SUT. Fuel and epoch defaults (10 000 000 fuel per Transform call, 10 ms epoch tick) are evaluated on this hardware. The AOT cache lives in `$XDG_CACHE_HOME/wafer/aot/` and survives restarts.
+**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are isolated and assigned to exactly one active SUT. Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache module has a disk location, but current E-Perf-9 startup runs disable that cache and measure Linux filesystem page-cache state.
 
-### Jetson Orin — inference target
+### Jetson Orin: inference target
 
 **Hardware:** NVIDIA Jetson Orin (Nano or NX), ARM Cortex-A78AE cores +
 integrated GPU + optional NVDLA, 8+ GB LPDDR5 RAM,
@@ -50,22 +46,16 @@ integrated GPU + optional NVDLA, 8+ GB LPDDR5 RAM,
 `allow_inference = true`; the WASI `wasi:nn/graph` capability is granted
 per-node.
 
-### x86_64 — cross-validation ceiling
+### x86_64 - cross-validation target
 
-**Hardware:** Development workstation (Apple Silicon under Rosetta or
-native Linux x86 host), 16+ GB RAM, `x86_64-unknown-linux-gnu` or
-`aarch64-apple-darwin`.
+**Hardware:** Linux x86-64 host, 16+ GB RAM, `x86_64-unknown-linux-gnu`. Apple Silicon remains a development and diagnostic host, not the E-Perf-5 comparison target.
 
 **Role in the evaluation:**
 
-- The native-Rust baseline that measures the "isolation tax" is
-  produced here as well as on Raspberry Pi 5; comparing them isolates
-  architecture-specific overhead.
+- A matched native-Rust and WAFER block is required here and on Raspberry Pi 5 for E-Perf-5. Until the x86 Linux block exists, E-Perf-5 remains `PENDING`.
 - Rapid iteration surface for plugin development and pre-flight
   benchmarks before spending scarce RPi/Jetson time.
-- Sanity check for the AOT cache — a warm cache on x86 confirms
-  functional correctness before the RPi cold-start numbers are
-  benchmarked.
+- Functional cache tests may run on x86, but they are separate from E-Perf-9 filesystem page-cache evidence.
 
 **Operational notes.** The `mise.toml` tasks (`mise run build`, `mise run
 build-plugins`, `mise run run`) target the host by default; cross-compilation
@@ -83,10 +73,7 @@ capabilities granted to specific nodes. Every deployment is:
 - No IPC across processes, no container boundary, no supervisor
   managing peer nodes.
 
-Comparator systems (eKuiper, Wassette, Spin) each deploy differently;
-when the evaluation runs eKuiper, eKuiper is containerised because that
-is its supported deployment mode. WAFER remains a single process across
-all three targets, which is the *point* of the single-process invariant.
+Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the native eKuiper 2.1.0 ARM64 package, not a container. WAFER remains a single process on every target.
 
 ## Operational touchpoints
 
@@ -100,6 +87,6 @@ all three targets, which is the *point* of the single-process invariant.
 - **Hot-swap:** `POST /api/v1/nodes/{id}/hot-swap` with a
   `{wasm_path: "..."}` body. See `docs/operations/getting-started.md`
   for a worked example.
-- **Shutdown:** `POST /api/v1/pipeline/shutdown` or SIGINT — both run
-  the ordered graceful shutdown (sources stop → drain → retry buffers
-  flush to DLQ → sinks close).
+- **Shutdown:** `POST /api/v1/pipeline/shutdown` or SIGINT: both run
+  the ordered graceful shutdown (sources stop -> drain -> retry buffers
+  flush to DLQ -> sinks close).

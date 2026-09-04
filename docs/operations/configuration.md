@@ -22,21 +22,21 @@ Both fields are optional and appear in log output plus the `/api/v1/nodes` respo
 The `[engine]` section governs wasmtime behaviour and default queue
 sizing.
 
+Runtime fuel limits and `epoch_deadline` default to `None`. Omit them for unlimited execution, or set positive values explicitly:
+
 ```toml
 [engine]
-epoch_deadline         = 100      # epoch ticks per Wasm call before interrupt (default 100)
-epoch_tick_ms          = 10       # wall-clock ms per epoch tick (default 10)
-default_queue_capacity = 1024     # per-edge fallback capacity
+epoch_deadline         = 100      # optional epoch ticks per Wasm call
+epoch_tick_ms          = 10       # default wall-clock ms per epoch tick
+default_queue_capacity = 1024     # default per-edge capacity
 
 [engine.fuel]
-transform = 10_000_000   # fuel per Transform call
+transform = 10_000_000
 filter    =    500_000
 router    =    500_000
 ```
 
-Together `epoch_deadline * epoch_tick_ms` gives the wall-clock cap per
-Wasm call (default: 1 000 ms). Per-node overrides (`[nodes.NAME.fuel]`
-and per-node capability toggles) win over these defaults.
+With both fields present, `epoch_deadline * epoch_tick_ms` is the nominal wall-clock cap per Wasm call. A positive `[nodes.NAME].fuel` value overrides the category value for one node. Zero is invalid. The values above are the protected final-evaluation policy, not runtime defaults.
 
 ## Configure the error policy (`[error_policy]`)
 

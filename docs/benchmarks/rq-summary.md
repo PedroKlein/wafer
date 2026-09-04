@@ -1,5 +1,7 @@
 # RQ Summary — Shakedown Results
 
+<!-- historical-diagnostic-file -->
+
 > **⚠️ SHAKEDOWN QUALITY — NOT THESIS GRADE.**
 >
 > All numbers below are from macOS Apple Silicon shakedown runs. They confirm

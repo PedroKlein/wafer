@@ -1,3 +1,154 @@
+# RFC-008: Evaluation harness design
+
+- **Status:** Implemented for final-campaign readiness
+- **Original session date:** 2026-07-12
+- **Final-method amendment:** 2026-09-04
+- **Depends on:** RFC-001 through RFC-007
+
+## Abstract
+
+The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
+
+The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Diagnostic scout, shakedown, focused-pilot, and targeted-pilot batches remain separate from final evidence.
+
+## Measurement boundary
+
+The matched gateway boundary is the complete co-located host:
+
+- CPU 0 runs Linux support work, native Mosquitto, load generation, subscription, and telemetry.
+- CPUs 1-3 run one active SUT: Native, protected WAFER, or native eKuiper.
+- The MQTT loopback condition measures the shared support path.
+- QoS 1, payload, topics, publisher, subscriber, warmup, duration, and CPU allocation are matched.
+
+Pipeline A is:
+
+```text
+MQTT source -> threshold filter -> MQTT sink
+```
+
+WAFER uses the Wasm threshold-filter component, Native uses the equivalent Rust filter, and eKuiper uses one SQL filter operator with concurrency 1.
+
+## Recording paths
+
+### In-process path
+
+`BenchSource` and `BenchSink` support boundary, depth, memory, containment, and hot-swap experiments. `BenchSource` uses open-loop intended timestamps. `BenchSink` records latency, throughput, sequence continuity, and version transitions without replacing the production orchestrator.
+
+E-Swap-4 adds one deterministic source schedule after a 30-second warmup:
+
+```text
+measured [0 s, 55 s):   1,000 msg/s
+measured [55 s, 65 s):  2,000 msg/s
+measured [65 s, 120 s): 1,000 msg/s
+swap at measured 60 s
+```
+
+Each of 30 independent runs contains one stateless swap and contributes one sink-observed gap to the across-run p95.
+
+### External MQTT path
+
+`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Final capacity runs do not require per-message CSV traces.
+
+## Canonical metering
+
+Runtime configuration defaults are unmetered: omitted fuel budgets and an omitted epoch deadline deserialize to `None`. Final WAFER evaluation configs explicitly protect ordinary leaves with:
+
+| Mechanism | Final evaluation value |
+|---|---:|
+| Transform fuel | 10,000,000 per call |
+| Filter fuel | 500,000 per call |
+| Router fuel | 500,000 per call |
+| Epoch deadline | 100 ticks |
+| Epoch tick | 10 ms |
+
+Only matrix-declared E-Perf-7 ablations and attack-specific stimuli differ. E-Perf-7 uses omission to create the four parsed modes: neither `(None, None)`, fuel-only `(Some, None)`, epoch-only `(None, Some)`, and both `(Some, Some)`. Numeric sentinel values do not disable metering.
+
+## Final RQ1 experiments
+
+### Matched target load
+
+E-Perf-1 compares Native, protected WAFER, and eKuiper at 1,000 msg/s for 30 complete runs per condition. It reports delivery, loss, run-level p50/p95/p99, CPU, RSS, thermal state, and provenance. It is an operating-point comparison, not a capacity experiment.
+
+### Gateway-capacity envelope
+
+E-Perf-10 runs MQTT loopback, Native, protected WAFER, and eKuiper at the common grid:
+
+```text
+[1,000, 4,000, 8,000, 15,000, 16,000] msg/s
+```
+
+Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent and the mean achieved/offered ratio is at least 0.99. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
+
+A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The analysis must report censoring rather than assign an exact SUT ceiling beyond the shared support path.
+
+### Startup and cross-architecture boundaries
+
+E-Perf-9 compares Linux filesystem page-cache preparation. The runtime disk compiled-component cache is disabled for these runs, so E-Perf-9 is not evidence for AOT or serialized-component caching.
+
+E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method.
+
+## Final RQ3 experiments
+
+### E-Swap-3 event-aligned disruption
+
+Each strategy has 30 runs and one disruption at measured t=60 seconds:
+
+- WAFER stateless hot-swap;
+- WAFER process restart;
+- eKuiper rule restart.
+
+The subscriber retains bounded observations and writes exactly 200 contiguous 100 ms buckets over `[-10 s,+10 s)` around the actual action-start timestamp. The scheduled t=60 boundary and actual alignment error are recorded; an error over 10 ms invalidates the leaf.
+
+The run-level estimators are:
+
+- baseline median rate over `[-10,-2)`;
+- minimum event-window rate over `[-2,+2)`;
+- percentage dip from baseline;
+- contiguous below-95-percent interruption containing t0;
+- action duration from a monotonic clock;
+- recovery to five consecutive buckets at or above 95 percent of baseline after action end, right-censored at +10 seconds;
+- full-run loss, duplication, and latency summary.
+
+The restart comparators are measured rather than assigned a synthetic 100 percent dip.
+
+### E-Swap-4 true burst
+
+E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 sink-observed 100 ms buckets, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
+
+## Statistics and outputs
+
+Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
+
+Figures and tables state N, units, estimator, evidence class, and claim boundary. Percentile summaries are not presented as empirical CDFs. PMIC measurements are labeled as a Raspberry Pi 5 internal-rail proxy, not total board or USB-C input power.
+
+## Reproducibility
+
+A final leaf contains clean tagged provenance, config and binary identities, thermal/throttle state, experiment-specific artifacts, and a passed completion receipt. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites a passed attempt.
+
+Use these gates before interpreting a batch:
+
+```sh
+python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
+python3 -m pytest -q eval/scripts/tests
+python3 eval/scripts/verify-result-contract.py --canonical <result-directory>
+```
+
+Canonical notebook resolution also requires the human approval receipt described by `eval/analysis/notebooks/README.md`.
+
+## Related documents
+
+- [Result contract](../../eval/RESULT-CONTRACT.md)
+- [Pi 5 experiment runbook](../eval/pi5-experiment-runbook.md)
+- [Config schema](../interfaces/config-schema.md)
+- [ADR-0013](../adr/0013-aot-cache-and-metering.md)
+- [Canonical readiness](../status/canonical-readiness.md)
+
+## Preserved original record
+
+<!-- historical-diagnostic-below -->
+
+The following text is the earlier decision or diagnostic record. It is preserved for traceability and does not override the current sections above.
+
 # RFC-008: Evaluation Harness Design
 
 - **Status:** Implemented — production-path harness. RQ1/RQ3 benchmarks measure the real Wasm path (A15 closed 2026-07-20; A16 closed 2026-07-22; A17 closed 2026-08-02 with post-verify polish; A18 closed 2026-08-01; A19 closed 2026-08-02). Only residual gap at time of writing: **A20** (Prometheus `wafer_hot_swap_rollbacks_total` counter, observability follow-up, not blocking thesis) — see [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).

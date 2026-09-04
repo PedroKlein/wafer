@@ -1,128 +1,103 @@
-# 08. Risks & Technical Debt
+# 08. Risks and technical debt
 
-Risks that could invalidate a thesis claim, block the evaluation, or
-require material rework. Each risk carries a likelihood × impact
-estimate, the current mitigation, and the residual (post-mitigation)
-exposure. Ordered roughly by product-of-likelihood-and-impact.
+These risks can invalidate an evaluation claim or block a final batch. The canonical validator treats provenance, throttling, malformed evidence, and incomplete conditions as hard failures.
 
-## R1 — Wasm boundary overhead exceeds the 30 %-of-eKuiper threshold on Raspberry Pi 5
+## R1: the shared MQTT path censors SUT capacity
 
-**Likelihood:** Medium — literature reports Wasm hop overheads from
-6 % (Lyu 2022) to 13.4 % (Sledge 2020) on x86; ARM numbers are noisier
-and typically higher. Our pass criterion is aggressive.
-**Impact:** High — RQ1 miss undermines the "viable performance"
-half of the thesis contribution.
-**Mitigation:** Envelope shape (`Arc<EnvelopeHeader>` + `Bytes` +
-`Lineage`) makes clone ~10 ns. Filter/Router borrow-only signatures
-avoid payload copy entirely. AOT cache brings cold-start prepare down
-from ~30 ms to ~2 ms. Fuel + epoch are independently toggleable so
-overhead can be attributed per mechanism (four-config decomposition).
-See ADR-0011, ADR-0007, ADR-0013.
-**Residual:** ResourceTable push/delete cost (~50 ns each) and
-Canonical-ABI lift of `list<u8>` outputs are irreducible today.
-If RQ1 misses the 30 % threshold, thesis narrative should shift to
-per-hop absolute latency framing rather than throughput ratio.
+**Likelihood:** High at the upper common-grid rates.
 
-## R2 — Attack containment fails in an unmeasured way
+**Impact:** High. A delivery-bad MQTT loopback point prevents attribution of loss or achieved-rate collapse to WAFER, Native, or eKuiper.
 
-**Likelihood:** Low — the six attack scenarios (S1–S6) were designed
-against `StoreLimits`, epoch OS-thread ticker, and WASI capability
-scoping; those are enforced by wasmtime, not by our code.
-**Impact:** High — RQ2 miss undermines the isolation half of the
-contribution.
-**Mitigation:** All six scenarios are exercised by the
-`plugins/attacks/*` set, wired into `TestPipeline` integration tests
-with explicit assertions on the offending node's `NodeState` and on
-the pipeline-level state.
-**Residual:** Side-channel and timing attacks are explicitly out of
-scope (see Scope Qualifier in the `wafer-project` skill). The claim
-is memory containment + capability scoping, not information-flow
-control.
+**Mitigation:** E-Perf-10 runs MQTT loopback at every common rate and reports delivery ceiling and normalized p99 knee separately. All systems use the same five rates and support-process allocation.
 
-## R3 — Hot-swap loses messages under pathological backpressure
+**Residual:** Native, WAFER, and eKuiper may remain right-censored above the highest support-uncensored rate. The thesis must not report an exact SUT ceiling in that region.
 
-**Likelihood:** Medium — the runner selects between the input `mpsc`
-receiver and the `watch::Sender<Option<SwapPayload>>`; a producer
-saturating the input queue at the exact instant of swap could in
-principle overflow retry buffers.
-**Impact:** High — RQ3 requires zero message loss.
-**Mitigation:** Retry buffer entries in flight at swap time are
-flushed to DLQ with `DlqReason::HotSwapDrain` — not lost, just
-diverted. `wafer-loadgen` tags every emitted message with a monotonic
-sequence, and the eval harness asserts every sequence is either
-sink-delivered or DLQ-recorded.
-**Residual:** DLQ full during a swap under saturation would surface
-as `DlqReason::QueueFull`; the eval harness catches this as a
-"delivery is not to the primary sink" rather than a lost message.
-Interpretation of DLQ-during-swap as acceptable (not-lost) is a
-methodological choice — flagged in the thesis's threats-to-validity
-section.
+## R2: metering configuration drifts from the evaluated system
 
-## R4 — Coordinated omission and warmup drift in the measurement harness
+**Likelihood:** Low after config and provenance checks.
 
-**Likelihood:** Medium — well-known pitfall in latency benchmarking
-(Gil Tene 2012).
-**Impact:** Medium — measurement artefacts that survive peer review
-would invalidate NFR-PERF numbers even if the runtime meets the
-target.
-**Mitigation:** Open-loop `wafer-loadgen` (fixed emission rate, no
-back-off on receiver stall). HdrHistogram at the sink side. 30 s
-warmup exclusion, ADF stationarity verification (RFC-008 §warmup).
-Bootstrap CI95 on all reported quantiles.
-**Residual:** The eval harness is still under construction (RFC-008,
-status: Accepted). Any missing knob (e.g. no SCHED_FIFO on the RPi)
-would silently inflate variance.
+**Impact:** High. An implicit unmetered leaf would not measure the protected runtime described by the evaluation.
 
-## R5 — Single-process constraint limits production adoption
+**Mitigation:** Runtime fuel and epoch limits default to `None`; final configs set the protected values explicitly. Parsed-config tests enumerate final WAFER leaves, and metadata records the effective fuel budgets, epoch deadline/tick, and metering mode.
 
-**Likelihood:** N/A — this is a scope choice, not a delivery risk.
-**Impact:** Medium — the thesis viability claim is about edge
-gateways, not cluster deployments. Reviewers may push back that the
-constraint is arbitrary.
-**Mitigation:** Positioning matrix and comparator narrative
-(architecture/09) frame the single-process invariant as
-*differentiator vs Azure IoT Operations* rather than a limitation.
-Explicitly documented in ADR-0001 (wasmtime choice), ADR-0004
-(native sources/sinks), and the `wafer-project` skill.
-**Residual:** Production users needing multi-node deployment must
-adopt a different runtime. Thesis makes no claim about horizontal
-scalability.
+**Residual:** A source/config change after the release tag invalidates the receipt and requires a new tag plus targeted validation.
 
-## R6 — Component-Model tooling churn (wit-bindgen / wasmtime)
+## R3: attack containment fails outside the measured boundary
 
-**Likelihood:** High — wasmtime is pinned to a git commit
-(post-41.0.3) because wasmtime-wasi-nn 41.0.3 on crates.io has a bug
-with the ort crate API. WIT bindgen is under active revision.
-**Impact:** Low — build breakage, occasional API migration effort.
-**Mitigation:** All three components (`wasmtime`, `wasmtime-wasi`,
-`wasmtime-wasi-nn`) are pinned in the workspace `Cargo.toml`. Plugin
-`crate-type = ["cdylib"]` and `wasm32-wasip2` target are stable at the
-Component-Model level.
-**Residual:** Bumping to wasmtime 42.x when it lands will require a
-one-day migration; documented in `docs/operations/dependencies.md`.
+**Likelihood:** Low for the six declared attacks.
 
-## R7 — AOT cache invalidation misses across wasmtime versions
+**Impact:** High for RQ2.
 
-**Likelihood:** Low.
-**Impact:** Medium — a stale cache would produce a component that
-fails at instantiate time and never reaches the guest.
-**Mitigation:** The cache key includes `blake3(wasm_bytes || platform
-|| wasmtime_version || config_flags)`. Any change in any input
-produces a different key. See ADR-0013.
-**Residual:** If wasmtime's compiled-module format changes without a
-version bump (unusual), stale entries would slip through. The AOT
-loader validates the compiled module before use and falls back to
-recompilation on validation error.
+**Mitigation:** Each attack has a dedicated component and semantic checks. E-Iso-7 uses independent source and sink populations so fault-branch backpressure does not enter the healthy-branch baseline.
 
-## R8 — Evaluation hardware access
+**Residual:** Side channels, covert channels, and hostile native adapters remain outside the isolation claim.
 
-**Likelihood:** Medium — the primary Raspberry Pi 5 unit and the optional Jetson Orin
-are single instances at the author's site. A hardware failure would
-extend the evaluation timeline.
-**Impact:** Medium — RQ1 / RQ2 / RQ3 measurements are pinned to those
-targets.
-**Mitigation:** All experiments run in a container-free
-`wafer-runtime` binary that can be cross-compiled to a replacement
-device without code changes. Bench scripts are checked into
-`eval/` and are hardware-agnostic.
-**Residual:** Timeline slip only; no impact on the thesis claim.
+## R4: hot-swap evidence confuses internal and observed timing
+
+**Likelihood:** Medium without schema enforcement.
+
+**Impact:** High for RQ3.
+
+**Mitigation:** Internal compile/instantiate/signal/ack/convergence phases, HTTP action duration, and sink-observed gaps remain separate fields. E-Swap-3 aligns bounded output buckets to actual action start. E-Swap-4 admits one event from each independent run.
+
+**Residual:** Queued output can hide an internal disruption. A small sink gap is not evidence of a small compile or instantiate phase.
+
+## R5: event scheduling misses the frozen boundary
+
+**Likelihood:** Low on the controlled host, subject to OS jitter.
+
+**Impact:** Medium. A misplaced event changes dip or burst interpretation.
+
+**Mitigation:** E-Swap-3 and E-Swap-4 schedule from a measured source/publisher boundary with monotonic waits. Actual wall-clock alignment is recorded for cross-process comparison, and a deviation above 10 ms fails the leaf.
+
+**Residual:** The E-Swap-4 sink series ends at measured +120 seconds. Targeted Pi validation must confirm that final messages remain inside the declared bucket window; a mismatch fails closed.
+
+## R6: coordinated omission or observer overhead biases latency
+
+**Likelihood:** Medium in an unbounded or feedback-driven generator.
+
+**Impact:** High for RQ1 and RQ3.
+
+**Mitigation:** Sources are open-loop and carry intended timestamps. HdrHistogram is recorded at the sink. Final capacity capture uses bounded summaries rather than mandatory per-message disk traces. A local trace/no-trace comparison is diagnostic evidence only.
+
+**Residual:** PMIC and one-second process sampling do not expose every transient. They are supporting resource evidence, not substitutes for the primary latency and sequence artifacts.
+
+## R7: startup evidence is mislabeled as compiled-cache evidence
+
+**Likelihood:** Medium because a compiled-component cache module exists in the runtime.
+
+**Impact:** Medium. It would overstate what E-Perf-9 measures.
+
+**Mitigation:** E-Perf-9 records Linux filesystem page-cache preparation and explicit compiled-cache state. The disk compiled-component cache is disabled, `hit=false`, and artifact/identity are null.
+
+**Residual:** A future compiled-cache experiment requires a separate method and enabled-cache provenance. Current E-Perf-9 data cannot be reused for that claim.
+
+## R8: PMIC telemetry is interpreted as whole-board power
+
+**Likelihood:** Medium.
+
+**Impact:** Medium for energy claims.
+
+**Mitigation:** Every figure and table labels PMIC values as a Raspberry Pi 5 internal-rail proxy. `power-boundary.json` records excluded consumers and the measurement boundary.
+
+**Residual:** Total USB-C input energy requires an external logging meter and is not available from the PMIC proxy.
+
+## R9: E-Perf-5 lacks its x86 half
+
+**Likelihood:** High until the matched host is available.
+
+**Impact:** The cross-architecture claim remains incomplete.
+
+**Mitigation:** Analysis returns `PENDING` unless both Raspberry Pi 5 and x86 Linux batches have matched source, config semantics, workload, and repetitions.
+
+**Residual:** ARM-only data cannot support a portability conclusion.
+
+## R10: hardware or long-run interruption
+
+**Likelihood:** Medium for a multi-day campaign.
+
+**Impact:** Schedule delay and partial attempts.
+
+**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, and never overwrites passed attempts. Retrieval is additive and verified path-for-path with SHA-256 manifests.
+
+**Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or targeted-pilot outcomes.

@@ -17,7 +17,7 @@ the long-form reasoning lives in the linked RFC / ADR.
 
 ## Envelope shape
 
-Every message that flows between nodes is a `RuntimeEnvelope` — three
+Every message that flows between nodes is a `RuntimeEnvelope`: three
 fields, deliberately chosen so a clone is near-free:
 
 ```rust
@@ -32,7 +32,7 @@ struct RuntimeEnvelope {
 timestamp, source node, content-type, custom metadata pairs). Cloning
 the envelope for fan-out or DLQ preservation is an `Arc` increment on
 the header, a `Bytes` increment on the payload (~5 ns each), and a
-`Lineage` byte-copy (~32 B) — call it ~10 ns total. This is what
+`Lineage` byte-copy (~32 B): call it ~10 ns total. This is what
 makes the Filter and Router borrow-only signatures actually cheap in
 practice: forwarding an unmodified message through a Router's `route()`
 returning `["out"]` copies zero payload bytes on the wire between host
@@ -47,15 +47,15 @@ Inbound `message` records carry the payload as `borrow<buffer>`, a WIT
 resource handle managed by the host in the wasmtime `ResourceTable`.
 Guests read bytes on demand:
 
-- `buffer.size() -> u64` — length without touching the bytes.
-- `buffer.read(offset, len) -> list<u8>` — slice on demand.
-- `buffer.read-all() -> list<u8>` — the full payload as an owned list.
+- `buffer.size() -> u64`: length without touching the bytes.
+- `buffer.read(offset, len) -> list<u8>`: slice on demand.
+- `buffer.read-all() -> list<u8>`: the full payload as an owned list.
 
 Because the borrow does not transfer ownership, the host retains the
 underlying `Bytes` for the duration of the guest call. Router and
 Filter plugins that decide based on `header.content-type` or metadata
 alone never call `read` at all, achieving genuine zero-copy routing.
-Outbound `output-message` records return `list<u8>` — the guest builds
+Outbound `output-message` records return `list<u8>`: the guest builds
 its own owned bytes and hands them to the host at the Canonical-ABI
 boundary. See [ADR-0007](../adr/0007-buffer-resource-zero-copy.md).
 
@@ -70,14 +70,14 @@ inherit_env      = false
 allow_inference  = false
 ```
 
-Defaults are all `false` — deny-by-default. Every capability granted
+Defaults are all `false`: deny-by-default. Every capability granted
 must be spelled out per node. The runtime translates these into WASI
 Preview 2 capability handles at instantiation: `inherit_stdio` wires
 stdin/stdout/stderr into the guest, `inherit_env` grants access to the
 host process env, `allow_inference` unlocks the `wasi:nn/*` imports
 required by the `inference-node` world.
 
-Capabilities are static per-node. Hot-swap does not renegotiate them —
+Capabilities are static per-node. Hot-swap does not renegotiate them -
 a swap on a node with `allow_inference = false` cannot suddenly
 require `wasi:nn` unless the operator edits the config and restarts
 the runtime. This is deliberate: capability drift across swaps would
@@ -87,23 +87,10 @@ undermine the RQ2 isolation contract.
 
 Two independent mechanisms bound untrusted guest execution:
 
-- **Fuel** — a wasmtime-native counter that decrements on every
-  instruction. A guest that exceeds its fuel budget traps as
-  `WasmProcessError::TimedOut`. Budgets come from `[engine.fuel]` with
-  per-category defaults (Transform 10 000 000, Filter 500 000, Router
-  500 000) and per-node overrides on `WasmNodeDef`.
-- **Epoch** — a wall-clock deadline. The runtime spins an
-  **OS thread** (not a tokio task) that ticks the epoch counter every
-  `[engine].epoch_tick_ms` (default 10 ms). When the tick count
-  exceeds `epoch_deadline`, the guest is interrupted. The OS-thread
-  choice guarantees the ticker fires even when the tokio runtime is
-  saturated — a critical property for RQ2 attack containment.
+- **Fuel** is a Wasmtime counter that decrements during guest execution. A guest that exceeds a configured budget traps as `WasmProcessError::TimedOut`. Runtime fuel defaults are `None` for Transform, Filter, and Router. A positive `[engine.fuel]` value enables the mechanism; a per-node value overrides it.
+- **Epoch** is an optional wall-clock deadline. A named OS thread ticks the engine every `[engine].epoch_tick_ms` (default 10 ms). Runtime `epoch_deadline` defaults to `None`, so ticking alone does not interrupt a call.
 
-Both mechanisms can be independently enabled or disabled at the engine
-level, giving four measurement configurations (fuel on/off × epoch
-on/off) used by the RQ1 overhead-decomposition experiment. Each guest
-also has a `StoreLimits` cap on memory allocation — Transform nodes
-get 64 MB by default, Filter/Router 16 MB. See
+Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, and an epoch deadline of 100 ticks, except for declared E-Perf-7 ablations and attack stimuli. E-Perf-7 creates its four modes by omitting the disabled field, not by using a numeric sentinel. Each guest also has a `StoreLimits` cap on memory allocation: Transform nodes get 64 MiB by default, and Filter and Router nodes get 16 MiB. See
 [ADR-0013](../adr/0013-aot-cache-and-metering.md) and [RFC-007
 §D1/§D8](../rfcs/RFC-007-performance-optimizations.md).
 
@@ -112,13 +99,13 @@ get 64 MB by default, Filter/Router 16 MB. See
 Every host-observable guest failure is classified into one of five
 `ErrorCategory` values that map 1:1 to the WIT `process-error` variant:
 
-- `bad-input` — malformed / schema-invalid input. Default action: DLQ.
-- `dependency-failed` — external dependency unavailable. Default:
+- `bad-input`: malformed / schema-invalid input. Default action: DLQ.
+- `dependency-failed`: external dependency unavailable. Default:
   retry 3× with 100 ms backoff, then DLQ.
-- `processing-failed` — internal plugin logic failed. Default: retry
+- `processing-failed`: internal plugin logic failed. Default: retry
   2× with 100 ms backoff, then DLQ.
-- `timed-out` — fuel or epoch deadline exceeded. Default: skip.
-- `unrecoverable` — panic / capability violation / `StoreLimits`
+- `timed-out`: fuel or epoch deadline exceeded. Default: skip.
+- `unrecoverable`: panic / capability violation / `StoreLimits`
   breach. Hard-wired: teardown the node and re-instantiate from the
   cached `InstancePre`.
 

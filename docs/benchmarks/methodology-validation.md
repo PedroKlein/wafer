@@ -1,5 +1,7 @@
 # E-Val-1: Methodology validation
 
+<!-- historical-diagnostic-file -->
+
 **Purpose.** Prove the measurement rig captures a known-magnitude latency.
 Injects a 50 ms delay via a Wasm plugin; asserts recorded p99 lands within
 [45, 55] ms. A p99 outside that window means the rig is lying about tail

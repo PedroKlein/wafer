@@ -1,5 +1,7 @@
 # RQ2 — Attack Containment Evidence
 
+<!-- historical-diagnostic-file -->
+
 **Status:** informational (shakedown-macos). Canonical evidence pending
 device runs. See `docs/status/canonical-readiness.md` for the promotion
 gate.

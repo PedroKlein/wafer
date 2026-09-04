@@ -2,7 +2,7 @@
 
 **Version pin.** Native eKuiper `2.1.0` Linux ARM64 package. The Raspberry Pi 5 canonical evaluation does not use Docker. The old Compose file remains solely for reproducing historical macOS shakedowns.
 
-**Role.** eKuiper is the reference stream-processing engine for E-Perf-1 throughput, E-Perf-2 latency, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
+**Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
 ## Raspberry Pi 5 setup
 
@@ -32,8 +32,10 @@ Historical shakedowns used `eval/ekuiper/docker-compose.yml` because eKuiper nee
 Pipeline A mirrors RFC-008 Decision 6:
 
 ```text
-MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT wafer/telemetry/hot
+MQTT source -> threshold filter -> MQTT sink
 ```
+
+The threshold filter decodes the telemetry record and applies `50 <= temperature <= 99999`; JSON decode is not a separate Pipeline A stage.
 
 `seed-pipeline-a.sh` creates the `wafer_telemetry` stream and `pipeline_a` rule through the REST API on port 9081. Its broker is configurable through `EKUIPER_BROKER_URL` and defaults to native Mosquitto at `tcp://127.0.0.1:1883`.
 

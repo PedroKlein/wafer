@@ -20,7 +20,7 @@ The WIT interface (`pipeline:node/filter@0.1.0`) exposes `evaluate: func(input: 
 
 - **Positive — zero-copy forwarding.** A filter pass-through costs two refcount bumps (`Arc` + `Bytes`) ≈ 10 ns instead of the ~300 B allocation that a Transform would incur. In a pipeline with multiple filters upstream of a transform, this eliminates per-message allocations proportional to filter count.
 
-- **Positive — tighter fuel budget.** Filter nodes default to 500 000 fuel units (vs Transform's 10 000 000). A filter that exceeds this budget is almost certainly misbehaving — it should be inspecting metadata or a small portion of the payload, not doing heavy computation. This makes runaway filter detection faster and cheaper.
+- **Positive: separate fuel policy.** Filter nodes have an independent fuel category. Runtime fuel defaults are `None`; the final protected evaluation config assigns 500,000 fuel units to Filter calls and 10,000,000 to Transform calls. This permits a tighter filter limit without coupling it to Transform work.
 
 - **Positive — no DLQ pre-clone.** The host filter loop does not pre-clone the envelope before calling the guest (unlike Transform, which must clone for DLQ safety before yielding ownership). If the guest traps, the original envelope is still available in the host for error-policy handling. This saves one `Arc` bump per invocation in the happy path.
 

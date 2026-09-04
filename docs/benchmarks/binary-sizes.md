@@ -1,5 +1,7 @@
 # Binary Size Comparison — Wasm Components vs. Container Images
 
+<!-- historical-diagnostic-file -->
+
 **Experiment**: E-Density-1 (RFC-008, D9).
 **Research question**: RQ1 orthogonal — is the Wasm-component isolation
 unit materially smaller than the container-image isolation unit?

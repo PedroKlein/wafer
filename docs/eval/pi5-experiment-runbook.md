@@ -1,23 +1,84 @@
-# Run WAFER experiments on Raspberry Pi 5
+# Run the final Raspberry Pi 5 evaluation
 
-This runbook identifies the pipeline behind each research question, shows the commands that are runnable today, and explains how result data returns to the analysis workstation. Complete [`pi5-host-setup.md`](pi5-host-setup.md) first.
+This how-to covers schedule inspection, pre-final validation, resumable execution, additive retrieval, contract verification, and analysis. Complete [Pi 5 host setup](pi5-host-setup.md) before using it.
 
-## Execution levels
+The final campaign is not authorized by this document. A human-approved launch receipt is required. Until that receipt exists, `campaign_started=false`.
 
-| Level | Purpose | Evidence status |
+## Evidence classes
+
+| Class | Purpose | Thesis evidence |
 |---|---|---|
-| Smoke | Prove deployment, plugin loading, CPU affinity, shutdown, and result writing | Diagnostic only |
-| Shakedown | Exercise an experiment at reduced repetitions or duration | Informational only |
-| Canonical | Produce thesis evidence with the frozen method | Quotable after contract and analysis checks |
+| Smoke | Check deployment, plugins, affinity, shutdown, and artifact writing | no |
+| Diagnostic scout or targeted pilot | Validate method and changed paths at reduced scale | no |
+| Final canonical batch | Execute the frozen matrix after approval | yes, after all gates pass |
 
-A Pi 5 directory name alone does not make a run canonical. Canonical runs require at least 30 repetitions, 30 seconds of excluded warmup, the experiment-specific measurement window, a clean tagged source revision, no throttling, and successful result-contract verification.
+A directory name does not determine evidence class. Final evidence requires the approved tag/SHA and batch ID, clean provenance, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis.
 
-## Tests available immediately
+## Fixed host boundary
 
-Run these on the Pi after deployment:
+- Raspberry Pi 5 4 GB, stock clocks, active cooling, Raspberry Pi OS Lite 64-bit.
+- CPU 0: Linux support work, Mosquitto, load generation, subscription, and telemetry.
+- CPUs 1-3: exactly one active SUT.
+- Native eKuiper 2.1.0; no container in canonical comparisons.
+- Pipeline A: `MQTT source -> threshold filter -> MQTT sink`.
+- PMIC data: internal-rail proxy only, not total board or USB-C input power.
+
+## Inspect and validate the final schedule
+
+From the repository root on the analysis machine:
 
 ```sh
-cd ~/wafer
+python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
+python3 eval/scripts/lib/canonical_runner.py \
+  --dry-run \
+  --batch-id final-candidate \
+  --seed 1729
+```
+
+Expected matrix output:
+
+```text
+27 experiments
+schedule_records=2105
+measured_leaves=1893
+```
+
+The 2,105 records include 212 shared-result aliases. The 1,893 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+
+The current estimate is:
+
+| Estimate | Value | Basis |
+|---|---:|---|
+| Nominal active-run time | 45.52 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 50.07 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Storage estimate | 43.04 GiB | Conservative accounting over all 2,105 schedule records at the immutable v16 average of 17,564,330 bytes per leaf, plus 25 percent margin; shared aliases normally consume less |
+| Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
+
+Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.
+
+## Verify the release candidate locally
+
+Run all gates on one clean commit before creating the evaluation tag:
+
+```sh
+cargo fmt --all -- --check
+WAFER_SKIP_DOCKER_TESTS=1 cargo test --workspace
+python3 -m pytest -q eval/scripts/tests
+cd eval/analysis
+uv sync
+uv run pytest -q
+cd ../..
+python3 eval/scripts/check-current-docs.py
+python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
+```
+
+Create the release receipt only after both repository revisions are clean. Any source, config, or documentation change after the tag requires a new tag and receipt.
+
+## Deploy and run smoke checks
+
+Deploy the tagged release using the reviewed deployment command in the release receipt. On the Pi checkout:
+
+```sh
 ./eval/scripts/preflight-pi5.sh
 ./eval/scripts/run-rpi5-smoke.sh
 ./eval/scripts/run-rpi5-validation.sh
@@ -25,139 +86,143 @@ cd ~/wafer
 ./eval/ekuiper/smoke-test.sh
 ```
 
-### Pipeline C smoke
+Do not continue if preflight reports a dirty or untagged source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
-`run-rpi5-smoke.sh` runs:
+## Run the targeted pre-final pilot
 
-```text
-BenchSource → pass-through Wasm Transform → BenchSink
-```
+The targeted pilot is a new diagnostic batch declared before launch. It covers:
 
-Configuration: `eval/configs/pipeline-c-rpi5-smoke.toml`.
+- E-Val-1;
+- all four E-Perf-7 modes;
+- all E-Perf-10 systems and rates;
+- all three E-Swap-3 strategies;
+- true-burst E-Swap-4.
 
-It emits 3,000 messages, excludes the first 1,000, runs WAFER on CPUs 1–3, and writes `eval/results/e-smoke/rpi5-<timestamp>/`. This proves the deployed binary and Component Model plugin execute on the Pi; it is not a performance result.
+Its schedule, repetition count, batch ID, tag/SHA, and matrix hash belong in the targeted-pilot receipt. Targeted results use `thesis_evidence=false` and are never pooled with the final batch. Stop, preserve the failed attempt, fix and retag if metering truth, capacity counters, event alignment, E-Swap-4 phase boundaries, provenance, or throttling fails.
 
-### Methodology validation
+The targeted pilot must also demonstrate resume behavior: stop after a declared leaf, rerun the same command, and confirm passed attempts are skipped rather than duplicated.
 
-`run-rpi5-validation.sh` runs:
+## Human approval gate
 
-```text
-BenchSource at 10 msg/s → 50 ms delay Wasm Transform → BenchSink
-```
+Before the full run, review the release receipt, targeted-pilot review, final schedule, runtime/storage estimates, stop conditions, and E-Perf-5 x86 limitation. The approval receipt must include at least:
 
-Configuration: `eval/configs/pipeline-c-with-delay.toml`.
+- `decision="APPROVE"` and approval timestamp;
+- fresh batch ID;
+- WAFER tag and SHA;
+- tcc-doc SHA;
+- canonical matrix and schedule SHA-256;
+- binary and plugin receipts;
+- targeted-pilot ID;
+- expected runtime and storage;
+- `campaign_started=false`.
 
-The run passes only when the histogram is non-empty, p99 is within 45–55 ms, the result directory conforms to the contract, and the Pi reports no throttling. One short run is a harness check; canonical E-Val-1 still requires the predefined repeated-run procedure.
+Canonical analysis consumes a subset of this receipt through `WAFER_FULL_RUN_APPROVAL`. Approval authorizes a later launch; it does not start one.
 
-### Native eKuiper smoke
+## Launch and resume the final batch
 
-`eval/ekuiper/smoke-test.sh` publishes two records through Pipeline A. Temperature 30 must be dropped and temperature 80 must be forwarded. This proves native eKuiper, native Mosquitto, and the comparator rule work before performance runs.
-
-## Pipeline and experiment map
-
-| Group | Experiments | Pipeline/config | Current runner | Primary data |
-|---|---|---|---|---|
-| Method validation | E-Val-1 | `pipeline-c-with-delay.toml` | `run-rpi5-validation.sh` for one short run; `run-e-val-1-shakedown.sh` is still macOS-specific for repeated runs | `latency.hdr`, `throughput.csv`, `percentiles.json` |
-| RQ1 comparator | E-Perf-1, E-Perf-2 | `pipeline-a-wafer.toml`, `pipeline-a-native.toml`, native eKuiper Pipeline A | `run-e-perf-1-2-shakedown.sh` requires Pi 5/native-eKuiper adaptation before canonical use | latency, throughput, sequence, memory |
-| RQ1 MQTT depth | E-Perf-3 | `e-perf-3/pipeline-mqtt-depth-{1,3,5,10}.toml` | `run-e-perf-3-shakedown.sh`; canonical wrapper pending | latency by depth |
-| RQ1 boundary cost | E-Perf-4 | `e-perf-4/pipeline-c-passthrough-{120b,1kb,10kb,100kb}.toml` | `run-e-perf-4-shakedown.sh`; canonical wrapper pending | per-size latency histograms |
-| RQ1 cross-architecture | E-Perf-5 | matching Pipeline C builds on Pi 5 and x86 Linux | canonical paired wrapper pending | WAFER/native ratios |
-| RQ1 memory/depth | E-Perf-6, E-Perf-8 | `e-perf-6/pipeline-depth-{1,3,5,10}.toml` | `run-e-perf-6-8-shakedown.sh`; canonical wrapper pending | `memory.csv`, latency by depth |
-| RQ1 metering | E-Perf-7 | `e-perf-7/pipeline-c-{passthrough,fuel-only,epoch-only,neither}.toml` | `run-e-perf-7-shakedown.sh`; canonical wrapper pending | latency by metering mode |
-| RQ1 startup | E-Perf-9 | `e-perf-9/pipeline-tier-{small,medium,large}.toml` | `run-e-bp-perf9-shakedown.sh`; canonical wrapper pending | cold/warm startup |
-| RQ1 pressure | E-Backpressure | `e-backpressure/pipeline-saturated.toml` | canonical runner | internal queue occupancy, offered/accepted/processed/drained rates, RSS, sequence |
-| RQ2 containment | E-Iso-1..6 | `e-iso-{1..6}/pipeline.toml` | `run-e-iso-shakedown.sh`; canonical wrapper pending | trap and node-state evidence |
-| RQ2 branch/recovery | E-Iso-7, E-Iso-8 | `e-iso-7/*.toml`, `e-iso-8/pipeline.toml` | `run-e-iso-7-8.sh`; canonical wrapper pending | healthy-branch throughput, recovery latency |
-| RQ3 hot-swap | E-Swap-1,2,4,5,6 | `e-swap/pipeline-hotswap*.toml` | `run-e-swap-shakedown.sh`; canonical wrapper pending | swap timeline, sequence, throughput |
-| RQ3 comparator | E-Swap-3 | `e-swap/pipeline-swap3-mqtt.toml`, native eKuiper Pipeline A | `run-e-swap-3-shakedown.sh` requires native-eKuiper adaptation | throughput dip by strategy |
-| Static density | E-Density-1 | built plugin artefacts | `collect-binary-sizes.sh` | `binary-sizes.csv` |
-
-The shakedown scripts named above are useful implementation references, but scripts that embed `shakedown-macos`, Docker, or reduced duration must not produce canonical Pi 5 claims until dedicated wrappers replace those assumptions.
-
-## Canonical execution contract
-
-Canonical method parameters are frozen in `eval/canonical-matrix.json`. The matrix is machine-checked with:
+Use the exact command copied into the approved handoff. Its shape is:
 
 ```sh
-python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
+./eval/scripts/run-rpi5-canonical.sh \
+  --execute \
+  --batch-id <approved-fresh-batch-id> \
+  --seed 1729
 ```
 
-A wrapper may reuse measurements across experiment IDs only when the matrix declares `shares_measurements_with` and the resulting batch records that relationship.
+Run only after explicit approval. The runner executes sequentially, writes `progress.jsonl`, creates a new attempt directory after failure, and skips a run index once a passed attempt exists. Reusing the same command and batch ID resumes the batch.
 
-Every canonical wrapper must enforce:
-
-- host tag `rpi5`;
-- N ≥ 30 independent runs per condition;
-- at least 30 seconds excluded warmup;
-- experiment-defined duration and rate;
-- WAFER/native/eKuiper running separately on CPUs 1–3;
-- native Mosquitto and load generation on CPU 0;
-- governor `performance` and `vcgencmd get_throttled=0x0` before and after;
-- a clean, tagged source revision;
-- `python3 eval/scripts/validate-canonical.py host --root .` success before launch;
-- `verify-result-contract.py --canonical` success for every run directory.
-
-Do not expand a short smoke command into an overnight loop and call it canonical. Implement and review each canonical wrapper against its experiment definition first. `run-experiment.sh --canonical` provides the per-run host/provenance gate; a saved facts file may be supplied only with `--dry-run` for deterministic tests.
-
-## Power and thermal telemetry
-
-Canonical Pi 5 runs start `eval/scripts/lib/pi_telemetry.py` before warmup and stop it after the measured process. `BenchSink` records the in-process window from the first post-warmup message through export; external MQTT paths bracket the subscriber measurement in the harness. A zero-output containment run falls back to its runtime interval because no post-warmup sink message exists. Each result leaf may contain:
-
-- `measurement-window.json` — exact bounds used to exclude warmup and teardown from energy integration;
-- `pi-telemetry.csv` — temperature, CPU frequency, governor, throttling, and summed rail-proxy watts;
-- `pmic-rails.csv` — named PMIC rail voltage/current/power samples;
-- `power-boundary.json` — the measurement boundary and exclusions;
-- `telemetry-error.json` — telemetry failed; benchmark data remains usable, but power/thermal evidence from that run is invalid.
-
-This is **not total board input power**. Raspberry Pi documents that `pmic_read_adc` cannot see USB current or devices connected directly to 5 V and should not be expected to sum to source-supply wattage. Report it only as the **Raspberry Pi 5 PMIC internal-rail proxy**. A logging inline USB-C meter is required for defensible whole-board watts and joules.
-
-## Retrieve data
-
-From the development machine:
+To dry-run one experiment without execution:
 
 ```sh
-mkdir -p eval/results
-rsync -av USER@wafer-pi5:wafer/eval/results/ eval/results/
+./eval/scripts/run-rpi5-canonical.sh \
+  --dry-run \
+  --batch-id preview-only \
+  --seed 1729 \
+  --experiments e-swap-3
 ```
 
-The transfer is additive and preserves timestamped directories. Never delete a device result until its copy has been verified.
+## Monitor and stop safely
 
-Verify one retrieved run:
+Monitor the batch ledger and telemetry without changing result files:
 
 ```sh
-python3 eval/scripts/verify-result-contract.py \
-  eval/results/e-smoke/rpi5-YYYY-MM-DDTHH-MM-SSZ
+tail -f eval/results/canonical-batches/rpi5-<batch-id>/progress.jsonl
+find eval/results -path "*rpi5-<batch-id>*" -name canonical-status.json -print
 ```
 
-Inspect provenance:
+Stop the runner normally with SIGINT. Do not delete partial attempts. Stop admission immediately for:
+
+- thermal throttling or missing telemetry;
+- provenance, config, binary, or plugin drift;
+- disk below the release-receipt floor;
+- repeated systemic harness failure;
+- counter or schema mismatch;
+- missed E-Swap event alignment;
+- unexpected concurrent SUT activity.
+
+A threshold miss by a valid SUT run is data, not a reason to tune the threshold or system during the batch.
+
+## Retrieve without overwriting evidence
+
+Create a remote manifest before transfer:
 
 ```sh
-jq . eval/results/e-smoke/rpi5-*/metadata.json
-sha256sum eval/results/e-smoke/rpi5-*/config.toml
+cd <remote-repository-root>
+find eval/results -type f ! -name remote-sha256.txt -print0 \
+  | sort -z | xargs -0 sha256sum > remote-sha256.txt
+mv remote-sha256.txt \
+  eval/results/canonical-batches/rpi5-<batch-id>/remote-sha256.txt
 ```
 
-## Analyze data
+From the analysis machine, copy additively into the same repository-relative result layout using a configured host alias:
 
-Install the locked analysis environment once:
+```sh
+rsync -a --ignore-existing \
+  <pi-host>:<remote-repository-root>/eval/results/ \
+  eval/results/
+```
+
+Retrieve `remote-sha256.txt`, then verify it from the repository root:
+
+```sh
+sha256sum -c eval/results/canonical-batches/rpi5-<batch-id>/remote-sha256.txt
+```
+
+Every listed path and digest must match before the Pi copy is treated as retrieved. Never use `--delete`, overwrite an earlier result tree, or remove failed attempts.
+
+## Verify contracts
+
+Verify every retrieved experiment batch:
+
+```sh
+python3 eval/scripts/verify-result-contract.py --canonical \
+  eval/results/<experiment>/rpi5-<batch-id>
+```
+
+Then re-run matrix validation and compare the accepted run population with `schedule.json`. All required conditions must have the declared N; shared aliases must point to their declared source leaf.
+
+## Analyze an approved complete batch
 
 ```sh
 cd eval/analysis
 uv sync
+export WAFER_FULL_RUN_APPROVAL=../../.plans/rpi5-final-experiment-readiness/full-run-approval.json
+export WAFER_EVAL_BATCH_ID=<batch-id>
+export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
+uv run pytest -q
+uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
+  notebooks/09-saturation.ipynb
 ```
 
-Select a Pi 5 result explicitly while the notebooks are being migrated from shakedown defaults:
+Canonical analysis rejects an unapproved, incomplete, wrong-host, dirty, mixed-SHA, throttled, failed, or malformed batch. Diagnostic paths may render `PENDING`, but cannot become thesis evidence.
 
-```sh
-SHAKEDOWN_DIR=../results/e-perf-4/rpi5-YYYY-MM-DDTHH-MM-SSZ \
-  uv run jupyter execute notebooks/02-per-hop-overhead.ipynb
-```
+## Experiment boundaries to retain
 
-After all canonical inputs exist:
-
-```sh
-cd ../..
-mise run //eval:notebooks-execute
-mise run //eval:figures
-```
-
-Notebook output is not proof by itself. Confirm every input directory is `rpi5-*`, every metadata file identifies the same source revision and hardware state, and no smoke directory was selected.
+- E-Perf-1 is the matched 1,000 msg/s operating point, not capacity.
+- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring.
+- E-Perf-7 disables mechanisms by TOML omission.
+- E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
+- E-Perf-5 remains `PENDING` until the x86 Linux block exists.
+- E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
+- E-Swap-4 has one source-driven burst and one stateless swap per independent run.
+- Diagnostic scout, v11-v17, targeted-pilot, laptop, and synthetic data are not pooled with final results.

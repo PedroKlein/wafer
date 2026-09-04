@@ -1,3 +1,54 @@
+# Evaluation progress
+
+## Current final-campaign readiness
+
+The final Raspberry Pi 5 method is implemented through canonical analysis. The final N=30 campaign has not started.
+
+| Area | Status |
+|---|---|
+| Final matrix and result contract | frozen and validated |
+| Canonical WAFER metering | explicit fuel plus epoch, with declared exceptions |
+| E-Perf-10 bounded capacity capture | implemented |
+| E-Swap-3 actual-t0 event buckets | implemented |
+| E-Swap-4 source-driven burst | implemented |
+| Canonical analysis and approval gate | implemented |
+| WAFER/thesis documentation sync | in progress |
+| Tagged release candidate | pending |
+| Reduced targeted Pi pilot | pending |
+| Independent final-readiness review | pending |
+| Human approval | pending |
+| Full N=30 campaign | not started |
+
+The matrix contains 2,105 schedule records and 1,893 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
+
+## Current experiment boundaries
+
+- E-Perf-1 is the 1,000 msg/s target-load comparison.
+- E-Perf-10 is the common-grid gateway-capacity envelope with MQTT support censoring.
+- E-Perf-5 remains `PENDING` until matching x86 Linux evidence exists.
+- E-Perf-9 measures Linux filesystem page-cache state with the disk compiled-component cache disabled.
+- E-Swap-3 measures one event-aligned disruption in each of 30 runs per strategy.
+- E-Swap-4 measures one true 1,000/2,000/1,000 msg/s burst and one stateless swap in each of 30 runs.
+- PMIC telemetry is an internal-rail proxy, not total board power.
+
+See [canonical readiness](canonical-readiness.md), [RFC-008](../rfcs/RFC-008-evaluation-harness.md), and [the Pi 5 runbook](../eval/pi5-experiment-runbook.md).
+
+## Historical diagnostic program
+
+<!-- historical-diagnostic-below -->
+
+The macOS shakedown program and Raspberry Pi pilot/scout batches validated implementation paths and exposed method defects. Those results remain in immutable result trees and historical reports. They are not pooled with the final batch and do not supply final RQ verdicts.
+
+Closed implementation findings include the WASI async path, process-time rollback, native filter parity, runtime-owned memory sampling, explicit eKuiper QoS, true metering ablation, trace-free capacity capture, event-aligned restart evidence, and true-burst scheduling.
+
+The accepted capacity scout is diagnostic only. It selected the common rate grid before final execution and established that higher SUT capacity may be censored by the co-located MQTT support path.
+
+## Preserved original record
+
+<!-- historical-diagnostic-below -->
+
+The following text is the earlier decision or diagnostic record. It is preserved for traceability and does not override the current sections above.
+
 # Evaluation Progress
 
 Current progress against the thesis evaluation plan

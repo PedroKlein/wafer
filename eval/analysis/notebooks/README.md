@@ -75,10 +75,10 @@ Install the analysis environment, provide the human approval receipt, export the
 ```bash
 cd eval/analysis
 uv sync
-export WAFER_FULL_RUN_APPROVAL=/path/to/full-run-approval.json
+export WAFER_FULL_RUN_APPROVAL=../../.plans/rpi5-final-experiment-readiness/full-run-approval.json
 export WAFER_EVAL_BATCH_ID=<batch-id>
-export WAFER_ANALYSIS_OUTPUT_DIR=/path/to/generated-analysis
-uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
+export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
+uv run jupyter nbconvert --execute --to notebook --output-dir executed \
   notebooks/09-saturation.ipynb
 ```
 
@@ -92,8 +92,8 @@ Each notebook accepts experiment-specific directory variables such as `E_PERF_10
 
 ```bash
 cd eval/analysis
-E_PERF_10_DIR=/absolute/path/to/e-perf-10 \
-  uv run jupyter nbconvert --execute --to notebook --output-dir /tmp \
+E_PERF_10_DIR=../results/e-perf-10/rpi5-<diagnostic-batch-id> \
+  uv run jupyter nbconvert --execute --to notebook --output-dir executed \
   notebooks/09-saturation.ipynb
 ```
 
@@ -104,7 +104,7 @@ from wafer_analysis.paths import resolve_result_batch
 
 result_dir = resolve_result_batch(
     "e-perf-10",
-    diagnostic_path="/absolute/path/to/e-perf-10",
+    diagnostic_path="../results/e-perf-10/rpi5-<diagnostic-batch-id>",
 )
 ```
 
