@@ -365,13 +365,28 @@ def check_throughput_buckets(path: Path, expected_count: int | None = None) -> l
         violations.append(
             f"throughput-buckets.json must use {expected_clock} aligned 100 ms buckets"
         )
-    if expected_count == 200 and (
-        value.get("event_offset_from_measurement_start_ns") != 60_000_000_000
-        or value.get("coverage_start_offset_ns") != -10_000_000_000
-        or value.get("coverage_end_offset_ns") != 10_000_000_000
-        or not isinstance(value.get("event_timestamp_ns"), int)
-    ):
-        violations.append("throughput-buckets.json event placement or coverage is invalid")
+    if expected_count == 200:
+        try:
+            measurement_start = int(value["measurement_start_timestamp_ns"])
+            scheduled_timestamp = int(value["scheduled_event_timestamp_ns"])
+            event_timestamp = int(value["event_timestamp_ns"])
+            alignment_error = int(value["alignment_error_ns"])
+            event_metadata_valid = (
+                value.get("clock_purpose") == "cross-process-alignment"
+                and value.get("scheduled_event_offset_ns") == 60_000_000_000
+                and scheduled_timestamp == measurement_start + 60_000_000_000
+                and int(value["event_offset_from_measurement_start_ns"])
+                    == event_timestamp - measurement_start
+                and alignment_error == event_timestamp - scheduled_timestamp
+                and value.get("alignment_tolerance_ns") == 10_000_000
+                and abs(alignment_error) <= 10_000_000
+                and value.get("coverage_start_offset_ns") == -10_000_000_000
+                and value.get("coverage_end_offset_ns") == 10_000_000_000
+            )
+        except (KeyError, TypeError, ValueError):
+            event_metadata_valid = False
+        if not event_metadata_valid:
+            violations.append("throughput-buckets.json event placement or coverage is invalid")
     buckets = value.get("buckets")
     if not isinstance(buckets, list) or not buckets:
         return violations + ["throughput-buckets.json buckets must be non-empty"]
@@ -416,22 +431,41 @@ def check_disruption_timeline(path: Path) -> list[str]:
     if value is None:
         return violations
     required = {
-        "timestamp_clock", "duration_clock", "strategy", "event_timestamp_ns",
-        "event_offset_from_measurement_start_ns", "action_start_timestamp_ns",
-        "action_end_timestamp_ns", "action_end_offset_ns", "action_duration_ns",
+        "timestamp_clock", "timestamp_clock_purpose", "scheduling_clock",
+        "duration_clock", "strategy", "measurement_start_timestamp_ns",
+        "scheduled_event_offset_ns", "scheduled_event_timestamp_ns",
+        "event_timestamp_ns", "event_offset_from_measurement_start_ns",
+        "alignment_error_ns", "alignment_tolerance_ns", "action_start_timestamp_ns",
+        "action_end_timestamp_ns", "action_end_offset_ns", "action_start_monotonic_ns",
+        "action_end_monotonic_ns", "action_duration_ns",
     }
     if not required <= value.keys():
         return violations + ["disruption-timeline.json is missing event fields"]
+    measurement_start = int(value.get("measurement_start_timestamp_ns", -1))
+    scheduled_timestamp = int(value.get("scheduled_event_timestamp_ns", -1))
+    event_timestamp = int(value.get("event_timestamp_ns", -1))
+    action_end_timestamp = int(value.get("action_end_timestamp_ns", -1))
+    action_start_monotonic = int(value.get("action_start_monotonic_ns", -1))
+    action_end_monotonic = int(value.get("action_end_monotonic_ns", -1))
     if (
         value["timestamp_clock"] != "unix-epoch"
+        or value["timestamp_clock_purpose"] != "cross-process-alignment"
+        or value["scheduling_clock"] != "monotonic"
         or value["duration_clock"] != "monotonic"
         or value["strategy"] not in {"wafer-hotswap", "wafer-restart", "ekuiper-restart"}
-        or int(value["event_offset_from_measurement_start_ns"]) != 60_000_000_000
-        or int(value["action_start_timestamp_ns"]) != int(value["event_timestamp_ns"])
-        or int(value["action_end_offset_ns"]) != int(value["action_duration_ns"])
-        or int(value["action_end_timestamp_ns"])
-            != int(value["event_timestamp_ns"]) + int(value["action_duration_ns"])
-        or int(value["action_duration_ns"]) < 0
+        or int(value["scheduled_event_offset_ns"]) != 60_000_000_000
+        or scheduled_timestamp != measurement_start + 60_000_000_000
+        or int(value["event_offset_from_measurement_start_ns"])
+            != event_timestamp - measurement_start
+        or int(value["alignment_error_ns"]) != event_timestamp - scheduled_timestamp
+        or int(value["alignment_tolerance_ns"]) != 10_000_000
+        or abs(int(value["alignment_error_ns"])) > 10_000_000
+        or int(value["action_start_timestamp_ns"]) != event_timestamp
+        or action_end_timestamp < event_timestamp
+        or int(value["action_end_offset_ns"]) != action_end_timestamp - event_timestamp
+        or action_end_monotonic < action_start_monotonic
+        or int(value["action_duration_ns"])
+            != action_end_monotonic - action_start_monotonic
     ):
         violations.append("disruption-timeline.json event/action clocks are invalid")
     return violations
@@ -446,8 +480,17 @@ def check_swap3_reconciliation(leaf: Path, metadata: dict) -> list[str]:
     if None in (throughput, timeline, publisher, subscriber):
         return violations
     try:
-        if throughput["event_timestamp_ns"] != timeline["event_timestamp_ns"]:
-            violations.append("E-Swap-3 bucket and action event timestamps differ")
+        matching_fields = (
+            "measurement_start_timestamp_ns",
+            "scheduled_event_timestamp_ns",
+            "scheduled_event_offset_ns",
+            "event_timestamp_ns",
+            "event_offset_from_measurement_start_ns",
+            "alignment_error_ns",
+            "alignment_tolerance_ns",
+        )
+        if any(throughput.get(field) != timeline.get(field) for field in matching_fields):
+            violations.append("E-Swap-3 bucket and action alignment metadata differ")
         if timeline["strategy"] != metadata.get("condition"):
             violations.append("E-Swap-3 strategy differs from metadata condition")
         intended = int(publisher["intended"])

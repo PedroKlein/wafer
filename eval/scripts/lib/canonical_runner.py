@@ -125,6 +125,7 @@ SWAP3_EVENT_OFFSET_NS = 60_000_000_000
 SWAP3_BUCKET_WIDTH_NS = 100_000_000
 SWAP3_COVERAGE_START_NS = -10_000_000_000
 SWAP3_COVERAGE_END_NS = 10_000_000_000
+SWAP3_ALIGNMENT_TOLERANCE_NS = 10_000_000
 
 
 def analyze_capacity_scout_summary(
@@ -734,10 +735,12 @@ def build_swap3_invocation(root: Path, item: RunItem, output: Path) -> dict:
             "warmup_secs": 30,
             "measurement_secs": 120,
             "event_offset_ns": SWAP3_EVENT_OFFSET_NS,
+            "alignment_tolerance_ns": SWAP3_ALIGNMENT_TOLERANCE_NS,
             "bucket_width_ns": SWAP3_BUCKET_WIDTH_NS,
             "coverage_start_offset_ns": SWAP3_COVERAGE_START_NS,
             "coverage_end_offset_ns": SWAP3_COVERAGE_END_NS,
             "publisher_timing_receipt": "publisher-timing.json",
+            "action_timing_receipt": "swap_timeline.json",
             "publisher_summary": "publisher-summary.json",
             "subscriber_artifact": "throughput-buckets.json",
         },
@@ -1111,11 +1114,12 @@ def analyze_swap3_disruption(
     threshold = 0.95 * baseline
     below = [rate < threshold for rate in rates]
     interruption_start = 100
-    while interruption_start > 80 and below[interruption_start - 1]:
-        interruption_start -= 1
     interruption_end = 100
-    while interruption_end < 120 and below[interruption_end]:
-        interruption_end += 1
+    if below[100]:
+        while interruption_start > 0 and below[interruption_start - 1]:
+            interruption_start -= 1
+        while interruption_end < len(below) and below[interruption_end]:
+            interruption_end += 1
     interruption_buckets = interruption_end - interruption_start
 
     action_end_offset_ns = int(timeline["action_end_offset_ns"])
@@ -1171,12 +1175,16 @@ def validate_swap3_artifacts(
     publisher: dict,
     subscriber: dict,
 ) -> None:
-    if throughput.get("clock") != "unix-epoch":
+    if (
+        throughput.get("clock") != "unix-epoch"
+        or throughput.get("clock_purpose") != "cross-process-alignment"
+    ):
         raise ValueError("E-Swap-3 buckets must declare unix-epoch alignment clock")
     if throughput.get("bucket_width_ns") != SWAP3_BUCKET_WIDTH_NS:
         raise ValueError("E-Swap-3 bucket width must be 100 ms")
     if (
-        throughput.get("event_offset_from_measurement_start_ns") != SWAP3_EVENT_OFFSET_NS
+        throughput.get("scheduled_event_offset_ns") != SWAP3_EVENT_OFFSET_NS
+        or throughput.get("alignment_tolerance_ns") != SWAP3_ALIGNMENT_TOLERANCE_NS
         or throughput.get("coverage_start_offset_ns") != SWAP3_COVERAGE_START_NS
         or throughput.get("coverage_end_offset_ns") != SWAP3_COVERAGE_END_NS
     ):
@@ -1201,24 +1209,54 @@ def validate_swap3_artifacts(
         raise ValueError("E-Swap-3 bucket totals do not reconcile")
     if timeline.get("strategy") not in SWAP3_STRATEGIES:
         raise ValueError("E-Swap-3 timeline strategy is invalid")
-    if timeline.get("timestamp_clock") != "unix-epoch" or timeline.get("duration_clock") != "monotonic":
+    if (
+        timeline.get("timestamp_clock") != "unix-epoch"
+        or timeline.get("timestamp_clock_purpose") != "cross-process-alignment"
+        or timeline.get("scheduling_clock") != "monotonic"
+        or timeline.get("duration_clock") != "monotonic"
+    ):
         raise ValueError("E-Swap-3 timeline clocks are invalid")
     event_timestamp = int(throughput["event_timestamp_ns"])
+    measurement_start = int(timeline.get("measurement_start_timestamp_ns", -1))
+    scheduled_timestamp = int(timeline.get("scheduled_event_timestamp_ns", -1))
+    actual_offset = event_timestamp - measurement_start
+    alignment_error = event_timestamp - scheduled_timestamp
     if (
         int(timeline.get("event_timestamp_ns", -1)) != event_timestamp
-        or int(timeline.get("event_offset_from_measurement_start_ns", -1)) != SWAP3_EVENT_OFFSET_NS
         or int(timeline.get("action_start_timestamp_ns", -1)) != event_timestamp
+        or int(timeline.get("scheduled_event_offset_ns", -1)) != SWAP3_EVENT_OFFSET_NS
+        or scheduled_timestamp != measurement_start + SWAP3_EVENT_OFFSET_NS
+        or int(timeline.get("event_offset_from_measurement_start_ns", -1)) != actual_offset
+        or int(timeline.get("alignment_error_ns", SWAP3_ALIGNMENT_TOLERANCE_NS + 1))
+            != alignment_error
+        or int(timeline.get("alignment_tolerance_ns", -1)) != SWAP3_ALIGNMENT_TOLERANCE_NS
+        or abs(alignment_error) > SWAP3_ALIGNMENT_TOLERANCE_NS
     ):
         raise ValueError("E-Swap-3 event clocks do not align")
+    matching_fields = (
+        "measurement_start_timestamp_ns",
+        "scheduled_event_timestamp_ns",
+        "scheduled_event_offset_ns",
+        "event_offset_from_measurement_start_ns",
+        "alignment_error_ns",
+        "alignment_tolerance_ns",
+    )
+    if any(throughput.get(field) != timeline.get(field) for field in matching_fields):
+        raise ValueError("E-Swap-3 bucket and action alignment metadata differ")
     action_duration = int(timeline.get("action_duration_ns", -1))
     action_end_offset = int(timeline.get("action_end_offset_ns", -1))
     action_end_timestamp = int(timeline.get("action_end_timestamp_ns", -1))
+    action_start_monotonic = int(timeline.get("action_start_monotonic_ns", -1))
+    action_end_monotonic = int(timeline.get("action_end_monotonic_ns", -1))
     if (
         action_duration < 0
-        or action_end_offset != action_duration
-        or action_end_timestamp != event_timestamp + action_duration
+        or action_end_offset < 0
+        or action_end_timestamp < event_timestamp
+        or action_end_offset != action_end_timestamp - event_timestamp
+        or action_end_monotonic < action_start_monotonic
+        or action_duration != action_end_monotonic - action_start_monotonic
     ):
-        raise ValueError("E-Swap-3 action duration does not reconcile")
+        raise ValueError("E-Swap-3 action timing does not reconcile")
     analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
     if int(subscriber["sequence"]["total_received"]) != int(subscriber["total_recorded"]):
         raise ValueError("E-Swap-3 subscriber sequence totals do not reconcile")
@@ -2488,6 +2526,20 @@ def wait_for_api(url: str, timeout_secs: float = 10.0) -> None:
     raise RuntimeError(f"API did not become ready: {url}")
 
 
+def wait_for_ekuiper_rule_ready(rule_id: str, timeout_secs: float = 10.0) -> None:
+    url = f"http://127.0.0.1:9081/rules/{rule_id}/status"
+    deadline = time.monotonic() + timeout_secs
+    while time.monotonic() < deadline:
+        try:
+            status = _url_value(url)
+            if isinstance(status, dict) and str(status.get("status", "")).lower() == "running":
+                return
+        except (OSError, ValueError, urllib.error.URLError):
+            pass
+        time.sleep(0.1)
+    raise RuntimeError(f"eKuiper rule did not become ready: {rule_id}")
+
+
 def post_hot_swap(node_id: str, plugin: Path) -> dict:
     request = urllib.request.Request(
         f"http://127.0.0.1:9090/api/v1/nodes/{node_id}/hot-swap",
@@ -2654,6 +2706,12 @@ def wait_for_subscriber(process: subprocess.Popen, timeout: int = 30) -> int:
         return process.wait(timeout=10)
 
 
+def write_json_atomic(path: Path, value: dict) -> None:
+    temporary = path.with_suffix(f"{path.suffix}.tmp")
+    temporary.write_text(json.dumps(value, indent=2) + "\n")
+    os.replace(temporary, path)
+
+
 def loadgen_command(
     root: Path,
     item: RunItem,
@@ -2683,7 +2741,8 @@ def loadgen_command(
             command.extend(["--sequence-example-limit", "1024"])
         if item.experiment == "e-swap-3" and event_aligned:
             command.extend([
-                "--publisher-timing-receipt", str(output / "publisher-timing.json")
+                "--publisher-timing-receipt", str(output / "publisher-timing.json"),
+                "--action-timing-receipt", str(output / "swap_timeline.json"),
             ])
         if trace_file is not None:
             command.extend(["--trace-file", str(trace_file)])
@@ -2729,6 +2788,8 @@ def run_restart_item(
     started_ns = time.time_ns()
     started_at = utc_now()
     runtime: subprocess.Popen | None = None
+    publisher: subprocess.Popen | None = None
+    subscriber: subprocess.Popen | None = None
     runtime_exit = 0
     ekuiper_audit: Path | None = None
     telemetry = start_pi_telemetry(root, output)
@@ -2805,7 +2866,8 @@ def run_restart_item(
             timing = json.loads(timing_path.read_text())
             if timing.get("event_offset_ns") != SWAP3_EVENT_OFFSET_NS:
                 raise RuntimeError("publisher timing receipt does not declare measured t=60")
-            wait_secs = max(0.0, (int(timing["event_unix_epoch_ns"]) - time.time_ns()) / 1_000_000_000)
+            scheduled_event_ns = int(timing["event_unix_epoch_ns"])
+            wait_secs = max(0.0, (scheduled_event_ns - time.time_ns()) / 1_000_000_000)
             action_wait_target = time.monotonic() + wait_secs
             time.sleep(max(0.0, action_wait_target - time.monotonic()))
             action_started_ns = time.time_ns()
@@ -2828,6 +2890,7 @@ def run_restart_item(
                     stderr=log,
                     check=True,
                 )
+                wait_for_ekuiper_rule_ready("pipeline_a")
             else:
                 assert runtime is not None
                 runtime.terminate()
@@ -2842,8 +2905,39 @@ def run_restart_item(
                 wait_for_api("http://127.0.0.1:9090/health")
                 if runtime.poll() is not None:
                     raise RuntimeError("wafer runtime failed to restart")
-            action_duration_ns = time.monotonic_ns() - action_started_monotonic_ns
+            action_finished_monotonic_ns = time.monotonic_ns()
             action_finished_ns = time.time_ns()
+            action_duration_ns = action_finished_monotonic_ns - action_started_monotonic_ns
+            if action_finished_ns < action_started_ns:
+                raise RuntimeError("wall clock moved backwards during E-Swap-3 action")
+            action_end_offset_ns = action_finished_ns - action_started_ns
+            event_offset_ns = action_started_ns - int(timing["measurement_started_unix_epoch_ns"])
+            action_timing = {
+                "schema_version": 1,
+                "strategy": item.condition,
+                "timestamp_clock": "unix-epoch",
+                "timestamp_clock_purpose": "cross-process-alignment",
+                "scheduling_clock": "monotonic",
+                "duration_clock": "monotonic",
+                "measurement_start_timestamp_ns": int(timing["measurement_started_unix_epoch_ns"]),
+                "scheduled_event_offset_ns": SWAP3_EVENT_OFFSET_NS,
+                "scheduled_event_timestamp_ns": scheduled_event_ns,
+                "event_timestamp_ns": action_started_ns,
+                "event_offset_from_measurement_start_ns": event_offset_ns,
+                "alignment_error_ns": alignment_error_ns,
+                "alignment_tolerance_ns": SWAP3_ALIGNMENT_TOLERANCE_NS,
+                "action_start_timestamp_ns": action_started_ns,
+                "action_end_timestamp_ns": action_finished_ns,
+                "action_end_offset_ns": action_end_offset_ns,
+                "action_start_monotonic_ns": action_started_monotonic_ns,
+                "action_end_monotonic_ns": action_finished_monotonic_ns,
+                "action_duration_ns": action_duration_ns,
+            }
+            write_json_atomic(output / "swap_timeline.json", action_timing)
+            if abs(alignment_error_ns) > SWAP3_ALIGNMENT_TOLERANCE_NS:
+                raise RuntimeError(
+                    "actual E-Swap-3 action start missed measured t=60 by more than 10 ms"
+                )
             publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
             subscriber_code = wait_for_subscriber(subscriber)
             if publisher_code != 0 or subscriber_code != 0:
@@ -2871,20 +2965,6 @@ def run_restart_item(
                 runtime_exit = runtime.wait(timeout=5)
             runtime = None
 
-        (output / "swap_timeline.json").write_text(
-            json.dumps(
-                {
-                    "strategy": item.condition,
-                    "action_started_ns": action_started_ns,
-                    "action_finished_ns": action_finished_ns,
-                    "action_timestamp_clock": "unix-epoch",
-                    "action_duration_ns": action_duration_ns,
-                    "action_duration_clock": "monotonic",
-                },
-                indent=2,
-            )
-            + "\n"
-        )
         stop_pi_telemetry(telemetry)
         finished_ns = time.time_ns()
         config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
@@ -2929,8 +3009,9 @@ def run_restart_item(
         postprocess_run(root, item, output)
         verify_result(root, output)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        if runtime is not None and runtime.poll() is None:
-            runtime.terminate()
+        for process in (publisher, subscriber, runtime):
+            if process is not None and process.poll() is None:
+                process.terminate()
         stop_pi_telemetry(telemetry)
         write_status(output, item, "failed", str(error))
         print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
@@ -3961,25 +4042,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             shutil.copyfile(branch_a_window, output / "measurement-window.json")
 
     if item.experiment == "e-swap-3":
-        timing = json.loads((output / "publisher-timing.json").read_text())
-        action = json.loads((output / "swap_timeline.json").read_text())
-        event_timestamp_ns = int(timing["event_unix_epoch_ns"])
-        duration_ns = int(action["action_duration_ns"])
-        timeline = {
-            "schema_version": 1,
-            "strategy": item.condition,
-            "timestamp_clock": "unix-epoch",
-            "duration_clock": "monotonic",
-            "measurement_start_timestamp_ns": int(timing["measurement_started_unix_epoch_ns"]),
-            "event_timestamp_ns": event_timestamp_ns,
-            "event_offset_from_measurement_start_ns": int(timing["event_offset_ns"]),
-            "action_start_timestamp_ns": event_timestamp_ns,
-            "action_end_timestamp_ns": event_timestamp_ns + duration_ns,
-            "action_end_offset_ns": duration_ns,
-            "action_duration_ns": duration_ns,
-            "actual_issue_timestamp_ns": int(action["action_started_ns"]),
-            "actual_ack_timestamp_ns": int(action["action_finished_ns"]),
-        }
+        timeline = json.loads((output / "swap_timeline.json").read_text())
         throughput = json.loads((output / "throughput-buckets.json").read_text())
         publisher = json.loads((output / "publisher-summary.json").read_text())
         subscriber = json.loads((output / "subscriber-metadata.json").read_text())

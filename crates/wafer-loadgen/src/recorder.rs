@@ -34,6 +34,8 @@ pub(crate) const EVENT_BUCKET_WIDTH_NS: u64 = 100_000_000;
 pub(crate) const EVENT_BUCKET_COUNT: usize = 200;
 pub(crate) const EVENT_COVERAGE_START_NS: i64 = -10_000_000_000;
 pub(crate) const EVENT_COVERAGE_END_NS: i64 = 10_000_000_000;
+pub(crate) const EVENT_ALIGNMENT_TOLERANCE_NS: i64 = 10_000_000;
+const EVENT_SAMPLE_CAPACITY: usize = 65_536;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PublisherTimingReceipt {
@@ -43,6 +45,35 @@ pub(crate) struct PublisherTimingReceipt {
     pub measurement_started_unix_epoch_ns: u64,
     pub event_unix_epoch_ns: u64,
     pub event_offset_ns: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ActionTimingReceipt {
+    pub schema_version: u8,
+    pub strategy: String,
+    pub timestamp_clock: String,
+    pub timestamp_clock_purpose: String,
+    pub scheduling_clock: String,
+    pub duration_clock: String,
+    pub measurement_start_timestamp_ns: u64,
+    pub scheduled_event_offset_ns: u64,
+    pub scheduled_event_timestamp_ns: u64,
+    pub event_timestamp_ns: u64,
+    pub event_offset_from_measurement_start_ns: u64,
+    pub alignment_error_ns: i64,
+    pub alignment_tolerance_ns: i64,
+    pub action_start_timestamp_ns: u64,
+    pub action_end_timestamp_ns: u64,
+    pub action_end_offset_ns: u64,
+    pub action_start_monotonic_ns: u64,
+    pub action_end_monotonic_ns: u64,
+    pub action_duration_ns: u64,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct EventSample {
+    receive_unix_epoch_ns: u64,
+    duplicate: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -56,11 +87,9 @@ struct ThroughputBucket {
 }
 
 pub(crate) struct EventBucketRecorder {
-    event_unix_epoch_ns: u64,
-    event_offset_ns: u64,
-    received_unique: [u64; EVENT_BUCKET_COUNT],
-    received_events: [u64; EVENT_BUCKET_COUNT],
-    duplicates: [u64; EVENT_BUCKET_COUNT],
+    measurement_start_timestamp_ns: u64,
+    scheduled_event_timestamp_ns: u64,
+    samples: Vec<EventSample>,
 }
 
 impl EventBucketRecorder {
@@ -75,55 +104,73 @@ impl EventBucketRecorder {
             anyhow::bail!("publisher timing receipt does not declare the frozen t=60 boundary");
         }
         Ok(Self {
-            event_unix_epoch_ns: timing.event_unix_epoch_ns,
-            event_offset_ns: timing.event_offset_ns,
-            received_unique: [0; EVENT_BUCKET_COUNT],
-            received_events: [0; EVENT_BUCKET_COUNT],
-            duplicates: [0; EVENT_BUCKET_COUNT],
+            measurement_start_timestamp_ns: timing.measurement_started_unix_epoch_ns,
+            scheduled_event_timestamp_ns: timing.event_unix_epoch_ns,
+            samples: Vec::with_capacity(EVENT_SAMPLE_CAPACITY),
         })
     }
 
-    pub(crate) fn record(&mut self, receive_unix_epoch_ns: u64, duplicate: bool) {
-        let offset = if receive_unix_epoch_ns >= self.event_unix_epoch_ns {
-            i64::try_from(receive_unix_epoch_ns.saturating_sub(self.event_unix_epoch_ns))
-                .unwrap_or(i64::MAX)
-        } else {
-            i64::try_from(self.event_unix_epoch_ns.saturating_sub(receive_unix_epoch_ns))
-                .unwrap_or(i64::MAX)
-                .checked_neg()
-                .unwrap_or(i64::MIN)
-        };
-        if !(EVENT_COVERAGE_START_NS..EVENT_COVERAGE_END_NS).contains(&offset) {
-            return;
+    pub(crate) fn record(
+        &mut self,
+        receive_unix_epoch_ns: u64,
+        duplicate: bool,
+    ) -> anyhow::Result<()> {
+        let capture_margin_ns = EVENT_ALIGNMENT_TOLERANCE_NS.unsigned_abs();
+        let capture_start = self
+            .scheduled_event_timestamp_ns
+            .saturating_sub(EVENT_COVERAGE_START_NS.unsigned_abs())
+            .saturating_sub(capture_margin_ns);
+        let capture_end = self
+            .scheduled_event_timestamp_ns
+            .saturating_add(EVENT_COVERAGE_END_NS.unsigned_abs())
+            .saturating_add(capture_margin_ns);
+        if !(capture_start..capture_end).contains(&receive_unix_epoch_ns) {
+            return Ok(());
         }
-        let shifted = offset.saturating_sub(EVENT_COVERAGE_START_NS);
-        let index = usize::try_from(
-            shifted
-                .checked_div(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX))
-                .unwrap_or(i64::MAX),
-        )
-        .unwrap_or(EVENT_BUCKET_COUNT);
-        let (Some(events), Some(unique), Some(duplicates)) = (
-            self.received_events.get_mut(index),
-            self.received_unique.get_mut(index),
-            self.duplicates.get_mut(index),
-        ) else {
-            return;
-        };
-        *events = events.saturating_add(1);
-        if duplicate {
-            *duplicates = duplicates.saturating_add(1);
-        } else {
-            *unique = unique.saturating_add(1);
+        if self.samples.len() == EVENT_SAMPLE_CAPACITY {
+            anyhow::bail!(
+                "E-Swap-3 bounded event sample capacity exceeded ({EVENT_SAMPLE_CAPACITY})"
+            );
         }
+        self.samples.push(EventSample { receive_unix_epoch_ns, duplicate });
+        Ok(())
     }
 
-    pub(crate) fn write(&self, path: &Path) -> anyhow::Result<()> {
-        let buckets = self
-            .received_unique
+    pub(crate) fn write(&self, path: &Path, action: &ActionTimingReceipt) -> anyhow::Result<()> {
+        self.validate_action_timing(action)?;
+        let mut received_unique = [0_u64; EVENT_BUCKET_COUNT];
+        let mut received_events = [0_u64; EVENT_BUCKET_COUNT];
+        let mut duplicates = [0_u64; EVENT_BUCKET_COUNT];
+        for sample in &self.samples {
+            let offset = signed_offset(sample.receive_unix_epoch_ns, action.event_timestamp_ns);
+            if !(EVENT_COVERAGE_START_NS..EVENT_COVERAGE_END_NS).contains(&offset) {
+                continue;
+            }
+            let shifted = offset.saturating_sub(EVENT_COVERAGE_START_NS);
+            let index = usize::try_from(
+                shifted
+                    .checked_div(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX))
+                    .unwrap_or(i64::MAX),
+            )
+            .unwrap_or(EVENT_BUCKET_COUNT);
+            let (Some(events), Some(unique), Some(duplicate_count)) = (
+                received_events.get_mut(index),
+                received_unique.get_mut(index),
+                duplicates.get_mut(index),
+            ) else {
+                continue;
+            };
+            *events = events.saturating_add(1);
+            if sample.duplicate {
+                *duplicate_count = duplicate_count.saturating_add(1);
+            } else {
+                *unique = unique.saturating_add(1);
+            }
+        }
+        let buckets = received_unique
             .iter()
-            .zip(&self.received_events)
-            .zip(&self.duplicates)
+            .zip(&received_events)
+            .zip(&duplicates)
             .enumerate()
             .map(|(index, ((received_unique, received_events), duplicates))| {
                 let start_offset_ns = EVENT_COVERAGE_START_NS.saturating_add(
@@ -146,18 +193,68 @@ impl EventBucketRecorder {
         let artifact = serde_json::json!({
             "schema_version": 1,
             "clock": "unix-epoch",
-            "event_timestamp_ns": self.event_unix_epoch_ns,
-            "event_offset_from_measurement_start_ns": self.event_offset_ns,
+            "clock_purpose": "cross-process-alignment",
+            "measurement_start_timestamp_ns": self.measurement_start_timestamp_ns,
+            "scheduled_event_timestamp_ns": self.scheduled_event_timestamp_ns,
+            "scheduled_event_offset_ns": action.scheduled_event_offset_ns,
+            "event_timestamp_ns": action.event_timestamp_ns,
+            "event_offset_from_measurement_start_ns": action.event_offset_from_measurement_start_ns,
+            "alignment_error_ns": action.alignment_error_ns,
+            "alignment_tolerance_ns": action.alignment_tolerance_ns,
             "bucket_width_ns": EVENT_BUCKET_WIDTH_NS,
             "coverage_start_offset_ns": EVENT_COVERAGE_START_NS,
             "coverage_end_offset_ns": EVENT_COVERAGE_END_NS,
-            "received_unique": self.received_unique.iter().sum::<u64>(),
-            "received_events": self.received_events.iter().sum::<u64>(),
-            "duplicates": self.duplicates.iter().sum::<u64>(),
+            "received_unique": received_unique.iter().sum::<u64>(),
+            "received_events": received_events.iter().sum::<u64>(),
+            "duplicates": duplicates.iter().sum::<u64>(),
             "buckets": buckets,
         });
         fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
         Ok(())
+    }
+
+    fn validate_action_timing(&self, action: &ActionTimingReceipt) -> anyhow::Result<()> {
+        let expected_offset = action
+            .event_timestamp_ns
+            .checked_sub(self.measurement_start_timestamp_ns)
+            .ok_or_else(|| anyhow::anyhow!("E-Swap-3 event precedes measurement start"))?;
+        let expected_error =
+            signed_offset(action.event_timestamp_ns, self.scheduled_event_timestamp_ns);
+        if action.schema_version != 1
+            || action.timestamp_clock != "unix-epoch"
+            || action.timestamp_clock_purpose != "cross-process-alignment"
+            || action.scheduling_clock != "monotonic"
+            || action.duration_clock != "monotonic"
+            || action.measurement_start_timestamp_ns != self.measurement_start_timestamp_ns
+            || action.scheduled_event_offset_ns != 60_000_000_000
+            || action.scheduled_event_timestamp_ns != self.scheduled_event_timestamp_ns
+            || action.action_start_timestamp_ns != action.event_timestamp_ns
+            || action.event_offset_from_measurement_start_ns != expected_offset
+            || action.alignment_error_ns != expected_error
+            || action.alignment_tolerance_ns != EVENT_ALIGNMENT_TOLERANCE_NS
+            || action.alignment_error_ns.unsigned_abs()
+                > EVENT_ALIGNMENT_TOLERANCE_NS.unsigned_abs()
+            || action.action_end_timestamp_ns < action.action_start_timestamp_ns
+            || action.action_end_offset_ns
+                != action.action_end_timestamp_ns.saturating_sub(action.action_start_timestamp_ns)
+            || action.action_end_monotonic_ns < action.action_start_monotonic_ns
+            || action.action_duration_ns
+                != action.action_end_monotonic_ns.saturating_sub(action.action_start_monotonic_ns)
+        {
+            anyhow::bail!("action timing receipt violates the frozen E-Swap-3 boundary");
+        }
+        Ok(())
+    }
+}
+
+fn signed_offset(timestamp_ns: u64, reference_ns: u64) -> i64 {
+    if timestamp_ns >= reference_ns {
+        i64::try_from(timestamp_ns.saturating_sub(reference_ns)).unwrap_or(i64::MAX)
+    } else {
+        i64::try_from(reference_ns.saturating_sub(timestamp_ns))
+            .unwrap_or(i64::MAX)
+            .checked_neg()
+            .unwrap_or(i64::MIN)
     }
 }
 
@@ -790,6 +887,36 @@ mod tests {
         assert!(rows.contains(&"duplicate,3,3,1"));
     }
 
+    fn action_timing(
+        timing: &PublisherTimingReceipt,
+        alignment_error_ns: i64,
+    ) -> ActionTimingReceipt {
+        let event_timestamp_ns =
+            timing.event_unix_epoch_ns.checked_add_signed(alignment_error_ns).unwrap();
+        ActionTimingReceipt {
+            schema_version: 1,
+            strategy: "wafer-hotswap".into(),
+            timestamp_clock: "unix-epoch".into(),
+            timestamp_clock_purpose: "cross-process-alignment".into(),
+            scheduling_clock: "monotonic".into(),
+            duration_clock: "monotonic".into(),
+            measurement_start_timestamp_ns: timing.measurement_started_unix_epoch_ns,
+            scheduled_event_offset_ns: timing.event_offset_ns,
+            scheduled_event_timestamp_ns: timing.event_unix_epoch_ns,
+            event_timestamp_ns,
+            event_offset_from_measurement_start_ns: event_timestamp_ns
+                .saturating_sub(timing.measurement_started_unix_epoch_ns),
+            alignment_error_ns,
+            alignment_tolerance_ns: EVENT_ALIGNMENT_TOLERANCE_NS,
+            action_start_timestamp_ns: event_timestamp_ns,
+            action_end_timestamp_ns: event_timestamp_ns.saturating_add(200_000_000),
+            action_end_offset_ns: 200_000_000,
+            action_start_monotonic_ns: 5_000_000_000,
+            action_end_monotonic_ns: 5_199_000_000,
+            action_duration_ns: 199_000_000,
+        }
+    }
+
     #[test]
     fn event_buckets_are_bounded_contiguous_and_reconcile_duplicates() {
         let timing = PublisherTimingReceipt {
@@ -800,14 +927,15 @@ mod tests {
             event_unix_epoch_ns: 1_060_000_000_000,
             event_offset_ns: 60_000_000_000,
         };
+        let action = action_timing(&timing, 5_000_000);
         let mut buckets = EventBucketRecorder::new(&timing).unwrap();
-        buckets.record(timing.event_unix_epoch_ns - 10_000_000_000, false);
-        buckets.record(timing.event_unix_epoch_ns - 9_950_000_000, true);
-        buckets.record(timing.event_unix_epoch_ns + 9_999_999_999, false);
-        buckets.record(timing.event_unix_epoch_ns + 10_000_000_000, false);
+        buckets.record(action.event_timestamp_ns - 10_000_000_000, false).unwrap();
+        buckets.record(action.event_timestamp_ns - 9_950_000_000, true).unwrap();
+        buckets.record(action.event_timestamp_ns + 9_999_999_999, false).unwrap();
+        buckets.record(action.event_timestamp_ns + 10_000_000_000, false).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("throughput-buckets.json");
-        buckets.write(&path).unwrap();
+        buckets.write(&path, &action).unwrap();
 
         let artifact: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -837,25 +965,81 @@ mod tests {
             event_unix_epoch_ns: 1_060_000_000_000,
             event_offset_ns: 60_000_000_000,
         };
+        let action = action_timing(&timing, 0);
         let mut buckets = EventBucketRecorder::new(&timing).unwrap();
         let started = std::time::Instant::now();
-        for index in 0..120_000_u64 {
-            buckets.record(
-                timing.event_unix_epoch_ns - 10_000_000_000 + (index % 20_000) * 1_000_000,
-                false,
-            );
+        for index in 0..20_000_u64 {
+            buckets
+                .record(timing.event_unix_epoch_ns - 10_000_000_000 + index * 1_000_000, false)
+                .unwrap();
         }
         let elapsed = started.elapsed();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("throughput-buckets.json");
-        buckets.write(&path).unwrap();
+        buckets.write(&path, &action).unwrap();
         let size = fs::metadata(&path).unwrap().len();
         eprintln!(
-            "swap3_local_evidence messages=120000 elapsed_ns={} throughput_msg_s={:.0} artifact_bytes={size}",
+            "swap3_local_evidence messages=20000 elapsed_ns={} throughput_msg_s={:.0} artifact_bytes={size}",
             elapsed.as_nanos(),
-            120_000.0 / elapsed.as_secs_f64()
+            20_000.0 / elapsed.as_secs_f64()
         );
         assert!(size < 64 * 1024);
+    }
+
+    #[test]
+    fn event_buckets_are_rebinned_against_actual_action_start() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1_000_000_000_000,
+            event_unix_epoch_ns: 1_060_000_000_000,
+            event_offset_ns: 60_000_000_000,
+        };
+        let action = action_timing(&timing, 5_000_000);
+        let mut buckets = EventBucketRecorder::new(&timing).unwrap();
+        buckets.record(timing.event_unix_epoch_ns + 1_000_000, false).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("throughput-buckets.json");
+        buckets.write(&path, &action).unwrap();
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let rows = artifact["buckets"].as_array().unwrap();
+        assert_eq!(rows[99]["received_unique"], 1);
+        assert_eq!(rows[100]["received_unique"], 0);
+    }
+
+    #[test]
+    fn event_bucket_capture_fails_on_fixed_capacity_overflow() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1_000_000_000_000,
+            event_unix_epoch_ns: 1_060_000_000_000,
+            event_offset_ns: 60_000_000_000,
+        };
+        let mut buckets = EventBucketRecorder::new(&timing).unwrap();
+        for _ in 0..EVENT_SAMPLE_CAPACITY {
+            buckets.record(timing.event_unix_epoch_ns, false).unwrap();
+        }
+        assert!(buckets.record(timing.event_unix_epoch_ns, false).is_err());
+    }
+
+    #[test]
+    fn event_buckets_reject_alignment_outside_tolerance() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1_000_000_000_000,
+            event_unix_epoch_ns: 1_060_000_000_000,
+            event_offset_ns: 60_000_000_000,
+        };
+        let buckets = EventBucketRecorder::new(&timing).unwrap();
+        let action = action_timing(&timing, EVENT_ALIGNMENT_TOLERANCE_NS + 1);
+        let dir = tempfile::tempdir().unwrap();
+        assert!(buckets.write(&dir.path().join("throughput-buckets.json"), &action).is_err());
     }
 
     #[test]

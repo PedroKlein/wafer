@@ -114,6 +114,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         sequence_example_limit: None,
         sequence_end_exclusive: Some(TOTAL_MESSAGES),
         publisher_timing_receipt: None,
+        action_timing_receipt: None,
     };
     let sub_handle = tokio::spawn(async move { run_subscriber(sub_args).await });
 

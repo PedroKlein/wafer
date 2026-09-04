@@ -313,8 +313,14 @@ def swap3_fixture(rates: list[float] | None = None, *, received: int = 120_000) 
     throughput = {
         "schema_version": 1,
         "clock": "unix-epoch",
-        "event_timestamp_ns": 1_060_000_000_000,
-        "event_offset_from_measurement_start_ns": 60_000_000_000,
+        "clock_purpose": "cross-process-alignment",
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
         "bucket_width_ns": 100_000_000,
         "coverage_start_offset_ns": -10_000_000_000,
         "coverage_end_offset_ns": 10_000_000_000,
@@ -327,14 +333,22 @@ def swap3_fixture(rates: list[float] | None = None, *, received: int = 120_000) 
         "schema_version": 1,
         "strategy": "wafer-hotswap",
         "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
         "duration_clock": "monotonic",
         "measurement_start_timestamp_ns": 1_000_000_000_000,
-        "event_timestamp_ns": 1_060_000_000_000,
-        "event_offset_from_measurement_start_ns": 60_000_000_000,
-        "action_start_timestamp_ns": 1_060_000_000_000,
-        "action_end_timestamp_ns": 1_060_200_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
+        "action_start_timestamp_ns": 1_060_005_000_000,
+        "action_end_timestamp_ns": 1_060_205_000_000,
         "action_end_offset_ns": 200_000_000,
-        "action_duration_ns": 200_000_000,
+        "action_start_monotonic_ns": 5_000_000_000,
+        "action_end_monotonic_ns": 5_199_000_000,
+        "action_duration_ns": 199_000_000,
     }
     publisher = {"intended": 120_000, "rejected": 0, "enqueued": 120_000}
     subscriber = {
@@ -363,10 +377,15 @@ def test_swap3_analysis_covers_no_partial_full_and_delayed_recovery() -> None:
     assert partial["recovery_ns"] == 100_000_000
 
     full_rates = [1_000.0] * 200
-    full_rates[80:120] = [0.0] * 40
+    full_rates[80:130] = [0.0] * 50
     full = analyze_swap3_disruption(*swap3_fixture(full_rates))
     assert full["dip_percent"] == 100
-    assert full["interruption_ns"] == 4_000_000_000
+    assert full["interruption_ns"] == 5_000_000_000
+
+    pre_event_rates = [1_000.0] * 200
+    pre_event_rates[95:100] = [0.0] * 5
+    pre_event = analyze_swap3_disruption(*swap3_fixture(pre_event_rates))
+    assert pre_event["interruption_ns"] == 0
 
     delayed_rates = [1_000.0] * 200
     delayed_rates[100:130] = [0.0] * 30
@@ -395,6 +414,13 @@ def test_swap3_analysis_reports_loss_and_validator_rejects_drift() -> None:
     invalid["buckets"][1]["start_offset_ns"] += 1
     with pytest.raises(ValueError, match="contiguous"):
         validate_swap3_artifacts(invalid, timeline, publisher, subscriber)
+    invalid_timeline = json.loads(json.dumps(timeline))
+    invalid_timeline["event_timestamp_ns"] += 6_000_000
+    invalid_timeline["action_start_timestamp_ns"] += 6_000_000
+    invalid_timeline["event_offset_from_measurement_start_ns"] += 6_000_000
+    invalid_timeline["alignment_error_ns"] += 6_000_000
+    with pytest.raises(ValueError, match="event clocks"):
+        validate_swap3_artifacts(throughput, invalid_timeline, publisher, subscriber)
     invalid_publisher = {**publisher, "enqueued": 119_999}
     with pytest.raises(ValueError, match="totals do not reconcile"):
         validate_swap3_artifacts(throughput, timeline, invalid_publisher, subscriber)
@@ -415,6 +441,7 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
     }
     assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
+    assert all("--action-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
     assert all(invocation["controlled_factors"]["event_offset_ns"] == 60_000_000_000 for invocation in invocations)
 
 

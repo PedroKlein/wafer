@@ -22,8 +22,8 @@ use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 use crate::recorder::{
-    EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt, RecordOutcome, SequenceReport,
-    SubscriberMetadata, now_ns,
+    ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
+    RecordOutcome, SequenceReport, SubscriberMetadata, now_ns,
 };
 
 /// Arguments for the `subscribe` subcommand.
@@ -74,9 +74,13 @@ pub struct SubscribeArgs {
     #[arg(long)]
     pub sequence_end_exclusive: Option<u64>,
 
-    /// Publisher timing receipt used to align bounded disruption buckets.
+    /// Publisher timing receipt used to bound disruption timestamp capture.
     #[arg(long)]
     pub publisher_timing_receipt: Option<PathBuf>,
+
+    /// Action timing receipt containing the actual disruption timestamp.
+    #[arg(long, requires = "publisher_timing_receipt")]
+    pub action_timing_receipt: Option<PathBuf>,
 }
 
 fn parse_broker(s: &str) -> (String, u16) {
@@ -210,7 +214,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                         };
                         if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
                             if let Some(buckets) = &mut event_buckets {
-                                buckets.record(receive_ns, recorder.last_record_duplicate());
+                                buckets.record(receive_ns, recorder.last_record_duplicate())?;
                             }
                             if let Some(trace) = &mut trace {
                                 let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
@@ -279,7 +283,25 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     recorder.write_artifacts(&args.output_dir, metadata)?;
     if let Some(buckets) = event_buckets {
-        buckets.write(&args.output_dir.join("throughput-buckets.json"))?;
+        let action_path = args.action_timing_receipt.as_ref().ok_or_else(|| {
+            anyhow::anyhow!("event-aligned capture requires --action-timing-receipt")
+        })?;
+        let deadline = tokio::time::Instant::now()
+            .checked_add(Duration::from_secs(30))
+            .unwrap_or_else(tokio::time::Instant::now);
+        let action = loop {
+            match tokio::fs::read(action_path).await {
+                Ok(bytes) => break serde_json::from_slice::<ActionTimingReceipt>(&bytes)?,
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::NotFound
+                        && tokio::time::Instant::now() < deadline =>
+                {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        };
+        buckets.write(&args.output_dir.join("throughput-buckets.json"), &action)?;
     }
 
     let report = SubscriberReport {

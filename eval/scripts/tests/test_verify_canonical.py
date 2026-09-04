@@ -630,8 +630,14 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
     buckets = {
         "schema_version": 1,
         "clock": "unix-epoch",
-        "event_timestamp_ns": 1_060_000_000_000,
-        "event_offset_from_measurement_start_ns": 60_000_000_000,
+        "clock_purpose": "cross-process-alignment",
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
         "bucket_width_ns": 100_000_000,
         "coverage_start_offset_ns": -10_000_000_000,
         "coverage_end_offset_ns": 10_000_000_000,
@@ -653,13 +659,22 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
     disruption = {
         "schema_version": 1,
         "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
         "duration_clock": "monotonic",
         "strategy": "wafer-hotswap",
-        "event_timestamp_ns": 1_060_000_000_000,
-        "event_offset_from_measurement_start_ns": 60_000_000_000,
-        "action_start_timestamp_ns": 1_060_000_000_000,
-        "action_end_timestamp_ns": 1_060_000_000_001,
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
+        "action_start_timestamp_ns": 1_060_005_000_000,
+        "action_end_timestamp_ns": 1_060_005_000_001,
         "action_end_offset_ns": 1,
+        "action_start_monotonic_ns": 5_000_000_000,
+        "action_end_monotonic_ns": 5_000_000_001,
         "action_duration_ns": 1,
     }
     burst = {
@@ -683,9 +698,20 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         assert CONTRACT.check_throughput_buckets(bucket_path, 200) == []
         assert CONTRACT.check_disruption_timeline(disruption_path) == []
         assert CONTRACT.check_burst_timeline(burst_path) == []
+        buckets["alignment_error_ns"] = 10_000_001
+        bucket_path.write_text(json.dumps(buckets))
+        assert "event placement" in " ".join(
+            CONTRACT.check_throughput_buckets(bucket_path, 200)
+        )
+        buckets["alignment_error_ns"] = 5_000_000
         buckets["buckets"][1]["start_offset_ns"] += 1
         bucket_path.write_text(json.dumps(buckets))
         assert "not contiguous" in " ".join(CONTRACT.check_throughput_buckets(bucket_path, 200))
+        disruption["action_duration_ns"] = 2
+        disruption_path.write_text(json.dumps(disruption))
+        assert "clocks are invalid" in " ".join(
+            CONTRACT.check_disruption_timeline(disruption_path)
+        )
         burst["successful_swaps"] = 2
         burst_path.write_text(json.dumps(burst))
         assert "successful_swaps must be 1" in " ".join(
