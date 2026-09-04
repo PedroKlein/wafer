@@ -1,12 +1,15 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from wafer_analysis.focused import (
     artifact_inventory,
     evidence_label,
     passed_artifacts,
     pending_record,
     percentile_rows,
+    target_load_rows,
 )
 
 
@@ -61,6 +64,54 @@ def test_passed_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None
     ]
 
 
+def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:
+    leaf = tmp_path / "wafer" / "run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    (leaf / "percentiles.json").write_text(
+        json.dumps(
+            {
+                "total_count": 60_000,
+                "p50_ns": 1,
+                "p95_ns": 2,
+                "p99_ns": 3,
+                "p999_ns": 4,
+            }
+        )
+    )
+    (leaf / "throughput.csv").write_text(
+        "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n"
+        "1,60000,999.983333,60000000000\n"
+    )
+    (leaf / "sequence.csv").write_text(
+        "event_type,seq_start,seq_end,count\ngap,42,42,1\nduplicate,7,7,1\n"
+    )
+
+    row = target_load_rows(tmp_path).iloc[0]
+    assert row["intended_messages"] == 60_000
+    assert row["received_unique"] == 59_999
+    assert row["loss_fraction"] == 1 / 60_000
+    assert row["achieved_rate_msg_s"] == 59_999 / 60
+    assert row["duplicates"] == 1
+
+
+def test_target_load_rows_reject_counter_mismatch(tmp_path) -> None:
+    leaf = tmp_path / "wafer" / "run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    (leaf / "percentiles.json").write_text(
+        json.dumps({"total_count": 59_999, "p50_ns": 1, "p95_ns": 2, "p99_ns": 3})
+    )
+    (leaf / "throughput.csv").write_text(
+        "timestamp_ns,messages_received,throughput_msg_s,duration_ns\n"
+        "1,59999,999.983333,60000000000\n"
+    )
+    (leaf / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
+
+    with pytest.raises(ValueError, match="gap total does not reconcile"):
+        target_load_rows(tmp_path)
+
+
 def test_evidence_label_exposes_sample_units_and_claim_boundary() -> None:
     assert evidence_label(3, "nanoseconds", False) == (
         "N=3; units=nanoseconds; evidence=diagnostic; uncertainty=descriptive only"
@@ -88,6 +139,12 @@ def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
     saturation_source = "".join(
         "".join(cell.get("source", [])) for cell in saturation["cells"]
     )
+    latency = json.loads((notebook_dir / "01-latency-cdf.ipynb").read_text())
+    latency_source = "".join(
+        "".join(cell.get("source", [])) for cell in latency["cells"]
+    )
+    assert "target_load_rows" in saturation_source
+    assert "target_load_rows" in latency_source
     assert "set_yscale('log')" in saturation_source
     assert "SYSTEM_COLORS" in saturation_source
     assert "axhline(.01" in saturation_source

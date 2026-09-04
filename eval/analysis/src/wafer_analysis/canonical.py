@@ -119,30 +119,61 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
     reference_median = float(np.median(reference))
     rows = []
     for condition in conditions:
-        values = np.asarray([run["p95_ns"] for run in grouped[condition]], dtype=float)
+        condition_runs = grouped[condition]
+        required_delivery = {
+            "intended_messages",
+            "received_unique",
+            "loss_fraction",
+            "achieved_rate_msg_s",
+            "achieved_ratio",
+            "duplicates",
+        }
+        if any(not required_delivery <= run.keys() for run in condition_runs):
+            raise ValueError(f"{condition} lacks target-load delivery evidence")
+        values = np.asarray([run["p95_ns"] for run in condition_runs], dtype=float)
+        achieved = np.asarray(
+            [run["achieved_rate_msg_s"] for run in condition_runs], dtype=float
+        )
         low, high = bootstrap_ci(values)
+        achieved_low, achieved_high = bootstrap_ci(achieved)
         delta, magnitude = cliffs_delta(values, reference)
+        intended = sum(int(run["intended_messages"]) for run in condition_runs)
+        received = sum(int(run["received_unique"]) for run in condition_runs)
+        pooled_loss = (intended - received) / intended
+        mean_achieved_ratio = float(
+            np.mean([run["achieved_ratio"] for run in condition_runs])
+        )
+        total_duplicates = sum(int(run["duplicates"]) for run in condition_runs)
         rows.append(
             {
                 "condition": condition,
                 "N_runs": len(values),
                 "median_p50_ns": float(
-                    np.median([run["p50_ns"] for run in grouped[condition]])
+                    np.median([run["p50_ns"] for run in condition_runs])
                 ),
                 "median_p95_ns": float(np.median(values)),
                 "median_p99_ns": float(
-                    np.median([run["p99_ns"] for run in grouped[condition]])
+                    np.median([run["p99_ns"] for run in condition_runs])
                 ),
                 "ci95_low_ns": low,
                 "ci95_high_ns": high,
+                "median_achieved_rate_msg_s": float(np.median(achieved)),
+                "achieved_ci95_low_msg_s": achieved_low,
+                "achieved_ci95_high_msg_s": achieved_high,
+                "pooled_loss": pooled_loss,
+                "mean_achieved_ratio": mean_achieved_ratio,
+                "total_duplicates": total_duplicates,
+                "delivery_good": pooled_loss <= 0.01
+                and mean_achieved_ratio >= 0.99
+                and total_duplicates == 0,
                 "reference_condition": "ekuiper",
                 "median_ratio_vs_reference": float(np.median(values))
                 / reference_median,
                 "cliffs_delta_vs_reference": delta,
                 "effect_magnitude": magnitude,
-                "units": "nanoseconds",
-                "estimator": "median run p95 with bootstrap 95% CI",
-                "threshold": "median(WAFER p95) / median(eKuiper p95) <= 2.0",
+                "units": "nanoseconds, messages/second, fraction, messages",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss; mean achieved ratio",
+                "threshold": "median(WAFER p95) / median(eKuiper p95) <= 2.0; pooled loss <= 0.01; mean achieved/offered >= 0.99; zero duplicates",
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
                 "thesis_evidence": True,
             }

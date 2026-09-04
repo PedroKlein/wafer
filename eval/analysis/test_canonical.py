@@ -27,6 +27,12 @@ def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
             "p50_ns": 100_000 + index * 1_000 + run,
             "p95_ns": 120_000 + index * 1_000 + run,
             "p99_ns": 140_000 + index * 1_000 + run,
+            "intended_messages": 60_000,
+            "received_unique": 60_000,
+            "loss_fraction": 0.0,
+            "achieved_rate_msg_s": 1_000.0,
+            "achieved_ratio": 1.0,
+            "duplicates": 0,
         }
         for index, condition in enumerate(conditions)
         for run in range(1, n + 1)
@@ -38,15 +44,30 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
 ):
     table = target_latency_table(percentile_runs(("wafer", "native", "ekuiper")))
     assert table["N_runs"].tolist() == [30, 30, 30]
-    assert table["units"].eq("nanoseconds").all()
-    assert table["estimator"].eq("median run p95 with bootstrap 95% CI").all()
+    assert table["units"].eq("nanoseconds, messages/second, fraction, messages").all()
+    assert (
+        table["estimator"]
+        .str.contains("median run p95 and achieved rate with bootstrap 95% CI")
+        .all()
+    )
     assert table["ci95_low_ns"].notna().all() and table["ci95_high_ns"].notna().all()
     wafer = table.loc[table.condition == "wafer"].iloc[0]
     assert wafer["reference_condition"] == "ekuiper"
     assert wafer["cliffs_delta_vs_reference"] is not None
-    assert wafer["threshold"] == "median(WAFER p95) / median(eKuiper p95) <= 2.0"
+    assert wafer["pooled_loss"] == 0
+    assert wafer["mean_achieved_ratio"] == 1
+    assert wafer["median_achieved_rate_msg_s"] == 1_000
+    assert bool(wafer["delivery_good"])
+    assert "pooled loss <= 0.01" in wafer["threshold"]
     assert wafer["claim_boundary"] == "matched 1,000 msg/s target load; not capacity"
     assert table["thesis_evidence"].eq(True).all()
+
+
+def test_target_latency_rejects_missing_delivery_evidence() -> None:
+    records = percentile_runs(("wafer", "native", "ekuiper"))
+    del records[0]["achieved_ratio"]
+    with pytest.raises(ValueError, match="lacks target-load delivery evidence"):
+        target_latency_table(records)
 
 
 def test_final_tables_reject_incomplete_independent_n() -> None:
