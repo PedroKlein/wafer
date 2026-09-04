@@ -29,6 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::payload::PayloadTemplate;
 use crate::profile::{LoadShape, Scheduler};
+use crate::recorder::PublisherTimingReceipt;
 
 /// Arguments for the `publish` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -149,6 +150,10 @@ pub struct PublishArgs {
     /// Write the hot-swap HTTP response as a canonical timeline artifact.
     #[arg(long)]
     pub hotswap_result_path: Option<PathBuf>,
+
+    /// Atomically publish the measured boundary used for cross-process event alignment.
+    #[arg(long)]
+    pub timing_receipt: Option<PathBuf>,
 }
 
 // -----------------------------------------------------------------------------
@@ -388,6 +393,22 @@ fn now_ns() -> u64 {
         .map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX))
 }
 
+fn write_timing_receipt(path: &std::path::Path, measurement_started_ns: u64) -> anyhow::Result<()> {
+    const EVENT_OFFSET_NS: u64 = 60_000_000_000;
+    let receipt = PublisherTimingReceipt {
+        schema_version: 1,
+        measurement_clock: "monotonic".into(),
+        alignment_clock: "unix-epoch".into(),
+        measurement_started_unix_epoch_ns: measurement_started_ns,
+        event_unix_epoch_ns: measurement_started_ns.saturating_add(EVENT_OFFSET_NS),
+        event_offset_ns: EVENT_OFFSET_NS,
+    };
+    let temporary = path.with_extension("tmp");
+    std::fs::write(&temporary, format!("{}\n", serde_json::to_string_pretty(&receipt)?))?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
 /// Spawn the hot-swap trigger task if the shape asks for it.
 ///
 /// Returns the [`JoinHandle`] so the caller can `.abort()` on shutdown. The task
@@ -419,9 +440,12 @@ fn spawn_hotswap_trigger(
         );
         let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
         let request_started_ns = now_ns();
+        let request_started_monotonic = Instant::now();
         let response = client.post(&url).json(&body).send().await?;
         let status = response.status();
         let response_body = response.text().await?;
+        let request_duration_ns = u64::try_from(request_started_monotonic.elapsed().as_nanos())
+            .unwrap_or(u64::MAX);
         let request_finished_ns = now_ns();
         info!("hot-swap POST {} => HTTP {}", url, status);
         if !status.is_success() {
@@ -436,7 +460,9 @@ fn spawn_hotswap_trigger(
                     "plugin": wasm_path.file_name().and_then(|name| name.to_str()),
                     "request_started_ns": request_started_ns,
                     "request_finished_ns": request_finished_ns,
-                    "request_duration_ns": request_finished_ns.saturating_sub(request_started_ns),
+                    "request_timestamp_clock": "unix-epoch",
+                    "request_duration_ns": request_duration_ns,
+                    "request_duration_clock": "monotonic",
                     "http_status": status.as_u16(),
                     "body": body,
                 }]
@@ -527,6 +553,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let start = Instant::now();
+    let measurement_started_ns = now_ns();
+    if let Some(path) = &args.timing_receipt {
+        write_timing_receipt(path, measurement_started_ns)?;
+    }
     let deadline = start.checked_add(Duration::from_secs(args.duration_secs)).unwrap_or(start);
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. }
@@ -700,6 +730,7 @@ mod tests {
             sequence_start: 0,
             drop_when_full: false,
             hotswap_result_path: None,
+            timing_receipt: None,
         };
         assert!(args.resolve_shape().is_err(), "zero is not a positive scout rate");
     }

@@ -360,28 +360,53 @@ def check_throughput_buckets(path: Path, expected_count: int | None = None) -> l
     value = _load_json(path, "throughput-buckets.json", violations)
     if value is None:
         return violations
-    if value.get("clock") != "monotonic" or value.get("bucket_width_ns") != 100_000_000:
-        violations.append("throughput-buckets.json must use monotonic 100 ms buckets")
+    expected_clock = "unix-epoch" if expected_count == 200 else "monotonic"
+    if value.get("clock") != expected_clock or value.get("bucket_width_ns") != 100_000_000:
+        violations.append(
+            f"throughput-buckets.json must use {expected_clock} aligned 100 ms buckets"
+        )
+    if expected_count == 200 and (
+        value.get("event_offset_from_measurement_start_ns") != 60_000_000_000
+        or value.get("coverage_start_offset_ns") != -10_000_000_000
+        or value.get("coverage_end_offset_ns") != 10_000_000_000
+        or not isinstance(value.get("event_timestamp_ns"), int)
+    ):
+        violations.append("throughput-buckets.json event placement or coverage is invalid")
     buckets = value.get("buckets")
     if not isinstance(buckets, list) or not buckets:
         return violations + ["throughput-buckets.json buckets must be non-empty"]
     if expected_count is not None and len(buckets) != expected_count:
         violations.append(f"throughput-buckets.json must contain {expected_count} buckets")
     previous_end = None
-    total = 0
+    totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
     for bucket in buckets:
         required = {"start_offset_ns", "end_offset_ns", "received_unique", "received_events", "duplicates", "rate_msg_s"}
         if not isinstance(bucket, dict) or not required <= bucket.keys():
             violations.append("throughput-buckets.json bucket schema is invalid")
             continue
+        if previous_end is None and expected_count == 200 and int(bucket["start_offset_ns"]) != -10_000_000_000:
+            violations.append("throughput-buckets.json does not start at -10 seconds")
         if int(bucket["end_offset_ns"]) - int(bucket["start_offset_ns"]) != 100_000_000:
             violations.append("throughput-buckets.json bucket width is inconsistent")
         if previous_end is not None and int(bucket["start_offset_ns"]) != previous_end:
             violations.append("throughput-buckets.json buckets are not contiguous")
         previous_end = int(bucket["end_offset_ns"])
-        total += int(bucket["received_events"])
-    if value.get("received_events") != total:
-        violations.append("throughput-buckets.json totals do not reconcile")
+        try:
+            unique = int(bucket["received_unique"])
+            events = int(bucket["received_events"])
+            duplicates = int(bucket["duplicates"])
+            if events != unique + duplicates or float(bucket["rate_msg_s"]) != unique * 10.0:
+                violations.append("throughput-buckets.json bucket counters or rate do not reconcile")
+            for field in totals:
+                totals[field] += int(bucket[field])
+        except (TypeError, ValueError):
+            violations.append("throughput-buckets.json bucket counters are invalid")
+    if expected_count == 200:
+        if previous_end != 10_000_000_000:
+            violations.append("throughput-buckets.json does not end at +10 seconds")
+        for field, total in totals.items():
+            if value.get(field) != total:
+                violations.append(f"throughput-buckets.json {field} total does not reconcile")
     return violations
 
 
@@ -390,13 +415,82 @@ def check_disruption_timeline(path: Path) -> list[str]:
     value = _load_json(path, "disruption-timeline.json", violations)
     if value is None:
         return violations
-    required = {"clock", "strategy", "event_ns", "action_start_ns", "action_end_ns"}
+    required = {
+        "timestamp_clock", "duration_clock", "strategy", "event_timestamp_ns",
+        "event_offset_from_measurement_start_ns", "action_start_timestamp_ns",
+        "action_end_timestamp_ns", "action_end_offset_ns", "action_duration_ns",
+    }
     if not required <= value.keys():
         return violations + ["disruption-timeline.json is missing event fields"]
-    if value["clock"] != "monotonic" or not (
-        int(value["action_start_ns"]) <= int(value["event_ns"]) <= int(value["action_end_ns"])
+    if (
+        value["timestamp_clock"] != "unix-epoch"
+        or value["duration_clock"] != "monotonic"
+        or value["strategy"] not in {"wafer-hotswap", "wafer-restart", "ekuiper-restart"}
+        or int(value["event_offset_from_measurement_start_ns"]) != 60_000_000_000
+        or int(value["action_start_timestamp_ns"]) != int(value["event_timestamp_ns"])
+        or int(value["action_end_offset_ns"]) != int(value["action_duration_ns"])
+        or int(value["action_end_timestamp_ns"])
+            != int(value["event_timestamp_ns"]) + int(value["action_duration_ns"])
+        or int(value["action_duration_ns"]) < 0
     ):
         violations.append("disruption-timeline.json event/action clocks are invalid")
+    return violations
+
+
+def check_swap3_reconciliation(leaf: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    throughput = _load_json(leaf / "throughput-buckets.json", "throughput-buckets.json", violations)
+    timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", violations)
+    publisher = _load_json(leaf / "publisher-summary.json", "publisher-summary.json", violations)
+    subscriber = _load_json(leaf / "subscriber-metadata.json", "subscriber-metadata.json", violations)
+    if None in (throughput, timeline, publisher, subscriber):
+        return violations
+    try:
+        if throughput["event_timestamp_ns"] != timeline["event_timestamp_ns"]:
+            violations.append("E-Swap-3 bucket and action event timestamps differ")
+        if timeline["strategy"] != metadata.get("condition"):
+            violations.append("E-Swap-3 strategy differs from metadata condition")
+        intended = int(publisher["intended"])
+        rejected = int(publisher["rejected"])
+        enqueued = int(publisher["enqueued"])
+        received_events = int(subscriber["total_recorded"])
+        duplicates = int(subscriber["sequence"]["total_duplicates"])
+        received_unique = received_events - duplicates
+        if intended != rejected + enqueued or received_unique > enqueued:
+            violations.append("E-Swap-3 publisher/subscriber totals do not reconcile")
+        if int(subscriber["sequence"]["total_received"]) != received_events:
+            violations.append("E-Swap-3 subscriber sequence totals do not reconcile")
+        if int(throughput["received_events"]) > received_events:
+            violations.append("E-Swap-3 bucket population exceeds measured sequence population")
+    except (KeyError, TypeError, ValueError):
+        violations.append("E-Swap-3 bounded source summaries are invalid")
+    return violations
+
+
+def check_disruption_analysis(path: Path) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "disruption-analysis.json", violations)
+    if value is None:
+        return violations
+    required = {
+        "strategy", "baseline_rate_msg_s", "event_min_rate_msg_s", "dip_percent",
+        "interruption_ns", "recovery_ns", "recovery_right_censored",
+        "action_duration_ns", "loss", "duplicates", "messages", "latency_ns",
+    }
+    if not required <= value.keys():
+        violations.append("disruption-analysis.json is missing estimator fields")
+    if value.get("strategy") not in {"wafer-hotswap", "wafer-restart", "ekuiper-restart"}:
+        violations.append("disruption-analysis.json strategy is invalid")
+    for field in ("baseline_rate_msg_s", "event_min_rate_msg_s", "dip_percent"):
+        if not isinstance(value.get(field), (int, float)) or value[field] < 0:
+            violations.append(f"disruption-analysis.json {field} is invalid")
+    for field in ("interruption_ns", "recovery_ns", "action_duration_ns", "loss", "duplicates"):
+        if not isinstance(value.get(field), int) or value[field] < 0:
+            violations.append(f"disruption-analysis.json {field} is invalid")
+    if not isinstance(value.get("recovery_right_censored"), bool):
+        violations.append("disruption-analysis.json recovery censoring is invalid")
+    if set(value.get("latency_ns", {})) != {"p50", "p95", "p99"}:
+        violations.append("disruption-analysis.json latency summary is invalid")
     return violations
 
 
@@ -903,6 +997,10 @@ def check_leaf(
     if experiment == "e-swap-3" and not focused:
         violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 200))
         violations.extend(check_disruption_timeline(leaf / "disruption-timeline.json"))
+        violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
+        violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
+        violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
+        violations.extend(check_swap3_reconciliation(leaf, metadata))
     if experiment == "e-swap-4" and not focused:
         violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json"))
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))

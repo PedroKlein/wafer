@@ -629,9 +629,15 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
 def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
     buckets = {
         "schema_version": 1,
-        "clock": "monotonic",
+        "clock": "unix-epoch",
+        "event_timestamp_ns": 1_060_000_000_000,
+        "event_offset_from_measurement_start_ns": 60_000_000_000,
         "bucket_width_ns": 100_000_000,
+        "coverage_start_offset_ns": -10_000_000_000,
+        "coverage_end_offset_ns": 10_000_000_000,
+        "received_unique": 200,
         "received_events": 200,
+        "duplicates": 0,
         "buckets": [
             {
                 "start_offset_ns": -10_000_000_000 + index * 100_000_000,
@@ -646,11 +652,15 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
     }
     disruption = {
         "schema_version": 1,
-        "clock": "monotonic",
+        "timestamp_clock": "unix-epoch",
+        "duration_clock": "monotonic",
         "strategy": "wafer-hotswap",
-        "event_ns": 60,
-        "action_start_ns": 60,
-        "action_end_ns": 61,
+        "event_timestamp_ns": 1_060_000_000_000,
+        "event_offset_from_measurement_start_ns": 60_000_000_000,
+        "action_start_timestamp_ns": 1_060_000_000_000,
+        "action_end_timestamp_ns": 1_060_000_000_001,
+        "action_end_offset_ns": 1,
+        "action_duration_ns": 1,
     }
     burst = {
         "schema_version": 1,

@@ -16,10 +16,12 @@ sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 from canonical_runner import (  # noqa: E402
     analyze_backpressure,
     analyze_capacity_scout_summary,
+    analyze_swap3_disruption,
     analyze_rate_sweep_traces,
     estimate_capacity_envelope,
     build_capacity_scout_invocation,
     build_capacity_scout_rate_block,
+    build_swap3_invocation,
     capacity_scout_failed_attempt_stop_reason,
     capacity_scout_next_rate,
     capacity_scout_safety_action,
@@ -61,6 +63,7 @@ from canonical_runner import (  # noqa: E402
     validate_focused_freeze,
     validate_rate_sweep_result,
     validate_startup_artifact,
+    validate_swap3_artifacts,
     write_progress,
 )
 
@@ -291,6 +294,128 @@ def test_shared_hotswap_result_preserves_single_source_leaf(tmp_path: Path) -> N
     assert analysis["shared_from"] == expected_source
     assert analysis["measurement_source_leaf"] == expected_source
     assert analysis["experiment"] == "e-swap-2"
+
+
+def swap3_fixture(rates: list[float] | None = None, *, received: int = 120_000) -> tuple[dict, dict, dict, dict]:
+    rates = rates or [1_000.0] * 200
+    buckets = []
+    for index, rate in enumerate(rates):
+        unique = int(rate / 10)
+        start = -10_000_000_000 + index * 100_000_000
+        buckets.append({
+            "start_offset_ns": start,
+            "end_offset_ns": start + 100_000_000,
+            "received_unique": unique,
+            "received_events": unique,
+            "duplicates": 0,
+            "rate_msg_s": rate,
+        })
+    throughput = {
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "event_timestamp_ns": 1_060_000_000_000,
+        "event_offset_from_measurement_start_ns": 60_000_000_000,
+        "bucket_width_ns": 100_000_000,
+        "coverage_start_offset_ns": -10_000_000_000,
+        "coverage_end_offset_ns": 10_000_000_000,
+        "received_unique": sum(row["received_unique"] for row in buckets),
+        "received_events": sum(row["received_events"] for row in buckets),
+        "duplicates": 0,
+        "buckets": buckets,
+    }
+    timeline = {
+        "schema_version": 1,
+        "strategy": "wafer-hotswap",
+        "timestamp_clock": "unix-epoch",
+        "duration_clock": "monotonic",
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "event_timestamp_ns": 1_060_000_000_000,
+        "event_offset_from_measurement_start_ns": 60_000_000_000,
+        "action_start_timestamp_ns": 1_060_000_000_000,
+        "action_end_timestamp_ns": 1_060_200_000_000,
+        "action_end_offset_ns": 200_000_000,
+        "action_duration_ns": 200_000_000,
+    }
+    publisher = {"intended": 120_000, "rejected": 0, "enqueued": 120_000}
+    subscriber = {
+        "total_recorded": received,
+        "latency_p50_ns": 100,
+        "latency_p95_ns": 200,
+        "latency_p99_ns": 300,
+        "sequence": {"total_received": received, "total_duplicates": 0},
+    }
+    return throughput, timeline, publisher, subscriber
+
+
+def test_swap3_analysis_covers_no_partial_full_and_delayed_recovery() -> None:
+    throughput, timeline, publisher, subscriber = swap3_fixture()
+    validate_swap3_artifacts(throughput, timeline, publisher, subscriber)
+    uninterrupted = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
+    assert uninterrupted["dip_percent"] == 0
+    assert uninterrupted["interruption_ns"] == 0
+    assert uninterrupted["recovery_ns"] == 0
+
+    partial_rates = [1_000.0] * 200
+    partial_rates[98:103] = [500.0] * 5
+    partial = analyze_swap3_disruption(*swap3_fixture(partial_rates))
+    assert partial["dip_percent"] == 50
+    assert partial["interruption_ns"] == 500_000_000
+    assert partial["recovery_ns"] == 100_000_000
+
+    full_rates = [1_000.0] * 200
+    full_rates[80:120] = [0.0] * 40
+    full = analyze_swap3_disruption(*swap3_fixture(full_rates))
+    assert full["dip_percent"] == 100
+    assert full["interruption_ns"] == 4_000_000_000
+
+    delayed_rates = [1_000.0] * 200
+    delayed_rates[100:130] = [0.0] * 30
+    delayed = analyze_swap3_disruption(*swap3_fixture(delayed_rates))
+    assert delayed["recovery_ns"] == 2_800_000_000
+    assert delayed["recovery_right_censored"] is False
+
+    delayed_rates[100:] = [0.0] * 100
+    censored = analyze_swap3_disruption(*swap3_fixture(delayed_rates))
+    assert censored["recovery_ns"] == 9_800_000_000
+    assert censored["recovery_right_censored"] is True
+
+
+def test_swap3_analysis_reports_loss_and_validator_rejects_drift() -> None:
+    throughput, timeline, publisher, subscriber = swap3_fixture(received=119_990)
+    analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
+    assert analysis["loss"] == 10
+    assert analysis["duplicates"] == 0
+    assert analysis["latency_ns"] == {"p50": 100, "p95": 200, "p99": 300}
+
+    invalid = json.loads(json.dumps(throughput))
+    invalid["clock"] = "monotonic"
+    with pytest.raises(ValueError, match="alignment clock"):
+        validate_swap3_artifacts(invalid, timeline, publisher, subscriber)
+    invalid = json.loads(json.dumps(throughput))
+    invalid["buckets"][1]["start_offset_ns"] += 1
+    with pytest.raises(ValueError, match="contiguous"):
+        validate_swap3_artifacts(invalid, timeline, publisher, subscriber)
+    invalid_publisher = {**publisher, "enqueued": 119_999}
+    with pytest.raises(ValueError, match="totals do not reconcile"):
+        validate_swap3_artifacts(throughput, timeline, invalid_publisher, subscriber)
+
+
+def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
+    items = [
+        next(
+            item for item in build_schedule({"e-swap-3"}, seed=1729)
+            if item.condition == strategy and item.run_index == 1
+        )
+        for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+    ]
+    invocations = [build_swap3_invocation(ROOT, item, Path("/tmp/swap3")) for item in items]
+    assert all(invocation["controlled_factors"] == invocations[0]["controlled_factors"] for invocation in invocations)
+    assert {invocation["strategy"] for invocation in invocations} == {
+        "wafer-hotswap", "wafer-restart", "ekuiper-restart"
+    }
+    assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
+    assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
+    assert all(invocation["controlled_factors"]["event_offset_ns"] == 60_000_000_000 for invocation in invocations)
 
 
 def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:

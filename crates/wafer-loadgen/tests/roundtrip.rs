@@ -113,6 +113,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         trace_file: Some(received_trace.clone()),
         sequence_example_limit: None,
         sequence_end_exclusive: Some(TOTAL_MESSAGES),
+        publisher_timing_receipt: None,
     };
     let sub_handle = tokio::spawn(async move { run_subscriber(sub_args).await });
 
@@ -144,6 +145,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         hotswap_swap_at_secs: 30.0,
         hotswap_api_url: "http://localhost:9090".into(),
         hotswap_result_path: None,
+        timing_receipt: None,
         trace_file: Some(published_trace.clone()),
         summary_file: Some(publisher_summary.clone()),
         sequence_start: 0,

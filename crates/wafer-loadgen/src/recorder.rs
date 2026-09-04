@@ -30,6 +30,137 @@ use hdrhistogram::Histogram;
 use hdrhistogram::serialization::{Serializer, V2Serializer};
 use serde::{Deserialize, Serialize};
 
+pub(crate) const EVENT_BUCKET_WIDTH_NS: u64 = 100_000_000;
+pub(crate) const EVENT_BUCKET_COUNT: usize = 200;
+pub(crate) const EVENT_COVERAGE_START_NS: i64 = -10_000_000_000;
+pub(crate) const EVENT_COVERAGE_END_NS: i64 = 10_000_000_000;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PublisherTimingReceipt {
+    pub schema_version: u8,
+    pub measurement_clock: String,
+    pub alignment_clock: String,
+    pub measurement_started_unix_epoch_ns: u64,
+    pub event_unix_epoch_ns: u64,
+    pub event_offset_ns: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct ThroughputBucket {
+    start_offset_ns: i64,
+    end_offset_ns: i64,
+    received_unique: u64,
+    received_events: u64,
+    duplicates: u64,
+    rate_msg_s: f64,
+}
+
+pub(crate) struct EventBucketRecorder {
+    event_unix_epoch_ns: u64,
+    event_offset_ns: u64,
+    received_unique: [u64; EVENT_BUCKET_COUNT],
+    received_events: [u64; EVENT_BUCKET_COUNT],
+    duplicates: [u64; EVENT_BUCKET_COUNT],
+}
+
+impl EventBucketRecorder {
+    pub(crate) fn new(timing: &PublisherTimingReceipt) -> anyhow::Result<Self> {
+        if timing.schema_version != 1
+            || timing.measurement_clock != "monotonic"
+            || timing.alignment_clock != "unix-epoch"
+            || timing.event_offset_ns != 60_000_000_000
+            || timing.event_unix_epoch_ns
+                != timing.measurement_started_unix_epoch_ns.saturating_add(timing.event_offset_ns)
+        {
+            anyhow::bail!("publisher timing receipt does not declare the frozen t=60 boundary");
+        }
+        Ok(Self {
+            event_unix_epoch_ns: timing.event_unix_epoch_ns,
+            event_offset_ns: timing.event_offset_ns,
+            received_unique: [0; EVENT_BUCKET_COUNT],
+            received_events: [0; EVENT_BUCKET_COUNT],
+            duplicates: [0; EVENT_BUCKET_COUNT],
+        })
+    }
+
+    pub(crate) fn record(&mut self, receive_unix_epoch_ns: u64, duplicate: bool) {
+        let offset = if receive_unix_epoch_ns >= self.event_unix_epoch_ns {
+            i64::try_from(receive_unix_epoch_ns.saturating_sub(self.event_unix_epoch_ns))
+                .unwrap_or(i64::MAX)
+        } else {
+            i64::try_from(self.event_unix_epoch_ns.saturating_sub(receive_unix_epoch_ns))
+                .unwrap_or(i64::MAX)
+                .checked_neg()
+                .unwrap_or(i64::MIN)
+        };
+        if !(EVENT_COVERAGE_START_NS..EVENT_COVERAGE_END_NS).contains(&offset) {
+            return;
+        }
+        let shifted = offset.saturating_sub(EVENT_COVERAGE_START_NS);
+        let index = usize::try_from(
+            shifted
+                .checked_div(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX))
+                .unwrap_or(i64::MAX),
+        )
+        .unwrap_or(EVENT_BUCKET_COUNT);
+        let (Some(events), Some(unique), Some(duplicates)) = (
+            self.received_events.get_mut(index),
+            self.received_unique.get_mut(index),
+            self.duplicates.get_mut(index),
+        ) else {
+            return;
+        };
+        *events = events.saturating_add(1);
+        if duplicate {
+            *duplicates = duplicates.saturating_add(1);
+        } else {
+            *unique = unique.saturating_add(1);
+        }
+    }
+
+    pub(crate) fn write(&self, path: &Path) -> anyhow::Result<()> {
+        let buckets = self
+            .received_unique
+            .iter()
+            .zip(&self.received_events)
+            .zip(&self.duplicates)
+            .enumerate()
+            .map(|(index, ((received_unique, received_events), duplicates))| {
+                let start_offset_ns = EVENT_COVERAGE_START_NS.saturating_add(
+                    i64::try_from(index)
+                        .unwrap_or(i64::MAX)
+                        .saturating_mul(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX)),
+                );
+                ThroughputBucket {
+                    start_offset_ns,
+                    end_offset_ns: start_offset_ns
+                        .saturating_add(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX)),
+                    received_unique: *received_unique,
+                    received_events: *received_events,
+                    duplicates: *duplicates,
+                    rate_msg_s: f64::from(u32::try_from(*received_unique).unwrap_or(u32::MAX))
+                        * 10.0,
+                }
+            })
+            .collect::<Vec<_>>();
+        let artifact = serde_json::json!({
+            "schema_version": 1,
+            "clock": "unix-epoch",
+            "event_timestamp_ns": self.event_unix_epoch_ns,
+            "event_offset_from_measurement_start_ns": self.event_offset_ns,
+            "bucket_width_ns": EVENT_BUCKET_WIDTH_NS,
+            "coverage_start_offset_ns": EVENT_COVERAGE_START_NS,
+            "coverage_end_offset_ns": EVENT_COVERAGE_END_NS,
+            "received_unique": self.received_unique.iter().sum::<u64>(),
+            "received_events": self.received_events.iter().sum::<u64>(),
+            "duplicates": self.duplicates.iter().sum::<u64>(),
+            "buckets": buckets,
+        });
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
+        Ok(())
+    }
+}
+
 /// Result of a single `LatencyRecorder::record_json` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordOutcome {
@@ -75,11 +206,12 @@ impl SequenceTracker {
     }
 
     /// Record a received sequence number.
-    pub fn record(&mut self, seq: u64) {
+    pub fn record(&mut self, seq: u64) -> bool {
         self.total_received = self.total_received.saturating_add(1);
         match seq.cmp(&self.expected_next) {
             std::cmp::Ordering::Equal => {
                 self.expected_next = self.expected_next.saturating_add(1);
+                false
             }
             std::cmp::Ordering::Greater => {
                 // seq > expected_next, so subtraction cannot underflow
@@ -97,6 +229,7 @@ impl SequenceTracker {
                     }
                     self.expected_next = seq + 1;
                 }
+                false
             }
             std::cmp::Ordering::Less => {
                 self.total_duplicates = self.total_duplicates.saturating_add(1);
@@ -105,6 +238,7 @@ impl SequenceTracker {
                 } else {
                     self.examples_truncated = true;
                 }
+                true
             }
         }
     }
@@ -219,6 +353,7 @@ pub struct LatencyRecorder {
     parse_errors: u64,
     negative_latency: u64,
     ignored_sequences: u64,
+    last_record_duplicate: bool,
 }
 
 impl LatencyRecorder {
@@ -251,6 +386,7 @@ impl LatencyRecorder {
             parse_errors: 0,
             negative_latency: 0,
             ignored_sequences: 0,
+            last_record_duplicate: false,
         }
     }
 
@@ -317,7 +453,7 @@ impl LatencyRecorder {
         // hdrhistogram returns Err only if the value is above the ceiling; we
         // already clamped so this can only fail on internal invariants.
         let _r = self.histogram.record(recorded);
-        self.sequence.record(seq);
+        self.last_record_duplicate = self.sequence.record(seq);
         RecordOutcome::Recorded { latency_ns, seq }
     }
 
@@ -339,6 +475,10 @@ impl LatencyRecorder {
     #[must_use]
     pub(crate) const fn ignored_sequences(&self) -> u64 {
         self.ignored_sequences
+    }
+
+    pub(crate) const fn last_record_duplicate(&self) -> bool {
+        self.last_record_duplicate
     }
 
     #[must_use]
@@ -648,6 +788,87 @@ mod tests {
         // Content assertions on the concrete rows.
         assert!(rows.contains(&"gap,2,2,1"));
         assert!(rows.contains(&"duplicate,3,3,1"));
+    }
+
+    #[test]
+    fn event_buckets_are_bounded_contiguous_and_reconcile_duplicates() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1_000_000_000_000,
+            event_unix_epoch_ns: 1_060_000_000_000,
+            event_offset_ns: 60_000_000_000,
+        };
+        let mut buckets = EventBucketRecorder::new(&timing).unwrap();
+        buckets.record(timing.event_unix_epoch_ns - 10_000_000_000, false);
+        buckets.record(timing.event_unix_epoch_ns - 9_950_000_000, true);
+        buckets.record(timing.event_unix_epoch_ns + 9_999_999_999, false);
+        buckets.record(timing.event_unix_epoch_ns + 10_000_000_000, false);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("throughput-buckets.json");
+        buckets.write(&path).unwrap();
+
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let rows = artifact["buckets"].as_array().unwrap();
+        assert_eq!(rows.len(), 200);
+        assert_eq!(artifact["received_events"], 3);
+        assert_eq!(artifact["received_unique"], 2);
+        assert_eq!(artifact["duplicates"], 1);
+        assert_eq!(rows[0]["start_offset_ns"], -10_000_000_000_i64);
+        assert_eq!(rows[0]["end_offset_ns"], -9_900_000_000_i64);
+        assert_eq!(rows[0]["received_events"], 2);
+        assert_eq!(rows[0]["received_unique"], 1);
+        assert_eq!(rows[0]["duplicates"], 1);
+        assert_eq!(rows[0]["rate_msg_s"], 10.0);
+        assert_eq!(rows[199]["received_unique"], 1);
+        assert!(fs::metadata(path).unwrap().len() < 64 * 1024);
+    }
+
+    #[test]
+    #[expect(clippy::print_stderr, reason = "test emits the requested local throughput receipt")]
+    fn event_bucket_capture_is_source_bound_and_artifact_bounded() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1_000_000_000_000,
+            event_unix_epoch_ns: 1_060_000_000_000,
+            event_offset_ns: 60_000_000_000,
+        };
+        let mut buckets = EventBucketRecorder::new(&timing).unwrap();
+        let started = std::time::Instant::now();
+        for index in 0..120_000_u64 {
+            buckets.record(
+                timing.event_unix_epoch_ns - 10_000_000_000 + (index % 20_000) * 1_000_000,
+                false,
+            );
+        }
+        let elapsed = started.elapsed();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("throughput-buckets.json");
+        buckets.write(&path).unwrap();
+        let size = fs::metadata(&path).unwrap().len();
+        eprintln!(
+            "swap3_local_evidence messages=120000 elapsed_ns={} throughput_msg_s={:.0} artifact_bytes={size}",
+            elapsed.as_nanos(),
+            120_000.0 / elapsed.as_secs_f64()
+        );
+        assert!(size < 64 * 1024);
+    }
+
+    #[test]
+    fn event_buckets_reject_non_frozen_timing_receipt() {
+        let timing = PublisherTimingReceipt {
+            schema_version: 1,
+            measurement_clock: "monotonic".into(),
+            alignment_clock: "unix-epoch".into(),
+            measurement_started_unix_epoch_ns: 1,
+            event_unix_epoch_ns: 2,
+            event_offset_ns: 1,
+        };
+        assert!(EventBucketRecorder::new(&timing).is_err());
     }
 
     #[test]

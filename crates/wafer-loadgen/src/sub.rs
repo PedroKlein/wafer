@@ -21,7 +21,10 @@ use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::recorder::{LatencyRecorder, RecordOutcome, SequenceReport, SubscriberMetadata, now_ns};
+use crate::recorder::{
+    EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt, RecordOutcome, SequenceReport,
+    SubscriberMetadata, now_ns,
+};
 
 /// Arguments for the `subscribe` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -70,6 +73,10 @@ pub struct SubscribeArgs {
     /// Ignore messages at or above this sequence number.
     #[arg(long)]
     pub sequence_end_exclusive: Option<u64>,
+
+    /// Publisher timing receipt used to align bounded disruption buckets.
+    #[arg(long)]
+    pub publisher_timing_receipt: Option<PathBuf>,
 }
 
 fn parse_broker(s: &str) -> (String, u16) {
@@ -153,6 +160,27 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     });
 
     let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit);
+    let mut event_buckets = match &args.publisher_timing_receipt {
+        Some(path) => {
+            let deadline = tokio::time::Instant::now()
+                .checked_add(Duration::from_secs(10))
+                .unwrap_or_else(tokio::time::Instant::now);
+            let receipt = loop {
+                match tokio::fs::read(path).await {
+                    Ok(bytes) => break serde_json::from_slice::<PublisherTimingReceipt>(&bytes)?,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::NotFound
+                            && tokio::time::Instant::now() < deadline =>
+                    {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            };
+            Some(Box::new(EventBucketRecorder::new(&receipt)?))
+        }
+        None => None,
+    };
     let mut trace =
         args.trace_file.as_ref().map(std::fs::File::create).transpose()?.map(BufWriter::new);
     if let Some(trace) = &mut trace {
@@ -181,6 +209,9 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                             None => recorder.record_json(&payload, receive_ns),
                         };
                         if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
+                            if let Some(buckets) = &mut event_buckets {
+                                buckets.record(receive_ns, recorder.last_record_duplicate());
+                            }
                             if let Some(trace) = &mut trace {
                                 let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
                                 writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
@@ -247,6 +278,9 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     };
 
     recorder.write_artifacts(&args.output_dir, metadata)?;
+    if let Some(buckets) = event_buckets {
+        buckets.write(&args.output_dir.join("throughput-buckets.json"))?;
+    }
 
     let report = SubscriberReport {
         total_messages: recorder.total_messages(),

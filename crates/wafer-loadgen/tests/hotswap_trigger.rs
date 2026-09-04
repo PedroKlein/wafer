@@ -90,6 +90,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
     let target_offset_secs = 1.0_f64;
     let output = tempfile::tempdir()?;
     let result_path = output.path().join("swap_timeline.json");
+    let timing_path = output.path().join("publisher-timing.json");
     let args = PublishArgs {
         broker_host: "127.0.0.1".into(),
         broker_port: 1, // dead port; publishes will fail, that's fine
@@ -114,6 +115,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
         hotswap_swap_at_secs: target_offset_secs,
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: Some(result_path.clone()),
+        timing_receipt: Some(timing_path.clone()),
         trace_file: None,
         summary_file: None,
         sequence_start: 0,
@@ -164,6 +166,15 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
     let artifact: serde_json::Value = serde_json::from_slice(&std::fs::read(&result_path)?)?;
     assert_eq!(artifact["requests"][0]["http_status"], 200);
     assert_eq!(artifact["requests"][0]["body"], "ok");
+    assert_eq!(artifact["requests"][0]["request_duration_clock"], "monotonic");
+    let timing: serde_json::Value = serde_json::from_slice(&std::fs::read(timing_path)?)?;
+    assert_eq!(timing["measurement_clock"], "monotonic");
+    assert_eq!(timing["alignment_clock"], "unix-epoch");
+    assert_eq!(timing["event_offset_ns"], 60_000_000_000_u64);
+    assert_eq!(
+        timing["event_unix_epoch_ns"].as_u64(),
+        Some(timing["measurement_started_unix_epoch_ns"].as_u64().unwrap() + 60_000_000_000)
+    );
 
     server.abort();
     Ok(())
@@ -215,6 +226,7 @@ async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Res
         hotswap_swap_at_secs: 2.0,
         hotswap_api_url: format!("http://{addr}"),
         hotswap_result_path: None,
+        timing_receipt: None,
         trace_file: None,
         summary_file: None,
         sequence_start: 0,
