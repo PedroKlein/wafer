@@ -29,13 +29,8 @@ for plugin in */Cargo.toml attacks/*/Cargo.toml; do
   echo "Building plugin: $name"
   cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
 done
-# Post-process: 10-30% size reduction (requires wasm-opt from binaryen)
-if command -v wasm-opt >/dev/null 2>&1; then
-  find . -path "*/wasm32-wasip2/release/*.wasm" -exec sh -c \
-    'echo "Optimizing $(basename "$1")" && wasm-opt -Os "$1" -o "$1"' _ {} \;
-else
-  echo "wasm-opt not found, skipping size optimization" >&2
-fi
+# Binaryen's wasm-opt does not support Component Model binaries.
+# Validate release components with wasm-tools after this build.
 '''
 
 [tasks.build-plugin]
