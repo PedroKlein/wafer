@@ -141,11 +141,23 @@ impl Scheduler {
     /// `1 / rate_at(current_offset)`.
     pub fn next_offset(&mut self) -> Duration {
         let now = self.next_offset;
-        let current_rate = self.shape.rate_at(now.as_secs_f64());
-        // 1/current_rate seconds → Duration.
-        let step = Duration::from_secs_f64(1.0 / current_rate);
-        self.next_offset = now.saturating_add(step);
-        self.emitted = self.emitted.saturating_add(1);
+        let emitted = self.emitted.saturating_add(1);
+        self.next_offset = match &self.shape {
+            LoadShape::Steady { rate } | LoadShape::HotswapTrigger { base_rate: rate, .. } => {
+                // Derive constant-rate offsets from the message index so rounded
+                // nanosecond steps cannot accumulate into population drift.
+                let nanos = u128::from(emitted)
+                    .saturating_mul(1_000_000_000)
+                    .checked_div(u128::from((*rate).max(1)))
+                    .unwrap_or(u128::MAX);
+                Duration::from_nanos(u64::try_from(nanos).unwrap_or(u64::MAX))
+            }
+            _ => {
+                let current_rate = self.shape.rate_at(now.as_secs_f64());
+                now.saturating_add(Duration::from_secs_f64(1.0 / current_rate))
+            }
+        };
+        self.emitted = emitted;
         now
     }
 
@@ -171,6 +183,19 @@ mod tests {
                 (shape.rate_at(t) - 1_000.0).abs() < 1e-9,
                 "steady rate should be constant at {t}"
             );
+        }
+    }
+
+    #[test]
+    fn steady_scheduler_emits_exact_frozen_capacity_populations() {
+        let duration = Duration::from_secs(60);
+        for rate in [1_000, 4_000, 8_000, 15_000, 16_000] {
+            let mut scheduler = Scheduler::new(LoadShape::Steady { rate });
+            let mut emitted = 0_u64;
+            while scheduler.next_offset() < duration {
+                emitted += 1;
+            }
+            assert_eq!(emitted, u64::from(rate) * 60, "rate={rate}");
         }
     }
 
