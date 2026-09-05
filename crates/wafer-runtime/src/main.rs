@@ -154,7 +154,7 @@ async fn main() -> Result<()> {
         match metadata::write_provenance(&provenance_path, &orchestrator, &args.config, &config) {
             Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
             Err(e) => {
-                warn!(path = %provenance_path.display(), error = %e, "provenance write failed")
+                warn!(path = %provenance_path.display(), error = %e, "provenance write failed");
             }
         }
     }
@@ -435,7 +435,7 @@ async fn flush_bench_artifacts(
         let path = dir.join("memory.csv");
         match std::fs::write(&path, csv) {
             Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written")
+                info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written");
             }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
         }
@@ -448,7 +448,7 @@ async fn flush_bench_artifacts(
         let guard = recorder.lock().await;
         match std::fs::write(&path, guard.to_csv()) {
             Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written")
+                info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written");
             }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write queue-depth.csv"),
         }
