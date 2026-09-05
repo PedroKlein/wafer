@@ -70,7 +70,7 @@ print(json.dumps({
     "per_run": runs,
 }, indent=2))
 PY
-    printf 'depth %-8s: %s runs → %s\n' "$depth_label" "$(ls "$per_run_dir"/*.json 2>/dev/null | wc -l | tr -d ' ')" "$depth_dir/depth-percentiles.json" >&2
+    printf 'depth %-8s: %s runs → %s\n' "$depth_label" "$(find "$per_run_dir" -maxdepth 1 -type f -name '*.json' | wc -l | tr -d ' ')" "$depth_dir/depth-percentiles.json" >&2
 done
 
 printf 'wrote per-depth percentiles under %s\n' "$SHAKE_DIR" >&2

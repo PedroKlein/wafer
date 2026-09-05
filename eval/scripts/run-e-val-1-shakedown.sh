@@ -43,6 +43,8 @@ skip_build=0
 # Kill the last-launched runtime on Ctrl-C so orphaned wafer processes
 # don't hold onto BenchSource threads for the next invocation.
 _last_wafer_pid=""
+# Invoked indirectly by trap.
+# shellcheck disable=SC2329
 _cleanup_val() {
     local rc=$?
     [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true

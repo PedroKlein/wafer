@@ -84,7 +84,7 @@ print(json.dumps({
     ],
 }, indent=2))
 PY
-    printf 'size %-6s: %s runs → %s\n' "$size_label" "$(ls "$per_run_dir" | wc -l | tr -d ' ')" "$size_dir/size-percentiles.json" >&2
+    printf 'size %-6s: %s runs → %s\n' "$size_label" "$(find "$per_run_dir" -mindepth 1 -maxdepth 1 -type f | wc -l | tr -d ' ')" "$size_dir/size-percentiles.json" >&2
 done
 
 printf 'wrote per-size percentiles under %s\n' "$SHAKE_DIR" >&2

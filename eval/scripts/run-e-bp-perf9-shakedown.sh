@@ -226,7 +226,7 @@ print(json.dumps({
     'git_sha': '$(git rev-parse --short HEAD 2>/dev/null || echo unknown)',
     'hostname': '$(hostname)',
     'arch': '$(uname -m)',
-    'os': '$(uname -s | tr A-Z a-z)',
+    'os': '$(uname -s | tr '[:upper:]' '[:lower:]')',
     'rustc': '$(rustc --version 2>/dev/null | head -1)',
     'config_path': '$BP_CFG',
     'config_sha256': '$(_sha256 "$BP_CFG")',
@@ -252,7 +252,7 @@ print(f'  Duplicates: {d[\"sequence\"][\"total_duplicates\"]}')
     fi
 
     # Check for queue overflow in runtime logs (grep for WARN/ERROR level indicators)
-    overflow=$(grep -i "overflow\|channel full\|dropped message" "$BP_OUT/stdout.log" 2>/dev/null | grep -v "config\|pipeline=" | wc -l | tr -d ' ')
+    overflow=$(grep -i "overflow\|channel full\|dropped message" "$BP_OUT/stdout.log" 2>/dev/null | grep -cv "config\|pipeline=" || true)
     overflow=${overflow:-0}
     _log "  Queue overflow/drop mentions in logs: $overflow"
 
@@ -315,7 +315,6 @@ if [ "$skip_perf9" -eq 0 ]; then
             duration_ns=$(( finished_ns - started_ns ))
 
             # Extract startup time from logs: time from process start to "Pipeline running"
-            pipeline_ready_line=$(grep -m1 "Pipeline running\|pipeline started\|All nodes running" "$out_dir/stdout.log" 2>/dev/null || true)
 
             python3 -c "
 import json
@@ -331,7 +330,7 @@ print(json.dumps({
     'git_sha': '$(git rev-parse --short HEAD 2>/dev/null || echo unknown)',
     'hostname': '$(hostname)',
     'arch': '$(uname -m)',
-    'os': '$(uname -s | tr A-Z a-z)',
+    'os': '$(uname -s | tr '[:upper:]' '[:lower:]')',
     'config_path': '$cfg',
     'notes': 'Cold = first run after cargo rebuild. startup_duration_ns is wall time from process launch to exit (50 messages at 100 msg/s = ~500ms runtime + compile/instantiate).',
 }, indent=2))
@@ -369,7 +368,7 @@ print(json.dumps({
     'git_sha': '$(git rev-parse --short HEAD 2>/dev/null || echo unknown)',
     'hostname': '$(hostname)',
     'arch': '$(uname -m)',
-    'os': '$(uname -s | tr A-Z a-z)',
+    'os': '$(uname -s | tr '[:upper:]' '[:lower:]')',
     'config_path': '$cfg',
     'notes': 'Warm = subsequent run on same binary. OS page cache + wasmtime AOT cache both populated.',
 }, indent=2))

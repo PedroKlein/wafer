@@ -42,6 +42,8 @@ WAFER_BIN="target/release/wafer"
 # Kill the last-launched runtime on Ctrl-C so orphaned wafer processes
 # don't hold the API port for the next invocation.
 _last_wafer_pid=""
+# Invoked indirectly by trap.
+# shellcheck disable=SC2329
 _cleanup_swap() {
     local rc=$?
     [ -n "$_last_wafer_pid" ] && kill -TERM "$_last_wafer_pid" 2>/dev/null || true
@@ -90,7 +92,7 @@ pass_count=0
 fail_count=0
 
 wait_api_ready() {
-    for i in $(seq 1 50); do
+    for _ in $(seq 1 50); do
         if curl -sf "$API_BASE/health" >/dev/null 2>&1; then
             return 0
         fi
@@ -144,7 +146,7 @@ run_unified() {
     # Swap loop: alternate v1 → v2 → v1 → ... every 2s for ≥100s
     local swap_count=0
     local swap_timeline_file="$out_dir/swap_timeline.jsonl"
-    > "$swap_timeline_file"
+    : > "$swap_timeline_file"
 
     local swap_start_epoch
     swap_start_epoch=$(date +%s)
@@ -439,7 +441,7 @@ run_burst() {
     # Issue 50+ swaps at 2s intervals under the 2× burst load
     local swap_count=0
     local swap_timeline_file="$run_dir/swap_timeline.jsonl"
-    > "$swap_timeline_file"
+    : > "$swap_timeline_file"
     local swap_start_epoch
     swap_start_epoch=$(date +%s)
 
@@ -592,7 +594,7 @@ run_rollback() {
     local swap_count=0
     local rollback_events=0
     local swap_timeline_file="$run_dir/swap_timeline.jsonl"
-    > "$swap_timeline_file"
+    : > "$swap_timeline_file"
     local swap_start_epoch
     swap_start_epoch=$(date +%s)
 

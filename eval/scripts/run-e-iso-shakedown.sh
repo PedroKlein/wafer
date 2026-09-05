@@ -41,6 +41,8 @@ WAFER_BIN="target/release/wafer"
 # thread alive on the port, and the next run either 409-conflicts or writes
 # results into a stale process. See P-Followup-4.
 _wafer_pids=()
+# Invoked indirectly by trap.
+# shellcheck disable=SC2329
 _cleanup_iso() {
     local rc=$?
     for p in "${_wafer_pids[@]:-}"; do

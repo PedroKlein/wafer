@@ -171,7 +171,8 @@ fi
 _run_one() {
     local size_label=$1
     local run_idx=$2
-    local out_dir="$OUT_ROOT/$size_label/run-$(printf '%02d' "$run_idx")"
+    local out_dir
+    out_dir="$OUT_ROOT/$size_label/run-$(printf '%02d' "$run_idx")"
     local cfg="$REPO_ROOT/eval/configs/e-perf-4/pipeline-c-passthrough-${size_label}.toml"
 
     [ -f "$cfg" ] || { _log "config missing: $cfg"; return 1; }
