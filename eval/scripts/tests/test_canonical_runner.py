@@ -461,6 +461,7 @@ def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
     source = {
         "measurement_start_ns": measurement_start,
         "measurement_end_ns": measurement_start + 120_001_000_000,
+        "source_completion_offset_ns": 120_001_000_000,
         "rates_msg_s": [1_000.0, 2_000.0, 1_000.0],
         "phase_offsets_ns": [0, 55_000_000_000, 65_000_000_000, 120_000_000_000],
         "warmup_messages": 30_000,
@@ -492,16 +493,53 @@ def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
             "duplicates": 0,
             "rate_msg_s": count * 10,
         })
+    buckets[-1]["received_unique"] -= 1
+    buckets[-1]["received_events"] -= 1
+    buckets[-1]["rate_msg_s"] -= 10
+    drain_buckets = [
+        {
+            "start_offset_ns": 120_000_000_000 + index * 100_000_000,
+            "end_offset_ns": 120_000_000_000 + (index + 1) * 100_000_000,
+            "received_unique": 1 if index == 0 else 0,
+            "received_events": 1 if index == 0 else 0,
+            "duplicates": 0,
+            "rate_msg_s": 10 if index == 0 else 0,
+        }
+        for index in range(100)
+    ]
     throughput = {
-        "clock": "monotonic",
+        "schema_version": 1,
+        "clock": "unix-epoch-source-sink-alignment",
+        "source_measurement_start_unix_ns": measurement_start,
+        "origin_mismatch_events": 0,
+        "missing_origin_events": 0,
         "bucket_width_ns": 100_000_000,
         "coverage_start_offset_ns": 0,
         "coverage_end_offset_ns": 120_000_000_000,
+        "primary_received_unique": 129_999,
+        "primary_received_events": 129_999,
+        "primary_duplicates": 0,
+        "primary_last_offset_ns": 119_999_500_000,
+        "primary_buckets": buckets,
+        "drain_coverage_start_offset_ns": 120_000_000_000,
+        "drain_coverage_end_offset_ns": 130_000_000_000,
+        "drain_received_unique": 1,
+        "drain_received_events": 1,
+        "drain_duplicates": 0,
+        "drain_first_offset_ns": 120_000_500_000,
+        "drain_last_offset_ns": 120_000_500_000,
+        "drain_buckets": drain_buckets,
+        "after_drain_unique": 0,
+        "after_drain_events": 0,
+        "after_drain_duplicates": 0,
+        "after_drain_first_offset_ns": None,
+        "after_drain_last_offset_ns": None,
+        "drain_right_censored": False,
+        "max_arrival_offset_ns": 120_000_500_000,
         "received_unique": 130_000,
         "received_events": 130_000,
         "duplicates": 0,
         "phase_received_messages": [55_000, 20_000, 55_000],
-        "buckets": buckets,
     }
     sequence = {"total_expected": "130000", "total_received": "130000", "gap_msgs": "0", "duplicates_count": "0"}
     return timing, source, request, sink, throughput, sequence
@@ -524,6 +562,10 @@ def test_swap4_timeline_requires_one_centered_swap_and_reconciled_phases() -> No
     assert timeline["phases"]["before"]["intended"] == 55_000
     assert timeline["phases"]["burst"]["received"] == 20_000
     assert timeline["sequence"] == {"expected": 130_000, "received": 130_000, "gaps": 0, "duplicates": 0}
+    assert timeline["primary_received_events"] == 129_999
+    assert timeline["drain_received_events"] == 1
+    assert timeline["drain_duration_after_window_ns"] == 500_000
+    assert timeline["source_completion_offset_ns"] == 120_001_000_000
     validate_swap4_artifacts(timeline, throughput, requests, sink)
 
     invalid = json.loads(json.dumps(timeline))
@@ -540,11 +582,49 @@ def test_swap4_timeline_requires_one_centered_swap_and_reconciled_phases() -> No
         validate_swap4_artifacts(invalid, throughput, requests, sink)
 
 
+def test_swap4_rejects_malformed_primary_and_drain_evidence() -> None:
+    timing, source, requests, sink, throughput, sequence = swap4_fixture()
+    timeline = build_swap4_timeline(timing, source, requests, sink, throughput, sequence)
+    mutations = [
+        ("clock", "monotonic", "source-origin clock"),
+        ("source_measurement_start_unix_ns", timing["measurement_start_ns"] + 1, "source-origin clock"),
+        ("drain_first_offset_ns", None, "drain offsets"),
+        ("drain_right_censored", True, "right-censored"),
+    ]
+    for field, value, message in mutations:
+        invalid = json.loads(json.dumps(throughput))
+        invalid[field] = value
+        with pytest.raises(ValueError, match=message):
+            validate_swap4_artifacts(timeline, invalid, requests, sink)
+    invalid = json.loads(json.dumps(throughput))
+    invalid["primary_buckets"].pop()
+    with pytest.raises(ValueError, match="1200 contiguous primary"):
+        validate_swap4_artifacts(timeline, invalid, requests, sink)
+    invalid = json.loads(json.dumps(throughput))
+    invalid["drain_buckets"][1]["start_offset_ns"] += 1
+    with pytest.raises(ValueError, match="drain buckets"):
+        validate_swap4_artifacts(timeline, invalid, requests, sink)
+    invalid = json.loads(json.dumps(throughput))
+    invalid["max_arrival_offset_ns"] = invalid["primary_last_offset_ns"]
+    with pytest.raises(ValueError, match="maximum arrival"):
+        validate_swap4_artifacts(timeline, invalid, requests, sink)
+    invalid_timeline = json.loads(json.dumps(timeline))
+    invalid_timeline["source_completion_offset_ns"] = 130_000_000_000
+    with pytest.raises(ValueError, match="completion"):
+        validate_swap4_artifacts(invalid_timeline, throughput, requests, sink)
+
+
 def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
     runs = [
         {
             "run_index": index,
-            "burst_timeline": {"successful_swaps": 1, "sequence": {"gaps": 0, "duplicates": 0}},
+            "burst_timeline": {
+                "successful_swaps": 1,
+                "sequence": {"gaps": 0, "duplicates": 0},
+                "drain_received_events": 1 if index % 2 else 0,
+                "drain_last_offset_ns": 120_000_000_000 + index if index % 2 else None,
+                "drain_right_censored": False,
+            },
             "hotswap_analysis": {"sample_count": 1, "events": [{"sink_observed_output_gap_ns": index * 1_000_000}]},
         }
         for index in range(1, 31)
@@ -554,6 +634,8 @@ def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
     assert summary["n_events"] == 30
     assert summary["p95_sink_observed_output_gap_ns"] == 29_000_000
     assert len(summary["bootstrap_median_ci95_ns"]) == 2
+    assert summary["runs_with_drain_arrivals"] == 15
+    assert summary["max_drain_arrival_offset_ns"] == 120_000_000_029
 
     runs[0]["hotswap_analysis"]["events"].append({"sink_observed_output_gap_ns": 1})
     with pytest.raises(ValueError, match="one event"):

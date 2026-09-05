@@ -689,6 +689,7 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         "swap_ns": burst_measurement_start + 60_005_000_000,
         "burst_end_ns": burst_measurement_start + 65_000_000_000,
         "measurement_end_ns": burst_measurement_start + 120_000_000_000,
+        "source_completion_offset_ns": 120_000_000_000,
         "before_rate_msg_s": 1000,
         "burst_rate_msg_s": 2000,
         "after_rate_msg_s": 1000,
@@ -706,6 +707,13 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         },
         "sequence": {"expected": 130_000, "received": 130_000, "gaps": 0, "duplicates": 0},
         "loss": 0,
+        "primary_received_events": 130_000,
+        "drain_received_events": 0,
+        "drain_first_offset_ns": None,
+        "drain_last_offset_ns": None,
+        "drain_duration_after_window_ns": 0,
+        "max_arrival_offset_ns": 119_999_000_000,
+        "drain_right_censored": False,
         "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "ack_ns": 1, "convergence_ns": 1},
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -745,6 +753,182 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
             CONTRACT.check_burst_timeline(burst_path)
         )
 
+
+def swap4_throughput_fixture() -> dict:
+    primary = [
+        {
+            "start_offset_ns": index * 100_000_000,
+            "end_offset_ns": (index + 1) * 100_000_000,
+            "received_unique": 0,
+            "received_events": 0,
+            "duplicates": 0,
+            "rate_msg_s": 0,
+        }
+        for index in range(1_200)
+    ]
+    primary[0].update(received_unique=129_999, received_events=129_999, rate_msg_s=1_299_990)
+    drain = [
+        {
+            "start_offset_ns": 120_000_000_000 + index * 100_000_000,
+            "end_offset_ns": 120_000_000_000 + (index + 1) * 100_000_000,
+            "received_unique": 1 if index == 0 else 0,
+            "received_events": 1 if index == 0 else 0,
+            "duplicates": 0,
+            "rate_msg_s": 10 if index == 0 else 0,
+        }
+        for index in range(100)
+    ]
+    return {
+        "schema_version": 1,
+        "clock": "unix-epoch-source-sink-alignment",
+        "source_measurement_start_unix_ns": 1_000_000_000_000,
+        "origin_mismatch_events": 0,
+        "missing_origin_events": 0,
+        "bucket_width_ns": 100_000_000,
+        "coverage_start_offset_ns": 0,
+        "coverage_end_offset_ns": 120_000_000_000,
+        "primary_buckets": primary,
+        "primary_received_unique": 129_999,
+        "primary_received_events": 129_999,
+        "primary_duplicates": 0,
+        "primary_last_offset_ns": 99_999_999,
+        "drain_coverage_start_offset_ns": 120_000_000_000,
+        "drain_coverage_end_offset_ns": 130_000_000_000,
+        "drain_buckets": drain,
+        "drain_received_unique": 1,
+        "drain_received_events": 1,
+        "drain_duplicates": 0,
+        "drain_first_offset_ns": 120_001_000_000,
+        "drain_last_offset_ns": 120_001_000_000,
+        "after_drain_unique": 0,
+        "after_drain_events": 0,
+        "after_drain_duplicates": 0,
+        "after_drain_first_offset_ns": None,
+        "after_drain_last_offset_ns": None,
+        "drain_right_censored": False,
+        "max_arrival_offset_ns": 120_001_000_000,
+        "received_unique": 130_000,
+        "received_events": 130_000,
+        "duplicates": 0,
+        "phase_received_messages": [55_000, 20_000, 55_000],
+    }
+
+
+def swap4_timeline_fixture() -> dict:
+    measurement_start = 1_000_000_000_000
+    return {
+        "schema_version": 1,
+        "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
+        "measurement_start_ns": measurement_start,
+        "burst_start_ns": measurement_start + 55_000_000_000,
+        "scheduled_swap_ns": measurement_start + 60_000_000_000,
+        "swap_ns": measurement_start + 60_005_000_000,
+        "burst_end_ns": measurement_start + 65_000_000_000,
+        "measurement_end_ns": measurement_start + 120_001_000_000,
+        "source_completion_offset_ns": 120_001_000_000,
+        "before_rate_msg_s": 1000,
+        "burst_rate_msg_s": 2000,
+        "after_rate_msg_s": 1000,
+        "burst_start_offset_ns": 55_000_000_000,
+        "scheduled_swap_offset_ns": 60_000_000_000,
+        "actual_swap_offset_ns": 60_005_000_000,
+        "burst_end_offset_ns": 65_000_000_000,
+        "swap_alignment_error_ns": 5_000_000,
+        "swap_alignment_tolerance_ns": 10_000_000,
+        "successful_swaps": 1,
+        "phases": {
+            "before": {"rate_msg_s": 1000, "start_offset_ns": 0, "end_offset_ns": 55_000_000_000, "intended": 55_000, "emitted": 55_000, "received": 55_000},
+            "burst": {"rate_msg_s": 2000, "start_offset_ns": 55_000_000_000, "end_offset_ns": 65_000_000_000, "intended": 20_000, "emitted": 20_000, "received": 20_000},
+            "after": {"rate_msg_s": 1000, "start_offset_ns": 65_000_000_000, "end_offset_ns": 120_000_000_000, "intended": 55_000, "emitted": 55_000, "received": 55_000},
+        },
+        "sequence": {"expected": 130_000, "received": 130_000, "gaps": 0, "duplicates": 0},
+        "loss": 0,
+        "primary_received_events": 129_999,
+        "drain_received_events": 1,
+        "drain_first_offset_ns": 120_001_000_000,
+        "drain_last_offset_ns": 120_001_000_000,
+        "drain_duration_after_window_ns": 1_000_000,
+        "max_arrival_offset_ns": 120_001_000_000,
+        "drain_right_censored": False,
+        "sink_observed_output_gap_ns": 80_000_000,
+        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "ack_ns": 1, "convergence_ns": 1},
+    }
+
+
+def test_swap4_drain_contract_is_strict(tmp_path: Path) -> None:
+    valid = swap4_throughput_fixture()
+    path = tmp_path / "throughput-buckets.json"
+    path.write_text(json.dumps(valid))
+    assert CONTRACT.check_throughput_buckets(path, 1_200) == []
+    mutations = [
+        ("clock", "monotonic", "source-origin clock"),
+        ("source_measurement_start_unix_ns", None, "source-origin clock"),
+        ("drain_first_offset_ns", None, "drain offsets"),
+        ("drain_right_censored", True, "right-censored"),
+    ]
+    for field, value, message in mutations:
+        invalid = json.loads(json.dumps(valid))
+        invalid[field] = value
+        assert message in " ".join(CONTRACT._check_swap4_throughput(invalid))
+    invalid = json.loads(json.dumps(valid))
+    invalid["drain_buckets"][1]["start_offset_ns"] += 1
+    assert "drain buckets" in " ".join(CONTRACT._check_swap4_throughput(invalid))
+    invalid = json.loads(json.dumps(valid))
+    invalid["primary_buckets"].pop()
+    assert "1200 primary" in " ".join(CONTRACT._check_swap4_throughput(invalid))
+    invalid = json.loads(json.dumps(valid))
+    invalid["max_arrival_offset_ns"] = invalid["primary_last_offset_ns"]
+    assert "maximum arrival" in " ".join(CONTRACT._check_swap4_throughput(invalid))
+    invalid = json.loads(json.dumps(valid))
+    invalid.update(after_drain_unique=1, after_drain_events=1,
+                   after_drain_first_offset_ns=130_000_000_000,
+                   after_drain_last_offset_ns=130_000_000_000,
+                   drain_right_censored=True, received_unique=130_001,
+                   received_events=130_001, max_arrival_offset_ns=130_000_000_000)
+    assert "right-censored" in " ".join(CONTRACT._check_swap4_throughput(invalid))
+
+
+def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path) -> None:
+    timeline = swap4_timeline_fixture()
+    throughput = swap4_throughput_fixture()
+    (tmp_path / "burst-timeline.json").write_text(json.dumps(timeline))
+    (tmp_path / "throughput-buckets.json").write_text(json.dumps(throughput))
+    (tmp_path / "burst-source-timing.json").write_text(
+        json.dumps({"measurement_start_ns": timeline["measurement_start_ns"]})
+    )
+    (tmp_path / "burst-source-summary.json").write_text(json.dumps({
+        "measurement_start_ns": timeline["measurement_start_ns"],
+        "source_completion_offset_ns": timeline["source_completion_offset_ns"],
+    }))
+    (tmp_path / "swap_timeline.json").write_text(
+        json.dumps({"transitions": [{"pause_ns": 80_000_000}]})
+    )
+    (tmp_path / "hotswap-analysis.json").write_text(json.dumps({
+        "sample_count": 1,
+        "events": [{"sink_observed_output_gap_ns": 80_000_000}],
+    }))
+    (tmp_path / "swap_requests.json").write_text(json.dumps([{
+        "request_started_ns": timeline["swap_ns"],
+        "body": {"timeline": timeline["internal_swap_phases_ns"]},
+    }]))
+    assert CONTRACT.check_burst_timeline(tmp_path / "burst-timeline.json") == []
+    assert CONTRACT.check_swap4_reconciliation(tmp_path) == []
+    invalid_timeline = json.loads(json.dumps(timeline))
+    invalid_timeline["source_completion_offset_ns"] = 130_000_000_000
+    (tmp_path / "burst-timeline.json").write_text(json.dumps(invalid_timeline))
+    assert "clocks" in " ".join(CONTRACT.check_burst_timeline(tmp_path / "burst-timeline.json"))
+    (tmp_path / "burst-timeline.json").write_text(json.dumps(timeline))
+    invalid_timeline = json.loads(json.dumps(timeline))
+    invalid_timeline["phases"]["after"]["received"] -= 1
+    (tmp_path / "burst-timeline.json").write_text(json.dumps(invalid_timeline))
+    assert "phase receive" in " ".join(CONTRACT.check_swap4_reconciliation(tmp_path))
+    (tmp_path / "burst-timeline.json").write_text(json.dumps(timeline))
+    source = json.loads((tmp_path / "burst-source-summary.json").read_text())
+    source["source_completion_offset_ns"] += 1
+    (tmp_path / "burst-source-summary.json").write_text(json.dumps(source))
+    assert "source timing" in " ".join(CONTRACT.check_swap4_reconciliation(tmp_path))
 
 if __name__ == "__main__":
     test_canonical_result_accepts_complete_leaf()

@@ -84,6 +84,7 @@ REQUIRED = (
     "E-Perf-5 remains `PENDING`",
     "PMIC telemetry is an internal-rail proxy",
     "Pipeline A is `MQTT source -> threshold filter -> MQTT sink`",
+    "100 separate drain buckets over `[120s,130s)`",
     "campaign_started=false",
 )
 
@@ -180,6 +181,20 @@ def config_errors() -> list[str]:
         16_000,
     ]:
         errors.append("final capacity grid differs from the documented common grid")
+    if matrix["experiments"]["e-swap-4"].get("sink_tail_policy") != {
+        "alignment_clock": "unix-epoch-source-sink-alignment",
+        "primary_start_secs": 0,
+        "primary_end_secs": 120,
+        "primary_bucket_count": 1_200,
+        "drain_start_secs": 120,
+        "drain_end_secs": 130,
+        "drain_bucket_count": 100,
+        "bucket_width_ms": 100,
+        "after_drain_events_allowed": 0,
+        "source_completion_deadline_secs": 130,
+        "require_full_sequence_reconciliation": True,
+    }:
+        errors.append("E-Swap-4 sink tail policy differs from current documentation")
     return errors
 
 

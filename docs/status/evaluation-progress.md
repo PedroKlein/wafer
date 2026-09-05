@@ -28,7 +28,7 @@ The matrix contains 2,105 schedule records and 1,893 executed or static leaves. 
 - E-Perf-5 remains `PENDING` until matching x86 Linux evidence exists.
 - E-Perf-9 measures Linux filesystem page-cache state with the disk compiled-component cache disabled.
 - E-Swap-3 measures one event-aligned disruption in each of 30 runs per strategy.
-- E-Swap-4 measures one true 1,000/2,000/1,000 msg/s burst and one stateless swap in each of 30 runs.
+- E-Swap-4 measures one true 1,000/2,000/1,000 msg/s burst and one stateless swap in each of 30 runs, with separate source-origin primary and bounded drain sink series.
 - PMIC telemetry is an internal-rail proxy, not total board power.
 
 See [canonical readiness](canonical-readiness.md), [RFC-008](../rfcs/RFC-008-evaluation-harness.md), and [the Pi 5 runbook](../eval/pi5-experiment-runbook.md).

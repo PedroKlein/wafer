@@ -9,7 +9,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - Capacity grid: `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper, with 30 runs per system/rate.
 - Metering: ordinary WAFER leaves explicitly use fuel plus epoch; runtime defaults remain unmetered.
 - E-Swap-3: actual-t0-aligned event series implemented; targeted Pi validation pending.
-- E-Swap-4: true source-driven burst and one swap/run implemented; targeted Pi validation pending.
+- E-Swap-4: true source-driven burst and one swap/run implemented; source-origin primary/drain sink accounting is pending a fresh targeted Pi validation.
 - E-Perf-9: Linux filesystem page-cache method; disk compiled-component cache disabled.
 - E-Perf-5: `PENDING` until matched x86 Linux evidence exists.
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.

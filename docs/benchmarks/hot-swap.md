@@ -30,7 +30,7 @@ E-Swap-3 uses 30 independent runs for each of WAFER hot-swap, WAFER restart, and
 
 ### True burst
 
-E-Swap-4 uses 30 independent runs. The source emits 1,000 msg/s before measured second 55, 2,000 msg/s from 55 through 65, and 1,000 msg/s afterward. Exactly one stateless swap is scheduled at second 60. Each run contributes one sink gap to the across-run p95.
+E-Swap-4 uses 30 independent runs. The source emits 1,000 msg/s before measured second 55, 2,000 msg/s from 55 through 65, and 1,000 msg/s afterward. Exactly one stateless swap is scheduled at second 60. Each run contributes one sink gap to the across-run p95. The primary sink series stays fixed at 1,200 source-origin 100 ms buckets over `[0,120s)`; a separate 100-bucket `[120s,130s)` drain records valid completion arrivals without folding them into the primary series. Full sequence counts must reconcile and any later receive fails closed.
 
 ## Cache boundary
 

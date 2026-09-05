@@ -113,7 +113,7 @@ The restart comparators are measured rather than assigned a synthetic 100 percen
 
 ### E-Swap-4 true burst
 
-E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 sink-observed 100 ms buckets, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
+E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 source-origin 100 ms primary buckets over `[0,120s)`, a separate 100-bucket drain series over `[120s,130s)`, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. The source carries `bench.measurement_start_unix_ns`; sink offsets use the explicitly labeled `unix-epoch-source-sink-alignment` clock while scheduling and source-completion duration remain monotonic. Full-run counts reconcile the primary, drain, and O(1) after-drain counters. Any receive at or after 130 seconds, right-censored drain, loss, or duplication rejects the run. Reconciled drain arrivals remain separate completion evidence and do not enter the t=60 disruption estimator. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
 
 ## Statistics and outputs
 

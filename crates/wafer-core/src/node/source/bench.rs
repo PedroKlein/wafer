@@ -100,6 +100,7 @@ pub struct BenchSource {
     interval: Option<tokio::time::Interval>,
     measurement_start: Option<tokio::time::Instant>,
     measurement_start_unix_ns: Option<u64>,
+    measurement_completed_offset_ns: Option<u64>,
     payload: Bytes,
     emitted_phase_counts: [u64; 3],
 }
@@ -116,6 +117,7 @@ impl BenchSource {
             interval: None,
             measurement_start: None,
             measurement_start_unix_ns: None,
+            measurement_completed_offset_ns: None,
             payload,
             emitted_phase_counts: [0; 3],
         }
@@ -231,6 +233,7 @@ impl BenchSource {
             "schema_version": 1,
             "measurement_start_ns": measurement_start_ns,
             "measurement_end_ns": current_time_ns(),
+            "source_completion_offset_ns": self.measurement_completed_offset_ns.unwrap_or(u64::MAX),
             "rates_msg_s": [self.config.rate_per_sec, burst.rate_per_sec, self.config.rate_per_sec],
             "phase_offsets_ns": [0, burst.start_secs.saturating_mul(1_000_000_000), burst.end_secs.saturating_mul(1_000_000_000), 120_000_000_000_u64],
             "warmup_messages": self.config.warmup_messages,
@@ -341,6 +344,12 @@ impl Source for BenchSource {
         Box::pin(async {
             // Check completion
             if self.sequence >= self.config.total_messages {
+                if self.measurement_completed_offset_ns.is_none()
+                    && let Some(start) = self.measurement_start
+                {
+                    self.measurement_completed_offset_ns =
+                        Some(crate::util::duration_ns_saturating(start.elapsed()));
+                }
                 return Ok(None);
             }
 
@@ -364,10 +373,16 @@ impl Source for BenchSource {
             if let Some(phase) = burst_phase
                 && let Some(name) = ["before", "burst", "after"].get(phase)
             {
-                envelope = envelope.with_metadata("bench.phase", *name).with_metadata(
-                    "bench.measurement_offset_ns",
-                    self.measurement_offset_ns(seq).unwrap_or(0).to_string(),
-                );
+                envelope = envelope
+                    .with_metadata("bench.phase", *name)
+                    .with_metadata(
+                        "bench.measurement_offset_ns",
+                        self.measurement_offset_ns(seq).unwrap_or(0).to_string(),
+                    )
+                    .with_metadata(
+                        "bench.measurement_start_unix_ns",
+                        self.measurement_start_unix_ns.unwrap_or(0).to_string(),
+                    );
             }
 
             Ok(Some(envelope))
@@ -467,6 +482,25 @@ mod tests {
                 .unwrap();
             assert_eq!(boundary, "2");
         }
+    }
+
+    #[tokio::test]
+    async fn burst_metadata_carries_source_measurement_origin() {
+        let config = BenchSourceConfig::new(1_000.0, 4_001)
+            .with_warmup(1)
+            .with_burst(BenchBurstSchedule::new(2_000.0, 1, 2));
+        let mut source = BenchSource::new(config);
+        source.init().await.unwrap();
+
+        let _warmup = source.poll().await.unwrap().unwrap();
+        let measured = source.poll().await.unwrap().unwrap();
+        let origin = measured
+            .header
+            .metadata
+            .iter()
+            .find(|(key, _)| key.as_ref() == "bench.measurement_start_unix_ns")
+            .and_then(|(_, value)| value.parse::<u64>().ok());
+        assert_eq!(origin, source.measurement_start_unix_ns);
     }
 
     #[tokio::test]

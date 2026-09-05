@@ -33,7 +33,7 @@ Runtime fuel and epoch limits default to `None`. Ordinary final WAFER configs en
 | NFR-SWAP-1 | Bound repeated-swap pause. | E-Swap-1 reports sink-observed gaps and internal phases separately; p95 sink gap must be below 100 ms. |
 | NFR-SWAP-2 | Preserve message accounting. | E-Swap-2 requires zero sequence loss and duplication. |
 | NFR-SWAP-3 | Bound output disruption against restart comparators. | E-Swap-3 has 30 runs per strategy, one action at measured t=60, and 200 actual-t0-aligned 100 ms buckets over `[-10,+10)`. The WAFER criterion uses the upper bootstrap CI for median dip, which must be below 5 percent with zero loss and duplication. Restart dips are measured, not assumed. |
-| NFR-SWAP-4 | Bound pause during a transient burst. | E-Swap-4 has 30 independent runs, source rates 1,000/2,000/1,000 over measured boundaries 55 and 65 seconds, and one stateless swap at 60 seconds. Across-run p95 sink gap must be below 100 ms with zero loss and duplication. |
+| NFR-SWAP-4 | Bound pause during a transient burst. | E-Swap-4 has 30 independent runs, source rates 1,000/2,000/1,000 over measured boundaries 55 and 65 seconds, and one stateless swap at 60 seconds. Across-run p95 sink gap must be below 100 ms with zero full-run loss and duplication. Primary `[0,120s)` buckets and the separate `[120s,130s)` drain must reconcile; after-drain receives fail closed. |
 | NFR-SWAP-5 | Recover from a process-time failure. | E-Swap-5 verifies bounded rollback and continuity within the configured canary window. |
 
 A sink-observed gap, HTTP duration, and internal swap phases are separate measurements. No state-preservation claim is made.

@@ -146,6 +146,7 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     .unwrap();
     assert_eq!(source_summary["intended_phase_messages"], serde_json::json!([10, 20, 10]));
     assert_eq!(source_summary["emitted_phase_messages"], serde_json::json!([10, 20, 10]));
+    assert!(source_summary["source_completion_offset_ns"].as_u64().unwrap() < 4_000_000_000);
     assert_eq!(offsets["before"][1] - offsets["before"][0], 100_000_000);
     assert_eq!(offsets["burst"][1] - offsets["burst"][0], 50_000_000);
     assert_eq!(offsets["after"][1] - offsets["after"][0], 100_000_000);
@@ -154,6 +155,12 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     )
     .unwrap();
     assert_eq!(sink_buckets["phase_received_messages"], serde_json::json!([10, 20, 10]));
+    assert_eq!(
+        sink_buckets["source_measurement_start_unix_ns"],
+        source_summary["measurement_start_ns"]
+    );
+    assert_eq!(sink_buckets["primary_buckets"].as_array().unwrap().len(), 1_200);
+    assert_eq!(sink_buckets["drain_buckets"].as_array().unwrap().len(), 100);
     assert_eq!(sink_buckets["received_events"], 40);
 }
 

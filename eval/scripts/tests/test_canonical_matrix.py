@@ -180,6 +180,22 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "burst_end_secs": 65,
         "swaps_per_run": 1,
     }
+    assert {"burst-source-timing.json", "burst-source-summary.json"} <= set(
+        burst["required_outputs"]
+    )
+    assert burst["sink_tail_policy"] == {
+        "alignment_clock": "unix-epoch-source-sink-alignment",
+        "primary_start_secs": 0,
+        "primary_end_secs": 120,
+        "primary_bucket_count": 1200,
+        "drain_start_secs": 120,
+        "drain_end_secs": 130,
+        "drain_bucket_count": 100,
+        "bucket_width_ms": 100,
+        "after_drain_events_allowed": 0,
+        "source_completion_deadline_secs": 130,
+        "require_full_sequence_reconciliation": True,
+    }
     assert all(
         definition["thesis_evidence"] is True
         for definition in matrix["experiments"].values()
@@ -192,6 +208,12 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
         ("e-swap-4 repetitions", lambda value: value["experiments"]["e-swap-4"].update(repetitions=29)),
         ("e-perf-10 rate grid", lambda value: value["experiments"]["e-perf-10"].update(rate_points_msg_s=[1000, 4000])),
         ("e-swap-4 sample_unit", lambda value: value["experiments"]["e-swap-4"].update(sample_unit="")),
+        (
+            "e-swap-4 sink tail policy",
+            lambda value: value["experiments"]["e-swap-4"]["sink_tail_policy"].update(
+                drain_end_secs=131
+            ),
+        ),
     )
     for expected, mutate in mutations:
         matrix = json.loads(MATRIX.read_text())

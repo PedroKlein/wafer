@@ -379,6 +379,18 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
         raise ValueError("E-Swap-4 requires 30 independent runs")
     if any(run.get("successful_swaps") != 1 for run in runs):
         raise ValueError("E-Swap-4 requires one successful swap per run")
+    if any(run.get("drain_right_censored") is not False for run in runs):
+        raise ValueError("E-Swap-4 requires complete drain evidence")
+    required_drain = {
+        "primary_received_events",
+        "drain_received_events",
+        "drain_first_offset_ns",
+        "drain_last_offset_ns",
+        "drain_duration_after_window_ns",
+        "max_arrival_offset_ns",
+    }
+    if any(not required_drain <= run.keys() for run in runs):
+        raise ValueError("E-Swap-4 lacks run-level drain evidence")
     gaps = sorted(float(run["sink_observed_output_gap_ns"]) for run in runs)
     low, high = _ci(gaps)
     phase_medians = {
@@ -412,10 +424,34 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
                 "total_duplicates": sum(
                     int(run["sequence"]["duplicates"]) for run in runs
                 ),
-                "units": "nanoseconds, messages",
-                "estimator": "one sink gap and one internal-phase vector per run",
-                "threshold": "across-run p95 sink gap < 100 ms; zero loss; zero duplication",
-                "claim_boundary": "one stateless swap centered in one source-driven burst per run",
+                "runs_with_drain_arrivals": sum(
+                    int(run["drain_received_events"]) > 0 for run in runs
+                ),
+                "median_primary_received_events": float(
+                    np.median([run["primary_received_events"] for run in runs])
+                ),
+                "median_drain_received_events": float(
+                    np.median([run["drain_received_events"] for run in runs])
+                ),
+                "max_drain_arrival_offset_ns": max(
+                    (
+                        int(run["drain_last_offset_ns"])
+                        for run in runs
+                        if run["drain_last_offset_ns"] is not None
+                    ),
+                    default=None,
+                ),
+                "max_drain_duration_after_window_ns": max(
+                    int(run["drain_duration_after_window_ns"]) for run in runs
+                ),
+                "max_arrival_offset_ns": max(
+                    int(run["max_arrival_offset_ns"]) for run in runs
+                ),
+                "drain_right_censored_runs": 0,
+                "units": "nanoseconds, messages, runs",
+                "estimator": "one sink gap and one internal-phase vector per run; source-origin primary/drain completion counts",
+                "threshold": "across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s",
+                "claim_boundary": "one stateless swap centered in one source-driven burst per run; drain excluded from t=60 disruption estimator",
                 "thesis_evidence": True,
             }
         ]

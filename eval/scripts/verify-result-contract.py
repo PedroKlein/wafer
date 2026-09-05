@@ -355,11 +355,148 @@ def check_capacity_artifact_reconciliation(leaf: Path) -> list[str]:
     return violations
 
 
+def _check_swap4_bucket_series(
+    buckets: object, *, count: int, start_ns: int, label: str
+) -> tuple[list[str], dict[str, int]]:
+    totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
+    if not isinstance(buckets, list) or len(buckets) != count:
+        return [f"throughput-buckets.json must contain {count} {label} buckets"], totals
+    violations = []
+    expected_start = start_ns
+    for bucket in buckets:
+        try:
+            unique = int(bucket["received_unique"])
+            events = int(bucket["received_events"])
+            duplicates = int(bucket["duplicates"])
+            valid = (
+                int(bucket["start_offset_ns"]) == expected_start
+                and int(bucket["end_offset_ns"]) == expected_start + 100_000_000
+                and events == unique + duplicates
+                and float(bucket["rate_msg_s"]) == unique * 10.0
+            )
+        except (KeyError, TypeError, ValueError):
+            violations.append(f"throughput-buckets.json {label} bucket schema is invalid")
+            continue
+        if not valid:
+            violations.append(
+                f"throughput-buckets.json {label} buckets are not contiguous or reconciled"
+            )
+        totals["received_unique"] += unique
+        totals["received_events"] += events
+        totals["duplicates"] += duplicates
+        expected_start += 100_000_000
+    return violations, totals
+
+
+def _check_swap4_throughput(value: dict) -> list[str]:
+    violations = []
+    if (
+        value.get("schema_version") != 1
+        or value.get("clock") != "unix-epoch-source-sink-alignment"
+        or type(value.get("source_measurement_start_unix_ns")) is not int
+        or value.get("origin_mismatch_events") != 0
+        or value.get("missing_origin_events") != 0
+        or value.get("bucket_width_ns") != 100_000_000
+        or value.get("coverage_start_offset_ns") != 0
+        or value.get("coverage_end_offset_ns") != 120_000_000_000
+        or value.get("drain_coverage_start_offset_ns") != 120_000_000_000
+        or value.get("drain_coverage_end_offset_ns") != 130_000_000_000
+    ):
+        violations.append("throughput-buckets.json E-Swap-4 source-origin clock is invalid")
+    primary_buckets = value.get("primary_buckets")
+    drain_buckets = value.get("drain_buckets")
+    primary_errors, primary = _check_swap4_bucket_series(
+        primary_buckets, count=1_200, start_ns=0, label="primary"
+    )
+    drain_errors, drain = _check_swap4_bucket_series(
+        drain_buckets, count=100, start_ns=120_000_000_000, label="drain"
+    )
+    violations.extend(primary_errors + drain_errors)
+    for prefix, totals in (("primary", primary), ("drain", drain)):
+        for field, total in totals.items():
+            if value.get(f"{prefix}_{field}") != total:
+                violations.append(f"throughput-buckets.json {prefix} totals do not reconcile")
+    if not isinstance(primary_buckets, list) or not isinstance(drain_buckets, list):
+        return violations
+    primary_last = value.get("primary_last_offset_ns")
+    drain_first = value.get("drain_first_offset_ns")
+    drain_last = value.get("drain_last_offset_ns")
+    primary_nonempty = [
+        index for index, bucket in enumerate(primary_buckets)
+        if int(bucket.get("received_events", 0)) > 0
+    ]
+    if primary["received_events"] > 0 and (
+        type(primary_last) is not int
+        or not primary_nonempty
+        or not primary_nonempty[-1] * 100_000_000
+        <= primary_last
+        < (primary_nonempty[-1] + 1) * 100_000_000
+    ):
+        violations.append("throughput-buckets.json primary last offset is invalid")
+    if primary["received_events"] == 0 and primary_last is not None:
+        violations.append("throughput-buckets.json primary last offset must be null")
+    drain_nonempty = [
+        index for index, bucket in enumerate(drain_buckets)
+        if int(bucket.get("received_events", 0)) > 0
+    ]
+    if drain["received_events"] > 0 and (
+        type(drain_first) is not int
+        or type(drain_last) is not int
+        or not drain_nonempty
+        or not 120_000_000_000 + drain_nonempty[0] * 100_000_000
+        <= drain_first
+        < 120_000_000_000 + (drain_nonempty[0] + 1) * 100_000_000
+        or not 120_000_000_000 + drain_nonempty[-1] * 100_000_000
+        <= drain_last
+        < 120_000_000_000 + (drain_nonempty[-1] + 1) * 100_000_000
+        or drain_first > drain_last
+    ):
+        violations.append("throughput-buckets.json drain offsets are invalid")
+    if drain["received_events"] == 0 and (drain_first is not None or drain_last is not None):
+        violations.append("throughput-buckets.json drain offsets must be null")
+    try:
+        after = {
+            "received_unique": int(value["after_drain_unique"]),
+            "received_events": int(value["after_drain_events"]),
+            "duplicates": int(value["after_drain_duplicates"]),
+        }
+        after_first = value["after_drain_first_offset_ns"]
+        after_last = value["after_drain_last_offset_ns"]
+        if after["received_events"] != after["received_unique"] + after["duplicates"]:
+            violations.append("throughput-buckets.json after-drain totals do not reconcile")
+        if after["received_events"] > 0 and (
+            type(after_first) is not int
+            or type(after_last) is not int
+            or not 130_000_000_000 <= after_first <= after_last
+        ):
+            violations.append("throughput-buckets.json after-drain offsets are invalid")
+        if after["received_events"] == 0 and (after_first is not None or after_last is not None):
+            violations.append("throughput-buckets.json after-drain offsets must be null")
+        if after["received_events"] != 0 or value.get("drain_right_censored") is not False:
+            violations.append("throughput-buckets.json drain is right-censored")
+        full = {field: primary[field] + drain[field] + after[field] for field in primary}
+        if any(value.get(field) != total for field, total in full.items()):
+            violations.append("throughput-buckets.json full-run totals do not reconcile")
+        offsets = [offset for offset in (primary_last, drain_last, after_last) if offset is not None]
+        maximum = int(value["max_arrival_offset_ns"])
+        if not offsets or maximum != max(offsets):
+            violations.append("throughput-buckets.json maximum arrival offset does not reconcile")
+        if (maximum < 120_000_000_000) != (
+            drain["received_events"] == 0 and after["received_events"] == 0
+        ):
+            violations.append("throughput-buckets.json arrival region is invalid")
+    except (KeyError, TypeError, ValueError):
+        violations.append("throughput-buckets.json drain evidence is invalid")
+    return violations
+
+
 def check_throughput_buckets(path: Path, expected_count: int | None = None) -> list[str]:
     violations: list[str] = []
     value = _load_json(path, "throughput-buckets.json", violations)
     if value is None:
         return violations
+    if expected_count == 1_200:
+        return _check_swap4_throughput(value)
     expected_clock = "unix-epoch" if expected_count == 200 else "monotonic"
     if value.get("clock") != expected_clock or value.get("bucket_width_ns") != 100_000_000:
         violations.append(
@@ -573,6 +710,7 @@ def check_burst_timeline(path: Path) -> list[str]:
             or abs(actual_swap - scheduled_swap) > 10_000_000
             or not burst_start < actual_swap < burst_end
             or int(value["measurement_end_ns"]) <= burst_end
+            or not 0 <= int(value["source_completion_offset_ns"]) < 130_000_000_000
         ):
             violations.append("burst-timeline.json clocks or centered swap are invalid")
     except (KeyError, TypeError, ValueError):
@@ -608,6 +746,25 @@ def check_burst_timeline(path: Path) -> list[str]:
         or sequence["gaps"] != value.get("loss")
     ):
         violations.append("burst-timeline.json sequence totals do not reconcile")
+    if (
+        type(value.get("primary_received_events")) is not int
+        or type(value.get("drain_received_events")) is not int
+        or type(value.get("max_arrival_offset_ns")) is not int
+        or value.get("drain_right_censored") is not False
+    ):
+        violations.append("burst-timeline.json drain evidence is invalid")
+    drain_count = value.get("drain_received_events")
+    drain_first = value.get("drain_first_offset_ns")
+    drain_last = value.get("drain_last_offset_ns")
+    if drain_count == 0 and (drain_first is not None or drain_last is not None):
+        violations.append("burst-timeline.json drain offsets must be null")
+    elif isinstance(drain_count, int) and drain_count > 0 and (
+        type(drain_first) is not int
+        or type(drain_last) is not int
+        or not 120_000_000_000 <= drain_first <= drain_last < 130_000_000_000
+        or value.get("drain_duration_after_window_ns") != drain_last - 120_000_000_000
+    ):
+        violations.append("burst-timeline.json drain offsets are invalid")
     internal_phases = value.get("internal_swap_phases_ns", {})
     if set(internal_phases) != {
         "compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns"
@@ -624,15 +781,29 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
     )
     sink_timeline = _load_json(leaf / "swap_timeline.json", "swap_timeline.json", violations)
     analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
+    source_timing = _load_json(
+        leaf / "burst-source-timing.json", "burst-source-timing.json", violations
+    )
+    source_summary = _load_json(
+        leaf / "burst-source-summary.json", "burst-source-summary.json", violations
+    )
     try:
         requests = json.loads((leaf / "swap_requests.json").read_text())
     except (OSError, ValueError) as error:
         return violations + [f"swap_requests.json is unreadable: {error}"]
-    if None in (timeline, throughput, sink_timeline, analysis):
+    if None in (timeline, throughput, sink_timeline, analysis, source_timing, source_summary):
         return violations
+    violations.extend(_check_swap4_throughput(throughput))
     try:
         transitions = sink_timeline["transitions"]
         events = analysis["events"]
+        if (
+            source_timing["measurement_start_ns"] != timeline["measurement_start_ns"]
+            or source_summary["measurement_start_ns"] != timeline["measurement_start_ns"]
+            or source_summary["source_completion_offset_ns"]
+                != timeline["source_completion_offset_ns"]
+        ):
+            violations.append("E-Swap-4 source timing does not reconcile")
         if not isinstance(requests, list) or len(requests) != 1:
             violations.append("final E-Swap-4 must contain exactly one swap request")
         elif timeline["swap_ns"] != requests[0]["request_started_ns"]:
@@ -650,8 +821,21 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
         ]
         if phase_received != throughput["phase_received_messages"]:
             violations.append("E-Swap-4 phase receive populations do not reconcile")
+        if throughput.get("source_measurement_start_unix_ns") != timeline.get(
+            "measurement_start_ns"
+        ):
+            violations.append("E-Swap-4 source and sink origins do not reconcile")
         if timeline["sequence"]["received"] != throughput["received_events"]:
             violations.append("E-Swap-4 sequence and bucket populations do not reconcile")
+        if (
+            timeline.get("primary_received_events") != throughput["primary_received_events"]
+            or timeline.get("drain_received_events") != throughput["drain_received_events"]
+            or timeline.get("drain_first_offset_ns") != throughput["drain_first_offset_ns"]
+            or timeline.get("drain_last_offset_ns") != throughput["drain_last_offset_ns"]
+            or timeline.get("max_arrival_offset_ns") != throughput["max_arrival_offset_ns"]
+            or timeline.get("drain_right_censored") is not False
+        ):
+            violations.append("E-Swap-4 timeline drain evidence does not reconcile")
     except (KeyError, TypeError, ValueError):
         violations.append("E-Swap-4 cross-artifact evidence is invalid")
     return violations
@@ -1145,7 +1329,6 @@ def check_leaf(
         violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
         violations.extend(check_swap3_reconciliation(leaf, metadata))
     if experiment == "e-swap-4" and not focused:
-        violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 1_200))
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
         violations.extend(check_swap4_reconciliation(leaf))
         analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)

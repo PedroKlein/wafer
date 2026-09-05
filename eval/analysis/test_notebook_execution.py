@@ -142,6 +142,13 @@ def build_complete_fixture(root: Path) -> None:
             "sink_observed_output_gap_ns": 1_000_000,
             "loss": 0,
             "sequence": {"duplicates": 0},
+            "primary_received_events": 129_999,
+            "drain_received_events": 1,
+            "drain_first_offset_ns": 120_000_500_000,
+            "drain_last_offset_ns": 120_000_500_000,
+            "drain_duration_after_window_ns": 500_000,
+            "max_arrival_offset_ns": 120_000_500_000,
+            "drain_right_censored": False,
             "internal_swap_phases_ns": {
                 "compile_ns": 1,
                 "instantiate_ns": 2,

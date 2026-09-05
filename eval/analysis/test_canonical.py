@@ -235,6 +235,15 @@ def swap4_runs() -> list[dict]:
             "sink_observed_output_gap_ns": run * 1_000_000,
             "loss": 0,
             "sequence": {"duplicates": 0},
+            "primary_received_events": 129_999 if run % 2 else 130_000,
+            "drain_received_events": 1 if run % 2 else 0,
+            "drain_first_offset_ns": 120_000_000_000 + run if run % 2 else None,
+            "drain_last_offset_ns": 120_000_000_000 + run if run % 2 else None,
+            "drain_duration_after_window_ns": run if run % 2 else 0,
+            "max_arrival_offset_ns": (
+                120_000_000_000 + run if run % 2 else 119_999_000_000
+            ),
+            "drain_right_censored": False,
             "internal_swap_phases_ns": {
                 "compile_ns": 1,
                 "instantiate_ns": 2,
@@ -254,9 +263,12 @@ def test_swap4_table_uses_one_event_per_run_and_reports_p95() -> None:
     assert table.loc[0, "p95_sink_gap_ns"] == 29_000_000
     assert table.loc[0, "median_compile_ns"] == 1
     assert table.loc[0, "median_convergence_ns"] == 5
+    assert table.loc[0, "runs_with_drain_arrivals"] == 15
+    assert table.loc[0, "max_drain_arrival_offset_ns"] == 120_000_000_029
+    assert table.loc[0, "drain_right_censored_runs"] == 0
     assert (
         table.loc[0, "threshold"]
-        == "across-run p95 sink gap < 100 ms; zero loss; zero duplication"
+        == "across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s"
     )
     broken = swap4_runs()
     broken[0]["successful_swaps"] = 2

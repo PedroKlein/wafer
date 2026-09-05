@@ -456,6 +456,20 @@ def validate_matrix(matrix: dict) -> list[str]:
         "swaps_per_run": 1,
     }:
         errors.append("e-swap-4 burst profile differs from the frozen one-swap design")
+    if swap4.get("sink_tail_policy") != {
+        "alignment_clock": "unix-epoch-source-sink-alignment",
+        "primary_start_secs": 0,
+        "primary_end_secs": 120,
+        "primary_bucket_count": 1_200,
+        "drain_start_secs": 120,
+        "drain_end_secs": 130,
+        "drain_bucket_count": 100,
+        "bucket_width_ms": 100,
+        "after_drain_events_allowed": 0,
+        "source_completion_deadline_secs": 130,
+        "require_full_sequence_reconciliation": True,
+    }:
+        errors.append("e-swap-4 sink tail policy differs from the frozen v3 design")
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")

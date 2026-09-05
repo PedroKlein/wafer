@@ -1152,6 +1152,7 @@ def build_swap4_timeline(
         "swap_ns": swap_ns,
         "burst_end_ns": int(source_timing["burst_end_ns"]),
         "measurement_end_ns": int(source_summary["measurement_end_ns"]),
+        "source_completion_offset_ns": int(source_summary["source_completion_offset_ns"]),
         "burst_start_offset_ns": 55_000_000_000,
         "scheduled_swap_offset_ns": 60_000_000_000,
         "actual_swap_offset_ns": swap_ns - measurement_start,
@@ -1165,11 +1166,57 @@ def build_swap4_timeline(
         "phases": phases,
         "sequence": sequence_summary,
         "loss": sum(emitted) - (sequence_summary["received"] - sequence_summary["duplicates"]),
+        "primary_received_events": int(throughput["primary_received_events"]),
+        "drain_received_events": int(throughput["drain_received_events"]),
+        "drain_first_offset_ns": throughput["drain_first_offset_ns"],
+        "drain_last_offset_ns": throughput["drain_last_offset_ns"],
+        "drain_duration_after_window_ns": (
+            0
+            if throughput["drain_last_offset_ns"] is None
+            else int(throughput["drain_last_offset_ns"]) - 120_000_000_000
+        ),
+        "max_arrival_offset_ns": int(throughput["max_arrival_offset_ns"]),
+        "drain_right_censored": bool(throughput["drain_right_censored"]),
         "sink_observed_output_gap_ns": int(sink_timeline["transitions"][0]["pause_ns"]),
         "internal_swap_phases_ns": {
             field: int(response_timeline[field]) for field in HOTSWAP_PHASE_FIELDS
         },
     }
+
+
+def _swap4_bucket_totals(
+    buckets: object, start_offset_ns: int, count: int, label: str
+) -> dict[str, int]:
+    if not isinstance(buckets, list) or len(buckets) != count:
+        raise ValueError(f"E-Swap-4 requires {count} contiguous {label} buckets")
+    totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
+    expected_start = start_offset_ns
+    for bucket in buckets:
+        try:
+            start = int(bucket["start_offset_ns"])
+            end = int(bucket["end_offset_ns"])
+            unique = int(bucket["received_unique"])
+            events = int(bucket["received_events"])
+            duplicates = int(bucket["duplicates"])
+            rate = float(bucket["rate_msg_s"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"E-Swap-4 {label} bucket schema is invalid") from error
+        if (
+            start != expected_start
+            or end != expected_start + 100_000_000
+            or events != unique + duplicates
+            or rate != unique * 10.0
+        ):
+            raise ValueError(f"E-Swap-4 {label} buckets are not contiguous or reconciled")
+        totals["received_unique"] += unique
+        totals["received_events"] += events
+        totals["duplicates"] += duplicates
+        expected_start += 100_000_000
+    return totals
+
+
+def _swap4_nonempty_indices(buckets: list[dict]) -> list[int]:
+    return [index for index, bucket in enumerate(buckets) if int(bucket["received_events"]) > 0]
 
 
 def validate_swap4_artifacts(
@@ -1197,39 +1244,109 @@ def validate_swap4_artifacts(
         or int(timeline.get("scheduled_swap_offset_ns", -1)) != 60_000_000_000
         or int(timeline.get("actual_swap_offset_ns", -1)) != actual_swap - measurement_start
         or int(timeline.get("swap_alignment_error_ns", SWAP4_ALIGNMENT_TOLERANCE_NS + 1))
-            != actual_swap - scheduled_swap
+        != actual_swap - scheduled_swap
         or int(timeline.get("swap_alignment_tolerance_ns", -1))
-            != SWAP4_ALIGNMENT_TOLERANCE_NS
+        != SWAP4_ALIGNMENT_TOLERANCE_NS
         or abs(actual_swap - scheduled_swap) > SWAP4_ALIGNMENT_TOLERANCE_NS
         or not burst_start < actual_swap < burst_end
     ):
         raise ValueError("E-Swap-4 swap is not centered in the declared burst")
-    buckets = throughput.get("buckets")
     if (
-        throughput.get("clock") != "monotonic"
+        throughput.get("schema_version") != 1
+        or throughput.get("clock") != "unix-epoch-source-sink-alignment"
+        or throughput.get("source_measurement_start_unix_ns") != measurement_start
+        or throughput.get("origin_mismatch_events") != 0
+        or throughput.get("missing_origin_events") != 0
         or throughput.get("bucket_width_ns") != 100_000_000
         or throughput.get("coverage_start_offset_ns") != 0
         or throughput.get("coverage_end_offset_ns") != 120_000_000_000
-        or not isinstance(buckets, list)
-        or len(buckets) != 1_200
+        or throughput.get("drain_coverage_start_offset_ns") != 120_000_000_000
+        or throughput.get("drain_coverage_end_offset_ns") != 130_000_000_000
     ):
-        raise ValueError("E-Swap-4 requires 1200 contiguous 100 ms sink buckets")
-    expected_start = 0
-    totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
-    for bucket in buckets:
-        if (
-            int(bucket["start_offset_ns"]) != expected_start
-            or int(bucket["end_offset_ns"]) != expected_start + 100_000_000
-            or int(bucket["received_events"])
-                != int(bucket["received_unique"]) + int(bucket["duplicates"])
-            or float(bucket["rate_msg_s"]) != int(bucket["received_unique"]) * 10.0
-        ):
-            raise ValueError("E-Swap-4 sink buckets are not contiguous or reconciled")
-        for field in totals:
-            totals[field] += int(bucket[field])
-        expected_start += 100_000_000
-    if any(int(throughput.get(field, -1)) != total for field, total in totals.items()):
-        raise ValueError("E-Swap-4 sink bucket totals do not reconcile")
+        raise ValueError("E-Swap-4 source-origin clock or coverage is invalid")
+    primary_buckets = throughput.get("primary_buckets")
+    drain_buckets = throughput.get("drain_buckets")
+    primary = _swap4_bucket_totals(primary_buckets, 0, 1_200, "primary")
+    drain = _swap4_bucket_totals(drain_buckets, 120_000_000_000, 100, "drain")
+    for prefix, totals in (("primary", primary), ("drain", drain)):
+        for field, total in totals.items():
+            if int(throughput.get(f"{prefix}_{field}", -1)) != total:
+                raise ValueError(f"E-Swap-4 {prefix} bucket totals do not reconcile")
+    primary_last = throughput.get("primary_last_offset_ns")
+    drain_first = throughput.get("drain_first_offset_ns")
+    drain_last = throughput.get("drain_last_offset_ns")
+    primary_nonempty = _swap4_nonempty_indices(primary_buckets)
+    if primary["received_events"] > 0 and (
+        type(primary_last) is not int
+        or not primary_nonempty
+        or not primary_nonempty[-1] * 100_000_000
+        <= primary_last
+        < (primary_nonempty[-1] + 1) * 100_000_000
+    ):
+        raise ValueError("E-Swap-4 primary last offset is invalid")
+    if primary["received_events"] == 0 and primary_last is not None:
+        raise ValueError("E-Swap-4 primary last offset must be null")
+    drain_nonempty = _swap4_nonempty_indices(drain_buckets)
+    if drain["received_events"] > 0 and (
+        type(drain_first) is not int
+        or type(drain_last) is not int
+        or not drain_nonempty
+        or not 120_000_000_000 + drain_nonempty[0] * 100_000_000
+        <= drain_first
+        < 120_000_000_000 + (drain_nonempty[0] + 1) * 100_000_000
+        or not 120_000_000_000 + drain_nonempty[-1] * 100_000_000
+        <= drain_last
+        < 120_000_000_000 + (drain_nonempty[-1] + 1) * 100_000_000
+        or drain_first > drain_last
+    ):
+        raise ValueError("E-Swap-4 drain offsets are invalid")
+    if drain["received_events"] == 0 and (drain_first is not None or drain_last is not None):
+        raise ValueError("E-Swap-4 drain offsets must be null")
+    after = {
+        "received_unique": int(throughput.get("after_drain_unique", -1)),
+        "received_events": int(throughput.get("after_drain_events", -1)),
+        "duplicates": int(throughput.get("after_drain_duplicates", -1)),
+    }
+    after_first = throughput.get("after_drain_first_offset_ns")
+    after_last = throughput.get("after_drain_last_offset_ns")
+    if after["received_events"] != after["received_unique"] + after["duplicates"]:
+        raise ValueError("E-Swap-4 after-drain counters do not reconcile")
+    if after["received_events"] > 0 and (
+        type(after_first) is not int
+        or type(after_last) is not int
+        or not 130_000_000_000 <= after_first <= after_last
+    ):
+        raise ValueError("E-Swap-4 after-drain offsets are invalid")
+    if after["received_events"] == 0 and (after_first is not None or after_last is not None):
+        raise ValueError("E-Swap-4 after-drain offsets must be null")
+    if after["received_events"] != 0 or throughput.get("drain_right_censored") is not False:
+        raise ValueError("E-Swap-4 drain is right-censored")
+    full = {field: primary[field] + drain[field] + after[field] for field in primary}
+    for field, total in full.items():
+        if int(throughput.get(field, -1)) != total:
+            raise ValueError("E-Swap-4 full-run sink totals do not reconcile")
+    observed_offsets = [value for value in (primary_last, drain_last, after_last) if value is not None]
+    max_arrival = int(throughput.get("max_arrival_offset_ns", -1))
+    if not observed_offsets or max_arrival != max(observed_offsets):
+        raise ValueError("E-Swap-4 maximum arrival offset does not reconcile")
+    if (max_arrival < 120_000_000_000) != (
+        drain["received_events"] == 0 and after["received_events"] == 0
+    ):
+        raise ValueError("E-Swap-4 arrival region classification is invalid")
+    source_completion = int(timeline.get("source_completion_offset_ns", -1))
+    if not 0 <= source_completion < 130_000_000_000:
+        raise ValueError("E-Swap-4 source completion exceeds the drain deadline")
+    if (
+        timeline.get("primary_received_events") != primary["received_events"]
+        or timeline.get("drain_received_events") != drain["received_events"]
+        or timeline.get("drain_first_offset_ns") != drain_first
+        or timeline.get("drain_last_offset_ns") != drain_last
+        or timeline.get("drain_duration_after_window_ns")
+        != (0 if drain_last is None else drain_last - 120_000_000_000)
+        or timeline.get("max_arrival_offset_ns") != max_arrival
+        or timeline.get("drain_right_censored") is not False
+    ):
+        raise ValueError("E-Swap-4 timeline drain evidence does not reconcile")
     phases = timeline.get("phases")
     if not isinstance(phases, dict) or set(phases) != {row[0] for row in SWAP4_PHASES}:
         raise ValueError("E-Swap-4 phases are missing")
@@ -1247,12 +1364,13 @@ def validate_swap4_artifacts(
     sequence = timeline["sequence"]
     if (
         sum(phase["received"] for phase in phases.values()) != sequence["received"]
-        or sequence["received"] != totals["received_events"]
+        or sequence["received"] != full["received_events"]
         or sequence["expected"] != 130_000
-        or timeline.get("loss")
-            != 130_000 - (sequence["received"] - sequence["duplicates"])
+        or timeline.get("loss") != 130_000 - (sequence["received"] - sequence["duplicates"])
         or sequence["gaps"] != timeline["loss"]
-        or sequence["duplicates"] != totals["duplicates"]
+        or sequence["duplicates"] != full["duplicates"]
+        or sequence["gaps"] != 0
+        or sequence["duplicates"] != 0
     ):
         raise ValueError("E-Swap-4 sequence totals do not reconcile")
     if timeline.get("sink_observed_output_gap_ns") != sink_timeline["transitions"][0].get(
@@ -1265,18 +1383,31 @@ def validate_swap4_artifacts(
         ).get("timeline", {}).get(field):
             raise ValueError("E-Swap-4 internal swap phases do not reconcile")
 
-
 def summarize_swap4_runs(runs: list[dict]) -> dict:
     if len(runs) != 30 or {int(run.get("run_index", 0)) for run in runs} != set(range(1, 31)):
         raise ValueError("E-Swap-4 summary requires 30 independent run indices")
     gaps = []
+    drain_offsets = []
+    runs_with_drain = 0
     for run in runs:
         analysis = run.get("hotswap_analysis", {})
         events = analysis.get("events")
         if analysis.get("sample_count") != 1 or not isinstance(events, list) or len(events) != 1:
             raise ValueError("E-Swap-4 requires one event from each run")
-        if run.get("burst_timeline", {}).get("successful_swaps") != 1:
+        timeline = run.get("burst_timeline", {})
+        if timeline.get("successful_swaps") != 1:
             raise ValueError("E-Swap-4 run is missing its successful swap")
+        if timeline.get("drain_right_censored") is not False:
+            raise ValueError("E-Swap-4 run has a right-censored drain")
+        drain_count = int(timeline.get("drain_received_events", -1))
+        drain_last = timeline.get("drain_last_offset_ns")
+        if drain_count > 0:
+            if type(drain_last) is not int:
+                raise ValueError("E-Swap-4 run is missing drain timing")
+            runs_with_drain += 1
+            drain_offsets.append(drain_last)
+        elif drain_count != 0 or drain_last is not None:
+            raise ValueError("E-Swap-4 run has invalid drain evidence")
         gaps.append(int(events[0]["sink_observed_output_gap_ns"]))
     ordered = sorted(gaps)
     run_level = _run_summary([float(value) for value in gaps], "e-swap-4:sink-gap")
@@ -1294,6 +1425,8 @@ def summarize_swap4_runs(runs: list[dict]) -> dict:
         "total_duplicates": sum(
             int(run["burst_timeline"].get("sequence", {}).get("duplicates", 0)) for run in runs
         ),
+        "runs_with_drain_arrivals": runs_with_drain,
+        "max_drain_arrival_offset_ns": max(drain_offsets, default=None),
     }
 
 

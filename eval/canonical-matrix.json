@@ -1076,6 +1076,8 @@
         "throughput.csv",
         "sequence.csv",
         "throughput-buckets.json",
+        "burst-source-timing.json",
+        "burst-source-summary.json",
         "burst-timeline.json",
         "swap_timeline.json",
         "hotswap-analysis.json",
@@ -1093,6 +1095,19 @@
         "swap_secs": 60,
         "burst_end_secs": 65,
         "swaps_per_run": 1
+      },
+      "sink_tail_policy": {
+        "alignment_clock": "unix-epoch-source-sink-alignment",
+        "primary_start_secs": 0,
+        "primary_end_secs": 120,
+        "primary_bucket_count": 1200,
+        "drain_start_secs": 120,
+        "drain_end_secs": 130,
+        "drain_bucket_count": 100,
+        "bucket_width_ms": 100,
+        "after_drain_events_allowed": 0,
+        "source_completion_deadline_secs": 130,
+        "require_full_sequence_reconciliation": true
       }
     },
     "e-swap-5": {

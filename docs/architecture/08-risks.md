@@ -50,7 +50,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Mitigation:** E-Swap-3 and E-Swap-4 schedule from a measured source/publisher boundary with monotonic waits. Actual wall-clock alignment is recorded for cross-process comparison, and a deviation above 10 ms fails the leaf.
 
-**Residual:** The E-Swap-4 sink series ends at measured +120 seconds. Targeted Pi validation must confirm that final messages remain inside the declared bucket window; a mismatch fails closed.
+**Residual:** The E-Swap-4 source offering window ends at measured +120 seconds, so valid receives may arrive later. The primary 1,200 source-origin buckets remain `[0,120s)` and a separate fixed 100-bucket drain series covers `[120s,130s)`. Full-run counts must reconcile across both series; a receive at or after 130 seconds, a right-censored drain, loss, or duplication fails closed.
 
 ## R6: coordinated omission or observer overhead biases latency
 

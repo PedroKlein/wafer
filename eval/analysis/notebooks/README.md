@@ -35,7 +35,7 @@ Missing and failed diagnostic conditions remain `PENDING` with a null value. The
 - E-Perf-10 offered versus achieved rate, pooled loss, p99 latency, delivery ceiling, normalized p99 knee, and MQTT support-path limitation;
 - E-Swap internal phases and sink-observed gaps;
 - E-Swap-3 event-aligned dip, action duration, recovery, and sequence integrity;
-- E-Swap-4 one event from each independent burst run.
+- E-Swap-4 one event from each independent burst run, plus separately reported source-origin `[0,120s)` primary and `[120s,130s)` drain completion evidence.
 
 Percentile summaries are never presented as an empirical CDF.
 

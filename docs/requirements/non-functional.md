@@ -31,7 +31,7 @@ E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source 
 | NFR-SWAP-1 | Repeated stateless swap pause is bounded. | p95 sink-observed output gap < 100 ms. | E-Swap-1 |
 | NFR-SWAP-2 | Repeated swaps preserve sequence accounting. | Zero loss and duplication. | E-Swap-2 |
 | NFR-SWAP-3 | Event-aligned output disruption is bounded. | For 30 WAFER hot-swap runs, upper bootstrap CI for median dip < 5 percent with zero loss and duplication; restart strategies are measured comparators. | E-Swap-3 |
-| NFR-SWAP-4 | One swap remains bounded during a true transient burst. | Across-run p95 sink gap < 100 ms with zero loss and duplication over 30 independent 1,000/2,000/1,000 msg/s runs. | E-Swap-4 |
+| NFR-SWAP-4 | One swap remains bounded during a true transient burst. | Across-run p95 sink gap < 100 ms with zero full-run loss and duplication over 30 independent 1,000/2,000/1,000 msg/s runs; source-origin primary and drain counts reconcile and no receive occurs at or after 130 s. | E-Swap-4 |
 | NFR-SWAP-5 | A process-time failure rolls back within the canary policy. | Pipeline continues and sequence evidence remains lossless. | E-Swap-5 |
 
 ## Measurement rules

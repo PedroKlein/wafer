@@ -98,7 +98,7 @@ The targeted pilot is a new diagnostic batch declared before launch. It covers:
 - all three E-Swap-3 strategies;
 - true-burst E-Swap-4.
 
-Its schedule, repetition count, batch ID, tag/SHA, and matrix hash belong in the targeted-pilot receipt. Targeted results use `thesis_evidence=false` and are never pooled with the final batch. Stop, preserve the failed attempt, fix and retag if metering truth, capacity counters, event alignment, E-Swap-4 phase boundaries, provenance, or throttling fails.
+Its schedule, repetition count, batch ID, tag/SHA, and matrix hash belong in the targeted-pilot receipt. Targeted results use `thesis_evidence=false` and are never pooled with the final batch. Stop, preserve the failed attempt, fix and retag if metering truth, capacity counters, event alignment, E-Swap-4 phase or drain boundaries, provenance, or throttling fails. E-Swap-4 must retain 1,200 source-origin primary buckets over `[0,120s)` and 100 separate drain buckets over `[120s,130s)`; full-run counters reconcile both regions. Reconciled drain arrivals are reported, while an after-drain receive, source completion at or after 130 seconds, or incomplete population fails closed.
 
 The targeted pilot must also demonstrate resume behavior: stop after a declared leaf, rerun the same command, and confirm passed attempts are skipped rather than duplicated.
 
@@ -224,5 +224,5 @@ Canonical analysis rejects an unapproved, incomplete, wrong-host, dirty, mixed-S
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
 - E-Perf-5 remains `PENDING` until the x86 Linux block exists.
 - E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
-- E-Swap-4 has one source-driven burst and one stateless swap per independent run.
+- E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled.
 - Diagnostic scout, v11-v17, targeted-pilot, laptop, and synthetic data are not pooled with final results.
