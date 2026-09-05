@@ -21,24 +21,21 @@ use crate::config::Config;
 use crate::engine::WaferEngine;
 use crate::error::{Result, WaferError};
 use crate::node::{NodeMetrics, NodeStateTracker};
-use wafer_types::NodeState;
 use crate::orchestrator::builder::{BuildOutput, NodeBundleKind, QueueProbe};
 use crate::runner::SwapPayload;
-use crate::runner::{DownstreamSender, TrackedReceiver, send_downstream};
 use crate::runner::error_policy::DlqEnvelope;
-use crate::runner::source::run_source_loop;
-use crate::runner::sink::run_sink_loop;
-use crate::runner::transform::run_transform_loop_with_config;
 use crate::runner::filter::run_filter_loop;
 use crate::runner::router::run_router_loop;
+use crate::runner::sink::run_sink_loop;
+use crate::runner::source::run_source_loop;
+use crate::runner::transform::run_transform_loop_with_config;
+use crate::runner::{DownstreamSender, TrackedReceiver, send_downstream};
+use wafer_types::NodeState;
 
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
-fn spawn_wasm_runner(
-    tasks: &mut JoinSet<()>,
-    runner: impl Future<Output = ()> + Send + 'static,
-) {
+fn spawn_wasm_runner(tasks: &mut JoinSet<()>, runner: impl Future<Output = ()> + Send + 'static) {
     let runtime = tokio::runtime::Handle::current();
     tasks.spawn_blocking(move || runtime.block_on(runner));
 }
@@ -102,9 +99,7 @@ pub struct SwapGuard {
 
 impl std::fmt::Debug for SwapGuard {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SwapGuard")
-            .field("held", &self.flag.load(Ordering::Acquire))
-            .finish()
+        f.debug_struct("SwapGuard").field("held", &self.flag.load(Ordering::Acquire)).finish()
     }
 }
 
@@ -132,9 +127,10 @@ impl PipelineHandle {
     /// - `WaferError::Runtime("swap-in-progress")` when a concurrent swap
     ///   is already in flight for this node.
     pub fn try_begin_swap(&self, node_id: &str) -> Result<SwapGuard> {
-        let flag = self.swap_in_progress.get(node_id).ok_or_else(|| {
-            WaferError::Runtime(format!("node-not-swappable: {node_id}"))
-        })?;
+        let flag = self
+            .swap_in_progress
+            .get(node_id)
+            .ok_or_else(|| WaferError::Runtime(format!("node-not-swappable: {node_id}")))?;
         flag.compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .map_err(|_was_true| WaferError::Runtime(format!("swap-in-progress: {node_id}")))?;
         Ok(SwapGuard { flag: Arc::clone(flag) })
@@ -152,9 +148,7 @@ impl PipelineHandle {
             return;
         }
         if let Ok(mut guard) = self.hotswap_metrics.phase_histogram.write() {
-            let h = guard
-                .entry(key)
-                .or_insert_with(crate::metrics::types::PhaseHistogram::new);
+            let h = guard.entry(key).or_insert_with(crate::metrics::types::PhaseHistogram::new);
             h.record(ns);
         }
     }
@@ -170,9 +164,7 @@ impl PipelineHandle {
             return;
         }
         if let Ok(mut guard) = self.hotswap_metrics.recovery_duration.write() {
-            let h = guard
-                .entry(key)
-                .or_insert_with(crate::metrics::types::PhaseHistogram::new);
+            let h = guard.entry(key).or_insert_with(crate::metrics::types::PhaseHistogram::new);
             h.record(ns);
         }
     }
@@ -214,9 +206,10 @@ impl PipelineHandle {
     ///
     /// See variants above.
     pub fn verify_plugin_hash(&self, node_id: &str, expected_hex: &str) -> Result<()> {
-        let guard = self.plugin_hashes.read().map_err(|e| {
-            WaferError::Runtime(format!("plugin_hashes lock poisoned: {e}"))
-        })?;
+        let guard = self
+            .plugin_hashes
+            .read()
+            .map_err(|e| WaferError::Runtime(format!("plugin_hashes lock poisoned: {e}")))?;
         match guard.get(node_id) {
             Some(cached) if cached.eq_ignore_ascii_case(expected_hex) => Ok(()),
             Some(cached) => Err(WaferError::Runtime(format!(
@@ -434,10 +427,7 @@ impl PipelineOrchestrator {
     ///
     /// Source/Sink: init() is called here before spawning the adapter loop.
     /// Wasm nodes: spawned with real runner loops when node instance is present.
-    fn spawn_bundles(
-        &mut self,
-        bundles: Vec<crate::orchestrator::builder::NodeBundle>,
-    ) {
+    fn spawn_bundles(&mut self, bundles: Vec<crate::orchestrator::builder::NodeBundle>) {
         let hot_swap_config = self.config.engine.hot_swap.clone();
         for bundle in bundles {
             let node_id = bundle.node_id.clone();
@@ -451,9 +441,10 @@ impl PipelineOrchestrator {
                         let hs_cfg = hot_swap_config.clone();
                         spawn_wasm_runner(&mut self.tasks, async move {
                             run_transform_loop_with_config(
-                                transform, receiver, senders, swap_rx,
-                                policy, cancel, state, metrics, hs_cfg,
-                            ).await;
+                                transform, receiver, senders, swap_rx, policy, cancel, state,
+                                metrics, hs_cfg,
+                            )
+                            .await;
                         });
                     } else {
                         // No compiled Wasm node — run as identity passthrough.
@@ -467,9 +458,9 @@ impl PipelineOrchestrator {
                     if let Some(filter) = node {
                         spawn_wasm_runner(&mut self.tasks, async move {
                             run_filter_loop(
-                                filter, receiver, senders, swap_rx,
-                                policy, cancel, state, metrics,
-                            ).await;
+                                filter, receiver, senders, swap_rx, policy, cancel, state, metrics,
+                            )
+                            .await;
                         });
                     } else {
                         // Native filter — forward all messages (no-op filter passes everything)
@@ -482,9 +473,9 @@ impl PipelineOrchestrator {
                     if let Some(router) = node {
                         spawn_wasm_runner(&mut self.tasks, async move {
                             run_router_loop(
-                                router, receiver, senders, swap_rx,
-                                policy, cancel, state, metrics,
-                            ).await;
+                                router, receiver, senders, swap_rx, policy, cancel, state, metrics,
+                            )
+                            .await;
                         });
                     } else {
                         // Native router — broadcast to all downstreams
@@ -755,7 +746,10 @@ impl PipelineOrchestrator {
 
         let path = dir.join("per_node_metrics.csv");
         let mut f = std::fs::File::create(&path)?;
-        writeln!(f, "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count")?;
+        writeln!(
+            f,
+            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count"
+        )?;
         let mut recovery = std::fs::File::create(dir.join("recovery.csv"))?;
         writeln!(recovery, "node_id,sample_index,duration_ns")?;
 
@@ -874,7 +868,7 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::config::{
-        Config, EdgeDef, EngineConfig, NodeDef, SourceDef, SinkDef, StdinSourceConfig,
+        Config, EdgeDef, EngineConfig, NodeDef, SinkDef, SourceDef, StdinSourceConfig,
         StdoutSinkConfig, WasmNodeDef,
     };
     use crate::orchestrator::builder::{build_pipeline, build_pipeline_with_io};
@@ -906,10 +900,7 @@ mod tests {
                         ..Default::default()
                     }),
                 ),
-                (
-                    "sink".to_string(),
-                    NodeDef::Sink(SinkDef::Stdout(StdoutSinkConfig::default())),
-                ),
+                ("sink".to_string(), NodeDef::Sink(SinkDef::Stdout(StdoutSinkConfig::default()))),
             ]),
             edges: vec![edge("src", "t1"), edge("t1", "sink")],
             ..Default::default()
@@ -924,10 +915,7 @@ mod tests {
                     "src".to_string(),
                     NodeDef::Source(SourceDef::Stdin(StdinSourceConfig::default())),
                 ),
-                (
-                    "sink".to_string(),
-                    NodeDef::Sink(SinkDef::Stdout(StdoutSinkConfig::default())),
-                ),
+                ("sink".to_string(), NodeDef::Sink(SinkDef::Stdout(StdoutSinkConfig::default()))),
             ]),
             edges: vec![edge("src", "sink")],
             ..Default::default()
@@ -963,13 +951,7 @@ mod tests {
         });
 
         tasks.join_next().await.expect("runner task").expect("runner result");
-        assert_eq!(
-            thread_ids
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .len(),
-            1
-        );
+        assert_eq!(thread_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len(), 1);
     }
 
     #[tokio::test]
@@ -1095,10 +1077,7 @@ mod tests {
         assert_eq!(orch.task_count(), 2);
 
         for i in 0..5 {
-            source_tx
-                .send(RuntimeEnvelope::from_string("test", format!("msg-{i}")))
-                .await
-                .unwrap();
+            source_tx.send(RuntimeEnvelope::from_string("test", format!("msg-{i}"))).await.unwrap();
         }
         drop(source_tx);
 
@@ -1162,9 +1141,7 @@ mod tests {
             drop(source_tx);
         });
 
-        tokio::spawn(async move {
-            while sink_rx.recv().await.is_some() {}
-        });
+        tokio::spawn(async move { while sink_rx.recv().await.is_some() {} });
 
         let result = tokio::time::timeout(Duration::from_secs(5), orch.run_until_complete())
             .await
@@ -1185,9 +1162,8 @@ mod tests {
         let handle = PipelineHandle::for_p0_10_test(&["transform"]);
 
         let first = handle.try_begin_swap("transform").expect("first must acquire");
-        let err = handle
-            .try_begin_swap("transform")
-            .expect_err("concurrent second must be rejected");
+        let err =
+            handle.try_begin_swap("transform").expect_err("concurrent second must be rejected");
         assert!(
             err.to_string().contains("swap-in-progress"),
             "expected swap-in-progress error, got: {err}"
@@ -1206,9 +1182,7 @@ mod tests {
     #[test]
     fn swap_guard_reports_unknown_node() {
         let handle = PipelineHandle::for_p0_10_test(&["transform"]);
-        let err = handle
-            .try_begin_swap("does-not-exist")
-            .expect_err("unknown node id must fail");
+        let err = handle.try_begin_swap("does-not-exist").expect_err("unknown node id must fail");
         assert!(
             err.to_string().contains("node-not-swappable"),
             "expected node-not-swappable error, got: {err}"
@@ -1218,17 +1192,20 @@ mod tests {
     /// AC1: recording every phase populates six independent series in
     /// the phase histogram. The Prometheus emitter reads from this map.
     #[test]
-    #[expect(clippy::significant_drop_tightening, reason = "RwLockReadGuard held for assertions across the for loop — intentional")]
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "RwLockReadGuard held for assertions across the for loop — intentional"
+    )]
     fn phase_histogram_records_six_phases() {
         let handle = PipelineHandle::for_p0_10_test(&["transform"]);
 
         for (phase, ns) in [
-            ("compile",       50_000_000_u64),
-            ("instantiate",    5_000_000_u64),
-            ("signal",             1_000_u64),
-            ("ack",               50_000_u64),
-            ("first_v2",         200_000_u64),
-            ("convergence",   10_000_000_u64),
+            ("compile", 50_000_000_u64),
+            ("instantiate", 5_000_000_u64),
+            ("signal", 1_000_u64),
+            ("ack", 50_000_u64),
+            ("first_v2", 200_000_u64),
+            ("convergence", 10_000_000_u64),
         ] {
             handle.record_hotswap_phase(phase, "transform", ns);
         }
@@ -1279,9 +1256,8 @@ mod tests {
 
         // Mismatch → error whose message starts with the sentinel string
         // the API handler maps to 409 CONFLICT.
-        let err = handle
-            .verify_plugin_hash("transform", "deadbeef")
-            .expect_err("mismatch must fail");
+        let err =
+            handle.verify_plugin_hash("transform", "deadbeef").expect_err("mismatch must fail");
         let msg = err.to_string();
         assert!(
             msg.contains("plugin-hash-mismatch"),
@@ -1290,17 +1266,13 @@ mod tests {
 
         // Case-insensitive match — hex encoders differ on case.
         assert!(
-            handle
-                .verify_plugin_hash("transform", &"A".repeat(64))
-                .is_ok(),
+            handle.verify_plugin_hash("transform", &"A".repeat(64)).is_ok(),
             "hash match must be case-insensitive (hex encoders vary)"
         );
 
         // Exact-case match still works.
         assert!(
-            handle
-                .verify_plugin_hash("transform", &"a".repeat(64))
-                .is_ok(),
+            handle.verify_plugin_hash("transform", &"a".repeat(64)).is_ok(),
             "exact-case hash match must pass"
         );
     }

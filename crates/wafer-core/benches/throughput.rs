@@ -96,7 +96,6 @@ fn create_test_envelope(size: usize) -> RuntimeEnvelope {
     RuntimeEnvelope::new("bench-source", bytes::Bytes::from(payload))
 }
 
-
 /// Baseline: raw queue throughput (no Wasm on the hot path).
 fn bench_queue_throughput(c: &mut Criterion) {
     let rt = Runtime::new().unwrap();
@@ -156,17 +155,40 @@ fn bench_transform_throughput(c: &mut Criterion) {
     for count in message_counts {
         group.throughput(Throughput::Elements(count as u64));
 
-        group.bench_with_input(
-            BenchmarkId::new("passthrough", count),
-            &count,
-            |b, &count| {
+        group.bench_with_input(BenchmarkId::new("passthrough", count), &count, |b, &count| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+
+                for _ in 0..iters {
+                    let mut transform =
+                        harness.load_transform(&passthrough).expect("load pass-through plugin");
+                    let envelope = create_test_envelope(256);
+
+                    let start = Instant::now();
+                    for _ in 0..count {
+                        let out = transform.process(envelope.clone()).unwrap();
+                        black_box(out);
+                    }
+                    total += start.elapsed();
+                }
+
+                total
+            });
+        });
+    }
+
+    let uppercase = uppercase_wasm();
+    if uppercase.exists() {
+        for count in [100, 1000] {
+            group.throughput(Throughput::Elements(count as u64));
+
+            group.bench_with_input(BenchmarkId::new("uppercase", count), &count, |b, &count| {
                 b.iter_custom(|iters| {
                     let mut total = Duration::ZERO;
 
                     for _ in 0..iters {
-                        let mut transform = harness
-                            .load_transform(&passthrough)
-                            .expect("load pass-through plugin");
+                        let mut transform =
+                            harness.load_transform(&uppercase).expect("load uppercase plugin");
                         let envelope = create_test_envelope(256);
 
                         let start = Instant::now();
@@ -179,40 +201,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
 
                     total
                 });
-            },
-        );
-    }
-
-    let uppercase = uppercase_wasm();
-    if uppercase.exists() {
-        for count in [100, 1000] {
-            group.throughput(Throughput::Elements(count as u64));
-
-            group.bench_with_input(
-                BenchmarkId::new("uppercase", count),
-                &count,
-                |b, &count| {
-                    b.iter_custom(|iters| {
-                        let mut total = Duration::ZERO;
-
-                        for _ in 0..iters {
-                            let mut transform = harness
-                                .load_transform(&uppercase)
-                                .expect("load uppercase plugin");
-                            let envelope = create_test_envelope(256);
-
-                            let start = Instant::now();
-                            for _ in 0..count {
-                                let out = transform.process(envelope.clone()).unwrap();
-                                black_box(out);
-                            }
-                            total += start.elapsed();
-                        }
-
-                        total
-                    });
-                },
-            );
+            });
         }
     }
 
@@ -245,9 +234,8 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
                 let mut total = Duration::ZERO;
 
                 for _ in 0..iters {
-                    let mut transform = harness
-                        .load_transform(&passthrough)
-                        .expect("load pass-through plugin");
+                    let mut transform =
+                        harness.load_transform(&passthrough).expect("load pass-through plugin");
                     let envelope = create_test_envelope(size);
 
                     let start = Instant::now();
@@ -281,9 +269,7 @@ fn bench_transform_latency(c: &mut Criterion) {
     group.sample_size(100);
 
     let harness = PluginTestHarness::new().expect("Failed to create harness");
-    let mut transform = harness
-        .load_transform(&passthrough)
-        .expect("load pass-through plugin");
+    let mut transform = harness.load_transform(&passthrough).expect("load pass-through plugin");
     let envelope = create_test_envelope(256);
 
     group.bench_function("single_message", |b| {

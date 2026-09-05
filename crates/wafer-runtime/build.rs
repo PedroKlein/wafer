@@ -10,8 +10,8 @@ fn main() -> std::io::Result<()> {
     println!("cargo:rerun-if-changed=../../Cargo.lock");
 
     let lockfile = std::fs::read_to_string("../../Cargo.lock")?;
-    let wasmtime_version = wasmtime_version_from_lockfile(&lockfile)
-        .unwrap_or_else(|| "unknown".to_string());
+    let wasmtime_version =
+        wasmtime_version_from_lockfile(&lockfile).unwrap_or_else(|| "unknown".to_string());
     println!("cargo:rustc-env=WAFER_WASMTIME_VERSION={wasmtime_version}");
 
     let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());

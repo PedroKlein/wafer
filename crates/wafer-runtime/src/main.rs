@@ -19,9 +19,9 @@ use wafer_config::{load_config, validate};
 use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
 use wafer_core::engine::Capabilities;
+use wafer_core::orchestrator::PipelineOrchestrator;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::orchestrator::launch_pipeline_timed;
-use wafer_core::orchestrator::PipelineOrchestrator;
 
 mod metadata;
 mod startup;
@@ -123,11 +123,7 @@ async fn main() -> Result<()> {
 
     let config = load_config(&args.config).context("Failed to load configuration")?;
     validate(&config).map_err(|errors| {
-        let messages = errors
-            .iter()
-            .map(ToString::to_string)
-            .collect::<Vec<_>>()
-            .join("; ");
+        let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
         anyhow::anyhow!("configuration validation failed: {messages}")
     })?;
 
@@ -157,7 +153,9 @@ async fn main() -> Result<()> {
     if let Some(provenance_path) = metadata::resolve_output_path() {
         match metadata::write_provenance(&provenance_path, &orchestrator, &args.config, &config) {
             Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
-            Err(e) => warn!(path = %provenance_path.display(), error = %e, "provenance write failed"),
+            Err(e) => {
+                warn!(path = %provenance_path.display(), error = %e, "provenance write failed")
+            }
         }
     }
 
@@ -179,9 +177,8 @@ async fn main() -> Result<()> {
     }
 
     if std::env::var_os("WAFER_QUEUE_DEPTH_OUTPUT").is_some() {
-        let queue_recorder = Arc::new(tokio::sync::Mutex::new(QueueDepthRecorder::new(
-            orchestrator.handle(),
-        )));
+        let queue_recorder =
+            Arc::new(tokio::sync::Mutex::new(QueueDepthRecorder::new(orchestrator.handle())));
         let queue_clone = Arc::clone(&queue_recorder);
         let cancel = bench_cancel.clone();
         tokio::spawn(async move {
@@ -194,12 +191,10 @@ async fn main() -> Result<()> {
 
     // Spawn timed swap trigger if configured (RQ3 benchmark mode)
     if let Some(delay_secs) = args.swap_after_secs {
-        let node_id = args.swap_node.clone().context(
-            "--swap-after-secs requires --swap-node <ID>"
-        )?;
-        let plugin_path = args.swap_plugin.clone().context(
-            "--swap-after-secs requires --swap-plugin <PATH>"
-        )?;
+        let node_id =
+            args.swap_node.clone().context("--swap-after-secs requires --swap-node <ID>")?;
+        let plugin_path =
+            args.swap_plugin.clone().context("--swap-after-secs requires --swap-plugin <PATH>")?;
 
         if !orchestrator.swappable_nodes().contains(&node_id.as_str()) {
             anyhow::bail!("--swap-node '{node_id}' is not a swappable Wasm node");
@@ -238,7 +233,8 @@ async fn main() -> Result<()> {
                 Capabilities::sandbox(),
                 64 * 1024 * 1024,
                 progress,
-            ).await;
+            )
+            .await;
 
             match result {
                 Ok(timed) => {
@@ -370,20 +366,16 @@ async fn launch_control_plane(
         };
 
         let serve_metrics = metrics_enabled && args.metrics_bind.is_none();
-        let server = ApiServer::new(
-            CoreApiConfig { bind, serve_metrics },
-            Arc::clone(&handle),
-        )
-        .await
-        .with_context(|| format!("failed to bind API server at {bind}"))?;
+        let server = ApiServer::new(CoreApiConfig { bind, serve_metrics }, Arc::clone(&handle))
+            .await
+            .with_context(|| format!("failed to bind API server at {bind}"))?;
         let local_addr = server.local_addr().context("failed to read API server bind address")?;
         info!(addr = %local_addr, serve_metrics, "HTTP API server listening");
 
         let cancel = orchestrator.cancel_token().clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(error) = server
-                .run_with_shutdown(async move { cancel.cancelled().await })
-                .await
+            if let Err(error) =
+                server.run_with_shutdown(async move { cancel.cancelled().await }).await
             {
                 error!(%error, "HTTP API server exited with error");
             }
@@ -391,20 +383,18 @@ async fn launch_control_plane(
     }
 
     if metrics_enabled && let Some(bind) = args.metrics_bind {
-        let server = MetricsServer::new(
-            MetricsServerConfig { bind, path: metrics_config.path },
-            handle,
-        )
-        .await
-        .with_context(|| format!("failed to bind metrics server at {bind}"))?;
-        let local_addr = server.local_addr().context("failed to read metrics server bind address")?;
+        let server =
+            MetricsServer::new(MetricsServerConfig { bind, path: metrics_config.path }, handle)
+                .await
+                .with_context(|| format!("failed to bind metrics server at {bind}"))?;
+        let local_addr =
+            server.local_addr().context("failed to read metrics server bind address")?;
         info!(addr = %local_addr, "metrics server listening");
 
         let cancel = orchestrator.cancel_token().clone();
         tasks.push(tokio::spawn(async move {
-            if let Err(error) = server
-                .run_with_shutdown(async move { cancel.cancelled().await })
-                .await
+            if let Err(error) =
+                server.run_with_shutdown(async move { cancel.cancelled().await }).await
             {
                 error!(%error, "metrics server exited with error");
             }
@@ -444,7 +434,9 @@ async fn flush_bench_artifacts(
         let csv = guard.to_csv();
         let path = dir.join("memory.csv");
         match std::fs::write(&path, csv) {
-            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written"),
+            Ok(()) => {
+                info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written")
+            }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
         }
     }
@@ -455,7 +447,9 @@ async fn flush_bench_artifacts(
     ) {
         let guard = recorder.lock().await;
         match std::fs::write(&path, guard.to_csv()) {
-            Ok(()) => info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written"),
+            Ok(()) => {
+                info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written")
+            }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write queue-depth.csv"),
         }
     }

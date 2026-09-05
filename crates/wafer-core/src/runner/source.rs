@@ -64,16 +64,17 @@ pub async fn run_source_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::testing::channel::ChannelSource;
     use crate::queue::RuntimeEnvelope;
-    use tokio::sync::mpsc;
+    use crate::testing::channel::ChannelSource;
     use std::time::Duration;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_source_loop_messages_flow() {
         let (tx, source) = ChannelSource::new("test-src");
         let (out_tx, mut out_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders =
+            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -88,9 +89,7 @@ mod tests {
 
         // Send 10 messages
         for i in 0..10 {
-            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}")))
-                .await
-                .unwrap();
+            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}"))).await.unwrap();
         }
         drop(tx); // Signal EOF
 
@@ -116,7 +115,8 @@ mod tests {
     async fn test_source_loop_eof_terminates() {
         let (tx, source) = ChannelSource::new("eof-src");
         let (out_tx, _out_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders =
+            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -141,7 +141,8 @@ mod tests {
     async fn test_source_loop_cancel_stops() {
         let (_tx, source) = ChannelSource::new("cancel-src");
         let (out_tx, _out_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders =
+            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());

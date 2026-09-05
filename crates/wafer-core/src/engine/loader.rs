@@ -85,7 +85,10 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
-    pub fn with_cache_dir(engine_config: &EngineConfig, cache_dir: impl Into<std::path::PathBuf>) -> Result<Self> {
+    pub fn with_cache_dir(
+        engine_config: &EngineConfig,
+        cache_dir: impl Into<std::path::PathBuf>,
+    ) -> Result<Self> {
         let mut this = Self::from_engine_config(engine_config)?;
         this.cache = std::sync::Mutex::new(ComponentCache::new(Some(cache_dir.into())));
         Ok(this)
@@ -100,7 +103,10 @@ impl WaferEngine {
     /// # Panics
     ///
     /// Panics if the OS cannot spawn a thread (catastrophic resource exhaustion).
-    #[expect(clippy::expect_used, reason = "epoch ticker is a single lightweight OS thread; spawn failure indicates catastrophic OS resource exhaustion")]
+    #[expect(
+        clippy::expect_used,
+        reason = "epoch ticker is a single lightweight OS thread; spawn failure indicates catastrophic OS resource exhaustion"
+    )]
     pub fn ensure_epoch_ticker(&self) {
         self.epoch_started.get_or_init(|| {
             let engine_weak = self.engine.weak();
@@ -155,10 +161,7 @@ impl WaferEngine {
     /// # Errors
     ///
     /// Returns `WaferError::ComponentLoad` if compilation fails.
-    pub fn compile_cached(
-        &self,
-        wasm_bytes: &[u8],
-    ) -> Result<std::sync::Arc<Component>> {
+    pub fn compile_cached(&self, wasm_bytes: &[u8]) -> Result<std::sync::Arc<Component>> {
         let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         cache.get_or_compile(&self.engine, wasm_bytes)
     }
@@ -190,13 +193,14 @@ impl WaferEngine {
         let mut linker = self.build_linker()?;
 
         // Add WAFER host traits (HostBuffer + logging) so the component's imports resolve
-        super::bindings::transform_node::TransformNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
-            &mut linker,
-            |state: &mut WaferState| state,
-        )
+        super::bindings::transform_node::TransformNode::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<WaferState>,
+        >(&mut linker, |state: &mut WaferState| state)
         .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        let instance_pre = linker.instantiate_pre(component)
+        let instance_pre = linker
+            .instantiate_pre(component)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
         TransformNodePre::new(instance_pre)
@@ -216,21 +220,20 @@ impl WaferEngine {
     ) -> Result<FilterNodePre<WaferState>> {
         let mut linker = self.build_linker()?;
 
-        super::bindings::filter_node::FilterNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
-            &mut linker,
-            |state: &mut WaferState| state,
-        )
+        super::bindings::filter_node::FilterNode::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<WaferState>,
+        >(&mut linker, |state: &mut WaferState| state)
         .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        let instance_pre = linker.instantiate_pre(component)
-            .map_err(|e| WaferError::PluginInit {
+        let instance_pre =
+            linker.instantiate_pre(component).map_err(|e| WaferError::PluginInit {
                 message: format!("Component does not implement the filter-node world: {e}"),
             })?;
 
-        FilterNodePre::new(instance_pre)
-            .map_err(|e| WaferError::PluginInit {
-                message: format!("Failed to create FilterNodePre: {e}"),
-            })
+        FilterNodePre::new(instance_pre).map_err(|e| WaferError::PluginInit {
+            message: format!("Failed to create FilterNodePre: {e}"),
+        })
     }
 
     /// Create a `RouterNodePre` from a compiled component.
@@ -246,21 +249,20 @@ impl WaferEngine {
     ) -> Result<RouterNodePre<WaferState>> {
         let mut linker = self.build_linker()?;
 
-        super::bindings::router_node::RouterNode::add_to_linker::<_, wasmtime::component::HasSelf<WaferState>>(
-            &mut linker,
-            |state: &mut WaferState| state,
-        )
+        super::bindings::router_node::RouterNode::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<WaferState>,
+        >(&mut linker, |state: &mut WaferState| state)
         .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
 
-        let instance_pre = linker.instantiate_pre(component)
-            .map_err(|e| WaferError::PluginInit {
+        let instance_pre =
+            linker.instantiate_pre(component).map_err(|e| WaferError::PluginInit {
                 message: format!("Component does not implement the router-node world: {e}"),
             })?;
 
-        RouterNodePre::new(instance_pre)
-            .map_err(|e| WaferError::PluginInit {
-                message: format!("Failed to create RouterNodePre: {e}"),
-            })
+        RouterNodePre::new(instance_pre).map_err(|e| WaferError::PluginInit {
+            message: format!("Failed to create RouterNodePre: {e}"),
+        })
     }
 
     /// Get a reference to the inner wasmtime `Engine`.
@@ -316,16 +318,12 @@ mod tests {
     /// a trap-on-first-instruction regression.
     #[test]
     fn epoch_none_means_wasmtime_untouched() {
-        use wasmtime::Store;
         use crate::engine::Capabilities;
+        use wasmtime::Store;
 
         let cfg = EngineConfig {
             epoch_deadline: None,
-            fuel: FuelBudgets {
-                transform: None,
-                filter: None,
-                router: None,
-            },
+            fuel: FuelBudgets { transform: None, filter: None, router: None },
             ..Default::default()
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
@@ -348,24 +346,18 @@ mod tests {
     /// consume_fuel at Config level; get_fuel returns Ok on a fresh Store.
     #[test]
     fn some_fuel_means_wasmtime_fuel_metering_enabled() {
-        use wasmtime::Store;
         use crate::engine::Capabilities;
+        use wasmtime::Store;
 
         let cfg = EngineConfig {
-            fuel: FuelBudgets {
-                transform: NonZeroU64::new(100_000),
-                ..Default::default()
-            },
+            fuel: FuelBudgets { transform: NonZeroU64::new(100_000), ..Default::default() },
             epoch_deadline: None,
             ..Default::default()
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
         let state = WaferState::new("test-node", Capabilities::default());
         let store: Store<WaferState> = Store::new(engine.inner(), state);
-        assert!(
-            store.get_fuel().is_ok(),
-            "consume_fuel must be on when any fuel budget is Some"
-        );
+        assert!(store.get_fuel().is_ok(), "consume_fuel must be on when any fuel budget is Some");
     }
 
     #[test]

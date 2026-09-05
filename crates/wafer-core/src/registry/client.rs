@@ -50,7 +50,10 @@ impl WaferRegistry {
 
     /// Resolve a plugin source to a concrete WASM file path.
     /// Local sources are validated; OCI sources are fetched (with caching).
-    #[expect(clippy::large_futures, reason = "OCI pull holds HTTP response + WASM bytes across awaits; called once per plugin resolution")]
+    #[expect(
+        clippy::large_futures,
+        reason = "OCI pull holds HTTP response + WASM bytes across awaits; called once per plugin resolution"
+    )]
     pub async fn resolve(&self, source: &PluginSource) -> Result<ResolvedPlugin, RegistryError> {
         match source {
             PluginSource::Local(path) => self.resolve_local(path),
@@ -81,7 +84,10 @@ impl WaferRegistry {
         ))
     }
 
-    #[expect(clippy::large_futures, reason = "OCI resolution holds HTTP client + response across awaits")]
+    #[expect(
+        clippy::large_futures,
+        reason = "OCI resolution holds HTTP client + response across awaits"
+    )]
     async fn resolve_oci(&self, oci_ref: &OciReference) -> Result<ResolvedPlugin, RegistryError> {
         let cache_key = oci_ref.tag.clone();
 
@@ -111,7 +117,10 @@ impl WaferRegistry {
         Ok(ResolvedPlugin::new(PluginSource::Oci(oci_ref.clone()), content_hash, cache_path))
     }
 
-    #[expect(clippy::large_futures, reason = "OCI fetch holds HTTP client + response bytes across awaits")]
+    #[expect(
+        clippy::large_futures,
+        reason = "OCI fetch holds HTTP client + response bytes across awaits"
+    )]
     async fn fetch_oci(&self, oci_ref: &OciReference) -> Result<Vec<u8>, RegistryError> {
         tracing::info!("Fetching {}", oci_ref.as_str());
 
@@ -165,7 +174,10 @@ impl std::fmt::Debug for WaferRegistry {
 }
 
 #[cfg(test)]
-#[expect(clippy::large_futures, reason = "test: registry resolve calls hold HTTP client state across awaits")]
+#[expect(
+    clippy::large_futures,
+    reason = "test: registry resolve calls hold HTTP client state across awaits"
+)]
 mod tests {
     use super::*;
 

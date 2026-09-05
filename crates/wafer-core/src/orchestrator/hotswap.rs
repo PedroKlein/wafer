@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use wasmtime::Store;
 
+use crate::engine::Capabilities;
 use crate::engine::WaferEngine;
 use crate::engine::state::WaferState;
-use crate::engine::Capabilities;
 use crate::error::{Result, WaferError};
 use crate::runner::{HotSwapProgress, SwapPayload};
 
@@ -133,7 +133,9 @@ impl SwapTimeline {
     #[must_use]
     pub fn instantiate_duration_ns(&self) -> Option<u64> {
         match (self.compile_done, self.instantiate_done) {
-            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
+            (Some(start), Some(end)) => {
+                Some(crate::util::duration_ns_saturating(end.duration_since(start)))
+            }
             _ => None,
         }
     }
@@ -142,7 +144,9 @@ impl SwapTimeline {
     #[must_use]
     pub fn signal_duration_ns(&self) -> Option<u64> {
         match (self.instantiate_done, self.signal_sent) {
-            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
+            (Some(start), Some(end)) => {
+                Some(crate::util::duration_ns_saturating(end.duration_since(start)))
+            }
             _ => None,
         }
     }
@@ -151,7 +155,9 @@ impl SwapTimeline {
     #[must_use]
     pub fn ack_duration_ns(&self) -> Option<u64> {
         match (self.signal_sent, self.swap_acked) {
-            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
+            (Some(start), Some(end)) => {
+                Some(crate::util::duration_ns_saturating(end.duration_since(start)))
+            }
             _ => None,
         }
     }
@@ -160,7 +166,9 @@ impl SwapTimeline {
     #[must_use]
     pub fn convergence_duration_ns(&self) -> Option<u64> {
         match (self.swap_acked, self.first_v2_output) {
-            (Some(start), Some(end)) => Some(crate::util::duration_ns_saturating(end.duration_since(start))),
+            (Some(start), Some(end)) => {
+                Some(crate::util::duration_ns_saturating(end.duration_since(start)))
+            }
             _ => None,
         }
     }
@@ -234,18 +242,19 @@ pub async fn prepare_transform_swap_timed(
     // epoch_interruption are gated at Config level so calling the setter
     // would return Err when the limit is None.
     if let Some(n) = engine.fuel_limit() {
-        store.set_fuel(n.get()).map_err(|e| {
-            WaferError::PluginInit { message: format!("failed to set fuel: {e}") }
-        })?;
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
         store.set_epoch_deadline(n.get());
     }
 
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| {
-        WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-    })?;
+    let instance = pre
+        .instantiate_async(&mut store)
+        .await
+        .map_err(|e| WaferError::PluginInit { message: format!("instantiation failed: {e}") })?;
     timeline.mark_instantiate_done();
 
     let payload = SwapPayload::Transform {
@@ -282,18 +291,19 @@ pub async fn prepare_filter_swap_timed(
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
     if let Some(n) = engine.fuel_limit() {
-        store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
-            message: format!("failed to set fuel: {e}"),
-        })?;
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
         store.set_epoch_deadline(n.get());
     }
 
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
-        message: format!("instantiation failed: {e}"),
-    })?;
+    let instance = pre
+        .instantiate_async(&mut store)
+        .await
+        .map_err(|e| WaferError::PluginInit { message: format!("instantiation failed: {e}") })?;
     timeline.mark_instantiate_done();
 
     let payload = SwapPayload::Filter {
@@ -330,18 +340,19 @@ pub async fn prepare_router_swap_timed(
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
     if let Some(n) = engine.fuel_limit() {
-        store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
-            message: format!("failed to set fuel: {e}"),
-        })?;
+        store
+            .set_fuel(n.get())
+            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
     }
     if let Some(n) = engine.epoch_deadline() {
         store.epoch_deadline_trap();
         store.set_epoch_deadline(n.get());
     }
 
-    let instance = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
-        message: format!("instantiation failed: {e}"),
-    })?;
+    let instance = pre
+        .instantiate_async(&mut store)
+        .await
+        .map_err(|e| WaferError::PluginInit { message: format!("instantiation failed: {e}") })?;
     timeline.mark_instantiate_done();
 
     let payload = SwapPayload::Router {
@@ -367,10 +378,7 @@ mod tests {
         assert_eq!(err.to_string(), "node 'bar' does not support hot-swap");
 
         let err = SwapError::WatchSendFailed("baz".to_string());
-        assert_eq!(
-            err.to_string(),
-            "watch channel send failed for node 'baz' (task dead?)"
-        );
+        assert_eq!(err.to_string(), "watch channel send failed for node 'baz' (task dead?)");
     }
 
     #[test]

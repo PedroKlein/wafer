@@ -84,11 +84,10 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
         .nodes
         .keys()
         .map(|id| {
-            let state = orch
-                .node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
-            let (processed, failed) = orch
-                .node_metrics(id)
-                .map_or((0, 0), |m| (m.processed(), m.failed()));
+            let state =
+                orch.node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
+            let (processed, failed) =
+                orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.failed()));
             NodeInfoResponse {
                 id: id.clone(),
                 state,
@@ -107,22 +106,18 @@ pub async fn get_node(
     Path(id): Path<String>,
 ) -> Result<Json<NodeInfoResponse>, StatusCode> {
     let state = orch.node_state(&id).ok_or(StatusCode::NOT_FOUND)?;
-    let (processed, failed) = orch
-        .node_metrics(&id)
-        .map_or((0, 0), |m| (m.processed(), m.failed()));
+    let (processed, failed) =
+        orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
-    Ok(Json(NodeInfoResponse {
-        id,
-        state: format!("{state:?}"),
-        processed,
-        failed,
-        swappable,
-    }))
+    Ok(Json(NodeInfoResponse { id, state: format!("{state:?}"), processed, failed, swappable }))
 }
 
 /// POST /api/v1/nodes/:id/hot-swap — trigger hot-swap with new Wasm binary
-#[expect(clippy::too_many_lines, reason = "multi-step hot-swap procedure (guard → load → compile → swap → canary → respond): linear sequence")]
+#[expect(
+    clippy::too_many_lines,
+    reason = "multi-step hot-swap procedure (guard → load → compile → swap → canary → respond): linear sequence"
+)]
 pub async fn hot_swap(
     State(orch): State<AppState>,
     Path(id): Path<String>,
@@ -183,7 +178,7 @@ pub async fn hot_swap(
                 capabilities_from_config(&wasm.capabilities),
                 wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
             )
-        },
+        }
         Some(NodeDef::Filter(wasm)) => (
             SwapKind::Filter,
             capabilities_from_config(&wasm.capabilities),
@@ -200,20 +195,44 @@ pub async fn hot_swap(
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     };
 
-    let wasm_bytes = tokio::fs::read(&body.wasm_path).await.map_err(|e| {
-        (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}"))
-    })?;
+    let wasm_bytes = tokio::fs::read(&body.wasm_path)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}")))?;
 
     let (progress, completion_rx) = HotSwapProgress::channel();
     let timed_result = match kind {
         SwapKind::Transform => {
-            prepare_transform_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
+            prepare_transform_swap_timed(
+                engine,
+                &wasm_bytes,
+                &id,
+                capabilities,
+                memory_limit,
+                progress,
+            )
+            .await
         }
         SwapKind::Filter => {
-            prepare_filter_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
+            prepare_filter_swap_timed(
+                engine,
+                &wasm_bytes,
+                &id,
+                capabilities,
+                memory_limit,
+                progress,
+            )
+            .await
         }
         SwapKind::Router => {
-            prepare_router_swap_timed(engine, &wasm_bytes, &id, capabilities, memory_limit, progress).await
+            prepare_router_swap_timed(
+                engine,
+                &wasm_bytes,
+                &id,
+                capabilities,
+                memory_limit,
+                progress,
+            )
+            .await
         }
     };
     let mut timed_result = timed_result.map_err(|e| {
@@ -225,11 +244,7 @@ pub async fn hot_swap(
     orch.send_swap(&id, timed_result.payload)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
 
-    let completion = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        completion_rx,
-    )
-    .await;
+    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), completion_rx).await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
@@ -257,7 +272,8 @@ pub async fn hot_swap(
                     "signal_ns": timed_result.timeline.signal_duration_ns(),
                     "rollback_ns": rollback_time_ns,
                 }
-            })).into_response());
+            }))
+            .into_response());
         }
         Ok(Ok(Err(err))) => {
             return Err((StatusCode::CONFLICT, err.to_string()));
@@ -277,12 +293,10 @@ pub async fn hot_swap(
     };
 
     let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
-    let convergence_ns = crate::util::duration_ns_saturating(
-        report.first_v2_at.duration_since(report.ack_at),
-    );
-    let first_v2_ns = crate::util::duration_ns_saturating(
-        report.first_v2_at.duration_since(signal_at),
-    );
+    let convergence_ns =
+        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(report.ack_at));
+    let first_v2_ns =
+        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(signal_at));
 
     // P0.10 AC1: record every phase into the hot_swap_phase_ns histogram
     // labelled {phase, node_id}. Six phases total — curl :9090/metrics | rg
@@ -316,7 +330,8 @@ pub async fn hot_swap(
             "ack_ns": ack_ns,
             "convergence_ns": convergence_ns,
         }
-    })).into_response())
+    }))
+    .into_response())
 }
 
 /// POST /api/v1/nodes/:id/reconfigure — warm reconfigure via cached InstancePre
@@ -376,14 +391,9 @@ pub async fn reconfigure(
     let payload = SwapPayload::Reconfigure { new_config_json, progress };
 
     let signal_at = std::time::Instant::now();
-    orch.send_swap(&id, payload)
-        .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
+    orch.send_swap(&id, payload).map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
 
-    let completion = tokio::time::timeout(
-        std::time::Duration::from_secs(5),
-        completion_rx,
-    )
-    .await;
+    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), completion_rx).await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
@@ -400,7 +410,8 @@ pub async fn reconfigure(
                 "timeline": {
                     "rollback_ns": rollback_time_ns,
                 }
-            })).into_response());
+            }))
+            .into_response());
         }
         Ok(Ok(Err(err))) => {
             return Err((StatusCode::CONFLICT, err.to_string()));
@@ -420,9 +431,8 @@ pub async fn reconfigure(
     };
 
     let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
-    let convergence_ns = crate::util::duration_ns_saturating(
-        report.first_v2_at.duration_since(report.ack_at),
-    );
+    let convergence_ns =
+        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(report.ack_at));
 
     // Reconfigure reuses the cached InstancePre; compile is unused and
     // instantiation is the tiny cached-pre `.instantiate()` inside try_reconfigure,
@@ -439,7 +449,8 @@ pub async fn reconfigure(
             "ack_ns": ack_ns,
             "convergence_ns": convergence_ns,
         }
-    })).into_response())
+    }))
+    .into_response())
 }
 
 /// POST /api/v1/pipeline/shutdown — trigger graceful shutdown
@@ -460,18 +471,10 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
 
     for node_id in orch.config().nodes.keys() {
         if let Some(m) = orch.node_metrics(node_id) {
-            writeln!(
-                output,
-                "wafer_node_processed_total{{node=\"{node_id}\"}} {}",
-                m.processed()
-            )
-            .expect("String write is infallible");
-            writeln!(
-                output,
-                "wafer_node_failed_total{{node=\"{node_id}\"}} {}",
-                m.failed()
-            )
-            .expect("String write is infallible");
+            writeln!(output, "wafer_node_processed_total{{node=\"{node_id}\"}} {}", m.processed())
+                .expect("String write is infallible");
+            writeln!(output, "wafer_node_failed_total{{node=\"{node_id}\"}} {}", m.failed())
+                .expect("String write is infallible");
         }
     }
 
@@ -554,11 +557,11 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     if let Ok(guard) = hotswap.recovery_duration.read()
         && !guard.is_empty()
     {
-        output.push_str(
-            "# TYPE wafer_node_recovery_duration_ms_bucket histogram\n",
-        );
+        output.push_str("# TYPE wafer_node_recovery_duration_ms_bucket histogram\n");
         for (node_id, hist) in guard.iter() {
-            for (i, upper_ns) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
+            for (i, upper_ns) in
+                crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate()
+            {
                 let count = hist.buckets[i].load(std::sync::atomic::Ordering::Relaxed);
                 let upper_ms = upper_ns / 1_000_000;
                 writeln!(

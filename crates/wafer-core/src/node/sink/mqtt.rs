@@ -114,7 +114,8 @@ impl MqttSink {
         }
 
         // Record batch stats for metrics
-        self.batch_stats.flushes_since_last_check = self.batch_stats.flushes_since_last_check.saturating_add(1);
+        self.batch_stats.flushes_since_last_check =
+            self.batch_stats.flushes_since_last_check.saturating_add(1);
         self.batch_stats.last_flush_size = crate::util::usize_as_u64(batch_size);
 
         Ok(())
@@ -182,7 +183,10 @@ impl Lifecycle for MqttSink {
         })
     }
 
-    #[expect(clippy::let_underscore_must_use, reason = "MQTT disconnect is best-effort during shutdown; broker may already be gone")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "MQTT disconnect is best-effort during shutdown; broker may already be gone"
+    )]
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             // Flush any remaining buffered messages

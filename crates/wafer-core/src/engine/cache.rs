@@ -37,10 +37,7 @@ impl ComponentCache {
     /// If `disk_dir` is `Some`, the directory will be created on first write.
     #[must_use]
     pub fn new(disk_dir: Option<PathBuf>) -> Self {
-        Self {
-            memory: HashMap::with_hasher(foldhash::fast::FixedState::default()),
-            disk_dir,
-        }
+        Self { memory: HashMap::with_hasher(foldhash::fast::FixedState::default()), disk_dir }
     }
 
     /// Create a memory-only cache (no disk persistence).
@@ -56,11 +53,7 @@ impl ComponentCache {
     /// # Errors
     ///
     /// Returns `WaferError::ComponentLoad` if compilation fails.
-    pub fn get_or_compile(
-        &mut self,
-        engine: &Engine,
-        wasm_bytes: &[u8],
-    ) -> Result<Arc<Component>> {
+    pub fn get_or_compile(&mut self, engine: &Engine, wasm_bytes: &[u8]) -> Result<Arc<Component>> {
         let hash = blake3::hash(wasm_bytes);
         let hash_bytes = *hash.as_bytes();
 
@@ -108,7 +101,10 @@ impl ComponentCache {
     }
 
     /// Try to load a compiled component from the disk cache.
-    #[expect(clippy::let_underscore_must_use, reason = "cache I/O is best-effort: eviction or creation failure is non-fatal")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cache I/O is best-effort: eviction or creation failure is non-fatal"
+    )]
     fn try_load_from_disk(
         &self,
         engine: &Engine,
@@ -137,7 +133,10 @@ impl ComponentCache {
     }
 
     /// Best-effort save to disk cache. Failures are non-fatal.
-    #[expect(clippy::let_underscore_must_use, reason = "cache I/O is best-effort: mkdir/write failure is non-fatal")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "cache I/O is best-effort: mkdir/write failure is non-fatal"
+    )]
     fn try_save_to_disk(&self, _engine: &Engine, hash: &blake3::Hash, component: &Component) {
         let Some(ref dir) = self.disk_dir else { return };
         let path = Self::artifact_path(dir, hash);

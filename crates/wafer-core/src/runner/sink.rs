@@ -94,9 +94,9 @@ pub async fn run_sink_loop(
 mod tests {
     use super::*;
     use crate::queue::RuntimeEnvelope;
-    use tokio::sync::mpsc;
     use crate::testing::channel::ChannelSink;
     use std::time::Duration;
+    use tokio::sync::mpsc;
 
     #[tokio::test]
     async fn test_sink_loop_messages_collected() {
@@ -116,9 +116,7 @@ mod tests {
 
         // Send 10 messages
         for i in 0..10 {
-            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}")))
-                .await
-                .unwrap();
+            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}"))).await.unwrap();
         }
         // Drop sender to signal upstream done
         drop(tx);
@@ -158,9 +156,7 @@ mod tests {
 
         // Send some messages and drop sender
         for i in 0..5 {
-            tx.send(RuntimeEnvelope::from_string("s", format!("drain-{i}")))
-                .await
-                .unwrap();
+            tx.send(RuntimeEnvelope::from_string("s", format!("drain-{i}"))).await.unwrap();
         }
         drop(tx);
 
@@ -194,18 +190,14 @@ mod tests {
 
         // Send messages
         for i in 0..3 {
-            tx.send(RuntimeEnvelope::from_string("s", format!("cancel-{i}")))
-                .await
-                .unwrap();
+            tx.send(RuntimeEnvelope::from_string("s", format!("cancel-{i}"))).await.unwrap();
         }
 
         // Give sink time to process the messages already sent
         tokio::time::sleep(Duration::from_millis(50)).await;
 
         // Send more messages that may still be in channel when cancel fires
-        tx.send(RuntimeEnvelope::from_string("s", "after-delay"))
-            .await
-            .unwrap();
+        tx.send(RuntimeEnvelope::from_string("s", "after-delay")).await.unwrap();
 
         // Cancel — should drain remaining messages
         cancel.cancel();

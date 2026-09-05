@@ -224,7 +224,10 @@ fn build_pipeline_inner(
                         policy,
                         node: None,
                     },
-                    #[expect(clippy::unreachable, reason = "Source/Sink categories are handled in the outer match; inner match only sees Transform/Filter/Router")]
+                    #[expect(
+                        clippy::unreachable,
+                        reason = "Source/Sink categories are handled in the outer match; inner match only sees Transform/Filter/Router"
+                    )]
                     _ => unreachable!("Source/Sink should not reach wasm node builder"),
                 }
             }
@@ -320,18 +323,13 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
     let mut queue_probes = Vec::new();
 
     for (to_node, edges_to_dest) in &edges_by_dest {
-        let capacity = edges_to_dest
-            .iter()
-            .filter_map(|e| e.capacity)
-            .max()
-            .unwrap_or(default_capacity);
+        let capacity =
+            edges_to_dest.iter().filter_map(|e| e.capacity).max().unwrap_or(default_capacity);
 
         let queue_metrics = Arc::new(QueueMetrics::default());
         let (sender, receiver) = mpsc::channel(capacity);
-        receivers.insert(
-            to_node.clone(),
-            TrackedReceiver::new(receiver, Arc::clone(&queue_metrics)),
-        );
+        receivers
+            .insert(to_node.clone(), TrackedReceiver::new(receiver, Arc::clone(&queue_metrics)));
         queue_probes.push(QueueProbe {
             queue: to_node.clone().into_boxed_str(),
             capacity,

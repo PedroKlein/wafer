@@ -16,10 +16,10 @@ use std::sync::Arc;
 use bytes::Bytes;
 use wasmtime::Store;
 
+use crate::engine::Capabilities;
 use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::bindings::transform_node::{self, TransformNode, TransformNodePre};
-use crate::engine::Capabilities;
 use crate::engine::state::{LogLevel, WaferState};
 use crate::error::WaferError;
 use crate::node::traits::{FilterOutcome, RouteOutcome};
@@ -27,7 +27,9 @@ use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::WasmProcessError;
 
 /// Maps a WIT `process-error` variant to our host-side error type.
-fn map_process_error(err: transform_node::wafer::pipeline::types::ProcessError) -> WasmProcessError {
+fn map_process_error(
+    err: transform_node::wafer::pipeline::types::ProcessError,
+) -> WasmProcessError {
     use transform_node::wafer::pipeline::types::ProcessError as WitErr;
     match err {
         WitErr::BadInput(msg) => WasmProcessError::BadInput(msg),
@@ -87,12 +89,8 @@ fn build_wit_message(
         .rep();
     let resource = wasmtime::component::Resource::new_borrow(resource_rep);
 
-    let metadata: Vec<(String, String)> = envelope
-        .header
-        .metadata
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
+    let metadata: Vec<(String, String)> =
+        envelope.header.metadata.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
 
     Ok(transform_node::wafer::pipeline::types::Message {
         id: envelope.header.id.to_string(),
@@ -216,9 +214,10 @@ impl WasmTransformNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-            message: format!("transform '{node_id}' recovery instantiation failed: {e}"),
-        })?;
+        let bindings =
+            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{node_id}' recovery instantiation failed: {e}"),
+            })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
@@ -238,9 +237,10 @@ impl WasmTransformNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-            message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
-        })?;
+        let new_bindings =
+            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
+            })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
@@ -289,10 +289,8 @@ impl WasmTransformNode {
         // Bytes-clone entry per message.
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self
-            .bindings
-            .wafer_pipeline_transform()
-            .call_process(&mut self.store, &wit_msg);
+        let result =
+            self.bindings.wafer_pipeline_transform().call_process(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
 
@@ -352,7 +350,10 @@ impl WasmTransformNode {
             })?
         {
             return Err(WaferError::PluginInit {
-                message: format!("transform '{}' validate() rejected config: {message}", self.node_id()),
+                message: format!(
+                    "transform '{}' validate() rejected config: {message}",
+                    self.node_id()
+                ),
             });
         }
         self.bindings
@@ -497,9 +498,10 @@ impl WasmFilterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-            message: format!("filter '{node_id}' recovery instantiation failed: {e}"),
-        })?;
+        let bindings =
+            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{node_id}' recovery instantiation failed: {e}"),
+            })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
@@ -518,9 +520,10 @@ impl WasmFilterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-            message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
-        })?;
+        let new_bindings =
+            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+                message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
+            })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
@@ -537,11 +540,12 @@ impl WasmFilterNode {
 
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
-        let node_config = crate::engine::bindings::filter_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-            id: self.node_id().to_string(),
-            config: config_json.to_string(),
-            plugin_version: self.plugin_version.clone(),
-        };
+        let node_config =
+            crate::engine::bindings::filter_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                id: self.node_id().to_string(),
+                config: config_json.to_string(),
+                plugin_version: self.plugin_version.clone(),
+            };
         // AC F5.AC2: skip metering setters when unlimited; see transform path.
         if let Some(n) = self.fuel_limit {
             self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
@@ -560,7 +564,10 @@ impl WasmFilterNode {
             })?
         {
             return Err(WaferError::PluginInit {
-                message: format!("filter '{}' validate() rejected config: {message}", self.node_id()),
+                message: format!(
+                    "filter '{}' validate() rejected config: {message}",
+                    self.node_id()
+                ),
             });
         }
         self.bindings
@@ -599,10 +606,7 @@ impl WasmFilterNode {
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self
-            .bindings
-            .wafer_pipeline_filter()
-            .call_evaluate(&mut self.store, &wit_msg);
+        let result = self.bindings.wafer_pipeline_filter().call_evaluate(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
 
@@ -747,9 +751,10 @@ impl WasmRouterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings = self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-            message: format!("router '{node_id}' recovery instantiation failed: {e}"),
-        })?;
+        let bindings =
+            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+                message: format!("router '{node_id}' recovery instantiation failed: {e}"),
+            })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
@@ -768,9 +773,10 @@ impl WasmRouterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let new_bindings = self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-            message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
-        })?;
+        let new_bindings =
+            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
+                message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
+            })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
@@ -787,11 +793,12 @@ impl WasmRouterNode {
 
     /// Call guest lifecycle validate() and init() before first message processing.
     pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
-        let node_config = crate::engine::bindings::router_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-            id: self.node_id().to_string(),
-            config: config_json.to_string(),
-            plugin_version: self.plugin_version.clone(),
-        };
+        let node_config =
+            crate::engine::bindings::router_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                id: self.node_id().to_string(),
+                config: config_json.to_string(),
+                plugin_version: self.plugin_version.clone(),
+            };
         // AC F5.AC2: skip metering setters when unlimited; see transform path.
         if let Some(n) = self.fuel_limit {
             self.store.set_fuel(n.get()).map_err(|e| WaferError::PluginInit {
@@ -810,7 +817,10 @@ impl WasmRouterNode {
             })?
         {
             return Err(WaferError::PluginInit {
-                message: format!("router '{}' validate() rejected config: {message}", self.node_id()),
+                message: format!(
+                    "router '{}' validate() rejected config: {message}",
+                    self.node_id()
+                ),
             });
         }
         self.bindings
@@ -829,10 +839,7 @@ impl WasmRouterNode {
     /// Decide which port(s) the message should be routed to.
     ///
     /// MUST run to completion — never place in a select! branch.
-    pub fn route(
-        &mut self,
-        envelope: &RuntimeEnvelope,
-    ) -> Result<RouteOutcome, WasmProcessError> {
+    pub fn route(&mut self, envelope: &RuntimeEnvelope) -> Result<RouteOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
         // AC F5.AC2: skip metering setters when unlimited.
@@ -849,10 +856,7 @@ impl WasmRouterNode {
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self
-            .bindings
-            .wafer_pipeline_router()
-            .call_route(&mut self.store, &wit_msg);
+        let result = self.bindings.wafer_pipeline_router().call_route(&mut self.store, &wit_msg);
 
         flush_logs(&mut self.store);
 
@@ -948,10 +952,7 @@ mod tests {
         for (wit_err, expected_variant) in cases {
             let mapped = map_process_error(wit_err);
             let debug = format!("{mapped:?}");
-            assert!(
-                debug.contains(expected_variant),
-                "Expected {expected_variant} in {debug}"
-            );
+            assert!(debug.contains(expected_variant), "Expected {expected_variant} in {debug}");
         }
     }
 

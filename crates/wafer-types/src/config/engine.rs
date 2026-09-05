@@ -9,7 +9,9 @@ use super::source_sink::{AuthConfig, TlsConfig};
 ///
 /// Standard `Option<NonZeroU64>` silently maps `0` to `None` (TOML trait
 /// semantics). We reject it instead so the P0.13 footgun stays impossible.
-pub(super) fn deserialize_metering_limit<'de, D>(deserializer: D) -> Result<Option<NonZeroU64>, D::Error>
+pub(super) fn deserialize_metering_limit<'de, D>(
+    deserializer: D,
+) -> Result<Option<NonZeroU64>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -32,7 +34,10 @@ where
     clippy::trivially_copy_pass_by_ref,
     reason = "serde's serialize_with contract requires fn(&T, S) -> Result<...>"
 )]
-pub(super) fn serialize_metering_limit<S>(value: &Option<NonZeroU64>, serializer: S) -> Result<S::Ok, S::Error>
+pub(super) fn serialize_metering_limit<S>(
+    value: &Option<NonZeroU64>,
+    serializer: S,
+) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -57,7 +62,11 @@ pub struct EngineConfig {
     /// `NonZeroU64` prevents the `0 = trap immediately` footgun (P0.13 lesson:
     /// a typo or off-by-one silently makes every Wasm call trap on first
     /// epoch check, indistinguishable from a plugin bug).
-    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_metering_limit",
+        serialize_with = "serialize_metering_limit"
+    )]
     pub epoch_deadline: Option<NonZeroU64>,
 
     #[serde(default = "default_epoch_tick_ms")]
@@ -94,15 +103,27 @@ pub struct FuelBudgets {
     /// Fuel per transform `process()` call. `None` = unlimited (`set_fuel` skipped).
     ///
     /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
-    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_metering_limit",
+        serialize_with = "serialize_metering_limit"
+    )]
     pub transform: Option<NonZeroU64>,
 
     /// Fuel per filter `apply()` call. `None` = unlimited.
-    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_metering_limit",
+        serialize_with = "serialize_metering_limit"
+    )]
     pub filter: Option<NonZeroU64>,
 
     /// Fuel per router `route()` call. `None` = unlimited.
-    #[serde(default, deserialize_with = "deserialize_metering_limit", serialize_with = "serialize_metering_limit")]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_metering_limit",
+        serialize_with = "serialize_metering_limit"
+    )]
     pub router: Option<NonZeroU64>,
 }
 
@@ -321,8 +342,6 @@ const fn default_queue_capacity() -> usize {
     1024
 }
 
-
-
 const fn default_memory_transform() -> usize {
     64 * 1024 * 1024
 }
@@ -344,19 +363,11 @@ const fn default_timed_out_action() -> SimpleAction {
 }
 
 const fn default_dependency_failed_retry() -> RetryConfig {
-    RetryConfig {
-        retries: 3,
-        backoff_ms: 100,
-        exhausted: SimpleAction::Dlq,
-    }
+    RetryConfig { retries: 3, backoff_ms: 100, exhausted: SimpleAction::Dlq }
 }
 
 const fn default_processing_failed_retry() -> RetryConfig {
-    RetryConfig {
-        retries: 2,
-        backoff_ms: 100,
-        exhausted: SimpleAction::Dlq,
-    }
+    RetryConfig { retries: 2, backoff_ms: 100, exhausted: SimpleAction::Dlq }
 }
 
 const fn default_retry_buffer_capacity() -> usize {

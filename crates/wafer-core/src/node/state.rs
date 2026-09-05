@@ -5,7 +5,7 @@
 //!                    ↘ Error → Recovering → Running
 //! ```
 
-use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use wafer_types::NodeState;
 
 /// Thread-safe state tracker for node lifecycle during hot-swap.
@@ -107,7 +107,10 @@ impl NodeStateTracker {
     }
 
     /// Valid from: any non-terminal state.
-    #[expect(clippy::let_underscore_must_use, reason = "compare_exchange on recovery_started_ns: benign if another thread already set it (preserves original timestamp)")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "compare_exchange on recovery_started_ns: benign if another thread already set it (preserves original timestamp)"
+    )]
     pub fn transition_to_error(&self) -> bool {
         loop {
             let current = self.state.load(Ordering::Acquire);
@@ -480,13 +483,9 @@ mod tests {
         assert!(tracker.transition_to_error());
         assert!(tracker.transition_to_recovering());
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let duration = tracker
-            .transition_recovering_to_running_timed()
-            .expect("transition must succeed");
-        assert!(
-            duration >= 20_000_000,
-            "recovery duration {duration}ns must be ≥ 20ms"
-        );
+        let duration =
+            tracker.transition_recovering_to_running_timed().expect("transition must succeed");
+        assert!(duration >= 20_000_000, "recovery duration {duration}ns must be ≥ 20ms");
         assert!(
             duration < 500_000_000,
             "recovery duration {duration}ns must be < 500ms in a unit test"

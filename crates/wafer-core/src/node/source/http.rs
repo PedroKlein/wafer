@@ -31,7 +31,10 @@ impl HttpSource {
     /// Panics if the hardcoded fallback address `127.0.0.1:8081` fails to parse
     /// (this should never happen as it's a valid address literal).
     #[must_use]
-    #[expect(clippy::unwrap_used, reason = "fallback \"127.0.0.1:8081\" is a valid literal socket address; parse cannot fail")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "fallback \"127.0.0.1:8081\" is a valid literal socket address; parse cannot fail"
+    )]
     pub fn new(
         id: impl Into<String>,
         bind_addr: impl Into<String>,
@@ -119,7 +122,10 @@ impl Lifecycle for HttpSource {
         })
     }
 
-    #[expect(clippy::let_underscore_must_use, reason = "shutdown signals are fire-and-forget: receiver may already be gone; JoinHandle abort is best-effort")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "shutdown signals are fire-and-forget: receiver may already be gone; JoinHandle abort is best-effort"
+    )]
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
             if let Some(shutdown_tx) = self.shutdown_tx.take() {
@@ -217,7 +223,10 @@ async fn run_http_server(
     }
 }
 
-#[expect(clippy::unwrap_used, reason = "hyper Response::builder().status(literal).body(Bytes) cannot fail with valid constants")]
+#[expect(
+    clippy::unwrap_used,
+    reason = "hyper Response::builder().status(literal).body(Bytes) cannot fail with valid constants"
+)]
 async fn handle_request(
     req: hyper::Request<hyper::body::Incoming>,
     expected_path: &str,

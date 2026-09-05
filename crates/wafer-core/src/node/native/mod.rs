@@ -132,10 +132,7 @@ impl NativeFilter {
         id: impl Into<String>,
         predicate_fn: impl Fn(&RuntimeEnvelope) -> bool + Send + 'static,
     ) -> Self {
-        Self {
-            id: id.into(),
-            predicate_fn: Box::new(predicate_fn),
-        }
+        Self { id: id.into(), predicate_fn: Box::new(predicate_fn) }
     }
 
     /// Convenience: strict `>` threshold on `temperature`.
@@ -155,12 +152,7 @@ impl NativeFilter {
     /// the launcher; keep in sync with `plugins/threshold-filter/src/lib.rs`
     /// or `tests/native_threshold_filter.rs` will fail.
     #[must_use]
-    pub fn range(
-        id: impl Into<String>,
-        field: impl Into<String>,
-        min: f64,
-        max: f64,
-    ) -> Self {
+    pub fn range(id: impl Into<String>, field: impl Into<String>, min: f64, max: f64) -> Self {
         Self::new(id, functions::range_filter(field.into(), min, max))
     }
 
@@ -171,11 +163,7 @@ impl NativeFilter {
         &mut self,
         envelope: &RuntimeEnvelope,
     ) -> std::result::Result<FilterOutcome, WasmProcessError> {
-        Ok(if (self.predicate_fn)(envelope) {
-            FilterOutcome::Forward
-        } else {
-            FilterOutcome::Drop
-        })
+        Ok(if (self.predicate_fn)(envelope) { FilterOutcome::Forward } else { FilterOutcome::Drop })
     }
 
     /// Sync mirror of `Lifecycle::id` so [`FilterNode`] avoids the
@@ -214,13 +202,9 @@ impl Filter for NativeFilter {
         envelope: &RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<FilterOutcome>> + Send + '_>> {
         let forward = (self.predicate_fn)(envelope);
-        Box::pin(async move {
-            Ok(if forward {
-                FilterOutcome::Forward
-            } else {
-                FilterOutcome::Drop
-            })
-        })
+        Box::pin(
+            async move { Ok(if forward { FilterOutcome::Forward } else { FilterOutcome::Drop }) },
+        )
     }
 }
 
@@ -263,20 +247,13 @@ impl NativeRouter {
     /// `rules` maps each prefix byte → port name. Any envelope whose first
     /// byte is not in `rules` is dropped.
     #[must_use]
-    pub fn by_first_byte(
-        id: impl Into<String>,
-        rules: Vec<(u8, String)>,
-    ) -> Self {
+    pub fn by_first_byte(id: impl Into<String>, rules: Vec<(u8, String)>) -> Self {
         let ports: Vec<String> = rules.iter().map(|(_, p)| p.clone()).collect();
         Self::new(id, ports, move |env| {
             let Some(&first) = env.payload.first() else {
                 return Vec::new();
             };
-            rules
-                .iter()
-                .filter(|(b, _)| *b == first)
-                .map(|(_, p)| p.clone())
-                .collect()
+            rules.iter().filter(|(b, _)| *b == first).map(|(_, p)| p.clone()).collect()
         })
     }
 
@@ -339,10 +316,10 @@ impl Router for NativeRouter {
     ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>> {
         let ports = (self.route_fn)(&envelope);
         Box::pin(async move {
-            ports.into_iter().next().map_or(
-                Ok(RouteResult::Filter),
-                |first| Ok(RouteResult::Route(first, envelope)),
-            )
+            ports
+                .into_iter()
+                .next()
+                .map_or(Ok(RouteResult::Filter), |first| Ok(RouteResult::Route(first, envelope)))
         })
     }
 }
@@ -378,20 +355,13 @@ pub trait ProcessNode: Send {
     /// Hot-swap: replace the underlying computation. Native nodes return
     /// `Err` so the API returns 400 to any hot-swap attempt on a native
     /// baseline (the baseline is by construction not swappable).
-    fn try_apply_swap_payload(
-        &mut self,
-        _payload: &crate::runner::SwapPayload,
-    ) -> Result<()> {
-        Err(WaferError::Runtime(
-            "native baseline nodes do not support hot-swap".into(),
-        ))
+    fn try_apply_swap_payload(&mut self, _payload: &crate::runner::SwapPayload) -> Result<()> {
+        Err(WaferError::Runtime("native baseline nodes do not support hot-swap".into()))
     }
 
     /// Config reload. Native nodes reject the call.
     fn try_reconfigure(&mut self, _new_config_json: &str) -> Result<()> {
-        Err(WaferError::Runtime(
-            "native baseline nodes do not support reconfigure".into(),
-        ))
+        Err(WaferError::Runtime("native baseline nodes do not support reconfigure".into()))
     }
 
     /// Recovery via cached `InstancePre`. Native nodes are stateless
@@ -447,9 +417,7 @@ pub mod functions {
     }
 
     /// Strict `>` on `temperature`. Retained for `NativeFilter::threshold`.
-    pub fn threshold_filter(
-        threshold: f64,
-    ) -> impl Fn(&RuntimeEnvelope) -> bool + Send + 'static {
+    pub fn threshold_filter(threshold: f64) -> impl Fn(&RuntimeEnvelope) -> bool + Send + 'static {
         move |envelope: &RuntimeEnvelope| {
             let Ok(s) = std::str::from_utf8(&envelope.payload) else {
                 return false;
@@ -484,8 +452,14 @@ pub mod functions {
     /// points. Not a full JSON parser — mirrors the equivalent Wasm
     /// plugin logic (see plugins/threshold-filter and plugins/content-router).
     #[must_use]
-    #[expect(clippy::arithmetic_side_effects, reason = "idx from find() + key.len() cannot exceed json.len()")]
-    #[expect(clippy::string_slice, reason = "find-based indices guaranteed to be at char boundaries in ASCII JSON keys/numbers")]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "idx from find() + key.len() cannot exceed json.len()"
+    )]
+    #[expect(
+        clippy::string_slice,
+        reason = "find-based indices guaranteed to be at char boundaries in ASCII JSON keys/numbers"
+    )]
     pub fn extract_json_number(json: &str, field: &str) -> Option<f64> {
         let key = format!("\"{field}\"");
         let idx = json.find(&key)?;
@@ -507,10 +481,9 @@ pub mod functions {
     /// error policy can decide) and a non-retriable one when the input
     /// isn't UTF-8.
     pub fn json_parse(payload: &[u8]) -> std::result::Result<Vec<u8>, ProcessError> {
-        let s = std::str::from_utf8(payload).map_err(|e| ProcessError::new(
-            "json.parse.non-utf8",
-            format!("payload is not UTF-8: {e}"),
-        ))?;
+        let s = std::str::from_utf8(payload).map_err(|e| {
+            ProcessError::new("json.parse.non-utf8", format!("payload is not UTF-8: {e}"))
+        })?;
         let temp = extract_json_number(s, "temperature").ok_or_else(|| {
             ProcessError::new(
                 "json.parse.missing-field",

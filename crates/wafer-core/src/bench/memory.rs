@@ -21,10 +21,7 @@ impl MemoryRecorder {
     /// Create a new recorder (does not start sampling).
     #[must_use]
     pub const fn new() -> Self {
-        Self {
-            samples: Vec::new(),
-            start: None,
-        }
+        Self { samples: Vec::new(), start: None }
     }
 
     /// Run the sampling loop at 1Hz until the cancellation token fires.
@@ -53,7 +50,10 @@ impl MemoryRecorder {
 
     /// Average RSS across all samples.
     #[must_use]
-    #[expect(clippy::arithmetic_side_effects, reason = "division by zero guarded by is_empty() check above")]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "division by zero guarded by is_empty() check above"
+    )]
     pub fn avg_rss_bytes(&self) -> u64 {
         if self.samples.is_empty() {
             return 0;
@@ -70,7 +70,10 @@ impl MemoryRecorder {
 
     /// Export as CSV string: "elapsed_ms,rss_bytes\n..."
     #[must_use]
-    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
+    #[expect(
+        clippy::expect_used,
+        reason = "std::fmt::Write for String is infallible — cannot panic"
+    )]
     pub fn to_csv(&self) -> String {
         use std::fmt::Write as _;
         let mut out = String::from("elapsed_ms,rss_bytes\n");
@@ -107,10 +110,7 @@ mod tests {
         let rss = rss.unwrap();
         assert!(rss > 0, "RSS should be non-zero for a running process");
         // Sanity: a Rust test process should use at least 1 MB
-        assert!(
-            rss > 1_000_000,
-            "RSS {rss} bytes is suspiciously low for a Rust test process"
-        );
+        assert!(rss > 1_000_000, "RSS {rss} bytes is suspiciously low for a Rust test process");
     }
 
     #[test]

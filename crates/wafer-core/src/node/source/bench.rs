@@ -347,7 +347,8 @@ impl Source for BenchSource {
             let seq = self.sequence;
             let (intended_ns, burst_phase) = self.schedule(seq).await?;
             self.sequence = self.sequence.saturating_add(1);
-            if let Some(count) = burst_phase.and_then(|phase| self.emitted_phase_counts.get_mut(phase))
+            if let Some(count) =
+                burst_phase.and_then(|phase| self.emitted_phase_counts.get_mut(phase))
             {
                 *count = count.saturating_add(1);
             }
@@ -363,12 +364,10 @@ impl Source for BenchSource {
             if let Some(phase) = burst_phase
                 && let Some(name) = ["before", "burst", "after"].get(phase)
             {
-                envelope = envelope
-                    .with_metadata("bench.phase", *name)
-                    .with_metadata(
-                        "bench.measurement_offset_ns",
-                        self.measurement_offset_ns(seq).unwrap_or(0).to_string(),
-                    );
+                envelope = envelope.with_metadata("bench.phase", *name).with_metadata(
+                    "bench.measurement_offset_ns",
+                    self.measurement_offset_ns(seq).unwrap_or(0).to_string(),
+                );
             }
 
             Ok(Some(envelope))

@@ -191,7 +191,11 @@ pub struct WasmNodeDef {
 
     /// Per-node fuel override. `None` = use engine default for this node type.
     /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
-    #[serde(default, deserialize_with = "engine::deserialize_metering_limit", serialize_with = "engine::serialize_metering_limit")]
+    #[serde(
+        default,
+        deserialize_with = "engine::deserialize_metering_limit",
+        serialize_with = "engine::serialize_metering_limit"
+    )]
     pub fuel: Option<std::num::NonZeroU64>,
 
     #[serde(default)]
@@ -216,8 +220,6 @@ pub struct WasmNodeDef {
     #[serde(default)]
     pub plugin_version: Option<String>,
 }
-
-
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct EdgeDef {
@@ -488,14 +490,7 @@ topic = "dlq/messages"
 queue_capacity = 20000
 "#;
         let dlq: DeadLetterConfig = toml::from_str(toml_str).unwrap();
-        if let DeadLetterConfig::Mqtt {
-            broker,
-            port,
-            topic,
-            queue_capacity,
-            ..
-        } = &dlq
-        {
+        if let DeadLetterConfig::Mqtt { broker, port, topic, queue_capacity, .. } = &dlq {
             assert_eq!(broker, "broker.local");
             assert_eq!(*port, 8883);
             assert_eq!(topic, "dlq/messages");

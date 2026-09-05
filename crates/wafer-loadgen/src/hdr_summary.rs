@@ -8,11 +8,11 @@
 
 use std::path::PathBuf;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::Args;
-use hdrhistogram::serialization::interval_log::{IntervalLogIterator, LogEntry};
-use hdrhistogram::serialization::Deserializer;
 use hdrhistogram::Histogram;
+use hdrhistogram::serialization::Deserializer;
+use hdrhistogram::serialization::interval_log::{IntervalLogIterator, LogEntry};
 use serde::Serialize;
 
 #[derive(Args, Debug)]
@@ -73,14 +73,15 @@ pub fn run(args: &HdrSummaryArgs) -> Result<()> {
         match entry {
             Ok(LogEntry::Interval(hist_line)) => {
                 let encoded = hist_line.encoded_histogram();
-                let raw = base64_decode(encoded)
-                    .with_context(|| format!("failed to base64-decode interval entry: {encoded}"))?;
+                let raw = base64_decode(encoded).with_context(|| {
+                    format!("failed to base64-decode interval entry: {encoded}")
+                })?;
                 let mut cursor = std::io::Cursor::new(raw);
-                let h: Histogram<u64> = deserializer
-                    .deserialize(&mut cursor)
-                    .with_context(|| "failed to deserialise interval histogram — V2 cookie mismatch?".to_string())?;
-                agg.add(&h)
-                    .map_err(|e| anyhow!("aggregation failed (bounds mismatch): {e:?}"))?;
+                let h: Histogram<u64> =
+                    deserializer.deserialize(&mut cursor).with_context(|| {
+                        "failed to deserialise interval histogram — V2 cookie mismatch?".to_string()
+                    })?;
+                agg.add(&h).map_err(|e| anyhow!("aggregation failed (bounds mismatch): {e:?}"))?;
                 intervals = intervals.saturating_add(1);
             }
             Ok(LogEntry::BaseTime(_) | LogEntry::StartTime(_)) => {}
@@ -138,8 +139,13 @@ fn write_summary(summary: &Summary, output: Option<&std::path::Path>, pretty: bo
         std::fs::write(path, &json)
             .with_context(|| format!("failed to write summary to {}", path.display()))?;
     } else {
-        #[expect(clippy::print_stdout, reason = "CLI tool — stdout is the default output destination when no --output path given")]
-        { println!("{json}"); }
+        #[expect(
+            clippy::print_stdout,
+            reason = "CLI tool — stdout is the default output destination when no --output path given"
+        )]
+        {
+            println!("{json}");
+        }
     }
     Ok(())
 }
@@ -147,9 +153,7 @@ fn write_summary(summary: &Summary, output: Option<&std::path::Path>, pretty: bo
 /// Minimal STANDARD base64 decoder — avoids a workspace-dep on
 /// `base64` here; the Rust `HdrHistogram` serialiser emits STANDARD.
 fn base64_decode(s: &str) -> Result<Vec<u8>> {
-    use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    STANDARD
-        .decode(s.trim())
-        .map_err(|e| anyhow!("base64 decode failed: {e}"))
+    use base64::engine::general_purpose::STANDARD;
+    STANDARD.decode(s.trim()).map_err(|e| anyhow!("base64 decode failed: {e}"))
 }

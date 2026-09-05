@@ -110,28 +110,29 @@ impl host_types::Host for WaferState {}
 ///
 /// The Component Model guarantees borrow handles are valid for the duration of
 /// the call — `table.get()` can only fail if there's a host-side bug.
-#[expect(clippy::expect_used, reason = "CM guarantees borrow handles are valid during call; failure = host bug")]
+#[expect(
+    clippy::expect_used,
+    reason = "CM guarantees borrow handles are valid during call; failure = host bug"
+)]
 impl host_types::HostBuffer for WaferState {
     /// Returns the total byte length of the payload.
     fn size(&mut self, resource: Resource<WaferBuffer>) -> u64 {
-        let buf = self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
+        let buf =
+            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
         buf.size()
     }
 
     /// Reads a slice of the payload. Returns fewer bytes if offset+len exceeds size.
-    fn read(
-        &mut self,
-        resource: Resource<WaferBuffer>,
-        offset: u64,
-        len: u64,
-    ) -> Vec<u8> {
-        let buf = self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
+    fn read(&mut self, resource: Resource<WaferBuffer>, offset: u64, len: u64) -> Vec<u8> {
+        let buf =
+            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
         buf.read(offset, len)
     }
 
     /// Reads the entire payload in one call.
     fn read_all(&mut self, resource: Resource<WaferBuffer>) -> Vec<u8> {
-        let buf = self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
+        let buf =
+            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
         buf.read_all()
     }
 
@@ -148,11 +149,7 @@ impl host_types::HostBuffer for WaferState {
 /// Pushes log entries to WaferState's per-call buffer. The runner loop
 /// drains this buffer after each Wasm call and emits via the tracing crate.
 impl logging::Host for WaferState {
-    fn log(
-        &mut self,
-        level: host_types::LogLevel,
-        message: String,
-    ) {
+    fn log(&mut self, level: host_types::LogLevel, message: String) {
         // Map WIT log-level enum to our internal LogLevel
         let internal_level = match level {
             host_types::LogLevel::Trace => LogLevel::Trace,

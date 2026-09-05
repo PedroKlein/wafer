@@ -4,7 +4,6 @@
 //! Macros use `macro_rules!` because WIT-generated types are local to each plugin —
 //! a separate crate cannot reference them as functions.
 
-
 #[macro_export]
 macro_rules! output_from {
     ($input:expr, $payload:expr) => {{
@@ -35,7 +34,6 @@ macro_rules! output_with_type {
     }};
 }
 
-
 #[macro_export]
 macro_rules! payload_bytes {
     ($input:expr) => {
@@ -50,7 +48,6 @@ macro_rules! payload_as_str {
         String::from_utf8(bytes).map_err(|_| bad_input!("payload is not valid UTF-8"))
     }};
 }
-
 
 /// Construct a `ProcessError::BadInput` — input is malformed or missing fields.
 #[macro_export]
@@ -92,7 +89,6 @@ macro_rules! unrecoverable {
     };
 }
 
-
 /// Declare a thread-local `RefCell<Option<T>>` for plugin state.
 ///
 /// Call once at module level. Safe because Wasm is single-threaded.
@@ -118,14 +114,12 @@ macro_rules! with_state {
     ($name:ident => $body:expr) => {
         __WAFER_STATE.with(|cell| {
             let mut borrow = cell.borrow_mut();
-            let $name = borrow
-                .as_mut()
-                .expect("plugin not initialized: init() must be called first");
+            let $name =
+                borrow.as_mut().expect("plugin not initialized: init() must be called first");
             $body
         })
     };
 }
-
 
 #[macro_export]
 macro_rules! log_info {
@@ -148,7 +142,6 @@ macro_rules! log_error {
     };
 }
 
-
 /// # Errors
 ///
 /// Returns a human-readable error string if deserialization fails.
@@ -157,7 +150,6 @@ macro_rules! log_error {
 pub fn parse_config<T: serde::de::DeserializeOwned>(json: &str) -> Result<T, String> {
     serde_json::from_str(json).map_err(|e| format!("config parse error: {e}"))
 }
-
 
 #[cfg(test)]
 mod tests {

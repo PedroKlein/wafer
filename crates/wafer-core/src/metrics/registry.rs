@@ -298,9 +298,7 @@ impl MetricsRegistry {
         }
         // Slow path: create histogram, drop read lock, take write lock.
         if let Ok(mut guard) = self.hotswap_metrics.phase_histogram.write() {
-            let h = guard
-                .entry(key)
-                .or_insert_with(super::types::PhaseHistogram::new);
+            let h = guard.entry(key).or_insert_with(super::types::PhaseHistogram::new);
             h.record(ns);
         }
     }

@@ -1,7 +1,13 @@
 #![cfg(test)]
 #![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
-#![expect(clippy::let_underscore_must_use, reason = "test: fire-and-forget channel sends during setup/teardown")]
-#![expect(clippy::large_futures, reason = "test: launch_pipeline future is large due to WASM Store/Component loading")]
+#![expect(
+    clippy::let_underscore_must_use,
+    reason = "test: fire-and-forget channel sends during setup/teardown"
+)]
+#![expect(
+    clippy::large_futures,
+    reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
+)]
 //! A17 — Process-time hot-swap rollback integration tests.
 //!
 //! Verifies that when a v2 plugin passes `validate()/init()` but traps on
@@ -50,7 +56,9 @@ impl BenchDirEnv {
         // the returned guard, so no other test in this file can concurrently
         // observe or mutate WAFER_BENCH_OUTPUT_DIR. This is the discipline
         // Rust 2024's `unsafe { set_var }` requires.
-        unsafe { std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir); }
+        unsafe {
+            std::env::set_var("WAFER_BENCH_OUTPUT_DIR", dir);
+        }
         Self { _lock: lock }
     }
 }
@@ -58,7 +66,9 @@ impl Drop for BenchDirEnv {
     fn drop(&mut self) {
         // SAFETY: still holding the lock, so no other test can race the
         // removal. See BenchDirEnv::set for the invariant.
-        unsafe { std::env::remove_var("WAFER_BENCH_OUTPUT_DIR"); }
+        unsafe {
+            std::env::remove_var("WAFER_BENCH_OUTPUT_DIR");
+        }
     }
 }
 
@@ -149,9 +159,7 @@ async fn hotswap_process_time_rollback() {
     let _env_guard = BenchDirEnv::set(&bench_dir);
 
     let config = build_config(1000);
-    let mut orchestrator = launch_pipeline(config, None)
-        .await
-        .expect("launch_pipeline");
+    let mut orchestrator = launch_pipeline(config, None).await.expect("launch_pipeline");
 
     let handle = orchestrator.handle();
 
@@ -159,9 +167,7 @@ async fn hotswap_process_time_rollback() {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify v1 is processing (metrics should show > 0 processed)
-    let pre_swap_processed = handle
-        .node_metrics("transform")
-        .map_or(0, |m| m.processed());
+    let pre_swap_processed = handle.node_metrics("transform").map_or(0, |m| m.processed());
     assert!(pre_swap_processed > 0, "v1 should have processed messages before swap");
 
     // Prepare hot-swap payload to v2-panics
@@ -180,9 +186,7 @@ async fn hotswap_process_time_rollback() {
     let timed_swap = v2_result.expect("prepare v2 swap");
 
     // Send the swap
-    handle
-        .send_swap("transform", timed_swap.payload)
-        .expect("send_swap");
+    handle.send_swap("transform", timed_swap.payload).expect("send_swap");
 
     // B1 (A17): the API caller must receive `RolledBack`, NOT a fabricated
     // `swap_converged`. Await the completion channel with the 10s canary
@@ -200,7 +204,10 @@ async fn hotswap_process_time_rollback() {
                 "rollback_time_ns must be populated in production path (M1), got 0"
             );
             assert!(
-                reason.contains("intentional trap") || reason.contains("panic") || reason.contains("unreachable") || reason.contains("trap"),
+                reason.contains("intentional trap")
+                    || reason.contains("panic")
+                    || reason.contains("unreachable")
+                    || reason.contains("trap"),
                 "rollback reason should mention the trap origin, got: {reason}"
             );
         }
@@ -208,22 +215,16 @@ async fn hotswap_process_time_rollback() {
     }
 
     // Additionally verify the metric fired (existing behavior).
-    let rollback_detected = handle
-        .node_metrics("transform")
-        .is_some_and(|m| m.rollbacks() > 0);
+    let rollback_detected = handle.node_metrics("transform").is_some_and(|m| m.rollbacks() > 0);
     assert!(rollback_detected, "NodeMetrics::rollbacks() must be > 0");
 
     // After rollback, v1 should continue processing messages
-    let post_rollback_processed = handle
-        .node_metrics("transform")
-        .map_or(0, |m| m.processed());
+    let post_rollback_processed = handle.node_metrics("transform").map_or(0, |m| m.processed());
 
     // Wait a bit more for additional messages to flow through v1
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    let final_processed = handle
-        .node_metrics("transform")
-        .map_or(0, |m| m.processed());
+    let final_processed = handle.node_metrics("transform").map_or(0, |m| m.processed());
 
     assert!(
         final_processed > post_rollback_processed,
@@ -231,9 +232,7 @@ async fn hotswap_process_time_rollback() {
     );
 
     // Verify recovery count increased (the rollback path transitions Error → Recovering → Running)
-    let recovery_count = handle
-        .node_metrics("transform")
-        .map_or(0, |m| m.recovery_count());
+    let recovery_count = handle.node_metrics("transform").map_or(0, |m| m.recovery_count());
     assert!(
         recovery_count >= 1,
         "Expected at least 1 recovery event from rollback, got {recovery_count}"
@@ -337,9 +336,7 @@ to = "sink"
 "#,
     );
     let config: Config = toml::from_str(&toml).expect("parse");
-    let mut orchestrator = launch_pipeline(config, None)
-        .await
-        .expect("launch_pipeline");
+    let mut orchestrator = launch_pipeline(config, None).await.expect("launch_pipeline");
 
     let handle = orchestrator.handle();
 
@@ -361,9 +358,7 @@ to = "sink"
     .await;
     let timed_swap = v2_result.expect("prepare v2 swap");
 
-    handle
-        .send_swap("transform", timed_swap.payload)
-        .expect("send_swap");
+    handle.send_swap("transform", timed_swap.payload).expect("send_swap");
 
     // Wait for rollback and recovery
     tokio::time::sleep(Duration::from_secs(3)).await;
@@ -376,11 +371,7 @@ to = "sink"
     // Rollback should have fired exactly once (max_rollback_retries = 1 means
     // the first trap triggers rollback; subsequent traps would exhaust the
     // budget, but since rollback succeeds and v1 works, there are no more traps)
-    assert!(
-        metrics.rollbacks() >= 1,
-        "Expected at least 1 rollback, got {}",
-        metrics.rollbacks()
-    );
+    assert!(metrics.rollbacks() >= 1, "Expected at least 1 rollback, got {}", metrics.rollbacks());
 
     // Recovery count should be >= 1 (rollback includes recovery transition)
     assert!(
@@ -392,13 +383,8 @@ to = "sink"
     // Pipeline should still be processing (v1 is restored)
     let processed_after = metrics.processed();
     tokio::time::sleep(Duration::from_millis(200)).await;
-    let processed_final = handle
-        .node_metrics("transform")
-        .map_or(0, |m| m.processed());
-    assert!(
-        processed_final > processed_after,
-        "v1 should continue processing after rollback"
-    );
+    let processed_final = handle.node_metrics("transform").map_or(0, |m| m.processed());
+    assert!(processed_final > processed_after, "v1 should continue processing after rollback");
 
     // Clean shutdown
     orchestrator.cancel();

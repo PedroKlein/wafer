@@ -64,12 +64,7 @@ impl Node {
         kind: NodeKind,
         state_tracker: Arc<NodeStateTracker>,
     ) -> Self {
-        Self {
-            id: id.into(),
-            state_tracker,
-            metrics: Arc::new(NodeMetrics::new()),
-            kind,
-        }
+        Self { id: id.into(), state_tracker, metrics: Arc::new(NodeMetrics::new()), kind }
     }
 }
 

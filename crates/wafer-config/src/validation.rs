@@ -7,7 +7,7 @@
 //! ALL errors are accumulated before returning — the user sees the full picture
 //! rather than fixing problems one at a time.
 
-use wafer_types::config::{Config, NodeCategory, OverflowPolicy, SourceDef, SinkDef};
+use wafer_types::config::{Config, NodeCategory, OverflowPolicy, SinkDef, SourceDef};
 
 use crate::error::ValidationError;
 
@@ -29,11 +29,7 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_orphan_nodes(config, &mut errors);
     check_no_cycles(config, &mut errors);
 
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(errors)
-    }
+    if errors.is_empty() { Ok(()) } else { Err(errors) }
 }
 
 // Individual validation checks
@@ -191,11 +187,8 @@ fn check_orphan_nodes(config: &Config, errors: &mut Vec<ValidationError>) {
         return;
     }
 
-    let referenced: std::collections::HashSet<&str> = config
-        .edges
-        .iter()
-        .flat_map(|e| [e.from.as_str(), e.to.as_str()])
-        .collect();
+    let referenced: std::collections::HashSet<&str> =
+        config.edges.iter().flat_map(|e| [e.from.as_str(), e.to.as_str()]).collect();
 
     for id in config.nodes.keys() {
         if !referenced.contains(id.as_str()) {
@@ -238,8 +231,7 @@ fn check_no_cycles(config: &Config, errors: &mut Vec<ValidationError>) {
 mod tests {
     use super::*;
     use wafer_types::config::{
-        PluginSpec,
-        Config, EdgeDef, NodeDef, OverflowPolicy, SourceDef, SinkDef,
+        Config, EdgeDef, NodeDef, OverflowPolicy, PluginSpec, SinkDef, SourceDef,
         StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
 
@@ -256,27 +248,54 @@ mod tests {
     }
 
     fn transform(plugin: &str) -> NodeDef {
-        NodeDef::Transform(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
+        NodeDef::Transform(WasmNodeDef {
+            plugin: PluginSpec::WasmPath(plugin.to_string()),
+            ..Default::default()
+        })
     }
 
     fn filter(plugin: &str) -> NodeDef {
-        NodeDef::Filter(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
+        NodeDef::Filter(WasmNodeDef {
+            plugin: PluginSpec::WasmPath(plugin.to_string()),
+            ..Default::default()
+        })
     }
 
     fn router(plugin: &str) -> NodeDef {
-        NodeDef::Router(WasmNodeDef { plugin: PluginSpec::WasmPath(plugin.to_string()), ..Default::default() })
+        NodeDef::Router(WasmNodeDef {
+            plugin: PluginSpec::WasmPath(plugin.to_string()),
+            ..Default::default()
+        })
     }
 
     fn edge(from: &str, to: &str) -> EdgeDef {
-        EdgeDef { from: from.to_string(), to: to.to_string(), port: None, capacity: None, overflow: None }
+        EdgeDef {
+            from: from.to_string(),
+            to: to.to_string(),
+            port: None,
+            capacity: None,
+            overflow: None,
+        }
     }
 
     fn edge_with_port(from: &str, to: &str, port: &str) -> EdgeDef {
-        EdgeDef { from: from.to_string(), to: to.to_string(), port: Some(port.to_string()), capacity: None, overflow: None }
+        EdgeDef {
+            from: from.to_string(),
+            to: to.to_string(),
+            port: Some(port.to_string()),
+            capacity: None,
+            overflow: None,
+        }
     }
 
     fn edge_with_overflow(from: &str, to: &str, overflow: OverflowPolicy) -> EdgeDef {
-        EdgeDef { from: from.to_string(), to: to.to_string(), port: None, capacity: None, overflow: Some(overflow) }
+        EdgeDef {
+            from: from.to_string(),
+            to: to.to_string(),
+            port: None,
+            capacity: None,
+            overflow: Some(overflow),
+        }
     }
 
     fn simple_config(nodes: Vec<(&str, NodeDef)>, edges: Vec<EdgeDef>) -> Config {
@@ -309,11 +328,7 @@ mod tests {
     #[test]
     fn test_orphan_node() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("out", stdout_sink()),
-                ("orphan", transform("o.wasm")),
-            ],
+            vec![("in", stdin_source()), ("out", stdout_sink()), ("orphan", transform("o.wasm"))],
             vec![edge("in", "out")],
         );
         let result = validate(&config);
@@ -324,11 +339,7 @@ mod tests {
     #[test]
     fn test_router_edge_needs_port() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("r", router("r.wasm")),
-                ("out", stdout_sink()),
-            ],
+            vec![("in", stdin_source()), ("r", router("r.wasm")), ("out", stdout_sink())],
             vec![
                 edge("in", "r"),
                 edge("r", "out"), // missing port!
@@ -383,11 +394,7 @@ mod tests {
                 ("r", router("r.wasm")),
                 ("out", stdout_sink()),
             ],
-            vec![
-                edge("a", "r"),
-                edge("b", "r"),
-                edge_with_port("r", "out", "default"),
-            ],
+            vec![edge("a", "r"), edge("b", "r"), edge_with_port("r", "out", "default")],
         );
         let result = validate(&config);
         let errors = result.unwrap_err();
@@ -397,10 +404,7 @@ mod tests {
     #[test]
     fn test_source_zero_inbound() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("t", transform("t.wasm")),
-            ],
+            vec![("in", stdin_source()), ("t", transform("t.wasm"))],
             vec![edge("t", "in"), edge("in", "t")], // edge INTO source
         );
         let result = validate(&config);
@@ -411,11 +415,7 @@ mod tests {
     #[test]
     fn test_sink_zero_outbound() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("out", stdout_sink()),
-                ("t", transform("t.wasm")),
-            ],
+            vec![("in", stdin_source()), ("out", stdout_sink()), ("t", transform("t.wasm"))],
             vec![edge("in", "out"), edge("out", "t")], // edge FROM sink
         );
         let result = validate(&config);
@@ -426,26 +426,23 @@ mod tests {
     #[test]
     fn test_dlq_required_for_dead_letter_overflow() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("out", stdout_sink()),
-            ],
+            vec![("in", stdin_source()), ("out", stdout_sink())],
             vec![edge_with_overflow("in", "out", OverflowPolicy::DeadLetter)],
         );
         // dead_letter is None by default
         let result = validate(&config);
         let errors = result.unwrap_err();
-        assert!(errors.iter().any(|e| e.message.contains("dead-letter") || e.message.contains("dead_letter")));
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("dead-letter") || e.message.contains("dead_letter"))
+        );
     }
 
     #[test]
     fn test_stdin_singleton() {
         let config = simple_config(
-            vec![
-                ("in1", stdin_source()),
-                ("in2", stdin_source()),
-                ("out", stdout_sink()),
-            ],
+            vec![("in1", stdin_source()), ("in2", stdin_source()), ("out", stdout_sink())],
             vec![edge("in1", "out"), edge("in2", "out")],
         );
         let result = validate(&config);
@@ -456,11 +453,7 @@ mod tests {
     #[test]
     fn test_stdout_singleton() {
         let config = simple_config(
-            vec![
-                ("in", stdin_source()),
-                ("out1", stdout_sink()),
-                ("out2", stdout_sink()),
-            ],
+            vec![("in", stdin_source()), ("out1", stdout_sink()), ("out2", stdout_sink())],
             vec![edge("in", "out1"), edge("in", "out2")],
         );
         let result = validate(&config);
@@ -470,10 +463,7 @@ mod tests {
 
     #[test]
     fn test_all_edges_reference_existing_nodes() {
-        let config = simple_config(
-            vec![("in", stdin_source())],
-            vec![edge("in", "nonexistent")],
-        );
+        let config = simple_config(vec![("in", stdin_source())], vec![edge("in", "nonexistent")]);
         let result = validate(&config);
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("nonexistent")));
@@ -485,10 +475,10 @@ mod tests {
         let config = simple_config(
             vec![
                 ("in", stdin_source()),
-                ("in2", stdin_source()),       // duplicate stdin
+                ("in2", stdin_source()), // duplicate stdin
                 ("out", stdout_sink()),
-                ("out2", stdout_sink()),       // duplicate stdout
-                ("orphan", transform("o.wasm")),  // orphan
+                ("out2", stdout_sink()),         // duplicate stdout
+                ("orphan", transform("o.wasm")), // orphan
             ],
             vec![edge("in", "out"), edge("in2", "out2")],
         );

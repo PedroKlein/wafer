@@ -11,7 +11,9 @@
 
 use clap::{Parser, Subcommand};
 
-use wafer_loadgen::{run_hdr_summary, run_publisher, run_subscriber, HdrSummaryArgs, PublishArgs, SubscribeArgs};
+use wafer_loadgen::{
+    HdrSummaryArgs, PublishArgs, SubscribeArgs, run_hdr_summary, run_publisher, run_subscriber,
+};
 
 #[derive(Parser, Debug)]
 #[command(name = "wafer-loadgen", about = "MQTT load generator + subscriber for WAFER evaluation")]

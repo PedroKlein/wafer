@@ -20,8 +20,8 @@ use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::bindings::transform_node::{TransformNode, TransformNodePre};
 use crate::engine::state::WaferState;
-use crate::node::wasm::WasmRouterNode;
 use crate::node::QueueMetrics;
+use crate::node::wasm::WasmRouterNode;
 use crate::queue::RuntimeEnvelope;
 
 use std::sync::{Arc, Mutex, OnceLock};
@@ -141,16 +141,10 @@ impl HotSwapProgress {
     ///
     /// Idempotent — subsequent `mark_first_v2` calls become no-ops because
     /// the sender is already taken.
-    pub fn report_rolled_back(
-        &self,
-        rollback_time_ns: u64,
-        reason: impl Into<String>,
-    ) {
+    pub fn report_rolled_back(&self, rollback_time_ns: u64, reason: impl Into<String>) {
         if let Some(tx) = self.take_sender() {
-            let _ = tx.send(Err(HotSwapError::RolledBack {
-                rollback_time_ns,
-                reason: reason.into(),
-            }));
+            let _ =
+                tx.send(Err(HotSwapError::RolledBack { rollback_time_ns, reason: reason.into() }));
         }
     }
 
@@ -192,9 +186,7 @@ pub(crate) struct TransformRollbackSnapshot {
 
 impl std::fmt::Debug for TransformRollbackSnapshot {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TransformRollbackSnapshot")
-            .field("pre", &"<TransformNodePre>")
-            .finish()
+        f.debug_struct("TransformRollbackSnapshot").field("pre", &"<TransformNodePre>").finish()
     }
 }
 
@@ -219,17 +211,13 @@ pub(crate) struct CanaryCounters {
 
 impl CanaryCounters {
     pub fn new(config: HotSwapConfig) -> Self {
-        Self {
-            success_count: 0,
-            trap_count: 0,
-            window_start: Instant::now(),
-            config,
-        }
+        Self { success_count: 0, trap_count: 0, window_start: Instant::now(), config }
     }
 
     pub fn window_expired(&self) -> bool {
         self.success_count >= self.config.canary_success_count
-            || crate::util::duration_ms_saturating(self.window_start.elapsed()) >= self.config.canary_window_ms
+            || crate::util::duration_ms_saturating(self.window_start.elapsed())
+                >= self.config.canary_window_ms
     }
 
     pub const fn retries_exhausted(&self) -> bool {
@@ -272,10 +260,7 @@ impl std::fmt::Debug for TransformCanaryState {
 impl TransformCanaryState {
     /// Create a new canary state from the v1 InstancePre retained before swap.
     pub fn new(pre: Arc<TransformNodePre<WaferState>>, config: HotSwapConfig) -> Self {
-        Self {
-            snapshot: TransformRollbackSnapshot { pre },
-            counters: CanaryCounters::new(config),
-        }
+        Self { snapshot: TransformRollbackSnapshot { pre }, counters: CanaryCounters::new(config) }
     }
 
     /// Check if the canary window has expired.
@@ -284,7 +269,10 @@ impl TransformCanaryState {
     }
 
     /// Check if the rollback retry budget is exhausted.
-    #[expect(dead_code, reason = "used by upcoming process-time rollback integration in runner loop")]
+    #[expect(
+        dead_code,
+        reason = "used by upcoming process-time rollback integration in runner loop"
+    )]
     pub const fn retries_exhausted(&self) -> bool {
         self.counters.retries_exhausted()
     }
@@ -323,15 +311,14 @@ impl TrackedReceiver {
         receiver: mpsc::Receiver<RuntimeEnvelope>,
         queue_metrics: Arc<QueueMetrics>,
     ) -> Self {
-        Self {
-            receiver,
-            queue_metrics: Some(queue_metrics),
-        }
+        Self { receiver, queue_metrics: Some(queue_metrics) }
     }
 
     pub async fn recv(&mut self) -> Option<RuntimeEnvelope> {
         let envelope = self.receiver.recv().await;
-        if envelope.is_some() && let Some(metrics) = &self.queue_metrics {
+        if envelope.is_some()
+            && let Some(metrics) = &self.queue_metrics
+        {
             metrics.record_dequeued();
         }
         envelope
@@ -348,10 +335,7 @@ impl TrackedReceiver {
 
 impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
     fn from(receiver: mpsc::Receiver<RuntimeEnvelope>) -> Self {
-        Self {
-            receiver,
-            queue_metrics: None,
-        }
+        Self { receiver, queue_metrics: None }
     }
 }
 
@@ -385,10 +369,7 @@ pub enum SwapPayload {
     },
     /// Config-only warm reconfigure: reuses the node's own cached `InstancePre`
     /// and only re-runs `validate() + init()` with new configuration.
-    Reconfigure {
-        new_config_json: String,
-        progress: Arc<HotSwapProgress>,
-    },
+    Reconfigure { new_config_json: String, progress: Arc<HotSwapProgress> },
 }
 
 impl SwapPayload {
@@ -415,7 +396,10 @@ impl SwapPayload {
     ///
     /// Panics if the swap payload's store or bindings have already been consumed.
     /// This is a bug — each `SwapPayload` is single-consumer.
-    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
+    #[expect(
+        clippy::expect_used,
+        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
+    )]
     pub fn try_apply_transform(
         self,
         node: &mut crate::node::TransformNode,
@@ -426,9 +410,15 @@ impl SwapPayload {
                     "native baseline transforms do not support hot-swap".into(),
                 )
             })?;
-            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let store = new_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let bindings = new_bindings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload bindings already consumed");
             wasm.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -442,15 +432,29 @@ impl SwapPayload {
     /// # Panics
     ///
     /// Panics if the swap payload's store or bindings have already been consumed.
-    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
-    pub fn try_apply_filter(self, node: &mut crate::node::FilterNode) -> Result<(), crate::error::WaferError> {
+    #[expect(
+        clippy::expect_used,
+        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
+    )]
+    pub fn try_apply_filter(
+        self,
+        node: &mut crate::node::FilterNode,
+    ) -> Result<(), crate::error::WaferError> {
         if let Self::Filter { new_store, new_bindings, new_pre, .. } = self {
-            let wasm = node.as_wasm_mut().ok_or_else(|| crate::error::WaferError::Runtime(
-                "native baseline filters do not support hot-swap".into(),
-            ))?;
-            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let wasm = node.as_wasm_mut().ok_or_else(|| {
+                crate::error::WaferError::Runtime(
+                    "native baseline filters do not support hot-swap".into(),
+                )
+            })?;
+            let store = new_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let bindings = new_bindings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload bindings already consumed");
             wasm.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -462,12 +466,24 @@ impl SwapPayload {
     /// # Panics
     ///
     /// Panics if the swap payload's store or bindings have already been consumed.
-    #[expect(clippy::expect_used, reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug")]
-    pub fn try_apply_router(self, node: &mut WasmRouterNode) -> Result<(), crate::error::WaferError> {
+    #[expect(
+        clippy::expect_used,
+        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
+    )]
+    pub fn try_apply_router(
+        self,
+        node: &mut WasmRouterNode,
+    ) -> Result<(), crate::error::WaferError> {
         if let Self::Router { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let store = new_store
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload store already consumed");
-            let bindings = new_bindings.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+            let bindings = new_bindings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
                 .expect("swap payload bindings already consumed");
             node.try_hot_swap(store, bindings, new_pre)?;
         }
@@ -488,7 +504,10 @@ impl SwapPayload {
 ///
 /// Panics if `senders` is empty after the early-return check (unreachable).
 #[expect(clippy::indexing_slicing, reason = "senders[0] is guarded by len() == 1 check")]
-#[expect(clippy::expect_used, reason = "split_last() is called after verifying senders is non-empty")]
+#[expect(
+    clippy::expect_used,
+    reason = "split_last() is called after verifying senders is non-empty"
+)]
 pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnvelope) {
     if senders.is_empty() {
         return;
@@ -521,10 +540,8 @@ pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnve
 #[expect(clippy::expect_used, reason = "split_last() called after verifying matching is non-empty")]
 pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[DownstreamSender]) {
     // Collect senders that match the requested ports
-    let matching: Vec<&DownstreamSender> = senders
-        .iter()
-        .filter(|s| ports.iter().any(|p| p.as_str() == &*s.port))
-        .collect();
+    let matching: Vec<&DownstreamSender> =
+        senders.iter().filter(|s| ports.iter().any(|p| p.as_str() == &*s.port)).collect();
 
     if matching.is_empty() {
         return;
@@ -790,7 +807,8 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_single_port_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "port-a".into(), queue_metrics: None }];
+        let senders =
+            vec![DownstreamSender { sender: tx, port: "port-a".into(), queue_metrics: None }];
         let envelope = RuntimeEnvelope::from_string("src", "routed");
 
         fan_out(&["port-a".to_string()], envelope, &senders).await;
@@ -827,7 +845,8 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_no_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "other".into(), queue_metrics: None }];
+        let senders =
+            vec![DownstreamSender { sender: tx, port: "other".into(), queue_metrics: None }];
         let envelope = RuntimeEnvelope::from_string("src", "lost");
 
         fan_out(&["nonexistent".to_string()], envelope, &senders).await;

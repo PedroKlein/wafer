@@ -23,8 +23,8 @@
 //! satisfies AC1.
 
 use wafer_core::node::{
-    Filter, FilterOutcome, NativeFilter, NativeRouter, NativeTransform, ProcessNode,
-    ProcessResult, RouteResult, Router, Transform,
+    Filter, FilterOutcome, NativeFilter, NativeRouter, NativeTransform, ProcessNode, ProcessResult,
+    RouteResult, Router, Transform,
 };
 use wafer_core::queue::RuntimeEnvelope;
 
@@ -66,10 +66,7 @@ async fn native_baseline_roundtrip_json_parse() {
     let bad = RuntimeEnvelope::from_string("src", r#"{"no_temp":"here"}"#);
     match Transform::process(&mut node, bad.clone()).await.unwrap() {
         ProcessResult::Error(err) => {
-            assert!(
-                err.retriable,
-                "missing temperature must map to retriable error"
-            );
+            assert!(err.retriable, "missing temperature must map to retriable error");
         }
         other => panic!("missing field must Error, got {other:?}"),
     }

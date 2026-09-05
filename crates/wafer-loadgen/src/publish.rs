@@ -222,59 +222,104 @@ impl PublishArgs {
             .map_err(|e| anyhow::anyhow!("parse profile {}: {e}", path.display()))?;
         let lg = cfg.loadgen;
         if self.broker_host == "localhost" {
-            if let Some(v) = lg.broker_host { self.broker_host = v; }
+            if let Some(v) = lg.broker_host {
+                self.broker_host = v;
+            }
         }
         if self.broker_port == 1883 {
-            if let Some(v) = lg.broker_port { self.broker_port = v; }
+            if let Some(v) = lg.broker_port {
+                self.broker_port = v;
+            }
         }
         if self.topic == "wafer/bench/input" {
-            if let Some(v) = lg.topic { self.topic = v; }
+            if let Some(v) = lg.topic {
+                self.topic = v;
+            }
         }
         if self.rate == 1000 {
-            if let Some(v) = lg.rate { self.rate = v; }
+            if let Some(v) = lg.rate {
+                self.rate = v;
+            }
         }
         if self.duration_secs == 60 {
-            if let Some(v) = lg.duration_secs { self.duration_secs = v; }
+            if let Some(v) = lg.duration_secs {
+                self.duration_secs = v;
+            }
         }
         if self.payload_size == 128 {
-            if let Some(v) = lg.payload_size { self.payload_size = v; }
+            if let Some(v) = lg.payload_size {
+                self.payload_size = v;
+            }
         }
         if self.profile == "steady" {
-            if let Some(v) = lg.profile { self.profile = v; }
+            if let Some(v) = lg.profile {
+                self.profile = v;
+            }
         }
         if self.client_id == "wafer-loadgen-pub" {
-            if let Some(v) = lg.client_id { self.client_id = v; }
+            if let Some(v) = lg.client_id {
+                self.client_id = v;
+            }
         }
         if self.payload_template.is_none() {
             if let Some(name) = lg.payload_template {
-                self.payload_template = Some(
-                    name.parse::<PayloadTemplate>()
-                        .map_err(|e| anyhow::anyhow!("{e}"))?,
-                );
+                self.payload_template =
+                    Some(name.parse::<PayloadTemplate>().map_err(|e| anyhow::anyhow!("{e}"))?);
             }
         }
-        if self.burst_multiplier == 2 { if let Some(v) = lg.burst_multiplier { self.burst_multiplier = v; } }
-        if self.burst_on_secs == 10 { if let Some(v) = lg.burst_on_secs { self.burst_on_secs = v; } }
-        if self.burst_cycle_secs == 60 { if let Some(v) = lg.burst_cycle_secs { self.burst_cycle_secs = v; } }
-        if self.ramp_start_rate == 100 { if let Some(v) = lg.ramp_start_rate { self.ramp_start_rate = v; } }
-        if self.ramp_step_rate == 100 { if let Some(v) = lg.ramp_step_rate { self.ramp_step_rate = v; } }
-        if self.ramp_step_interval_secs == 10 { if let Some(v) = lg.ramp_step_interval_secs { self.ramp_step_interval_secs = v; } }
-        if self.ramp_max_rate == 10_000 { if let Some(v) = lg.ramp_max_rate { self.ramp_max_rate = v; } }
+        if self.burst_multiplier == 2 {
+            if let Some(v) = lg.burst_multiplier {
+                self.burst_multiplier = v;
+            }
+        }
+        if self.burst_on_secs == 10 {
+            if let Some(v) = lg.burst_on_secs {
+                self.burst_on_secs = v;
+            }
+        }
+        if self.burst_cycle_secs == 60 {
+            if let Some(v) = lg.burst_cycle_secs {
+                self.burst_cycle_secs = v;
+            }
+        }
+        if self.ramp_start_rate == 100 {
+            if let Some(v) = lg.ramp_start_rate {
+                self.ramp_start_rate = v;
+            }
+        }
+        if self.ramp_step_rate == 100 {
+            if let Some(v) = lg.ramp_step_rate {
+                self.ramp_step_rate = v;
+            }
+        }
+        if self.ramp_step_interval_secs == 10 {
+            if let Some(v) = lg.ramp_step_interval_secs {
+                self.ramp_step_interval_secs = v;
+            }
+        }
+        if self.ramp_max_rate == 10_000 {
+            if let Some(v) = lg.ramp_max_rate {
+                self.ramp_max_rate = v;
+            }
+        }
 
         // Hotswap section (only takes effect for profile = "hotswap-trigger").
         let hs = cfg.hotswap;
-        if self.hotswap_target_node.is_none() { self.hotswap_target_node = hs.target_node; }
+        if self.hotswap_target_node.is_none() {
+            self.hotswap_target_node = hs.target_node;
+        }
         if self.hotswap_wasm_path.is_none() {
-            self.hotswap_wasm_path = hs
-                .new_plugin_path
-                .or(hs.new_plugin)
-                .map(PathBuf::from);
+            self.hotswap_wasm_path = hs.new_plugin_path.or(hs.new_plugin).map(PathBuf::from);
         }
         if (self.hotswap_swap_at_secs - 30.0).abs() < f64::EPSILON {
-            if let Some(v) = hs.trigger_after_secs { self.hotswap_swap_at_secs = v; }
+            if let Some(v) = hs.trigger_after_secs {
+                self.hotswap_swap_at_secs = v;
+            }
         }
         if self.hotswap_api_url == "http://localhost:9090" {
-            if let Some(v) = hs.api_url { self.hotswap_api_url = v; }
+            if let Some(v) = hs.api_url {
+                self.hotswap_api_url = v;
+            }
         }
         Ok(())
     }
@@ -444,8 +489,8 @@ fn spawn_hotswap_trigger(
         let response = client.post(&url).json(&body).send().await?;
         let status = response.status();
         let response_body = response.text().await?;
-        let request_duration_ns = u64::try_from(request_started_monotonic.elapsed().as_nanos())
-            .unwrap_or(u64::MAX);
+        let request_duration_ns =
+            u64::try_from(request_started_monotonic.elapsed().as_nanos()).unwrap_or(u64::MAX);
         let request_finished_ns = now_ns();
         info!("hot-swap POST {} => HTTP {}", url, status);
         if !status.is_success() {

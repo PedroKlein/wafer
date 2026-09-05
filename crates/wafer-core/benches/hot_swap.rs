@@ -293,17 +293,9 @@ fn bench_production_sanity(_c: &mut Criterion) {
 
     let envelope = wafer_core::queue::RuntimeEnvelope::from_string("bench", "sanity");
     let out = transform.process(envelope).expect("production process call must return Ok");
-    assert!(
-        !out.payload.is_empty(),
-        "production path returned empty payload — stub regression?"
-    );
+    assert!(!out.payload.is_empty(), "production path returned empty payload — stub regression?");
     println!("\n=== Production sanity: WasmTransformNode::process returned Ok ===");
 }
 
-criterion_group!(
-    benches,
-    bench_wasm_loading,
-    bench_prepare_target,
-    bench_production_sanity,
-);
+criterion_group!(benches, bench_wasm_loading, bench_prepare_target, bench_production_sanity,);
 criterion_main!(benches);

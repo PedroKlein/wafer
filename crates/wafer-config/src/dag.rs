@@ -43,22 +43,20 @@ impl DagGraph {
         }
 
         for edge in &config.edges {
-            let from_idx =
-                node_indices.get(&edge.from).copied().ok_or_else(|| ConfigError::UnknownNode {
-                    id: edge.from.clone(),
-                })?;
-            let to_idx =
-                node_indices.get(&edge.to).copied().ok_or_else(|| ConfigError::UnknownNode {
-                    id: edge.to.clone(),
-                })?;
+            let from_idx = node_indices
+                .get(&edge.from)
+                .copied()
+                .ok_or_else(|| ConfigError::UnknownNode { id: edge.from.clone() })?;
+            let to_idx = node_indices
+                .get(&edge.to)
+                .copied()
+                .ok_or_else(|| ConfigError::UnknownNode { id: edge.to.clone() })?;
             graph.add_edge(from_idx, to_idx, ());
         }
 
-        let topo_indices =
-            toposort(&graph, None).map_err(|_cycle| ConfigError::CycleDetected)?;
+        let topo_indices = toposort(&graph, None).map_err(|_cycle| ConfigError::CycleDetected)?;
 
-        let topo_order: Vec<String> =
-            topo_indices.iter().map(|idx| graph[*idx].clone()).collect();
+        let topo_order: Vec<String> = topo_indices.iter().map(|idx| graph[*idx].clone()).collect();
 
         Ok(Self { graph, node_indices, topo_order })
     }
@@ -100,15 +98,12 @@ impl DagGraph {
     }
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use wafer_types::config::{
-        PluginSpec,
-        Config, EdgeDef, NodeDef, SourceDef, SinkDef,
-        StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
+        Config, EdgeDef, NodeDef, PluginSpec, SinkDef, SourceDef, StdinSourceConfig,
+        StdoutSinkConfig, WasmNodeDef,
     };
 
     fn stdin_node() -> NodeDef {
@@ -120,7 +115,10 @@ mod tests {
     }
 
     fn transform_node() -> NodeDef {
-        NodeDef::Transform(WasmNodeDef { plugin: PluginSpec::WasmPath("t.wasm".to_string()), ..Default::default() })
+        NodeDef::Transform(WasmNodeDef {
+            plugin: PluginSpec::WasmPath("t.wasm".to_string()),
+            ..Default::default()
+        })
     }
 
     fn edge(from: &str, to: &str) -> EdgeDef {
@@ -144,11 +142,7 @@ mod tests {
     #[test]
     fn test_topo_order_linear() {
         let cfg = config(
-            vec![
-                ("a", stdin_node()),
-                ("b", transform_node()),
-                ("c", stdout_node()),
-            ],
+            vec![("a", stdin_node()), ("b", transform_node()), ("c", stdout_node())],
             vec![edge("a", "b"), edge("b", "c")],
         );
         let dag = DagGraph::from_config(&cfg).unwrap();
@@ -186,11 +180,7 @@ mod tests {
     #[test]
     fn test_from_config_builds_graph() {
         let cfg = config(
-            vec![
-                ("source", stdin_node()),
-                ("t", transform_node()),
-                ("sink", stdout_node()),
-            ],
+            vec![("source", stdin_node()), ("t", transform_node()), ("sink", stdout_node())],
             vec![edge("source", "t"), edge("t", "sink")],
         );
         let dag = DagGraph::from_config(&cfg).unwrap();
@@ -204,11 +194,7 @@ mod tests {
     #[test]
     fn test_cycle_detection() {
         let cfg = config(
-            vec![
-                ("a", transform_node()),
-                ("b", transform_node()),
-                ("c", transform_node()),
-            ],
+            vec![("a", transform_node()), ("b", transform_node()), ("c", transform_node())],
             vec![edge("a", "b"), edge("b", "c"), edge("c", "a")],
         );
         let result = DagGraph::from_config(&cfg);
@@ -224,10 +210,7 @@ mod tests {
 
     #[test]
     fn test_unknown_node_in_edge_is_rejected() {
-        let cfg = config(
-            vec![("source", stdin_node())],
-            vec![edge("source", "nonexistent")],
-        );
+        let cfg = config(vec![("source", stdin_node())], vec![edge("source", "nonexistent")]);
         let result = DagGraph::from_config(&cfg);
         assert!(matches!(result, Err(ConfigError::UnknownNode { .. })));
     }

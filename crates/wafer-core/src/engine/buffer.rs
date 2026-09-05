@@ -35,8 +35,14 @@ impl WaferBuffer {
 
     /// Read a slice of the payload. Returns fewer bytes if offset+len exceeds size.
     #[inline]
-    #[expect(clippy::as_conversions, reason = "u64→usize: offset/len validated against data.len() which is usize; truncation impossible")]
-    #[expect(clippy::arithmetic_side_effects, reason = "total-offset underflow impossible (offset<total guard); start+clamped_len <= total (clamped_len = min(len,remaining))")]
+    #[expect(
+        clippy::as_conversions,
+        reason = "u64→usize: offset/len validated against data.len() which is usize; truncation impossible"
+    )]
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "total-offset underflow impossible (offset<total guard); start+clamped_len <= total (clamped_len = min(len,remaining))"
+    )]
     #[expect(
         clippy::indexing_slicing,
         clippy::cast_possible_truncation,

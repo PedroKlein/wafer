@@ -60,7 +60,10 @@ impl WaferState {
     ///
     /// The `add_nn_to_linker` closure signature requires `WasiNnView`
     /// (not `Result<WasiNnView>`), so returning an error is not an option.
-    #[expect(clippy::expect_used, reason = "linker closure requires WasiNnView (not Result); only called when wasi-nn capability is configured")]
+    #[expect(
+        clippy::expect_used,
+        reason = "linker closure requires WasiNnView (not Result); only called when wasi-nn capability is configured"
+    )]
     pub fn nn_view(&mut self) -> wasmtime_wasi_nn::wit::WasiNnView<'_> {
         let nn_ctx = self
             .nn_ctx

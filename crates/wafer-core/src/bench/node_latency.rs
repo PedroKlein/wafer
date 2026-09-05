@@ -35,7 +35,10 @@ impl NodeLatencyRecorder {
     ///
     /// Panics if the internal histogram cannot be created (compile-time constant bounds; unreachable in practice).
     #[must_use]
-    #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
+    #[expect(
+        clippy::expect_used,
+        reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail"
+    )]
     pub fn new(node_ids: &[&str]) -> Self {
         let mut histograms = HashMap::with_capacity(node_ids.len());
         for id in node_ids {
@@ -52,7 +55,10 @@ impl NodeLatencyRecorder {
     /// If `duration_ns` is below the histogram minimum (1µs), it's recorded as 1µs.
     /// If the node ID is not registered, the call is silently ignored.
     #[inline]
-    #[expect(clippy::let_underscore_must_use, reason = "histogram record errors only on values outside configured range; clamped values can still exceed max — silently dropping is correct for latency sampling")]
+    #[expect(
+        clippy::let_underscore_must_use,
+        reason = "histogram record errors only on values outside configured range; clamped values can still exceed max — silently dropping is correct for latency sampling"
+    )]
     pub fn record(&mut self, node_id: &str, duration_ns: u64) {
         if let Some(hist) = self.histograms.get_mut(node_id) {
             let clamped = duration_ns.max(1_000);
@@ -86,7 +92,10 @@ impl NodeLatencyRecorder {
     /// Export per-node metrics as CSV.
     ///
     /// Format: `node_id,count,min_ns,p50_ns,p99_ns,p999_ns,max_ns,mean_ns`
-    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
+    #[expect(
+        clippy::expect_used,
+        reason = "std::fmt::Write for String is infallible — cannot panic"
+    )]
     pub fn to_csv(&self) -> String {
         use std::fmt::Write as _;
         let mut csv = String::from("node_id,count,min_ns,p50_ns,p99_ns,p999_ns,max_ns,mean_ns\n");
@@ -122,7 +131,10 @@ impl NodeLatencyRecorder {
     /// # Panics
     ///
     /// Panics if in-memory histogram serialization fails (unreachable: buffers are always valid).
-    #[expect(clippy::expect_used, reason = "HdrHistogram writer/serialization uses in-memory buffers that cannot fail; UTF-8 is guaranteed from ASCII content")]
+    #[expect(
+        clippy::expect_used,
+        reason = "HdrHistogram writer/serialization uses in-memory buffers that cannot fail; UTF-8 is guaranteed from ASCII content"
+    )]
     pub fn to_hdr_log(&self) -> String {
         let mut buf = Vec::new();
         let mut serializer = V2Serializer::new();
@@ -135,9 +147,8 @@ impl NodeLatencyRecorder {
             .with_base_time(start_time)
             .add_comment("WAFER per-node latency histograms (nanoseconds)");
 
-        let mut log_writer = writer_builder
-            .begin_log_with(&mut buf, &mut serializer)
-            .expect("begin interval log");
+        let mut log_writer =
+            writer_builder.begin_log_with(&mut buf, &mut serializer).expect("begin interval log");
 
         let mut entries: Vec<(&String, &Histogram<u64>)> = self.histograms.iter().collect();
         entries.sort_by_key(|(id, _)| *id);
@@ -186,7 +197,10 @@ impl Default for NodeLatencyRecorder {
 }
 
 #[cfg(test)]
-#[expect(clippy::let_underscore_must_use, reason = "test cleanup: fs::remove_dir_all failure is benign")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "test cleanup: fs::remove_dir_all failure is benign"
+)]
 mod tests {
     use super::*;
 
@@ -287,10 +301,8 @@ mod tests {
             recorder.record("n2", 100_000);
         }
 
-        let tmp_dir = std::env::temp_dir().join(format!(
-            "wafer-node-latency-test-{}",
-            std::process::id()
-        ));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("wafer-node-latency-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         recorder.export_to_dir(&tmp_dir).unwrap();

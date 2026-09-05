@@ -49,7 +49,12 @@ impl From<RuntimeEnvelope> for SerializableEnvelope {
             id: env.header.id.to_string(),
             timestamp: env.header.timestamp,
             source: env.header.source.to_string(),
-            metadata: env.header.metadata.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            metadata: env
+                .header
+                .metadata
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             payload: env.payload.to_vec(),
             retry_count: env.retry_count,
         }
@@ -58,16 +63,20 @@ impl From<RuntimeEnvelope> for SerializableEnvelope {
 
 impl From<SerializableEnvelope> for RuntimeEnvelope {
     fn from(env: SerializableEnvelope) -> Self {
-        use std::sync::Arc;
-        use bytes::Bytes;
         use crate::queue::envelope::{EnvelopeHeader, Lineage};
+        use bytes::Bytes;
+        use std::sync::Arc;
 
         let header = EnvelopeHeader {
             id: env.id.into_boxed_str(),
             timestamp: env.timestamp,
             source: env.source.into_boxed_str(),
             content_type: "application/octet-stream".into(),
-            metadata: env.metadata.into_iter().map(|(k, v)| (k.into_boxed_str(), v.into_boxed_str())).collect(),
+            metadata: env
+                .metadata
+                .into_iter()
+                .map(|(k, v)| (k.into_boxed_str(), v.into_boxed_str()))
+                .collect(),
         };
         Self {
             header: Arc::new(header),
@@ -117,7 +126,10 @@ impl DlqEnvelope {
 /// # Panics
 ///
 /// Panics if JSON serialization of the DLQ envelope fails (unreachable: all fields are serde-infallible).
-#[expect(clippy::expect_used, reason = "DlqEnvelope fields are all serde-infallible types (String, u64, HashMap, Vec<u8>)")]
+#[expect(
+    clippy::expect_used,
+    reason = "DlqEnvelope fields are all serde-infallible types (String, u64, HashMap, Vec<u8>)"
+)]
 pub fn wrap_for_dlq(
     envelope: RuntimeEnvelope,
     failed_edge: impl Into<String>,
@@ -127,7 +139,8 @@ pub fn wrap_for_dlq(
     // SAFETY: DlqEnvelope contains only String, u64, HashMap<String,String>, Vec<u8> -- all infallible to serialize
     let payload = dlq_envelope.to_json_bytes().expect("infallible serialization");
 
-    RuntimeEnvelope::new("dlq", bytes::Bytes::from(payload)).with_metadata("content_type", "application/json")
+    RuntimeEnvelope::new("dlq", bytes::Bytes::from(payload))
+        .with_metadata("content_type", "application/json")
 }
 
 /// Custom serde module for base64 encoding/decoding of binary data.
@@ -153,7 +166,6 @@ mod base64_serde {
         ENGINE.decode(s).map_err(serde::de::Error::custom)
     }
 }
-
 
 #[cfg(test)]
 mod tests {

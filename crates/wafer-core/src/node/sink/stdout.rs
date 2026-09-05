@@ -67,7 +67,8 @@ impl StdoutSink {
 
         writer.flush()?;
 
-        self.batch_stats.flushes_since_last_check = self.batch_stats.flushes_since_last_check.saturating_add(1);
+        self.batch_stats.flushes_since_last_check =
+            self.batch_stats.flushes_since_last_check.saturating_add(1);
         self.batch_stats.last_flush_size = crate::util::usize_as_u64(batch_size);
 
         Ok(())

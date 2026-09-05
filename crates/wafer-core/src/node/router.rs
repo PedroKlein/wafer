@@ -21,7 +21,11 @@ pub struct WasmRouter {
 
 impl WasmRouter {
     #[must_use]
-    pub const fn new(engine: Arc<WaferEngine>, _instance: RouterInstance, config: NodeConfig) -> Self {
+    pub const fn new(
+        engine: Arc<WaferEngine>,
+        _instance: RouterInstance,
+        config: NodeConfig,
+    ) -> Self {
         Self { config, _engine: engine, initialized: false }
     }
 }
@@ -63,8 +67,6 @@ impl Router for WasmRouter {
         &mut self,
         _envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<RouteResult>> + Send + '_>> {
-        Box::pin(async move {
-            Err(WaferError::Runtime("router pending Phase 2 rewrite".into()))
-        })
+        Box::pin(async move { Err(WaferError::Runtime("router pending Phase 2 rewrite".into())) })
     }
 }

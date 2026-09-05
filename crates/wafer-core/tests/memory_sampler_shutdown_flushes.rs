@@ -1,4 +1,7 @@
-#![expect(clippy::significant_drop_tightening, reason = "integration test: guard scopes are intentionally test-wide")]
+#![expect(
+    clippy::significant_drop_tightening,
+    reason = "integration test: guard scopes are intentionally test-wide"
+)]
 
 //! Integration test: `MemoryRecorder` flushes samples on cancel-safe shutdown.
 //!
@@ -42,15 +45,8 @@ async fn memory_sampler_shutdown_flushes() {
     // Verify CSV output is well-formed
     let csv = guard.to_csv();
     let lines: Vec<&str> = csv.lines().collect();
-    assert_eq!(
-        lines[0], "elapsed_ms,rss_bytes",
-        "CSV header must match expected schema"
-    );
-    assert!(
-        lines.len() >= 3,
-        "CSV must have header + >=2 data rows, got {} lines",
-        lines.len()
-    );
+    assert_eq!(lines[0], "elapsed_ms,rss_bytes", "CSV header must match expected schema");
+    assert!(lines.len() >= 3, "CSV must have header + >=2 data rows, got {} lines", lines.len());
 
     // Verify each data row parses correctly
     for line in &lines[1..] {

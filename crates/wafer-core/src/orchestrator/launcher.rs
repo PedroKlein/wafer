@@ -17,12 +17,12 @@ use crate::config::{
 };
 use crate::engine::{Capabilities, WaferEngine, WaferState};
 use crate::error::{ConfigError, Result, WaferError};
+use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::node::{
     BenchBurstSchedule, BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink,
     FileSource, HttpSink, HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink,
 };
-use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
-use crate::orchestrator::builder::{build_pipeline_with_io, NodeBundleKind};
+use crate::orchestrator::builder::{NodeBundleKind, build_pipeline_with_io};
 use crate::orchestrator::pipeline::PipelineOrchestrator;
 use crate::registry::{OciReference, PluginSource, RegistryConfig, WaferRegistry};
 
@@ -116,13 +116,11 @@ pub async fn launch_pipeline_timed(
     engine.ensure_epoch_ticker();
     let engine = Arc::new(engine);
 
-    let registry_config = config.registry.as_ref().map_or_else(
-        RegistryConfig::default,
-        |cfg| RegistryConfig {
+    let registry_config =
+        config.registry.as_ref().map_or_else(RegistryConfig::default, |cfg| RegistryConfig {
             cache_dir: cfg.cache_dir.as_ref().map(PathBuf::from),
             ..Default::default()
-        },
-    );
+        });
     let registry = WaferRegistry::new(registry_config).map_err(WaferError::Registry)?;
 
     let mut sources: HashMap<String, Box<dyn Source + Send>> = HashMap::new();
@@ -153,43 +151,52 @@ pub async fn launch_pipeline_timed(
 
         match (&mut bundle.kind, node_def) {
             (NodeBundleKind::Transform { node, .. }, NodeDef::Transform(wasm)) => {
-                *node = Some(load_transform_node_dispatch(
-                    &bundle.node_id,
-                    wasm,
-                    config.engine.fuel.transform,
-                    config.engine.memory.transform,
-                    &engine,
-                    &registry,
-                    config_path,
-                    &mut plugin_hashes,
-                    &mut timings,
-                ).await?);
+                *node = Some(
+                    load_transform_node_dispatch(
+                        &bundle.node_id,
+                        wasm,
+                        config.engine.fuel.transform,
+                        config.engine.memory.transform,
+                        &engine,
+                        &registry,
+                        config_path,
+                        &mut plugin_hashes,
+                        &mut timings,
+                    )
+                    .await?,
+                );
             }
             (NodeBundleKind::Filter { node, .. }, NodeDef::Filter(wasm)) => {
-                *node = Some(load_filter_node_dispatch(
-                    &bundle.node_id,
-                    wasm,
-                    config.engine.fuel.filter,
-                    config.engine.memory.filter,
-                    &engine,
-                    &registry,
-                    config_path,
-                    &mut plugin_hashes,
-                    &mut timings,
-                ).await?);
+                *node = Some(
+                    load_filter_node_dispatch(
+                        &bundle.node_id,
+                        wasm,
+                        config.engine.fuel.filter,
+                        config.engine.memory.filter,
+                        &engine,
+                        &registry,
+                        config_path,
+                        &mut plugin_hashes,
+                        &mut timings,
+                    )
+                    .await?,
+                );
             }
             (NodeBundleKind::Router { node, .. }, NodeDef::Router(wasm)) => {
-                *node = Some(load_router_node(
-                    &bundle.node_id,
-                    wasm,
-                    config.engine.fuel.router,
-                    config.engine.memory.router,
-                    &engine,
-                    &registry,
-                    config_path,
-                    &mut plugin_hashes,
-                    &mut timings,
-                ).await?);
+                *node = Some(
+                    load_router_node(
+                        &bundle.node_id,
+                        wasm,
+                        config.engine.fuel.router,
+                        config.engine.memory.router,
+                        &engine,
+                        &registry,
+                        config_path,
+                        &mut plugin_hashes,
+                        &mut timings,
+                    )
+                    .await?,
+                );
             }
             _ => {}
         }
@@ -237,11 +244,8 @@ fn bench_source_from_toml(node_id: &str, cfg: &BenchSourceConfigToml) -> BenchSo
         .with_payload_size(cfg.payload_size)
         .with_evidence_dir(std::env::var_os("WAFER_BENCH_OUTPUT_DIR").map(PathBuf::from));
     if let Some(burst) = &cfg.burst {
-        core = core.with_burst(BenchBurstSchedule::new(
-            burst.rate,
-            burst.start_secs,
-            burst.end_secs,
-        ));
+        core =
+            core.with_burst(BenchBurstSchedule::new(burst.rate, burst.start_secs, burst.end_secs));
     }
     BenchSource::new(core).with_id(node_id.to_owned())
 }
@@ -256,14 +260,7 @@ fn create_sink(node_id: &str, sink_def: &SinkDef) -> Box<dyn Sink + Send> {
         SinkDef::File(cfg) => Box::new(FileSink::new(node_id, &cfg.path)),
         SinkDef::Mqtt(cfg) => {
             let client_id = cfg.client_id.clone().unwrap_or_else(|| format!("wafer-{node_id}"));
-            Box::new(MqttSink::new(
-                node_id,
-                &cfg.broker,
-                cfg.port,
-                &cfg.topic,
-                cfg.qos,
-                client_id,
-            ))
+            Box::new(MqttSink::new(node_id, &cfg.broker, cfg.port, &cfg.topic, cfg.qos, client_id))
         }
         SinkDef::Http(cfg) => Box::new(HttpSink::new(node_id, &cfg.url)),
         SinkDef::BenchSink(cfg) => Box::new(bench_sink_from_toml(node_id, cfg)),
@@ -305,8 +302,14 @@ fn resolve_bench_sink_output_dir(
 /// This is where the `plugin.kind = "native"` schema variant is honoured
 /// (P0.4 AC2). Wasm construction still goes through the original
 /// `load_transform_node` helper unchanged.
-#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
-#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "node loader params are a flat list; a config struct would add indirection for a private function"
+)]
+#[expect(
+    clippy::large_futures,
+    reason = "WASM component loading holds Store/Component across awaits; called once per node at startup"
+)]
 async fn load_transform_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -323,8 +326,15 @@ async fn load_transform_node_dispatch(
         return Ok(crate::node::TransformNode::Native(native));
     }
     let wasm_node = load_transform_node(
-        node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
-        plugin_hashes, timings,
+        node_id,
+        wasm,
+        default_fuel,
+        default_memory,
+        engine,
+        registry,
+        config_path,
+        plugin_hashes,
+        timings,
     )
     .await?;
     Ok(crate::node::TransformNode::from(wasm_node))
@@ -345,8 +355,14 @@ fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
-#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "node loader params are a flat list; a config struct would add indirection for a private function"
+)]
+#[expect(
+    clippy::large_futures,
+    reason = "WASM component loading holds Store/Component across awaits; called once per node at startup"
+)]
 async fn load_transform_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -361,9 +377,8 @@ async fn load_transform_node(
     let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
-    timings.component_load_compile = timings
-        .component_load_compile
-        .saturating_add(phase_started.elapsed());
+    timings.component_load_compile =
+        timings.component_load_compile.saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
 
     let phase_started = Instant::now();
@@ -443,14 +458,8 @@ fn threshold_native_config(node_id: &str, wasm: &WasmNodeDef) -> Result<(String,
         .and_then(|v| v.as_str())
         .unwrap_or("temperature")
         .to_owned();
-    let min = table
-        .and_then(|t| t.get("min"))
-        .and_then(as_f64)
-        .unwrap_or(0.0);
-    let max = table
-        .and_then(|t| t.get("max"))
-        .and_then(as_f64)
-        .unwrap_or(f64::INFINITY);
+    let min = table.and_then(|t| t.get("min")).and_then(as_f64).unwrap_or(0.0);
+    let max = table.and_then(|t| t.get("max")).and_then(as_f64).unwrap_or(f64::INFINITY);
     if min > max {
         return Err(WaferError::Config(ConfigError::Message(format!(
             "native filter '{node_id}': min ({min}) > max ({max})"
@@ -478,8 +487,14 @@ fn as_f64(v: &toml::Value) -> Option<f64> {
 /// Dispatch: build a Wasm or Native filter depending on `wasm.plugin`.
 /// Mirrors [`load_transform_node_dispatch`] so the native baseline can
 /// implement `type = "filter"` (RQ1 apples-to-apples — A18).
-#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
-#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "node loader params are a flat list; a config struct would add indirection for a private function"
+)]
+#[expect(
+    clippy::large_futures,
+    reason = "WASM component loading holds Store/Component across awaits; called once per node at startup"
+)]
 async fn load_filter_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -496,8 +511,15 @@ async fn load_filter_node_dispatch(
         return Ok(crate::node::FilterNode::Native(native));
     }
     let wasm_node = load_filter_node(
-        node_id, wasm, default_fuel, default_memory, engine, registry, config_path,
-        plugin_hashes, timings,
+        node_id,
+        wasm,
+        default_fuel,
+        default_memory,
+        engine,
+        registry,
+        config_path,
+        plugin_hashes,
+        timings,
     )
     .await?;
     Ok(crate::node::FilterNode::from(wasm_node))
@@ -521,8 +543,14 @@ pub fn build_native_filter_from_def(
     Ok(crate::node::FilterNode::Native(native))
 }
 
-#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
-#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "node loader params are a flat list; a config struct would add indirection for a private function"
+)]
+#[expect(
+    clippy::large_futures,
+    reason = "WASM component loading holds Store/Component across awaits; called once per node at startup"
+)]
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -537,9 +565,8 @@ async fn load_filter_node(
     let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
-    timings.component_load_compile = timings
-        .component_load_compile
-        .saturating_add(phase_started.elapsed());
+    timings.component_load_compile =
+        timings.component_load_compile.saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
 
     let phase_started = Instant::now();
@@ -581,8 +608,14 @@ async fn load_filter_node(
     Ok(node)
 }
 
-#[expect(clippy::too_many_arguments, reason = "node loader params are a flat list; a config struct would add indirection for a private function")]
-#[expect(clippy::large_futures, reason = "WASM component loading holds Store/Component across awaits; called once per node at startup")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "node loader params are a flat list; a config struct would add indirection for a private function"
+)]
+#[expect(
+    clippy::large_futures,
+    reason = "WASM component loading holds Store/Component across awaits; called once per node at startup"
+)]
 async fn load_router_node(
     node_id: &str,
     wasm: &WasmNodeDef,
@@ -597,9 +630,8 @@ async fn load_router_node(
     let phase_started = Instant::now();
     let (component, plugin_hash) =
         resolve_and_load_component(node_id, wasm, engine, registry, config_path).await?;
-    timings.component_load_compile = timings
-        .component_load_compile
-        .saturating_add(phase_started.elapsed());
+    timings.component_load_compile =
+        timings.component_load_compile.saturating_add(phase_started.elapsed());
     plugin_hashes.insert(node_id.into(), plugin_hash);
 
     let phase_started = Instant::now();
@@ -645,7 +677,10 @@ async fn load_router_node(
 /// component. Returning the hash lets the launcher seed
 /// `PipelineHandle::plugin_hashes` with the same value the P0.12 guard
 /// checks on hot-swap — single source of truth (metadata.json AC2).
-#[expect(clippy::large_futures, reason = "OCI resolution + WASM compilation hold large intermediates across awaits; called once per node")]
+#[expect(
+    clippy::large_futures,
+    reason = "OCI resolution + WASM compilation hold large intermediates across awaits; called once per node"
+)]
 async fn resolve_and_load_component(
     node_id: &str,
     wasm: &WasmNodeDef,

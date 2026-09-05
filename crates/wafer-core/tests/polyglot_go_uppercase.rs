@@ -18,10 +18,8 @@ use wafer_core::testing::PluginTestHarness;
 ///
 /// Built by `mise run //plugins:build-plugin-go`. Skipped (not failed) when
 /// missing so `cargo test` still works in environments without TinyGo.
-const UPPERCASE_GO_WASM: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../plugins/go/uppercase/wafer-uppercase-go.wasm"
-);
+const UPPERCASE_GO_WASM: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/go/uppercase/wafer-uppercase-go.wasm");
 
 fn skip_if_not_built() -> Option<PluginTestHarness> {
     if !Path::new(UPPERCASE_GO_WASM).exists() {
@@ -126,8 +124,10 @@ fn go_uppercase_double_drop_diagnostic_is_recognizable() {
     );
     match sentinel {
         WasmProcessError::Unrecoverable(msg) => {
-            assert!(msg.contains("borrow handles") || msg.contains("resource"),
-                "diagnostic sentinel drifted: {msg}");
+            assert!(
+                msg.contains("borrow handles") || msg.contains("resource"),
+                "diagnostic sentinel drifted: {msg}"
+            );
         }
         other => panic!("expected Unrecoverable variant, got {other:?}"),
     }

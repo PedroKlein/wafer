@@ -24,7 +24,10 @@ pub struct ApiConfig {
 }
 
 impl Default for ApiConfig {
-    #[expect(clippy::unwrap_used, reason = "hardcoded literal \"127.0.0.1:9090\" is always a valid SocketAddr")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "hardcoded literal \"127.0.0.1:9090\" is always a valid SocketAddr"
+    )]
     fn default() -> Self {
         Self { bind: "127.0.0.1:9090".parse().unwrap(), serve_metrics: true }
     }

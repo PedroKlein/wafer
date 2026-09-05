@@ -67,10 +67,7 @@ to = "snk"
     .unwrap();
 
     let result = load_config(file.path());
-    assert!(
-        result.is_err(),
-        "fuel.transform = 0 must be rejected at load time"
-    );
+    assert!(result.is_err(), "fuel.transform = 0 must be rejected at load time");
 }
 
 #[test]
@@ -104,8 +101,5 @@ to = "snk"
     .unwrap();
 
     let result = load_config(file.path());
-    assert!(
-        result.is_err(),
-        "per-node fuel = 0 must be rejected at load time"
-    );
+    assert!(result.is_err(), "per-node fuel = 0 must be rejected at load time");
 }

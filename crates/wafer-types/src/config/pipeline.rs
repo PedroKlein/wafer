@@ -22,10 +22,7 @@ pub struct ApiConfig {
 
 impl Default for ApiConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            bind: default_api_bind(),
-        }
+        Self { enabled: true, bind: default_api_bind() }
     }
 }
 
@@ -40,10 +37,7 @@ pub struct MetricsConfig {
 
 impl Default for MetricsConfig {
     fn default() -> Self {
-        Self {
-            enabled: true,
-            path: default_metrics_path(),
-        }
+        Self { enabled: true, path: default_metrics_path() }
     }
 }
 

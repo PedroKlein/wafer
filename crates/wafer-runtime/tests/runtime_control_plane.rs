@@ -59,12 +59,7 @@ fn spawn_wafer(config: &std::path::Path) -> Child {
         .expect("spawn wafer");
 
     // Keep stdin open so the stdin source keeps the pipeline alive.
-    child
-        .stdin
-        .as_mut()
-        .expect("stdin")
-        .write_all(b"control-plane-test\n")
-        .expect("write stdin");
+    child.stdin.as_mut().expect("stdin").write_all(b"control-plane-test\n").expect("write stdin");
 
     child
 }

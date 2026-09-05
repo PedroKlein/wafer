@@ -10,11 +10,14 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::node::TransformNode;
+use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState, send_downstream};
+use crate::runner::{
+    DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState,
+    send_downstream,
+};
 use wafer_types::config::HotSwapConfig;
 
 fn recover_after_timeout(
@@ -54,7 +57,10 @@ fn recover_after_timeout(
 /// The Wasm call (`transform.process()`) runs OUTSIDE the `select!` block.
 /// Only `receiver.recv()` is inside `select!` — which is documented cancel-safe.
 /// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
-#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
+)]
 pub async fn run_transform_loop(
     transform: TransformNode,
     receiver: impl Into<TrackedReceiver>,
@@ -66,14 +72,28 @@ pub async fn run_transform_loop(
     metrics: Arc<NodeMetrics>,
 ) {
     run_transform_loop_with_config(
-        transform, receiver, senders, swap_rx, policy, cancel, state, metrics,
+        transform,
+        receiver,
+        senders,
+        swap_rx,
+        policy,
+        cancel,
+        state,
+        metrics,
         HotSwapConfig::default(),
-    ).await;
+    )
+    .await;
 }
 
 /// Inner transform loop with explicit hot-swap config (testable).
-#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring plus hot-swap config for testability")]
-#[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop with canary logic; splitting would fragment the control flow")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Runner loop needs all pipeline wiring plus hot-swap config for testability"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear select!/match pipeline loop with canary logic; splitting would fragment the control flow"
+)]
 pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
     receiver: impl Into<TrackedReceiver>,
@@ -141,10 +161,7 @@ pub async fn run_transform_loop_with_config(
                         if is_reconfigure {
                             canary = None;
                         } else if let Some(pre) = v1_pre {
-                            canary = Some(TransformCanaryState::new(
-                                pre,
-                                hot_swap_config.clone(),
-                            ));
+                            canary = Some(TransformCanaryState::new(pre, hot_swap_config.clone()));
                         }
                     }
                     Err(err) => {
@@ -234,7 +251,8 @@ pub async fn run_transform_loop_with_config(
                         let rollback_start = Instant::now();
                         match transform.recover_from_cached_pre() {
                             Ok(()) => {
-                                let rollback_ns = crate::util::duration_ns_saturating(rollback_start.elapsed());
+                                let rollback_ns =
+                                    crate::util::duration_ns_saturating(rollback_start.elapsed());
                                 tracing::info!(
                                     node = transform.node_id(),
                                     rollback_time_ns = rollback_ns,
@@ -243,7 +261,9 @@ pub async fn run_transform_loop_with_config(
                                     "process-time rollback to v1 succeeded"
                                 );
                                 state.transition_to_recovering();
-                                if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
+                                if let Some(duration_ns) =
+                                    state.transition_recovering_to_running_timed()
+                                {
                                     metrics.record_recovery(duration_ns);
                                 }
                                 metrics.record_rollback();
@@ -281,10 +301,8 @@ pub async fn run_transform_loop_with_config(
                                 // swap did not converge. Report with
                                 // rollback_time_ns=0 to signal the failure.
                                 if let Some(progress) = pending_swap_progress.take() {
-                                    progress.report_rolled_back(
-                                        0,
-                                        format!("rollback failed: {error}"),
-                                    );
+                                    progress
+                                        .report_rolled_back(0, format!("rollback failed: {error}"));
                                 }
                                 // Fallthrough to standard recovery
                                 canary = None;
@@ -306,7 +324,9 @@ pub async fn run_transform_loop_with_config(
                                 0,
                                 format!(
                                     "canary budget exhausted after {} traps (max={}): {}",
-                                    c.counters.trap_count, c.counters.config.max_rollback_retries, msg
+                                    c.counters.trap_count,
+                                    c.counters.config.max_rollback_retries,
+                                    msg
                                 ),
                             );
                         }
@@ -350,10 +370,12 @@ mod tests {
     use super::*;
     use crate::runner::error_policy::ResolvedErrorPolicy;
     use tokio::sync::{mpsc, watch};
-    
 
     /// Creates test infrastructure for the transform loop.
-    #[expect(clippy::type_complexity, reason = "test setup helper; type alias would obscure the tuple for readability")]
+    #[expect(
+        clippy::type_complexity,
+        reason = "test setup helper; type alias would obscure the tuple for readability"
+    )]
     fn setup_transform_test() -> (
         mpsc::Sender<RuntimeEnvelope>,
         mpsc::Receiver<RuntimeEnvelope>,
@@ -374,11 +396,8 @@ mod tests {
             queue_metrics: None,
         }];
         let (swap_tx, swap_rx) = watch::channel(None);
-        let policy = ErrorPolicyExecutor::new(
-            ResolvedErrorPolicy::default(),
-            None,
-            "test-transform",
-        );
+        let policy =
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-transform");
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -388,8 +407,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_transform_loop_shutdown_on_cancel() {
-        let (input_tx, _input_rx, _senders, _output_rx, _swap_tx, _swap_rx, _policy, cancel, state, metrics) =
-            setup_transform_test();
+        let (
+            input_tx,
+            _input_rx,
+            _senders,
+            _output_rx,
+            _swap_tx,
+            _swap_rx,
+            _policy,
+            cancel,
+            state,
+            metrics,
+        ) = setup_transform_test();
 
         // Cancel immediately — the loop should exit promptly
         cancel.cancel();

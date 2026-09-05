@@ -1,4 +1,8 @@
-#![expect(clippy::print_stdout, clippy::print_stderr, reason = "CLI binary — stdout/stderr output is the primary interface")]
+#![expect(
+    clippy::print_stdout,
+    clippy::print_stderr,
+    reason = "CLI binary — stdout/stderr output is the primary interface"
+)]
 //! waferctl - CLI for managing WAFER pipeline instances.
 
 mod client;
@@ -141,8 +145,13 @@ async fn run(cli: Cli) -> error::Result<()> {
         Commands::Shutdown => cmd_shutdown(&client, cli.json).await,
         Commands::Metrics { raw } => cmd_metrics(&client, cli.json, raw).await,
         Commands::Config { .. } => {
-            #[expect(clippy::unreachable, reason = "Config command is handled before client creation and never reaches this branch")]
-            {unreachable!("Config commands handled earlier in main")}
+            #[expect(
+                clippy::unreachable,
+                reason = "Config command is handled before client creation and never reaches this branch"
+            )]
+            {
+                unreachable!("Config commands handled earlier in main")
+            }
         }
     }
 }
@@ -275,10 +284,8 @@ fn cmd_reload(_client: &WaferClient, _json: bool) -> error::Result<()> {
 }
 
 fn cmd_drain(_client: &WaferClient, _json: bool) -> error::Result<()> {
-    Err(CliError::user(anyhow::anyhow!(
-        "standalone drain is not exposed by the runtime HTTP API"
-    ))
-    .with_hint("Use 'waferctl shutdown' to trigger graceful pipeline shutdown."))
+    Err(CliError::user(anyhow::anyhow!("standalone drain is not exposed by the runtime HTTP API"))
+        .with_hint("Use 'waferctl shutdown' to trigger graceful pipeline shutdown."))
 }
 
 async fn cmd_shutdown(client: &WaferClient, json: bool) -> error::Result<()> {

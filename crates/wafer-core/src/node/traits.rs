@@ -156,4 +156,3 @@ pub trait Filter: Lifecycle {
         envelope: &RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<FilterOutcome>> + Send + '_>>;
 }
-

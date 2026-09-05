@@ -114,8 +114,7 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     source.init().await.unwrap();
     sink.init().await.unwrap();
 
-    let mut offsets: std::collections::HashMap<String, Vec<u64>> =
-        std::collections::HashMap::new();
+    let mut offsets: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
     while let Some(envelope) = source.poll().await.unwrap() {
         let phase = envelope
             .header

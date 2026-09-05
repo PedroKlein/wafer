@@ -119,9 +119,9 @@ fn classify(err: &WasmProcessError) -> ContainedAs {
         // Any other variant means the sandbox did NOT actually stop
         // the exploit — the attack was allowed to return control
         // through a normal error channel, which is not containment.
-        other => panic!(
-            "attack was NOT contained; got an in-band error instead of a trap: {other:?}"
-        ),
+        other => {
+            panic!("attack was NOT contained; got an in-band error instead of a trap: {other:?}")
+        }
     }
 }
 
@@ -158,9 +158,7 @@ fn assert_contained(
     let harness = PluginTestHarness::new().expect("engine must construct");
 
     // (1) Healthy transform succeeds BEFORE the attack.
-    let mut healthy = harness
-        .load_transform(PASS_THROUGH_WASM)
-        .expect("pass-through must load");
+    let mut healthy = harness.load_transform(PASS_THROUGH_WASM).expect("pass-through must load");
     let pre = healthy
         .process(RuntimeEnvelope::from_string("healthy", "pre-attack"))
         .expect("pre-attack healthy path must succeed");
@@ -175,15 +173,11 @@ fn assert_contained(
         Some(limit) => harness
             .load_transform_with_memory_limit(attack_path, limit)
             .expect("attack plugin must load"),
-        None => harness
-            .load_transform(attack_path)
-            .expect("attack plugin must load"),
+        None => harness.load_transform(attack_path).expect("attack plugin must load"),
     };
     let err = attacker
         .process(RuntimeEnvelope::from_string("attacker", "trigger"))
-        .expect_err(&format!(
-            "attack {label} did NOT trap — sandbox failed to contain it"
-        ));
+        .expect_err(&format!("attack {label} did NOT trap — sandbox failed to contain it"));
     let got = classify(&err);
     assert!(
         allowed.contains(&got),
@@ -216,12 +210,7 @@ fn buffer_overflow_contained() {
     if !check_prereqs(&[PASS_THROUGH_WASM, ATK_BUFFER_OVERFLOW]) {
         return;
     }
-    assert_contained(
-        ATK_BUFFER_OVERFLOW,
-        "S1 buffer-overflow",
-        &[ContainedAs::Trap],
-        None,
-    );
+    assert_contained(ATK_BUFFER_OVERFLOW, "S1 buffer-overflow", &[ContainedAs::Trap], None);
 }
 
 /// S2: cross-read — dereferences a fabricated absolute host address
@@ -231,12 +220,7 @@ fn cross_read_contained() {
     if !check_prereqs(&[PASS_THROUGH_WASM, ATK_CROSS_READ]) {
         return;
     }
-    assert_contained(
-        ATK_CROSS_READ,
-        "S2 cross-read",
-        &[ContainedAs::Trap],
-        None,
-    );
+    assert_contained(ATK_CROSS_READ, "S2 cross-read", &[ContainedAs::Trap], None);
 }
 
 /// S3: infinite-loop — `loop {}`. Expected: epoch interruption
@@ -262,9 +246,7 @@ fn epoch_recovery_uses_a_fresh_store() {
         return;
     }
     let harness = PluginTestHarness::new().expect("engine must construct");
-    let mut attacker = harness
-        .load_transform(ATK_INFINITE_LOOP)
-        .expect("attack plugin must load");
+    let mut attacker = harness.load_transform(ATK_INFINITE_LOOP).expect("attack plugin must load");
 
     let first = attacker
         .process(RuntimeEnvelope::from_string("attacker", "first"))
@@ -326,9 +308,8 @@ to = "sink"
     ))
     .expect("inline config must parse");
 
-    let mut orchestrator = Box::pin(launch_pipeline(config, None))
-        .await
-        .expect("pipeline must launch");
+    let mut orchestrator =
+        Box::pin(launch_pipeline(config, None)).await.expect("pipeline must launch");
     let handle = orchestrator.handle();
     tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete())
         .await
@@ -368,9 +349,8 @@ fn memory_exhaust_contained() {
 
     // AC2: re-run just the attack to inspect the message payload.
     let harness = PluginTestHarness::new().unwrap();
-    let mut attacker = harness
-        .load_transform_with_memory_limit(ATK_MEMORY_EXHAUST, MEMORY_EXHAUST_LIMIT)
-        .unwrap();
+    let mut attacker =
+        harness.load_transform_with_memory_limit(ATK_MEMORY_EXHAUST, MEMORY_EXHAUST_LIMIT).unwrap();
     let err = attacker
         .process(RuntimeEnvelope::from_string("attacker", "grow"))
         .expect_err("memory-exhaust must trap");
@@ -405,12 +385,7 @@ fn fs_access_contained() {
     if !check_prereqs(&[PASS_THROUGH_WASM, ATK_FS_ACCESS]) {
         return;
     }
-    assert_contained(
-        ATK_FS_ACCESS,
-        "S5 fs-access",
-        &[ContainedAs::Trap],
-        None,
-    );
+    assert_contained(ATK_FS_ACCESS, "S5 fs-access", &[ContainedAs::Trap], None);
 }
 
 /// S6: panic — `panic!("malicious payload triggers panic")`. Under

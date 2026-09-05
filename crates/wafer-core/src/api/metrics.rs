@@ -20,7 +20,10 @@ pub struct MetricsServerConfig {
 }
 
 impl Default for MetricsServerConfig {
-    #[expect(clippy::unwrap_used, reason = "hardcoded literal \"127.0.0.1:9091\" is always a valid SocketAddr")]
+    #[expect(
+        clippy::unwrap_used,
+        reason = "hardcoded literal \"127.0.0.1:9091\" is always a valid SocketAddr"
+    )]
     fn default() -> Self {
         Self { bind: "127.0.0.1:9091".parse().unwrap(), path: "/metrics".to_string() }
     }

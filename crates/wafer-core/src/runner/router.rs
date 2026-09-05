@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::node::wasm::WasmRouterNode;
+use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, fan_out};
@@ -53,8 +53,14 @@ fn recover_after_timeout(
 /// The Wasm call (`router.route()`) runs OUTSIDE the `select!` block.
 /// Router borrows the envelope — no safety clone needed. Fan-out after routing
 /// clones for N-1 ports and moves for the last port.
-#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
-#[expect(clippy::too_many_lines, reason = "linear select!/match pipeline loop; splitting into helpers would fragment the control flow")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear select!/match pipeline loop; splitting into helpers would fragment the control flow"
+)]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
     receiver: impl Into<TrackedReceiver>,
@@ -198,17 +204,10 @@ mod tests {
     async fn test_router_loop_cancellation_exits_cleanly() {
         let (_input_tx, _input_rx) = mpsc::channel::<RuntimeEnvelope>(32);
         let (output_tx, _output_rx) = mpsc::channel(32);
-        let _senders = [DownstreamSender {
-            sender: output_tx,
-            port: "default".into(),
-            queue_metrics: None,
-        }];
+        let _senders =
+            [DownstreamSender { sender: output_tx, port: "default".into(), queue_metrics: None }];
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
-        let _policy = ErrorPolicyExecutor::new(
-            ResolvedErrorPolicy::default(),
-            None,
-            "test-router",
-        );
+        let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-router");
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -222,11 +221,8 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_single_port() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
-            sender: tx,
-            port: "output-a".into(),
-            queue_metrics: None,
-        }];
+        let senders =
+            vec![DownstreamSender { sender: tx, port: "output-a".into(), queue_metrics: None }];
 
         let envelope = RuntimeEnvelope::from_string("src", "hello");
         fan_out(&["output-a".to_string()], envelope, &senders).await;
@@ -245,12 +241,7 @@ mod tests {
         ];
 
         let envelope = RuntimeEnvelope::from_string("src", "routed");
-        fan_out(
-            &["port-a".to_string(), "port-b".to_string()],
-            envelope,
-            &senders,
-        )
-        .await;
+        fan_out(&["port-a".to_string(), "port-b".to_string()], envelope, &senders).await;
 
         let a = rx_a.recv().await.expect("port-a should receive");
         let b = rx_b.recv().await.expect("port-b should receive");
@@ -261,11 +252,8 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_no_matching_port() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
-            sender: tx,
-            port: "other-port".into(),
-            queue_metrics: None,
-        }];
+        let senders =
+            vec![DownstreamSender { sender: tx, port: "other-port".into(), queue_metrics: None }];
 
         let envelope = RuntimeEnvelope::from_string("src", "lost");
         // Route to a port that doesn't match any sender

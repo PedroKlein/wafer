@@ -174,7 +174,10 @@ impl TransformHarness {
 }
 
 #[cfg(test)]
-#[expect(clippy::print_stderr, reason = "test diagnostic output for skipped tests when wasm plugins are not built")]
+#[expect(
+    clippy::print_stderr,
+    reason = "test diagnostic output for skipped tests when wasm plugins are not built"
+)]
 mod tests {
     use super::*;
 
@@ -270,12 +273,8 @@ mod tests {
             .with_metadata("bench.intended_ns", "1234567890123");
         let out = transform.process(input).expect("transform must succeed");
 
-        let md: Vec<(&str, &str)> = out
-            .header
-            .metadata
-            .iter()
-            .map(|(k, v)| (k.as_ref(), v.as_ref()))
-            .collect();
+        let md: Vec<(&str, &str)> =
+            out.header.metadata.iter().map(|(k, v)| (k.as_ref(), v.as_ref())).collect();
         assert!(
             md.contains(&("bench.sequence", "42")),
             "transform dropped bench.sequence; metadata = {md:?}"
@@ -305,9 +304,9 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             let payload = format!("epoch-soak-{i}");
             let input = RuntimeEnvelope::from_string("src", &payload);
-            let out = transform.process(input).unwrap_or_else(|e| {
-                panic!("iteration {i} trapped after >{} ms: {e}", i * 10)
-            });
+            let out = transform
+                .process(input)
+                .unwrap_or_else(|e| panic!("iteration {i} trapped after >{} ms: {e}", i * 10));
             assert_eq!(std::str::from_utf8(&out.payload).unwrap(), payload);
         }
     }

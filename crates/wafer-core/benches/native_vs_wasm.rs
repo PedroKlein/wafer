@@ -47,78 +47,66 @@ fn bench_native_transform(c: &mut Criterion) {
         group.throughput(Throughput::Elements(1));
 
         // Uppercase transform
-        group.bench_with_input(
-            BenchmarkId::new("uppercase", size),
-            &size,
-            |b, &size| {
-                b.iter_custom(|iters| {
-                    rt.block_on(async {
-                        let mut transform = NativeTransform::uppercase("bench");
-                        let start = Instant::now();
+        group.bench_with_input(BenchmarkId::new("uppercase", size), &size, |b, &size| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut transform = NativeTransform::uppercase("bench");
+                    let start = Instant::now();
 
-                        for _ in 0..iters {
-                            let envelope = create_test_envelope(size);
-                            let result = transform.process(envelope).await;
-                            drop(black_box(result));
-                        }
+                    for _ in 0..iters {
+                        let envelope = create_test_envelope(size);
+                        let result = transform.process(envelope).await;
+                        drop(black_box(result));
+                    }
 
-                        start.elapsed()
-                    })
-                });
-            },
-        );
+                    start.elapsed()
+                })
+            });
+        });
 
         // Passthrough transform
-        group.bench_with_input(
-            BenchmarkId::new("passthrough", size),
-            &size,
-            |b, &size| {
-                b.iter_custom(|iters| {
-                    rt.block_on(async {
-                        let mut transform = NativeTransform::passthrough("bench");
-                        let start = Instant::now();
+        group.bench_with_input(BenchmarkId::new("passthrough", size), &size, |b, &size| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut transform = NativeTransform::passthrough("bench");
+                    let start = Instant::now();
 
-                        for _ in 0..iters {
-                            let envelope = create_test_envelope(size);
-                            let result = transform.process(envelope).await;
-                            drop(black_box(result));
-                        }
+                    for _ in 0..iters {
+                        let envelope = create_test_envelope(size);
+                        let result = transform.process(envelope).await;
+                        drop(black_box(result));
+                    }
 
-                        start.elapsed()
-                    })
-                });
-            },
-        );
+                    start.elapsed()
+                })
+            });
+        });
 
         // P0.4 AC3: json-parse transform. Payload must contain a
         // "temperature" field; we synthesise one at the requested
         // size by padding a canonical JSON body.
-        group.bench_with_input(
-            BenchmarkId::new("json_parse", size),
-            &size,
-            |b, &size| {
-                b.iter_custom(|iters| {
-                    rt.block_on(async {
-                        let mut transform = NativeTransform::json_parse("bench");
-                        let base = br#"{"temperature": 42.0, "pad":""#;
-                        let pad = size.saturating_sub(base.len() + 2);
-                        let mut payload = base.to_vec();
-                        payload.extend(std::iter::repeat_n(b'x', pad));
-                        payload.extend_from_slice(b"\"}");
-                        let payload = Bytes::from(payload);
-                        let start = Instant::now();
+        group.bench_with_input(BenchmarkId::new("json_parse", size), &size, |b, &size| {
+            b.iter_custom(|iters| {
+                rt.block_on(async {
+                    let mut transform = NativeTransform::json_parse("bench");
+                    let base = br#"{"temperature": 42.0, "pad":""#;
+                    let pad = size.saturating_sub(base.len() + 2);
+                    let mut payload = base.to_vec();
+                    payload.extend(std::iter::repeat_n(b'x', pad));
+                    payload.extend_from_slice(b"\"}");
+                    let payload = Bytes::from(payload);
+                    let start = Instant::now();
 
-                        for _ in 0..iters {
-                            let envelope = RuntimeEnvelope::new("bench-source", payload.clone());
-                            let result = transform.process(envelope).await;
-                            drop(black_box(result));
-                        }
+                    for _ in 0..iters {
+                        let envelope = RuntimeEnvelope::new("bench-source", payload.clone());
+                        let result = transform.process(envelope).await;
+                        drop(black_box(result));
+                    }
 
-                        start.elapsed()
-                    })
-                });
-            },
-        );
+                    start.elapsed()
+                })
+            });
+        });
     }
 
     group.finish();
@@ -175,8 +163,7 @@ fn bench_native_router(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("content", size), &size, |b, &size| {
             b.iter_custom(|iters| {
                 rt.block_on(async {
-                    let mut router =
-                        NativeRouter::content_router("bench", 50.0, "high", "low");
+                    let mut router = NativeRouter::content_router("bench", 50.0, "high", "low");
                     let base = br#"{"level": 75.0, "pad":""#;
                     let pad = size.saturating_sub(base.len() + 2);
                     let mut payload = base.to_vec();
@@ -207,19 +194,15 @@ fn bench_bench_envelope(c: &mut Criterion) {
     for size in sizes {
         group.throughput(Throughput::Elements(1));
 
-        group.bench_with_input(
-            BenchmarkId::new("with_metadata", size),
-            &size,
-            |b, &size| {
-                let payload = Bytes::from(vec![0x42u8; size]);
-                b.iter(|| {
-                    let env = RuntimeEnvelope::new("bench-source", payload.clone())
-                        .with_metadata("bench.sequence", "12345")
-                        .with_metadata("bench.intended_ns", "1000000000");
-                    black_box(env)
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("with_metadata", size), &size, |b, &size| {
+            let payload = Bytes::from(vec![0x42u8; size]);
+            b.iter(|| {
+                let env = RuntimeEnvelope::new("bench-source", payload.clone())
+                    .with_metadata("bench.sequence", "12345")
+                    .with_metadata("bench.intended_ns", "1000000000");
+                black_box(env)
+            });
+        });
     }
 
     group.finish();

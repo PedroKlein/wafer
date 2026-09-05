@@ -35,7 +35,9 @@ use std::time::Duration;
 /// Descriptor of an open-loop load profile.
 #[derive(Debug, Clone)]
 pub enum LoadShape {
-    Steady { rate: u32 },
+    Steady {
+        rate: u32,
+    },
     Burst {
         base_rate: u32,
         multiplier: u32,
@@ -71,7 +73,10 @@ impl LoadShape {
             Self::Steady { rate } => f64::from(rate).max(1.0),
             Self::HotswapTrigger { base_rate, .. } => f64::from(base_rate).max(1.0),
             Self::Burst { base_rate, multiplier, on_secs, cycle_secs } => {
-                #[expect(clippy::as_conversions, reason = "u32 -> f64 is lossless (u32::MAX < f64 mantissa capacity)")]
+                #[expect(
+                    clippy::as_conversions,
+                    reason = "u32 -> f64 is lossless (u32::MAX < f64 mantissa capacity)"
+                )]
                 let cycle = cycle_secs.max(1) as f64;
                 #[expect(clippy::as_conversions, reason = "u32 -> f64 is lossless")]
                 let on = on_secs.min(cycle_secs) as f64;
@@ -162,7 +167,10 @@ mod tests {
     fn steady_rate_is_constant() {
         let shape = LoadShape::Steady { rate: 1_000 };
         for t in [0.0, 5.0, 60.0, 3_600.0] {
-            assert!((shape.rate_at(t) - 1_000.0).abs() < 1e-9, "steady rate should be constant at {t}");
+            assert!(
+                (shape.rate_at(t) - 1_000.0).abs() < 1e-9,
+                "steady rate should be constant at {t}"
+            );
         }
     }
 
@@ -170,12 +178,8 @@ mod tests {
     /// Verify via message-count ratio in burst vs steady windows.
     #[test]
     fn burst_rate_doubles_in_burst_window_2x_pm_5pct() {
-        let shape = LoadShape::Burst {
-            base_rate: 1_000,
-            multiplier: 2,
-            on_secs: 10,
-            cycle_secs: 60,
-        };
+        let shape =
+            LoadShape::Burst { base_rate: 1_000, multiplier: 2, on_secs: 10, cycle_secs: 60 };
         let mut sch = Scheduler::new(shape);
 
         // Sweep the full first 120s and bucket messages by phase.

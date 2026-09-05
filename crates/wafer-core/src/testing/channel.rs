@@ -9,9 +9,9 @@ use std::pin::Pin;
 use tokio::sync::mpsc;
 
 use crate::error::Result;
+use crate::node::Lifecycle;
 use crate::node::Sink;
 use crate::node::Source;
-use crate::node::Lifecycle;
 use crate::queue::RuntimeEnvelope;
 
 const DEFAULT_CAPACITY: usize = 1024;
@@ -139,10 +139,9 @@ impl Sink for ChannelSink {
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         Box::pin(async move {
-            self.sender
-                .send(envelope)
-                .await
-                .map_err(|_send_err| crate::error::WaferError::Runtime("channel sink receiver dropped".into()))?;
+            self.sender.send(envelope).await.map_err(|_send_err| {
+                crate::error::WaferError::Runtime("channel sink receiver dropped".into())
+            })?;
             Ok(())
         })
     }
@@ -239,9 +238,7 @@ mod tests {
         let n = 100;
 
         for i in 0..n {
-            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}")))
-                .await
-                .unwrap();
+            tx.send(RuntimeEnvelope::from_string("s", format!("msg-{i}"))).await.unwrap();
         }
         drop(tx);
 

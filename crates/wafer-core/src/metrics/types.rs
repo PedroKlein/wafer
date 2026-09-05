@@ -93,17 +93,14 @@ pub struct HotSwapMetrics {
     /// ack, first_v2, convergence. Wrapped in RwLock because the label
     /// set is small (`num_swappable_nodes * 6`) and the map is only
     /// touched inside record/emit paths, not on the message hot path.
-    pub phase_histogram: std::sync::RwLock<
-        std::collections::HashMap<(String, String), PhaseHistogram>,
-    >,
+    pub phase_histogram:
+        std::sync::RwLock<std::collections::HashMap<(String, String), PhaseHistogram>>,
     /// P0.11 (A7 residual): per-node recovery-duration histogram in
     /// nanoseconds, populated on every Recovering → Running transition.
     /// Rendered as `wafer_node_recovery_duration_ms` at scrape time
     /// (buckets in ms; nanosecond samples are divided by 1_000_000 for
     /// display, source of truth remains ns).
-    pub recovery_duration: std::sync::RwLock<
-        std::collections::HashMap<String, PhaseHistogram>,
-    >,
+    pub recovery_duration: std::sync::RwLock<std::collections::HashMap<String, PhaseHistogram>>,
 }
 
 /// Fixed-bucket histogram tuned for hot-swap phase durations.
@@ -121,16 +118,16 @@ pub struct PhaseHistogram {
 impl PhaseHistogram {
     /// Bucket upper bounds in nanoseconds.
     pub const BUCKETS_NS: [u64; 10] = [
-        100_000,        // 100 µs
-        500_000,        // 500 µs
-        1_000_000,      // 1   ms
-        5_000_000,      // 5   ms
-        10_000_000,     // 10  ms
-        50_000_000,     // 50  ms
-        100_000_000,    // 100 ms
-        500_000_000,    // 500 ms
-        1_000_000_000,  // 1   s
-        5_000_000_000,  // 5   s
+        100_000,       // 100 µs
+        500_000,       // 500 µs
+        1_000_000,     // 1   ms
+        5_000_000,     // 5   ms
+        10_000_000,    // 10  ms
+        50_000_000,    // 50  ms
+        100_000_000,   // 100 ms
+        500_000_000,   // 500 ms
+        1_000_000_000, // 1   s
+        5_000_000_000, // 5   s
     ];
     pub const BUCKET_COUNT: usize = Self::BUCKETS_NS.len();
 
@@ -142,7 +139,10 @@ impl PhaseHistogram {
         }
     }
 
-    #[expect(clippy::indexing_slicing, reason = "i bounded by enumerate() over BUCKETS_NS which has same length as self.buckets")]
+    #[expect(
+        clippy::indexing_slicing,
+        reason = "i bounded by enumerate() over BUCKETS_NS which has same length as self.buckets"
+    )]
     pub fn record(&self, ns: u64) {
         for (i, upper) in Self::BUCKETS_NS.iter().enumerate() {
             if ns <= *upper {

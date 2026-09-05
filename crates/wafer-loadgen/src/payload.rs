@@ -66,12 +66,8 @@ pub enum PayloadTemplate {
 
 impl PayloadTemplate {
     /// All templates, in enumeration order. Used by tests to sweep.
-    pub const ALL: [Self; 4] = [
-        Self::Telemetry120b,
-        Self::Generic1kb,
-        Self::Generic10kb,
-        Self::Generic100kb,
-    ];
+    pub const ALL: [Self; 4] =
+        [Self::Telemetry120b, Self::Generic1kb, Self::Generic10kb, Self::Generic100kb];
 
     /// Human-readable / CLI name.
     #[must_use]
@@ -172,7 +168,10 @@ fn render_generic(tpl: PayloadTemplate, ts_ns: u64, seq: u64) -> Vec<u8> {
     let target = tpl.target_size();
     let pad = if target > base_len {
         // target > base_len guarded by the if-check
-        #[expect(clippy::arithmetic_side_effects, reason = "target > base_len checked in enclosing if")]
+        #[expect(
+            clippy::arithmetic_side_effects,
+            reason = "target > base_len checked in enclosing if"
+        )]
         let pad_len = target - base_len;
         deterministic_pad_hex(tpl.name(), pad_len)
     } else {
@@ -288,7 +287,11 @@ mod tests {
 
     #[test]
     fn generic_templates_are_valid_json() {
-        for tpl in [PayloadTemplate::Generic1kb, PayloadTemplate::Generic10kb, PayloadTemplate::Generic100kb] {
+        for tpl in [
+            PayloadTemplate::Generic1kb,
+            PayloadTemplate::Generic10kb,
+            PayloadTemplate::Generic100kb,
+        ] {
             let bytes = tpl.render(CANONICAL_TS_NS, CANONICAL_SEQ);
             let json: serde_json::Value = serde_json::from_slice(&bytes)
                 .unwrap_or_else(|e| panic!("{}: invalid JSON: {e}", tpl.name()));

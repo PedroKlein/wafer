@@ -67,12 +67,7 @@ impl RuntimeEnvelope {
             metadata: Vec::new(),
         };
 
-        Self {
-            header: Arc::new(header),
-            payload,
-            lineage: Lineage::default(),
-            retry_count: 0,
-        }
+        Self { header: Arc::new(header), payload, lineage: Lineage::default(), retry_count: 0 }
     }
 
     /// Create an envelope from a UTF-8 string payload.
@@ -84,9 +79,7 @@ impl RuntimeEnvelope {
     /// Add a metadata key-value pair (builder pattern).
     #[must_use]
     pub fn with_metadata(mut self, key: impl Into<Box<str>>, value: impl Into<Box<str>>) -> Self {
-        Arc::make_mut(&mut self.header)
-            .metadata
-            .push((key.into(), value.into()));
+        Arc::make_mut(&mut self.header).metadata.push((key.into(), value.into()));
         self
     }
 

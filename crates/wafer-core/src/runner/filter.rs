@@ -13,7 +13,9 @@ use tokio_util::sync::CancellationToken;
 use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, send_downstream};
+use crate::runner::{
+    DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, send_downstream,
+};
 
 fn recover_after_timeout(
     filter: &mut FilterNode,
@@ -53,8 +55,14 @@ fn recover_after_timeout(
 /// The Wasm call (`filter.evaluate()`) runs OUTSIDE the `select!` block.
 /// Filter borrows the envelope — no safety clone needed. If the evaluation
 /// errors, we still own the envelope and can pass it to the error policy.
-#[expect(clippy::too_many_arguments, reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics")]
-#[expect(clippy::too_many_lines, reason = "keeping the linear message and recovery state machine in one function preserves control-flow locality")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "keeping the linear message and recovery state machine in one function preserves control-flow locality"
+)]
 pub async fn run_filter_loop(
     mut filter: FilterNode,
     receiver: impl Into<TrackedReceiver>,
@@ -188,17 +196,10 @@ mod tests {
     async fn test_filter_loop_cancellation_exits_cleanly() {
         let (_input_tx, _input_rx) = mpsc::channel::<RuntimeEnvelope>(32);
         let (output_tx, _output_rx) = mpsc::channel(32);
-        let _senders = [DownstreamSender {
-            sender: output_tx,
-            port: "default".into(),
-            queue_metrics: None,
-        }];
+        let _senders =
+            [DownstreamSender { sender: output_tx, port: "default".into(), queue_metrics: None }];
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
-        let _policy = ErrorPolicyExecutor::new(
-            ResolvedErrorPolicy::default(),
-            None,
-            "test-filter",
-        );
+        let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-filter");
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());

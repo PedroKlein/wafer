@@ -91,8 +91,7 @@ impl SequenceTracker {
     /// Number of sequence positions spanned since tracking began.
     #[must_use]
     pub fn total_expected(&self) -> u64 {
-        self.first_expected
-            .map_or(0, |first| self.expected_next.saturating_sub(first))
+        self.first_expected.map_or(0, |first| self.expected_next.saturating_sub(first))
     }
 
     /// Total number of missing message slots.
@@ -176,16 +175,11 @@ impl HotSwapRecorder {
             Some(current) if current != version => {
                 // Version transition detected
                 let from = current.clone();
-                let pause_ns = self
-                    .last_v1_time_ns
-                    .map_or(0, |last| timestamp_ns.saturating_sub(last));
+                let pause_ns =
+                    self.last_v1_time_ns.map_or(0, |last| timestamp_ns.saturating_sub(last));
 
                 self.first_v2_time_ns = Some(timestamp_ns);
-                self.transitions.push(SwapTransition {
-                    from,
-                    to: version.to_owned(),
-                    pause_ns,
-                });
+                self.transitions.push(SwapTransition { from, to: version.to_owned(), pause_ns });
 
                 self.current_version = Some(version.to_owned());
                 self.last_v1_time_ns = Some(timestamp_ns);
@@ -260,12 +254,7 @@ pub struct BenchSinkConfig {
 
 impl Default for BenchSinkConfig {
     fn default() -> Self {
-        Self {
-            warmup_secs: 30,
-            track_sequences: true,
-            track_hotswap: false,
-            output_dir: None,
-        }
+        Self { warmup_secs: 30, track_sequences: true, track_hotswap: false, output_dir: None }
     }
 }
 
@@ -273,12 +262,7 @@ impl BenchSinkConfig {
     /// Create with zero warmup and sequence tracking (useful for tests).
     #[must_use]
     pub const fn for_test() -> Self {
-        Self {
-            warmup_secs: 0,
-            track_sequences: true,
-            track_hotswap: false,
-            output_dir: None,
-        }
+        Self { warmup_secs: 0, track_sequences: true, track_hotswap: false, output_dir: None }
     }
 
     /// Set output directory for auto-export on close.
@@ -356,7 +340,10 @@ impl BenchSink {
     ///
     /// Panics if the internal histogram cannot be created (compile-time constant bounds; unreachable in practice).
     #[must_use]
-    #[expect(clippy::expect_used, reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail")]
+    #[expect(
+        clippy::expect_used,
+        reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail"
+    )]
     pub fn new(config: BenchSinkConfig) -> Self {
         let sequence_tracker = if config.track_sequences {
             Some(if config.warmup_secs == 0 {
@@ -367,15 +354,12 @@ impl BenchSink {
         } else {
             None
         };
-        let hotswap_recorder = if config.track_hotswap {
-            Some(HotSwapRecorder::new())
-        } else {
-            None
-        };
+        let hotswap_recorder =
+            if config.track_hotswap { Some(HotSwapRecorder::new()) } else { None };
 
         // Range: 1µs (1000ns) to 10s (10_000_000_000ns), 3 significant digits
-        let histogram = Histogram::new_with_bounds(1_000, 10_000_000_000, 3)
-            .expect("valid histogram bounds");
+        let histogram =
+            Histogram::new_with_bounds(1_000, 10_000_000_000, 3).expect("valid histogram bounds");
 
         Self {
             id: "bench-sink".to_owned(),
@@ -488,7 +472,10 @@ impl BenchSink {
     /// # Panics
     ///
     /// Panics if in-memory histogram serialization fails (unreachable: buffers are always valid).
-    #[expect(clippy::expect_used, reason = "HdrHistogram writer/serialization operates on in-memory buffers; UTF-8 guaranteed from ASCII content")]
+    #[expect(
+        clippy::expect_used,
+        reason = "HdrHistogram writer/serialization operates on in-memory buffers; UTF-8 guaranteed from ASCII content"
+    )]
     pub fn to_hdr_log(&self) -> String {
         let mut buf = Vec::new();
         let mut serializer = V2Serializer::new();
@@ -504,15 +491,11 @@ impl BenchSink {
             .add_comment(&format!("Recorded values: {}", self.histogram.len()))
             .add_comment(&format!("Warmup: {}s", self.config.warmup_secs));
 
-        let mut log_writer = writer_builder
-            .begin_log_with(&mut buf, &mut serializer)
-            .expect("begin interval log");
+        let mut log_writer =
+            writer_builder.begin_log_with(&mut buf, &mut serializer).expect("begin interval log");
 
         // Write as a single interval spanning the full measurement
-        let duration = self.measurement_start.map_or(
-            Duration::ZERO,
-            |start| start.elapsed(),
-        );
+        let duration = self.measurement_start.map_or(Duration::ZERO, |start| start.elapsed());
 
         log_writer
             .write_histogram(
@@ -530,17 +513,16 @@ impl BenchSink {
     ///
     /// Format: `elapsed_secs,msg_count,bytes`
     /// One row per 1-second bucket.
-    #[expect(clippy::expect_used, reason = "std::fmt::Write for String is infallible — cannot panic")]
+    #[expect(
+        clippy::expect_used,
+        reason = "std::fmt::Write for String is infallible — cannot panic"
+    )]
     pub fn throughput_csv(&self) -> String {
         use std::fmt::Write as _;
         let mut csv = String::from("elapsed_secs,msg_count,bytes\n");
         for sample in &self.throughput_samples {
-            writeln!(
-                csv,
-                "{:.3},{},{}",
-                sample.elapsed_secs, sample.msg_count, sample.bytes
-            )
-            .expect("String write is infallible");
+            writeln!(csv, "{:.3},{},{}", sample.elapsed_secs, sample.msg_count, sample.bytes)
+                .expect("String write is infallible");
         }
         csv
     }
@@ -573,19 +555,23 @@ impl BenchSink {
         csv_file.write_all(csv_content.as_bytes())?;
 
         if let Some(buckets) = &self.burst_buckets {
-            let rows = buckets.iter().enumerate().map(|(index, bucket)| {
-                let start_offset_ns = u64::try_from(index)
-                    .unwrap_or(u64::MAX)
-                    .saturating_mul(BURST_BUCKET_WIDTH_NS);
-                serde_json::json!({
-                    "start_offset_ns": start_offset_ns,
-                    "end_offset_ns": start_offset_ns.saturating_add(BURST_BUCKET_WIDTH_NS),
-                    "received_unique": bucket.received_unique,
-                    "received_events": bucket.received_events,
-                    "duplicates": bucket.duplicates,
-                    "rate_msg_s": bucket.received_unique.saturating_mul(10),
+            let rows = buckets
+                .iter()
+                .enumerate()
+                .map(|(index, bucket)| {
+                    let start_offset_ns = u64::try_from(index)
+                        .unwrap_or(u64::MAX)
+                        .saturating_mul(BURST_BUCKET_WIDTH_NS);
+                    serde_json::json!({
+                        "start_offset_ns": start_offset_ns,
+                        "end_offset_ns": start_offset_ns.saturating_add(BURST_BUCKET_WIDTH_NS),
+                        "received_unique": bucket.received_unique,
+                        "received_events": bucket.received_events,
+                        "duplicates": bucket.duplicates,
+                        "rate_msg_s": bucket.received_unique.saturating_mul(10),
+                    })
                 })
-            }).collect::<Vec<_>>();
+                .collect::<Vec<_>>();
             let received_unique = buckets.iter().map(|bucket| bucket.received_unique).sum::<u64>();
             let received_events = buckets.iter().map(|bucket| bucket.received_events).sum::<u64>();
             let duplicates = buckets.iter().map(|bucket| bucket.duplicates).sum::<u64>();
@@ -608,15 +594,11 @@ impl BenchSink {
         }
 
         if let Some(started) = self.start_wall_time {
-            let started_ns = started
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, crate::util::duration_ns_saturating);
+            let started_ns =
+                started.duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating);
             let finished_ns = current_time_ns();
             let mut window_file = std::fs::File::create(dir.join("measurement-window.json"))?;
-            writeln!(
-                window_file,
-                "{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}"
-            )?;
+            writeln!(window_file, "{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}")?;
         }
 
         // Write sequence.csv when the sink was configured to track sequences.
@@ -674,11 +656,19 @@ impl BenchSink {
 
     fn record_sequence(&mut self, envelope: &RuntimeEnvelope) -> bool {
         let Some(tracker) = &mut self.sequence_tracker else { return false };
-        let Some(seq) = envelope.header.metadata.iter()
+        let Some(seq) = envelope
+            .header
+            .metadata
+            .iter()
             .find(|(key, _)| key.as_ref() == "bench.sequence")
             .and_then(|(_, value)| value.parse::<u64>().ok())
-        else { return false };
-        if let Some(start) = envelope.header.metadata.iter()
+        else {
+            return false;
+        };
+        if let Some(start) = envelope
+            .header
+            .metadata
+            .iter()
             .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
             .and_then(|(_, value)| value.parse::<u64>().ok())
         {
@@ -688,16 +678,18 @@ impl BenchSink {
     }
 
     fn record_burst_bucket(&mut self, envelope: &RuntimeEnvelope, now: Instant, duplicate: bool) {
-        let Some((_, phase)) = envelope.header.metadata.iter()
-            .find(|(key, _)| key.as_ref() == "bench.phase")
-        else { return };
+        let Some((_, phase)) =
+            envelope.header.metadata.iter().find(|(key, _)| key.as_ref() == "bench.phase")
+        else {
+            return;
+        };
         let buckets = self.burst_buckets.get_or_insert_with(|| {
             vec![BurstBucket::default(); BURST_BUCKET_COUNT].into_boxed_slice()
         });
         if let Some(start) = self.measurement_start {
             let elapsed_ns = crate::util::duration_ns_saturating(now.duration_since(start));
-            let index = usize::try_from(elapsed_ns / BURST_BUCKET_WIDTH_NS)
-                .unwrap_or(BURST_BUCKET_COUNT);
+            let index =
+                usize::try_from(elapsed_ns / BURST_BUCKET_WIDTH_NS).unwrap_or(BURST_BUCKET_COUNT);
             if let Some(bucket) = buckets.get_mut(index) {
                 bucket.received_events = bucket.received_events.saturating_add(1);
                 if duplicate {
@@ -707,7 +699,8 @@ impl BenchSink {
                 }
             }
         }
-        if let Some(count) = ["before", "burst", "after"].iter()
+        if let Some(count) = ["before", "burst", "after"]
+            .iter()
             .position(|candidate| candidate == &phase.as_ref())
             .and_then(|index| self.burst_phase_received.get_mut(index))
         {
@@ -721,8 +714,8 @@ impl BenchSink {
         let elapsed = now.duration_since(bucket_start);
 
         if elapsed >= Duration::from_secs(1) {
-            let elapsed_since_measurement = self.measurement_start
-                .map_or(0.0, |s| now.duration_since(s).as_secs_f64());
+            let elapsed_since_measurement =
+                self.measurement_start.map_or(0.0, |s| now.duration_since(s).as_secs_f64());
 
             self.throughput_samples.push(ThroughputSample {
                 elapsed_secs: elapsed_since_measurement,
@@ -740,9 +733,7 @@ impl BenchSink {
 
 /// Get current wall-clock time in nanoseconds since UNIX epoch.
 fn current_time_ns() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, crate::util::duration_ns_saturating)
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating)
 }
 
 impl Lifecycle for BenchSink {
@@ -794,7 +785,10 @@ impl Lifecycle for BenchSink {
     }
 }
 
-#[expect(clippy::let_underscore_must_use, reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling"
+)]
 impl Sink for BenchSink {
     fn collect(
         &mut self,
@@ -804,9 +798,12 @@ impl Sink for BenchSink {
         if !self.started {
             self.started = true;
             if self.config.warmup_secs > 0 {
-                #[expect(clippy::arithmetic_side_effects, reason = "Instant + Duration cannot overflow for realistic warmup values")]
-                let deadline = Instant::now()
-                    + std::time::Duration::from_secs(self.config.warmup_secs);
+                #[expect(
+                    clippy::arithmetic_side_effects,
+                    reason = "Instant + Duration cannot overflow for realistic warmup values"
+                )]
+                let deadline =
+                    Instant::now() + std::time::Duration::from_secs(self.config.warmup_secs);
                 self.warmup_until = Some(deadline);
             }
         }
@@ -866,11 +863,8 @@ impl Sink for BenchSink {
 
         // Hot-swap version tracking
         if let Some(ref mut recorder) = self.hotswap_recorder {
-            if let Some((_, version)) = envelope
-                .header
-                .metadata
-                .iter()
-                .find(|(k, _)| k.as_ref() == "plugin.version")
+            if let Some((_, version)) =
+                envelope.header.metadata.iter().find(|(k, _)| k.as_ref() == "plugin.version")
             {
                 recorder.record(version.as_ref(), current_time_ns());
             }
@@ -881,7 +875,10 @@ impl Sink for BenchSink {
 }
 
 #[cfg(test)]
-#[expect(clippy::let_underscore_must_use, reason = "test code: fire-and-forget histogram records and fs cleanup")]
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "test code: fire-and-forget histogram records and fs cleanup"
+)]
 mod tests {
     use super::*;
     use crate::queue::RuntimeEnvelope;
@@ -917,8 +914,8 @@ mod tests {
         assert_eq!(tracker.total_received(), 0);
         assert!(!tracker.has_gaps());
 
-        let tmp_dir = std::env::temp_dir()
-            .join(format!("wafer-warmup-window-{}", std::process::id()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("wafer-warmup-window-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp_dir);
         sink.export_to_dir(&tmp_dir).unwrap();
         assert!(!tmp_dir.join("measurement-window.json").exists());
@@ -1125,8 +1122,10 @@ mod tests {
 
         let recorder = sink.hotswap_recorder().expect("track_hotswap=true set on config");
         assert_eq!(recorder.transitions().len(), 1, "exactly one v1→v2 transition");
-        let last_v1 = recorder.last_v1_ns().expect("last_v1_ns must be populated after a transition");
-        let first_v2 = recorder.first_v2_ns().expect("first_v2_ns must be populated after a transition");
+        let last_v1 =
+            recorder.last_v1_ns().expect("last_v1_ns must be populated after a transition");
+        let first_v2 =
+            recorder.first_v2_ns().expect("first_v2_ns must be populated after a transition");
         assert!(
             first_v2 > last_v1,
             "first_v2_ns ({first_v2}) must strictly exceed last_v1_ns ({last_v1})"
@@ -1170,10 +1169,7 @@ mod tests {
         // Should contain required HdrHistogram interval log markers
         assert!(hdr_log.contains("#[StartTime"), "missing StartTime header");
         assert!(hdr_log.contains("#[BaseTime"), "missing BaseTime header");
-        assert!(
-            hdr_log.contains("WAFER BenchSink latency histogram"),
-            "missing comment"
-        );
+        assert!(hdr_log.contains("WAFER BenchSink latency histogram"), "missing comment");
         assert!(hdr_log.contains("Total messages: 50"), "missing total messages");
         assert!(hdr_log.contains("Recorded values: 50"), "missing recorded count");
         // Should contain at least one encoded histogram line (Tag:start:duration:...)
@@ -1222,10 +1218,7 @@ mod tests {
             sink.collect(envelope).await.unwrap();
         }
 
-        let dir = std::env::temp_dir().join(format!(
-            "wafer-burst-buckets-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("wafer-burst-buckets-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         sink.export_to_dir(&dir).unwrap();
         let value: serde_json::Value = serde_json::from_str(
@@ -1292,10 +1285,8 @@ mod tests {
         assert!(csv_path.exists(), "throughput.csv not created");
         assert!(window_path.exists(), "measurement-window.json not created");
 
-        let window: serde_json::Value = serde_json::from_str(
-            &std::fs::read_to_string(window_path).unwrap(),
-        )
-        .unwrap();
+        let window: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(window_path).unwrap()).unwrap();
         let started_ns = window["started_ns"].as_u64().unwrap();
         let finished_ns = window["finished_ns"].as_u64().unwrap();
         assert!(started_ns >= before_measurement_ns);
@@ -1317,7 +1308,8 @@ mod tests {
 
     #[tokio::test]
     async fn auto_export_on_close_with_output_dir() {
-        let tmp_dir = std::env::temp_dir().join(format!("wafer-bench-autoexport-{}", std::process::id()));
+        let tmp_dir =
+            std::env::temp_dir().join(format!("wafer-bench-autoexport-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp_dir);
 
         let config = BenchSinkConfig::for_test().with_output_dir(&tmp_dir);
@@ -1333,7 +1325,10 @@ mod tests {
         sink.close().await.unwrap();
 
         assert!(tmp_dir.join("latency.hdr").exists(), "auto-export failed: latency.hdr missing");
-        assert!(tmp_dir.join("throughput.csv").exists(), "auto-export failed: throughput.csv missing");
+        assert!(
+            tmp_dir.join("throughput.csv").exists(),
+            "auto-export failed: throughput.csv missing"
+        );
         assert!(
             tmp_dir.join("measurement-window.json").exists(),
             "auto-export failed: measurement-window.json missing"

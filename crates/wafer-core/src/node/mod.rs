@@ -10,18 +10,25 @@ mod state;
 mod traits;
 pub mod wasm;
 
-pub use router::{RouterInstance, WasmRouter};
-pub use sink::{BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink, HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition, ThroughputSample};
-pub use source::{BenchBurstSchedule, BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source, StdinSource};
 pub use native::{NativeFilter, NativeRouter, NativeTransform, ProcessNode};
+pub use router::{RouterInstance, WasmRouter};
+pub use sink::{
+    BatchStats, BenchSink, BenchSinkConfig, FileSink, HotSwapRecorder, HttpSink,
+    HttpSinkBatchConfig, MqttSink, SequenceTracker, Sink, StdoutSink, SwapTransition,
+    ThroughputSample,
+};
+pub use source::{
+    BenchBurstSchedule, BenchSource, BenchSourceConfig, FileSource, HttpSource, MqttSource, Source,
+    StdinSource,
+};
 // Re-export the runner-side TransformNode enum near the top.
 // (Full definition below in this module.)
 pub use kind::{Node, NodeKind};
 pub use metrics::{NodeMetrics, QueueMetrics};
 pub use state::{NodeStateTracker, ProcessingGuard};
 pub use traits::{
-    ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError,
-    ProcessResult, RouteOutcome, RouteResult, Router, Transform,
+    ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError, ProcessResult,
+    RouteOutcome, RouteResult, Router, Transform,
 };
 
 use crate::error::Result;
@@ -99,7 +106,6 @@ impl AnyNode {
     pub fn from_router(r: impl Router + 'static) -> Self {
         Self::Router(Box::new(r), Arc::new(NodeStateTracker::new()))
     }
-
 
     #[must_use]
     pub fn id(&self) -> &str {
