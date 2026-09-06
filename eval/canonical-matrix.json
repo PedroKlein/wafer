@@ -594,6 +594,18 @@
         "wafer",
         "native"
       ],
+      "metering_exceptions": {
+        "wafer": {
+          "policy": "explicit-fuel-and-epoch-for-present-node-categories",
+          "fuel": {
+            "transform": 10000000,
+            "filter": null,
+            "router": null
+          },
+          "epoch_deadline": 100,
+          "epoch_tick_ms": 10
+        }
+      },
       "required_outputs": [
         "latency.hdr",
         "throughput.csv",

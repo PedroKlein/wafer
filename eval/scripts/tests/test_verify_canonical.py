@@ -362,6 +362,52 @@ def test_focused_verifier_rejects_unresolved_memory_decision() -> None:
     assert "memory-retention status is not fixed" in completed.stdout
 
 
+def test_canonical_static_density_result_accepts_release_component_sizes() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = (
+            Path(tmp)
+            / "e-density-1"
+            / "rpi5-test"
+            / "release-components"
+            / "run-01-attempt-01"
+        )
+        result.mkdir(parents=True)
+        for name in (
+            "config.toml",
+            "stdout.log",
+            "binary-sizes.csv",
+            "pi-telemetry.csv",
+            "pmic-rails.csv",
+            "power-boundary.json",
+        ):
+            (result / name).write_text("fixture\n")
+        (result / "measurement-window.json").write_text(
+            '{"started_ns":100,"finished_ns":200}\n'
+        )
+        (result / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "experiment": "e-density-1",
+                    "condition": "release-components",
+                    "system": "static",
+                    "static_measurement": True,
+                    "host_tag": "rpi5",
+                    "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+                    "arch": "aarch64",
+                    "isolated_cpus": "1-3",
+                    "cpu_governors": ["performance"],
+                    "throttled": "0x0",
+                    "git_sha": "1" * 40,
+                    "git_dirty": False,
+                    "git_tags": ["rpi5-eval-v1"],
+                    "exit_codes": {"collector": 0},
+                }
+            )
+        )
+        completed = run(result)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 def test_canonical_result_accepts_complete_leaf() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         result = make_result(Path(tmp))
@@ -381,6 +427,27 @@ def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:
         completed = run(result)
     assert completed.returncode == 1
     assert "metering provenance differs" in completed.stdout
+
+def test_e_perf_5_accepts_transform_only_fuel_for_transform_only_pipeline() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = make_result(Path(tmp))
+        target = Path(tmp) / "e-perf-5" / "rpi5-2026-08-30T00-00-00Z" / "wafer" / "run-01"
+        target.parent.mkdir(parents=True)
+        result.rename(target)
+        result = target
+        metadata_path = result / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata["experiment"] = "e-perf-5"
+        metadata["condition"] = "wafer"
+        metadata["engine_fuel_budgets"] = {
+            "transform": 10_000_000,
+            "filter": None,
+            "router": None,
+        }
+        metadata_path.write_text(json.dumps(metadata))
+        completed = run(result)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
 
 def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None:
     with tempfile.TemporaryDirectory() as tmp:

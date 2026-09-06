@@ -1901,7 +1901,7 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
             total_messages=1_000,
         ),
     ),
-    "e-density-1": (Condition("release-components", ""),),
+    "e-density-1": (Condition("release-components", "", system="static"),),
 }
 
 
@@ -4218,6 +4218,97 @@ def run_rate_sweep_item(
     return True
 
 
+def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
+    output = selection.path
+    output.mkdir(parents=True, exist_ok=True)
+    print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
+    telemetry: subprocess.Popen | None = None
+    started_ns = time.monotonic_ns()
+    started_at = utc_now()
+    try:
+        (output / "config.toml").write_text(
+            '[static]\nproducer = "eval/scripts/collect-binary-sizes.sh"\n'
+        )
+        telemetry = start_pi_telemetry(root, output)
+        with (output / "stdout.log").open("wb") as log:
+            subprocess.run(
+                [str(root / "eval/scripts/collect-binary-sizes.sh"), str(output)],
+                cwd=root,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                check=True,
+            )
+        time.sleep(2)
+        stop_pi_telemetry(telemetry)
+        telemetry = None
+
+        expected_plugins = [
+            line.split("|", 1)[0]
+            for line in (root / "eval/scripts/binary-sizes.index").read_text().splitlines()
+            if line and not line.startswith("#")
+        ]
+        with (output / "binary-sizes.csv").open(newline="") as stream:
+            actual_plugins = [row["plugin"] for row in csv.DictReader(stream)]
+        if actual_plugins != expected_plugins:
+            raise RuntimeError(
+                f"binary-size population differs from index: {actual_plugins!r} != {expected_plugins!r}"
+            )
+
+        facts_path = output / "host-facts.json"
+        subprocess.run(
+            [
+                sys.executable,
+                str(root / "eval/scripts/validate-canonical.py"),
+                "host",
+                "--root",
+                str(root),
+                "--output",
+                str(facts_path),
+            ],
+            cwd=root,
+            check=True,
+        )
+        facts = json.loads(facts_path.read_text())
+        finished_ns = time.monotonic_ns()
+        (output / "measurement-window.json").write_text(
+            json.dumps({"started_ns": started_ns, "finished_ns": finished_ns}, indent=2)
+            + "\n"
+        )
+        metadata = {
+            "experiment": item.experiment,
+            "condition": item.condition,
+            "system": item.system,
+            "run_index": item.run_index,
+            "static_measurement": True,
+            "host_tag": "rpi5",
+            "generated_at": utc_now(),
+            "started_at": started_at,
+            "duration_ns": finished_ns - started_ns,
+            "git_sha": facts["git_sha"],
+            "git_dirty": facts["git_dirty"],
+            "git_tags": facts["git_tags"],
+            "hardware_model": facts["hardware_model"],
+            "arch": facts["arch"],
+            "isolated_cpus": facts["isolated_cpus"],
+            "cpu_governors": facts["cpu_governors"],
+            "throttled": facts["throttled"],
+            "exit_codes": {"collector": 0},
+            "plugin_count": len(actual_plugins),
+            "thesis_evidence": True,
+        }
+        (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
+        postprocess_run(root, item, output)
+        verify_result(root, output)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        stop_pi_telemetry(telemetry)
+        write_status(output, item, "failed", str(error))
+        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
+        return False
+    write_status(output, item, "passed")
+    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
+    return True
+
+
 def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
     condition_dir = (
         root
@@ -4245,6 +4336,8 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
 
     if item.experiment in {"e-perf-10", "capacity-scout"}:
         return run_rate_sweep_item(root, item, selection)
+    if item.experiment == "e-density-1":
+        return run_density_item(root, item, selection)
     if item.experiment in {"e-swap-1", "e-swap-4", "e-swap-5"}:
         return run_hot_swap_item(root, item, selection)
     if item.experiment == "e-swap-3":

@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+result="$ROOT/eval/results/e-val-1/rpi5-validation-$(date -u +%Y-%m-%dT%H-%M-%SZ)"
 dry_run=0
 
 if [ "${1:-}" = "--dry-run" ]; then
@@ -19,6 +20,7 @@ command=(
     --duration 45
     --broker 127.0.0.1:1883
     --skip-build
+    --output-dir "$result"
 )
 
 if [ "$dry_run" -eq 1 ]; then
@@ -30,8 +32,7 @@ fi
 
 "$ROOT/eval/scripts/preflight-pi5.sh"
 WAFER_RUNTIME_CPUSET=1-3 WAFER_LOADGEN_CPUSET=0 "${command[@]}"
-result="$(find "$ROOT/eval/results/e-val-1" -mindepth 1 -maxdepth 1 -type d -name 'rpi5-*' | sort | tail -1)"
-[ -n "$result" ] || { echo "error: validation result directory was not created" >&2; exit 1; }
+[ -d "$result" ] || { echo "error: validation result directory was not created" >&2; exit 1; }
 
 "$ROOT/target/release/wafer-loadgen" hdr-summary \
     --hdr "$result/latency.hdr" \

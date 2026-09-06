@@ -354,6 +354,14 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign must exclude diagnostic batches")
 
     expected_metering_exceptions = {
+        "e-perf-5": {
+            "wafer": {
+                "policy": "explicit-fuel-and-epoch-for-present-node-categories",
+                "fuel": {"transform": 10_000_000, "filter": None, "router": None},
+                "epoch_deadline": 100,
+                "epoch_tick_ms": 10,
+            }
+        },
         "e-iso-4": {
             "infinite-loop": {
                 "type": "epoch-containment-stimulus",

@@ -13,6 +13,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
+import canonical_runner as runner  # noqa: E402
 from canonical_runner import (  # noqa: E402
     analyze_backpressure,
     analyze_capacity_scout_summary,
@@ -86,6 +87,44 @@ T4_EXPERIMENTS = {
     *(f"e-iso-{index}" for index in range(1, 9)),
     *(f"e-swap-{index}" for index in range(1, 7)),
 }
+
+
+def test_validation_dry_run_uses_a_dedicated_result_directory() -> None:
+    completed = subprocess.run(
+        [str(ROOT / "eval/scripts/run-rpi5-validation.sh"), "--dry-run"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "--output-dir" in completed.stdout
+    assert "eval/results/e-val-1/rpi5-validation-" in completed.stdout
+
+
+def test_density_dispatches_static_collector_before_generic_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    item = RunItem(
+        experiment="e-density-1",
+        condition="release-components",
+        run_index=1,
+        config="",
+        warmup_secs=0,
+        measurement_secs=0,
+        system="static",
+    )
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "run_density_item",
+        lambda root, candidate, selection: observed.append((root, candidate, selection)) or True,
+        raising=False,
+    )
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert len(observed) == 1
 
 
 def test_schedule_covers_performance_matrix() -> None:

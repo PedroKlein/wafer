@@ -1214,7 +1214,7 @@ def check_leaf(
             with meta_path.open() as fh:
                 metadata = json.load(fh)
             missing = [k for k in MERGED_PROVENANCE_KEYS if k not in metadata]
-            if missing and metadata.get("system") not in {"ekuiper", "mqtt-loopback"}:
+            if missing and metadata.get("system") not in {"ekuiper", "mqtt-loopback", "static"}:
                 message = (
                     f"metadata.json lacks merged provenance keys: {sorted(missing)} "
                     f"(legacy shakedown script; canonical runs source "
@@ -1251,6 +1251,9 @@ def check_leaf(
                 elif metadata.get("system") == "mqtt-loopback":
                     if exit_codes.get("publisher") != 0 or exit_codes.get("subscriber") != 0:
                         violations.append("Pi 5 metadata records a non-zero loopback loadgen exit")
+                elif metadata.get("system") == "static":
+                    if exit_codes.get("collector") != 0:
+                        violations.append("Pi 5 metadata records a non-zero static collector exit")
                 elif exit_codes.get("wafer_runtime") != 0:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
                 if experiment == "e-perf-10":
@@ -1275,7 +1278,7 @@ def check_leaf(
                     if not isinstance(tags, list) or not tags:
                         violations.append("canonical result lacks tagged source provenance")
                     if (
-                        metadata.get("system") not in {"ekuiper", "mqtt-loopback"}
+                        metadata.get("system") not in {"ekuiper", "mqtt-loopback", "static"}
                         and "runtime-provenance.json" not in files
                     ):
                         violations.append("missing canonical runtime provenance: runtime-provenance.json")
