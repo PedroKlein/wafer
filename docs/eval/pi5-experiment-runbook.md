@@ -165,13 +165,13 @@ A threshold miss by a valid SUT run is data, not a reason to tune the threshold 
 
 ## Move the single evidence volume between hosts
 
-V5 raw evidence has one physical copy on the exFAT volume labeled `WAFER_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAFER_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
+V6 raw evidence has one physical copy on the exFAT volume labeled `WAF_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAF_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
 
 On the Pi, create the SHA-256 manifest under `manifests/` from volume-root-relative raw paths. Verify it on the Pi before handoff. Then stop every writer, run `sync`, and unmount the volume cleanly. Do not unplug a mounted or busy volume.
 
 After physically moving the drive, mount the same filesystem on macOS and confirm its UUID and label. Verify the same manifest in place before analysis reads any file. Repeat checksum verification after every host transition, including a return to Pi or a later Jetson check. A failed checksum, unexpected file, missing file, stale mount, or unclean unmount blocks use of the evidence.
 
-Raw evidence is append-only and retains failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. Do not use `rsync`, Finder, hardlinks, symlinks, or another disk to create a second raw copy. Receipts and content-free manifests may be committed to the repository; raw artifacts remain on `WAFER_RESULTS`.
+Raw evidence is append-only and retains failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. Do not use `rsync`, Finder, hardlinks, symlinks, or another disk to create a second raw copy. Receipts and content-free manifests may be committed to the repository; raw artifacts remain on `WAF_RESULTS`.
 
 ## Verify contracts
 

@@ -111,7 +111,7 @@ ENHANCED_METHOD_REQUIREMENTS = {
         "no threshold waiver",
     ),
     "docs/eval/pi5-host-setup.md": (
-        "one physical exFAT filesystem labeled `WAFER_RESULTS`",
+        "one physical exFAT filesystem labeled `WAF_RESULTS`",
         "paths relative to this volume root",
         "verify the complete SHA-256 manifest",
         "run `sync`, and unmount it cleanly",

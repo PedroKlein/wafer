@@ -31,6 +31,24 @@ def test_enhanced_architecture_is_complete_and_candidate_only() -> None:
     assert "7 candidate experiments" in result.stdout
 
 
+def test_exfat_volume_label_fits_format_limit() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    storage = matrix["enhanced_candidate"]["storage"]
+    label = storage["volume_label"]
+    assert len(label.encode("utf-16-le")) // 2 <= 11, (
+        "exFAT volume labels are limited to 11 UTF-16 code units"
+    )
+    assert storage["mount_paths"]["macos"] == f"/Volumes/{label}"
+
+    matrix["enhanced_candidate"]["storage"]["volume_label"] = "WAFER_RESULTS"
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        path.write_text(json.dumps(matrix))
+        result = run_validator(matrix=path)
+    assert result.returncode == 1
+    assert "exFAT volume label exceeds 11 UTF-16 code units" in result.stderr
+
+
 def test_enhanced_architecture_rejects_missing_capability_and_final_promotion() -> None:
     matrix = json.loads(MATRIX.read_text())
     mutations = (

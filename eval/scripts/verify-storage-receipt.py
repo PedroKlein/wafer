@@ -100,8 +100,8 @@ def validate_facts(
         fail("stable device identifier differs from the approved device")
     if not expected_uuid or facts.get("uuid") != expected_uuid:
         fail("filesystem UUID differs from the approved volume")
-    if facts.get("label") != "WAFER_RESULTS":
-        fail("volume label must be WAFER_RESULTS")
+    if facts.get("label") != "WAF_RESULTS":
+        fail("volume label must be WAF_RESULTS")
     if str(facts.get("filesystem", "")).lower() != "exfat":
         fail("filesystem type must be exFAT")
     options = facts.get("mount_options")
@@ -523,7 +523,7 @@ def facts(args: argparse.Namespace) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(description="Non-destructive WAFER_RESULTS qualification")
+    root = argparse.ArgumentParser(description="Non-destructive WAF_RESULTS qualification")
     subparsers = root.add_subparsers(dest="command", required=True)
 
     facts_parser = subparsers.add_parser("facts")

@@ -19,10 +19,13 @@
   },
   "enhanced_candidate": {
     "schema_version": 1,
-    "id": "rpi5-v5-enhanced-candidate",
+    "id": "rpi5-v6-enhanced-candidate",
     "status": "architecture-frozen-before-n5",
-    "release_lineage": "v5",
+    "release_lineage": "v6",
     "signed_v4_immutable": true,
+    "signed_v5_immutable": true,
+    "supersedes_release_tag": "rpi5-final-rc-v5",
+    "supersession_reason": "v5 storage label exceeds the exFAT 11 UTF-16 code-unit limit",
     "thesis_evidence": false,
     "campaign_started": false,
     "n30_admitted": false,
@@ -478,11 +481,11 @@
     },
     "storage": {
       "filesystem": "exFAT",
-      "volume_label": "WAFER_RESULTS",
+      "volume_label": "WAF_RESULTS",
       "physical_raw_copies": 1,
       "mount_paths": {
         "pi_jetson": "/mnt/wafer-results",
-        "macos": "/Volumes/WAFER_RESULTS"
+        "macos": "/Volumes/WAF_RESULTS"
       },
       "manifest_paths": "volume-root-relative",
       "directories": [

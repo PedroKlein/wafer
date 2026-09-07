@@ -55,7 +55,7 @@ CONTRACT_PHRASES = (
     "no cross-architecture claim is made",
     "mandatory per-message traces remain forbidden",
     "/mnt/wafer-results",
-    "/Volumes/WAFER_RESULTS",
+    "/Volumes/WAF_RESULTS",
     "append-only",
 )
 
@@ -76,8 +76,15 @@ def validate(matrix: dict, decision: dict, contract: str) -> list[str]:
     if not isinstance(enhanced, dict):
         return ["enhanced_candidate must be an object"]
 
-    if enhanced.get("release_lineage") != "v5" or enhanced.get("signed_v4_immutable") is not True:
-        errors.append("enhanced architecture must preserve signed v4 and use the v5 lineage")
+    if (
+        enhanced.get("release_lineage") != "v6"
+        or enhanced.get("signed_v4_immutable") is not True
+        or enhanced.get("signed_v5_immutable") is not True
+        or enhanced.get("supersedes_release_tag") != "rpi5-final-rc-v5"
+        or enhanced.get("supersession_reason")
+        != "v5 storage label exceeds the exFAT 11 UTF-16 code-unit limit"
+    ):
+        errors.append("enhanced architecture must preserve v4/v5 and use the corrective v6 lineage")
     if enhanced.get("thesis_evidence") is not False or enhanced.get("n30_admitted") is not False or enhanced.get("campaign_started") is not False:
         errors.append("enhanced candidate suite must remain diagnostic and outside N=30")
     if enhanced.get("selection_receipt_required") != ".plans/rpi5-v5-enhanced-experiment-readiness/n30-selection.json":
@@ -356,13 +363,16 @@ def validate(matrix: dict, decision: dict, contract: str) -> list[str]:
     if deferred.get("external_total_input_power") != "deferred" or deferred.get("pmic_measurement_boundary") != "internal-rail-proxy":
         errors.append("PMIC measurement boundary must remain internal-rail-proxy")
     storage = enhanced.get("storage", {})
+    volume_label = storage.get("volume_label")
+    if not isinstance(volume_label, str) or len(volume_label.encode("utf-16-le")) // 2 > 11:
+        errors.append("exFAT volume label exceeds 11 UTF-16 code units")
     if {key: storage.get(key) for key in ("filesystem", "volume_label", "physical_raw_copies", "manifest_paths", "directories", "analysis_write_roots")} != {
-        "filesystem": "exFAT", "volume_label": "WAFER_RESULTS", "physical_raw_copies": 1,
+        "filesystem": "exFAT", "volume_label": "WAF_RESULTS", "physical_raw_copies": 1,
         "manifest_paths": "volume-root-relative", "directories": ["raw", "manifests", "derived", "reports"],
         "analysis_write_roots": ["derived", "reports"],
     } or "append-only" not in str(storage.get("raw_policy", "")) or "never duplicate" not in str(storage.get("raw_policy", "")):
         errors.append("single-copy storage policy differs from the frozen contract")
-    if storage.get("mount_paths") != {"pi_jetson": "/mnt/wafer-results", "macos": "/Volumes/WAFER_RESULTS"}:
+    if storage.get("mount_paths") != {"pi_jetson": "/mnt/wafer-results", "macos": "/Volumes/WAF_RESULTS"}:
         errors.append("storage mount paths differ from the frozen contract")
 
     if decision.get("source_of_truth") != "eval/canonical-matrix.json#enhanced_candidate":

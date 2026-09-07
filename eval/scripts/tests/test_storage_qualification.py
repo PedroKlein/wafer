@@ -31,7 +31,7 @@ def write_facts(
     *,
     device_id: str = "by-id:usb-Kingston_fixture",
     uuid: str = "ABCD-1234",
-    label: str = "WAFER_RESULTS",
+    label: str = "WAF_RESULTS",
     filesystem: str = "exfat",
     mount_path: Path | None = None,
     options: list[str] | None = None,
@@ -134,7 +134,7 @@ def test_prepare_writes_bounded_corpus_manifest_and_receipt(tmp_path: Path) -> N
         "by-id:usb-Kingston_fixture"
     ]
     assert receipt["filesystem"]["uuid"] == "ABCD-1234"
-    assert receipt["filesystem"]["label"] == "WAFER_RESULTS"
+    assert receipt["filesystem"]["label"] == "WAF_RESULTS"
     assert receipt["filesystem"]["type"] == "exfat"
     assert receipt["mount"]["path"] == str(volume)
     assert receipt["mount"]["read_write"] is True
@@ -368,7 +368,7 @@ def test_linux_facts_uses_injected_platform_commands(tmp_path: Path) -> None:
                 {
                     "path": str(source),
                     "uuid": "ABCD-1234",
-                    "label": "WAFER_RESULTS",
+                    "label": "WAF_RESULTS",
                     "fstype": "exfat",
                 }
             ]
@@ -394,7 +394,7 @@ def test_linux_facts_uses_injected_platform_commands(tmp_path: Path) -> None:
     value = json.loads(completed.stdout)
     assert value["stable_device_ids"] == ["by-id:usb-Kingston_fixture-part1"]
     assert value["uuid"] == "ABCD-1234"
-    assert value["label"] == "WAFER_RESULTS"
+    assert value["label"] == "WAF_RESULTS"
     assert value["filesystem"] == "exfat"
     assert value["mount_options"] == ["rw", "nosuid", "nodev"]
     assert value["mount_id"] == "41"

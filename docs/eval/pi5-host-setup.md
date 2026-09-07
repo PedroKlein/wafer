@@ -146,7 +146,7 @@ vcgencmd get_throttled
 
 ## 9. Mount the single results volume
 
-Enhanced v5 evidence uses one physical exFAT filesystem labeled `WAFER_RESULTS`. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAFER_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
+Enhanced v6 evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
 
 Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
@@ -216,18 +216,18 @@ admission blocked. The script's fixture mode is for local contract tests only;
 its receipts set `execution_mode=fixture-synthetic` and can never grant either
 admission gate.
 
-For a macOS handoff, eject the volume on the Pi and mount it at `/Volumes/WAFER_RESULTS`. The facts receipt binds the macOS disk identifier plus the same exFAT UUID and label; it does not reuse a Linux `/dev/disk/by-id` path:
+For a macOS handoff, eject the volume on the Pi and mount it at `/Volumes/WAF_RESULTS`. The facts receipt binds the macOS disk identifier plus the same exFAT UUID and label; it does not reuse a Linux `/dev/disk/by-id` path:
 
 ```sh
 ./eval/scripts/qualify-results-storage.sh facts \
-  --results-root /Volumes/WAFER_RESULTS \
+  --results-root /Volumes/WAF_RESULTS \
   > /tmp/wafer-results-macos.json
 ./eval/scripts/qualify-results-storage.sh handoff \
-  --results-root /Volumes/WAFER_RESULTS \
+  --results-root /Volumes/WAF_RESULTS \
   --facts-json /tmp/wafer-results-macos.json \
-  --verified-receipt /Volumes/WAFER_RESULTS/manifests/storage-qualification/<id>/verified.json \
-  --manifest /Volumes/WAFER_RESULTS/manifests/expanded-n5.sha256 \
-  --analysis-output /Volumes/WAFER_RESULTS/derived/expanded-n5 \
+  --verified-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/verified.json \
+  --manifest /Volumes/WAF_RESULTS/manifests/expanded-n5.sha256 \
+  --analysis-output /Volumes/WAF_RESULTS/derived/expanded-n5 \
   --host macos
 ```
 
@@ -242,7 +242,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v5 campaign storage path.
+Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v6 campaign storage path.
 
 ## Final checklist
 
@@ -256,7 +256,7 @@ These commands must succeed before longer test runs:
 systemctl is-active --quiet mosquitto kuiper
 findmnt /mnt/wafer-results
 [ "$(findmnt -n -o FSTYPE /mnt/wafer-results)" = exfat ]
-[ "$(lsblk -no LABEL "$(findmnt -n -o SOURCE /mnt/wafer-results)")" = WAFER_RESULTS ]
+[ "$(lsblk -no LABEL "$(findmnt -n -o SOURCE /mnt/wafer-results)")" = WAF_RESULTS ]
 ./eval/scripts/preflight-pi5.sh
 ```
 

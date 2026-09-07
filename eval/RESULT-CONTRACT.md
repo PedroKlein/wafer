@@ -2,7 +2,7 @@
 
 Every WAFER experiment run produces one self-contained raw leaf beneath the
 selected results layout. Repository-local tests use
-`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; v5 campaign runs use
+`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; v6 campaign runs use
 `<results-root>/raw/<experiment-id>/<host-tag>-<batch-id>/...`. This document is
 the authoritative manifest for both layouts.
 
@@ -37,7 +37,7 @@ eval/results/
         └── branch-b/                   ← E-Iso-7 only; same branch-local files
 ```
 
-Prospective v5 runs pass an explicit results root. The approved volume layout is:
+Prospective v6 runs pass an explicit results root. The approved volume layout is:
 
 ```
 <results-root>/
@@ -50,7 +50,7 @@ Prospective v5 runs pass an explicit results root. The approved volume layout is
 
 The runner accepts `--results-root PATH` or `WAFER_RESULTS_ROOT`; a CLI value wins.
 No platform path is inferred. `/mnt/wafer-results` on Pi/Jetson and
-`/Volumes/WAFER_RESULTS` on macOS are documented operator mount paths. An explicit
+`/Volumes/WAF_RESULTS` on macOS are documented operator mount paths. An explicit
 root must already exist and be a mounted filesystem before the runner creates any
 managed directory. Paths containing spaces are supported. Stored paths are relative
 to the volume root.
@@ -205,11 +205,13 @@ Final E-Swap-4 uses a source-driven 1,000→2,000→1,000 msg/s schedule over me
 
 Final E-Density-1 is a static source-bound measurement. The canonical runner invokes `eval/scripts/collect-binary-sizes.sh` instead of `run-experiment.sh`, requires one `binary-sizes.csv` row for every non-comment entry in `eval/scripts/binary-sizes.index`, and records Pi host, tag, governor, throttling, telemetry, and measurement-window evidence. Its metadata uses `system = "static"` and `exit_codes.collector = 0`; runtime/Wasmtime provenance is intentionally inapplicable because no WAFER runtime process executes.
 
-### v5 enhanced candidate contract
+### v6 enhanced candidate contract
 
-The signed v4 final campaign remains immutable. Enhanced work uses the separate
-`enhanced_candidate` object in `eval/canonical-matrix.json` and the v5 release
-lineage. It does not modify or supersede the existing primary estimands.
+The signed v4 final campaign remains immutable. The signed v5 candidate is retained
+as a rejected pre-format artifact because its volume label exceeds exFAT's 11
+UTF-16 code-unit limit. Enhanced work uses the separate `enhanced_candidate` object
+in `eval/canonical-matrix.json` and the corrective v6 release lineage. It does not
+modify or supersede the existing primary estimands.
 
 Every enhanced experiment is either `candidate-supplementary` or diagnostic,
 sets `thesis_evidence=false` and `n30_admitted=false`, and remains outside the
@@ -408,16 +410,17 @@ no waiver from throttle, temperature, reboot, or I/O gates.
 
 #### Single-volume evidence storage
 
-Prospective v5 evidence uses one physical exFAT volume labeled
-`WAFER_RESULTS`, mounted at `/mnt/wafer-results` on Pi/Jetson and
-`/Volumes/WAFER_RESULTS` on macOS. Manifests store volume-root-relative paths.
+Prospective v6 evidence uses one physical exFAT volume labeled
+`WAF_RESULTS`, an 11-code-unit label that the filesystem can represent. It is
+mounted at `/mnt/wafer-results` on Pi/Jetson and `/Volumes/WAF_RESULTS` on macOS.
+Manifests store volume-root-relative paths.
 The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Raw
 artifacts are append-only, retain failed and interrupted attempts, and are never
 duplicated during host transfer. Analysis opens raw inputs read-only and writes
 only under `derived/` and `reports/`.
 
 Storage qualification is a staged, non-destructive gate. `prepared.json` binds
-one stable device identifier, UUID, `WAFER_RESULTS` label, exFAT type, exact mount
+one stable device identifier, UUID, `WAF_RESULTS` label, exFAT type, exact mount
 path, mount options, read-write state, available bytes, path-device identity, and
 a bounded large-file/many-small-file corpus manifest. The operator then stops
 writers, synchronizes, safely unmounts, and remounts the physical volume. A fresh
