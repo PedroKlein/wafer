@@ -113,6 +113,7 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
         trace_file: Some(received_trace.clone()),
         sequence_example_limit: None,
         sequence_end_exclusive: Some(TOTAL_MESSAGES),
+        measurement_secs: 2,
         publisher_timing_receipt: None,
         action_timing_receipt: None,
     };
@@ -226,6 +227,20 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     // Latency should be positive (broker adds ≥ a few µs). Zero would indicate
     // that intended_publish_ns == receive_ns i.e. broken measurement.
     assert!(meta.latency_p50_ns > 0, "p50 must be > 0 for real traffic");
+    let intervals: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(output_dir.join("interval-latency.json"))?)?;
+    assert_eq!(intervals["interval_clock"], "monotonic-elapsed");
+    assert_eq!(intervals["alignment_clock"], "unix-epoch");
+    assert_eq!(intervals["maximum_rows"], 4);
+    assert_eq!(
+        intervals["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["latency_count"].as_u64().unwrap())
+            .sum::<u64>(),
+        TOTAL_MESSAGES,
+    );
 
     // sequence.csv is header-only when zero gaps/dups.
     let csv = std::fs::read_to_string(output_dir.join("sequence.csv"))?;

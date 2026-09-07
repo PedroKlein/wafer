@@ -41,6 +41,8 @@ async fn memory_sampler_shutdown_flushes() {
         "expected >=2 samples after 2.5s at 1Hz, got {}",
         guard.samples().len()
     );
+    assert!(guard.start_unix_epoch_ns().is_some());
+    assert!(guard.samples().last().unwrap().0 >= 2_000);
 
     // Verify CSV output is well-formed
     let csv = guard.to_csv();

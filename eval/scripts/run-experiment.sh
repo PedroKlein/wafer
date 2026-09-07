@@ -52,6 +52,7 @@ Common options:
   --total-messages <N>       Subscriber completion count. Defaults to run-until-signal.
   --warmup-secs <secs>       MQTT warmup publisher duration before measurement.
   --duration <secs>          Hard cap on measured runtime duration. Default: 300.
+  --measurement-secs <secs>  Declared post-warmup measurement window. Defaults to --duration.
   --startup-cache-state <state>
                              Required for E-Perf-9: cold or warm filesystem cache.
   --output-dir <path>        Exact result leaf. Must not already exist.
@@ -79,6 +80,7 @@ subscribe_topic=""
 total_messages=""
 warmup_secs=0
 duration=300
+measurement_secs=""
 startup_cache_state=""
 output_dir=""
 broker="${WAFER_HARNESS_MQTT:-}"
@@ -98,6 +100,7 @@ while [ $# -gt 0 ]; do
         --total-messages)    total_messages="${2:?}"; shift 2 ;;
         --warmup-secs)       warmup_secs="${2:?}"; shift 2 ;;
         --duration)          duration="${2:?}"; shift 2 ;;
+        --measurement-secs)  measurement_secs="${2:?}"; shift 2 ;;
         --startup-cache-state) startup_cache_state="${2:?}"; shift 2 ;;
         --output-dir)        output_dir="${2:?}"; shift 2 ;;
         --broker)            broker="${2:?}"; shift 2 ;;
@@ -114,6 +117,7 @@ done
 [ -n "$config" ]     || { printf 'ERROR: --config is required\n' >&2; usage >&2; exit 2; }
 [ -n "$experiment" ] || { printf 'ERROR: --experiment is required\n' >&2; usage >&2; exit 2; }
 [ -f "$config" ]     || { printf 'ERROR: config not found: %s\n' "$config" >&2; exit 2; }
+[ -n "$measurement_secs" ] || measurement_secs="$duration"
 if [ "$experiment" = "e-perf-9" ]; then
     case "$startup_cache_state" in
         cold|warm) ;;
@@ -216,8 +220,12 @@ import json
 import sys
 
 matrix = json.load(open(sys.argv[1]))
-if sys.argv[2] not in matrix["experiments"]:
-    raise SystemExit(f"experiment {sys.argv[2]!r} is absent from canonical matrix")
+experiment = sys.argv[2]
+if (
+    experiment not in matrix["experiments"]
+    and experiment not in matrix.get("enhanced_candidate", {}).get("experiments", {})
+):
+    raise SystemExit(f"experiment {experiment!r} is absent from canonical matrix")
 PY
     if [ "$has_mqtt_source" -eq 1 ] || [ "$has_mqtt_sink" -eq 1 ]; then
         [ -n "$broker" ] || {
@@ -276,6 +284,7 @@ if [ "$dry_run" -eq 1 ]; then
     _log "  subscribe_topic  = ${subscribe_topic:-<none>}"
     _log "  broker           = ${broker:-<auto-mosquitto>}"
     _log "  duration_secs    = $duration"
+    _log "  measurement_secs = $measurement_secs"
     _log "  warmup_secs      = $warmup_secs"
     _log "  startup_cache    = ${startup_cache_state:-<none>}"
     exit 0
@@ -300,6 +309,7 @@ CONFIG_SHA256="$(_sha256 "$config")"
 
 # BenchSink writes latency.hdr + throughput.csv into this env-driven dir.
 export WAFER_BENCH_OUTPUT_DIR="$OUT_DIR"
+export WAFER_MEASUREMENT_SECS="$measurement_secs"
 if [ "$experiment" = "e-backpressure" ]; then
     export WAFER_QUEUE_DEPTH_OUTPUT="$OUT_DIR/queue-depth.csv"
 else
@@ -498,7 +508,8 @@ _stop_loadgen() {
 if [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     _log "launching wafer-loadgen subscribe topic=$subscribe_topic"
     sub_args=(subscribe --broker "$broker" --topic "$subscribe_topic" \
-              --output-dir "$OUT_DIR" --host-tag "$host")
+              --output-dir "$OUT_DIR" --host-tag "$host" \
+              --measurement-secs "$measurement_secs")
     [ -n "$total_messages" ] && sub_args+=(--total-messages "$total_messages")
     loadgen_cmd=("$WAFER_LOADGEN_BIN" "${sub_args[@]}")
     if [ -n "${WAFER_LOADGEN_CPUSET:-}" ]; then
@@ -677,6 +688,14 @@ metadata["power_measurement"] = boundary
 with open(metadata_path, "w") as stream:
     json.dump(metadata, stream, indent=2)
 PY
+fi
+
+if [ "$defer_verification" -eq 0 ]; then
+    if [ "$canonical" -eq 1 ]; then
+        python3 "$REPO_ROOT/eval/scripts/lib/interval_metrics.py" --required "$OUT_DIR"
+    else
+        python3 "$REPO_ROOT/eval/scripts/lib/interval_metrics.py" "$OUT_DIR"
+    fi
 fi
 
 if [ "$canonical" -eq 1 ] && [ "$defer_verification" -eq 0 ]; then

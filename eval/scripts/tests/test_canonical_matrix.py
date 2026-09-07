@@ -167,7 +167,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "wafer-restart",
         "ekuiper-restart",
     ]
+    assert "throughput-buckets-10ms.json" in matrix["experiments"]["e-swap-3"][
+        "required_outputs"
+    ]
     burst = matrix["experiments"]["e-swap-4"]
+    assert "throughput-buckets-10ms.json" in burst["required_outputs"]
     assert burst["sample_unit"] == "run"
     assert burst["repetitions"] == 30
     assert "events_per_run" not in burst
@@ -200,6 +204,89 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         definition["thesis_evidence"] is True
         for definition in matrix["experiments"].values()
     )
+
+
+def test_independent_swap_and_rollback_candidate_contracts_are_frozen() -> None:
+    experiments = json.loads(MATRIX.read_text())["enhanced_candidate"]["experiments"]
+    swaps = experiments["e-swap-independent-sessions"]
+    rollbacks = experiments["e-swap-rollback-sessions"]
+
+    common = {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "repetitions": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "warmup_secs": 30,
+        "rate_msg_s": 1_000,
+        "payload_bytes": 128,
+        "ordering": {"method": "seeded run order", "default_seed": 1729},
+    }
+    assert {key: swaps[key] for key in common} == common
+    assert {key: rollbacks[key] for key in common} == common
+    assert swaps["conditions"] == ["steady"]
+    assert swaps["measurement_secs"] == 120
+    assert swaps["no_pool_with"] == [
+        "e-swap-1",
+        "e-swap-2",
+        "e-swap-6",
+        "prior diagnostic rehearsals",
+    ]
+    assert rollbacks["conditions"] == ["process-trap-rollback"]
+    assert rollbacks["measurement_secs"] == 300
+    assert rollbacks["no_pool_with"] == ["e-swap-5", "prior diagnostic rehearsals"]
+    assert "throughput-buckets-10ms.json" not in swaps["required_outputs"]
+    assert "throughput-buckets-10ms.json" not in rollbacks["required_outputs"]
+    assert "swap_timeline.json" not in rollbacks["required_outputs"]
+
+
+def test_capacity_knee_candidate_contract_and_profile_are_frozen() -> None:
+    candidate = json.loads(MATRIX.read_text())["enhanced_candidate"]["experiments"][
+        "e-perf-capacity-knee"
+    ]
+    profile = tomllib.loads((ROOT / candidate["loadgen_profile"]).read_text())
+    expected_grid = {
+        "mqtt-loopback": [*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000],
+        "native": list(range(8_000, 16_000, 1_000)),
+        "wafer": list(range(8_000, 16_000, 1_000)),
+        "ekuiper": list(range(4_000, 9_000, 1_000)),
+    }
+
+    assert candidate["condition_grid_msg_s"] == expected_grid
+    assert candidate["repetitions"] == 5
+    assert candidate["warmup_secs"] == 30
+    assert candidate["measurement_secs"] == 60
+    assert candidate["thesis_evidence"] is False
+    assert candidate["n30_admitted"] is False
+    assert candidate["ordering"] == {
+        "method": "seeded rate blocks with five-run balanced system order",
+        "default_seed": 1729,
+        "cooldown_secs": 60,
+    }
+    assert candidate["delivery_good"] == {
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_loss_percent": 1.0,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_achieved_ratio": 0.99,
+        "duplicates_allowed": 0,
+        "support_path_censoring": "mqtt-loopback",
+    }
+    assert profile["sweep"] == {
+        "repetitions": 5,
+        "ordering": "seeded rate blocks with five-run balanced system order",
+        "cooldown_secs": 60,
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_loss_percent": 1.0,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_achieved_ratio": 0.99,
+        "duplicates_allowed": 0,
+        "support_path_censoring": "mqtt-loopback",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+    }
+    assert profile["condition_grid_msg_s"] == expected_grid
 
 
 def test_final_matrix_rejects_capacity_or_burst_drift() -> None:

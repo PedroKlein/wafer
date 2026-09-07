@@ -19,7 +19,10 @@ from canonical_runner import (  # noqa: E402
     analyze_capacity_scout_summary,
     analyze_swap3_disruption,
     analyze_rate_sweep_traces,
+    estimate_candidate_capacity_envelope,
     estimate_capacity_envelope,
+    apply_capacity_knee_cooldown,
+    build_capacity_knee_schedule,
     build_capacity_scout_invocation,
     build_capacity_scout_rate_block,
     build_swap3_invocation,
@@ -50,12 +53,14 @@ from canonical_runner import (  # noqa: E402
     RunItem,
     select_attempt,
     summarize_branch_isolation,
+    summarize_capacity_knee,
     summarize_process_resources,
     summarize_swap4_runs,
     summarize_rate_sweep,
     summarize_recovery,
     validate_backpressure_result,
     validate_capacity_scout_decision_replay,
+    validate_candidate_capacity_run_result,
     validate_capacity_run_result,
     validate_capacity_scout_result,
     verify_capacity_result_files,
@@ -64,6 +69,7 @@ from canonical_runner import (  # noqa: E402
     write_capacity_scout_progress,
     write_capacity_result,
     write_capacity_scout_result,
+    validate_fine_event_buckets,
     validate_focused_freeze,
     validate_rate_sweep_result,
     validate_startup_artifact,
@@ -102,6 +108,21 @@ def test_validation_dry_run_uses_a_dedicated_result_directory() -> None:
     assert "eval/results/e-val-1/rpi5-validation-" in completed.stdout
 
 
+def test_capacity_knee_dispatches_bounded_rate_sweep_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    item = build_capacity_knee_schedule(seed=1729)[0]
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "run_rate_sweep_item",
+        lambda root, candidate, selection: observed.append((root, candidate, selection)) or True,
+    )
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert len(observed) == 1
+
+
 def test_density_dispatches_static_collector_before_generic_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -125,6 +146,461 @@ def test_density_dispatches_static_collector_before_generic_config(
 
     assert runner.run_item(tmp_path, "test", item)
     assert len(observed) == 1
+
+
+def test_candidate_swap_dispatches_existing_hot_swap_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    observed = []
+    monkeypatch.setattr(
+        runner,
+        "run_hot_swap_item",
+        lambda root, candidate, selection: observed.append(candidate.experiment) or True,
+    )
+    for experiment in (runner.SWAP_SESSIONS_EXPERIMENT, runner.ROLLBACK_SESSIONS_EXPERIMENT):
+        item = build_schedule({experiment}, seed=1729)[0]
+        assert runner.run_item(tmp_path, "test", item)
+
+    assert observed == [runner.SWAP_SESSIONS_EXPERIMENT, runner.ROLLBACK_SESSIONS_EXPERIMENT]
+
+
+def test_candidate_swap_schedules_have_five_independent_sessions_and_fifty_events() -> None:
+    swaps = build_schedule({runner.SWAP_SESSIONS_EXPERIMENT}, seed=1729)
+    rollbacks = build_schedule({runner.ROLLBACK_SESSIONS_EXPERIMENT}, seed=1729)
+
+    assert len(swaps) == len(rollbacks) == 5
+    assert {item.run_index for item in swaps} == set(range(1, 6))
+    assert {item.run_index for item in rollbacks} == set(range(1, 6))
+    assert all(item.events_per_run == 50 for item in swaps + rollbacks)
+    assert all(item.shared_from is None for item in swaps + rollbacks)
+    assert all(item.measurement_secs == 120 for item in swaps)
+    assert all(item.measurement_secs == 300 for item in rollbacks)
+
+
+def test_candidate_swap_definitions_reject_event_class_or_alias_drift() -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    definitions = matrix["enhanced_candidate"]["experiments"]
+    for experiment in (runner.SWAP_SESSIONS_EXPERIMENT, runner.ROLLBACK_SESSIONS_EXPERIMENT):
+        runner.validate_candidate_swap_definition(experiment, definitions[experiment])
+        changed = json.loads(json.dumps(definitions[experiment]))
+        changed["event_classes"] = ["cached"]
+        with pytest.raises(ValueError, match="event_classes"):
+            runner.validate_candidate_swap_definition(experiment, changed)
+        changed = json.loads(json.dumps(definitions[experiment]))
+        changed["no_pool_with"] = []
+        with pytest.raises(ValueError, match="no_pool_with"):
+            runner.validate_candidate_swap_definition(experiment, changed)
+
+
+def test_candidate_runner_separates_process_cap_from_measurement_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config = tmp_path / "candidate.toml"
+    config.write_text("fixture")
+    item = RunItem(
+        experiment="e-perf-payload-refinement",
+        condition="8kb",
+        run_index=1,
+        config="candidate.toml",
+        warmup_secs=30,
+        measurement_secs=60,
+    )
+    commands = []
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+    monkeypatch.setattr(
+        runner.subprocess,
+        "run",
+        lambda command, **kwargs: commands.append(command),
+    )
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, candidate, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+
+    assert runner.run_item(tmp_path, "test", item)
+
+    command = commands[0]
+    assert command[command.index("--duration") + 1] == "120"
+    assert command[command.index("--measurement-secs") + 1] == "60"
+
+
+def test_ekuiper_profile_schedule_has_exact_matched_n5_pairs() -> None:
+    schedule = runner.build_ekuiper_profile_schedule(seed=1729)
+
+    assert len(schedule) == 3 * 2 * 5
+    assert len({item.result_key for item in schedule}) == len(schedule)
+    assert {item.run_index for item in schedule} == set(range(1, 6))
+    assert {item.condition for item in schedule} == {
+        f"rate-{rate:05d}/{state}"
+        for rate in (1_000, 4_000, 8_000)
+        for state in ("profiled", "unprofiled-control")
+    }
+    assert all(item.system == "ekuiper" for item in schedule)
+    assert all(item.warmup_secs == 30 for item in schedule)
+    assert all(item.measurement_secs == 60 for item in schedule)
+    assert all(item.total_messages == item.offered_rate_msg_s * 60 for item in schedule)
+    assert all(item.exclusive_sut for item in schedule)
+    for rate in (1_000, 4_000, 8_000):
+        for run_index in range(1, 6):
+            pair = [
+                item
+                for item in schedule
+                if item.offered_rate_msg_s == rate and item.run_index == run_index
+            ]
+            assert {runner.ekuiper_profile_state(item) for item in pair} == {
+                "profiled",
+                "unprofiled-control",
+            }
+            assert len({(item.config, item.loadgen_profile) for item in pair}) == 1
+
+
+def write_ekuiper_profile_fixture(
+    output: Path,
+    item: runner.RunItem,
+    *,
+    process_available: bool,
+) -> dict:
+    output.mkdir(parents=True)
+    (output / "measurement-window.json").write_text(
+        json.dumps({"started_ns": 10_000_000_000, "finished_ns": 70_000_000_000})
+    )
+    (output / "interval-metrics.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "measurement_start_unix_epoch_ns": 10_000_000_000,
+                "declared_measurement_duration_ns": 60_000_000_000,
+                "aggregate_latency_count": item.total_messages,
+                "row_count": 60,
+                "rows": [
+                    {
+                        "interval_start_ns": index * 1_000_000_000,
+                        "interval_end_ns": (index + 1) * 1_000_000_000,
+                    }
+                    for index in range(60)
+                ],
+            }
+        )
+    )
+    (output / "percentiles.json").write_text(
+        json.dumps(
+            {
+                "total_count": item.total_messages,
+                "p50_ns": 100_000,
+                "p95_ns": 200_000,
+                "p99_ns": 300_000,
+                "p999_ns": 400_000,
+            }
+        )
+    )
+    context = {
+        "state": runner.ekuiper_profile_state(item),
+        "process_profiler": {
+            "status": "available" if process_available else "unavailable",
+            "reason": None if process_available else "procfs-process-metrics-unavailable",
+            "collection_enabled": process_available,
+        },
+    }
+    if process_available:
+        (output / "resource-usage.csv").write_text(
+            "timestamp_ns,cpu_time_ticks,rss_bytes,process_count,thread_count,"
+            "rss_anon_bytes,rss_file_bytes,vm_data_bytes,vm_size_bytes,"
+            "pss_anon_bytes,private_dirty_bytes\n"
+            "10000000000,100,1000,1,8,800,200,1200,4000,700,750\n"
+            "70000000000,220,1400,1,9,1100,300,1500,4400,1000,1050\n"
+        )
+    (output / "metadata.json").write_text(
+        json.dumps(
+            {
+                "experiment": runner.EKUIPER_PROFILE_EXPERIMENT,
+                "condition": item.condition,
+                "run_index": item.run_index,
+                "system": "ekuiper",
+                "git_sha": "a" * 40,
+                "git_dirty": False,
+                "profile": context,
+            }
+        )
+    )
+    return context
+
+
+def test_ekuiper_process_profiler_detects_available_and_missing_procfs(
+    tmp_path: Path,
+) -> None:
+    process = tmp_path / "100"
+    process.mkdir()
+    for name, contents in {
+        "stat": "100 (kuiperd) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14\n",
+        "statm": "10 5\n",
+        "status": "RssAnon:\t1 kB\nRssFile:\t1 kB\nVmData:\t2 kB\nVmSize:\t4 kB\n",
+        "smaps_rollup": "Pss_Anon:\t1 kB\nPrivate_Dirty:\t1 kB\n",
+    }.items():
+        (process / name).write_text(contents)
+    (process / "task").mkdir()
+    (process / "task/100").mkdir()
+
+    assert runner.ekuiper_process_profile_availability([100], tmp_path) == {
+        "status": "available",
+        "reason": None,
+        "collection_enabled": True,
+    }
+    assert runner.ekuiper_process_profile_availability([101], tmp_path) == {
+        "status": "unavailable",
+        "reason": "procfs-process-metrics-unavailable",
+        "collection_enabled": False,
+    }
+
+
+def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic(
+    tmp_path: Path,
+) -> None:
+    profiled = next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == "rate-01000/profiled" and item.run_index == 1
+    )
+    context = write_ekuiper_profile_fixture(tmp_path / "profiled", profiled, process_available=True)
+
+    runtime, overhead = runner.write_ekuiper_profile_artifacts(
+        profiled, tmp_path / "profiled", context
+    )
+
+    assert runtime["evidence_class"] == "diagnostic"
+    assert runtime["thesis_evidence"] is False
+    assert runtime["n30_admitted"] is False
+    assert runtime["rate_msg_s"] == 1_000
+    assert runtime["profiler_state"] == "profiled"
+    assert runtime["process_metrics"]["status"] == "available"
+    assert runtime["process_metrics"]["row_count"] == 2
+    assert runtime["process_metrics"]["maximum_rows"] == 62
+    assert runtime["gc_runtime_metrics"] == {
+        "status": "unavailable",
+        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+    }
+    assert runtime["interval_alignment"]["row_count"] == 60
+    assert overhead["paired_condition"] == "rate-01000/unprofiled-control"
+    assert overhead["overhead_role"] == "sampler-enabled"
+    assert overhead["claim_boundary"] == "diagnostic-association-only-not-gc-causality"
+
+
+def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics(
+    tmp_path: Path,
+) -> None:
+    profiled = next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == "rate-04000/profiled" and item.run_index == 2
+    )
+    output = tmp_path / "unavailable"
+    context = write_ekuiper_profile_fixture(output, profiled, process_available=False)
+
+    runtime, overhead = runner.write_ekuiper_profile_artifacts(profiled, output, context)
+
+    assert runtime["process_metrics"] == {
+        "status": "unavailable",
+        "reason": "procfs-process-metrics-unavailable",
+    }
+    assert overhead["profile_collection_enabled"] is False
+    assert overhead["overhead_role"] == "sampler-skipped-unavailable"
+
+
+def candidate_ekuiper_profile_summary() -> dict:
+    records = []
+    for item in runner.build_ekuiper_profile_schedule(seed=1729):
+        state = runner.ekuiper_profile_state(item)
+        paired = "unprofiled-control" if state == "profiled" else "profiled"
+        records.append(
+            {
+                "schema_version": 1,
+                "experiment": runner.EKUIPER_PROFILE_EXPERIMENT,
+                "evidence_class": "diagnostic",
+                "thesis_evidence": False,
+                "n30_admitted": False,
+                "sample_unit": "independent host run at one rate and profiler state",
+                "condition": item.condition,
+                "run_index": item.run_index,
+                "rate_msg_s": item.offered_rate_msg_s,
+                "profiler_state": state,
+                "source_git_sha": "a" * 40,
+                "source_dirty": False,
+                "measurement_source_leaf": f"raw/{item.result_key}",
+                "shared_from": None,
+                "claim_boundary": "diagnostic-association-only-not-gc-causality",
+                "no_pool_with": [
+                    "e-perf-1",
+                    "e-perf-10",
+                    "prior diagnostic rehearsals",
+                ],
+                "profiler_overhead": {
+                    "experiment": runner.EKUIPER_PROFILE_EXPERIMENT,
+                    "rate_msg_s": item.offered_rate_msg_s,
+                    "profiler_state": state,
+                    "run_index": item.run_index,
+                    "paired_condition": (
+                        f"rate-{item.offered_rate_msg_s:05d}/{paired}"
+                    ),
+                    "pair_key": (
+                        f"rate-{item.offered_rate_msg_s:05d}/run-{item.run_index:02d}"
+                    ),
+                    "claim_boundary": "diagnostic-association-only-not-gc-causality",
+                },
+            }
+        )
+    return {
+        "schema_version": 1,
+        "experiment": runner.EKUIPER_PROFILE_EXPERIMENT,
+        "batch_class": "diagnostic-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "required_runs_per_cell": 5,
+        "rates_msg_s": [1_000, 4_000, 8_000],
+        "profiler_states": ["profiled", "unprofiled-control"],
+        "complete": True,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+        "records": records,
+    }
+
+
+def test_ekuiper_profile_summary_rejects_missing_pairs_aliases_and_dirty_sources() -> None:
+    summary = candidate_ekuiper_profile_summary()
+    runner.validate_ekuiper_profile_summary(summary)
+
+    summary = candidate_ekuiper_profile_summary()
+    summary["records"].pop()
+    with pytest.raises(ValueError, match="30 independent runs"):
+        runner.validate_ekuiper_profile_summary(summary)
+
+    summary = candidate_ekuiper_profile_summary()
+    summary["records"][0]["shared_from"] = "e-perf-1"
+    with pytest.raises(ValueError, match="diagnostic boundary"):
+        runner.validate_ekuiper_profile_summary(summary)
+
+    summary = candidate_ekuiper_profile_summary()
+    summary["records"][0]["source_dirty"] = True
+    with pytest.raises(ValueError, match="dirty source"):
+        runner.validate_ekuiper_profile_summary(summary)
+
+
+def test_canonical_ekuiper_items_never_enable_candidate_profiler() -> None:
+    canonical = build_schedule({"e-perf-1", "e-perf-10"}, seed=1729)
+    ekuiper = [item for item in canonical if item.system == "ekuiper"]
+    assert all(not runner.is_ekuiper_profile_item(item) for item in ekuiper)
+    for item in ekuiper:
+        context, pids = runner.build_ekuiper_profile_context(
+            item,
+            {"process_snapshot": {"processes": [{"pid": 123}]}},
+        )
+        assert context is None
+        assert pids == []
+
+
+def test_payload_refinement_schedule_has_exact_n5_grid() -> None:
+    schedule = runner.build_payload_refinement_schedule(seed=1729)
+
+    assert len(schedule) == 10 * 5
+    assert len({item.result_key for item in schedule}) == len(schedule)
+    assert {item.run_index for item in schedule} == set(range(1, 6))
+    assert {item.condition for item in schedule} == {
+        "120b", "1kb", "8kb", "10kb", "16kb", "32kb", "64kb", "100kb", "128kb", "256kb",
+    }
+    assert all(item.warmup_secs == 30 for item in schedule)
+    assert all(item.measurement_secs == 60 for item in schedule)
+    assert all(item.loadgen_profile is None for item in schedule)
+    assert all(item.total_messages is None for item in schedule)
+
+
+def test_depth_extension_schedule_has_exact_n5_grid() -> None:
+    schedule = runner.build_depth_extension_schedule(seed=1729)
+
+    assert len(schedule) == 6 * 5
+    assert len({item.result_key for item in schedule}) == len(schedule)
+    assert {item.run_index for item in schedule} == set(range(1, 6))
+    assert {item.condition for item in schedule} == {
+        "depth-1", "depth-3", "depth-5", "depth-10", "depth-20", "depth-50",
+    }
+    assert all(item.warmup_secs == 30 for item in schedule)
+    assert all(item.measurement_secs == 60 for item in schedule)
+    assert all(item.shared_from is None for item in schedule)
+
+
+def test_candidate_manifests_reconcile_exact_payload_and_topology() -> None:
+    payload_item = next(
+        item
+        for item in runner.build_payload_refinement_schedule(seed=1729)
+        if item.condition == "8kb"
+    )
+    payload = runner.build_payload_manifest(ROOT, payload_item)
+    assert payload["payload_bytes"] == 8192
+    assert payload["payload_sha256"] == hashlib.sha256(b"B" * 8192).hexdigest()
+    assert payload["source_pattern"] == "repeated-byte-0x42"
+    assert payload["sink_kind"] == "bench-sink"
+    assert payload["transform_plugin_path"].endswith("wafer_pass_through.wasm")
+    assert payload["edges"] == [
+        {"from": "source", "to": "transform"},
+        {"from": "transform", "to": "sink"},
+    ]
+    runner.validate_payload_manifest(payload, ROOT / payload_item.config)
+
+    depth_item = next(
+        item
+        for item in runner.build_depth_extension_schedule(seed=1729)
+        if item.condition == "depth-50"
+    )
+    topology = runner.build_topology_manifest(ROOT, depth_item)
+    assert topology["depth"] == 50
+    assert topology["node_count"] == 52
+    assert topology["edge_count"] == 51
+    assert topology["transform_count"] == 50
+    assert topology["source_kind"] == "bench-source"
+    assert topology["sink_kind"] == "bench-sink"
+    assert topology["transform_plugin_paths"] == [runner.PASS_THROUGH_PLUGIN]
+    assert topology["identical_transform_behavior"] is True
+    assert topology["effective_metering_mode"] == "fuel-and-epoch"
+    runner.validate_topology_manifest(topology, ROOT / depth_item.config)
+
+
+def test_candidate_postprocess_stamps_metadata_and_writes_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    item = next(
+        item
+        for item in runner.build_payload_refinement_schedule(seed=1729)
+        if item.condition == "16kb" and item.run_index == 3
+    )
+    (tmp_path / "metadata.json").write_text('{"experiment":"e-perf-payload-refinement"}')
+    (tmp_path / "latency.hdr").write_text("fixture")
+
+    def fake_run(command: list[str], **_: object) -> None:
+        if "hdr-summary" in command:
+            output = Path(command[command.index("--output") + 1])
+            output.write_text(
+                json.dumps(
+                    {
+                        "total_count": 60_000,
+                        "p50_ns": 1,
+                        "p95_ns": 2,
+                        "p99_ns": 3,
+                        "p999_ns": 4,
+                    }
+                )
+            )
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "compose_interval_metrics", lambda output, required: None)
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    manifest = json.loads((tmp_path / "payload-manifest.json").read_text())
+    assert metadata["batch_class"] == "candidate-payload-refinement"
+    assert metadata["evidence_class"] == "candidate-supplementary"
+    assert metadata["thesis_evidence"] is False
+    assert metadata["n30_admitted"] is False
+    assert manifest["condition"] == "16kb"
+    assert manifest["run_index"] == 3
+    assert manifest["payload_bytes"] == 16_384
 
 
 def test_schedule_covers_performance_matrix() -> None:
@@ -281,6 +757,270 @@ def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:
     assert evidence["measurement_source_leaf"].startswith("eval/results/e-swap-4/")
 
 
+def test_candidate_swap_evidence_labels_first_use_and_cached_events() -> None:
+    requests = [
+        {
+            "event_index": index,
+            "plugin": (
+                "wafer_pass_through_v2.wasm"
+                if index % 2 == 0
+                else "wafer_pass_through_v1.wasm"
+            ),
+            "request_duration_ns": 100 + index,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {
+                "timeline": {
+                    "compile_ns": 10 + index,
+                    "instantiate_ns": 20 + index,
+                    "signal_ns": 30 + index,
+                    "ack_ns": 40 + index,
+                    "convergence_ns": 50 + index,
+                }
+            },
+        }
+        for index in range(50)
+    ]
+    sink = {"transitions": [{"pause_ns": 1_000 + index} for index in range(50)]}
+    item = RunItem(
+        experiment=runner.SWAP_SESSIONS_EXPERIMENT,
+        condition="steady",
+        run_index=3,
+        config="eval/configs/e-swap/pipeline-hotswap.toml",
+        warmup_secs=30,
+        measurement_secs=120,
+        events_per_run=50,
+    )
+
+    evidence = runner.stamp_candidate_swap_evidence(
+        derive_hotswap_evidence(
+            requests,
+            sink,
+            experiment=item.experiment,
+            condition=item.condition,
+            source_leaf="raw/e-swap-independent-sessions/rpi5-test/steady/run-03-attempt-01",
+        ),
+        item,
+        {"expected": 120_000, "received": 120_000, "gaps": 0, "duplicates": 0},
+    )
+
+    assert evidence["run_index"] == 3
+    assert evidence["events"][0]["event_class"] == "first-use-aot"
+    assert {event["event_class"] for event in evidence["events"][1:]} == {"cached"}
+    assert evidence["shared_from"] is None
+    assert evidence["thesis_evidence"] is False
+
+
+def test_candidate_rollback_evidence_requires_fifty_lossless_events() -> None:
+    requests = [
+        {
+            "event_index": index,
+            "plugin": "wafer_pass_through_v2_panics.wasm",
+            "request_duration_ns": 100 + index,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {
+                "status": "rolled_back",
+                "timeline": {
+                    "compile_ns": 10 + index,
+                    "instantiate_ns": 20 + index,
+                    "signal_ns": 30 + index,
+                    "rollback_ns": 40 + index,
+                },
+            },
+        }
+        for index in range(50)
+    ]
+    item = RunItem(
+        experiment=runner.ROLLBACK_SESSIONS_EXPERIMENT,
+        condition="process-trap-rollback",
+        run_index=4,
+        config="eval/configs/e-swap/pipeline-hotswap-rollback.toml",
+        warmup_secs=30,
+        measurement_secs=300,
+        events_per_run=50,
+    )
+    sequence = {"expected": 300_000, "received": 300_000, "gaps": 0, "duplicates": 0}
+
+    evidence = runner.build_candidate_rollback_evidence(
+        requests,
+        item,
+        "raw/e-swap-rollback-sessions/rpi5-test/process-trap-rollback/run-04-attempt-01",
+        sequence,
+    )
+
+    assert evidence["events"][0]["event_class"] == "first-use-aot"
+    assert evidence["events"][49]["event_class"] == "cached"
+    assert evidence["events"][0]["rollback_ns"] == 40
+    with pytest.raises(ValueError, match="exactly 50"):
+        runner.build_candidate_rollback_evidence(requests[:-1], item, "raw/test", sequence)
+
+
+def candidate_swap_summary_fixture(experiment: str) -> dict:
+    rollback = experiment == runner.ROLLBACK_SESSIONS_EXPERIMENT
+    records = []
+    for run_index in range(1, 6):
+        events = []
+        for event_index in range(50):
+            event = {
+                "event_index": event_index,
+                "event_class": runner.candidate_swap_event_class(event_index),
+                "plugin": (
+                    "wafer_pass_through_v2_panics.wasm"
+                    if rollback
+                    else "wafer_pass_through_v2.wasm"
+                    if event_index % 2 == 0
+                    else "wafer_pass_through_v1.wasm"
+                ),
+                "compile_ns": 10,
+                "instantiate_ns": 20,
+                "signal_ns": 30,
+                "http_total_ns": 100,
+            }
+            event["rollback_ns" if rollback else "ack_ns"] = 40
+            if not rollback:
+                event["convergence_ns"] = 50
+                event["sink_observed_output_gap_ns"] = 1_000
+            events.append(event)
+        record = {
+            "schema_version": 1,
+            "batch_class": (
+                "candidate-rollback-session" if rollback else "candidate-independent-swap"
+            ),
+            "experiment": experiment,
+            "condition": "process-trap-rollback" if rollback else "steady",
+            "evidence_class": "candidate-supplementary",
+            "thesis_evidence": False,
+            "n30_admitted": False,
+            "sample_unit": "independent host run",
+            "nested_unit": "rollback event within run" if rollback else "swap event within run",
+            "duration_unit": "ns",
+            "sample_count": 50,
+            "run_index": run_index,
+            "event_classes": ["first-use-aot", "cached"],
+            "shared_from": None,
+            "sequence": {"expected": 100, "received": 100, "gaps": 0, "duplicates": 0},
+            "no_pool_with": (
+                ["e-swap-5", "prior diagnostic rehearsals"]
+                if rollback
+                else ["e-swap-1", "e-swap-2", "e-swap-6", "prior diagnostic rehearsals"]
+            ),
+            "events": events,
+            "source_git_sha": "1" * 40,
+            "source_dirty": False,
+        }
+        if rollback:
+            record.update(attempts=50, rolled_back=50, all_rolled_back=True)
+        records.append(record)
+    return {
+        "schema_version": 1,
+        "experiment": experiment,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": "rollback event within run" if rollback else "swap event within run",
+        "required_runs": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "complete": True,
+        "no_pool_with": records[0]["no_pool_with"],
+        "records": records,
+    }
+
+
+def test_candidate_swap_summary_rejects_duplicate_runs_and_alias_pooling() -> None:
+    summary = candidate_swap_summary_fixture(runner.SWAP_SESSIONS_EXPERIMENT)
+    runner.validate_candidate_swap_summary(summary)
+
+    duplicate = json.loads(json.dumps(summary))
+    duplicate["records"][1]["run_index"] = 1
+    with pytest.raises(ValueError, match="missing or duplicate run identities"):
+        runner.validate_candidate_swap_summary(duplicate)
+
+    aliased = json.loads(json.dumps(summary))
+    aliased["records"][0]["shared_from"] = "e-swap-1"
+    with pytest.raises(ValueError, match="no-pooling boundary"):
+        runner.validate_candidate_swap_summary(aliased)
+
+
+def test_candidate_rollback_summary_requires_all_fifty_rollbacks_per_run() -> None:
+    summary = candidate_swap_summary_fixture(runner.ROLLBACK_SESSIONS_EXPERIMENT)
+    runner.validate_candidate_swap_summary(summary)
+
+    incomplete = json.loads(json.dumps(summary))
+    incomplete["records"][0]["rolled_back"] = 49
+    with pytest.raises(ValueError, match="fifty successful rollbacks"):
+        runner.validate_candidate_swap_summary(incomplete)
+
+
+@pytest.mark.parametrize(
+    ("experiment", "artifact_name", "summary_name"),
+    (
+        (
+            runner.SWAP_SESSIONS_EXPERIMENT,
+            "hotswap-analysis.json",
+            "independent-swap-summary.json",
+        ),
+        (
+            runner.ROLLBACK_SESSIONS_EXPERIMENT,
+            "rollback.json",
+            "rollback-session-summary.json",
+        ),
+    ),
+)
+def test_candidate_swap_summaries_select_five_passed_physical_runs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    experiment: str,
+    artifact_name: str,
+    summary_name: str,
+) -> None:
+    volume = tmp_path / "results"
+    volume.mkdir()
+    layout = runner.ResultsLayout.resolve(
+        tmp_path, volume, mount_check=lambda _: True
+    )
+    layout.prepare()
+    monkeypatch.setattr(runner, "results_layout", lambda _: layout)
+    fixture = candidate_swap_summary_fixture(experiment)
+    for record in fixture["records"]:
+        leaf = layout.raw_path(
+            experiment,
+            "rpi5-test",
+            "process-trap-rollback" if experiment == runner.ROLLBACK_SESSIONS_EXPERIMENT else "steady",
+            f"run-{record['run_index']:02d}-attempt-01",
+        )
+        leaf.mkdir(parents=True)
+        evidence = {
+            key: value
+            for key, value in record.items()
+            if key not in {"source_git_sha", "source_dirty"}
+        }
+        (leaf / artifact_name).write_text(json.dumps(evidence))
+        (leaf / "metadata.json").write_text(
+            json.dumps(
+                {
+                    "run_index": record["run_index"],
+                    "git_sha": record["source_git_sha"],
+                    "git_dirty": False,
+                }
+            )
+        )
+        (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+
+    path = (
+        runner.summarize_rollback_sessions(tmp_path, "test")
+        if experiment == runner.ROLLBACK_SESSIONS_EXPERIMENT
+        else runner.summarize_swap_sessions(tmp_path, "test")
+    )
+    summary = json.loads(path.read_text())
+
+    assert path == layout.manifests / "candidate-batches/rpi5-test" / summary_name
+    assert summary["complete"] is True
+    assert [record["run_index"] for record in summary["records"]] == list(range(1, 6))
+
+
 def test_hotswap_evidence_rejects_unit_name_conflation() -> None:
     request = {
         "event_index": 0,
@@ -306,16 +1046,11 @@ def test_hotswap_evidence_rejects_unit_name_conflation() -> None:
         )
 
 
-def test_shared_hotswap_result_preserves_single_source_leaf(tmp_path: Path) -> None:
+def test_shared_hotswap_result_preserves_one_source_without_copying_raw(tmp_path: Path) -> None:
     source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
     source.mkdir(parents=True)
     (source / "canonical-status.json").write_text('{"status":"passed"}')
-    (source / "metadata.json").write_text(
-        json.dumps({"experiment": "e-swap-1", "measurement_source_leaf": str(source.relative_to(tmp_path))})
-    )
-    (source / "hotswap-analysis.json").write_text(
-        json.dumps({"experiment": "e-swap-1", "measurement_source_leaf": str(source.relative_to(tmp_path)), "events": [{"event_index": 0}]})
-    )
+    (source / "metadata.json").write_text('{"experiment":"e-swap-1"}')
     item = RunItem(
         experiment="e-swap-2",
         condition="steady",
@@ -326,17 +1061,65 @@ def test_shared_hotswap_result_preserves_single_source_leaf(tmp_path: Path) -> N
         shared_from="e-swap-1",
     )
 
-    target = copy_shared_result(tmp_path, "batch", item)
+    receipt_path = copy_shared_result(tmp_path, "batch", item)
+    receipt = json.loads(receipt_path.read_text())
 
-    metadata = json.loads((target / "metadata.json").read_text())
-    analysis = json.loads((target / "hotswap-analysis.json").read_text())
-    expected_source = str(source.relative_to(tmp_path))
-    assert metadata["shared_from"] == expected_source
-    assert metadata["measurement_source_leaf"] == expected_source
-    assert metadata["shared_measurement"] is True
-    assert analysis["shared_from"] == expected_source
-    assert analysis["measurement_source_leaf"] == expected_source
-    assert analysis["experiment"] == "e-swap-2"
+    assert receipt_path == tmp_path / "eval/results/aliases/e-swap-2/rpi5-batch/steady/run-01.json"
+    assert receipt["source_leaf"] == str(source.relative_to(tmp_path))
+    assert receipt["sample_identity"] == receipt["source_leaf"]
+    assert receipt["shared_measurement"] is True
+    assert not (tmp_path / "eval/results/e-swap-2").exists()
+
+
+def test_shared_result_uses_explicit_root_with_spaces_without_raw_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "mounted results volume"
+    volume.mkdir()
+    layout = runner.ResultsLayout.resolve(
+        tmp_path, volume, mount_check=lambda _: True
+    )
+    layout.prepare()
+    monkeypatch.setattr(runner, "results_layout", lambda _: layout)
+    source = layout.raw / "e-perf-1/rpi5-batch/native/run-01-attempt-01"
+    source.mkdir(parents=True)
+    (source / "canonical-status.json").write_text('{"status":"passed"}')
+    item = RunItem(
+        experiment="e-perf-2",
+        condition="native",
+        run_index=1,
+        config="unused.toml",
+        warmup_secs=30,
+        measurement_secs=60,
+        shared_from="e-perf-1",
+    )
+
+    receipt = copy_shared_result(tmp_path, "batch", item)
+
+    assert receipt == volume / "manifests/aliases/e-perf-2/rpi5-batch/native/run-01.json"
+    assert json.loads(receipt.read_text())["source_leaf"].startswith("raw/")
+    assert not (volume / "raw/e-perf-2").exists()
+
+
+def test_shared_hotswap_result_rejects_changed_immutable_source(tmp_path: Path) -> None:
+    source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
+    source.mkdir(parents=True)
+    status = source / "canonical-status.json"
+    status.write_text('{"status":"passed"}')
+    item = RunItem(
+        experiment="e-swap-2",
+        condition="steady",
+        run_index=1,
+        config="unused.toml",
+        warmup_secs=30,
+        measurement_secs=120,
+        shared_from="e-swap-1",
+    )
+    copy_shared_result(tmp_path, "batch", item)
+    status.write_text('{"status":"passed","changed":true}')
+
+    with pytest.raises(ValueError, match="alias receipt differs"):
+        copy_shared_result(tmp_path, "batch", item)
 
 
 def swap3_fixture(rates: list[float] | None = None, *, received: int = 120_000) -> tuple[dict, dict, dict, dict]:
@@ -402,6 +1185,85 @@ def swap3_fixture(rates: list[float] | None = None, *, received: int = 120_000) 
         "sequence": {"total_received": received, "total_duplicates": 0},
     }
     return throughput, timeline, publisher, subscriber
+
+
+def fine_event_fixture(
+    canonical: dict,
+    *,
+    experiment: str,
+    event_timestamp_ns: int,
+    scheduled_timestamp_ns: int,
+) -> dict:
+    fine = []
+    parents = []
+    for index in range(400):
+        start = -2_000_000_000 + index * 10_000_000
+        unique = 10 if experiment == "e-swap-3" else 1
+        duplicate = 0
+        fine.append({
+            "start_offset_ns": start,
+            "end_offset_ns": start + 10_000_000,
+            "received_unique": unique,
+            "received_events": unique + duplicate,
+            "duplicates": duplicate,
+            "rate_msg_s": unique * 100,
+        })
+    for index in range(40):
+        nested = fine[index * 10 : (index + 1) * 10]
+        start = -2_000_000_000 + index * 100_000_000
+        unique = sum(row["received_unique"] for row in nested)
+        events = sum(row["received_events"] for row in nested)
+        duplicates = sum(row["duplicates"] for row in nested)
+        parents.append({
+            "start_offset_ns": start,
+            "end_offset_ns": start + 100_000_000,
+            "received_unique": unique,
+            "received_events": events,
+            "duplicates": duplicates,
+            "rate_msg_s": unique * 10,
+        })
+    totals = {
+        field: sum(row[field] for row in fine)
+        for field in ("received_unique", "received_events", "duplicates")
+    }
+    return {
+        "schema_version": 1,
+        "clock": "unix-epoch" if experiment == "e-swap-3" else "unix-epoch-source-sink-alignment",
+        "clock_purpose": "cross-process-alignment",
+        "alignment": "actual-t0",
+        "source_measurement_start_unix_ns": canonical.get("source_measurement_start_unix_ns"),
+        "scheduled_event_timestamp_ns": scheduled_timestamp_ns,
+        "event_timestamp_ns": event_timestamp_ns,
+        "alignment_error_ns": event_timestamp_ns - scheduled_timestamp_ns,
+        "alignment_tolerance_ns": 10_000_000,
+        "bucket_width_ns": 10_000_000,
+        "bucket_count": 400,
+        "coverage_start_offset_ns": -2_000_000_000,
+        "coverage_end_offset_ns": 2_000_000_000,
+        "parent_bucket_width_ns": 100_000_000,
+        "parent_bucket_count": 40,
+        **totals,
+        "buckets": fine,
+        "parent_buckets": parents,
+        "canonical_series": "throughput-buckets.json",
+        "loss_accounting": "canonical-sequence-and-primary-drain-only",
+    }
+
+
+def test_swap3_fine_event_buckets_reconcile_to_canonical_actual_t0_slice() -> None:
+    throughput, timeline, _, _ = swap3_fixture()
+    fine = fine_event_fixture(
+        throughput,
+        experiment="e-swap-3",
+        event_timestamp_ns=timeline["event_timestamp_ns"],
+        scheduled_timestamp_ns=timeline["scheduled_event_timestamp_ns"],
+    )
+
+    validate_fine_event_buckets(fine, throughput, experiment="e-swap-3")
+
+    fine["buckets"][0]["received_events"] += 1
+    with pytest.raises(ValueError, match="contiguous or reconciled"):
+        validate_fine_event_buckets(fine, throughput, experiment="e-swap-3")
 
 
 def test_swap3_analysis_covers_no_partial_full_and_delayed_recovery() -> None:
@@ -582,6 +1444,27 @@ def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
     }
     sequence = {"total_expected": "130000", "total_received": "130000", "gap_msgs": "0", "duplicates_count": "0"}
     return timing, source, request, sink, throughput, sequence
+
+
+def test_swap4_fine_event_buckets_are_nested_without_replacing_tail_accounting() -> None:
+    timing, _, requests, _, throughput, _ = swap4_fixture()
+    fine = fine_event_fixture(
+        throughput,
+        experiment="e-swap-4",
+        event_timestamp_ns=requests[0]["request_started_ns"],
+        scheduled_timestamp_ns=timing["scheduled_swap_ns"],
+    )
+
+    validate_fine_event_buckets(fine, throughput, experiment="e-swap-4")
+    assert fine["received_events"] < throughput["received_events"]
+    assert throughput["primary_buckets"][-1]["received_events"] == 99
+    assert throughput["drain_received_events"] == 1
+    assert throughput["after_drain_events"] == 0
+    assert throughput["drain_right_censored"] is False
+
+    fine["parent_buckets"][0]["received_unique"] += 1
+    with pytest.raises(ValueError, match="contiguous or reconciled|fine and parent|parent population"):
+        validate_fine_event_buckets(fine, throughput, experiment="e-swap-4")
 
 
 def test_swap4_schedule_has_30_runs_with_one_event_at_measured_t60() -> None:
@@ -1507,6 +2390,132 @@ def test_rate_sweep_schedule_is_complete_and_position_balanced() -> None:
         assert all(set(observed) == set(systems) for observed in positions.values())
 
 
+def test_capacity_knee_schedule_is_exact_deterministic_counterbalanced_and_cooled() -> None:
+    schedule = build_capacity_knee_schedule(seed=1729)
+    expected_rates = {
+        "mqtt-loopback": {*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000},
+        "native": set(range(8_000, 16_000, 1_000)),
+        "wafer": set(range(8_000, 16_000, 1_000)),
+        "ekuiper": set(range(4_000, 9_000, 1_000)),
+    }
+
+    assert len(schedule) == 5 * sum(map(len, expected_rates.values())) == 185
+    assert schedule == build_capacity_knee_schedule(seed=1729)
+    assert schedule != build_capacity_knee_schedule(seed=1730)
+    assert all(item.experiment == "e-perf-capacity-knee" for item in schedule)
+    assert all(item.loadgen_profile == "eval/loadgen/capacity-knee.toml" for item in schedule)
+    assert all(item.total_messages == item.offered_rate_msg_s * 60 for item in schedule)
+    assert all(item.exclusive_sut for item in schedule)
+    for system, rates in expected_rates.items():
+        observed = [item for item in schedule if item.system == system]
+        assert {item.offered_rate_msg_s for item in observed} == rates
+        assert {item.run_index for item in observed} == set(range(1, 6))
+        assert len(observed) == 5 * len(rates)
+    rate_positions = {
+        rate: [] for rate in sorted(set().union(*expected_rates.values()))
+    }
+    for run_index in range(1, 6):
+        rates = []
+        for item in schedule:
+            if item.run_index != run_index or item.offered_rate_msg_s in rates:
+                continue
+            rates.append(item.offered_rate_msg_s)
+        assert rates != sorted(rates)
+        assert rates != sorted(rates, reverse=True)
+        for position, rate in enumerate(rates):
+            rate_positions[rate].append(position)
+    assert all(len(set(positions)) == 5 for positions in rate_positions.values())
+    for rate in sorted(set().union(*expected_rates.values())):
+        eligible = [system for system in runner.RATE_SWEEP_SYSTEMS if rate in expected_rates[system]]
+        positions = {position: [] for position in range(len(eligible))}
+        for run_index in range(1, 6):
+            block = [
+                item for item in schedule
+                if item.run_index == run_index and item.offered_rate_msg_s == rate
+            ]
+            assert {item.system for item in block} == set(eligible)
+            for position, item in enumerate(block):
+                positions[position].append(item.system)
+        for systems in positions.values():
+            counts = [systems.count(system) for system in eligible]
+            assert max(counts) - min(counts) <= 1
+    assert runner.capacity_knee_cooldown_secs() == 60
+
+
+def test_capacity_knee_schedule_rejects_grid_order_or_cooldown_drift(tmp_path: Path) -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    definition = matrix["enhanced_candidate"]["experiments"]["e-perf-capacity-knee"]
+    mutations = (
+        lambda value: value["condition_grid_msg_s"]["mqtt-loopback"].pop(),
+        lambda value: value["ordering"].update(method="monotonic ascending"),
+        lambda value: value["ordering"].update(cooldown_secs=0),
+        lambda value: value["delivery_good"].update(max_loss_percent=2.0),
+    )
+    for mutate in mutations:
+        changed = json.loads(json.dumps(definition))
+        mutate(changed)
+        with pytest.raises(ValueError):
+            runner.validate_capacity_knee_definition(changed)
+
+
+def test_capacity_knee_cooldown_is_executed_and_auditable(tmp_path: Path) -> None:
+    item = build_capacity_knee_schedule(seed=1729)[0]
+    slept = []
+
+    apply_capacity_knee_cooldown(tmp_path, item, sleep=slept.append)
+
+    assert slept == [60]
+    events = [json.loads(line) for line in (tmp_path / "progress.jsonl").read_text().splitlines()]
+    assert [event["event"] for event in events] == ["cooldown-started", "cooldown-finished"]
+    assert all(event["item"] == item.result_key for event in events)
+    assert all(event["cooldown_secs"] == 60 for event in events)
+
+
+def test_capacity_knee_cli_dry_run_exposes_candidate_plan() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(ROOT / "eval/scripts/lib/canonical_runner.py"),
+            "--experiments",
+            "e-perf-capacity-knee",
+            "--batch-id",
+            "test",
+            "--seed",
+            "1729",
+            "--dry-run",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("PLAN e-perf-capacity-knee") == 37
+    assert "runs=5" in result.stdout
+    assert "cooldown=60s" in result.stdout
+
+
+def test_capacity_knee_candidate_invocations_are_trace_free() -> None:
+    item = next(
+        item for item in build_capacity_knee_schedule(seed=1729)
+        if item.system == "wafer" and item.offered_rate_msg_s == 9_000
+    )
+    receipt = runner.build_capacity_invocation(ROOT, item, Path("/tmp/capacity-knee"))
+
+    assert receipt["publisher_command"][receipt["publisher_command"].index("--rate") + 1] == "9000"
+    assert "--trace-file" not in receipt["publisher_command"]
+    assert "--trace-file" not in receipt["subscriber_command"]
+    assert item.config == "eval/configs/pipeline-a-wafer.toml"
+
+
+def test_default_all_schedule_does_not_admit_candidate_experiments() -> None:
+    assert runner.parse_experiments("all") == set(
+        json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]
+    )
+    assert "e-perf-capacity-knee" not in runner.parse_experiments("all")
+
+
 def test_final_capacity_loadgen_commands_use_bounded_summaries_without_raw_traces() -> None:
     item = next(
         item
@@ -1547,6 +2556,7 @@ def test_final_capacity_loadgen_commands_use_bounded_summaries_without_raw_trace
     assert warmup[warmup.index("--sequence-start") + 1] == "240000"
     assert "--drop-when-full" in warmup
     assert subscriber[subscriber.index("--total-messages") + 1] == "240000"
+    assert subscriber[subscriber.index("--measurement-secs") + 1] == "60"
     assert subscriber[subscriber.index("--sequence-end-exclusive") + 1] == "240000"
     assert subscriber[subscriber.index("--topic") + 1] == "wafer/telemetry/hot"
     assert subscriber[subscriber.index("--sequence-example-limit") + 1] == "1024"
@@ -1631,6 +2641,174 @@ def capacity_batch(
     }
 
 
+def candidate_capacity_run_fixture(
+    system: str,
+    rate: int,
+    *,
+    run_index: int = 1,
+    loss_ratio: float = 0.0,
+    achieved_ratio: float | None = None,
+    duplicates: int = 0,
+) -> dict:
+    result = capacity_run_fixture("wafer", 1_000, run_index=run_index)
+    intended = rate * 60
+    total_undelivered = round(intended * loss_ratio)
+    received_unique = intended - total_undelivered
+    received_events = received_unique + duplicates
+    achieved_ratio = achieved_ratio if achieved_ratio is not None else received_unique / intended
+    result.update(
+        batch_class="candidate-capacity-knee",
+        experiment="e-perf-capacity-knee",
+        thesis_evidence=False,
+        evidence_class="candidate-supplementary",
+        n30_admitted=False,
+        system=system,
+        rate_msg_s=rate,
+        messages={
+            "intended": intended,
+            "rejected": total_undelivered,
+            "enqueued": received_unique,
+            "received_events": received_events,
+            "received_unique": received_unique,
+            "downstream_lost": 0,
+            "total_undelivered": total_undelivered,
+            "duplicates": duplicates,
+            "unexpected": 0,
+            "ignored_warmup": 0,
+        },
+        rates_msg_s={
+            "intended": float(rate),
+            "achieved": rate * achieved_ratio,
+            "achieved_ratio": achieved_ratio,
+        },
+        loss_percent=100.0 * loss_ratio,
+    )
+    result["latency_hdr"]["samples"] = received_events
+    result["resources"]["scope"] = "no-sut" if system == "mqtt-loopback" else "sut"
+    return result
+
+
+def test_capacity_knee_estimator_uses_pooled_loss_ratio_and_zero_duplicates() -> None:
+    runs = {
+        system: [
+            candidate_capacity_run_fixture(
+                system,
+                rate,
+                run_index=run_index,
+                loss_ratio=(0.03 if run_index in (4, 5) and rate == min(rates) else 0.0),
+            )
+            for rate in rates
+            for run_index in range(1, 6)
+        ]
+        for system, rates in {
+            "mqtt-loopback": [*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000],
+            "native": list(range(8_000, 16_000, 1_000)),
+            "wafer": list(range(8_000, 16_000, 1_000)),
+            "ekuiper": list(range(4_000, 9_000, 1_000)),
+        }.items()
+    }
+
+    summary = estimate_candidate_capacity_envelope(runs)
+
+    assert summary["experiment"] == "e-perf-capacity-knee"
+    assert summary["thesis_evidence"] is False
+    assert summary["n30_admitted"] is False
+    assert summary["systems"]["mqtt-loopback"]["rates"][0]["pooled_loss"] == pytest.approx(0.012)
+    assert summary["systems"]["mqtt-loopback"]["rates"][0]["classification"] == "bad"
+    assert summary["systems"]["native"]["rates"][0]["classification"] == "support-confounded"
+
+    runs["mqtt-loopback"] = [
+        candidate_capacity_run_fixture(
+            "mqtt-loopback", rate, run_index=run_index, duplicates=1 if rate == 4_000 and run_index == 1 else 0
+        )
+        for rate in [*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000]
+        for run_index in range(1, 6)
+    ]
+    summary = estimate_candidate_capacity_envelope(runs)
+    assert summary["systems"]["mqtt-loopback"]["rates"][0]["classification"] == "bad"
+
+
+def test_capacity_knee_summary_is_manifest_only_and_uses_passed_attempts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "results"
+    volume.mkdir()
+    layout = runner.ResultsLayout.resolve(tmp_path, volume, mount_check=lambda _: True)
+    layout.prepare()
+    monkeypatch.setattr(runner, "results_layout", lambda _: layout)
+    for system, rates in runner.CAPACITY_KNEE_GRID.items():
+        for rate in rates:
+            for run_index in range(1, 6):
+                leaf = layout.raw_path(
+                    "e-perf-capacity-knee",
+                    "rpi5-test",
+                    f"{system}/rate-{rate:05d}/run-{run_index:02d}-attempt-01",
+                )
+                leaf.mkdir(parents=True)
+                (leaf / "capacity-run.json").write_text(
+                    json.dumps(candidate_capacity_run_fixture(system, rate, run_index=run_index))
+                )
+                (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+    failed = layout.raw_path(
+        "e-perf-capacity-knee",
+        "rpi5-test",
+        "wafer/rate-08000/run-01-attempt-02",
+    )
+    failed.mkdir(parents=True)
+    (failed / "capacity-run.json").write_text(
+        json.dumps(candidate_capacity_run_fixture("wafer", 8_000, run_index=1))
+    )
+    (failed / "canonical-status.json").write_text('{"status":"failed"}')
+
+    path = summarize_capacity_knee(tmp_path, "test")
+    summary = json.loads(path.read_text())
+
+    assert path == volume / "manifests/candidate-batches/rpi5-test/capacity-knee-summary.json"
+    assert summary["systems"]["wafer"]["complete"] is True
+    assert all(row["run_count"] == 5 for row in summary["systems"]["wafer"]["rates"])
+    assert not (layout.raw / "e-perf-capacity-knee/rpi5-test/capacity-knee-summary.json").exists()
+
+    missing = layout.raw_path(
+        "e-perf-capacity-knee",
+        "rpi5-test",
+        "wafer/rate-08000/run-05-attempt-01/canonical-status.json",
+    )
+    missing.write_text('{"status":"failed"}')
+    incomplete = json.loads(summarize_capacity_knee(tmp_path, "test").read_text())
+    assert incomplete["systems"]["wafer"]["complete"] is False
+
+
+def test_candidate_capacity_result_rejects_evidence_promotion_and_threshold_drift() -> None:
+    result = candidate_capacity_run_fixture("wafer", 9_000)
+    validate_candidate_capacity_run_result(result)
+
+    promoted = json.loads(json.dumps(result))
+    promoted["thesis_evidence"] = True
+    with pytest.raises(ValueError, match="thesis_evidence=false"):
+        validate_candidate_capacity_run_result(promoted)
+
+    duplicate = json.loads(json.dumps(result))
+    duplicate["messages"]["duplicates"] = 1
+    duplicate["messages"]["received_events"] += 1
+    duplicate["latency_hdr"]["samples"] += 1
+    validate_candidate_capacity_run_result(duplicate)
+    assert estimate_candidate_capacity_envelope({
+        system: [
+            candidate_capacity_run_fixture(system, rate, run_index=index)
+            for rate in runner.CAPACITY_KNEE_GRID[system]
+            for index in range(1, 6)
+        ]
+        for system in runner.RATE_SWEEP_SYSTEMS
+    })["criteria"] == {
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_pooled_loss": 0.01,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_mean_achieved_ratio": 0.99,
+        "duplicates_allowed": 0,
+        "support_path_censoring": "mqtt-loopback",
+    }
+
+
 def test_capacity_estimator_rejects_duplicate_run_indices() -> None:
     rates = {
         rate: (0.0, 1.0, 1_000_000)
@@ -1642,6 +2820,24 @@ def test_capacity_estimator_rejects_duplicate_run_indices() -> None:
     runs["wafer"][1]["run_index"] = 1
     with pytest.raises(ValueError, match="duplicate run_index"):
         estimate_capacity_envelope(runs)
+
+
+def test_capacity_estimator_rejects_duplicates_as_delivery_bad() -> None:
+    rates = {
+        rate: (0.0, 1.0, 1_000_000)
+        for rate in (1000, 4000, 8000, 15000, 16000)
+    }
+    runs = capacity_batch(
+        {system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")}
+    )
+    duplicate = runs["mqtt-loopback"][0]
+    duplicate["messages"]["duplicates"] = 1
+    duplicate["messages"]["received_events"] += 1
+    duplicate["latency_hdr"]["samples"] += 1
+
+    summary = estimate_capacity_envelope(runs)
+
+    assert summary["systems"]["mqtt-loopback"]["rates"][0]["classification"] == "bad"
 
 
 def test_capacity_estimator_handles_first_rate_failure() -> None:
@@ -2428,6 +3624,32 @@ def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
                 }
             )
         )
+        (output / "interval-latency.json").write_text(json.dumps({
+            "schema_version": 1,
+            "interval_clock": "monotonic-elapsed",
+            "alignment_clock": "unix-epoch",
+            "alignment_clock_purpose": "cross-process-alignment-only",
+            "measurement_start_unix_epoch_ns": 1_000_000_000,
+            "declared_measurement_duration_ns": 60_000_000_000,
+            "bucket_width_ns": 1_000_000_000,
+            "maximum_rows": 62,
+            "row_count": 1,
+            "aggregate_latency_count": 60_000,
+            "late_arrivals": 0,
+            "rows": [{
+                "interval_start_ns": 0,
+                "interval_end_ns": 1_000_000_000,
+                "interval_start_unix_epoch_ns": 1_000_000_000,
+                "interval_end_unix_epoch_ns": 2_000_000_000,
+                "latency_count": 60_000,
+                "latency_p50_ns": 1_000,
+                "latency_p95_ns": 2_000,
+                "latency_p99_ns": 3_000,
+                "received_events": 60_000,
+                "throughput_messages": 60_000,
+                "duplicates": 0,
+            }],
+        }))
         postprocess_run(ROOT, item, output)
         percentiles = json.loads((output / "percentiles.json").read_text())
     assert percentiles["p99_ns"] == 3_000
@@ -2452,6 +3674,50 @@ def test_progress_log_records_counts_and_temperature_field() -> None:
     assert entry["item"] == "e-perf-1/wafer/run-01"
     assert entry["failures"] == 1
     assert "temperature_c" in entry
+
+
+def test_resume_uses_next_numeric_attempt_after_a_gap() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        condition = Path(tmp)
+        (condition / "run-01-attempt-01").mkdir()
+        (condition / "run-01-attempt-03").mkdir()
+
+        selection = select_attempt(condition, 1)
+
+        assert selection.skip is False
+        assert selection.path.name == "run-01-attempt-04"
+
+
+def test_resume_rejects_multiple_passed_attempts() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        condition = Path(tmp)
+        for attempt in (1, 2):
+            path = condition / f"run-01-attempt-{attempt:02d}"
+            path.mkdir()
+            (path / "canonical-status.json").write_text('{"status":"passed"}')
+
+        with pytest.raises(ValueError, match="multiple passed attempts"):
+            select_attempt(condition, 1)
+
+
+def test_resume_rejects_linked_attempt_or_terminal_receipt() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        condition = Path(tmp)
+        outside = condition / "outside"
+        outside.mkdir()
+        linked_attempt = condition / "run-01-attempt-01"
+        linked_attempt.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(ValueError, match="malformed attempt path"):
+            select_attempt(condition, 1)
+
+        linked_attempt.unlink()
+        attempt = condition / "run-01-attempt-01"
+        attempt.mkdir()
+        target = condition / "status.json"
+        target.write_text('{"status":"passed"}')
+        (attempt / "canonical-status.json").symlink_to(target)
+        with pytest.raises(ValueError, match="linked terminal receipt"):
+            select_attempt(condition, 1)
 
 
 def test_resume_skips_passed_attempt_and_preserves_failed_attempt() -> None:

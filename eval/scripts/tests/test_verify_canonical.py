@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 import tempfile
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -16,14 +17,95 @@ CONTRACT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONTRACT)
 
 
-def run(path: Path) -> subprocess.CompletedProcess[str]:
+def run(path: Path, *, canonical: bool = True) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, str(VERIFIER)]
+    if canonical:
+        command.append("--canonical")
+    command.append(str(path))
     return subprocess.run(
-        [sys.executable, str(VERIFIER), "--canonical", str(path)],
+        command,
         cwd=ROOT,
         capture_output=True,
         text=True,
         check=False,
     )
+
+
+def test_alias_receipt_dereferences_single_raw_source(tmp_path: Path) -> None:
+    source = tmp_path / "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01"
+    source.mkdir(parents=True)
+    for name in ("config.toml", "metadata.json", "stdout.log"):
+        (source / name).write_text("{}" if name.endswith(".json") else "fixture\n")
+    status = source / "canonical-status.json"
+    status.write_text('{"status":"passed"}')
+    receipt = tmp_path / "manifests/aliases/e-perf-2/rpi5-batch/native/run-01.json"
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text(json.dumps({
+        "schema_version": 1,
+        "experiment": "e-perf-2",
+        "condition": "native",
+        "run_index": 1,
+        "shared_from_experiment": "e-perf-1",
+        "source_leaf": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "source_status_sha256": hashlib.sha256(status.read_bytes()).hexdigest(),
+        "sample_identity": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "shared_measurement": True,
+    }))
+
+    result = run(receipt, canonical=False)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "OK: 1 leaf run" in result.stdout
+
+
+def test_interval_fragment_without_composed_output_is_rejected(tmp_path: Path) -> None:
+    leaf = tmp_path / "e-perf-1/run-01"
+    leaf.mkdir(parents=True)
+    for name in ("config.toml", "metadata.json", "stdout.log"):
+        (leaf / name).write_text("{}\n")
+    (leaf / "interval-latency.json").write_text("{}\n")
+
+    violations, _ = CONTRACT.check_leaf(leaf, "e-perf-1")
+
+    assert any("lacks composed interval-metrics" in item for item in violations)
+
+
+def test_invalid_composed_interval_is_rejected(tmp_path: Path) -> None:
+    leaf = tmp_path / "e-perf-1/run-01"
+    leaf.mkdir(parents=True)
+    for name in ("config.toml", "metadata.json", "stdout.log"):
+        (leaf / name).write_text("{}\n")
+    (leaf / "interval-latency.json").write_text("{}\n")
+    (leaf / "interval-metrics.json").write_text('{"schema_version":1,"rows":[]}\n')
+
+    violations, _ = CONTRACT.check_leaf(leaf, "e-perf-1")
+
+    assert any("invalid interval-metrics.json" in item for item in violations)
+
+
+def test_canonical_timed_leaf_requires_bounded_interval_artifacts(tmp_path: Path) -> None:
+    leaf = tmp_path / "e-perf-1/run-01"
+    leaf.mkdir(parents=True)
+    for name in ("config.toml", "metadata.json", "stdout.log", "latency.hdr"):
+        (leaf / name).write_text("{}\n")
+    matrix = {
+        "experiments": {
+            "e-perf-1": {
+                "measurement_secs": 60,
+                "required_outputs": ["latency.hdr"],
+            }
+        },
+        "enhanced_candidate": {
+            "instrumentation": {"bounded_interval_metrics": {"bucket_width_ms": 1000}}
+        },
+    }
+
+    violations, _ = CONTRACT.check_leaf(
+        leaf, "e-perf-1", canonical=True, canonical_matrix=matrix
+    )
+
+    assert "missing bounded interval artefact for e-perf-1: interval-latency.json" in violations
+    assert "missing bounded interval artefact for e-perf-1: interval-metrics.json" in violations
 
 
 def make_result(root: Path) -> Path:
@@ -44,6 +126,53 @@ def make_result(root: Path) -> Path:
     (result / "measurement-window.json").write_text(
         '{"started_ns":100,"finished_ns":200}\n'
     )
+    interval_fragment = {
+        "schema_version": 1,
+        "interval_clock": "monotonic-elapsed",
+        "alignment_clock": "unix-epoch",
+        "alignment_clock_purpose": "cross-process-alignment-only",
+        "measurement_start_unix_epoch_ns": 1_000_000_000,
+        "declared_measurement_duration_ns": 1_000_000_000,
+        "bucket_width_ns": 1_000_000_000,
+        "maximum_rows": 3,
+        "row_count": 1,
+        "aggregate_latency_count": 1,
+        "late_arrivals": 0,
+        "rows": [{
+            "interval_start_ns": 0,
+            "interval_end_ns": 1_000_000_000,
+            "interval_start_unix_epoch_ns": 1_000_000_000,
+            "interval_end_unix_epoch_ns": 2_000_000_000,
+            "latency_count": 1,
+            "latency_p50_ns": 1,
+            "latency_p95_ns": 1,
+            "latency_p99_ns": 1,
+            "received_events": 1,
+            "throughput_messages": 1,
+            "duplicates": 0,
+        }],
+    }
+    (result / "interval-latency.json").write_text(json.dumps(interval_fragment))
+    metric = {"status": "unavailable", "reason": "fixture"}
+    interval_metrics = {
+        **interval_fragment,
+        "sample_unit": "interval-within-run",
+        "sources": {"latency_throughput": "interval-latency.json"},
+        "estimators": {},
+        "rows": [{
+            **interval_fragment["rows"][0],
+            "latency_p50_ns": {"status": "available", "value": 1},
+            "latency_p95_ns": {"status": "available", "value": 1},
+            "latency_p99_ns": {"status": "available", "value": 1},
+            "throughput_messages_per_second": 1.0,
+            "cpu_percent": metric,
+            "rss_bytes": metric,
+            "pmic_internal_rail_proxy_watts": metric,
+            "temperature_millicelsius": metric,
+            "queue_depth": metric,
+        }],
+    }
+    (result / "interval-metrics.json").write_text(json.dumps(interval_metrics))
     metadata = {
         "experiment": "e-perf-4",
         "host_tag": "rpi5",
@@ -452,38 +581,21 @@ def test_e_perf_5_accepts_transform_only_fuel_for_transform_only_pipeline() -> N
 def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        source = make_result(root)
         result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
-        result.mkdir(parents=True)
-        for name in (
-            "config.toml",
-            "stdout.log",
-            "latency.hdr",
-            "throughput.csv",
-            "sequence.csv",
-            "pi-telemetry.csv",
-            "pmic-rails.csv",
-            "power-boundary.json",
-        ):
-            (result / name).write_text("fixture\n")
-        (result / "measurement-window.json").write_text(
-            '{"started_ns":100,"finished_ns":200}\n'
+        result.parent.mkdir(parents=True)
+        source.rename(result)
+        (result / "runtime-provenance.json").unlink()
+        metadata_path = result / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata.update(
+            experiment="e-perf-1",
+            condition="ekuiper",
+            system="ekuiper",
+            ekuiper_version="2.1.0",
+            exit_codes={"ekuiper": 0},
         )
-        metadata = {
-            "experiment": "e-perf-1",
-            "system": "ekuiper",
-            "host_tag": "rpi5",
-            "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
-            "arch": "aarch64",
-            "isolated_cpus": "1-3",
-            "cpu_governors": ["performance"],
-            "throttled": "0x0",
-            "git_sha": "1" * 40,
-            "git_dirty": False,
-            "git_tags": ["rpi5-eval-v1"],
-            "ekuiper_version": "2.1.0",
-            "exit_codes": {"ekuiper": 0},
-        }
-        (result / "metadata.json").write_text(json.dumps(metadata))
+        metadata_path.write_text(json.dumps(metadata))
         completed = run(result)
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
@@ -655,6 +767,59 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         path = Path(tmp) / "capacity-run.json"
         path.write_text(json.dumps(capacity))
         assert CONTRACT.check_capacity_run_result(path) == []
+
+        candidate = json.loads(json.dumps(capacity))
+        candidate.update(
+            batch_class="candidate-capacity-knee",
+            experiment="e-perf-capacity-knee",
+            thesis_evidence=False,
+            evidence_class="candidate-supplementary",
+            n30_admitted=False,
+            rate_msg_s=9_000,
+        )
+        candidate["messages"].update(
+            intended=540_000,
+            rejected=0,
+            enqueued=540_000,
+            received_events=540_000,
+            received_unique=540_000,
+            downstream_lost=0,
+            total_undelivered=0,
+        )
+        candidate["rates_msg_s"] = {
+            "intended": 9_000.0,
+            "achieved": 9_000.0,
+            "achieved_ratio": 1.0,
+        }
+        candidate["latency_hdr"]["samples"] = 540_000
+        path.write_text(json.dumps(candidate))
+        assert CONTRACT.check_capacity_run_result(
+            path,
+            expected_experiment="e-perf-capacity-knee",
+            expected_batch_class="candidate-capacity-knee",
+            expected_thesis_evidence=False,
+            repetitions=5,
+            measurement_secs=60,
+            require_n30_exclusion=True,
+            allowed_rates_by_system={"wafer": {9_000}},
+            expected_evidence_class="candidate-supplementary",
+        ) == []
+        candidate["rate_msg_s"] = 4_000
+        path.write_text(json.dumps(candidate))
+        assert "outside the system grid" in " ".join(
+            CONTRACT.check_capacity_run_result(
+                path,
+                expected_experiment="e-perf-capacity-knee",
+                expected_batch_class="candidate-capacity-knee",
+                expected_thesis_evidence=False,
+                repetitions=5,
+                measurement_secs=60,
+                require_n30_exclusion=True,
+                allowed_rates_by_system={"wafer": {9_000}},
+                expected_evidence_class="candidate-supplementary",
+            )
+        )
+
         capacity["measurement_duration_ns"] = 30_000_000_000
         path.write_text(json.dumps(capacity))
         assert "measurement duration differs" in " ".join(
@@ -691,6 +856,380 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         assert "config receipt checksum mismatch" in " ".join(
             CONTRACT.check_capacity_artifact_reconciliation(leaf)
         )
+
+
+def test_candidate_payload_manifest_rejects_hash_and_identity_drift(tmp_path: Path) -> None:
+    config = ROOT / "eval/configs/enhanced/e-perf-payload-8kb.toml"
+    leaf = tmp_path / "e-perf-payload-refinement/8kb/run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    copied = leaf / "config.toml"
+    copied.write_bytes(config.read_bytes())
+    metadata = {
+        "experiment": "e-perf-payload-refinement",
+        "condition": "8kb",
+        "run_index": 1,
+    }
+    manifest = {
+        "schema_version": 1,
+        "batch_class": "candidate-payload-refinement",
+        "experiment": "e-perf-payload-refinement",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one payload size",
+        "condition": "8kb",
+        "run_index": 1,
+        "source_kind": "bench-source",
+        "source_node": "source",
+        "source_pattern": "repeated-byte-0x42",
+        "transform_node": "transform",
+        "transform_plugin_path": (
+            "../../../plugins/pass-through/target/wasm32-wasip2/release/"
+            "wafer_pass_through.wasm"
+        ),
+        "sink_kind": "bench-sink",
+        "sink_node": "sink",
+        "edges": [
+            {"from": "source", "to": "transform"},
+            {"from": "transform", "to": "sink"},
+        ],
+        "payload_bytes": 8192,
+        "payload_sha256": hashlib.sha256(b"B" * 8192).hexdigest(),
+        "rate_msg_s": 1_000,
+        "warmup_messages": 30_000,
+        "measurement_messages": 60_000,
+        "total_messages": 90_000,
+        "config_sha256": hashlib.sha256(copied.read_bytes()).hexdigest(),
+        "no_pool_with": ["e-perf-4", "prior diagnostic rehearsals"],
+    }
+    path = leaf / "payload-manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    assert CONTRACT.check_payload_manifest(path, metadata) == []
+    manifest["payload_sha256"] = "0" * 64
+    path.write_text(json.dumps(manifest))
+    assert "payload checksum differs" in " ".join(
+        CONTRACT.check_payload_manifest(path, metadata)
+    )
+
+    manifest["payload_sha256"] = hashlib.sha256(b"B" * 8192).hexdigest()
+    copied.write_text(copied.read_text().replace("wafer_pass_through.wasm", "other.wasm"))
+    manifest["transform_plugin_path"] = "other.wasm"
+    manifest["config_sha256"] = hashlib.sha256(copied.read_bytes()).hexdigest()
+    path.write_text(json.dumps(manifest))
+    assert "candidate identity is invalid" in " ".join(
+        CONTRACT.check_payload_manifest(path, metadata)
+    )
+
+
+def test_candidate_topology_manifest_rejects_node_or_metering_drift(tmp_path: Path) -> None:
+    config = ROOT / "eval/configs/enhanced/e-perf-depth-20.toml"
+    leaf = tmp_path / "e-perf-depth-extension/depth-20/run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    copied = leaf / "config.toml"
+    copied.write_bytes(config.read_bytes())
+    raw = tomllib.loads(copied.read_text())
+    manifest = {
+        "schema_version": 1,
+        "batch_class": "candidate-depth-extension",
+        "experiment": "e-perf-depth-extension",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one pipeline depth",
+        "condition": "depth-20",
+        "run_index": 1,
+        "depth": 20,
+        "node_count": 22,
+        "source_count": 1,
+        "source_kind": "bench-source",
+        "sink_count": 1,
+        "sink_kind": "bench-sink",
+        "edge_count": 21,
+        "transform_count": 20,
+        "node_ids": list(raw["nodes"]),
+        "edges": raw["edges"],
+        "transform_plugin_paths": sorted(
+            {node["plugin"] for node in raw["nodes"].values() if node.get("type") == "transform"}
+        ),
+        "identical_transform_behavior": True,
+        "engine_fuel_budgets": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
+        "payload_bytes": 128,
+        "rate_msg_s": 1_000,
+        "warmup_messages": 30_000,
+        "measurement_messages": 60_000,
+        "config_sha256": hashlib.sha256(copied.read_bytes()).hexdigest(),
+        "no_pool_with": ["e-perf-3", "e-perf-6", "e-perf-8", "prior diagnostic rehearsals"],
+    }
+    assert len(raw["nodes"]) == manifest["node_count"]
+    path = leaf / "topology-manifest.json"
+    path.write_text(json.dumps(manifest))
+
+    assert CONTRACT.check_topology_manifest(path, metadata={"condition": "depth-20", "run_index": 1}) == []
+    manifest["transform_count"] = 19
+    path.write_text(json.dumps(manifest))
+    assert "does not reconcile with config.toml" in " ".join(
+        CONTRACT.check_topology_manifest(path, metadata={"condition": "depth-20", "run_index": 1})
+    )
+
+    manifest["transform_count"] = 20
+    copied.write_text(copied.read_text().replace("wafer_pass_through.wasm", "other.wasm"))
+    manifest["transform_plugin_paths"] = ["other.wasm"]
+    manifest["config_sha256"] = hashlib.sha256(copied.read_bytes()).hexdigest()
+    path.write_text(json.dumps(manifest))
+    assert "does not reconcile with config.toml" in " ".join(
+        CONTRACT.check_topology_manifest(path, metadata={"condition": "depth-20", "run_index": 1})
+    )
+
+
+def candidate_swap_leaf(tmp_path: Path, *, rollback: bool) -> tuple[Path, dict, dict]:
+    experiment = (
+        "e-swap-rollback-sessions" if rollback else "e-swap-independent-sessions"
+    )
+    condition = "process-trap-rollback" if rollback else "steady"
+    leaf = tmp_path / experiment / condition / "run-03-attempt-01"
+    leaf.mkdir(parents=True)
+    source_leaf = f"raw/{experiment}/rpi5-test/{condition}/run-03-attempt-01"
+    metadata = {
+        "experiment": experiment,
+        "condition": condition,
+        "run_index": 3,
+        "measurement_source_leaf": source_leaf,
+        "system": "wafer",
+        "host_tag": "rpi5",
+        "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+        "arch": "aarch64",
+        "isolated_cpus": "1-3",
+        "cpu_governors": ["performance"],
+        "throttled": "0x0",
+        "git_sha": "1" * 40,
+        "git_dirty": False,
+        "git_tags": ["rpi5-eval-v5"],
+        "wasmtime_version": "43.0.0",
+        "wafer_runtime_sha256": "2" * 64,
+        "wafer_plugin_hashes": {"transform": "3" * 64},
+        "engine_fuel_budgets": {
+            "transform": 10_000_000,
+            "filter": 500_000,
+            "router": 500_000,
+        },
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
+        "exit_codes": {"wafer_runtime": 0},
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "batch_class": (
+            "candidate-rollback-session" if rollback else "candidate-independent-swap"
+        ),
+    }
+    requests = []
+    events = []
+    transitions = []
+    for index in range(50):
+        timeline = {
+            "compile_ns": 10 + index,
+            "instantiate_ns": 20 + index,
+            "signal_ns": 30 + index,
+        }
+        event = {"event_index": index, "event_class": "first-use-aot" if index == 0 else "cached", **timeline}
+        if rollback:
+            timeline["rollback_ns"] = 40 + index
+            event["rollback_ns"] = 40 + index
+        else:
+            timeline.update(ack_ns=40 + index, convergence_ns=50 + index)
+            event.update(
+                ack_ns=40 + index,
+                convergence_ns=50 + index,
+                sink_observed_output_gap_ns=1_000 + index,
+            )
+            transitions.append({"pause_ns": 1_000 + index})
+        request = {
+            "event_index": index,
+            "plugin": (
+                "wafer_pass_through_v2_panics.wasm"
+                if rollback
+                else "wafer_pass_through_v2.wasm"
+                if index % 2 == 0
+                else "wafer_pass_through_v1.wasm"
+            ),
+            "request_duration_ns": 100 + index,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {"timeline": timeline},
+        }
+        if rollback:
+            request["body"]["status"] = "rolled_back"
+        event.update(
+            plugin=request["plugin"],
+            http_total_ns=100 + index,
+            http_total_clock="monotonic",
+        )
+        requests.append(request)
+        events.append(event)
+    (leaf / "swap_requests.json").write_text(json.dumps(requests))
+    (leaf / "swap_timeline.json").write_text(json.dumps({"transitions": transitions}))
+    (leaf / "sequence.csv").write_text(
+        "total_expected,total_received,gap_events,gap_msgs,duplicates_count\n"
+        "1000,1000,0,0,0\n"
+    )
+    evidence = {
+        "schema_version": 1,
+        "batch_class": "candidate-rollback-session" if rollback else "candidate-independent-swap",
+        "experiment": experiment,
+        "condition": condition,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": "rollback event within run" if rollback else "swap event within run",
+        "run_index": 3,
+        "event_classes": ["first-use-aot", "cached"],
+        "measurement_source_leaf": source_leaf,
+        "shared_from": None,
+        "duration_unit": "ns",
+        "sample_count": 50,
+        "sequence": {"expected": 1_000, "received": 1_000, "gaps": 0, "duplicates": 0},
+        "no_pool_with": (
+            ["e-swap-5", "prior diagnostic rehearsals"]
+            if rollback
+            else ["e-swap-1", "e-swap-2", "e-swap-6", "prior diagnostic rehearsals"]
+        ),
+        "events": events,
+    }
+    if rollback:
+        evidence.update(attempts=50, rolled_back=50, all_rolled_back=True)
+    (leaf / ("rollback.json" if rollback else "hotswap-analysis.json")).write_text(
+        json.dumps(evidence)
+    )
+    return leaf, metadata, evidence
+
+
+def complete_candidate_swap_leaf(leaf: Path, metadata: dict) -> None:
+    for name in (
+        "config.toml",
+        "stdout.log",
+        "runtime-provenance.json",
+        "latency.hdr",
+        "throughput.csv",
+        "pi-telemetry.csv",
+        "pmic-rails.csv",
+        "power-boundary.json",
+    ):
+        (leaf / name).write_text("fixture\n")
+    (leaf / "metadata.json").write_text(json.dumps(metadata))
+    (leaf / "measurement-window.json").write_text(
+        '{"started_ns":100,"finished_ns":200}\n'
+    )
+    fragment = {
+        "schema_version": 1,
+        "interval_clock": "monotonic-elapsed",
+        "alignment_clock": "unix-epoch",
+        "alignment_clock_purpose": "cross-process-alignment-only",
+        "measurement_start_unix_epoch_ns": 1_000_000_000,
+        "declared_measurement_duration_ns": 1_000_000_000,
+        "bucket_width_ns": 1_000_000_000,
+        "maximum_rows": 3,
+        "row_count": 1,
+        "aggregate_latency_count": 1,
+        "late_arrivals": 0,
+        "rows": [{
+            "interval_start_ns": 0,
+            "interval_end_ns": 1_000_000_000,
+            "interval_start_unix_epoch_ns": 1_000_000_000,
+            "interval_end_unix_epoch_ns": 2_000_000_000,
+            "latency_count": 1,
+            "latency_p50_ns": 1,
+            "latency_p95_ns": 1,
+            "latency_p99_ns": 1,
+            "received_events": 1,
+            "throughput_messages": 1,
+            "duplicates": 0,
+        }],
+    }
+    (leaf / "interval-latency.json").write_text(json.dumps(fragment))
+    metric = {"status": "unavailable", "reason": "fixture"}
+    interval_metrics = {
+        **{key: value for key, value in fragment.items() if key != "rows"},
+        "sample_unit": "interval-within-run",
+        "sources": {"latency_throughput": "interval-latency.json"},
+        "estimators": {},
+        "rows": [{
+            **fragment["rows"][0],
+            "latency_p50_ns": {"status": "available", "value": 1},
+            "latency_p95_ns": {"status": "available", "value": 1},
+            "latency_p99_ns": {"status": "available", "value": 1},
+            "throughput_messages_per_second": 1.0,
+            "cpu_percent": metric,
+            "rss_bytes": metric,
+            "pmic_internal_rail_proxy_watts": metric,
+            "temperature_millicelsius": metric,
+            "queue_depth": metric,
+        }],
+    }
+    (leaf / "interval-metrics.json").write_text(json.dumps(interval_metrics))
+
+
+def test_candidate_swap_full_leaf_contract_accepts_real_required_outputs(
+    tmp_path: Path,
+) -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    for rollback in (False, True):
+        leaf, metadata, _ = candidate_swap_leaf(tmp_path, rollback=rollback)
+        complete_candidate_swap_leaf(leaf, metadata)
+        if rollback:
+            (leaf / "swap_timeline.json").unlink()
+        violations, warnings = CONTRACT.check_leaf(
+            leaf,
+            metadata["experiment"],
+            canonical=True,
+            canonical_matrix=matrix,
+        )
+        assert violations == []
+        assert warnings == []
+
+
+def test_candidate_swap_verifier_rejects_missing_or_mixed_events(tmp_path: Path) -> None:
+    leaf, metadata, evidence = candidate_swap_leaf(tmp_path, rollback=False)
+    assert CONTRACT.check_candidate_swap_evidence(
+        leaf, metadata, "e-swap-independent-sessions"
+    ) == []
+
+    evidence["events"][0]["event_class"] = "cached"
+    (leaf / "hotswap-analysis.json").write_text(json.dumps(evidence))
+    assert "event labels are invalid" in " ".join(
+        CONTRACT.check_candidate_swap_evidence(
+            leaf, metadata, "e-swap-independent-sessions"
+        )
+    )
+
+    evidence["events"] = evidence["events"][:-1]
+    evidence["sample_count"] = 49
+    (leaf / "hotswap-analysis.json").write_text(json.dumps(evidence))
+    assert "exactly 50 events" in " ".join(
+        CONTRACT.check_candidate_swap_evidence(
+            leaf, metadata, "e-swap-independent-sessions"
+        )
+    )
+
+
+def test_candidate_rollback_verifier_reconciles_all_events(tmp_path: Path) -> None:
+    leaf, metadata, evidence = candidate_swap_leaf(tmp_path, rollback=True)
+    assert CONTRACT.check_candidate_swap_evidence(
+        leaf, metadata, "e-swap-rollback-sessions"
+    ) == []
+
+    evidence["events"][10]["rollback_ns"] += 1
+    (leaf / "rollback.json").write_text(json.dumps(evidence))
+    assert "does not reconcile" in " ".join(
+        CONTRACT.check_candidate_swap_evidence(
+            leaf, metadata, "e-swap-rollback-sessions"
+        )
+    )
 
 
 def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
@@ -792,6 +1331,11 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         disruption_path.write_text(json.dumps(disruption))
         burst_path.write_text(json.dumps(burst))
         assert CONTRACT.check_throughput_buckets(bucket_path, 200) == []
+        fine_path = root / "throughput-buckets-10ms.json"
+        fine_path.write_text(json.dumps(fine_bucket_fixture(buckets, "e-swap-3")))
+        assert CONTRACT.check_fine_event_buckets(
+            fine_path, bucket_path, experiment="e-swap-3"
+        ) == []
         assert CONTRACT.check_disruption_timeline(disruption_path) == []
         assert CONTRACT.check_burst_timeline(burst_path) == []
         buckets["alignment_error_ns"] = 10_000_001
@@ -924,6 +1468,107 @@ def swap4_timeline_fixture() -> dict:
     }
 
 
+def fine_bucket_fixture(canonical: dict, experiment: str) -> dict:
+    event_timestamp_ns = (
+        canonical["event_timestamp_ns"]
+        if experiment == "e-swap-3"
+        else canonical["source_measurement_start_unix_ns"] + 60_005_000_000
+    )
+    scheduled_timestamp_ns = (
+        canonical["scheduled_event_timestamp_ns"]
+        if experiment == "e-swap-3"
+        else canonical["source_measurement_start_unix_ns"] + 60_000_000_000
+    )
+    fine = []
+    for index in range(400):
+        start = -2_000_000_000 + index * 10_000_000
+        unique = 1 if experiment == "e-swap-4" else 0
+        fine.append({
+            "start_offset_ns": start,
+            "end_offset_ns": start + 10_000_000,
+            "received_unique": unique,
+            "received_events": unique,
+            "duplicates": 0,
+            "rate_msg_s": unique * 100,
+        })
+    if experiment == "e-swap-3":
+        for parent_index, canonical_parent in enumerate(canonical["buckets"][80:120]):
+            fine[parent_index * 10].update(
+                received_unique=canonical_parent["received_unique"],
+                received_events=canonical_parent["received_events"],
+                rate_msg_s=canonical_parent["received_unique"] * 100,
+            )
+    parents = []
+    for index in range(40):
+        nested = fine[index * 10 : (index + 1) * 10]
+        start = -2_000_000_000 + index * 100_000_000
+        unique = sum(row["received_unique"] for row in nested)
+        events = sum(row["received_events"] for row in nested)
+        duplicates = sum(row["duplicates"] for row in nested)
+        parents.append({
+            "start_offset_ns": start,
+            "end_offset_ns": start + 100_000_000,
+            "received_unique": unique,
+            "received_events": events,
+            "duplicates": duplicates,
+            "rate_msg_s": unique * 10,
+        })
+    totals = {
+        field: sum(row[field] for row in fine)
+        for field in ("received_unique", "received_events", "duplicates")
+    }
+    return {
+        "schema_version": 1,
+        "clock": "unix-epoch" if experiment == "e-swap-3" else "unix-epoch-source-sink-alignment",
+        "clock_purpose": "cross-process-alignment",
+        "alignment": "actual-t0",
+        "source_measurement_start_unix_ns": canonical.get("source_measurement_start_unix_ns"),
+        "scheduled_event_timestamp_ns": scheduled_timestamp_ns,
+        "event_timestamp_ns": event_timestamp_ns,
+        "alignment_error_ns": event_timestamp_ns - scheduled_timestamp_ns,
+        "alignment_tolerance_ns": 10_000_000,
+        "bucket_width_ns": 10_000_000,
+        "bucket_count": 400,
+        "coverage_start_offset_ns": -2_000_000_000,
+        "coverage_end_offset_ns": 2_000_000_000,
+        "parent_bucket_width_ns": 100_000_000,
+        "parent_bucket_count": 40,
+        **totals,
+        "buckets": fine,
+        "parent_buckets": parents,
+        "canonical_series": "throughput-buckets.json",
+        "loss_accounting": "canonical-sequence-and-primary-drain-only",
+    }
+
+
+def test_fine_event_contract_rejects_non_nested_and_wrong_t0(tmp_path: Path) -> None:
+    canonical = swap4_throughput_fixture()
+    fine = fine_bucket_fixture(canonical, "e-swap-4")
+    canonical_path = tmp_path / "throughput-buckets.json"
+    fine_path = tmp_path / "throughput-buckets-10ms.json"
+    canonical_path.write_text(json.dumps(canonical))
+    fine_path.write_text(json.dumps(fine))
+    assert CONTRACT.check_fine_event_buckets(
+        fine_path, canonical_path, experiment="e-swap-4"
+    ) == []
+
+    fine["parent_buckets"][0]["received_events"] += 1
+    fine_path.write_text(json.dumps(fine))
+    assert "reconcile" in " ".join(
+        CONTRACT.check_fine_event_buckets(
+            fine_path, canonical_path, experiment="e-swap-4"
+        )
+    )
+    fine = fine_bucket_fixture(canonical, "e-swap-4")
+    fine["event_timestamp_ns"] += 10_000_001
+    fine_path.write_text(json.dumps(fine))
+    assert "actual-t0" in " ".join(
+        CONTRACT.check_fine_event_buckets(
+            fine_path, canonical_path, experiment="e-swap-4"
+        )
+    )
+
+
 def test_swap4_drain_contract_is_strict(tmp_path: Path) -> None:
     valid = swap4_throughput_fixture()
     path = tmp_path / "throughput-buckets.json"
@@ -955,6 +1600,125 @@ def test_swap4_drain_contract_is_strict(tmp_path: Path) -> None:
                    drain_right_censored=True, received_unique=130_001,
                    received_events=130_001, max_arrival_offset_ns=130_000_000_000)
     assert "right-censored" in " ".join(CONTRACT._check_swap4_throughput(invalid))
+
+
+def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, dict]:
+    leaf = tmp_path / state
+    leaf.mkdir(parents=True)
+    interval = leaf / "interval-metrics.json"
+    interval.write_text('{"aggregate_latency_count":240000}\n')
+    metadata = {
+        "experiment": "e-compare-ekuiper-profile",
+        "system": "ekuiper",
+        "condition": f"rate-04000/{state}",
+        "run_index": 2,
+        "offered_rate_msg_s": 4_000,
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "batch_class": "diagnostic-ekuiper-profile",
+        "shared_measurement": False,
+        "measurement_source_leaf": (
+            f"raw/e-compare-ekuiper-profile/rate-04000/{state}/run-02-attempt-01"
+        ),
+        "git_sha": "a" * 40,
+        "git_dirty": False,
+    }
+    process = {
+        "status": "unavailable",
+        "reason": "process-profiler-disabled-by-design",
+    }
+    if state == "profiled":
+        profile = leaf / "resource-usage.csv"
+        profile.write_text("header\nrow\n")
+        process = {
+            "status": "available",
+            "path": profile.name,
+            "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+            "row_count": 2,
+            "maximum_rows": 62,
+        }
+    runtime = {
+        "schema_version": 1,
+        "experiment": "e-compare-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "condition": metadata["condition"],
+        "run_index": 2,
+        "rate_msg_s": 4_000,
+        "profiler_state": state,
+        "source_git_sha": "a" * 40,
+        "source_dirty": False,
+        "measurement_source_leaf": metadata["measurement_source_leaf"],
+        "shared_from": None,
+        "interval_alignment": {
+            "clock": "unix-epoch",
+            "measurement_start_ns": 10_000_000_000,
+            "measurement_end_ns": 70_000_000_000,
+            "row_count": 60,
+            "path": interval.name,
+            "sha256": hashlib.sha256(interval.read_bytes()).hexdigest(),
+        },
+        "process_metrics": process,
+        "latency_ns": {
+            "sample_count": 240_000,
+            "p50": 100_000,
+            "p95": 200_000,
+            "p99": 300_000,
+        },
+        "gc_runtime_metrics": {
+            "status": "unavailable",
+            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        },
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    paired = "unprofiled-control" if state == "profiled" else "profiled"
+    overhead = {
+        "schema_version": 1,
+        "experiment": "e-compare-ekuiper-profile",
+        "condition": metadata["condition"],
+        "run_index": 2,
+        "rate_msg_s": 4_000,
+        "profiler_state": state,
+        "paired_condition": f"rate-04000/{paired}",
+        "pair_key": "rate-04000/run-02",
+        "profile_collection_enabled": state == "profiled",
+        "overhead_role": (
+            "sampler-enabled" if state == "profiled" else "unprofiled-control"
+        ),
+        "overhead_estimator": "paired-run-level-profiled-minus-unprofiled-control",
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+    }
+    (leaf / "ekuiper-runtime-summary.json").write_text(json.dumps(runtime))
+    (leaf / "profiler-overhead.json").write_text(json.dumps(overhead))
+    return leaf, metadata
+
+
+def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
+    tmp_path: Path,
+) -> None:
+    for state in ("profiled", "unprofiled-control"):
+        leaf, metadata = ekuiper_profile_contract_fixture(tmp_path, state)
+        assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+
+    leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "invalid", "profiled")
+    runtime_path = leaf / "ekuiper-runtime-summary.json"
+    runtime = json.loads(runtime_path.read_text())
+    runtime["claim_boundary"] = "GC caused latency tails"
+    runtime_path.write_text(json.dumps(runtime))
+    assert "diagnostic identity" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
+
+    runtime["claim_boundary"] = "diagnostic-association-only-not-gc-causality"
+    runtime["process_metrics"]["row_count"] = 63
+    runtime_path.write_text(json.dumps(runtime))
+    assert "unbounded" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
 
 
 def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path) -> None:

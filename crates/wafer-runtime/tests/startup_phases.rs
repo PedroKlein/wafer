@@ -53,6 +53,21 @@ fn one_message_startup_records_non_overlapping_phases_and_plugin_identity() {
     let startup: Value =
         serde_json::from_slice(&std::fs::read(&startup_path).expect("read startup artifact"))
             .expect("parse startup artifact");
+    let memory_clock: Value = serde_json::from_slice(
+        &std::fs::read(output.path().join("memory-clock.json"))
+            .expect("read memory clock artifact"),
+    )
+    .expect("parse memory clock artifact");
+    assert_eq!(memory_clock["elapsed_clock"], "monotonic");
+    assert_eq!(memory_clock["alignment_clock"], "unix-epoch");
+    assert!(memory_clock["start_unix_epoch_ns"].as_u64().unwrap() > 0);
+    let intervals: Value = serde_json::from_slice(
+        &std::fs::read(output.path().join("interval-latency.json"))
+            .expect("read interval latency artifact"),
+    )
+    .expect("parse interval latency artifact");
+    assert_eq!(intervals["interval_clock"], "monotonic-elapsed");
+    assert_eq!(intervals["aggregate_latency_count"], 1);
     assert_eq!(startup["clock"], "monotonic");
     assert_eq!(startup["cache_state"], "warm");
     assert_eq!(startup["cache_preparation"]["action"], "none");

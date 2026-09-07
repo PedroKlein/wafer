@@ -514,14 +514,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn payload_has_configured_size() {
-        let config = BenchSourceConfig::new(100_000.0, 1).with_payload_size(256);
-        let mut source = BenchSource::new(config);
+    async fn candidate_payload_grid_has_exact_size_and_content_hash() {
+        use sha2::{Digest as _, Sha256};
 
-        source.init().await.unwrap();
+        let payloads = [
+            (120, "c2444823dde4c40542129b562b092b693b36c59c909106d291b18a650769b418"),
+            (1_024, "9b6ce55f379e9771551de6939556a7e6b949814ae27c2f5cfd5dbeb378ce7c2a"),
+            (8_192, "766c00ba277e84ef9550596c7eda86bad4d66a3fee2255924e6388ee9c272792"),
+            (10_240, "6dff39006bfd7895ec3ef56f233bcf5977a4cb6bd10e6aeb44d2169a773a886d"),
+            (16_384, "db03474b1b90657f9fe742b4eed775e8b9000196bf262d1bd8521f8f7f3edd3f"),
+            (32_768, "314a5163f130c25e1f962e1b0316d356d0702438df90c32c2d2dd16c84e551a8"),
+            (65_536, "fee47b1f0d7685a226fd5f2b9dd8f525038bbb05fe9d89a5d75c249edac868e3"),
+            (102_400, "7dc809b57100c529a1c31c9a89b97f4f2f682a327f23d66afa2f5b3922e3ca4e"),
+            (131_072, "97eb39e6f0fb754d60677c47fc58038027025b6351fdc5887e54aea232a5e07b"),
+            (262_144, "4b0d375a615c0382b4f958b48e43e7f356b4fcac76e20423294adc07b8d4976e"),
+        ];
 
-        let msg = source.poll().await.unwrap().unwrap();
-        assert_eq!(msg.payload.len(), 256);
+        for (size, expected_sha256) in payloads {
+            let config = BenchSourceConfig::new(100_000.0, 1).with_payload_size(size);
+            let mut source = BenchSource::new(config);
+            source.init().await.unwrap();
+            let message = source.poll().await.unwrap().unwrap();
+
+            assert_eq!(message.payload.len(), size);
+            assert_eq!(hex::encode(Sha256::digest(&message.payload)), expected_sha256);
+        }
     }
 
     #[tokio::test]

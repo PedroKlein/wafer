@@ -9,7 +9,7 @@
 
 The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
-The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Diagnostic scout, shakedown, focused-pilot, and targeted-pilot batches remain separate from final evidence.
+The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, focused-pilot, targeted-pilot, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; a post-rehearsal selection receipt must record `include`, `defer`, or `reject` first.
 
 ## Measurement boundary
 
@@ -77,7 +77,7 @@ E-Perf-10 runs MQTT loopback, Native, protected WAFER, and eKuiper at the common
 [1,000, 4,000, 8,000, 15,000, 16,000] msg/s
 ```
 
-Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent and the mean achieved/offered ratio is at least 0.99. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
+Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
 
 A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The analysis must report censoring rather than assign an exact SUT ceiling beyond the shared support path.
 
@@ -85,7 +85,7 @@ A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and
 
 E-Perf-9 compares Linux filesystem page-cache preparation. The runtime disk compiled-component cache is disabled for these runs, so E-Perf-9 is not evidence for AOT or serialized-component caching.
 
-E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method.
+E-Perf-5 remains `PENDING` until matching Raspberry Pi 5 and x86 Linux batches exist at the same source and method. The x86 execution and any cross-architecture conclusion remain `future-work`.
 
 ## Final RQ3 experiments
 
@@ -117,9 +117,19 @@ E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run r
 
 ## Statistics and outputs
 
-Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
+Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. Intervals and repeated swap events are nested observations, not independent replicates. Candidate-supplementary runs are not pooled with canonical-primary or prior rehearsal runs. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
 
-Figures and tables state N, units, estimator, evidence class, and claim boundary. Percentile summaries are not presented as empirical CDFs. PMIC measurements are labeled as a Raspberry Pi 5 internal-rail proxy, not total board or USB-C input power.
+Figures and tables state N, units, estimator, evidence class, and claim boundary. Percentile summaries are not presented as empirical CDFs. PMIC measurements are labeled as a Raspberry Pi 5 internal-rail proxy, not total board, USB-C input, or total input power. External input-power capture remains `future-work`.
+
+E-Perf-2 remains an alternate analysis of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. These aliases do not multiply sample counts. E-Swap-4 retains 1,200 source-origin primary buckets over `[0,120s)`, 100 separate drain buckets over `[120s,130s)`, zero after-drain arrivals, and no accepted right censoring.
+
+## Enhanced evidence storage
+
+V5 raw evidence lives as one physical copy on the exFAT volume labeled `WAFER_RESULTS`. Pi and Jetson use `/mnt/wafer-results`; macOS uses `/Volumes/WAFER_RESULTS`. Manifests record volume-root-relative paths. The same full SHA-256 manifest is verified after each mount or host transition, and the drive is synchronized and unmounted cleanly before physical movement.
+
+Raw attempts are append-only, including failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. The method does not depend on symlinks, hardlinks, case-only path distinctions, or POSIX ownership persistence, and it never creates a second raw-data copy.
+
+The retained 5 V / 4.2 A supply is admitted empirically. It receives no threshold waiver for nonzero throttling, high temperature, reboot, kernel I/O errors, or checksum failure.
 
 ## Reproducibility
 

@@ -1,0 +1,431 @@
+[pipeline]
+name = "e-perf-depth-extension-50"
+description = "Candidate depth benchmark with 50 identical pass-through transforms"
+
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 90000
+warmup_messages = 30000
+payload_size = 128
+
+[nodes.t1]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t2]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t3]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t4]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t5]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t6]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t7]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t8]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t9]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t10]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t11]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t12]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t13]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t14]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t15]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t16]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t17]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t18]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t19]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t20]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t21]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t22]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t23]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t24]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t25]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t26]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t27]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t28]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t29]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t30]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t31]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t32]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t33]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t34]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t35]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t36]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t37]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t38]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t39]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t40]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t41]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t42]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t43]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t44]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t45]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t46]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t47]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t48]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t49]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.t50]
+type = "transform"
+plugin = "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "t1"
+
+[[edges]]
+from = "t1"
+to = "t2"
+
+[[edges]]
+from = "t2"
+to = "t3"
+
+[[edges]]
+from = "t3"
+to = "t4"
+
+[[edges]]
+from = "t4"
+to = "t5"
+
+[[edges]]
+from = "t5"
+to = "t6"
+
+[[edges]]
+from = "t6"
+to = "t7"
+
+[[edges]]
+from = "t7"
+to = "t8"
+
+[[edges]]
+from = "t8"
+to = "t9"
+
+[[edges]]
+from = "t9"
+to = "t10"
+
+[[edges]]
+from = "t10"
+to = "t11"
+
+[[edges]]
+from = "t11"
+to = "t12"
+
+[[edges]]
+from = "t12"
+to = "t13"
+
+[[edges]]
+from = "t13"
+to = "t14"
+
+[[edges]]
+from = "t14"
+to = "t15"
+
+[[edges]]
+from = "t15"
+to = "t16"
+
+[[edges]]
+from = "t16"
+to = "t17"
+
+[[edges]]
+from = "t17"
+to = "t18"
+
+[[edges]]
+from = "t18"
+to = "t19"
+
+[[edges]]
+from = "t19"
+to = "t20"
+
+[[edges]]
+from = "t20"
+to = "t21"
+
+[[edges]]
+from = "t21"
+to = "t22"
+
+[[edges]]
+from = "t22"
+to = "t23"
+
+[[edges]]
+from = "t23"
+to = "t24"
+
+[[edges]]
+from = "t24"
+to = "t25"
+
+[[edges]]
+from = "t25"
+to = "t26"
+
+[[edges]]
+from = "t26"
+to = "t27"
+
+[[edges]]
+from = "t27"
+to = "t28"
+
+[[edges]]
+from = "t28"
+to = "t29"
+
+[[edges]]
+from = "t29"
+to = "t30"
+
+[[edges]]
+from = "t30"
+to = "t31"
+
+[[edges]]
+from = "t31"
+to = "t32"
+
+[[edges]]
+from = "t32"
+to = "t33"
+
+[[edges]]
+from = "t33"
+to = "t34"
+
+[[edges]]
+from = "t34"
+to = "t35"
+
+[[edges]]
+from = "t35"
+to = "t36"
+
+[[edges]]
+from = "t36"
+to = "t37"
+
+[[edges]]
+from = "t37"
+to = "t38"
+
+[[edges]]
+from = "t38"
+to = "t39"
+
+[[edges]]
+from = "t39"
+to = "t40"
+
+[[edges]]
+from = "t40"
+to = "t41"
+
+[[edges]]
+from = "t41"
+to = "t42"
+
+[[edges]]
+from = "t42"
+to = "t43"
+
+[[edges]]
+from = "t43"
+to = "t44"
+
+[[edges]]
+from = "t44"
+to = "t45"
+
+[[edges]]
+from = "t45"
+to = "t46"
+
+[[edges]]
+from = "t46"
+to = "t47"
+
+[[edges]]
+from = "t47"
+to = "t48"
+
+[[edges]]
+from = "t48"
+to = "t49"
+
+[[edges]]
+from = "t49"
+to = "t50"
+
+[[edges]]
+from = "t50"
+to = "sink"

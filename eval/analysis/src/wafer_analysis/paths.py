@@ -9,23 +9,29 @@ import pathlib
 import re
 from collections.abc import Mapping
 
+from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
+
 APPROVAL_RELATIVE_PATH = pathlib.Path(
     ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
 )
-
-
 def resolve_result_batch(
     experiment_id: str,
     diagnostic_path: str | None = None,
     batch_id: str | None = None,
+    results_root: pathlib.Path | str | None = None,
 ) -> pathlib.Path:
     """Resolve one explicit diagnostic path or approved canonical batch."""
     repo = _find_repo_root()
+    layout = ResultsLayout.resolve(repo, results_root)
     if diagnostic_path is not None:
         path = pathlib.Path(diagnostic_path)
         if not path.is_absolute():
-            path = repo / path
+            path = layout.volume / path if layout.explicit else repo / path
+        if layout.explicit:
+            _reject_links_below(path, layout.raw)
         path = path.resolve()
+        if layout.explicit and layout.raw.resolve() not in path.parents:
+            raise ValueError(f"diagnostic input must be beneath the raw evidence root: {path}")
         if not path.is_dir():
             raise FileNotFoundError(f"Explicit diagnostic path does not exist: {path}")
         return path
@@ -35,42 +41,121 @@ def resolve_result_batch(
         raise RuntimeError(
             "WAFER_EVAL_BATCH_ID or an explicit diagnostic_path is required"
         )
-    return find_canonical_batch(experiment_id, selected_batch)
+    return find_canonical_batch(experiment_id, selected_batch, results_root)
 
 
 def resolve_analysis_batch(
     experiment_id: str,
     diagnostic_path: str | None = None,
     batch_id: str | None = None,
+    results_root: pathlib.Path | str | None = None,
 ) -> tuple[pathlib.Path | None, bool]:
     """Resolve notebook input and identify whether canonical gates apply."""
     if diagnostic_path is not None:
         return resolve_result_batch(
-            experiment_id, diagnostic_path=diagnostic_path
+            experiment_id,
+            diagnostic_path=diagnostic_path,
+            results_root=results_root,
         ), False
     selected_batch = batch_id or os.environ.get("WAFER_EVAL_BATCH_ID")
     if selected_batch:
-        return find_canonical_batch(experiment_id, selected_batch), True
+        return find_canonical_batch(experiment_id, selected_batch, results_root), True
     return None, False
 
 
-def find_canonical_batch(experiment_id: str, batch_id: str) -> pathlib.Path:
+def find_canonical_batch(
+    experiment_id: str,
+    batch_id: str,
+    results_root: pathlib.Path | str | None = None,
+) -> pathlib.Path:
     """Resolve one explicitly named approved Pi 5 batch and validate it."""
     name = _canonical_batch_name(batch_id)
-    path = _find_repo_root() / "eval" / "results" / experiment_id / name
-    if not path.is_dir():
-        raise FileNotFoundError(f"Canonical batch does not exist: {path}")
-    validate_canonical_batch(path, experiment_id)
-    return path
+    repo = _find_repo_root()
+    layout = ResultsLayout.resolve(repo, results_root)
+    path = layout.raw_path(experiment_id, name)
+    if path.is_dir():
+        validate_canonical_batch(path, experiment_id, results_root)
+        return path
+    if experiment_id in CANONICAL_ALIASES:
+        return _resolve_alias_batch(layout, experiment_id, name)
+    raise FileNotFoundError(f"Canonical batch does not exist: {path}")
 
 
-def find_canonical_ledger(batch_id: str) -> pathlib.Path:
+def find_canonical_ledger(
+    batch_id: str, results_root: pathlib.Path | str | None = None
+) -> pathlib.Path:
     """Resolve the ledger for one explicitly named canonical batch."""
     name = _canonical_batch_name(batch_id)
-    path = _find_repo_root() / "eval" / "results" / "canonical-batches" / name
+    layout = ResultsLayout.resolve(_find_repo_root(), results_root)
+    path = layout.manifest_path("canonical-batches", name)
     if not path.is_dir():
         raise FileNotFoundError(f"Canonical batch ledger does not exist: {path}")
     return path
+
+
+def resolve_analysis_output(
+    kind: str,
+    *parts: str,
+    results_root: pathlib.Path | str | None = None,
+) -> pathlib.Path:
+    """Resolve a derived or report output without permitting raw writes."""
+    return ResultsLayout.resolve(_find_repo_root(), results_root).analysis_path(
+        kind, *parts
+    )
+
+
+def _resolve_alias_batch(
+    layout: ResultsLayout, experiment_id: str, batch_name: str
+) -> pathlib.Path:
+    expected_source = CANONICAL_ALIASES.get(experiment_id)
+    if expected_source is None:
+        raise FileNotFoundError(
+            f"Canonical batch does not exist and experiment is not an alias: {experiment_id}/{batch_name}"
+        )
+    receipt_root = layout.manifest_path("aliases", experiment_id, batch_name)
+    receipts = sorted(receipt_root.rglob("run-*.json")) if receipt_root.is_dir() else []
+    if not receipts:
+        raise FileNotFoundError(
+            f"Canonical batch or alias receipt does not exist: {experiment_id}/{batch_name}"
+        )
+    matrix = _read_object(_find_repo_root() / "eval/canonical-matrix.json", "canonical matrix")
+    definitions = matrix.get("experiments")
+    if not isinstance(definitions, dict) or not isinstance(
+        definitions.get(experiment_id), dict
+    ):
+        raise ValueError(f"canonical matrix does not declare alias {experiment_id}")
+    expected_units = _expected_units(definitions[experiment_id])
+    observed_units: set[tuple[str, int]] = set()
+    source_batches: set[pathlib.Path] = set()
+    for receipt_path in receipts:
+        receipt = _read_object(receipt_path, "alias receipt")
+        if (
+            receipt.get("schema_version") != 1
+            or receipt.get("experiment") != experiment_id
+            or receipt.get("shared_from_experiment") != expected_source
+            or receipt.get("shared_measurement") is not True
+        ):
+            raise ValueError(f"malformed alias receipt: {receipt_path}")
+        try:
+            unit = (str(receipt["condition"]), int(receipt["run_index"]))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError(f"malformed alias receipt: {receipt_path}") from error
+        if unit not in expected_units or unit in observed_units:
+            raise ValueError(f"unexpected or duplicate alias receipt: {unit}")
+        observed_units.add(unit)
+        _, source = resolve_alias_receipt(receipt_path)
+        source_batches.add(source.parents[1])
+    if observed_units != expected_units:
+        raise ValueError("alias receipt set is incomplete")
+    if len(source_batches) != 1:
+        raise ValueError("alias receipts do not resolve to one source batch")
+    source_batch = next(iter(source_batches))
+    validate_canonical_batch(
+        source_batch,
+        expected_source,
+        layout.volume if layout.explicit else None,
+    )
+    return source_batch
 
 
 def analysis_evidence_status(
@@ -88,6 +173,19 @@ def analysis_evidence_status(
         "thesis_evidence": False,
         "uncertainty": "descriptive only",
     }
+
+
+def _reject_links_below(path: pathlib.Path, root: pathlib.Path) -> None:
+    current = path.absolute()
+    boundary = root.absolute()
+    while True:
+        if current.is_symlink():
+            raise ValueError(f"evidence path must not use symlinks: {current}")
+        if current == boundary:
+            return
+        if current == current.parent:
+            raise ValueError(f"evidence path is outside the results root: {path}")
+        current = current.parent
 
 
 def _canonical_batch_name(batch_id: str) -> str:
@@ -183,10 +281,18 @@ def _validate_json_artifact(path: pathlib.Path) -> None:
 
 
 def validate_canonical_batch(
-    path: pathlib.Path, experiment_id: str | None = None
+    path: pathlib.Path,
+    experiment_id: str | None = None,
+    results_root: pathlib.Path | str | None = None,
 ) -> str:
     """Reject unapproved, mixed, dirty, throttled, malformed, or incomplete input."""
     repo = _find_repo_root()
+    layout = ResultsLayout.resolve(repo, results_root)
+    if layout.explicit:
+        _reject_links_below(path, layout.raw)
+    resolved_path = path.resolve()
+    if layout.explicit and layout.raw.resolve() not in resolved_path.parents:
+        raise ValueError(f"canonical input must be beneath the raw evidence root: {path}")
     experiment = experiment_id or path.parent.name
     approval = _approved_batch(repo)
     if path.name != _canonical_batch_name(approval["batch_id"]):

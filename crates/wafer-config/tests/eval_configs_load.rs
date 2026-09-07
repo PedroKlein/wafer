@@ -94,6 +94,71 @@ fn every_eval_config_loads_and_validates() {
 }
 
 #[test]
+fn enhanced_payload_and_depth_configs_preserve_exact_shape_and_metering() {
+    let root = workspace_root();
+    let payloads = [
+        ("120b", 120),
+        ("1kb", 1_024),
+        ("8kb", 8_192),
+        ("10kb", 10_240),
+        ("16kb", 16_384),
+        ("32kb", 32_768),
+        ("64kb", 65_536),
+        ("100kb", 102_400),
+        ("128kb", 131_072),
+        ("256kb", 262_144),
+    ];
+    for (label, size) in payloads {
+        let path = root.join(format!("eval/configs/enhanced/e-perf-payload-{label}.toml"));
+        let config =
+            load_config(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        validate(&config).unwrap_or_else(|errors| panic!("{}: {errors:?}", path.display()));
+        let NodeDef::Source(SourceDef::BenchSource(source)) = &config.nodes["source"] else {
+            panic!("{} source is not bench-source", path.display());
+        };
+        assert_eq!(source.payload_size, size);
+        assert_eq!(source.warmup_messages, 30_000);
+        assert_eq!(source.total_messages, 90_000);
+        let NodeDef::Transform(transform) = &config.nodes["transform"] else {
+            panic!("{} transform is not a Wasm transform", path.display());
+        };
+        assert_eq!(
+            transform.plugin.wasm_path(),
+            Some(
+                "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+            )
+        );
+        assert!(matches!(config.nodes["sink"], NodeDef::Sink(SinkDef::BenchSink(_))));
+        assert_eq!(config.nodes.len(), 3);
+        assert_eq!(config.edges.len(), 2);
+    }
+
+    let expected_plugin =
+        "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm";
+    for depth in [1, 3, 5, 10, 20, 50] {
+        let path = root.join(format!("eval/configs/enhanced/e-perf-depth-{depth}.toml"));
+        let config =
+            load_config(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+        validate(&config).unwrap_or_else(|errors| panic!("{}: {errors:?}", path.display()));
+        assert_eq!(config.engine.epoch_deadline.map(std::num::NonZeroU64::get), Some(100));
+        assert_eq!(config.engine.epoch_tick_ms, 10);
+        assert_eq!(config.engine.fuel.transform.map(std::num::NonZeroU64::get), Some(10_000_000));
+        let transforms = config
+            .nodes
+            .values()
+            .filter_map(|node| match node {
+                NodeDef::Transform(transform) => transform.plugin.wasm_path(),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(transforms.len(), depth);
+        assert!(transforms.iter().all(|plugin| *plugin == expected_plugin));
+        assert_eq!(config.nodes.len(), depth + 2);
+        assert_eq!(config.edges.len(), depth + 1);
+    }
+}
+
+#[test]
 fn capacity_scout_wafer_is_explicitly_metered() {
     let config = load_config(&workspace_root().join("eval/configs/capacity-scout-wafer.toml"))
         .expect("load capacity scout config");

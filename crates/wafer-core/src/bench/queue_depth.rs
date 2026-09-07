@@ -1,5 +1,5 @@
 use std::fmt::Write;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use tokio_util::sync::CancellationToken;
 
@@ -23,13 +23,22 @@ pub struct QueueDepthRecorder {
     handle: PipelineHandle,
     samples: Vec<QueueDepthSample>,
     start: Instant,
+    start_unix_epoch_ns: u64,
     truncated: bool,
 }
 
 impl QueueDepthRecorder {
     #[must_use]
     pub fn new(handle: PipelineHandle) -> Self {
-        Self { handle, samples: Vec::new(), start: Instant::now(), truncated: false }
+        Self {
+            handle,
+            samples: Vec::new(),
+            start: Instant::now(),
+            start_unix_epoch_ns: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, crate::util::duration_ns_saturating),
+            truncated: false,
+        }
     }
 
     pub async fn sample_loop(&mut self, cancel: CancellationToken) {
@@ -64,6 +73,11 @@ impl QueueDepthRecorder {
                 processed: snapshot.processed,
             });
         }
+    }
+
+    #[must_use]
+    pub const fn start_unix_epoch_ns(&self) -> u64 {
+        self.start_unix_epoch_ns
     }
 
     #[must_use]

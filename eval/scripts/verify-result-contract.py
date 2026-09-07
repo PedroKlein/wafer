@@ -34,9 +34,20 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 import sys
+import tomllib
 from pathlib import Path
+
+ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer_analysis"
+if str(ANALYSIS_SRC) not in sys.path:
+    sys.path.insert(0, str(ANALYSIS_SRC))
+
+from results_layout import resolve_alias_receipt
+
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from interval_metrics import validate_interval_metrics
 
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
@@ -49,6 +60,33 @@ CANONICAL_PI_FILES = {
 CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
+CANDIDATE_SCALING_EXPERIMENTS = {
+    "e-perf-payload-refinement",
+    "e-perf-depth-extension",
+}
+CANDIDATE_SWAP_EXPERIMENTS = {
+    "e-swap-independent-sessions",
+    "e-swap-rollback-sessions",
+}
+EKUIPER_PROFILE_EXPERIMENT = "e-compare-ekuiper-profile"
+EKUIPER_PROFILE_RATES = {1_000, 4_000, 8_000}
+EKUIPER_PROFILE_STATES = {"profiled", "unprofiled-control"}
+PAYLOAD_REFINEMENT_GRID = {
+    "120b": 120,
+    "1kb": 1_024,
+    "8kb": 8_192,
+    "10kb": 10_240,
+    "16kb": 16_384,
+    "32kb": 32_768,
+    "64kb": 65_536,
+    "100kb": 102_400,
+    "128kb": 131_072,
+    "256kb": 262_144,
+}
+DEPTH_EXTENSION_GRID = {1, 3, 5, 10, 20, 50}
+PASS_THROUGH_PLUGIN = (
+    "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+)
 
 # Runtime-provenance keys populated by `eval/scripts/lib/write_metadata.py`
 # when it merges `runtime-provenance.json` (emitted by wafer-runtime) into
@@ -231,7 +269,19 @@ def check_subscriber_metadata(path: Path) -> list[str]:
     return violations
 
 
-def check_capacity_run_result(path: Path) -> list[str]:
+def check_capacity_run_result(
+    path: Path,
+    *,
+    expected_experiment: str = "e-perf-10",
+    expected_batch_class: str = "final-capacity",
+    expected_thesis_evidence: bool = True,
+    repetitions: int = FINAL_CAPACITY_REPETITIONS,
+    measurement_secs: int = FINAL_CAPACITY_MEASUREMENT_SECS,
+    require_n30_exclusion: bool = False,
+    allowed_rates: set[int] | None = None,
+    allowed_rates_by_system: dict[str, set[int]] | None = None,
+    expected_evidence_class: str | None = None,
+) -> list[str]:
     violations: list[str] = []
     value = _load_json(path, "capacity-run.json", violations)
     if value is None:
@@ -272,25 +322,56 @@ def check_capacity_run_result(path: Path) -> list[str]:
                     violations.append("capacity-run.json contains unexpected sequences")
             except (TypeError, ValueError):
                 violations.append("capacity-run.json message counters must be integers")
-    if value.get("experiment") != "e-perf-10":
-        violations.append("capacity-run.json experiment must be e-perf-10")
+    if value.get("experiment") != expected_experiment:
+        violations.append(f"capacity-run.json experiment must be {expected_experiment}")
     try:
-        measurement_secs = FINAL_CAPACITY_MEASUREMENT_SECS
-        repetitions = FINAL_CAPACITY_REPETITIONS
         if not 1 <= int(value.get("run_index")) <= repetitions:
             violations.append("capacity-run.json run_index is outside the frozen repetitions")
         if int(value.get("measurement_duration_ns")) != measurement_secs * 1_000_000_000:
             violations.append("capacity-run.json measurement duration differs from the frozen matrix")
-        if int(messages.get("intended")) != int(value.get("rate_msg_s")) * measurement_secs:
+        rate = int(value.get("rate_msg_s"))
+        if allowed_rates is not None and rate not in allowed_rates:
+            violations.append("capacity-run.json rate is outside the experiment grid")
+        if (
+            allowed_rates_by_system is not None
+            and rate not in allowed_rates_by_system.get(str(value.get("system")), set())
+        ):
+            violations.append("capacity-run.json rate is outside the system grid")
+        if int(messages.get("intended")) != rate * measurement_secs:
             violations.append("capacity-run.json intended population differs from rate times duration")
     except (KeyError, TypeError, ValueError):
         violations.append("capacity-run.json frozen duration/population fields are invalid")
-    if value.get("batch_class") != "final-capacity":
-        violations.append("capacity-run.json batch_class must be final-capacity")
-    if value.get("thesis_evidence") is not True:
-        violations.append("capacity-run.json must set thesis_evidence=true")
+    if value.get("batch_class") != expected_batch_class:
+        violations.append(f"capacity-run.json batch_class must be {expected_batch_class}")
+    if value.get("thesis_evidence") is not expected_thesis_evidence:
+        violations.append(
+            "capacity-run.json must set "
+            f"thesis_evidence={str(expected_thesis_evidence).lower()}"
+        )
+    if expected_evidence_class is not None and value.get("evidence_class") != expected_evidence_class:
+        violations.append("capacity-run.json evidence_class is invalid")
+    if require_n30_exclusion and value.get("n30_admitted") is not False:
+        violations.append("capacity-run.json candidate must set n30_admitted=false")
     if value.get("traces") is not False:
         violations.append("capacity-run.json final capture must be trace-free")
+    try:
+        intended = int(messages["intended"])
+        received_unique = int(messages["received_unique"])
+        total_undelivered = int(messages["total_undelivered"])
+        duration_secs = int(value["measurement_duration_ns"]) / 1_000_000_000
+        expected_loss_percent = 100.0 * total_undelivered / intended if intended else 100.0
+        expected_achieved = received_unique / duration_secs
+        if not math.isclose(float(value.get("loss_percent")), expected_loss_percent):
+            violations.append("capacity-run.json loss_percent differs from counters")
+        if not math.isclose(float(value.get("rates_msg_s", {}).get("achieved")), expected_achieved):
+            violations.append("capacity-run.json achieved rate differs from counters")
+        achieved_ratio = value.get("rates_msg_s", {}).get("achieved_ratio")
+        if achieved_ratio is not None and not math.isclose(
+            float(achieved_ratio), received_unique / intended if intended else 0.0
+        ):
+            violations.append("capacity-run.json achieved ratio differs from counters")
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        violations.append("capacity-run.json derived rates are invalid")
     histogram = value.get("latency_hdr")
     if not isinstance(histogram, dict) or not {
         "path", "sha256", "samples", "lowest_ns", "highest_ns", "significant_digits"
@@ -559,6 +640,146 @@ def check_throughput_buckets(path: Path, expected_count: int | None = None) -> l
         for field, total in totals.items():
             if value.get(field) != total:
                 violations.append(f"throughput-buckets.json {field} total does not reconcile")
+    return violations
+
+
+def check_fine_event_buckets(
+    path: Path,
+    canonical_path: Path,
+    *,
+    experiment: str,
+    expected_event_timestamp_ns: int | None = None,
+) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "throughput-buckets-10ms.json", violations)
+    canonical = _load_json(canonical_path, "throughput-buckets.json", violations)
+    if value is None or canonical is None:
+        return violations
+    if (
+        value.get("schema_version") != 1
+        or value.get("alignment") != "actual-t0"
+        or value.get("clock_purpose") != "cross-process-alignment"
+        or value.get("bucket_width_ns") != 10_000_000
+        or value.get("bucket_count") != 400
+        or value.get("coverage_start_offset_ns") != -2_000_000_000
+        or value.get("coverage_end_offset_ns") != 2_000_000_000
+        or value.get("parent_bucket_width_ns") != 100_000_000
+        or value.get("parent_bucket_count") != 40
+        or value.get("loss_accounting") != "canonical-sequence-and-primary-drain-only"
+    ):
+        violations.append("throughput-buckets-10ms.json contract differs from the frozen window")
+    expected_clock = (
+        "unix-epoch" if experiment == "e-swap-3" else "unix-epoch-source-sink-alignment"
+    )
+    if value.get("clock") != expected_clock:
+        violations.append("throughput-buckets-10ms.json clock differs from the experiment")
+    try:
+        event_timestamp = int(value["event_timestamp_ns"])
+        scheduled_timestamp = int(value["scheduled_event_timestamp_ns"])
+        alignment_error = event_timestamp - scheduled_timestamp
+        if (
+            int(value["alignment_error_ns"]) != alignment_error
+            or int(value["alignment_tolerance_ns"]) != 10_000_000
+            or abs(alignment_error) > 10_000_000
+            or (
+                expected_event_timestamp_ns is not None
+                and event_timestamp != expected_event_timestamp_ns
+            )
+        ):
+            violations.append("throughput-buckets-10ms.json actual-t0 alignment is invalid")
+    except (KeyError, TypeError, ValueError):
+        violations.append("throughput-buckets-10ms.json timing metadata is invalid")
+
+    def validate_series(
+        rows: object, *, count: int, width_ns: int, label: str
+    ) -> tuple[dict[str, int], list[dict]]:
+        totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
+        if not isinstance(rows, list) or len(rows) != count:
+            violations.append(
+                f"throughput-buckets-10ms.json must contain {count} {label} buckets"
+            )
+            return totals, []
+        expected_start = -2_000_000_000
+        for row in rows:
+            try:
+                unique = int(row["received_unique"])
+                events = int(row["received_events"])
+                duplicates = int(row["duplicates"])
+                if (
+                    int(row["start_offset_ns"]) != expected_start
+                    or int(row["end_offset_ns"]) != expected_start + width_ns
+                    or events != unique + duplicates
+                    or float(row["rate_msg_s"]) != unique * 1_000_000_000 / width_ns
+                ):
+                    violations.append(
+                        f"throughput-buckets-10ms.json {label} buckets are not contiguous or reconciled"
+                    )
+                totals["received_unique"] += unique
+                totals["received_events"] += events
+                totals["duplicates"] += duplicates
+                expected_start += width_ns
+            except (KeyError, TypeError, ValueError):
+                violations.append(
+                    f"throughput-buckets-10ms.json {label} bucket schema is invalid"
+                )
+        if expected_start != 2_000_000_000:
+            violations.append(
+                f"throughput-buckets-10ms.json {label} coverage does not end at +2 seconds"
+            )
+        return totals, rows
+
+    fine_totals, fine = validate_series(
+        value.get("buckets"), count=400, width_ns=10_000_000, label="fine"
+    )
+    parent_totals, parents = validate_series(
+        value.get("parent_buckets"), count=40, width_ns=100_000_000, label="parent"
+    )
+    if fine_totals != parent_totals:
+        violations.append("throughput-buckets-10ms.json fine and parent totals differ")
+    if fine and parents:
+        for parent_index, parent in enumerate(parents):
+            nested = fine[parent_index * 10 : (parent_index + 1) * 10]
+            for field in ("received_unique", "received_events", "duplicates"):
+                if int(parent[field]) != sum(int(row[field]) for row in nested):
+                    violations.append(
+                        "throughput-buckets-10ms.json fine buckets do not reconcile to parent population"
+                    )
+                    break
+    for field, total in fine_totals.items():
+        if value.get(field) != total:
+            violations.append(f"throughput-buckets-10ms.json {field} total differs")
+    if value.get("canonical_series") != "throughput-buckets.json":
+        violations.append("throughput-buckets-10ms.json canonical series reference is invalid")
+    if experiment == "e-swap-3":
+        if value.get("event_timestamp_ns") != canonical.get("event_timestamp_ns"):
+            violations.append("E-Swap-3 fine and canonical actual-t0 differ")
+        canonical_rows = canonical.get("buckets")
+        if isinstance(canonical_rows, list) and len(canonical_rows) == 200 and parents:
+            for parent, canonical_parent in zip(parents, canonical_rows[80:120]):
+                for field in ("received_unique", "received_events", "duplicates"):
+                    if int(parent[field]) != int(canonical_parent[field]):
+                        violations.append(
+                            "E-Swap-3 fine buckets do not reconcile to canonical 100 ms population"
+                        )
+                        break
+    elif experiment == "e-swap-4":
+        try:
+            source_origin = canonical.get("source_measurement_start_unix_ns")
+            if (
+                value.get("source_measurement_start_unix_ns") != source_origin
+                or not isinstance(source_origin, int)
+                or scheduled_timestamp != source_origin + 60_000_000_000
+            ):
+                violations.append("E-Swap-4 fine and canonical source origins differ")
+            if any(
+                fine_totals[field] > int(canonical[field])
+                for field in ("received_unique", "received_events", "duplicates")
+            ):
+                violations.append("E-Swap-4 fine population exceeds canonical full-run population")
+        except (KeyError, TypeError, ValueError):
+            violations.append("E-Swap-4 fine/canonical population is invalid")
+    else:
+        violations.append("throughput-buckets-10ms.json is attached to an unsupported experiment")
     return violations
 
 
@@ -1149,11 +1370,452 @@ def check_focused_leaf(
     return violations
 
 
+def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    runtime = _load_json(
+        leaf / "ekuiper-runtime-summary.json",
+        "ekuiper-runtime-summary.json",
+        violations,
+    )
+    overhead = _load_json(
+        leaf / "profiler-overhead.json", "profiler-overhead.json", violations
+    )
+    if runtime is None or overhead is None:
+        return violations
+    condition = str(metadata.get("condition", ""))
+    match = re.fullmatch(r"rate-(\d{5})/(profiled|unprofiled-control)", condition)
+    if match is None:
+        return [*violations, "eKuiper profile metadata condition is invalid"]
+    rate = int(match.group(1))
+    state = match.group(2)
+    expected_identity = {
+        "schema_version": 1,
+        "experiment": EKUIPER_PROFILE_EXPERIMENT,
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "condition": condition,
+        "run_index": metadata.get("run_index"),
+        "rate_msg_s": rate,
+        "profiler_state": state,
+        "source_git_sha": metadata.get("git_sha"),
+        "source_dirty": metadata.get("git_dirty"),
+        "measurement_source_leaf": metadata.get("measurement_source_leaf"),
+        "shared_from": None,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    if any(runtime.get(field) != value for field, value in expected_identity.items()):
+        violations.append("eKuiper runtime summary diagnostic identity is invalid")
+    if rate not in EKUIPER_PROFILE_RATES or state not in EKUIPER_PROFILE_STATES:
+        violations.append("eKuiper profile rate or state is outside the frozen grid")
+    if (
+        metadata.get("system") != "ekuiper"
+        or metadata.get("batch_class") != "diagnostic-ekuiper-profile"
+        or metadata.get("evidence_class") != "diagnostic"
+        or metadata.get("thesis_evidence") is not False
+        or metadata.get("n30_admitted") is not False
+        or metadata.get("offered_rate_msg_s") != rate
+        or metadata.get("shared_measurement") is not False
+    ):
+        violations.append("eKuiper profile metadata diagnostic identity is invalid")
+    interval = runtime.get("interval_alignment", {})
+    try:
+        interval_path = leaf / str(interval["path"])
+        if (
+            interval.get("clock") != "unix-epoch"
+            or int(interval["row_count"]) != 60
+            or int(interval["measurement_end_ns"])
+            - int(interval["measurement_start_ns"])
+            != 60_000_000_000
+            or hashlib.sha256(interval_path.read_bytes()).hexdigest()
+            != interval.get("sha256")
+        ):
+            violations.append("eKuiper runtime summary interval alignment is invalid")
+    except (KeyError, OSError, TypeError, ValueError):
+        violations.append("eKuiper runtime summary interval alignment is invalid")
+    gc_runtime = runtime.get("gc_runtime_metrics")
+    if gc_runtime != {
+        "status": "unavailable",
+        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+    }:
+        violations.append("eKuiper GC/runtime limitation is missing or overstated")
+    latency = runtime.get("latency_ns", {})
+    try:
+        interval_document = json.loads(interval_path.read_text())
+        latency_count = int(latency["sample_count"])
+        interval_count = int(interval_document["aggregate_latency_count"])
+    except (KeyError, OSError, TypeError, ValueError):
+        latency_count = -1
+        interval_count = -2
+    if (
+        any(
+            type(latency.get(field)) is not int or latency[field] < 0
+            for field in ("sample_count", "p50", "p95", "p99")
+        )
+        or latency_count <= 0
+        or latency_count != interval_count
+    ):
+        violations.append("eKuiper profile latency population does not reconcile")
+    process = runtime.get("process_metrics", {})
+    if process.get("status") == "available":
+        path = leaf / str(process.get("path", ""))
+        try:
+            row_count = int(process["row_count"])
+            if (
+                state != "profiled"
+                or row_count < 2
+                or row_count > 62
+                or process.get("maximum_rows") != 62
+                or hashlib.sha256(path.read_bytes()).hexdigest()
+                != process.get("sha256")
+            ):
+                violations.append("eKuiper process profile is invalid or unbounded")
+        except (KeyError, OSError, TypeError, ValueError):
+            violations.append("eKuiper process profile is invalid or unbounded")
+    elif process.get("status") != "unavailable" or not process.get("reason"):
+        violations.append("eKuiper process profile availability is invalid")
+    expected_pair = (
+        f"rate-{rate:05d}/unprofiled-control"
+        if state == "profiled"
+        else f"rate-{rate:05d}/profiled"
+    )
+    expected_role = (
+        "sampler-enabled"
+        if process.get("status") == "available"
+        else "sampler-skipped-unavailable"
+        if state == "profiled"
+        else "unprofiled-control"
+    )
+    if (
+        overhead.get("schema_version") != 1
+        or overhead.get("experiment") != EKUIPER_PROFILE_EXPERIMENT
+        or overhead.get("condition") != condition
+        or overhead.get("run_index") != metadata.get("run_index")
+        or overhead.get("rate_msg_s") != rate
+        or overhead.get("profiler_state") != state
+        or overhead.get("paired_condition") != expected_pair
+        or overhead.get("pair_key") != f"rate-{rate:05d}/run-{metadata.get('run_index'):02d}"
+        or overhead.get("overhead_estimator")
+        != "paired-run-level-profiled-minus-unprofiled-control"
+        or overhead.get("claim_boundary")
+        != "diagnostic-association-only-not-gc-causality"
+        or overhead.get("profile_collection_enabled")
+        is not (process.get("status") == "available")
+        or overhead.get("overhead_role") != expected_role
+    ):
+        violations.append("profiler-overhead.json pairing or claim boundary is invalid")
+    if (
+        state == "unprofiled-control"
+        or process.get("status") == "unavailable"
+    ) and (leaf / "resource-usage.csv").exists():
+        violations.append("eKuiper leaf contains profiler output while collection is disabled")
+    return violations
+
+
+def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -> list[str]:
+    violations: list[str] = []
+    artifact_name = (
+        "hotswap-analysis.json"
+        if experiment == "e-swap-independent-sessions"
+        else "rollback.json"
+    )
+    value = _load_json(leaf / artifact_name, artifact_name, violations)
+    if value is None:
+        return violations
+    expected = {
+        "e-swap-independent-sessions": {
+            "batch_class": "candidate-independent-swap",
+            "condition": "steady",
+            "nested_unit": "swap event within run",
+            "no_pool_with": [
+                "e-swap-1",
+                "e-swap-2",
+                "e-swap-6",
+                "prior diagnostic rehearsals",
+            ],
+        },
+        "e-swap-rollback-sessions": {
+            "batch_class": "candidate-rollback-session",
+            "condition": "process-trap-rollback",
+            "nested_unit": "rollback event within run",
+            "no_pool_with": ["e-swap-5", "prior diagnostic rehearsals"],
+        },
+    }[experiment]
+    identity = {
+        "schema_version": 1,
+        "batch_class": expected["batch_class"],
+        "experiment": experiment,
+        "condition": expected["condition"],
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": expected["nested_unit"],
+        "event_classes": ["first-use-aot", "cached"],
+        "no_pool_with": expected["no_pool_with"],
+        "duration_unit": "ns",
+        "sample_count": 50,
+    }
+    if any(value.get(field) != expected_value for field, expected_value in identity.items()):
+        violations.append(f"{artifact_name} candidate identity is invalid")
+    if (
+        value.get("run_index") != metadata.get("run_index")
+        or value.get("measurement_source_leaf") != metadata.get("measurement_source_leaf")
+        or value.get("shared_from") is not None
+    ):
+        violations.append(f"{artifact_name} does not reconcile with metadata.json")
+    events = value.get("events")
+    if not isinstance(events, list) or len(events) != 50:
+        return violations + [f"{artifact_name} must contain exactly 50 events"]
+    if [event.get("event_index") for event in events] != list(range(50)):
+        violations.append(f"{artifact_name} event indices must be exactly 0 through 49")
+    if [event.get("event_class") for event in events] != ["first-use-aot", *("cached" for _ in range(49))]:
+        violations.append(f"{artifact_name} first-use and cached event labels are invalid")
+    sequence = value.get("sequence")
+    try:
+        with (leaf / "sequence.csv").open(newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        if len(rows) != 1:
+            raise ValueError
+        expected_sequence = {
+            "expected": int(rows[0]["total_expected"]),
+            "received": int(rows[0]["total_received"]),
+            "gaps": int(rows[0]["gap_msgs"]),
+            "duplicates": int(rows[0]["duplicates_count"]),
+        }
+        if (
+            sequence != expected_sequence
+            or expected_sequence["expected"] != expected_sequence["received"]
+            or expected_sequence["gaps"] != 0
+            or expected_sequence["duplicates"] != 0
+        ):
+            raise ValueError
+    except (KeyError, OSError, TypeError, ValueError):
+        violations.append(f"{artifact_name} sequence evidence is not lossless or reconciled")
+    required = (
+        {"compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns", "http_total_ns", "sink_observed_output_gap_ns"}
+        if experiment == "e-swap-independent-sessions"
+        else {"compile_ns", "instantiate_ns", "signal_ns", "rollback_ns", "http_total_ns"}
+    )
+    if any(
+        any(type(event.get(field)) is not int or event[field] < 0 for field in required)
+        for event in events
+    ):
+        violations.append(f"{artifact_name} event durations are invalid")
+    try:
+        requests = json.loads((leaf / "swap_requests.json").read_text())
+        if not isinstance(requests, list) or len(requests) != 50:
+            raise ValueError
+        for event, request in zip(events, requests, strict=True):
+            event_index = event["event_index"]
+            expected_plugin = (
+                "wafer_pass_through_v2_panics.wasm"
+                if experiment == "e-swap-rollback-sessions"
+                else "wafer_pass_through_v2.wasm"
+                if event_index % 2 == 0
+                else "wafer_pass_through_v1.wasm"
+            )
+            if event.get("plugin") != expected_plugin or request.get("plugin") != expected_plugin:
+                raise ValueError
+            timeline = request["body"]["timeline"]
+            fields = {"compile_ns", "instantiate_ns", "signal_ns"}
+            if experiment == "e-swap-independent-sessions":
+                fields |= {"ack_ns", "convergence_ns"}
+                if event["sink_observed_output_gap_ns"] != json.loads(
+                    (leaf / "swap_timeline.json").read_text()
+                )["transitions"][event["event_index"]]["pause_ns"]:
+                    raise ValueError
+            else:
+                fields.add("rollback_ns")
+                if request.get("http_status") != 200 or request["body"].get("status") != "rolled_back":
+                    raise ValueError
+            if any(event[field] != timeline[field] for field in fields):
+                raise ValueError
+            if event["http_total_ns"] != request["request_duration_ns"]:
+                raise ValueError
+    except (KeyError, OSError, TypeError, ValueError):
+        counterpart = (
+            "swap requests/timeline"
+            if experiment == "e-swap-independent-sessions"
+            else "swap requests"
+        )
+        violations.append(f"{artifact_name} does not reconcile with {counterpart}")
+    if experiment == "e-swap-rollback-sessions" and (
+        value.get("attempts") != 50
+        or value.get("rolled_back") != 50
+        or value.get("all_rolled_back") is not True
+    ):
+        violations.append("rollback.json must show fifty successful rollbacks")
+    return violations
+
+
+def check_payload_manifest(path: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "payload-manifest.json", violations)
+    if value is None:
+        return violations
+    expected_identity = {
+        "schema_version": 1,
+        "batch_class": "candidate-payload-refinement",
+        "experiment": "e-perf-payload-refinement",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one payload size",
+        "source_kind": "bench-source",
+        "source_pattern": "repeated-byte-0x42",
+        "transform_plugin_path": PASS_THROUGH_PLUGIN,
+        "sink_kind": "bench-sink",
+        "no_pool_with": ["e-perf-4", "prior diagnostic rehearsals"],
+    }
+    if any(value.get(field) != expected for field, expected in expected_identity.items()):
+        violations.append("payload-manifest.json candidate identity is invalid")
+    condition = value.get("condition")
+    payload_bytes = value.get("payload_bytes")
+    if condition not in PAYLOAD_REFINEMENT_GRID or payload_bytes != PAYLOAD_REFINEMENT_GRID[condition]:
+        violations.append("payload-manifest.json condition and byte count differ")
+    elif value.get("payload_sha256") != hashlib.sha256(b"B" * payload_bytes).hexdigest():
+        violations.append("payload-manifest.json payload checksum differs")
+    config_path = path.with_name("config.toml")
+    try:
+        config = tomllib.loads(config_path.read_text())
+        nodes = config["nodes"]
+        edges = config["edges"]
+        source = nodes["source"]
+        transforms = [node for node in nodes.values() if node.get("type") == "transform"]
+        sinks = [
+            node
+            for node in nodes.values()
+            if node.get("type") == "sink" and node.get("kind") == "bench-sink"
+        ]
+        if (
+            source.get("kind") != "bench-source"
+            or source.get("payload_size") != payload_bytes
+            or source.get("rate") != 1_000.0
+            or source.get("warmup_messages") != 30_000
+            or source.get("total_messages") != 90_000
+            or len(nodes) != 3
+            or len(transforms) != 1
+            or transforms[0].get("plugin") != PASS_THROUGH_PLUGIN
+            or len(sinks) != 1
+            or edges != [
+                {"from": "source", "to": "transform"},
+                {"from": "transform", "to": "sink"},
+            ]
+            or value.get("source_node") != "source"
+            or value.get("transform_node") != "transform"
+            or value.get("sink_node") != "sink"
+            or value.get("edges") != edges
+            or value.get("config_sha256") != hashlib.sha256(config_path.read_bytes()).hexdigest()
+        ):
+            violations.append("payload-manifest.json does not reconcile with config.toml")
+    except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
+        violations.append("payload-manifest.json cannot reconcile with config.toml")
+    if value.get("run_index") != metadata.get("run_index") or condition != metadata.get("condition"):
+        violations.append("payload-manifest.json does not reconcile with metadata.json")
+    if value.get("run_index") not in range(1, 6):
+        violations.append("payload-manifest.json run index is outside N=5")
+    if (
+        value.get("rate_msg_s") != 1_000
+        or value.get("warmup_messages") != 30_000
+        or value.get("measurement_messages") != 60_000
+        or value.get("total_messages") != 90_000
+    ):
+        violations.append("payload-manifest.json run population differs from the candidate contract")
+    return violations
+
+
+def check_topology_manifest(path: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "topology-manifest.json", violations)
+    if value is None:
+        return violations
+    expected_identity = {
+        "schema_version": 1,
+        "batch_class": "candidate-depth-extension",
+        "experiment": "e-perf-depth-extension",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one pipeline depth",
+        "no_pool_with": [
+            "e-perf-3",
+            "e-perf-6",
+            "e-perf-8",
+            "prior diagnostic rehearsals",
+        ],
+    }
+    if any(value.get(field) != expected for field, expected in expected_identity.items()):
+        violations.append("topology-manifest.json candidate identity is invalid")
+    depth = value.get("depth")
+    if depth not in DEPTH_EXTENSION_GRID or value.get("condition") != f"depth-{depth}":
+        violations.append("topology-manifest.json depth is outside the frozen grid")
+    config_path = path.with_name("config.toml")
+    try:
+        config = tomllib.loads(config_path.read_text())
+        nodes = config["nodes"]
+        edges = config["edges"]
+        transforms = [node for node in nodes.values() if node.get("type") == "transform"]
+        plugin_paths = {node.get("plugin") for node in transforms}
+        expected_edges = [{"from": "source", "to": "t1"}]
+        expected_edges.extend(
+            {"from": f"t{index}", "to": f"t{index + 1}"}
+            for index in range(1, depth)
+        )
+        expected_edges.append({"from": f"t{depth}", "to": "sink"})
+        if (
+            len(nodes) != depth + 2
+            or len(transforms) != depth
+            or len(edges) != depth + 1
+            or edges != expected_edges
+            or plugin_paths != {PASS_THROUGH_PLUGIN}
+            or nodes.get("source", {}).get("kind") != "bench-source"
+            or nodes.get("sink", {}).get("kind") != "bench-sink"
+            or value.get("node_count") != len(nodes)
+            or value.get("source_count") != 1
+            or value.get("source_kind") != "bench-source"
+            or value.get("sink_count") != 1
+            or value.get("sink_kind") != "bench-sink"
+            or value.get("transform_count") != len(transforms)
+            or value.get("edge_count") != len(edges)
+            or value.get("node_ids") != list(nodes)
+            or value.get("edges") != expected_edges
+            or value.get("transform_plugin_paths") != sorted(plugin_paths)
+            or value.get("identical_transform_behavior") is not True
+            or value.get("engine_fuel_budgets")
+            != {"transform": 10_000_000, "filter": 500_000, "router": 500_000}
+            or value.get("epoch_deadline") != 100
+            or value.get("epoch_tick_ms") != 10
+            or value.get("effective_metering_mode") != "fuel-and-epoch"
+            or value.get("config_sha256") != hashlib.sha256(config_path.read_bytes()).hexdigest()
+        ):
+            violations.append("topology-manifest.json does not reconcile with config.toml")
+    except (KeyError, OSError, TypeError, ValueError, tomllib.TOMLDecodeError):
+        violations.append("topology-manifest.json cannot reconcile with config.toml")
+    if value.get("run_index") != metadata.get("run_index") or value.get("condition") != metadata.get("condition"):
+        violations.append("topology-manifest.json does not reconcile with metadata.json")
+    if value.get("run_index") not in range(1, 6):
+        violations.append("topology-manifest.json run index is outside N=5")
+    if (
+        value.get("payload_bytes") != 128
+        or value.get("rate_msg_s") != 1_000
+        or value.get("warmup_messages") != 30_000
+        or value.get("measurement_messages") != 60_000
+    ):
+        violations.append("topology-manifest.json source workload differs from the candidate contract")
+    return violations
+
+
 def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
     if experiment == "e-perf-7":
         values = matrix["experiments"][experiment]["metering_modes"][condition]
     else:
-        values = matrix["experiments"][experiment].get("metering_exceptions", {}).get(
+        definition = matrix["experiments"].get(experiment)
+        if definition is None:
+            definition = matrix.get("enhanced_candidate", {}).get("experiments", {}).get(experiment, {})
+        values = definition.get("metering_exceptions", {}).get(
             condition, matrix["final_campaign"]["canonical_metering"]
         )
     fuel = values.get("fuel")
@@ -1262,6 +1924,41 @@ def check_leaf(
                         violations.append(
                             f"E-Perf-10 metadata must set thesis_evidence={str(expected_evidence).lower()}"
                         )
+                if experiment == "e-perf-capacity-knee":
+                    if metadata.get("thesis_evidence") is not False:
+                        violations.append("capacity-knee metadata must set thesis_evidence=false")
+                    if metadata.get("n30_admitted") is not False:
+                        violations.append("capacity-knee metadata must set n30_admitted=false")
+                    if metadata.get("evidence_class") != "candidate-supplementary":
+                        violations.append("capacity-knee metadata evidence_class is invalid")
+                if experiment in CANDIDATE_SCALING_EXPERIMENTS | CANDIDATE_SWAP_EXPERIMENTS:
+                    expected_batch_class = {
+                        "e-perf-payload-refinement": "candidate-payload-refinement",
+                        "e-perf-depth-extension": "candidate-depth-extension",
+                        "e-swap-independent-sessions": "candidate-independent-swap",
+                        "e-swap-rollback-sessions": "candidate-rollback-session",
+                    }[experiment]
+                    if (
+                        metadata.get("experiment") != experiment
+                        or metadata.get("thesis_evidence") is not False
+                        or metadata.get("n30_admitted") is not False
+                        or metadata.get("evidence_class") != "candidate-supplementary"
+                        or metadata.get("batch_class") != expected_batch_class
+                    ):
+                        violations.append(f"{experiment} metadata candidate identity is invalid")
+                if experiment == EKUIPER_PROFILE_EXPERIMENT:
+                    if (
+                        metadata.get("experiment") != experiment
+                        or metadata.get("system") != "ekuiper"
+                        or metadata.get("thesis_evidence") is not False
+                        or metadata.get("n30_admitted") is not False
+                        or metadata.get("evidence_class") != "diagnostic"
+                        or metadata.get("batch_class") != "diagnostic-ekuiper-profile"
+                        or metadata.get("shared_measurement") is not False
+                    ):
+                        violations.append(
+                            "eKuiper profile metadata diagnostic identity is invalid"
+                        )
                 if canonical:
                     if not focused and metadata.get("system") == "wafer" and canonical_matrix is not None:
                         expected = expected_metering(
@@ -1303,16 +2000,58 @@ def check_leaf(
             canonical_matrix.get("focused_pilot", {}).get("experiments", {}).get(experiment)
             if focused
             else canonical_matrix.get("experiments", {}).get(experiment)
+            or canonical_matrix.get("enhanced_candidate", {}).get("experiments", {}).get(experiment)
         )
         if not isinstance(experiment_contract, dict):
             violations.append(f"experiment {experiment} is absent from canonical matrix")
         else:
-            for required in experiment_contract.get("required_outputs", []):
+            required_outputs = experiment_contract.get("required_outputs", [])
+            for required in required_outputs:
                 if required not in files:
                     violations.append(
                         f"missing required canonical artefact for {experiment}: {required}"
                     )
+            interval_contract = (
+                canonical_matrix.get("enhanced_candidate", {})
+                .get("instrumentation", {})
+                .get("bounded_interval_metrics", {})
+            )
+            timed_output = int(experiment_contract.get("measurement_secs", 0)) > 0 and bool(
+                {"latency.hdr", "throughput.csv"} & set(required_outputs)
+            )
+            if interval_contract and timed_output and not focused:
+                for required in ("interval-latency.json", "interval-metrics.json"):
+                    if required not in files:
+                        violations.append(
+                            f"missing bounded interval artefact for {experiment}: {required}"
+                        )
+    for fragment_path in leaf.rglob("interval-latency.json"):
+        interval_path = fragment_path.with_name("interval-metrics.json")
+        if not interval_path.is_file():
+            violations.append(
+                f"timed interval fragment lacks composed interval-metrics.json: {fragment_path.parent}"
+            )
+            continue
+        aggregate_count = None
+        subscriber_path = fragment_path.with_name("subscriber-metadata.json")
+        percentiles_path = fragment_path.with_name("percentiles.json")
+        try:
+            if subscriber_path.is_file():
+                aggregate_count = int(json.loads(subscriber_path.read_text())["total_recorded"])
+            elif percentiles_path.is_file():
+                aggregate_count = int(json.loads(percentiles_path.read_text())["total_count"])
+            validate_interval_metrics(interval_path, aggregate_count)
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            violations.append(f"invalid interval-metrics.json: {error}")
 
+    if experiment == "e-perf-payload-refinement" and "payload-manifest.json" in files:
+        violations.extend(check_payload_manifest(leaf / "payload-manifest.json", metadata))
+    if experiment == "e-perf-depth-extension" and "topology-manifest.json" in files:
+        violations.extend(check_topology_manifest(leaf / "topology-manifest.json", metadata))
+    if experiment in CANDIDATE_SWAP_EXPERIMENTS:
+        violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
+    if experiment == EKUIPER_PROFILE_EXPERIMENT:
+        violations.extend(check_ekuiper_profile_artifacts(leaf, metadata))
     if experiment == "e-perf-10" and "rate-sweep.json" in files:
         violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
     if experiment == "e-perf-10" and not focused:
@@ -1324,8 +2063,47 @@ def check_leaf(
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
         violations.extend(check_capacity_run_result(leaf / "capacity-run.json"))
         violations.extend(check_capacity_artifact_reconciliation(leaf))
+    if experiment == "e-perf-capacity-knee" and "capacity-run.json" in files:
+        matrix = canonical_matrix
+        if matrix is None:
+            try:
+                matrix = json.loads(CANONICAL_MATRIX.read_text())
+            except (OSError, ValueError) as error:
+                violations.append(f"cannot load capacity-knee contract: {error}")
+        definition = (
+            matrix.get("enhanced_candidate", {}).get("experiments", {}).get(experiment)
+            if isinstance(matrix, dict)
+            else None
+        )
+        violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
+        violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
+        if not isinstance(definition, dict):
+            violations.append("capacity-knee experiment is absent from the matrix")
+        else:
+            violations.extend(check_capacity_run_result(
+                leaf / "capacity-run.json",
+                expected_experiment=experiment,
+                expected_batch_class="candidate-capacity-knee",
+                expected_thesis_evidence=False,
+                repetitions=int(definition["repetitions"]),
+                measurement_secs=int(definition["measurement_secs"]),
+                require_n30_exclusion=True,
+                allowed_rates_by_system={
+                    system: {int(rate) for rate in rates}
+                    for system, rates in definition["condition_grid_msg_s"].items()
+                },
+                expected_evidence_class="candidate-supplementary",
+            ))
+        violations.extend(check_capacity_artifact_reconciliation(leaf))
     if experiment == "e-swap-3" and not focused:
         violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 200))
+        violations.extend(
+            check_fine_event_buckets(
+                leaf / "throughput-buckets-10ms.json",
+                leaf / "throughput-buckets.json",
+                experiment=experiment,
+            )
+        )
         violations.extend(check_disruption_timeline(leaf / "disruption-timeline.json"))
         violations.extend(check_publisher_summary(leaf / "publisher-summary.json"))
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
@@ -1334,6 +2112,13 @@ def check_leaf(
     if experiment == "e-swap-4" and not focused:
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
         violations.extend(check_swap4_reconciliation(leaf))
+        violations.extend(
+            check_fine_event_buckets(
+                leaf / "throughput-buckets-10ms.json",
+                leaf / "throughput-buckets.json",
+                experiment=experiment,
+            )
+        )
         analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
         if analysis is not None and (
             analysis.get("sample_count") != 1
@@ -1405,15 +2190,35 @@ def main() -> int:
         if not root.exists():
             print(f"warn: {root} does not exist", file=sys.stderr)
             continue
-        experiment = experiment_of(root)
-        if experiment is None:
-            print(f"warn: cannot infer experiment id from {root}", file=sys.stderr)
-            continue
-        leaves = find_leaf_dirs(root)
-        if not leaves:
-            print(f"warn: no leaf run dirs (config.toml) under {root}", file=sys.stderr)
-            continue
-        for leaf in leaves:
+        alias_receipts = (
+            [root]
+            if root.is_file()
+            else sorted(root.rglob("run-*.json"))
+            if "aliases" in root.parts
+            else []
+        )
+        if alias_receipts:
+            alias_targets: list[tuple[Path, str]] = []
+            for receipt_path in alias_receipts:
+                try:
+                    receipt, source = resolve_alias_receipt(receipt_path)
+                    source_experiment = receipt.get("shared_from_experiment")
+                    if not isinstance(source_experiment, str):
+                        raise ValueError("alias source experiment is missing")
+                    alias_targets.append((source, source_experiment))
+                except ValueError as error:
+                    all_violations.append((receipt_path, str(error)))
+            roots = alias_targets
+        else:
+            experiment = experiment_of(root)
+            if experiment is None:
+                print(f"warn: cannot infer experiment id from {root}", file=sys.stderr)
+                continue
+            roots = [(leaf, experiment) for leaf in find_leaf_dirs(root)]
+            if not roots:
+                print(f"warn: no leaf run dirs (config.toml) under {root}", file=sys.stderr)
+                continue
+        for leaf, experiment in roots:
             checked += 1
             violations, warnings = check_leaf(
                 leaf,

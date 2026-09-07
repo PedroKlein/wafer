@@ -3,7 +3,7 @@
 # Rendered by `wafer_loadgen::PayloadTemplate::Generic100kb`. Schema is
 # telemetry + a `pad` field of BLAKE3-derived hex. Deterministic across runs.
 #
-# SHA-256 of the canonical rendering: 5504f0abd0e19f76d805cca6ae87538596826381101764fd880fa4c70704cce5
+# SHA-256 of the canonical rendering: 770ce4bf5ecf4bf2a6474149f19cf3458368701239ff84d125edad96aa0ab41b
 # Total byte length: 102_400 bytes exact at any (ts, seq).
 
 [loadgen]

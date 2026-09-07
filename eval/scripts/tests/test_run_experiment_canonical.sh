@@ -39,6 +39,20 @@ after="$(find "$ROOT/eval/results/e-perf-4" -mindepth 1 -maxdepth 1 -type d | wc
 grep -q 'canonical        = true' <<<"$plan"
 grep -q 'canonical preflight: PASS' <<<"$plan"
 grep -q "out_dir          = $tmp/planned-output" <<<"$plan"
+candidate_plan="$(
+  "$ROOT/eval/scripts/run-experiment.sh" \
+    --config "$ROOT/eval/configs/enhanced/e-perf-payload-8kb.toml" \
+    --experiment e-perf-payload-refinement \
+    --host rpi5 \
+    --canonical \
+    --canonical-facts "$tmp/facts.json" \
+    --skip-build \
+    --output-dir "$tmp/candidate-output" \
+    --dry-run 2>&1
+)"
+grep -q 'experiment       = e-perf-payload-refinement' <<<"$candidate_plan"
+grep -q 'loadgen_profile  = <none>' <<<"$candidate_plan"
+[ ! -e "$tmp/candidate-output" ] || { echo 'candidate dry-run created output' >&2; exit 1; }
 mqtt_plan="$(
   "$ROOT/eval/scripts/run-experiment.sh" \
     --config "$ROOT/eval/configs/pipeline-a-wafer.toml" \
@@ -110,6 +124,7 @@ harness_root="$tmp/harness-root"
 mkdir -p "$harness_root/eval/scripts/lib" "$harness_root/target/release"
 cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experiment.sh"
 cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
+cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]
 name = "startup-test"
@@ -165,6 +180,7 @@ SH
 chmod +x \
   "$harness_root/eval/scripts/run-experiment.sh" \
   "$harness_root/eval/scripts/lib/write_metadata.py" \
+  "$harness_root/eval/scripts/lib/interval_metrics.py" \
   "$harness_root/target/release/wafer" \
   "$harness_root/target/release/wafer-loadgen"
 

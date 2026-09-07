@@ -142,9 +142,98 @@ vcgencmd measure_temp
 vcgencmd get_throttled
 ```
 
-`get_throttled` must report `throttled=0x0`. Active cooling and the official Pi 5 power supply are required for sustained runs.
+`get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply is admitted only by measured host gates and receives no threshold waiver: any nonzero throttling, temperature at or above the declared limit, reboot, kernel I/O error, or checksum mismatch stops admission.
 
-## 9. Run preflight and smoke
+## 9. Mount the single results volume
+
+Enhanced v5 evidence uses one physical exFAT filesystem labeled `WAFER_RESULTS`. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAFER_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
+
+Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
+
+Before moving the drive, stop all writers, run `sync`, and unmount it cleanly. After each mount or host transition, confirm the UUID and label and verify the complete SHA-256 manifest before exposing `raw/` to analysis. Analysis opens `raw/` read-only and writes only under `derived/` and `reports/`. Never copy the raw tree to the SD card, Mac internal storage, or another removable volume.
+
+Qualification is staged and non-destructive. The tool never formats, relabels, mounts, unmounts, copies, or deletes the volume. First capture the mounted-device facts and review the stable by-id name and UUID before creating the bounded test corpus:
+
+```sh
+./eval/scripts/qualify-results-storage.sh facts \
+  --results-root /mnt/wafer-results \
+  > /tmp/wafer-results-before.json
+./eval/scripts/qualify-results-storage.sh prepare \
+  --results-root /mnt/wafer-results \
+  --facts-json /tmp/wafer-results-before.json \
+  --expected-device-id 'by-id:<approved-Kingston-partition-id>' \
+  --expected-uuid '<approved-exFAT-UUID>' \
+  --qualification-id '<source-bound-id>' \
+  --min-free-bytes '<required-campaign-bytes>'
+```
+
+`prepare` fails before writing if the stable device ID, UUID, label, exFAT type, mount path, read-write state, path identity, or free-space margin differs. Its corpus is stored under `manifests/storage-qualification/<id>/`, never under `raw/`. It writes one large file, 1,024 small files, their SHA-256 manifest, exact file/byte counts, and a `prepared.json` receipt, then calls `sync`.
+
+Next stop every writer, run `sync`, unmount the volume with the host's normal safe-eject procedure, remount it at `/mnt/wafer-results`, and collect fresh facts. The tool does not perform this operator step. Verification requires a changed mount identity and rehashes every corpus file:
+
+```sh
+./eval/scripts/qualify-results-storage.sh facts \
+  --results-root /mnt/wafer-results \
+  > /tmp/wafer-results-after.json
+./eval/scripts/qualify-results-storage.sh verify-remount \
+  --results-root /mnt/wafer-results \
+  --facts-json /tmp/wafer-results-after.json \
+  --prepared-receipt /mnt/wafer-results/manifests/storage-qualification/<id>/prepared.json
+```
+
+The resulting `verified.json` records expected/observed file and byte counts, missing, extra, and mismatch counts, and the before/after mount identities. Any non-zero count blocks use of the volume.
+
+After storage qualification and a fresh reboot, record the boot ID and run the
+stop-on-first-failure host load ladder. Do not use the historical
+`.plans/rpi5-host-diagnostic/run_phase.sh`; it predates the exFAT evidence
+contract and writes to its local plan directory.
+
+```sh
+boot_id="$(cat /proc/sys/kernel/random/boot_id)"
+session_id="host-characterization-$(date -u +%Y%m%dT%H%M%SZ)"
+./eval/scripts/characterize-rpi5-host.sh \
+  --output-dir "/mnt/wafer-results/raw/e-host-thermal-storage/$session_id" \
+  --session-id "$session_id" \
+  --expected-boot-id "$boot_id"
+```
+
+Start within ten minutes of the reboot with `vcgencmd get_throttled` equal to
+`throttled=0x0`. The fixed sequence is 120 seconds idle followed by 300 seconds
+each of one-, two-, and three-SUT-core CPU load, CPU plus memory, USB write, USB
+read, and combined CPU plus memory plus USB. One-second samples record
+wall-clock and monotonic time, boot ID, temperature, CPU frequency, throttling,
+PMIC internal-rail proxy watts, memory availability and PSI, and USB throughput.
+The PMIC value is not total input power and excludes direct USB-device draw.
+
+The command exits immediately on temperature at or above 75 °C, any non-zero
+throttling value, boot-ID change, kernel I/O error, workload or instrumentation
+failure, or USB SHA-256 mismatch. It writes the partial receipt and marks later
+phases `not-run`; retry with a new session ID after correcting the failure. It
+never overwrites a prior session. N=5 requires the diagnostic phases through
+USB read to pass. N=30 additionally requires the maximum combined-load phase,
+so a failure there does not erase accepted diagnostic evidence but keeps final
+admission blocked. The script's fixture mode is for local contract tests only;
+its receipts set `execution_mode=fixture-synthetic` and can never grant either
+admission gate.
+
+For a macOS handoff, eject the volume on the Pi and mount it at `/Volumes/WAFER_RESULTS`. The facts receipt binds the macOS disk identifier plus the same exFAT UUID and label; it does not reuse a Linux `/dev/disk/by-id` path:
+
+```sh
+./eval/scripts/qualify-results-storage.sh facts \
+  --results-root /Volumes/WAFER_RESULTS \
+  > /tmp/wafer-results-macos.json
+./eval/scripts/qualify-results-storage.sh handoff \
+  --results-root /Volumes/WAFER_RESULTS \
+  --facts-json /tmp/wafer-results-macos.json \
+  --verified-receipt /Volumes/WAFER_RESULTS/manifests/storage-qualification/<id>/verified.json \
+  --manifest /Volumes/WAFER_RESULTS/manifests/expanded-n5.sha256 \
+  --analysis-output /Volumes/WAFER_RESULTS/derived/expanded-n5 \
+  --host macos
+```
+
+On Jetson, use `/mnt/wafer-results`, capture Linux facts, and pass `--host jetson`. Both handoffs verify the same volume-relative `raw/` manifest in place. The handoff receipt declares raw input read-only and rejects any analysis output outside `derived/` or `reports/`. Do not proceed if facts capture, corpus verification, or the raw manifest check fails.
+
+## 10. Run preflight and smoke
 
 ```sh
 cd ~/wafer
@@ -153,7 +242,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command prints a result directory under `eval/results/e-smoke/rpi5-<timestamp>/` and runs the result-contract verifier against it.
+Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v5 campaign storage path.
 
 ## Final checklist
 
@@ -165,6 +254,9 @@ These commands must succeed before longer test runs:
 [ "$(sort -u /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)" = performance ]
 [ "$(vcgencmd get_throttled)" = throttled=0x0 ]
 systemctl is-active --quiet mosquitto kuiper
+findmnt /mnt/wafer-results
+[ "$(findmnt -n -o FSTYPE /mnt/wafer-results)" = exfat ]
+[ "$(lsblk -no LABEL "$(findmnt -n -o SOURCE /mnt/wafer-results)")" = WAFER_RESULTS ]
 ./eval/scripts/preflight-pi5.sh
 ```
 

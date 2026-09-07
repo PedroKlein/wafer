@@ -28,6 +28,7 @@ CURRENT_DOCS = (
     "docs/status/canonical-readiness.md",
     "docs/benchmarks/README.md",
     "docs/benchmarks/ekuiper-comparator.md",
+    "docs/benchmarks/ekuiper-profile-diagnostic.md",
     "docs/benchmarks/hot-swap.md",
     "eval/analysis/notebooks/README.md",
 )
@@ -87,6 +88,90 @@ REQUIRED = (
     "100 separate drain buckets over `[120s,130s)`",
     "campaign_started=false",
 )
+ENHANCED_METHOD_REQUIREMENTS = {
+    "docs/eval/pi5-experiment-runbook.md": (
+        "`canonical-primary`",
+        "`candidate-supplementary`",
+        "`diagnostic`",
+        "`future-work`",
+        "not automatically admitted to N=30",
+        "pooled loss at or below 1 percent",
+        "mean achieved/offered ratio at least 0.99",
+        "zero duplicates",
+        "E-Perf-5 remains `PENDING`",
+        "E-Perf-2 remains an alias view of E-Perf-1",
+        "1,200 source-origin primary buckets over `[0,120s)`",
+        "100 separate drain buckets over `[120s,130s)`",
+        "one physical copy",
+        "paths relative to the volume root",
+        "Verify the same manifest",
+        "unmount the volume cleanly",
+        "writes only to `derived/` and `reports/`",
+        "not total input power",
+        "no threshold waiver",
+    ),
+    "docs/eval/pi5-host-setup.md": (
+        "one physical exFAT filesystem labeled `WAFER_RESULTS`",
+        "paths relative to this volume root",
+        "verify the complete SHA-256 manifest",
+        "run `sync`, and unmount it cleanly",
+        "writes only under `derived/` and `reports/`",
+        "receives no threshold waiver",
+    ),
+    "docs/benchmarks/ekuiper-profile-diagnostic.md": (
+        "five externally profiled and five unprofiled",
+        "1,000, 4,000, and 8,000 messages per second",
+        "no validated GC event stream",
+        "does not claim that GC caused any tail event",
+        "never pooled with E-Perf-1, E-Perf-10",
+    ),
+    "docs/rfcs/RFC-008-evaluation-harness.md": (
+        "`canonical-primary`",
+        "`candidate-supplementary`",
+        "`diagnostic`",
+        "`future-work`",
+        "not automatically admitted to N=30",
+        "pooled loss is at most 1 percent",
+        "mean achieved/offered ratio is at least 0.99",
+        "duplicate count is zero",
+        "E-Perf-5 remains `PENDING`",
+        "E-Perf-2 remains an alternate analysis of E-Perf-1",
+        "1,200 source-origin primary buckets over `[0,120s)`",
+        "100 separate drain buckets over `[120s,130s)`",
+        "one physical copy",
+        "volume-root-relative paths",
+        "verified after each mount or host transition",
+        "unmounted cleanly",
+        "writes only to `derived/` and `reports/`",
+        "not total board, USB-C input, or total input power",
+        "receives no threshold waiver",
+    ),
+}
+ENHANCED_METHOD_FORBIDDEN = (
+    (
+        re.compile(r"(?:are|is|will be)\s+automatically\s+(?:admitted|accepted|included)[^\n]{0,40}N=30", re.IGNORECASE),
+        "automatic N=30 admission",
+    ),
+    (
+        re.compile(r"PMIC[^\n]{0,40}(?:measures|is|equals)\s+(?:the\s+)?total(?:[- ]input| board| USB-C)", re.IGNORECASE),
+        "total-input power claim",
+    ),
+    (
+        re.compile(
+            r"median\s+(?:run\s+)?loss[^\n]{0,30}(?:1\s*(?:percent|%))",
+            re.IGNORECASE,
+        ),
+        "median-loss delivery-good estimator",
+    ),
+    (
+        re.compile(
+            r"(?:eKuiper profiling|profiled eKuiper)[^\n]{0,80}"
+            r"(?:proves?|establishes?|shows?)[^\n]{0,30}GC[^\n]{0,30}(?:cause|causal)",
+            re.IGNORECASE,
+        ),
+        "eKuiper profiling GC-causality claim",
+    ),
+)
 
 
 def current_text(path: Path) -> str:
@@ -96,6 +181,27 @@ def current_text(path: Path) -> str:
 
 def stale_claims(text: str) -> list[str]:
     return [message for pattern, message in FORBIDDEN if pattern.search(text)]
+
+
+def enhanced_method_text_errors(text: str, label: str) -> list[str]:
+    return [
+        f"{label}: forbidden enhanced-method claim: {message}"
+        for pattern, message in ENHANCED_METHOD_FORBIDDEN
+        if pattern.search(text)
+    ]
+
+
+def enhanced_method_errors() -> list[str]:
+    errors = []
+    for relative, requirements in ENHANCED_METHOD_REQUIREMENTS.items():
+        text = current_text(ROOT / relative)
+        errors.extend(
+            f"{relative}: missing enhanced-method statement: {required}"
+            for required in requirements
+            if required not in text
+        )
+        errors.extend(enhanced_method_text_errors(text, relative))
+    return errors
 
 
 def check_links(path: Path, text: str) -> list[str]:
@@ -219,6 +325,7 @@ def audit() -> list[str]:
         if required not in corpus:
             errors.append(f"current docs lack required statement: {required}")
     errors.extend(config_errors())
+    errors.extend(enhanced_method_errors())
     return errors
 
 

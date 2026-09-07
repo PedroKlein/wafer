@@ -19,6 +19,7 @@ use std::time::Duration;
 use clap::Args;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::recorder::{
@@ -74,6 +75,10 @@ pub struct SubscribeArgs {
     #[arg(long)]
     pub sequence_end_exclusive: Option<u64>,
 
+    /// Declared measured window used to bound one-second interval output.
+    #[arg(long, default_value_t = 300)]
+    pub measurement_secs: u64,
+
     /// Publisher timing receipt used to bound disruption timestamp capture.
     #[arg(long)]
     pub publisher_timing_receipt: Option<PathBuf>,
@@ -112,6 +117,9 @@ const fn qos_from_u8(q: u8) -> QoS {
     reason = "single-function driver keeps the cancel-safe select! and the metadata\n     construction in one place; splitting into helpers would obscure the exit-path invariant."
 )]
 pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberReport> {
+    if args.measurement_secs == 0 {
+        anyhow::bail!("--measurement-secs must be greater than zero");
+    }
     let (host, port) = parse_broker(&args.broker);
     let broker_display = format!("{host}:{port}");
     info!(
@@ -130,13 +138,22 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     // Bounded channel from eventloop task → recording loop. Bounded so an
     // overwhelmed recorder pushes back on the eventloop and, in turn, the broker.
-    let (tx, mut rx) = mpsc::channel::<(u64, Vec<u8>)>(2048);
+    let (tx, mut rx) = mpsc::channel(2048);
     let topic_for_task = args.topic.clone();
     let qos = qos_from_u8(args.qos);
+    let measurement_start = std::time::Instant::now();
+    let measurement_start_unix_epoch_ns = now_ns();
+    let shutdown = CancellationToken::new();
+    let producer_shutdown = shutdown.clone();
 
     let eventloop_task = tokio::spawn(async move {
         loop {
-            match eventloop.poll().await {
+            let event = tokio::select! {
+                biased;
+                () = producer_shutdown.cancelled() => break,
+                event = eventloop.poll() => event,
+            };
+            match event {
                 Ok(Event::Incoming(Packet::ConnAck(_))) => {
                     // Every reconnect: re-subscribe. rumqttc + clean_session
                     // drops broker-side subs on disconnect — see the mqtt-iot
@@ -147,8 +164,9 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                 }
                 Ok(Event::Incoming(Packet::Publish(msg))) => {
                     let receive_ns = now_ns();
-                    if tx.send((receive_ns, msg.payload.to_vec())).await.is_err() {
-                        // Recorder loop has hung up — we're shutting down.
+                    let elapsed_ns =
+                        u64::try_from(measurement_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
+                    if tx.send((receive_ns, elapsed_ns, msg.payload)).await.is_err() {
                         break;
                     }
                 }
@@ -164,6 +182,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     });
 
     let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit);
+    recorder.enable_intervals(measurement_start_unix_epoch_ns, args.measurement_secs)?;
     let mut event_buckets = match &args.publisher_timing_receipt {
         Some(path) => {
             let deadline = tokio::time::Instant::now()
@@ -197,6 +216,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     tokio::pin!(sigint);
 
     let mut exit_reason = "eof";
+    let mut recording_error = None;
     loop {
         tokio::select! {
             biased;
@@ -207,14 +227,30 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
             }
             recv = rx.recv() => {
                 match recv {
-                    Some((receive_ns, payload)) => {
-                        let outcome = match args.sequence_end_exclusive {
-                            Some(end) => recorder.record_json_before(&payload, receive_ns, end),
-                            None => recorder.record_json(&payload, receive_ns),
+                    Some((receive_ns, elapsed_ns, payload)) => {
+                        let outcome = match recorder.record_json_at(
+                            &payload,
+                            receive_ns,
+                            elapsed_ns,
+                            args.sequence_end_exclusive,
+                        ) {
+                            Ok(outcome) => outcome,
+                            Err(error) => {
+                                recording_error = Some(error);
+                                exit_reason = "interval-error";
+                                break;
+                            }
                         };
                         if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
-                            if let Some(buckets) = &mut event_buckets {
-                                buckets.record(receive_ns, recorder.last_record_duplicate())?;
+                            if let Some(buckets) = &mut event_buckets
+                                && let Err(error) = buckets.record(
+                                    receive_ns,
+                                    recorder.last_record_duplicate(),
+                                )
+                            {
+                                recording_error = Some(error);
+                                exit_reason = "event-bucket-error";
+                                break;
                             }
                             if let Some(trace) = &mut trace {
                                 let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
@@ -239,8 +275,43 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         }
     }
 
+    shutdown.cancel();
+    while let Some((receive_ns, elapsed_ns, payload)) = rx.recv().await {
+        if exit_reason == "total-messages" || recording_error.is_some() {
+            continue;
+        }
+        let outcome = match recorder.record_json_at(
+            &payload,
+            receive_ns,
+            elapsed_ns,
+            args.sequence_end_exclusive,
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                recording_error = Some(error);
+                continue;
+            }
+        };
+        if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
+            if let Some(buckets) = &mut event_buckets
+                && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
+            {
+                recording_error = Some(error);
+                continue;
+            }
+            if let Some(trace) = &mut trace {
+                let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
+                writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
+            }
+        }
+    }
+    eventloop_task.await?;
+    if let Some(error) = recording_error {
+        return Err(error);
+    }
+    let measurement_elapsed_ns =
+        u64::try_from(measurement_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let ended_at_ns = now_ns();
-    eventloop_task.abort();
     if let Some(trace) = &mut trace {
         trace.flush()?;
     }
@@ -281,6 +352,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         },
     };
 
+    recorder.finalize_intervals(measurement_elapsed_ns)?;
     recorder.write_artifacts(&args.output_dir, metadata)?;
     if let Some(buckets) = event_buckets {
         let action_path = args.action_timing_receipt.as_ref().ok_or_else(|| {
@@ -358,7 +430,7 @@ fn ms_from_ns(ns: u64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_broker;
+    use super::{SubscribeArgs, parse_broker, run_subscriber};
 
     #[test]
     fn parse_broker_host_only_defaults_port_1883() {
@@ -368,6 +440,27 @@ mod tests {
     #[test]
     fn parse_broker_host_and_port() {
         assert_eq!(parse_broker("mosquitto:8883"), ("mosquitto".into(), 8883));
+    }
+
+    #[tokio::test]
+    async fn zero_interval_measurement_duration_is_rejected_before_connecting() {
+        let args = SubscribeArgs {
+            broker: "localhost:1".into(),
+            topic: "wafer/test".into(),
+            output_dir: std::env::temp_dir(),
+            total_messages: 0,
+            client_id: "test".into(),
+            host_tag: None,
+            qos: 1,
+            trace_file: None,
+            sequence_example_limit: None,
+            sequence_end_exclusive: None,
+            measurement_secs: 0,
+            publisher_timing_receipt: None,
+            action_timing_receipt: None,
+        };
+        let error = run_subscriber(args).await.unwrap_err();
+        assert!(error.to_string().contains("--measurement-secs"));
     }
 
     #[test]

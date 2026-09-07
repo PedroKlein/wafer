@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
+import statistics
 from collections.abc import Iterable
 
 import numpy as np
@@ -216,6 +218,572 @@ def metering_table(records: list[dict]) -> pd.DataFrame:
                 "thesis_evidence": True,
             }
         )
+    return pd.DataFrame(rows)
+
+
+def _candidate_scaling_table(
+    summary: dict,
+    *,
+    experiment: str,
+    batch_class: str,
+    sample_unit: str,
+    values: tuple[tuple[str, int], ...],
+    value_field: str,
+    no_pool_with: list[str],
+    require_rss: bool,
+) -> pd.DataFrame:
+    if {
+        "schema_version": summary.get("schema_version"),
+        "experiment": summary.get("experiment"),
+        "evidence_class": summary.get("evidence_class"),
+        "thesis_evidence": summary.get("thesis_evidence"),
+        "n30_admitted": summary.get("n30_admitted"),
+        "sample_unit": summary.get("sample_unit"),
+        "required_runs_per_condition": summary.get("required_runs_per_condition"),
+        "complete": summary.get("complete"),
+        "no_pool_with": summary.get("no_pool_with"),
+    } != {
+        "schema_version": 1,
+        "experiment": experiment,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": sample_unit,
+        "required_runs_per_condition": 5,
+        "complete": True,
+        "no_pool_with": no_pool_with,
+    }:
+        raise ValueError(f"malformed {experiment} candidate summary")
+
+    expected_values = dict(values)
+    expected_keys = {
+        (condition, run_index)
+        for condition in expected_values
+        for run_index in range(1, 6)
+    }
+    observed_keys: set[tuple[str, int]] = set()
+    source_shas: set[str] = set()
+    rows = []
+    for record in summary.get("records", []):
+        if (
+            record.get("experiment") != experiment
+            or record.get("batch_class") != batch_class
+            or record.get("evidence_class") != "candidate-supplementary"
+            or record.get("thesis_evidence") is not False
+            or record.get("n30_admitted") is not False
+            or record.get("sample_unit") != sample_unit
+        ):
+            raise ValueError(f"{experiment} record has invalid candidate identity")
+        condition = record.get("condition")
+        run_index = record.get("run_index")
+        if condition not in expected_values or run_index not in range(1, 6):
+            raise ValueError(f"{experiment} record is outside the frozen N=5 grid")
+        if record.get(value_field) != expected_values[condition]:
+            raise ValueError(f"{experiment} record condition value differs from its label")
+        key = (condition, run_index)
+        if key in observed_keys:
+            raise ValueError(f"{experiment} contains duplicate run identity {key}")
+        observed_keys.add(key)
+        source_sha = record.get("source_git_sha")
+        if not isinstance(source_sha, str) or len(source_sha) != 40 or record.get("source_dirty") is not False:
+            raise ValueError(f"{experiment} record has invalid source provenance")
+        source_shas.add(source_sha)
+        latency = record.get("latency_ns")
+        if not isinstance(latency, dict) or any(
+            type(latency.get(field)) is not int or latency[field] < 0
+            for field in ("p50", "p95", "p99")
+        ):
+            raise ValueError(f"{experiment} record has invalid latency evidence")
+        row = {
+            "condition": condition,
+            "run_index": run_index,
+            value_field: expected_values[condition],
+            "p50_ns": latency["p50"],
+            "p95_ns": latency["p95"],
+            "p99_ns": latency["p99"],
+            "source_git_sha": source_sha,
+            "thesis_evidence": False,
+            "n30_admitted": False,
+        }
+        if value_field == "payload_bytes":
+            expected_hash = hashlib.sha256(b"B" * expected_values[condition]).hexdigest()
+            if record.get("payload_sha256") != expected_hash:
+                raise ValueError(f"{experiment} record has invalid payload hash")
+            row["payload_sha256"] = expected_hash
+        if require_rss:
+            if (
+                record.get("node_count") != expected_values[condition] + 2
+                or record.get("transform_count") != expected_values[condition]
+                or record.get("edge_count") != expected_values[condition] + 1
+                or record.get("identical_transform_behavior") is not True
+                or record.get("effective_metering_mode") != "fuel-and-epoch"
+            ):
+                raise ValueError(f"{experiment} record has invalid topology evidence")
+            peak_rss = record.get("peak_rss_bytes")
+            if type(peak_rss) is not int or peak_rss <= 0:
+                raise ValueError(f"{experiment} record has invalid RSS evidence")
+            row["peak_rss_bytes"] = peak_rss
+        rows.append(row)
+    if observed_keys != expected_keys:
+        raise ValueError(f"{experiment} requires five independent runs per condition")
+    if len(source_shas) != 1:
+        raise ValueError(f"{experiment} summary mixes source revisions")
+    return pd.DataFrame(rows).sort_values([value_field, "run_index"]).reset_index(drop=True)
+
+
+def candidate_payload_table(summary: dict) -> pd.DataFrame:
+    return _candidate_scaling_table(
+        summary,
+        experiment="e-perf-payload-refinement",
+        batch_class="candidate-payload-refinement",
+        sample_unit="independent host run at one payload size",
+        values=(
+            ("120b", 120),
+            ("1kb", 1_024),
+            ("8kb", 8_192),
+            ("10kb", 10_240),
+            ("16kb", 16_384),
+            ("32kb", 32_768),
+            ("64kb", 65_536),
+            ("100kb", 102_400),
+            ("128kb", 131_072),
+            ("256kb", 262_144),
+        ),
+        value_field="payload_bytes",
+        no_pool_with=["e-perf-4", "prior diagnostic rehearsals"],
+        require_rss=False,
+    )
+
+
+def candidate_depth_table(summary: dict) -> pd.DataFrame:
+    return _candidate_scaling_table(
+        summary,
+        experiment="e-perf-depth-extension",
+        batch_class="candidate-depth-extension",
+        sample_unit="independent host run at one pipeline depth",
+        values=tuple((f"depth-{depth}", depth) for depth in (1, 3, 5, 10, 20, 50)),
+        value_field="depth",
+        no_pool_with=[
+            "e-perf-3",
+            "e-perf-6",
+            "e-perf-8",
+            "prior diagnostic rehearsals",
+        ],
+        require_rss=True,
+    )
+
+
+def candidate_swap_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    experiment = summary.get("experiment")
+    specifications = {
+        "e-swap-independent-sessions": {
+            "batch_class": "candidate-independent-swap",
+            "condition": "steady",
+            "nested_unit": "swap event within run",
+            "no_pool_with": [
+                "e-swap-1",
+                "e-swap-2",
+                "e-swap-6",
+                "prior diagnostic rehearsals",
+            ],
+            "metrics": (
+                "compile_ns",
+                "instantiate_ns",
+                "signal_ns",
+                "ack_ns",
+                "convergence_ns",
+                "http_total_ns",
+                "sink_observed_output_gap_ns",
+            ),
+        },
+        "e-swap-rollback-sessions": {
+            "batch_class": "candidate-rollback-session",
+            "condition": "process-trap-rollback",
+            "nested_unit": "rollback event within run",
+            "no_pool_with": ["e-swap-5", "prior diagnostic rehearsals"],
+            "metrics": (
+                "compile_ns",
+                "instantiate_ns",
+                "signal_ns",
+                "rollback_ns",
+                "http_total_ns",
+            ),
+        },
+    }
+    if experiment not in specifications:
+        raise ValueError("unexpected candidate swap experiment")
+    specification = specifications[experiment]
+    expected_identity = {
+        "schema_version": 1,
+        "experiment": experiment,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": specification["nested_unit"],
+        "required_runs": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "complete": True,
+        "no_pool_with": specification["no_pool_with"],
+    }
+    if any(summary.get(key) != value for key, value in expected_identity.items()):
+        raise ValueError(f"malformed {experiment} candidate summary")
+
+    expected_runs = set(range(1, 6))
+    observed_runs: set[int] = set()
+    source_shas: set[str] = set()
+    event_rows = []
+    run_rows = []
+    for record in summary.get("records", []):
+        run_index = record.get("run_index")
+        if (
+            record.get("experiment") != experiment
+            or record.get("batch_class") != specification["batch_class"]
+            or record.get("condition") != specification["condition"]
+            or record.get("evidence_class") != "candidate-supplementary"
+            or record.get("thesis_evidence") is not False
+            or record.get("n30_admitted") is not False
+            or record.get("sample_unit") != "independent host run"
+            or record.get("nested_unit") != specification["nested_unit"]
+            or record.get("duration_unit") != "ns"
+            or record.get("event_classes") != ["first-use-aot", "cached"]
+            or record.get("sample_count") != 50
+            or record.get("shared_from") is not None
+            or record.get("no_pool_with") != specification["no_pool_with"]
+            or run_index not in expected_runs
+            or run_index in observed_runs
+        ):
+            raise ValueError(f"{experiment} record has invalid independent-run identity")
+        observed_runs.add(run_index)
+        source_sha = record.get("source_git_sha")
+        if not isinstance(source_sha, str) or len(source_sha) != 40 or record.get("source_dirty") is not False:
+            raise ValueError(f"{experiment} record has invalid source provenance")
+        source_shas.add(source_sha)
+        sequence = record.get("sequence")
+        if (
+            not isinstance(sequence, dict)
+            or sequence.get("expected") != sequence.get("received")
+            or sequence.get("gaps") != 0
+            or sequence.get("duplicates") != 0
+        ):
+            raise ValueError(f"{experiment} record is not lossless")
+        events = record.get("events")
+        if not isinstance(events, list) or len(events) != 50:
+            raise ValueError(f"{experiment} record requires exactly 50 events")
+        if experiment == "e-swap-rollback-sessions" and (
+            record.get("attempts") != 50
+            or record.get("rolled_back") != 50
+            or record.get("all_rolled_back") is not True
+        ):
+            raise ValueError("rollback candidate requires fifty successful rollbacks")
+        class_rows = {"first-use-aot": [], "cached": []}
+        for expected_index, event in enumerate(events):
+            expected_class = "first-use-aot" if expected_index == 0 else "cached"
+            expected_plugin = (
+                "wafer_pass_through_v2_panics.wasm"
+                if experiment == "e-swap-rollback-sessions"
+                else "wafer_pass_through_v2.wasm"
+                if expected_index % 2 == 0
+                else "wafer_pass_through_v1.wasm"
+            )
+            if (
+                event.get("event_index") != expected_index
+                or event.get("event_class") != expected_class
+                or event.get("plugin") != expected_plugin
+            ):
+                raise ValueError(f"{experiment} event classes, indices, or plugins are mixed")
+            if any(type(event.get(metric)) is not int or event[metric] < 0 for metric in specification["metrics"]):
+                raise ValueError(f"{experiment} event contains invalid duration evidence")
+            row = {
+                "run_index": run_index,
+                "event_index": expected_index,
+                "event_class": expected_class,
+                "source_git_sha": source_sha,
+                "thesis_evidence": False,
+                **{metric: event[metric] for metric in specification["metrics"]},
+            }
+            event_rows.append(row)
+            class_rows[expected_class].append(row)
+        for event_class, rows in class_rows.items():
+            run_rows.append(
+                {
+                    "run_index": run_index,
+                    "event_class": event_class,
+                    "event_count": len(rows),
+                    **{
+                        f"median_{metric}": statistics.median(row[metric] for row in rows)
+                        for metric in specification["metrics"]
+                    },
+                }
+            )
+    if observed_runs != expected_runs or len(source_shas) != 1:
+        raise ValueError(f"{experiment} requires five clean runs from one source revision")
+    return (
+        pd.DataFrame(event_rows).sort_values(["run_index", "event_index"]).reset_index(drop=True),
+        pd.DataFrame(run_rows).sort_values(["event_class", "run_index"]).reset_index(drop=True),
+    )
+
+
+def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
+    identity = {
+        "schema_version": 1,
+        "experiment": "e-compare-ekuiper-profile",
+        "batch_class": "diagnostic-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "required_runs_per_cell": 5,
+        "rates_msg_s": [1_000, 4_000, 8_000],
+        "profiler_states": ["profiled", "unprofiled-control"],
+        "complete": True,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    if any(summary.get(field) != value for field, value in identity.items()):
+        raise ValueError("eKuiper profile summary diagnostic identity is invalid")
+    records = summary.get("records")
+    if not isinstance(records, list):
+        raise ValueError("eKuiper profile summary records are invalid")
+    expected_keys = {
+        (rate, state, run_index)
+        for rate in (1_000, 4_000, 8_000)
+        for state in ("profiled", "unprofiled-control")
+        for run_index in range(1, 6)
+    }
+    observed_keys = set()
+    source_shas = set()
+    rows = []
+    for record in records:
+        key = (
+            record.get("rate_msg_s"),
+            record.get("profiler_state"),
+            record.get("run_index"),
+        )
+        if key in observed_keys:
+            raise ValueError("eKuiper profile summary duplicates a matched run")
+        observed_keys.add(key)
+        condition = f"rate-{key[0]:05d}/{key[1]}" if key[0] and key[1] else ""
+        if (
+            record.get("schema_version") != 1
+            or record.get("experiment") != "e-compare-ekuiper-profile"
+            or record.get("evidence_class") != "diagnostic"
+            or record.get("thesis_evidence") is not False
+            or record.get("n30_admitted") is not False
+            or record.get("sample_unit")
+            != "independent host run at one rate and profiler state"
+            or record.get("condition") != condition
+            or record.get("shared_from") is not None
+            or not isinstance(record.get("measurement_source_leaf"), str)
+            or record.get("claim_boundary")
+            != "diagnostic-association-only-not-gc-causality"
+            or record.get("no_pool_with") != identity["no_pool_with"]
+        ):
+            raise ValueError("eKuiper profile record crosses the diagnostic boundary")
+        gc_runtime = record.get("gc_runtime_metrics")
+        if gc_runtime != {
+            "status": "unavailable",
+            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        }:
+            raise ValueError("eKuiper profile record overstates GC/runtime evidence")
+        interval = record.get("interval_alignment", {})
+        if (
+            interval.get("clock") != "unix-epoch"
+            or interval.get("row_count") != 60
+            or int(interval.get("measurement_end_ns", 0))
+            - int(interval.get("measurement_start_ns", 0))
+            != 60_000_000_000
+            or not isinstance(interval.get("path"), str)
+            or not isinstance(interval.get("sha256"), str)
+            or len(interval["sha256"]) != 64
+        ):
+            raise ValueError("eKuiper profile interval alignment is invalid")
+        process = record.get("process_metrics", {})
+        if process.get("status") == "available":
+            if (
+                key[1] != "profiled"
+                or not 2 <= int(process.get("row_count", 0)) <= 62
+                or process.get("maximum_rows") != 62
+            ):
+                raise ValueError("eKuiper profile process evidence is invalid")
+        elif process.get("status") != "unavailable" or not process.get("reason"):
+            raise ValueError("eKuiper profile process availability is invalid")
+        latency = record.get("latency_ns", {})
+        if any(type(latency.get(field)) is not int or latency[field] < 0 for field in ("sample_count", "p50", "p95", "p99")):
+            raise ValueError("eKuiper profile latency evidence is invalid")
+        source_sha = record.get("source_git_sha")
+        if (
+            not isinstance(source_sha, str)
+            or len(source_sha) != 40
+            or record.get("source_dirty") is not False
+        ):
+            raise ValueError("eKuiper profile source provenance is invalid")
+        source_shas.add(source_sha)
+        overhead = record.get("profiler_overhead", {})
+        paired_state = (
+            "unprofiled-control" if key[1] == "profiled" else "profiled"
+        )
+        if (
+            overhead.get("experiment") != "e-compare-ekuiper-profile"
+            or overhead.get("condition") != condition
+            or overhead.get("run_index") != key[2]
+            or overhead.get("rate_msg_s") != key[0]
+            or overhead.get("profiler_state") != key[1]
+            or overhead.get("paired_condition")
+            != f"rate-{key[0]:05d}/{paired_state}"
+            or overhead.get("pair_key") != f"rate-{key[0]:05d}/run-{key[2]:02d}"
+            or overhead.get("overhead_estimator")
+            != "paired-run-level-profiled-minus-unprofiled-control"
+            or overhead.get("claim_boundary") != identity["claim_boundary"]
+        ):
+            raise ValueError("eKuiper profile pairing evidence is invalid")
+        rows.append(
+            {
+                "rate_msg_s": key[0],
+                "profiler_state": key[1],
+                "run_index": key[2],
+                "sample_count": latency["sample_count"],
+                "p50_ns": latency["p50"],
+                "p95_ns": latency["p95"],
+                "p99_ns": latency["p99"],
+                "process_status": process["status"],
+                "cpu_percent": process.get("cpu_percent"),
+                "max_rss_bytes": process.get("max_rss_bytes"),
+                "measurement_source_leaf": record["measurement_source_leaf"],
+                "interpretation": identity["claim_boundary"],
+            }
+        )
+    if observed_keys != expected_keys:
+        raise ValueError("eKuiper profile summary does not contain the exact matched run grid")
+    if len(source_shas) != 1:
+        raise ValueError("eKuiper profile summary mixes source revisions")
+    runs = pd.DataFrame(rows).sort_values(
+        ["rate_msg_s", "run_index", "profiler_state"]
+    ).reset_index(drop=True)
+    pairs = []
+    for (rate, run_index), group in runs.groupby(["rate_msg_s", "run_index"]):
+        by_state = group.set_index("profiler_state")
+        profiled = by_state.loc["profiled"]
+        control = by_state.loc["unprofiled-control"]
+        pairs.append(
+            {
+                "rate_msg_s": rate,
+                "run_index": run_index,
+                "p95_overhead_ns": profiled.p95_ns - control.p95_ns,
+                "p99_overhead_ns": profiled.p99_ns - control.p99_ns,
+                "p95_ratio": profiled.p95_ns / control.p95_ns,
+                "p99_ratio": profiled.p99_ns / control.p99_ns,
+                "interpretation": identity["claim_boundary"],
+            }
+        )
+    return runs, pd.DataFrame(pairs).sort_values(["rate_msg_s", "run_index"]).reset_index(drop=True)
+
+
+def candidate_capacity_table(summary: dict) -> pd.DataFrame:
+    grids = {
+        "mqtt-loopback": [
+            *range(4_000, 16_000, 1_000),
+            15_250,
+            15_500,
+            15_750,
+            16_000,
+        ],
+        "native": list(range(8_000, 16_000, 1_000)),
+        "wafer": list(range(8_000, 16_000, 1_000)),
+        "ekuiper": list(range(4_000, 9_000, 1_000)),
+    }
+    criteria = {
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_pooled_loss": 0.01,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_mean_achieved_ratio": 0.99,
+        "duplicates_allowed": 0,
+        "support_path_censoring": "mqtt-loopback",
+    }
+    if (
+        summary.get("schema_version") != 1
+        or summary.get("experiment") != "e-perf-capacity-knee"
+        or summary.get("evidence_class") != "candidate-supplementary"
+        or summary.get("thesis_evidence") is not False
+        or summary.get("n30_admitted") is not False
+        or summary.get("sample_unit")
+        != "independent host run at one system and offered rate"
+        or summary.get("required_runs_per_rate") != 5
+    ):
+        raise ValueError("malformed candidate capacity summary")
+    if summary.get("criteria") != criteria:
+        raise ValueError("candidate capacity criteria differ from the frozen estimator")
+    systems = summary.get("systems")
+    if not isinstance(systems, dict) or set(systems) != set(grids):
+        raise ValueError("candidate capacity summary requires all four systems")
+
+    mqtt_rates = systems["mqtt-loopback"].get("rates", [])
+    first_support_bad = next(
+        (
+            int(rate["rate_msg_s"])
+            for rate in mqtt_rates
+            if rate.get("classification") == "bad"
+        ),
+        None,
+    )
+    rows = []
+    for system, grid in grids.items():
+        result = systems[system]
+        rates = result.get("rates")
+        if not result.get("complete") or not isinstance(rates, list):
+            raise ValueError(f"{system} candidate capacity summary is incomplete")
+        if [rate.get("rate_msg_s") for rate in rates] != grid:
+            raise ValueError(f"{system} candidate capacity rates differ from the frozen grid")
+        expected_support = {
+            "from_rate_msg_s": first_support_bad,
+            "highest_support_uncensored_rate_msg_s": max(
+                (rate for rate in grid if first_support_bad is None or rate < first_support_bad),
+                default=None,
+            ),
+        }
+        if result.get("support_censoring") != expected_support:
+            raise ValueError(f"{system} MQTT support-path censoring is invalid")
+        for rate in rates:
+            if rate.get("run_count") != 5:
+                raise ValueError(f"{system} rate requires five independent runs")
+            pooled_loss = float(rate["pooled_loss"])
+            achieved_ratio = float(rate["mean_achieved_ratio"])
+            duplicates = int(rate["duplicates"])
+            raw = (
+                "good"
+                if pooled_loss <= 0.01
+                and achieved_ratio >= 0.99
+                and duplicates == 0
+                else "bad"
+            )
+            expected = (
+                "support-confounded"
+                if system != "mqtt-loopback"
+                and first_support_bad is not None
+                and int(rate["rate_msg_s"]) >= first_support_bad
+                else raw
+            )
+            if rate.get("classification") != expected:
+                raise ValueError(
+                    f"{system} rate {rate['rate_msg_s']} classification disagrees "
+                    "with the frozen estimator or MQTT censoring"
+                )
+            rows.append(
+                {
+                    "system": system,
+                    "offered_rate_msg_s": int(rate["rate_msg_s"]),
+                    "N_runs": 5,
+                    "pooled_loss": pooled_loss,
+                    "mean_achieved_ratio": achieved_ratio,
+                    "total_duplicates": duplicates,
+                    "classification": expected,
+                    "delivery_good": expected == "good",
+                    "support_confounded": expected == "support-confounded",
+                    "thesis_evidence": False,
+                    "n30_admitted": False,
+                }
+            )
     return pd.DataFrame(rows)
 
 

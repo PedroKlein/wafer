@@ -35,6 +35,26 @@ def test_documented_config_values_match_source_and_final_configs() -> None:
     assert DOCS.config_errors() == []
 
 
+def test_enhanced_method_docs_match_frozen_claim_and_storage_boundaries() -> None:
+    assert DOCS.enhanced_method_errors() == []
+
+
+def test_enhanced_method_docs_reject_automatic_admission_and_total_power_claims(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "method.md"
+    path.write_text(
+        "candidate-supplementary results are automatically admitted to N=30, "
+        "PMIC measures total input power, delivery-good uses median loss below 1%, "
+        "and eKuiper profiling proves GC causes latency tails.\n"
+    )
+    errors = DOCS.enhanced_method_text_errors(path.read_text(), "method.md")
+    assert any("automatic N=30 admission" in error for error in errors)
+    assert any("total-input power claim" in error for error in errors)
+    assert any("median-loss delivery-good estimator" in error for error in errors)
+    assert any("GC-causality" in error for error in errors)
+
+
 def test_historical_benchmark_docs_are_explicitly_marked() -> None:
     for relative in DOCS.HISTORICAL_DOCS:
         assert DOCS.HISTORICAL_FILE_MARKER in (DOCS.ROOT / relative).read_text()

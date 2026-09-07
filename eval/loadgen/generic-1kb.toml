@@ -4,7 +4,7 @@
 # + a `pad` field of BLAKE3-derived hex. Padding is deterministic (not `x`
 # filler) so throughput measurements are reproducible across hosts.
 #
-# SHA-256 of the canonical rendering: b34447bd0a92c0481da43839eb2a62a8cacdac096d33995e8ae86234794cd17a
+# SHA-256 of the canonical rendering: ed8e293d8fc536309a543c68c940dbf19b2d707c117d0f3e85b4329ecb62785c
 # Total byte length: 1024 bytes exact at any (ts, seq).
 
 [loadgen]

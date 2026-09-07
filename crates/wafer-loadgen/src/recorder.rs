@@ -3,7 +3,7 @@
 //! Records end-to-end latency for MQTT messages emitted by `wafer-loadgen publish`
 //! (the JSON payload embeds `ts` = intended-publish-time in nanoseconds, `seq` =
 //! monotonic sequence). The subscriber (`sub.rs`) drives this recorder for every
-//! received message and flushes three artifacts on graceful exit:
+//! received message and flushes aggregate artifacts plus an optional bounded interval fragment on graceful exit:
 //!
 //! - `latency.hdr` — raw [`HdrHistogram`] V2-serialised bytes. The first three
 //!   bytes are the V2 cookie prefix `1c 84 93` (the low byte encodes counter
@@ -36,6 +36,181 @@ pub(crate) const EVENT_COVERAGE_START_NS: i64 = -10_000_000_000;
 pub(crate) const EVENT_COVERAGE_END_NS: i64 = 10_000_000_000;
 pub(crate) const EVENT_ALIGNMENT_TOLERANCE_NS: i64 = 10_000_000;
 const EVENT_SAMPLE_CAPACITY: usize = 65_536;
+const FINE_EVENT_BUCKET_WIDTH_NS: i64 = 10_000_000;
+const FINE_EVENT_BUCKET_COUNT: usize = 400;
+const FINE_EVENT_COVERAGE_START_NS: i64 = -2_000_000_000;
+const FINE_EVENT_COVERAGE_END_NS: i64 = 2_000_000_000;
+const FINE_EVENT_PARENT_BUCKET_WIDTH_NS: i64 = 100_000_000;
+const FINE_EVENT_PARENT_BUCKET_COUNT: usize = 40;
+const INTERVAL_WIDTH_NS: u64 = 1_000_000_000;
+
+#[derive(Debug, Clone, Serialize)]
+struct IntervalLatencyRow {
+    interval_start_ns: u64,
+    interval_end_ns: u64,
+    interval_start_unix_epoch_ns: u64,
+    interval_end_unix_epoch_ns: u64,
+    latency_count: u64,
+    latency_p50_ns: Option<u64>,
+    latency_p95_ns: Option<u64>,
+    latency_p99_ns: Option<u64>,
+    received_events: u64,
+    throughput_messages: u64,
+    duplicates: u64,
+}
+
+struct IntervalRecorder {
+    measurement_start_unix_epoch_ns: u64,
+    declared_measurement_duration_ns: u64,
+    maximum_rows: usize,
+    current_bucket: usize,
+    current_histogram: Histogram<u64>,
+    current_events: u64,
+    current_unique: u64,
+    current_duplicates: u64,
+    rows: Vec<IntervalLatencyRow>,
+    late_arrivals: u64,
+    finalized: bool,
+}
+
+impl IntervalRecorder {
+    fn new(measurement_start_unix_epoch_ns: u64, measurement_secs: u64) -> anyhow::Result<Self> {
+        if measurement_secs == 0 {
+            anyhow::bail!("interval measurement duration must be positive");
+        }
+        let maximum_rows = usize::try_from(measurement_secs)
+            .unwrap_or(usize::MAX)
+            .checked_add(2)
+            .ok_or_else(|| anyhow::anyhow!("interval maximum row count overflow"))?;
+        let histogram = Histogram::new_with_bounds(
+            LatencyRecorder::LOWEST_NS,
+            LatencyRecorder::HIGHEST_NS,
+            LatencyRecorder::SIG_DIGITS,
+        )?;
+        Ok(Self {
+            measurement_start_unix_epoch_ns,
+            declared_measurement_duration_ns: measurement_secs.saturating_mul(INTERVAL_WIDTH_NS),
+            maximum_rows,
+            current_bucket: 0,
+            current_histogram: histogram,
+            current_events: 0,
+            current_unique: 0,
+            current_duplicates: 0,
+            rows: Vec::with_capacity(maximum_rows),
+            late_arrivals: 0,
+            finalized: false,
+        })
+    }
+
+    fn record(&mut self, elapsed_ns: u64, latency_ns: u64, duplicate: bool) -> anyhow::Result<()> {
+        let bucket = usize::try_from(elapsed_ns / INTERVAL_WIDTH_NS).unwrap_or(usize::MAX);
+        if bucket < self.current_bucket {
+            self.late_arrivals = self.late_arrivals.saturating_add(1);
+            return Ok(());
+        }
+        if bucket >= self.maximum_rows {
+            anyhow::bail!("interval row limit exceeded ({})", self.maximum_rows);
+        }
+        while self.current_bucket < bucket {
+            self.finish_current(INTERVAL_WIDTH_NS)?;
+        }
+        let recorded = latency_ns.clamp(LatencyRecorder::LOWEST_NS, LatencyRecorder::HIGHEST_NS);
+        self.current_histogram.record(recorded)?;
+        self.current_events = self.current_events.saturating_add(1);
+        if duplicate {
+            self.current_duplicates = self.current_duplicates.saturating_add(1);
+        } else {
+            self.current_unique = self.current_unique.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    fn finalize(&mut self, elapsed_ns: u64) -> anyhow::Result<()> {
+        if self.finalized {
+            return Ok(());
+        }
+        self.finalized = true;
+        if elapsed_ns == 0 {
+            return Ok(());
+        }
+        let final_bucket =
+            usize::try_from(elapsed_ns.saturating_sub(1) / INTERVAL_WIDTH_NS).unwrap_or(usize::MAX);
+        if final_bucket >= self.maximum_rows {
+            anyhow::bail!("interval row limit exceeded ({})", self.maximum_rows);
+        }
+        while self.current_bucket < final_bucket {
+            self.finish_current(INTERVAL_WIDTH_NS)?;
+        }
+        let remainder = elapsed_ns % INTERVAL_WIDTH_NS;
+        self.finish_current(if remainder == 0 { INTERVAL_WIDTH_NS } else { remainder })
+    }
+
+    fn finish_current(&mut self, width_ns: u64) -> anyhow::Result<()> {
+        if self.rows.len() == self.maximum_rows {
+            anyhow::bail!("interval row limit exceeded ({})", self.maximum_rows);
+        }
+        let start_ns = u64::try_from(self.current_bucket)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(INTERVAL_WIDTH_NS);
+        let end_ns = start_ns.saturating_add(width_ns);
+        let count = self.current_histogram.len();
+        self.rows.push(IntervalLatencyRow {
+            interval_start_ns: start_ns,
+            interval_end_ns: end_ns,
+            interval_start_unix_epoch_ns: self
+                .measurement_start_unix_epoch_ns
+                .saturating_add(start_ns),
+            interval_end_unix_epoch_ns: self.measurement_start_unix_epoch_ns.saturating_add(end_ns),
+            latency_count: count,
+            latency_p50_ns: (count > 0).then(|| self.current_histogram.value_at_quantile(0.50)),
+            latency_p95_ns: (count > 0).then(|| self.current_histogram.value_at_quantile(0.95)),
+            latency_p99_ns: (count > 0).then(|| self.current_histogram.value_at_quantile(0.99)),
+            received_events: self.current_events,
+            throughput_messages: self.current_unique,
+            duplicates: self.current_duplicates,
+        });
+        self.current_histogram.reset();
+        self.current_events = 0;
+        self.current_unique = 0;
+        self.current_duplicates = 0;
+        self.current_bucket = self.current_bucket.saturating_add(1);
+        Ok(())
+    }
+
+    fn write(&self, path: &Path, aggregate_count: u64) -> anyhow::Result<()> {
+        if !self.finalized {
+            anyhow::bail!("interval recorder was not finalized");
+        }
+        let interval_count = self.rows.iter().map(|row| row.latency_count).sum::<u64>();
+        if interval_count != aggregate_count {
+            anyhow::bail!(
+                "interval latency population {interval_count} differs from aggregate {aggregate_count}"
+            );
+        }
+        let artifact = serde_json::json!({
+            "schema_version": 1,
+            "interval_clock": "monotonic-elapsed",
+            "alignment_clock": "unix-epoch",
+            "alignment_clock_purpose": "cross-process-alignment-only",
+            "measurement_start_unix_epoch_ns": self.measurement_start_unix_epoch_ns,
+            "declared_measurement_duration_ns": self.declared_measurement_duration_ns,
+            "bucket_width_ns": INTERVAL_WIDTH_NS,
+            "maximum_rows": self.maximum_rows,
+            "row_count": self.rows.len(),
+            "aggregate_latency_count": aggregate_count,
+            "late_arrivals": self.late_arrivals,
+            "rows": self.rows,
+        });
+        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
+        Ok(())
+    }
+}
+
+#[derive(Deserialize)]
+struct TimestampedMessage {
+    ts: u64,
+    seq: u64,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PublisherTimingReceipt {
@@ -76,7 +251,7 @@ struct EventSample {
     duplicate: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 struct ThroughputBucket {
     start_offset_ns: i64,
     end_offset_ns: i64,
@@ -84,6 +259,120 @@ struct ThroughputBucket {
     received_events: u64,
     duplicates: u64,
     rate_msg_s: f64,
+}
+
+fn event_buckets(
+    samples: &[EventSample],
+    event_timestamp_ns: u64,
+    start_offset_ns: i64,
+    width_ns: i64,
+    count: usize,
+) -> Vec<ThroughputBucket> {
+    let mut unique = vec![0_u64; count];
+    let mut events = vec![0_u64; count];
+    let mut duplicates = vec![0_u64; count];
+    let end_offset_ns = start_offset_ns
+        .saturating_add(i64::try_from(count).unwrap_or(i64::MAX).saturating_mul(width_ns));
+    for sample in samples {
+        let offset = signed_offset(sample.receive_unix_epoch_ns, event_timestamp_ns);
+        if !(start_offset_ns..end_offset_ns).contains(&offset) {
+            continue;
+        }
+        let index = usize::try_from(
+            offset.saturating_sub(start_offset_ns).checked_div(width_ns).unwrap_or(i64::MAX),
+        )
+        .unwrap_or(count);
+        let (Some(event_count), Some(unique_count), Some(duplicate_count)) =
+            (events.get_mut(index), unique.get_mut(index), duplicates.get_mut(index))
+        else {
+            continue;
+        };
+        *event_count = event_count.saturating_add(1);
+        if sample.duplicate {
+            *duplicate_count = duplicate_count.saturating_add(1);
+        } else {
+            *unique_count = unique_count.saturating_add(1);
+        }
+    }
+    unique
+        .iter()
+        .zip(&events)
+        .zip(&duplicates)
+        .enumerate()
+        .map(|(index, ((received_unique, received_events), duplicates))| {
+            let start_offset_ns = start_offset_ns
+                .saturating_add(i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(width_ns));
+            ThroughputBucket {
+                start_offset_ns,
+                end_offset_ns: start_offset_ns.saturating_add(width_ns),
+                received_unique: *received_unique,
+                received_events: *received_events,
+                duplicates: *duplicates,
+                rate_msg_s: f64::from(u32::try_from(*received_unique).unwrap_or(u32::MAX))
+                    * 1_000_000_000.0
+                    / f64::from(u32::try_from(width_ns).unwrap_or(u32::MAX)),
+            }
+        })
+        .collect()
+}
+
+fn bucket_totals(buckets: &[ThroughputBucket]) -> (u64, u64, u64) {
+    buckets.iter().fold((0, 0, 0), |(unique, events, duplicates), bucket| {
+        (
+            unique.saturating_add(bucket.received_unique),
+            events.saturating_add(bucket.received_events),
+            duplicates.saturating_add(bucket.duplicates),
+        )
+    })
+}
+
+fn write_fine_event_buckets(
+    path: &Path,
+    samples: &[EventSample],
+    measurement_start_timestamp_ns: u64,
+    scheduled_event_timestamp_ns: u64,
+    event_timestamp_ns: u64,
+) -> anyhow::Result<()> {
+    let buckets = event_buckets(
+        samples,
+        event_timestamp_ns,
+        FINE_EVENT_COVERAGE_START_NS,
+        FINE_EVENT_BUCKET_WIDTH_NS,
+        FINE_EVENT_BUCKET_COUNT,
+    );
+    let parent_buckets = event_buckets(
+        samples,
+        event_timestamp_ns,
+        FINE_EVENT_COVERAGE_START_NS,
+        FINE_EVENT_PARENT_BUCKET_WIDTH_NS,
+        FINE_EVENT_PARENT_BUCKET_COUNT,
+    );
+    let (received_unique, received_events, duplicates) = bucket_totals(&buckets);
+    if bucket_totals(&parent_buckets) != (received_unique, received_events, duplicates) {
+        anyhow::bail!("fine and parent event bucket populations differ");
+    }
+    let artifact = serde_json::json!({
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "clock_purpose": "cross-process-alignment",
+        "alignment": "actual-t0",
+        "measurement_start_timestamp_ns": measurement_start_timestamp_ns,
+        "scheduled_event_timestamp_ns": scheduled_event_timestamp_ns,
+        "event_timestamp_ns": event_timestamp_ns,
+        "bucket_width_ns": FINE_EVENT_BUCKET_WIDTH_NS,
+        "bucket_count": FINE_EVENT_BUCKET_COUNT,
+        "coverage_start_offset_ns": FINE_EVENT_COVERAGE_START_NS,
+        "coverage_end_offset_ns": FINE_EVENT_COVERAGE_END_NS,
+        "parent_bucket_width_ns": FINE_EVENT_PARENT_BUCKET_WIDTH_NS,
+        "parent_bucket_count": FINE_EVENT_PARENT_BUCKET_COUNT,
+        "received_unique": received_unique,
+        "received_events": received_events,
+        "duplicates": duplicates,
+        "buckets": buckets,
+        "parent_buckets": parent_buckets,
+    });
+    fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
+    Ok(())
 }
 
 pub(crate) struct EventBucketRecorder {
@@ -138,58 +427,14 @@ impl EventBucketRecorder {
 
     pub(crate) fn write(&self, path: &Path, action: &ActionTimingReceipt) -> anyhow::Result<()> {
         self.validate_action_timing(action)?;
-        let mut received_unique = [0_u64; EVENT_BUCKET_COUNT];
-        let mut received_events = [0_u64; EVENT_BUCKET_COUNT];
-        let mut duplicates = [0_u64; EVENT_BUCKET_COUNT];
-        for sample in &self.samples {
-            let offset = signed_offset(sample.receive_unix_epoch_ns, action.event_timestamp_ns);
-            if !(EVENT_COVERAGE_START_NS..EVENT_COVERAGE_END_NS).contains(&offset) {
-                continue;
-            }
-            let shifted = offset.saturating_sub(EVENT_COVERAGE_START_NS);
-            let index = usize::try_from(
-                shifted
-                    .checked_div(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX))
-                    .unwrap_or(i64::MAX),
-            )
-            .unwrap_or(EVENT_BUCKET_COUNT);
-            let (Some(events), Some(unique), Some(duplicate_count)) = (
-                received_events.get_mut(index),
-                received_unique.get_mut(index),
-                duplicates.get_mut(index),
-            ) else {
-                continue;
-            };
-            *events = events.saturating_add(1);
-            if sample.duplicate {
-                *duplicate_count = duplicate_count.saturating_add(1);
-            } else {
-                *unique = unique.saturating_add(1);
-            }
-        }
-        let buckets = received_unique
-            .iter()
-            .zip(&received_events)
-            .zip(&duplicates)
-            .enumerate()
-            .map(|(index, ((received_unique, received_events), duplicates))| {
-                let start_offset_ns = EVENT_COVERAGE_START_NS.saturating_add(
-                    i64::try_from(index)
-                        .unwrap_or(i64::MAX)
-                        .saturating_mul(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX)),
-                );
-                ThroughputBucket {
-                    start_offset_ns,
-                    end_offset_ns: start_offset_ns
-                        .saturating_add(i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX)),
-                    received_unique: *received_unique,
-                    received_events: *received_events,
-                    duplicates: *duplicates,
-                    rate_msg_s: f64::from(u32::try_from(*received_unique).unwrap_or(u32::MAX))
-                        * 10.0,
-                }
-            })
-            .collect::<Vec<_>>();
+        let buckets = event_buckets(
+            &self.samples,
+            action.event_timestamp_ns,
+            EVENT_COVERAGE_START_NS,
+            i64::try_from(EVENT_BUCKET_WIDTH_NS).unwrap_or(i64::MAX),
+            EVENT_BUCKET_COUNT,
+        );
+        let (received_unique, received_events, duplicates) = bucket_totals(&buckets);
         let artifact = serde_json::json!({
             "schema_version": 1,
             "clock": "unix-epoch",
@@ -204,13 +449,19 @@ impl EventBucketRecorder {
             "bucket_width_ns": EVENT_BUCKET_WIDTH_NS,
             "coverage_start_offset_ns": EVENT_COVERAGE_START_NS,
             "coverage_end_offset_ns": EVENT_COVERAGE_END_NS,
-            "received_unique": received_unique.iter().sum::<u64>(),
-            "received_events": received_events.iter().sum::<u64>(),
-            "duplicates": duplicates.iter().sum::<u64>(),
+            "received_unique": received_unique,
+            "received_events": received_events,
+            "duplicates": duplicates,
             "buckets": buckets,
         });
         fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
-        Ok(())
+        write_fine_event_buckets(
+            &path.with_file_name("throughput-buckets-10ms.json"),
+            &self.samples,
+            self.measurement_start_timestamp_ns,
+            self.scheduled_event_timestamp_ns,
+            action.event_timestamp_ns,
+        )
     }
 
     fn validate_action_timing(&self, action: &ActionTimingReceipt) -> anyhow::Result<()> {
@@ -445,6 +696,8 @@ pub struct SubscriberMetadata {
 /// This is the same envelope as `BenchSink` for cross-experiment comparability.
 pub struct LatencyRecorder {
     histogram: Histogram<u64>,
+    intervals: Option<IntervalRecorder>,
+    interval_origin_elapsed_ns: Option<u64>,
     sequence: SequenceTracker,
     total_messages: u64,
     parse_errors: u64,
@@ -477,6 +730,8 @@ impl LatencyRecorder {
                 .expect("HdrHistogram bounds are compile-time constants and known valid");
         Self {
             histogram,
+            intervals: None,
+            interval_origin_elapsed_ns: None,
             sequence: max_examples
                 .map_or_else(SequenceTracker::new, SequenceTracker::with_max_examples),
             total_messages: 0,
@@ -487,13 +742,49 @@ impl LatencyRecorder {
         }
     }
 
+    pub(crate) fn enable_intervals(
+        &mut self,
+        measurement_start_unix_epoch_ns: u64,
+        measurement_secs: u64,
+    ) -> anyhow::Result<()> {
+        self.intervals =
+            Some(IntervalRecorder::new(measurement_start_unix_epoch_ns, measurement_secs)?);
+        Ok(())
+    }
+
     /// Parse a JSON payload (with `ts` = intended-publish-ns and `seq` = u64)
     /// and record the observed latency against `receive_ns`.
     pub fn record_json(&mut self, payload: &[u8], receive_ns: u64) -> RecordOutcome {
         self.record_json_with_sequence_end(payload, receive_ns, None)
     }
 
+    pub(crate) fn record_json_at(
+        &mut self,
+        payload: &[u8],
+        receive_ns: u64,
+        elapsed_ns: u64,
+        sequence_end_exclusive: Option<u64>,
+    ) -> anyhow::Result<RecordOutcome> {
+        let outcome =
+            self.record_json_with_sequence_end(payload, receive_ns, sequence_end_exclusive);
+        if let RecordOutcome::Recorded { latency_ns, .. } = outcome
+            && let Some(intervals) = &mut self.intervals
+        {
+            let origin = *self.interval_origin_elapsed_ns.get_or_insert_with(|| {
+                intervals.measurement_start_unix_epoch_ns = receive_ns;
+                elapsed_ns
+            });
+            intervals.record(
+                elapsed_ns.saturating_sub(origin),
+                latency_ns,
+                self.last_record_duplicate,
+            )?;
+        }
+        Ok(outcome)
+    }
+
     /// Record only messages whose sequence is below `sequence_end_exclusive`.
+    #[cfg(test)]
     pub(crate) fn record_json_before(
         &mut self,
         payload: &[u8],
@@ -509,15 +800,7 @@ impl LatencyRecorder {
         receive_ns: u64,
         sequence_end_exclusive: Option<u64>,
     ) -> RecordOutcome {
-        let parsed: serde_json::Result<serde_json::Value> = serde_json::from_slice(payload);
-        let Ok(json) = parsed else {
-            self.total_messages = self.total_messages.saturating_add(1);
-            self.parse_errors = self.parse_errors.saturating_add(1);
-            return RecordOutcome::ParseError;
-        };
-        let ts = json.get("ts").and_then(serde_json::Value::as_u64);
-        let seq = json.get("seq").and_then(serde_json::Value::as_u64);
-        let (Some(ts), Some(seq)) = (ts, seq) else {
+        let Ok(TimestampedMessage { ts, seq }) = serde_json::from_slice(payload) else {
             self.total_messages = self.total_messages.saturating_add(1);
             self.parse_errors = self.parse_errors.saturating_add(1);
             return RecordOutcome::ParseError;
@@ -657,7 +940,16 @@ impl LatencyRecorder {
         csv
     }
 
-    /// Write `latency.hdr`, `sequence.csv`, and `subscriber-metadata.json` to `dir`.
+    pub(crate) fn finalize_intervals(&mut self, measurement_elapsed_ns: u64) -> anyhow::Result<()> {
+        if let Some(intervals) = &mut self.intervals {
+            let elapsed_ns = measurement_elapsed_ns
+                .saturating_sub(self.interval_origin_elapsed_ns.unwrap_or_default());
+            intervals.finalize(elapsed_ns)?;
+        }
+        Ok(())
+    }
+
+    /// Write aggregate artifacts and, when enabled, `interval-latency.json` to `dir`.
     ///
     /// # Errors
     /// - Directory creation failure.
@@ -703,6 +995,10 @@ impl LatencyRecorder {
         let mut meta_file = fs::File::create(dir.join("subscriber-metadata.json"))?;
         meta_file.write_all(json.as_bytes())?;
         meta_file.write_all(b"\n")?;
+
+        if let Some(intervals) = &self.intervals {
+            intervals.write(&dir.join("interval-latency.json"), self.histogram.len())?;
+        }
 
         Ok(())
     }
@@ -952,6 +1248,32 @@ mod tests {
         assert_eq!(rows[0]["rate_msg_s"], 10.0);
         assert_eq!(rows[199]["received_unique"], 1);
         assert!(fs::metadata(path).unwrap().len() < 64 * 1024);
+
+        let fine: serde_json::Value = serde_json::from_slice(
+            &fs::read(dir.path().join("throughput-buckets-10ms.json")).unwrap(),
+        )
+        .unwrap();
+        let fine_rows = fine["buckets"].as_array().unwrap();
+        let parents = fine["parent_buckets"].as_array().unwrap();
+        assert_eq!(fine_rows.len(), 400);
+        assert_eq!(parents.len(), 40);
+        assert_eq!(fine_rows[0]["start_offset_ns"], -2_000_000_000_i64);
+        assert_eq!(fine_rows[399]["end_offset_ns"], 2_000_000_000_i64);
+        assert_eq!(fine["alignment"], "actual-t0");
+        assert_eq!(fine["event_timestamp_ns"], action.event_timestamp_ns);
+        assert!(
+            fs::metadata(dir.path().join("throughput-buckets-10ms.json")).unwrap().len()
+                < 256 * 1024
+        );
+        for (parent_index, parent) in parents.iter().enumerate() {
+            for field in ["received_unique", "received_events", "duplicates"] {
+                let nested = fine_rows[parent_index * 10..(parent_index + 1) * 10]
+                    .iter()
+                    .map(|row| row[field].as_u64().unwrap())
+                    .sum::<u64>();
+                assert_eq!(parent[field], nested);
+            }
+        }
     }
 
     #[test]
@@ -1043,6 +1365,89 @@ mod tests {
     }
 
     #[test]
+    fn interval_recorder_rejects_zero_duration() {
+        assert!(IntervalRecorder::new(0, 0).is_err());
+    }
+
+    #[test]
+    fn one_second_intervals_emit_empty_and_final_partial_rows() {
+        let mut intervals = IntervalRecorder::new(10_000_000_000, 3).unwrap();
+        intervals.record(0, 10_000, false).unwrap();
+        intervals.record(2_000_000_000, 30_000, false).unwrap();
+        intervals.finalize(2_500_000_000).unwrap();
+
+        assert_eq!(intervals.rows.len(), 3);
+        assert_eq!(intervals.rows[0].interval_start_ns, 0);
+        assert_eq!(intervals.rows[0].interval_end_ns, 1_000_000_000);
+        assert_eq!(intervals.rows[1].latency_count, 0);
+        assert_eq!(intervals.rows[1].latency_p50_ns, None);
+        assert_eq!(intervals.rows[2].interval_end_ns, 2_500_000_000);
+        assert_eq!(intervals.rows.iter().map(|row| row.latency_count).sum::<u64>(), 2);
+    }
+
+    #[test]
+    fn exact_boundary_starts_the_next_interval_without_extra_shutdown_row() {
+        let mut intervals = IntervalRecorder::new(5_000_000_000, 2).unwrap();
+        intervals.record(999_999_999, 10_000, false).unwrap();
+        intervals.record(1_000_000_000, 20_000, true).unwrap();
+        intervals.finalize(2_000_000_000).unwrap();
+
+        assert_eq!(intervals.rows.len(), 2);
+        assert_eq!(intervals.rows[0].latency_count, 1);
+        assert_eq!(intervals.rows[1].latency_count, 1);
+        assert_eq!(intervals.rows[1].received_events, 1);
+        assert_eq!(intervals.rows[1].throughput_messages, 0);
+        assert_eq!(intervals.rows[1].duplicates, 1);
+    }
+
+    #[test]
+    fn intervals_bound_cardinality_and_count_late_arrivals() {
+        let mut intervals = IntervalRecorder::new(0, 2).unwrap();
+        let allocated_rows = intervals.rows.capacity();
+        intervals.record(1_000_000_000, 10_000, false).unwrap();
+        intervals.record(500_000_000, 10_000, false).unwrap();
+        intervals.record(3_999_999_999, 10_000, false).unwrap();
+        assert_eq!(intervals.late_arrivals, 1);
+        assert_eq!(intervals.rows.capacity(), allocated_rows);
+        assert_eq!(intervals.rows.len(), 3);
+        assert!(intervals.record(4_000_000_000, 10_000, false).is_err());
+    }
+
+    #[test]
+    fn interval_shutdown_beyond_declared_slack_fails_closed() {
+        let mut intervals = IntervalRecorder::new(0, 1).unwrap();
+        intervals.record(0, 10_000, false).unwrap();
+        assert!(intervals.finalize(3_000_000_001).is_err());
+    }
+
+    #[test]
+    fn interval_artifact_has_clock_labels_and_no_per_message_fields() {
+        let mut intervals = IntervalRecorder::new(9_000_000_000, 1).unwrap();
+        intervals.record(0, 10_000, false).unwrap();
+        intervals.finalize(1_000_000_000).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("interval-latency.json");
+        intervals.write(&path, 1).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["interval_clock"], "monotonic-elapsed");
+        assert_eq!(value["alignment_clock"], "unix-epoch");
+        assert_eq!(value["maximum_rows"], 3);
+        let serialized = serde_json::to_string(&value).unwrap();
+        for forbidden in ["message_id", "sequence_id", "per_message_timestamp"] {
+            assert!(!serialized.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn interval_artifact_rejects_population_mismatch() {
+        let mut intervals = IntervalRecorder::new(0, 1).unwrap();
+        intervals.record(0, 10_000, false).unwrap();
+        intervals.finalize(1_000_000_000).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        assert!(intervals.write(&dir.path().join("interval-latency.json"), 2).is_err());
+    }
+
+    #[test]
     fn event_buckets_reject_non_frozen_timing_receipt() {
         let timing = PublisherTimingReceipt {
             schema_version: 1,
@@ -1053,6 +1458,118 @@ mod tests {
             event_offset_ns: 1,
         };
         assert!(EventBucketRecorder::new(&timing).is_err());
+    }
+
+    #[test]
+    fn latency_recorder_writes_interval_fragment_on_shutdown() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = LatencyRecorder::with_sequence_example_limit(Some(4));
+        recorder.enable_intervals(1_000_000_000, 2).unwrap();
+        let payload = br#"{"ts":1000000000,"seq":0}"#;
+        recorder.record_json_at(payload, 1_000_010_000, 500_000_000, None).unwrap();
+        let metadata = SubscriberMetadata {
+            broker: "localhost:1883".into(),
+            topic: "wafer/test".into(),
+            started_at_ns: 1_000_000_000,
+            ended_at_ns: 2_500_000_000,
+            exit_reason: "sigint".into(),
+            git_sha: None,
+            host_tag: None,
+            sequence_end_exclusive: None,
+            ignored_sequence_count: 0,
+            unexpected_sequence_count: 0,
+            total_recorded: 0,
+            total_messages: 0,
+            parse_errors: 0,
+            negative_latency_count: 0,
+            latency_min_ns: 0,
+            latency_max_ns: 0,
+            latency_mean_ns: 0.0,
+            latency_p50_ns: 0,
+            latency_p95_ns: 0,
+            latency_p99_ns: 0,
+            latency_p999_ns: 0,
+            histogram_lowest_ns: 0,
+            histogram_highest_ns: 0,
+            histogram_sig_digits: 0,
+            sequence: SequenceReport {
+                total_received: 0,
+                total_gaps: 0,
+                total_duplicates: 0,
+                gap_ranges: vec![],
+                duplicate_seqs: vec![],
+                examples_truncated: false,
+            },
+        };
+        recorder.finalize_intervals(2_000_000_000).unwrap();
+        recorder.write_artifacts(dir.path(), metadata).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("interval-latency.json")).unwrap())
+                .unwrap();
+        assert_eq!(value["row_count"], 2);
+        assert_eq!(value["rows"][0]["latency_count"], 1);
+        assert_eq!(value["rows"][1]["latency_count"], 0);
+    }
+
+    #[test]
+    fn interval_output_is_additive_to_existing_aggregate_artifacts() {
+        let baseline_dir = tempfile::tempdir().unwrap();
+        let interval_dir = tempfile::tempdir().unwrap();
+        let mut baseline = LatencyRecorder::with_sequence_example_limit(Some(4));
+        let mut interval = LatencyRecorder::with_sequence_example_limit(Some(4));
+        interval.enable_intervals(1_000_000_000, 1).unwrap();
+        for seq in 0..3 {
+            let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
+            baseline.record_json(payload.as_bytes(), 1_000_010_000);
+            interval
+                .record_json_at(payload.as_bytes(), 1_000_010_000, seq * 100_000_000, None)
+                .unwrap();
+        }
+        let metadata = SubscriberMetadata {
+            broker: "localhost:1883".into(),
+            topic: "wafer/test".into(),
+            started_at_ns: 1_000_000_000,
+            ended_at_ns: 2_000_000_000,
+            exit_reason: "total-messages".into(),
+            git_sha: None,
+            host_tag: None,
+            sequence_end_exclusive: None,
+            ignored_sequence_count: 0,
+            unexpected_sequence_count: 0,
+            total_recorded: 0,
+            total_messages: 0,
+            parse_errors: 0,
+            negative_latency_count: 0,
+            latency_min_ns: 0,
+            latency_max_ns: 0,
+            latency_mean_ns: 0.0,
+            latency_p50_ns: 0,
+            latency_p95_ns: 0,
+            latency_p99_ns: 0,
+            latency_p999_ns: 0,
+            histogram_lowest_ns: 0,
+            histogram_highest_ns: 0,
+            histogram_sig_digits: 0,
+            sequence: SequenceReport {
+                total_received: 0,
+                total_gaps: 0,
+                total_duplicates: 0,
+                gap_ranges: vec![],
+                duplicate_seqs: vec![],
+                examples_truncated: false,
+            },
+        };
+        baseline.write_artifacts(baseline_dir.path(), metadata.clone()).unwrap();
+        interval.finalize_intervals(1_000_000_000).unwrap();
+        interval.write_artifacts(interval_dir.path(), metadata).unwrap();
+        for artifact in ["latency.hdr", "sequence.csv", "subscriber-metadata.json"] {
+            assert_eq!(
+                fs::read(baseline_dir.path().join(artifact)).unwrap(),
+                fs::read(interval_dir.path().join(artifact)).unwrap(),
+                "interval instrumentation changed {artifact}",
+            );
+        }
+        assert!(interval_dir.path().join("interval-latency.json").is_file());
     }
 
     #[test]

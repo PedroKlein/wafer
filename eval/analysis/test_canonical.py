@@ -9,7 +9,12 @@ import pytest
 
 from wafer_analysis.canonical import (
     FINAL_VISUAL_MANIFEST,
+    candidate_capacity_table,
+    candidate_depth_table,
+    candidate_payload_table,
+    candidate_swap_tables,
     capacity_tables,
+    ekuiper_profile_tables,
     metering_table,
     swap3_table,
     swap4_table,
@@ -174,6 +179,496 @@ def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
     } <= set(boundaries.columns)
     assert boundaries["claim_boundary"].str.contains("support").all()
     assert set(rates["classification"]) == {"good", "bad", "support-confounded"}
+
+
+def candidate_scaling_summary(experiment: str, conditions: list[tuple[str, int]]) -> dict:
+    records = []
+    for condition, value in conditions:
+        for run_index in range(1, 6):
+            records.append(
+                {
+                    "schema_version": 1,
+                    "batch_class": (
+                        "candidate-payload-refinement"
+                        if experiment == "e-perf-payload-refinement"
+                        else "candidate-depth-extension"
+                    ),
+                    "experiment": experiment,
+                    "evidence_class": "candidate-supplementary",
+                    "thesis_evidence": False,
+                    "n30_admitted": False,
+                    "sample_unit": (
+                        "independent host run at one payload size"
+                        if experiment == "e-perf-payload-refinement"
+                        else "independent host run at one pipeline depth"
+                    ),
+                    "condition": condition,
+                    "run_index": run_index,
+                    "source_git_sha": "1" * 40,
+                    "source_dirty": False,
+                    "payload_bytes" if experiment == "e-perf-payload-refinement" else "depth": value,
+                    **(
+                        {"payload_sha256": hashlib.sha256(b"B" * value).hexdigest()}
+                        if experiment == "e-perf-payload-refinement"
+                        else {
+                            "node_count": value + 2,
+                            "transform_count": value,
+                            "edge_count": value + 1,
+                            "identical_transform_behavior": True,
+                            "effective_metering_mode": "fuel-and-epoch",
+                        }
+                    ),
+                    "latency_ns": {"p50": value * 10, "p95": value * 20, "p99": value * 30},
+                    **({"peak_rss_bytes": value * 1024} if experiment == "e-perf-depth-extension" else {}),
+                }
+            )
+    return {
+        "schema_version": 1,
+        "experiment": experiment,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": records[0]["sample_unit"],
+        "required_runs_per_condition": 5,
+        "complete": True,
+        "no_pool_with": (
+            ["e-perf-4", "prior diagnostic rehearsals"]
+            if experiment == "e-perf-payload-refinement"
+            else ["e-perf-3", "e-perf-6", "e-perf-8", "prior diagnostic rehearsals"]
+        ),
+        "records": records,
+    }
+
+
+def ekuiper_profile_summary() -> dict:
+    records = []
+    for rate in (1_000, 4_000, 8_000):
+        for run_index in range(1, 6):
+            for state in ("profiled", "unprofiled-control"):
+                records.append(
+                    {
+                        "schema_version": 1,
+                        "experiment": "e-compare-ekuiper-profile",
+                        "evidence_class": "diagnostic",
+                        "thesis_evidence": False,
+                        "n30_admitted": False,
+                        "sample_unit": "independent host run at one rate and profiler state",
+                        "condition": f"rate-{rate:05d}/{state}",
+                        "run_index": run_index,
+                        "rate_msg_s": rate,
+                        "profiler_state": state,
+                        "source_git_sha": "a" * 40,
+                        "source_dirty": False,
+                        "measurement_source_leaf": (
+                            f"raw/e-compare-ekuiper-profile/rate-{rate:05d}/{state}/"
+                            f"run-{run_index:02d}-attempt-01"
+                        ),
+                        "shared_from": None,
+                        "latency_ns": {
+                            "sample_count": rate * 60,
+                            "p50": 100_000,
+                            "p95": 220_000 if state == "profiled" else 200_000,
+                            "p99": 330_000 if state == "profiled" else 300_000,
+                        },
+                        "interval_alignment": {
+                            "clock": "unix-epoch",
+                            "measurement_start_ns": 10_000_000_000,
+                            "measurement_end_ns": 70_000_000_000,
+                            "row_count": 60,
+                            "path": "interval-metrics.json",
+                            "sha256": "b" * 64,
+                        },
+                        "process_metrics": (
+                            {
+                                "status": "available",
+                                "row_count": 61,
+                                "maximum_rows": 62,
+                                "cpu_percent": 42.0,
+                                "max_rss_bytes": 32_000_000,
+                            }
+                            if state == "profiled"
+                            else {
+                                "status": "unavailable",
+                                "reason": "process-profiler-disabled-by-design",
+                            }
+                        ),
+                        "gc_runtime_metrics": {
+                            "status": "unavailable",
+                            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+                        },
+                        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+                        "profiler_overhead": {
+                            "experiment": "e-compare-ekuiper-profile",
+                            "condition": f"rate-{rate:05d}/{state}",
+                            "run_index": run_index,
+                            "rate_msg_s": rate,
+                            "profiler_state": state,
+                            "paired_condition": (
+                                f"rate-{rate:05d}/"
+                                f"{'unprofiled-control' if state == 'profiled' else 'profiled'}"
+                            ),
+                            "pair_key": f"rate-{rate:05d}/run-{run_index:02d}",
+                            "overhead_estimator": (
+                                "paired-run-level-profiled-minus-unprofiled-control"
+                            ),
+                            "claim_boundary": (
+                                "diagnostic-association-only-not-gc-causality"
+                            ),
+                        },
+                        "no_pool_with": [
+                            "e-perf-1",
+                            "e-perf-10",
+                            "prior diagnostic rehearsals",
+                        ],
+                    }
+                )
+    return {
+        "schema_version": 1,
+        "experiment": "e-compare-ekuiper-profile",
+        "batch_id": "fixture",
+        "batch_class": "diagnostic-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "required_runs_per_cell": 5,
+        "rates_msg_s": [1_000, 4_000, 8_000],
+        "profiler_states": ["profiled", "unprofiled-control"],
+        "complete": True,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+        "records": records,
+    }
+
+
+def test_ekuiper_profile_tables_keep_thirty_runs_and_fifteen_pairs() -> None:
+    runs, pairs = ekuiper_profile_tables(ekuiper_profile_summary())
+
+    assert len(runs) == 30
+    assert len(pairs) == 15
+    assert runs.groupby(["rate_msg_s", "profiler_state"]).size().eq(5).all()
+    assert pairs.groupby("rate_msg_s").size().eq(5).all()
+    assert pairs["p95_overhead_ns"].eq(20_000).all()
+    assert pairs["p99_overhead_ns"].eq(30_000).all()
+    assert pairs["interpretation"].eq(
+        "diagnostic-association-only-not-gc-causality"
+    ).all()
+    assert runs.loc[runs.profiler_state == "unprofiled-control", "process_status"].eq(
+        "unavailable"
+    ).all()
+
+
+def test_ekuiper_profile_tables_reject_missing_pairs_aliases_and_causal_claims() -> None:
+    summary = ekuiper_profile_summary()
+    summary["records"].pop()
+    with pytest.raises(ValueError, match="matched run grid"):
+        ekuiper_profile_tables(summary)
+
+    summary = ekuiper_profile_summary()
+    summary["records"][0]["shared_from"] = "e-perf-1"
+    with pytest.raises(ValueError, match="diagnostic boundary"):
+        ekuiper_profile_tables(summary)
+
+    summary = ekuiper_profile_summary()
+    summary["records"][0]["profiler_overhead"]["paired_condition"] = (
+        "rate-01000/profiled"
+    )
+    with pytest.raises(ValueError, match="pairing evidence"):
+        ekuiper_profile_tables(summary)
+
+    summary = ekuiper_profile_summary()
+    summary["records"][0]["interval_alignment"]["row_count"] = 59
+    with pytest.raises(ValueError, match="interval alignment"):
+        ekuiper_profile_tables(summary)
+
+    summary = ekuiper_profile_summary()
+    summary["claim_boundary"] = "GC caused latency tails"
+    with pytest.raises(ValueError, match="diagnostic identity"):
+        ekuiper_profile_tables(summary)
+
+
+def test_candidate_payload_table_keeps_all_fifty_runs_independent() -> None:
+    summary = candidate_scaling_summary(
+        "e-perf-payload-refinement",
+        [(label, size) for label, size in (
+            ("120b", 120), ("1kb", 1024), ("8kb", 8192), ("10kb", 10240),
+            ("16kb", 16384), ("32kb", 32768), ("64kb", 65536),
+            ("100kb", 102400), ("128kb", 131072), ("256kb", 262144),
+        )],
+    )
+    table = candidate_payload_table(summary)
+
+    assert len(table) == 50
+    assert table.groupby("payload_bytes").size().eq(5).all()
+    assert table["run_index"].isin(range(1, 6)).all()
+    assert table["thesis_evidence"].eq(False).all()
+    assert table["n30_admitted"].eq(False).all()
+
+
+def test_candidate_depth_table_keeps_latency_and_rss_on_same_thirty_runs() -> None:
+    summary = candidate_scaling_summary(
+        "e-perf-depth-extension",
+        [(f"depth-{depth}", depth) for depth in (1, 3, 5, 10, 20, 50)],
+    )
+    table = candidate_depth_table(summary)
+
+    assert len(table) == 30
+    assert table.groupby("depth").size().eq(5).all()
+    assert table["peak_rss_bytes"].notna().all()
+    assert table["p95_ns"].notna().all()
+    assert table["thesis_evidence"].eq(False).all()
+
+
+def test_candidate_scaling_tables_reject_primary_or_rehearsal_pooling() -> None:
+    summary = candidate_scaling_summary(
+        "e-perf-payload-refinement", [("120b", 120)]
+    )
+    summary["records"][0]["experiment"] = "e-perf-4"
+    with pytest.raises(ValueError, match="candidate identity"):
+        candidate_payload_table(summary)
+
+    summary = candidate_scaling_summary(
+        "e-perf-depth-extension", [("depth-1", 1)]
+    )
+    summary["records"][0]["batch_class"] = "diagnostic-rehearsal"
+    with pytest.raises(ValueError, match="candidate identity"):
+        candidate_depth_table(summary)
+
+
+def candidate_swap_summary(experiment: str) -> dict:
+    rollback = experiment == "e-swap-rollback-sessions"
+    metrics = (
+        {
+            "compile_ns": 100,
+            "instantiate_ns": 20,
+            "signal_ns": 3,
+            "rollback_ns": 5,
+            "http_total_ns": 150,
+        }
+        if rollback
+        else {
+            "compile_ns": 100,
+            "instantiate_ns": 20,
+            "signal_ns": 3,
+            "ack_ns": 4,
+            "convergence_ns": 5,
+            "http_total_ns": 150,
+            "sink_observed_output_gap_ns": 1_000_000,
+        }
+    )
+    records = []
+    for run_index in range(1, 6):
+        events = [
+            {
+                "event_index": event_index,
+                "event_class": "first-use-aot" if event_index == 0 else "cached",
+                "plugin": (
+                    "wafer_pass_through_v2_panics.wasm"
+                    if rollback
+                    else "wafer_pass_through_v2.wasm"
+                    if event_index % 2 == 0
+                    else "wafer_pass_through_v1.wasm"
+                ),
+                **metrics,
+            }
+            for event_index in range(50)
+        ]
+        records.append(
+            {
+                "schema_version": 1,
+                "batch_class": (
+                    "candidate-rollback-session"
+                    if rollback
+                    else "candidate-independent-swap"
+                ),
+                "experiment": experiment,
+                "condition": "process-trap-rollback" if rollback else "steady",
+                "evidence_class": "candidate-supplementary",
+                "thesis_evidence": False,
+                "n30_admitted": False,
+                "sample_unit": "independent host run",
+                "nested_unit": (
+                    "rollback event within run" if rollback else "swap event within run"
+                ),
+                "duration_unit": "ns",
+                "sample_count": 50,
+                "run_index": run_index,
+                "source_git_sha": "1" * 40,
+                "source_dirty": False,
+                "event_classes": ["first-use-aot", "cached"],
+                "shared_from": None,
+                "sequence": {
+                    "expected": 1_000,
+                    "received": 1_000,
+                    "gaps": 0,
+                    "duplicates": 0,
+                },
+                "no_pool_with": (
+                    ["e-swap-5", "prior diagnostic rehearsals"]
+                    if rollback
+                    else [
+                        "e-swap-1",
+                        "e-swap-2",
+                        "e-swap-6",
+                        "prior diagnostic rehearsals",
+                    ]
+                ),
+                "events": events,
+                **(
+                    {"attempts": 50, "rolled_back": 50, "all_rolled_back": True}
+                    if rollback
+                    else {}
+                ),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "experiment": experiment,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": "rollback event within run" if rollback else "swap event within run",
+        "required_runs": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "complete": True,
+        "no_pool_with": records[0]["no_pool_with"],
+        "records": records,
+    }
+
+
+def test_candidate_swap_tables_keep_events_nested_and_classes_separate() -> None:
+    events, runs = candidate_swap_tables(
+        candidate_swap_summary("e-swap-independent-sessions")
+    )
+
+    assert len(events) == 250
+    assert len(runs) == 10
+    assert set(runs["event_class"]) == {"first-use-aot", "cached"}
+    assert runs.loc[runs.event_class == "first-use-aot", "event_count"].eq(1).all()
+    assert runs.loc[runs.event_class == "cached", "event_count"].eq(49).all()
+    assert events.groupby("run_index").size().eq(50).all()
+
+
+def test_candidate_rollback_tables_preserve_five_run_level_populations() -> None:
+    events, runs = candidate_swap_tables(
+        candidate_swap_summary("e-swap-rollback-sessions")
+    )
+
+    assert len(events) == 250
+    assert len(runs) == 10
+    assert "median_rollback_ns" in runs
+    assert events.groupby("run_index").size().eq(50).all()
+
+
+def test_candidate_rollback_tables_reject_incomplete_rollback_population() -> None:
+    summary = candidate_swap_summary("e-swap-rollback-sessions")
+    summary["records"][0]["rolled_back"] = 49
+    with pytest.raises(ValueError, match="fifty successful rollbacks"):
+        candidate_swap_tables(summary)
+
+
+def test_candidate_swap_tables_reject_mixed_classes_aliases_and_duplicate_runs() -> None:
+    summary = candidate_swap_summary("e-swap-independent-sessions")
+    summary["records"][0]["events"][0]["event_class"] = "cached"
+    with pytest.raises(ValueError, match="classes, indices, or plugins are mixed"):
+        candidate_swap_tables(summary)
+
+    summary = candidate_swap_summary("e-swap-independent-sessions")
+    summary["records"][0]["shared_from"] = "e-swap-1"
+    with pytest.raises(ValueError, match="independent-run identity"):
+        candidate_swap_tables(summary)
+
+    summary = candidate_swap_summary("e-swap-independent-sessions")
+    summary["records"][1]["run_index"] = 1
+    with pytest.raises(ValueError, match="independent-run identity"):
+        candidate_swap_tables(summary)
+
+
+def candidate_capacity_summary() -> dict:
+    grids = {
+        "mqtt-loopback": [*range(4_000, 16_000, 1_000), 15_250, 15_500, 15_750, 16_000],
+        "native": list(range(8_000, 16_000, 1_000)),
+        "wafer": list(range(8_000, 16_000, 1_000)),
+        "ekuiper": list(range(4_000, 9_000, 1_000)),
+    }
+    systems = {}
+    for system, rates in grids.items():
+        systems[system] = {
+            "complete": True,
+            "support_censoring": {
+                "from_rate_msg_s": 8_000,
+                "highest_support_uncensored_rate_msg_s": max(
+                    (rate for rate in rates if rate < 8_000), default=None
+                ),
+            },
+            "rates": [
+                {
+                    "rate_msg_s": rate,
+                    "run_count": 5,
+                    "classification": (
+                        "bad"
+                        if system == "mqtt-loopback" and rate >= 8_000
+                        else "support-confounded"
+                        if system != "mqtt-loopback" and rate >= 8_000
+                        else "good"
+                    ),
+                    "pooled_loss": 0.02 if system == "mqtt-loopback" and rate >= 8_000 else 0.0,
+                    "mean_achieved_ratio": 0.98 if system == "mqtt-loopback" and rate >= 8_000 else 1.0,
+                    "duplicates": 0,
+                }
+                for rate in rates
+            ],
+        }
+    return {
+        "schema_version": 1,
+        "experiment": "e-perf-capacity-knee",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one system and offered rate",
+        "required_runs_per_rate": 5,
+        "criteria": {
+            "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+            "max_pooled_loss": 0.01,
+            "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+            "min_mean_achieved_ratio": 0.99,
+            "duplicates_allowed": 0,
+            "support_path_censoring": "mqtt-loopback",
+        },
+        "systems": systems,
+    }
+
+
+def test_candidate_capacity_table_preserves_estimator_and_censoring() -> None:
+    table = candidate_capacity_table(candidate_capacity_summary())
+
+    assert len(table) == 37
+    assert table["N_runs"].eq(5).all()
+    assert table["thesis_evidence"].eq(False).all()
+    assert table["n30_admitted"].eq(False).all()
+    assert table.loc[
+        (table.system == "wafer") & (table.offered_rate_msg_s == 8_000),
+        "classification",
+    ].item() == "support-confounded"
+
+
+def test_candidate_capacity_table_rejects_uncensored_or_threshold_shifted_summary() -> None:
+    summary = candidate_capacity_summary()
+    summary["systems"]["wafer"]["rates"][0]["classification"] = "good"
+    with pytest.raises(ValueError, match="classification disagrees"):
+        candidate_capacity_table(summary)
+
+    summary = candidate_capacity_summary()
+    summary["criteria"]["max_pooled_loss"] = 0.02
+    with pytest.raises(ValueError, match="criteria differ"):
+        candidate_capacity_table(summary)
+
+    summary = candidate_capacity_summary()
+    summary["systems"]["wafer"]["support_censoring"]["from_rate_msg_s"] = 9_000
+    with pytest.raises(ValueError, match="support-path censoring is invalid"):
+        candidate_capacity_table(summary)
 
 
 def test_capacity_tables_reject_schema_drift_from_the_producer() -> None:

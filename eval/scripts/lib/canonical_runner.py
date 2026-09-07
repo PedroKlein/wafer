@@ -20,9 +20,17 @@ import tomllib
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+EVAL_ROOT = Path(__file__).resolve().parents[2]
+RESULTS_LAYOUT_ROOT = EVAL_ROOT / "analysis" / "src" / "wafer_analysis"
+if str(RESULTS_LAYOUT_ROOT) not in sys.path:
+    sys.path.insert(0, str(RESULTS_LAYOUT_ROOT))
+
+from results_layout import CANONICAL_ALIASES, ResultsLayout, atomic_write_json
+from interval_metrics import compose_interval_metrics
 from write_metadata import merge_metadata
 
 
@@ -78,7 +86,7 @@ class ValidationGate:
 
 
 RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
-CANONICAL_MATRIX_PATH = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
+CANONICAL_MATRIX_PATH = EVAL_ROOT / "canonical-matrix.json"
 RATE_SWEEP_DEFINITION = json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"]
 RATE_SWEEP_RATES = tuple(RATE_SWEEP_DEFINITION["rate_points_msg_s"])
 RATE_SWEEP_REPETITIONS = int(RATE_SWEEP_DEFINITION["repetitions"])
@@ -92,6 +100,63 @@ RATE_SWEEP_BASELINE = 1_000
 RATE_SWEEP_P99_MULTIPLIER = 2.0
 RATE_SWEEP_MAX_LOSS_PERCENT = 1.0
 RATE_SWEEP_PROFILE = "eval/loadgen/canonical-rate-sweep.toml"
+CAPACITY_KNEE_EXPERIMENT = "e-perf-capacity-knee"
+PAYLOAD_REFINEMENT_EXPERIMENT = "e-perf-payload-refinement"
+DEPTH_EXTENSION_EXPERIMENT = "e-perf-depth-extension"
+SWAP_SESSIONS_EXPERIMENT = "e-swap-independent-sessions"
+ROLLBACK_SESSIONS_EXPERIMENT = "e-swap-rollback-sessions"
+EKUIPER_PROFILE_EXPERIMENT = "e-compare-ekuiper-profile"
+CANDIDATE_SWAP_EXPERIMENTS = {
+    SWAP_SESSIONS_EXPERIMENT,
+    ROLLBACK_SESSIONS_EXPERIMENT,
+}
+EXECUTABLE_CANDIDATE_EXPERIMENTS = {
+    CAPACITY_KNEE_EXPERIMENT,
+    PAYLOAD_REFINEMENT_EXPERIMENT,
+    DEPTH_EXTENSION_EXPERIMENT,
+    SWAP_SESSIONS_EXPERIMENT,
+    ROLLBACK_SESSIONS_EXPERIMENT,
+    EKUIPER_PROFILE_EXPERIMENT,
+}
+PAYLOAD_REFINEMENT_GRID = (
+    ("120b", 120),
+    ("1kb", 1_024),
+    ("8kb", 8_192),
+    ("10kb", 10_240),
+    ("16kb", 16_384),
+    ("32kb", 32_768),
+    ("64kb", 65_536),
+    ("100kb", 102_400),
+    ("128kb", 131_072),
+    ("256kb", 262_144),
+)
+PAYLOAD_REFINEMENT_SHA256 = {
+    label: hashlib.sha256(bytes([0x42]) * size).hexdigest()
+    for label, size in PAYLOAD_REFINEMENT_GRID
+}
+DEPTH_EXTENSION_GRID = (1, 3, 5, 10, 20, 50)
+PASS_THROUGH_PLUGIN = (
+    "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+)
+CANDIDATE_REPETITIONS = 5
+CANDIDATE_WARMUP_SECS = 30
+CANDIDATE_MEASUREMENT_SECS = 60
+CANDIDATE_RATE_MSG_S = 1_000
+EKUIPER_PROFILE_RATES = (1_000, 4_000, 8_000)
+EKUIPER_PROFILE_STATES = ("profiled", "unprofiled-control")
+CAPACITY_KNEE_GRID = {
+    "mqtt-loopback": (
+        4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000,
+        12_000, 13_000, 14_000, 15_000, 15_250, 15_500, 15_750, 16_000,
+    ),
+    "native": (8_000, 9_000, 10_000, 11_000, 12_000, 13_000, 14_000, 15_000),
+    "wafer": (8_000, 9_000, 10_000, 11_000, 12_000, 13_000, 14_000, 15_000),
+    "ekuiper": (4_000, 5_000, 6_000, 7_000, 8_000),
+}
+CAPACITY_KNEE_PROFILE = "eval/loadgen/capacity-knee.toml"
+CAPACITY_KNEE_REPETITIONS = 5
+CAPACITY_KNEE_WARMUP_SECS = 30
+CAPACITY_KNEE_MEASUREMENT_SECS = 60
 STARTUP_PHASES = (
     "process_config",
     "component_load_compile",
@@ -284,6 +349,36 @@ def verify_capacity_scout_result_files(output: Path, result: dict) -> None:
             raise ValueError(f"capacity-scout {name} receipt checksum mismatch")
 
 
+def validate_candidate_capacity_run_result(result: dict) -> None:
+    candidate = {**result, "batch_class": "capacity-scout"}
+    validate_capacity_scout_result(candidate)
+    if result.get("batch_class") != "candidate-capacity-knee":
+        raise ValueError("candidate capacity result requires batch_class=candidate-capacity-knee")
+    if result.get("experiment") != CAPACITY_KNEE_EXPERIMENT:
+        raise ValueError(f"candidate capacity result must be {CAPACITY_KNEE_EXPERIMENT}")
+    if result.get("thesis_evidence") is not False:
+        raise ValueError("candidate capacity result requires thesis_evidence=false")
+    if result.get("evidence_class") != "candidate-supplementary":
+        raise ValueError("candidate capacity result requires candidate-supplementary evidence")
+    if result.get("n30_admitted") is not False:
+        raise ValueError("candidate capacity result requires n30_admitted=false")
+    if result.get("rate_msg_s") not in CAPACITY_KNEE_GRID[result["system"]]:
+        raise ValueError("candidate capacity result rate is outside the system grid")
+    if result["controlled_factors"].get("warmup_secs") != CAPACITY_KNEE_WARMUP_SECS:
+        raise ValueError("candidate capacity warmup differs from the frozen matrix")
+    if result["controlled_factors"].get("measurement_secs") != CAPACITY_KNEE_MEASUREMENT_SECS:
+        raise ValueError("candidate capacity controlled measurement duration differs from the frozen matrix")
+    if not 1 <= int(result.get("run_index", 0)) <= CAPACITY_KNEE_REPETITIONS:
+        raise ValueError("candidate capacity run_index is outside the frozen repetitions")
+    if result.get("measurement_duration_ns") != CAPACITY_KNEE_MEASUREMENT_SECS * 1_000_000_000:
+        raise ValueError("candidate capacity measurement duration differs from the frozen matrix")
+    if result["messages"].get("intended") != result["rate_msg_s"] * CAPACITY_KNEE_MEASUREMENT_SECS:
+        raise ValueError("candidate capacity intended population differs from rate times duration")
+    achieved_ratio = result["messages"]["received_unique"] / result["messages"]["intended"]
+    if not math.isclose(float(result["rates_msg_s"].get("achieved_ratio", -1)), achieved_ratio):
+        raise ValueError("candidate capacity achieved ratio differs from counters")
+
+
 def validate_capacity_run_result(result: dict) -> None:
     required = {
         "schema_version", "batch_class", "experiment", "thesis_evidence", "system",
@@ -427,6 +522,100 @@ def _run_summary(values: list[float], seed: str) -> dict:
     }
 
 
+def _classify_delivery_runs(
+    rate_runs: list[dict], required_repetitions: int
+) -> tuple[str, float | None, float | None, int]:
+    duplicates = sum(int(run["messages"]["duplicates"]) for run in rate_runs)
+    if len(rate_runs) != required_repetitions:
+        return "incomplete", None, None, duplicates
+    intended = sum(int(run["messages"]["intended"]) for run in rate_runs)
+    undelivered = sum(int(run["messages"]["total_undelivered"]) for run in rate_runs)
+    pooled_loss = undelivered / intended if intended else 1.0
+    mean_achieved_ratio = statistics.mean(
+        float(run["rates_msg_s"]["achieved_ratio"]) for run in rate_runs
+    )
+    classification = (
+        "good"
+        if pooled_loss <= 0.01 and mean_achieved_ratio >= 0.99 and duplicates == 0
+        else "bad"
+    )
+    return classification, pooled_loss, mean_achieved_ratio, duplicates
+
+
+def estimate_candidate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
+    if set(runs_by_system) != set(RATE_SWEEP_SYSTEMS):
+        raise ValueError("candidate capacity envelope requires all four systems")
+    by_system_rate: dict[str, dict[int, list[dict]]] = {}
+    for system, rates in CAPACITY_KNEE_GRID.items():
+        by_rate = {rate: [] for rate in rates}
+        seen: set[tuple[int, int]] = set()
+        for run in runs_by_system[system]:
+            validate_candidate_capacity_run_result(run)
+            if run["system"] != system:
+                raise ValueError("candidate capacity run stored under the wrong system")
+            identity = (run["rate_msg_s"], run["run_index"])
+            if identity in seen:
+                raise ValueError("duplicate candidate capacity run identity")
+            seen.add(identity)
+            by_rate[run["rate_msg_s"]].append(run)
+        by_system_rate[system] = by_rate
+
+    mqtt = {
+        rate: _classify_delivery_runs(
+            by_system_rate["mqtt-loopback"][rate], CAPACITY_KNEE_REPETITIONS
+        )[0]
+        for rate in CAPACITY_KNEE_GRID["mqtt-loopback"]
+    }
+    first_support_bad = next((rate for rate in CAPACITY_KNEE_GRID["mqtt-loopback"] if mqtt[rate] == "bad"), None)
+    systems = {}
+    for system, grid in CAPACITY_KNEE_GRID.items():
+        rows = []
+        for rate in grid:
+            rate_runs = by_system_rate[system][rate]
+            classification, pooled_loss, mean_achieved_ratio, duplicates = (
+                _classify_delivery_runs(rate_runs, CAPACITY_KNEE_REPETITIONS)
+            )
+            if system != "mqtt-loopback" and first_support_bad is not None and rate >= first_support_bad:
+                classification = "support-confounded"
+            rows.append({
+                "rate_msg_s": rate,
+                "run_count": len(rate_runs),
+                "classification": classification,
+                "pooled_loss": pooled_loss,
+                "mean_achieved_ratio": mean_achieved_ratio,
+                "duplicates": duplicates,
+            })
+        systems[system] = {
+            "complete": all(row["run_count"] == CAPACITY_KNEE_REPETITIONS for row in rows),
+            "support_censoring": {
+                "from_rate_msg_s": first_support_bad,
+                "highest_support_uncensored_rate_msg_s": max(
+                    (rate for rate in grid if first_support_bad is None or rate < first_support_bad),
+                    default=None,
+                ),
+            },
+            "rates": rows,
+        }
+    return {
+        "schema_version": 1,
+        "experiment": CAPACITY_KNEE_EXPERIMENT,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one system and offered rate",
+        "required_runs_per_rate": CAPACITY_KNEE_REPETITIONS,
+        "criteria": {
+            "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+            "max_pooled_loss": 0.01,
+            "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+            "min_mean_achieved_ratio": 0.99,
+            "duplicates_allowed": 0,
+            "support_path_censoring": "mqtt-loopback",
+        },
+        "systems": systems,
+    }
+
+
 def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
     if set(runs_by_system) != set(RATE_SWEEP_SYSTEMS):
         raise ValueError("capacity envelope requires all four frozen systems")
@@ -447,19 +636,10 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
             by_rate[run["rate_msg_s"]].append(run)
         by_system_rate[system] = by_rate
 
-    def raw_classification(rate_runs: list[dict]) -> str:
-        if len(rate_runs) != RATE_SWEEP_REPETITIONS:
-            return "incomplete"
-        intended = sum(run["messages"]["intended"] for run in rate_runs)
-        undelivered = sum(run["messages"]["total_undelivered"] for run in rate_runs)
-        pooled_loss = undelivered / intended if intended else 1.0
-        mean_achieved_ratio = statistics.mean(
-            run["rates_msg_s"]["achieved_ratio"] for run in rate_runs
-        )
-        return "good" if pooled_loss <= 0.01 and mean_achieved_ratio >= 0.99 else "bad"
-
     mqtt_classifications = {
-        rate: raw_classification(by_system_rate["mqtt-loopback"][rate])
+        rate: _classify_delivery_runs(
+            by_system_rate["mqtt-loopback"][rate], RATE_SWEEP_REPETITIONS
+        )[0]
         for rate in RATE_SWEEP_RATES
     }
     first_support_bad = next(
@@ -476,7 +656,9 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
         rates = []
         for rate in RATE_SWEEP_RATES:
             rate_runs = by_system_rate[system][rate]
-            classification = raw_classification(rate_runs)
+            classification = _classify_delivery_runs(
+                rate_runs, RATE_SWEEP_REPETITIONS
+            )[0]
             support_confounded = (
                 system != "mqtt-loopback"
                 and first_support_bad is not None
@@ -491,6 +673,9 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
                 statistics.mean(run["rates_msg_s"]["achieved_ratio"] for run in rate_runs)
                 if rate_runs
                 else None
+            )
+            total_duplicates = sum(
+                int(run["messages"]["duplicates"]) for run in rate_runs
             )
             metrics = {
                 "loss": [run["messages"]["total_undelivered"] / run["messages"]["intended"] for run in rate_runs],
@@ -510,6 +695,7 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
                     "classification": classification,
                     "pooled_loss": pooled_loss,
                     "mean_achieved_ratio": mean_achieved_ratio,
+                    "total_duplicates": total_duplicates,
                     "run_summary": {
                         name: _run_summary(values, f"{system}:{rate}:{name}")
                         for name, values in metrics.items()
@@ -1077,6 +1263,7 @@ def derive_hotswap_evidence(
         events.append(
             {
                 "event_index": int(request.get("event_index", index)),
+                "plugin": request.get("plugin"),
                 **{field: timeline[field] for field in HOTSWAP_PHASE_FIELDS},
                 "http_total_ns": http_total_ns,
                 "http_total_clock": request.get(
@@ -1101,6 +1288,111 @@ def derive_hotswap_evidence(
             "internal swap because queued output can mask internal disruption."
         ),
     }
+
+
+def _read_lossless_sequence(path: Path) -> dict[str, int]:
+    with path.open(newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    if len(rows) != 1:
+        raise ValueError("sequence.csv must contain one summary row")
+    sequence = {
+        "expected": int(rows[0]["total_expected"]),
+        "received": int(rows[0]["total_received"]),
+        "gaps": int(rows[0]["gap_msgs"]),
+        "duplicates": int(rows[0]["duplicates_count"]),
+    }
+    if (
+        sequence["expected"] != sequence["received"]
+        or sequence["gaps"] != 0
+        or sequence["duplicates"] != 0
+    ):
+        raise ValueError("candidate swap session is not lossless")
+    return sequence
+
+
+def stamp_candidate_swap_evidence(evidence: dict, item: RunItem, sequence: dict) -> dict:
+    events = evidence.get("events")
+    if not isinstance(events, list) or len(events) != 50:
+        raise ValueError(f"{item.experiment} requires exactly 50 nested events")
+    if [event.get("event_index") for event in events] != list(range(50)):
+        raise ValueError(f"{item.experiment} event indices must be exactly 0 through 49")
+    for event in events:
+        event_index = event["event_index"]
+        event["event_class"] = candidate_swap_event_class(event_index)
+        expected_plugin = (
+            "wafer_pass_through_v2_panics.wasm"
+            if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT
+            else "wafer_pass_through_v2.wasm"
+            if event_index % 2 == 0
+            else "wafer_pass_through_v1.wasm"
+        )
+        if event.get("plugin") != expected_plugin:
+            raise ValueError(f"{item.experiment} event {event_index} uses the wrong plugin")
+    return {
+        **evidence,
+        "batch_class": (
+            "candidate-independent-swap"
+            if item.experiment == SWAP_SESSIONS_EXPERIMENT
+            else "candidate-rollback-session"
+        ),
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": (
+            "swap event within run"
+            if item.experiment == SWAP_SESSIONS_EXPERIMENT
+            else "rollback event within run"
+        ),
+        "run_index": item.run_index,
+        "event_classes": ["first-use-aot", "cached"],
+        "sequence": sequence,
+        "no_pool_with": (
+            ["e-swap-1", "e-swap-2", "e-swap-6", "prior diagnostic rehearsals"]
+            if item.experiment == SWAP_SESSIONS_EXPERIMENT
+            else ["e-swap-5", "prior diagnostic rehearsals"]
+        ),
+    }
+
+
+def build_candidate_rollback_evidence(
+    requests: list[dict], item: RunItem, source_leaf: str, sequence: dict
+) -> dict:
+    events = []
+    for index, request in enumerate(requests):
+        timeline = request.get("body", {}).get("timeline", {})
+        event = {
+            "event_index": int(request.get("event_index", index)),
+            "plugin": request.get("plugin"),
+            "compile_ns": timeline.get("compile_ns"),
+            "instantiate_ns": timeline.get("instantiate_ns"),
+            "signal_ns": timeline.get("signal_ns"),
+            "rollback_ns": timeline.get("rollback_ns"),
+            "http_total_ns": request.get("request_duration_ns"),
+            "http_total_clock": request.get(
+                "request_duration_clock", "wall-clock-difference-legacy"
+            ),
+        }
+        for field in ("compile_ns", "instantiate_ns", "signal_ns", "rollback_ns", "http_total_ns"):
+            if type(event[field]) is not int or event[field] < 0:
+                raise ValueError(f"rollback event {index} requires non-negative integer {field}")
+        if request.get("http_status") != 200 or request.get("body", {}).get("status") != "rolled_back":
+            raise ValueError(f"rollback event {index} did not report rolled_back")
+        events.append(event)
+    return stamp_candidate_swap_evidence(
+        {
+            "schema_version": 1,
+            "duration_unit": "ns",
+            "experiment": item.experiment,
+            "condition": item.condition,
+            "measurement_source_leaf": source_leaf,
+            "shared_from": None,
+            "sample_count": len(events),
+            "events": events,
+        },
+        item,
+        sequence,
+    )
 
 
 def build_swap4_timeline(
@@ -1599,6 +1891,111 @@ def validate_swap3_artifacts(
         raise ValueError("E-Swap-3 received population exceeds publisher population")
 
 
+def validate_fine_event_buckets(
+    fine: dict,
+    canonical: dict,
+    *,
+    experiment: str,
+    expected_event_timestamp_ns: int | None = None,
+) -> None:
+    if (
+        fine.get("schema_version") != 1
+        or fine.get("alignment") != "actual-t0"
+        or fine.get("clock_purpose") != "cross-process-alignment"
+        or fine.get("bucket_width_ns") != 10_000_000
+        or fine.get("bucket_count") != 400
+        or fine.get("coverage_start_offset_ns") != -2_000_000_000
+        or fine.get("coverage_end_offset_ns") != 2_000_000_000
+        or fine.get("parent_bucket_width_ns") != 100_000_000
+        or fine.get("parent_bucket_count") != 40
+        or fine.get("canonical_series") != "throughput-buckets.json"
+        or fine.get("loss_accounting") != "canonical-sequence-and-primary-drain-only"
+    ):
+        raise ValueError("fine event buckets differ from the frozen multi-resolution contract")
+    expected_clock = (
+        "unix-epoch" if experiment == "e-swap-3" else "unix-epoch-source-sink-alignment"
+    )
+    if fine.get("clock") != expected_clock:
+        raise ValueError("fine event bucket clock differs from experiment")
+    event_timestamp_ns = int(fine["event_timestamp_ns"])
+    scheduled_event_timestamp_ns = int(fine["scheduled_event_timestamp_ns"])
+    alignment_error_ns = event_timestamp_ns - scheduled_event_timestamp_ns
+    if (
+        int(fine.get("alignment_error_ns", 10_000_001)) != alignment_error_ns
+        or fine.get("alignment_tolerance_ns") != 10_000_000
+        or abs(alignment_error_ns) > 10_000_000
+        or (
+            expected_event_timestamp_ns is not None
+            and event_timestamp_ns != expected_event_timestamp_ns
+        )
+    ):
+        raise ValueError("fine event buckets are not aligned to actual t0")
+
+    def validate_series(rows: object, *, count: int, width_ns: int) -> tuple[list[dict], dict]:
+        if not isinstance(rows, list) or len(rows) != count:
+            raise ValueError(f"fine event artifact requires exactly {count} buckets")
+        expected_start = -2_000_000_000
+        totals = {"received_unique": 0, "received_events": 0, "duplicates": 0}
+        for row in rows:
+            unique = int(row["received_unique"])
+            events = int(row["received_events"])
+            duplicates = int(row["duplicates"])
+            if (
+                int(row["start_offset_ns"]) != expected_start
+                or int(row["end_offset_ns"]) != expected_start + width_ns
+                or events != unique + duplicates
+                or not math.isclose(
+                    float(row["rate_msg_s"]), unique * 1_000_000_000 / width_ns
+                )
+            ):
+                raise ValueError("fine event buckets are not contiguous or reconciled")
+            totals["received_unique"] += unique
+            totals["received_events"] += events
+            totals["duplicates"] += duplicates
+            expected_start += width_ns
+        if expected_start != 2_000_000_000:
+            raise ValueError("fine event bucket coverage does not end at +2 seconds")
+        return rows, totals
+
+    rows, totals = validate_series(fine.get("buckets"), count=400, width_ns=10_000_000)
+    parents, parent_totals = validate_series(
+        fine.get("parent_buckets"), count=40, width_ns=100_000_000
+    )
+    if totals != parent_totals:
+        raise ValueError("fine and parent event bucket totals differ")
+    for parent_index, parent in enumerate(parents):
+        nested = rows[parent_index * 10 : (parent_index + 1) * 10]
+        for field in totals:
+            if int(parent[field]) != sum(int(row[field]) for row in nested):
+                raise ValueError("fine event buckets do not reconcile to parent population")
+    if any(int(fine.get(field, -1)) != total for field, total in totals.items()):
+        raise ValueError("fine event bucket totals differ from declared population")
+    if experiment == "e-swap-3":
+        if fine.get("event_timestamp_ns") != canonical.get("event_timestamp_ns"):
+            raise ValueError("E-Swap-3 fine and canonical actual t0 differ")
+        canonical_rows = canonical.get("buckets")
+        if not isinstance(canonical_rows, list) or len(canonical_rows) != 200:
+            raise ValueError("E-Swap-3 canonical bucket population is malformed")
+        for parent, canonical_parent in zip(parents, canonical_rows[80:120]):
+            for field in totals:
+                if int(parent[field]) != int(canonical_parent[field]):
+                    raise ValueError(
+                        "E-Swap-3 fine buckets do not reconcile to canonical 100 ms population"
+                    )
+    elif experiment == "e-swap-4":
+        source_origin = canonical.get("source_measurement_start_unix_ns")
+        if (
+            fine.get("source_measurement_start_unix_ns") != source_origin
+            or not isinstance(source_origin, int)
+            or scheduled_event_timestamp_ns != source_origin + 60_000_000_000
+        ):
+            raise ValueError("E-Swap-4 fine and canonical source origins differ")
+        if any(int(fine[field]) > int(canonical[field]) for field in totals):
+            raise ValueError("E-Swap-4 fine population exceeds canonical full-run population")
+    else:
+        raise ValueError("fine event buckets are attached to an unsupported experiment")
+
+
 def analyze_backpressure(
     samples: list[dict],
     *,
@@ -1709,6 +2106,186 @@ def validate_backpressure_result(result: dict) -> None:
         raise ValueError("backpressure run exceeded the frozen RSS bound")
 
 
+def validate_candidate_scaling_definition(experiment: str, definition: dict) -> None:
+    common = {
+        "repetitions": CANDIDATE_REPETITIONS,
+        "warmup_secs": CANDIDATE_WARMUP_SECS,
+        "measurement_secs": CANDIDATE_MEASUREMENT_SECS,
+        "rate_msg_s": CANDIDATE_RATE_MSG_S,
+        "ordering": {
+            "method": "seeded condition shuffle per repetition",
+            "default_seed": 1729,
+        },
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "evidence_class": "candidate-supplementary",
+    }
+    expected = {
+        PAYLOAD_REFINEMENT_EXPERIMENT: {
+            **common,
+            "payload_bytes": [size for _, size in PAYLOAD_REFINEMENT_GRID],
+            "payload_sha256": PAYLOAD_REFINEMENT_SHA256,
+            "execution_path": "in-process bench-source -> pass-through -> bench-sink",
+            "payload_pattern": "repeated-byte-0x42",
+        },
+        DEPTH_EXTENSION_EXPERIMENT: {
+            **common,
+            "depths": list(DEPTH_EXTENSION_GRID),
+            "payload_bytes": 128,
+            "execution_path": "in-process bench-source -> identical pass-through chain -> bench-sink",
+        },
+    }[experiment]
+    for field, value in expected.items():
+        if definition.get(field) != value:
+            raise ValueError(f"{experiment} {field} differs from the frozen candidate contract")
+
+
+def candidate_swap_event_class(event_index: int) -> str:
+    return "first-use-aot" if event_index == 0 else "cached"
+
+
+def validate_candidate_swap_definition(experiment: str, definition: dict) -> None:
+    expected = {
+        SWAP_SESSIONS_EXPERIMENT: {
+            "condition": "steady",
+            "measurement_secs": 120,
+            "execution_path": (
+                "in-process bench-source -> alternating pass-through-v1/v2 hot-swaps -> bench-sink"
+            ),
+            "required_outputs": [
+                "latency.hdr",
+                "throughput.csv",
+                "sequence.csv",
+                "swap_requests.json",
+                "swap_timeline.json",
+                "hotswap-analysis.json",
+                "interval-metrics.json",
+            ],
+            "no_pool_with": [
+                "e-swap-1",
+                "e-swap-2",
+                "e-swap-6",
+                "prior diagnostic rehearsals",
+            ],
+        },
+        ROLLBACK_SESSIONS_EXPERIMENT: {
+            "condition": "process-trap-rollback",
+            "measurement_secs": 300,
+            "execution_path": (
+                "in-process bench-source -> process-trapping swap with automatic rollback -> bench-sink"
+            ),
+            "required_outputs": [
+                "latency.hdr",
+                "throughput.csv",
+                "sequence.csv",
+                "swap_requests.json",
+                "rollback.json",
+                "interval-metrics.json",
+            ],
+            "no_pool_with": ["e-swap-5", "prior diagnostic rehearsals"],
+        },
+    }[experiment]
+    frozen = {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_units": [
+            "swap event within run"
+            if experiment == SWAP_SESSIONS_EXPERIMENT
+            else "rollback event within run"
+        ],
+        "repetitions": 5,
+        "conditions": [expected["condition"]],
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "warmup_secs": 30,
+        "measurement_secs": expected["measurement_secs"],
+        "rate_msg_s": 1_000,
+        "payload_bytes": 128,
+        "execution_path": expected["execution_path"],
+        "ordering": {"method": "seeded run order", "default_seed": 1729},
+        "required_outputs": expected["required_outputs"],
+        "no_pool_with": expected["no_pool_with"],
+    }
+    for field, value in frozen.items():
+        if definition.get(field) != value:
+            raise ValueError(f"{experiment} {field} differs from the frozen candidate contract")
+
+
+def validate_ekuiper_profile_definition(definition: dict) -> None:
+    expected = {
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "nested_units": ["one-second interval within run"],
+        "repetitions": 5,
+        "rates_msg_s": list(EKUIPER_PROFILE_RATES),
+        "profiler_states": list(EKUIPER_PROFILE_STATES),
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "loadgen_profile": "eval/loadgen/telemetry-120b.toml",
+        "config": "eval/configs/canonical/e-perf-1-ekuiper.toml",
+        "profiler": {
+            "kind": "external-procfs-process-sampler",
+            "interval_secs": 1,
+            "maximum_rows_per_run": 62,
+            "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+            "graceful_unavailable": True,
+        },
+        "ordering": {
+            "method": "seeded paired condition shuffle per repetition",
+            "default_seed": 1729,
+        },
+        "required_outputs": [
+            "latency.hdr",
+            "throughput.csv",
+            "interval-metrics.json",
+            "ekuiper-runtime-summary.json",
+            "profiler-overhead.json",
+        ],
+        "analysis": "ekuiper-tail-association",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    for field, value in expected.items():
+        if definition.get(field) != value:
+            raise ValueError(
+                f"{EKUIPER_PROFILE_EXPERIMENT} {field} differs from the frozen diagnostic contract"
+            )
+
+
+def validate_capacity_knee_definition(definition: dict) -> None:
+    expected_grid = {system: list(rates) for system, rates in CAPACITY_KNEE_GRID.items()}
+    expected_ordering = {
+        "method": "seeded rate blocks with five-run balanced system order",
+        "default_seed": 1729,
+        "cooldown_secs": 60,
+    }
+    expected_delivery = {
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_loss_percent": 1.0,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_achieved_ratio": 0.99,
+        "duplicates_allowed": 0,
+        "support_path_censoring": "mqtt-loopback",
+    }
+    expected = {
+        "repetitions": CAPACITY_KNEE_REPETITIONS,
+        "warmup_secs": CAPACITY_KNEE_WARMUP_SECS,
+        "measurement_secs": CAPACITY_KNEE_MEASUREMENT_SECS,
+        "loadgen_profile": CAPACITY_KNEE_PROFILE,
+        "condition_grid_msg_s": expected_grid,
+        "ordering": expected_ordering,
+        "delivery_good": expected_delivery,
+        "thesis_evidence": False,
+        "n30_admitted": False,
+    }
+    for field, value in expected.items():
+        if definition.get(field) != value:
+            raise ValueError(f"{CAPACITY_KNEE_EXPERIMENT} {field} differs from the frozen candidate contract")
+
+
 def _validate_rate_sweep_definition(_root: Path, definition: dict) -> None:
     expected = {
         "systems": list(RATE_SWEEP_SYSTEMS),
@@ -1743,6 +2320,10 @@ def _rate_sweep_config(system: str) -> str:
     return RATE_SWEEP_PROFILE
 
 
+def _capacity_knee_config(system: str) -> str:
+    return CAPACITY_KNEE_PROFILE if system == "mqtt-loopback" else _rate_sweep_config(system)
+
+
 CONDITIONS: dict[str, tuple[Condition, ...]] = {
     "e-perf-1": tuple(
         Condition(
@@ -1769,6 +2350,58 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
         )
         for system in RATE_SWEEP_SYSTEMS
         for rate in RATE_SWEEP_RATES
+    ),
+    CAPACITY_KNEE_EXPERIMENT: tuple(
+        Condition(
+            f"{system}/rate-{rate:05d}",
+            _capacity_knee_config(system),
+            CAPACITY_KNEE_PROFILE,
+            system=system,
+            offered_rate_msg_s=rate,
+            exclusive_sut=True,
+        )
+        for system in RATE_SWEEP_SYSTEMS
+        for rate in CAPACITY_KNEE_GRID[system]
+    ),
+    PAYLOAD_REFINEMENT_EXPERIMENT: tuple(
+        Condition(
+            label,
+            f"eval/configs/enhanced/e-perf-payload-{label}.toml",
+        )
+        for label, _ in PAYLOAD_REFINEMENT_GRID
+    ),
+    DEPTH_EXTENSION_EXPERIMENT: tuple(
+        Condition(
+            f"depth-{depth}",
+            f"eval/configs/enhanced/e-perf-depth-{depth}.toml",
+        )
+        for depth in DEPTH_EXTENSION_GRID
+    ),
+    SWAP_SESSIONS_EXPERIMENT: (
+        Condition(
+            "steady",
+            "eval/configs/e-swap/pipeline-hotswap.toml",
+            events_per_run=50,
+        ),
+    ),
+    ROLLBACK_SESSIONS_EXPERIMENT: (
+        Condition(
+            "process-trap-rollback",
+            "eval/configs/e-swap/pipeline-hotswap-rollback.toml",
+            events_per_run=50,
+        ),
+    ),
+    EKUIPER_PROFILE_EXPERIMENT: tuple(
+        Condition(
+            f"rate-{rate:05d}/{state}",
+            "eval/configs/canonical/e-perf-1-ekuiper.toml",
+            "eval/loadgen/telemetry-120b.toml",
+            system="ekuiper",
+            offered_rate_msg_s=rate,
+            exclusive_sut=True,
+        )
+        for rate in EKUIPER_PROFILE_RATES
+        for state in EKUIPER_PROFILE_STATES
     ),
     "e-perf-2": tuple(
         Condition(
@@ -1917,6 +2550,12 @@ EXPERIMENT_ORDER = (
     "e-perf-7",
     "e-perf-9",
     "e-perf-10",
+    CAPACITY_KNEE_EXPERIMENT,
+    PAYLOAD_REFINEMENT_EXPERIMENT,
+    DEPTH_EXTENSION_EXPERIMENT,
+    SWAP_SESSIONS_EXPERIMENT,
+    ROLLBACK_SESSIONS_EXPERIMENT,
+    EKUIPER_PROFILE_EXPERIMENT,
     "e-backpressure",
     "e-iso-1",
     "e-iso-2",
@@ -1936,6 +2575,14 @@ EXPERIMENT_ORDER = (
 )
 
 
+def _capacity_knee_rate_order(seed: int, run_index: int) -> list[int]:
+    rates = sorted(set().union(*CAPACITY_KNEE_GRID.values()))
+    random.Random(f"{seed}:{CAPACITY_KNEE_EXPERIMENT}:rates").shuffle(rates)
+    step = max(1, len(rates) // CAPACITY_KNEE_REPETITIONS)
+    offset = ((run_index - 1) * step) % len(rates)
+    return rates[offset:] + rates[:offset]
+
+
 def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
     unknown = experiments - CONDITIONS.keys()
     if unknown:
@@ -1943,9 +2590,23 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
 
     matrix_path = Path(__file__).resolve().parents[2] / "canonical-matrix.json"
     matrix_document = json.loads(matrix_path.read_text())
-    matrix = matrix_document["experiments"]
+    final_experiments = matrix_document["experiments"]
+    candidate_experiments = matrix_document["enhanced_candidate"]["experiments"]
     if "e-perf-10" in experiments:
-        _validate_rate_sweep_definition(matrix_path.parents[1], matrix["e-perf-10"])
+        _validate_rate_sweep_definition(matrix_path.parents[1], final_experiments["e-perf-10"])
+    candidate_selected = EXECUTABLE_CANDIDATE_EXPERIMENTS & experiments
+    if candidate_selected and candidate_selected != experiments:
+        raise ValueError("candidate experiments must run in a candidate-only batch")
+    for candidate in candidate_selected:
+        definition = candidate_experiments[candidate]
+        if candidate == CAPACITY_KNEE_EXPERIMENT:
+            validate_capacity_knee_definition(definition)
+        elif candidate in {PAYLOAD_REFINEMENT_EXPERIMENT, DEPTH_EXTENSION_EXPERIMENT}:
+            validate_candidate_scaling_definition(candidate, definition)
+        elif candidate == EKUIPER_PROFILE_EXPERIMENT:
+            validate_ekuiper_profile_definition(definition)
+        else:
+            validate_candidate_swap_definition(candidate, definition)
     wafer_configs = {
         (entry["experiment"], entry["condition"]): entry["config"]
         for entry in matrix_document["final_campaign"]["wafer_config_catalog"]
@@ -1953,22 +2614,41 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
     schedule: list[RunItem] = []
 
     for experiment in (item for item in EXPERIMENT_ORDER if item in experiments):
-        definition = matrix[experiment]
+        definition = (
+            candidate_experiments[experiment]
+            if experiment in EXECUTABLE_CANDIDATE_EXPERIMENTS
+            else final_experiments[experiment]
+        )
         conditions = CONDITIONS[experiment]
         for run_index in range(1, definition["repetitions"] + 1):
             if experiment == "e-perf-9":
                 ordered = list(conditions)
-            elif experiment == "e-perf-10":
+            elif experiment in {"e-perf-10", CAPACITY_KNEE_EXPERIMENT}:
                 by_pair = {
                     (condition.system, condition.offered_rate_msg_s): condition
                     for condition in conditions
                 }
-                rates = list(RATE_SWEEP_RATES)
-                random.Random(f"{seed}:{experiment}:{run_index}:rates").shuffle(rates)
+                rate_grid = (
+                    CAPACITY_KNEE_GRID
+                    if experiment == CAPACITY_KNEE_EXPERIMENT
+                    else {system: RATE_SWEEP_RATES for system in RATE_SWEEP_SYSTEMS}
+                )
+                rates = (
+                    _capacity_knee_rate_order(seed, run_index)
+                    if experiment == CAPACITY_KNEE_EXPERIMENT
+                    else list(RATE_SWEEP_RATES)
+                )
+                if experiment == "e-perf-10":
+                    random.Random(f"{seed}:{experiment}:{run_index}:rates").shuffle(rates)
                 ordered = []
                 for rate in rates:
-                    systems = list(RATE_SWEEP_SYSTEMS)
-                    random.Random(f"{seed}:{experiment}:{rate}:systems").shuffle(systems)
+                    systems = [system for system in RATE_SWEEP_SYSTEMS if rate in rate_grid[system]]
+                    systems.sort(
+                        key=lambda system: (
+                            hashlib.sha256(f"{seed}:{experiment}:{rate}:{system}".encode()).hexdigest(),
+                            system,
+                        )
+                    )
                     offset = (run_index - 1) % len(systems)
                     systems = systems[offset:] + systems[:offset]
                     ordered.extend(by_pair[(system, rate)] for system in systems)
@@ -1986,7 +2666,9 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
                         run_index=run_index,
                         config=(
                             wafer_configs[(experiment, condition.name)]
-                            if condition.system == "wafer" and condition.config
+                            if experiment not in EXECUTABLE_CANDIDATE_EXPERIMENTS
+                            and condition.system == "wafer"
+                            and condition.config
                             else condition.config
                         ),
                         warmup_secs=definition["warmup_secs"],
@@ -2004,6 +2686,41 @@ def build_schedule(experiments: set[str], seed: int) -> list[RunItem]:
     return schedule
 
 
+def build_capacity_knee_schedule(seed: int) -> list[RunItem]:
+    return build_schedule({CAPACITY_KNEE_EXPERIMENT}, seed)
+
+
+def build_payload_refinement_schedule(seed: int) -> list[RunItem]:
+    return build_schedule({PAYLOAD_REFINEMENT_EXPERIMENT}, seed)
+
+
+def build_depth_extension_schedule(seed: int) -> list[RunItem]:
+    return build_schedule({DEPTH_EXTENSION_EXPERIMENT}, seed)
+
+
+def build_ekuiper_profile_schedule(seed: int) -> list[RunItem]:
+    return build_schedule({EKUIPER_PROFILE_EXPERIMENT}, seed)
+
+
+def ekuiper_profile_state(item: RunItem) -> str:
+    if item.experiment != EKUIPER_PROFILE_EXPERIMENT:
+        raise ValueError("profile state requires an eKuiper profile item")
+    state = item.condition.rsplit("/", 1)[-1]
+    if state not in EKUIPER_PROFILE_STATES:
+        raise ValueError(f"unknown eKuiper profile state: {state}")
+    return state
+
+
+def is_ekuiper_profile_item(item: RunItem) -> bool:
+    return item.experiment == EKUIPER_PROFILE_EXPERIMENT
+
+
+def capacity_knee_cooldown_secs() -> int:
+    definition = json.loads(CANONICAL_MATRIX_PATH.read_text())["enhanced_candidate"]["experiments"][CAPACITY_KNEE_EXPERIMENT]
+    validate_capacity_knee_definition(definition)
+    return int(definition["ordering"]["cooldown_secs"])
+
+
 def build_focused_schedule(seed: int) -> list[RunItem]:
     focused = json.loads(CANONICAL_MATRIX_PATH.read_text())["focused_pilot"]
     if seed != focused["seed"]:
@@ -2012,18 +2729,37 @@ def build_focused_schedule(seed: int) -> list[RunItem]:
     return [RunItem(**item) for item in json.loads(snapshot.read_text())]
 
 
+def results_layout(root: Path) -> ResultsLayout:
+    return ResultsLayout.resolve(root)
+
+
 def select_attempt(condition_dir: Path, run_index: int) -> AttemptSelection:
-    attempts = sorted(condition_dir.glob(f"run-{run_index:02d}-attempt-*"))
-    for attempt in attempts:
+    attempts: list[tuple[int, Path]] = []
+    pattern = re.compile(rf"run-{run_index:02d}-attempt-(\d+)")
+    for attempt in condition_dir.glob(f"run-{run_index:02d}-attempt-*"):
+        match = pattern.fullmatch(attempt.name)
+        if match is None or attempt.is_symlink() or not attempt.is_dir():
+            raise ValueError(f"malformed attempt path: {attempt}")
+        attempts.append((int(match.group(1)), attempt))
+    passed: list[Path] = []
+    for _, attempt in sorted(attempts):
         status_path = attempt / "canonical-status.json"
+        if status_path.is_symlink() or (
+            status_path.is_file() and status_path.stat().st_nlink > 1
+        ):
+            raise ValueError(f"linked terminal receipt is forbidden: {status_path}")
         try:
             status = json.loads(status_path.read_text())
         except (OSError, ValueError):
             continue
         if status.get("status") == "passed":
-            return AttemptSelection(attempt, True)
+            passed.append(attempt)
+    if len(passed) > 1:
+        raise ValueError(f"multiple passed attempts for run {run_index:02d}")
+    if passed:
+        return AttemptSelection(passed[0], True)
 
-    next_index = len(attempts) + 1
+    next_index = max((index for index, _ in attempts), default=0) + 1
     path = condition_dir / f"run-{run_index:02d}-attempt-{next_index:02d}"
     return AttemptSelection(path, False)
 
@@ -2493,6 +3229,193 @@ class ProcessResourceSampler:
             raise RuntimeError(f"process resource sampler failed: {self.error}")
 
 
+def ekuiper_process_profile_availability(
+    pids: list[int], proc_root: Path = Path("/proc")
+) -> dict:
+    if not pids:
+        return {
+            "status": "unavailable",
+            "reason": "ekuiper-process-tree-is-empty",
+            "collection_enabled": False,
+        }
+    required = ("stat", "statm", "status", "smaps_rollup", "task")
+    for pid in pids:
+        process = proc_root / str(pid)
+        try:
+            for name in required[:-1]:
+                (process / name).open("rb").close()
+            next((process / required[-1]).iterdir())
+        except (OSError, StopIteration):
+            return {
+                "status": "unavailable",
+                "reason": "procfs-process-metrics-unavailable",
+                "collection_enabled": False,
+            }
+    return {
+        "status": "available",
+        "reason": None,
+        "collection_enabled": True,
+    }
+
+
+def _ekuiper_profile_process_summary(
+    output: Path, context: dict, measurement_start_ns: int, measurement_end_ns: int
+) -> dict:
+    process = context.get("process_profiler", {})
+    if process.get("status") != "available" or process.get("collection_enabled") is not True:
+        if (output / "resource-usage.csv").exists():
+            raise ValueError("eKuiper profiler output exists while collection is disabled")
+        return {
+            "status": "unavailable",
+            "reason": process.get("reason") or "process-profiler-disabled-by-design",
+        }
+    path = output / "resource-usage.csv"
+    rows = _read_integer_csv(path, ProcessResourceSampler.FIELDNAMES)
+    maximum_rows = CANDIDATE_MEASUREMENT_SECS + 2
+    if not rows or len(rows) > maximum_rows:
+        raise ValueError("eKuiper process profile is empty or exceeds its row bound")
+    if any(row["process_count"] <= 0 for row in rows):
+        raise ValueError("eKuiper process disappeared during profiling")
+    if rows[0]["timestamp_ns"] < measurement_start_ns - 1_000_000_000 or rows[-1][
+        "timestamp_ns"
+    ] > measurement_end_ns + 1_000_000_000:
+        raise ValueError("eKuiper process profile is not aligned to the measurement window")
+    aggregate = summarize_process_resources(path)
+    return {
+        "status": "available",
+        "source": "external-procfs-process-sampler",
+        "path": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "row_count": len(rows),
+        "maximum_rows": maximum_rows,
+        "cpu_percent": aggregate["cpu_percent"],
+        "max_rss_bytes": aggregate["max_rss_bytes"],
+        "max_thread_count": max(row["thread_count"] for row in rows),
+        "max_rss_anon_bytes": max(row["rss_anon_bytes"] for row in rows),
+        "max_private_dirty_bytes": max(row["private_dirty_bytes"] for row in rows),
+    }
+
+
+def build_ekuiper_profile_context(
+    item: RunItem, audit: dict, proc_root: Path = Path("/proc")
+) -> tuple[dict | None, list[int]]:
+    if not is_ekuiper_profile_item(item):
+        return None, []
+    state = ekuiper_profile_state(item)
+    pids = [
+        int(process["pid"])
+        for process in audit.get("process_snapshot", {}).get("processes", [])
+    ]
+    process_profile = (
+        ekuiper_process_profile_availability(pids, proc_root)
+        if state == "profiled"
+        else {
+            "status": "unavailable",
+            "reason": "process-profiler-disabled-by-design",
+            "collection_enabled": False,
+        }
+    )
+    return {"state": state, "process_profiler": process_profile}, pids
+
+
+def write_ekuiper_profile_artifacts(
+    item: RunItem, output: Path, context: dict
+) -> tuple[dict, dict]:
+    state = ekuiper_profile_state(item)
+    metadata = json.loads((output / "metadata.json").read_text())
+    window = json.loads((output / "measurement-window.json").read_text())
+    intervals = json.loads((output / "interval-metrics.json").read_text())
+    percentiles = json.loads((output / "percentiles.json").read_text())
+    measurement_start_ns = int(window["started_ns"])
+    measurement_end_ns = int(window["finished_ns"])
+    if measurement_end_ns <= measurement_start_ns:
+        raise ValueError("eKuiper profile measurement window is empty")
+    interval_start_ns = int(intervals.get("measurement_start_unix_epoch_ns", -1))
+    interval_duration_ns = int(intervals.get("declared_measurement_duration_ns", -1))
+    interval_end_ns = interval_start_ns + interval_duration_ns
+    if (
+        not measurement_start_ns <= interval_start_ns < measurement_end_ns
+        or interval_duration_ns != CANDIDATE_MEASUREMENT_SECS * 1_000_000_000
+        or interval_end_ns > measurement_end_ns + 1_000_000_000
+        or intervals.get("row_count") != CANDIDATE_MEASUREMENT_SECS
+        or len(intervals.get("rows", [])) != CANDIDATE_MEASUREMENT_SECS
+    ):
+        raise ValueError("eKuiper profile intervals do not align to the measurement window")
+    process_metrics = _ekuiper_profile_process_summary(
+        output, context, interval_start_ns, interval_end_ns
+    )
+    latency_count = int(percentiles["total_count"])
+    if latency_count <= 0 or latency_count != int(intervals.get("aggregate_latency_count", -1)):
+        raise ValueError("eKuiper profile latency population does not reconcile")
+    runtime = {
+        "schema_version": 1,
+        "experiment": EKUIPER_PROFILE_EXPERIMENT,
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "condition": item.condition,
+        "run_index": item.run_index,
+        "rate_msg_s": item.offered_rate_msg_s,
+        "profiler_state": state,
+        "source_git_sha": metadata.get("git_sha"),
+        "source_dirty": metadata.get("git_dirty"),
+        "measurement_source_leaf": metadata.get("measurement_source_leaf"),
+        "shared_from": None,
+        "interval_alignment": {
+            "clock": "unix-epoch",
+            "measurement_start_ns": interval_start_ns,
+            "measurement_end_ns": interval_end_ns,
+            "row_count": intervals["row_count"],
+            "path": "interval-metrics.json",
+            "sha256": hashlib.sha256((output / "interval-metrics.json").read_bytes()).hexdigest(),
+        },
+        "latency_ns": {
+            "sample_count": latency_count,
+            "p50": int(percentiles["p50_ns"]),
+            "p95": int(percentiles["p95_ns"]),
+            "p99": int(percentiles["p99_ns"]),
+        },
+        "process_metrics": process_metrics,
+        "gc_runtime_metrics": {
+            "status": "unavailable",
+            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        },
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    paired_state = (
+        "unprofiled-control" if state == "profiled" else "profiled"
+    )
+    overhead = {
+        "schema_version": 1,
+        "experiment": EKUIPER_PROFILE_EXPERIMENT,
+        "condition": item.condition,
+        "run_index": item.run_index,
+        "rate_msg_s": item.offered_rate_msg_s,
+        "profiler_state": state,
+        "paired_condition": f"rate-{item.offered_rate_msg_s:05d}/{paired_state}",
+        "pair_key": f"rate-{item.offered_rate_msg_s:05d}/run-{item.run_index:02d}",
+        "profile_collection_enabled": process_metrics["status"] == "available",
+        "overhead_role": (
+            "sampler-enabled"
+            if process_metrics["status"] == "available"
+            else "sampler-skipped-unavailable"
+            if state == "profiled"
+            else "unprofiled-control"
+        ),
+        "overhead_estimator": "paired-run-level-profiled-minus-unprofiled-control",
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+    }
+    (output / "ekuiper-runtime-summary.json").write_text(
+        json.dumps(runtime, indent=2) + "\n"
+    )
+    (output / "profiler-overhead.json").write_text(
+        json.dumps(overhead, indent=2) + "\n"
+    )
+    return runtime, overhead
+
+
 def validate_startup_artifact(result: dict) -> None:
     required = {
         "schema_version",
@@ -2726,6 +3649,7 @@ def write_progress(
     total: int,
     item: str = "",
     failures: int = 0,
+    **details: object,
 ) -> None:
     try:
         temperature_c = int(
@@ -2741,6 +3665,7 @@ def write_progress(
         "item": item,
         "failures": failures,
         "temperature_c": temperature_c,
+        **details,
     }
     with (ledger / "progress.jsonl").open("a") as stream:
         stream.write(json.dumps(entry, separators=(",", ":")) + "\n")
@@ -2748,6 +3673,37 @@ def write_progress(
         f"[{entry['timestamp']}] PROGRESS {completed}/{total} event={event} "
         f"item={item or '-'} failures={failures} temp_c={temperature_c}",
         flush=True,
+    )
+
+
+def apply_capacity_knee_cooldown(
+    ledger: Path,
+    item: RunItem,
+    completed: int = 0,
+    total: int = 0,
+    failures: int = 0,
+    *,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    seconds = capacity_knee_cooldown_secs()
+    write_progress(
+        ledger,
+        "cooldown-started",
+        completed,
+        total,
+        item.result_key,
+        failures,
+        cooldown_secs=seconds,
+    )
+    sleep(seconds)
+    write_progress(
+        ledger,
+        "cooldown-finished",
+        completed,
+        total,
+        item.result_key,
+        failures,
+        cooldown_secs=seconds,
     )
 
 
@@ -2762,7 +3718,7 @@ def write_status(path: Path, item: RunItem, status: str, detail: str = "") -> No
     }
     if detail:
         receipt["detail"] = detail
-    (path / "canonical-status.json").write_text(json.dumps(receipt, indent=2) + "\n")
+    atomic_write_json(path / "canonical-status.json", receipt)
 
 
 def find_passed_attempt(condition_dir: Path, run_index: int) -> Path | None:
@@ -2788,46 +3744,39 @@ def stamp_focused_metadata(root: Path, metadata: dict) -> None:
 def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if item.shared_from is None:
         raise ValueError("shared result has no source experiment")
-    source_dir = (
-        root
-        / "eval/results"
-        / item.shared_from
-        / f"rpi5-{batch_id}"
-        / item.condition
-    )
+    if CANONICAL_ALIASES.get(item.experiment) != item.shared_from:
+        raise ValueError("shared result differs from the canonical alias mapping")
+    layout = results_layout(root)
+    source_dir = layout.raw_path(item.shared_from, f"rpi5-{batch_id}", item.condition)
     source = find_passed_attempt(source_dir, item.run_index)
     if source is None:
         raise RuntimeError(f"shared source is incomplete: {source_dir}")
-    target_dir = (
-        root
-        / "eval/results"
-        / item.experiment
-        / f"rpi5-{batch_id}"
-        / item.condition
+    status_path = source / "canonical-status.json"
+    source_status_sha256 = hashlib.sha256(status_path.read_bytes()).hexdigest()
+    receipt = layout.manifest_path(
+        "aliases",
+        item.experiment,
+        f"rpi5-{batch_id}",
+        item.condition,
+        f"run-{item.run_index:02d}.json",
     )
-    selection = select_attempt(target_dir, item.run_index)
-    if selection.skip:
-        return selection.path
-    shutil.copytree(source, selection.path)
-    status_path = selection.path / "canonical-status.json"
-    status_path.unlink(missing_ok=True)
-    metadata_path = selection.path / "metadata.json"
-    metadata = json.loads(metadata_path.read_text())
-    source_leaf = str(source.relative_to(root))
-    metadata["experiment"] = item.experiment
-    metadata["shared_from"] = source_leaf
-    metadata["measurement_source_leaf"] = source_leaf
-    metadata["shared_measurement"] = True
-    stamp_focused_metadata(root, metadata)
-    metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
-    analysis_path = selection.path / "hotswap-analysis.json"
-    if analysis_path.is_file():
-        analysis = json.loads(analysis_path.read_text())
-        analysis["experiment"] = item.experiment
-        analysis["shared_from"] = source_leaf
-        analysis["measurement_source_leaf"] = source_leaf
-        analysis_path.write_text(json.dumps(analysis, indent=2) + "\n")
-    return selection.path
+    value = {
+        "schema_version": 1,
+        "experiment": item.experiment,
+        "condition": item.condition,
+        "run_index": item.run_index,
+        "shared_from_experiment": item.shared_from,
+        "source_leaf": layout.relative(source),
+        "source_status_sha256": source_status_sha256,
+        "sample_identity": layout.relative(source),
+        "shared_measurement": True,
+    }
+    if receipt.is_file():
+        if json.loads(receipt.read_text()) != value:
+            raise ValueError(f"alias receipt differs from immutable source: {receipt}")
+        return receipt
+    atomic_write_json(receipt, value)
+    return receipt
 
 
 def start_pi_telemetry(root: Path, output: Path) -> subprocess.Popen:
@@ -2922,6 +3871,9 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
         )
         environment = os.environ.copy()
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
+        environment["WAFER_MEASUREMENT_SECS"] = str(item.measurement_secs)
+        if item.experiment == "e-swap-4":
+            environment["WAFER_SWAP_ACTUAL_T0_RECEIPT"] = str(output / "swap-actual-t0.json")
         with (output / "stdout.log").open("ab") as log:
             runtime = subprocess.Popen(
                 [
@@ -2949,6 +3901,19 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 action_target = time.monotonic() + wait_secs
                 time.sleep(max(0.0, action_target - time.monotonic()))
                 request_started_ns = time.time_ns()
+                atomic_write_json(
+                    output / "swap-actual-t0.json",
+                    {
+                        "schema_version": 1,
+                        "clock": "unix-epoch",
+                        "alignment": "actual-t0",
+                        "source_measurement_start_unix_ns": int(
+                            source_timing["measurement_start_ns"]
+                        ),
+                        "scheduled_event_timestamp_ns": scheduled_swap_ns,
+                        "event_timestamp_ns": request_started_ns,
+                    },
+                )
                 request_started_monotonic_ns = time.monotonic_ns()
                 response = post_hot_swap("transform", v2)
                 request_duration_ns = time.monotonic_ns() - request_started_monotonic_ns
@@ -2972,7 +3937,13 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 interval = item.measurement_secs / len(offsets)
                 for event_index, _ in enumerate(offsets):
                     event_started = time.monotonic()
-                    plugin = panics if item.experiment == "e-swap-5" else (v2 if event_index % 2 == 0 else v1)
+                    plugin = (
+                        panics
+                        if item.experiment in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT}
+                        else v2
+                        if event_index % 2 == 0
+                        else v1
+                    )
                     request_started_ns = time.time_ns()
                     request_started_monotonic_ns = time.monotonic_ns()
                     response = post_hot_swap("transform", plugin)
@@ -3004,11 +3975,14 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
             runtime = None
         if runtime_exit != 0:
             raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
-        if not (output / "swap_timeline.json").is_file():
+        if (
+            item.experiment != ROLLBACK_SESSIONS_EXPERIMENT
+            and not (output / "swap_timeline.json").is_file()
+        ):
             (output / "swap_timeline.json").write_text(
                 json.dumps({"requests": requests}, indent=2) + "\n"
             )
-        if item.experiment == "e-swap-5":
+        if item.experiment in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT}:
             rolled_back = sum(
                 1
                 for request in requests
@@ -3031,13 +4005,17 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
             if successful != len(requests):
                 raise RuntimeError(f"only {successful}/{len(requests)} hot swaps succeeded")
 
-        with (output / "sequence.csv").open(newline="") as stream:
-            sequence = next(csv.DictReader(stream))
-        if int(sequence["gap_msgs"]) != 0 or int(sequence["duplicates_count"]) != 0:
-            raise RuntimeError(
-                "hot-swap sequence integrity failed: "
-                f"gaps={sequence['gap_msgs']}, duplicates={sequence['duplicates_count']}"
+        sequence = _read_lossless_sequence(output / "sequence.csv")
+        if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT:
+            rollback = build_candidate_rollback_evidence(
+                requests, item, results_layout(root).relative(output), sequence
             )
+            rollback.update(
+                attempts=len(requests),
+                rolled_back=rolled_back,
+                all_rolled_back=rolled_back == len(requests),
+            )
+            (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
         stop_pi_telemetry(telemetry)
         finished_ns = time.time_ns()
         provenance_path = output / "runtime-provenance.json"
@@ -3079,9 +4057,7 @@ def wait_for_subscriber(process: subprocess.Popen, timeout: int = 30) -> int:
 
 
 def write_json_atomic(path: Path, value: dict) -> None:
-    temporary = path.with_suffix(f"{path.suffix}.tmp")
-    temporary.write_text(json.dumps(value, indent=2) + "\n")
-    os.replace(temporary, path)
+    atomic_write_json(path, value, overwrite=True)
 
 
 def loadgen_command(
@@ -3105,11 +4081,12 @@ def loadgen_command(
             str(loadgen), "subscribe", "--broker", "127.0.0.1:1883",
             "--topic", topic or "wafer/telemetry/hot", "--output-dir", str(output),
             "--total-messages", str(item.total_messages or 0),
+            "--measurement-secs", str(item.measurement_secs),
             "--host-tag", "rpi5",
         ]
-        if item.experiment in {"e-perf-10", "capacity-scout"} and item.total_messages is not None:
+        if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT} and item.total_messages is not None:
             command.extend(["--sequence-end-exclusive", str(item.total_messages)])
-        if item.experiment in {"e-perf-10", "capacity-scout", "e-swap-3"}:
+        if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT, "e-swap-3"}:
             command.extend(["--sequence-example-limit", "1024"])
         if item.experiment == "e-swap-3" and event_aligned:
             command.extend([
@@ -3128,7 +4105,7 @@ def loadgen_command(
     ]
     if item.offered_rate_msg_s is not None:
         command.extend(["--rate", str(item.offered_rate_msg_s)])
-    if item.experiment in {"e-perf-10", "capacity-scout"}:
+    if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT}:
         command.append("--drop-when-full")
     if item.experiment == "e-swap-3" and event_aligned:
         timing_dir = output or (summary_file.parent if summary_file is not None else None)
@@ -3187,6 +4164,7 @@ def run_restart_item(
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
+        environment["WAFER_MEASUREMENT_SECS"] = str(item.measurement_secs)
 
         with (output / "stdout.log").open("ab") as log:
             runtime_command = [
@@ -3596,6 +4574,8 @@ def run_ekuiper_item(
     started_ns = time.time_ns()
     started_at = utc_now()
     telemetry = start_pi_telemetry(root, output)
+    process_sampler: ProcessResourceSampler | None = None
+    profile_context: dict | None = None
     try:
         set_ekuiper_active(root, True)
         facts_path = output / "host-facts.json"
@@ -3616,6 +4596,9 @@ def run_ekuiper_item(
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = json.loads(facts_path.read_text())["git_sha"]
         ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
+        profile_context, pids = build_ekuiper_profile_context(
+            item, json.loads(ekuiper_audit.read_text())
+        )
         with (output / "stdout.log").open("ab") as log:
             subprocess.run(
                 loadgen_command(root, item, "publish", duration=item.warmup_secs),
@@ -3626,6 +4609,14 @@ def run_ekuiper_item(
                 check=True,
             )
             measurement_started_ns = time.time_ns()
+            if (
+                profile_context is not None
+                and profile_context["process_profiler"]["collection_enabled"]
+            ):
+                process_sampler = ProcessResourceSampler(
+                    output / "resource-usage.csv", pids
+                )
+                process_sampler.start()
             subscriber = subprocess.Popen(
                 loadgen_command(root, item, "subscribe", output=output),
                 cwd=root,
@@ -3644,6 +4635,9 @@ def run_ekuiper_item(
             )
             subscriber_code = wait_for_subscriber(subscriber)
             measurement_finished_ns = time.time_ns()
+            if process_sampler is not None:
+                process_sampler.stop()
+                process_sampler = None
         if publisher.returncode != 0 or subscriber_code != 0:
             raise RuntimeError(
                 f"loadgen failed: publisher={publisher.returncode}, subscriber={subscriber_code}"
@@ -3682,12 +4676,18 @@ def run_ekuiper_item(
                 "path": ekuiper_audit.name,
                 "sha256": hashlib.sha256(ekuiper_audit.read_bytes()).hexdigest(),
             },
+            **({"profile": profile_context} if profile_context is not None else {}),
             **facts,
         }
         (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         postprocess_run(root, item, output)
         verify_result(root, output)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
+        if process_sampler is not None:
+            try:
+                process_sampler.stop()
+            except RuntimeError as sampler_error:
+                error = RuntimeError(f"{error}; {sampler_error}")
         stop_pi_telemetry(telemetry)
         write_status(output, item, "failed", str(error))
         print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
@@ -3789,13 +4789,289 @@ def _binary_file_receipt(path: Path, samples: int | None = None) -> dict:
     return receipt
 
 
+def _load_candidate_config(config_path: Path) -> dict:
+    try:
+        config = tomllib.loads(config_path.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f"cannot load candidate config {config_path}: {error}") from error
+    if not isinstance(config.get("nodes"), dict) or not isinstance(config.get("edges"), list):
+        raise ValueError(f"candidate config has no concrete topology: {config_path}")
+    return config
+
+
+def build_payload_manifest(root: Path, item: RunItem) -> dict:
+    if item.experiment != PAYLOAD_REFINEMENT_EXPERIMENT:
+        raise ValueError("payload manifest requires a payload-refinement item")
+    expected_sizes = dict(PAYLOAD_REFINEMENT_GRID)
+    if item.condition not in expected_sizes:
+        raise ValueError(f"unknown payload-refinement condition: {item.condition}")
+    config_path = root / item.config
+    config = _load_candidate_config(config_path)
+    sources = [
+        (node_id, node)
+        for node_id, node in config["nodes"].items()
+        if node.get("type") == "source" and node.get("kind") == "bench-source"
+    ]
+    transforms = [
+        (node_id, node)
+        for node_id, node in config["nodes"].items()
+        if node.get("type") == "transform"
+    ]
+    sinks = [
+        (node_id, node)
+        for node_id, node in config["nodes"].items()
+        if node.get("type") == "sink" and node.get("kind") == "bench-sink"
+    ]
+    if len(sources) != 1 or len(transforms) != 1 or len(sinks) != 1:
+        raise ValueError("payload-refinement config must contain one bench source, transform, and sink")
+    source_id, source = sources[0]
+    transform_id, transform = transforms[0]
+    sink_id, sink = sinks[0]
+    if transform.get("plugin") != PASS_THROUGH_PLUGIN:
+        raise ValueError("payload-refinement transform is not the frozen pass-through plugin")
+    if sink.get("kind") != "bench-sink":
+        raise ValueError("payload-refinement sink is not bench-sink")
+    expected_edges = [
+        {"from": source_id, "to": transform_id},
+        {"from": transform_id, "to": sink_id},
+    ]
+    if config["edges"] != expected_edges:
+        raise ValueError("payload-refinement config is not the frozen linear boundary")
+    payload_bytes = int(source.get("payload_size", -1))
+    expected_bytes = expected_sizes[item.condition]
+    if payload_bytes != expected_bytes:
+        raise ValueError(
+            f"payload-refinement config size {payload_bytes} differs from {expected_bytes}"
+        )
+    manifest = {
+        "schema_version": 1,
+        "batch_class": "candidate-payload-refinement",
+        "experiment": PAYLOAD_REFINEMENT_EXPERIMENT,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one payload size",
+        "condition": item.condition,
+        "run_index": item.run_index,
+        "source_kind": "bench-source",
+        "source_node": source_id,
+        "source_pattern": "repeated-byte-0x42",
+        "transform_node": transform_id,
+        "transform_plugin_path": str(transform["plugin"]),
+        "sink_kind": "bench-sink",
+        "sink_node": sink_id,
+        "edges": expected_edges,
+        "payload_bytes": payload_bytes,
+        "payload_sha256": PAYLOAD_REFINEMENT_SHA256[item.condition],
+        "rate_msg_s": int(source["rate"]),
+        "warmup_messages": int(source["warmup_messages"]),
+        "measurement_messages": int(source["total_messages"])
+        - int(source["warmup_messages"]),
+        "total_messages": int(source["total_messages"]),
+        "config_path": item.config,
+        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "no_pool_with": ["e-perf-4", "prior diagnostic rehearsals"],
+    }
+    validate_payload_manifest(manifest, config_path)
+    return manifest
+
+
+def validate_payload_manifest(manifest: dict, config_path: Path) -> None:
+    if {
+        "schema_version": manifest.get("schema_version"),
+        "batch_class": manifest.get("batch_class"),
+        "experiment": manifest.get("experiment"),
+        "evidence_class": manifest.get("evidence_class"),
+        "thesis_evidence": manifest.get("thesis_evidence"),
+        "n30_admitted": manifest.get("n30_admitted"),
+        "sample_unit": manifest.get("sample_unit"),
+        "source_kind": manifest.get("source_kind"),
+        "source_pattern": manifest.get("source_pattern"),
+        "transform_plugin_path": manifest.get("transform_plugin_path"),
+        "sink_kind": manifest.get("sink_kind"),
+        "no_pool_with": manifest.get("no_pool_with"),
+    } != {
+        "schema_version": 1,
+        "batch_class": "candidate-payload-refinement",
+        "experiment": PAYLOAD_REFINEMENT_EXPERIMENT,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one payload size",
+        "source_kind": "bench-source",
+        "source_pattern": "repeated-byte-0x42",
+        "transform_plugin_path": PASS_THROUGH_PLUGIN,
+        "sink_kind": "bench-sink",
+        "no_pool_with": ["e-perf-4", "prior diagnostic rehearsals"],
+    }:
+        raise ValueError("payload manifest candidate boundary is invalid")
+    expected_sizes = dict(PAYLOAD_REFINEMENT_GRID)
+    condition = manifest.get("condition")
+    if condition not in expected_sizes or manifest.get("payload_bytes") != expected_sizes[condition]:
+        raise ValueError("payload manifest condition and byte count differ")
+    if manifest.get("payload_sha256") != PAYLOAD_REFINEMENT_SHA256[condition]:
+        raise ValueError("payload manifest content hash differs from the emitted bytes")
+    if manifest.get("edges") != [
+        {"from": manifest.get("source_node"), "to": manifest.get("transform_node")},
+        {"from": manifest.get("transform_node"), "to": manifest.get("sink_node")},
+    ]:
+        raise ValueError("payload manifest edges differ from the frozen linear boundary")
+    if manifest.get("config_sha256") != hashlib.sha256(config_path.read_bytes()).hexdigest():
+        raise ValueError("payload manifest config checksum differs")
+    if manifest.get("run_index") not in range(1, CANDIDATE_REPETITIONS + 1):
+        raise ValueError("payload manifest run index is outside N=5")
+    if (
+        manifest.get("rate_msg_s") != CANDIDATE_RATE_MSG_S
+        or manifest.get("warmup_messages") != CANDIDATE_RATE_MSG_S * CANDIDATE_WARMUP_SECS
+        or manifest.get("measurement_messages")
+        != CANDIDATE_RATE_MSG_S * CANDIDATE_MEASUREMENT_SECS
+        or manifest.get("total_messages")
+        != CANDIDATE_RATE_MSG_S * (CANDIDATE_WARMUP_SECS + CANDIDATE_MEASUREMENT_SECS)
+    ):
+        raise ValueError("payload manifest run population differs from the candidate contract")
+
+
+def build_topology_manifest(root: Path, item: RunItem) -> dict:
+    if item.experiment != DEPTH_EXTENSION_EXPERIMENT:
+        raise ValueError("topology manifest requires a depth-extension item")
+    config_path = root / item.config
+    config = _load_candidate_config(config_path)
+    nodes = config["nodes"]
+    edges = config["edges"]
+    transforms = [(node_id, node) for node_id, node in nodes.items() if node.get("type") == "transform"]
+    sources = [(node_id, node) for node_id, node in nodes.items() if node.get("type") == "source"]
+    sinks = [(node_id, node) for node_id, node in nodes.items() if node.get("type") == "sink"]
+    if (
+        len(sources) != 1
+        or sources[0][1].get("kind") != "bench-source"
+        or len(sinks) != 1
+        or sinks[0][1].get("kind") != "bench-sink"
+    ):
+        raise ValueError("depth-extension config must contain one bench source and one bench sink")
+    depth = int(item.condition.removeprefix("depth-"))
+    plugin_paths = {str(node.get("plugin")) for _, node in transforms}
+    fuel = config.get("engine", {}).get("fuel", {})
+    manifest = {
+        "schema_version": 1,
+        "batch_class": "candidate-depth-extension",
+        "experiment": DEPTH_EXTENSION_EXPERIMENT,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one pipeline depth",
+        "condition": item.condition,
+        "run_index": item.run_index,
+        "depth": depth,
+        "node_count": len(nodes),
+        "edge_count": len(edges),
+        "source_count": len(sources),
+        "source_kind": "bench-source",
+        "transform_count": len(transforms),
+        "sink_count": len(sinks),
+        "sink_kind": "bench-sink",
+        "node_ids": list(nodes),
+        "edges": [{"from": edge["from"], "to": edge["to"]} for edge in edges],
+        "transform_plugin_paths": sorted(plugin_paths),
+        "identical_transform_behavior": len(plugin_paths) == 1,
+        "engine_fuel_budgets": {
+            "transform": fuel.get("transform"),
+            "filter": fuel.get("filter"),
+            "router": fuel.get("router"),
+        },
+        "epoch_deadline": config.get("engine", {}).get("epoch_deadline"),
+        "epoch_tick_ms": config.get("engine", {}).get("epoch_tick_ms"),
+        "effective_metering_mode": "fuel-and-epoch",
+        "payload_bytes": int(sources[0][1].get("payload_size", -1)) if len(sources) == 1 else None,
+        "rate_msg_s": int(sources[0][1].get("rate", -1)) if len(sources) == 1 else None,
+        "warmup_messages": int(sources[0][1].get("warmup_messages", -1)) if len(sources) == 1 else None,
+        "measurement_messages": (
+            int(sources[0][1].get("total_messages", -1))
+            - int(sources[0][1].get("warmup_messages", -1))
+            if len(sources) == 1
+            else None
+        ),
+        "config_path": item.config,
+        "config_sha256": hashlib.sha256(config_path.read_bytes()).hexdigest(),
+        "no_pool_with": [
+            "e-perf-3",
+            "e-perf-6",
+            "e-perf-8",
+            "prior diagnostic rehearsals",
+        ],
+    }
+    validate_topology_manifest(manifest, config_path)
+    return manifest
+
+
+def validate_topology_manifest(manifest: dict, config_path: Path) -> None:
+    expected_depths = set(DEPTH_EXTENSION_GRID)
+    depth = manifest.get("depth")
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("batch_class") != "candidate-depth-extension"
+        or manifest.get("experiment") != DEPTH_EXTENSION_EXPERIMENT
+        or manifest.get("evidence_class") != "candidate-supplementary"
+        or manifest.get("thesis_evidence") is not False
+        or manifest.get("n30_admitted") is not False
+        or manifest.get("sample_unit") != "independent host run at one pipeline depth"
+        or manifest.get("no_pool_with")
+        != ["e-perf-3", "e-perf-6", "e-perf-8", "prior diagnostic rehearsals"]
+    ):
+        raise ValueError("topology manifest candidate boundary is invalid")
+    if depth not in expected_depths or manifest.get("condition") != f"depth-{depth}":
+        raise ValueError("topology manifest depth is outside the candidate grid")
+    if (
+        manifest.get("source_count") != 1
+        or manifest.get("source_kind") != "bench-source"
+        or manifest.get("transform_count") != depth
+        or manifest.get("sink_count") != 1
+        or manifest.get("sink_kind") != "bench-sink"
+        or manifest.get("node_count") != depth + 2
+        or manifest.get("edge_count") != depth + 1
+        or manifest.get("identical_transform_behavior") is not True
+        or manifest.get("transform_plugin_paths") != [PASS_THROUGH_PLUGIN]
+    ):
+        raise ValueError("topology manifest does not describe one identical linear transform chain")
+    expected_edges = [{"from": "source", "to": "t1"}]
+    expected_edges.extend(
+        {"from": f"t{index}", "to": f"t{index + 1}"}
+        for index in range(1, depth)
+    )
+    expected_edges.append({"from": f"t{depth}", "to": "sink"})
+    if manifest.get("edges") != expected_edges:
+        raise ValueError("topology manifest edges do not form the declared linear chain")
+    if (
+        manifest.get("engine_fuel_budgets")
+        != {"transform": 10_000_000, "filter": 500_000, "router": 500_000}
+        or manifest.get("epoch_deadline") != 100
+        or manifest.get("epoch_tick_ms") != 10
+        or manifest.get("effective_metering_mode") != "fuel-and-epoch"
+    ):
+        raise ValueError("topology manifest metering differs from the candidate contract")
+    if (
+        manifest.get("payload_bytes") != 128
+        or manifest.get("rate_msg_s") != CANDIDATE_RATE_MSG_S
+        or manifest.get("warmup_messages") != CANDIDATE_RATE_MSG_S * CANDIDATE_WARMUP_SECS
+        or manifest.get("measurement_messages")
+        != CANDIDATE_RATE_MSG_S * CANDIDATE_MEASUREMENT_SECS
+    ):
+        raise ValueError("topology manifest source workload differs from the candidate contract")
+    if manifest.get("config_sha256") != hashlib.sha256(config_path.read_bytes()).hexdigest():
+        raise ValueError("topology manifest config checksum differs")
+    if manifest.get("run_index") not in range(1, CANDIDATE_REPETITIONS + 1):
+        raise ValueError("topology manifest run index is outside N=5")
+
+
 def _write_capacity_result(
     item: RunItem,
     output: Path,
     controlled_factors: dict,
     *,
     final: bool,
+    candidate: bool = False,
 ) -> dict:
+    if final and candidate:
+        raise ValueError("capacity result cannot be final and candidate")
     if (output / "published.csv").exists() or (output / "received.csv").exists():
         raise ValueError("capacity run must not contain per-message traces")
     publisher = json.loads((output / "publisher-summary.json").read_text())
@@ -3814,7 +5090,13 @@ def _write_capacity_result(
         )
     result = {
         "schema_version": 1,
-        "batch_class": "final-capacity" if final else "capacity-scout",
+        "batch_class": (
+            "final-capacity"
+            if final
+            else "candidate-capacity-knee"
+            if candidate
+            else "capacity-scout"
+        ),
         "thesis_evidence": final,
         "system": item.system,
         "rate_msg_s": item.offered_rate_msg_s,
@@ -3840,12 +5122,17 @@ def _write_capacity_result(
         "controlled_factors": controlled_factors,
         "traces": False,
     }
-    if final:
-        result["experiment"] = "e-perf-10"
+    if final or candidate:
+        result["experiment"] = "e-perf-10" if final else CAPACITY_KNEE_EXPERIMENT
         result["rates_msg_s"]["achieved_ratio"] = (
             result["rates_msg_s"]["achieved"] / item.offered_rate_msg_s
         )
-        validate_capacity_run_result(result)
+        if candidate:
+            result["evidence_class"] = "candidate-supplementary"
+            result["n30_admitted"] = False
+            validate_candidate_capacity_run_result(result)
+        else:
+            validate_capacity_run_result(result)
         name = "capacity-run.json"
     else:
         validate_capacity_scout_result(result)
@@ -3872,6 +5159,14 @@ def write_capacity_scout_result(
 
 def write_capacity_result(item: RunItem, output: Path, controlled_factors: dict) -> dict:
     return _write_capacity_result(item, output, controlled_factors, final=True)
+
+
+def write_candidate_capacity_result(
+    item: RunItem, output: Path, controlled_factors: dict
+) -> dict:
+    return _write_capacity_result(
+        item, output, controlled_factors, final=False, candidate=True
+    )
 
 
 def write_rate_sweep_result(
@@ -3957,7 +5252,8 @@ def run_rate_sweep_item(
     config = root / item.config
     shutil.copy2(config, output / "config.toml")
     final_capacity = item.experiment == "e-perf-10" and FOCUSED_MATRIX_SHA_ENV not in os.environ
-    if item.experiment == "capacity-scout" or final_capacity:
+    candidate_capacity = item.experiment == CAPACITY_KNEE_EXPERIMENT
+    if item.experiment == "capacity-scout" or final_capacity or candidate_capacity:
         shutil.copy2(root / str(item.loadgen_profile), output / "loadgen-profile.toml")
         invocation = build_capacity_invocation(root, item, output)
         (output / "invocation-receipt.json").write_text(
@@ -4001,6 +5297,7 @@ def run_rate_sweep_item(
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = facts["git_sha"]
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
+        environment["WAFER_MEASUREMENT_SECS"] = str(item.measurement_secs)
 
         if item.system in {"wafer", "native"}:
             with (output / "stdout.log").open("ab") as log:
@@ -4077,7 +5374,7 @@ def run_rate_sweep_item(
                     "publish",
                     topic=input_topic,
                     trace_file=(output / "published.csv") if item.experiment == "e-perf-10" and not final_capacity else None,
-                    summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" or final_capacity else None,
+                    summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" or final_capacity or candidate_capacity else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -4187,6 +5484,10 @@ def run_rate_sweep_item(
         elif final_capacity:
             invocation = json.loads((output / "invocation-receipt.json").read_text())
             write_capacity_result(item, output, invocation["controlled_factors"])
+            verify_result(root, output)
+        elif candidate_capacity:
+            invocation = json.loads((output / "invocation-receipt.json").read_text())
+            write_candidate_capacity_result(item, output, invocation["controlled_factors"])
             verify_result(root, output)
         else:
             result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
@@ -4310,35 +5611,35 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
 
 
 def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
-    condition_dir = (
-        root
-        / "eval/results"
-        / item.experiment
-        / f"rpi5-{batch_id}"
-        / item.condition
+    layout = results_layout(root)
+    if item.shared_from:
+        try:
+            receipt = copy_shared_result(root, batch_id, item)
+            print(f"[{utc_now()}] PASS {item.result_key} (shared): {receipt}", flush=True)
+            return True
+        except (OSError, ValueError, RuntimeError) as error:
+            print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
+            return False
+
+    condition_dir = layout.raw_path(
+        item.experiment, f"rpi5-{batch_id}", item.condition
     )
     selection = select_attempt(condition_dir, item.run_index)
     if selection.skip:
         print(f"[{utc_now()}] SKIP {item.result_key}: {selection.path}", flush=True)
         return True
 
-    if item.shared_from:
-        try:
-            result = copy_shared_result(root, batch_id, item)
-            verify_result(root, result)
-            write_status(result, item, "passed", f"shared from {item.shared_from}")
-            print(f"[{utc_now()}] PASS {item.result_key} (shared)", flush=True)
-            return True
-        except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
-            write_status(selection.path, item, "failed", str(error))
-            print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-            return False
-
-    if item.experiment in {"e-perf-10", "capacity-scout"}:
+    if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT}:
         return run_rate_sweep_item(root, item, selection)
     if item.experiment == "e-density-1":
         return run_density_item(root, item, selection)
-    if item.experiment in {"e-swap-1", "e-swap-4", "e-swap-5"}:
+    if item.experiment in {
+        "e-swap-1",
+        "e-swap-4",
+        "e-swap-5",
+        SWAP_SESSIONS_EXPERIMENT,
+        ROLLBACK_SESSIONS_EXPERIMENT,
+    }:
         return run_hot_swap_item(root, item, selection)
     if item.experiment == "e-swap-3":
         return run_restart_item(root, item, selection)
@@ -4362,6 +5663,8 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
         "127.0.0.1:1883",
         "--duration",
         str(max(30, item.warmup_secs + item.measurement_secs + 30)),
+        "--measurement-secs",
+        str(item.measurement_secs),
         "--output-dir",
         str(output),
     ]
@@ -4403,19 +5706,48 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata["condition"] = item.condition
     metadata["run_index"] = item.run_index
     metadata["config_path"] = item.config
-    if item.experiment in {"e-perf-10", "capacity-scout"}:
+    if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT}:
         metadata["thesis_evidence"] = item.experiment == "e-perf-10"
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
         metadata["batch_class"] = (
-            "final-capacity" if item.experiment == "e-perf-10" else "capacity-scout"
+            "final-capacity"
+            if item.experiment == "e-perf-10"
+            else "candidate-capacity-knee"
+            if item.experiment == CAPACITY_KNEE_EXPERIMENT
+            else "capacity-scout"
         )
+        if item.experiment == CAPACITY_KNEE_EXPERIMENT:
+            metadata["evidence_class"] = "candidate-supplementary"
+            metadata["n30_admitted"] = False
+    if item.experiment in {
+        PAYLOAD_REFINEMENT_EXPERIMENT,
+        DEPTH_EXTENSION_EXPERIMENT,
+        *CANDIDATE_SWAP_EXPERIMENTS,
+    }:
+        metadata["thesis_evidence"] = False
+        metadata["evidence_class"] = "candidate-supplementary"
+        metadata["n30_admitted"] = False
+        metadata["batch_class"] = {
+            PAYLOAD_REFINEMENT_EXPERIMENT: "candidate-payload-refinement",
+            DEPTH_EXTENSION_EXPERIMENT: "candidate-depth-extension",
+            SWAP_SESSIONS_EXPERIMENT: "candidate-independent-swap",
+            ROLLBACK_SESSIONS_EXPERIMENT: "candidate-rollback-session",
+        }[item.experiment]
     if item.experiment == "e-swap-3":
         metadata["disruption_capture"] = build_swap3_invocation(root, item, output)[
             "controlled_factors"
         ]
-    if item.experiment in HOTSWAP_SHARED_EXPERIMENTS:
-        metadata["measurement_source_leaf"] = str(output.relative_to(root))
+    if item.experiment in HOTSWAP_SHARED_EXPERIMENTS | CANDIDATE_SWAP_EXPERIMENTS:
+        metadata["measurement_source_leaf"] = results_layout(root).relative(output)
         metadata["shared_measurement"] = False
+    if item.experiment == EKUIPER_PROFILE_EXPERIMENT:
+        metadata["thesis_evidence"] = False
+        metadata["evidence_class"] = "diagnostic"
+        metadata["n30_admitted"] = False
+        metadata["batch_class"] = "diagnostic-ekuiper-profile"
+        metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
+        metadata["shared_measurement"] = False
+        metadata["measurement_source_leaf"] = results_layout(root).relative(output)
     stamp_focused_metadata(root, metadata)
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
@@ -4510,14 +5842,21 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     if item.experiment == "e-swap-3":
         timeline = json.loads((output / "swap_timeline.json").read_text())
         throughput = json.loads((output / "throughput-buckets.json").read_text())
+        fine = json.loads((output / "throughput-buckets-10ms.json").read_text())
         publisher = json.loads((output / "publisher-summary.json").read_text())
         subscriber = json.loads((output / "subscriber-metadata.json").read_text())
         validate_swap3_artifacts(throughput, timeline, publisher, subscriber)
+        validate_fine_event_buckets(
+            fine,
+            throughput,
+            experiment="e-swap-3",
+            expected_event_timestamp_ns=int(timeline["event_timestamp_ns"]),
+        )
         analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
         (output / "disruption-timeline.json").write_text(json.dumps(timeline, indent=2) + "\n")
         (output / "disruption-analysis.json").write_text(json.dumps(analysis, indent=2) + "\n")
 
-    if item.experiment in {"e-swap-1", "e-swap-4"}:
+    if item.experiment in {"e-swap-1", "e-swap-4", SWAP_SESSIONS_EXPERIMENT}:
         requests = json.loads((output / "swap_requests.json").read_text())
         sink_timeline = json.loads((output / "swap_timeline.json").read_text())
         evidence = derive_hotswap_evidence(
@@ -4525,8 +5864,12 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             sink_timeline,
             experiment=item.experiment,
             condition=item.condition,
-            source_leaf=str(output.relative_to(root)),
+            source_leaf=results_layout(root).relative(output),
         )
+        if item.experiment == SWAP_SESSIONS_EXPERIMENT:
+            evidence = stamp_candidate_swap_evidence(
+                evidence, item, _read_lossless_sequence(output / "sequence.csv")
+            )
         (output / "hotswap-analysis.json").write_text(json.dumps(evidence, indent=2) + "\n")
         if item.experiment == "e-swap-4":
             with (output / "sequence.csv").open(newline="") as stream:
@@ -4540,7 +5883,14 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
                 throughput,
                 sequence,
             )
+            fine = json.loads((output / "throughput-buckets-10ms.json").read_text())
             validate_swap4_artifacts(timeline, throughput, requests, sink_timeline)
+            validate_fine_event_buckets(
+                fine,
+                throughput,
+                experiment="e-swap-4",
+                expected_event_timestamp_ns=int(timeline["swap_ns"]),
+            )
             (output / "burst-timeline.json").write_text(json.dumps(timeline, indent=2) + "\n")
 
     if item.experiment == "e-backpressure":
@@ -4591,6 +5941,15 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             recovery = summarize_recovery(output / "recovery.csv")
             (output / "recovery.json").write_text(json.dumps(recovery, indent=2) + "\n")
 
+    if item.experiment == PAYLOAD_REFINEMENT_EXPERIMENT:
+        (output / "payload-manifest.json").write_text(
+            json.dumps(build_payload_manifest(root, item), indent=2) + "\n"
+        )
+    if item.experiment == DEPTH_EXTENSION_EXPERIMENT:
+        (output / "topology-manifest.json").write_text(
+            json.dumps(build_topology_manifest(root, item), indent=2) + "\n"
+        )
+
     hdr = output / "latency.hdr"
     subscriber_metadata = output / "subscriber-metadata.json"
     if subscriber_metadata.is_file():
@@ -4608,6 +5967,13 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             [str(loadgen), "hdr-summary", "--hdr", str(hdr), "--output", str(output / "percentiles.json")],
             check=True,
         )
+    compose_interval_metrics(output, required=True)
+    if item.experiment == EKUIPER_PROFILE_EXPERIMENT:
+        context = metadata.get("profile")
+        if not isinstance(context, dict):
+            raise ValueError("eKuiper profile metadata lacks profiler context")
+        write_ekuiper_profile_artifacts(item, output, context)
+
     if item.experiment == "e-perf-9":
         startup_path = output / "startup.json"
         startup = json.loads(startup_path.read_text())
@@ -4633,10 +5999,15 @@ def verify_result(root: Path, output: Path) -> None:
 
 
 def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> None:
-    result_dirs = [
-        root / "eval/results" / experiment / f"rpi5-{batch_id}"
-        for experiment in sorted(experiments)
-    ]
+    layout = results_layout(root)
+    result_dirs = []
+    for experiment in sorted(experiments):
+        raw_batch = layout.raw_path(experiment, f"rpi5-{batch_id}")
+        alias_batch = layout.manifest_path("aliases", experiment, f"rpi5-{batch_id}")
+        if raw_batch.is_dir():
+            result_dirs.append(raw_batch)
+        elif alias_batch.is_dir():
+            result_dirs.append(alias_batch)
     subprocess.run(
         [
             sys.executable,
@@ -4651,7 +6022,8 @@ def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> No
 
 
 def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
-    result_root = root / "eval/results/e-iso-7" / f"rpi5-{batch_id}"
+    layout = results_layout(root)
+    result_root = layout.raw_path("e-iso-7", f"rpi5-{batch_id}")
     runs: dict[str, list[dict]] = {
         "control": [],
         "panic-attack": [],
@@ -4674,13 +6046,14 @@ def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
         "sample_unit": "run",
         "comparisons": compare_branch_conditions(runs),
     }
-    path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "branch-isolation-summary.json"
+    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "branch-isolation-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
 
 def summarize_swap4(root: Path, batch_id: str) -> Path:
-    result_root = root / "eval/results/e-swap-4" / f"rpi5-{batch_id}"
+    layout = results_layout(root)
+    result_root = layout.raw_path("e-swap-4", f"rpi5-{batch_id}")
     runs = []
     for timeline_path in result_root.rglob("burst-timeline.json"):
         leaf = timeline_path.parent
@@ -4700,18 +6073,439 @@ def summarize_swap4(root: Path, batch_id: str) -> Path:
         except (OSError, ValueError, KeyError, TypeError):
             continue
     summary = {**summarize_swap4_runs(runs), "batch_id": batch_id}
-    path = (
-        root
-        / "eval/results/canonical-batches"
-        / f"rpi5-{batch_id}"
-        / "swap4-summary.json"
+    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "swap4-summary.json")
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def _candidate_scaling_summary(root: Path, batch_id: str, experiment: str) -> dict:
+    layout = results_layout(root)
+    definition = json.loads(CANONICAL_MATRIX_PATH.read_text())["enhanced_candidate"]["experiments"][experiment]
+    manifest_name = (
+        "payload-manifest.json"
+        if experiment == PAYLOAD_REFINEMENT_EXPERIMENT
+        else "topology-manifest.json"
     )
+    result_root = layout.raw_path(experiment, f"rpi5-{batch_id}")
+    records = []
+    for manifest_path in sorted(result_root.rglob(manifest_name)):
+        leaf = manifest_path.parent
+        try:
+            if json.loads((leaf / "canonical-status.json").read_text()).get("status") != "passed":
+                continue
+            manifest = json.loads(manifest_path.read_text())
+            if experiment == PAYLOAD_REFINEMENT_EXPERIMENT:
+                validate_payload_manifest(manifest, leaf / "config.toml")
+            else:
+                validate_topology_manifest(manifest, leaf / "config.toml")
+            metadata = json.loads((leaf / "metadata.json").read_text())
+            percentiles = json.loads((leaf / "percentiles.json").read_text())
+            record = {
+                **manifest,
+                "source_git_sha": metadata["git_sha"],
+                "source_dirty": metadata["git_dirty"],
+                "latency_ns": {
+                    "p50": int(percentiles["p50_ns"]),
+                    "p95": int(percentiles["p95_ns"]),
+                    "p99": int(percentiles["p99_ns"]),
+                },
+            }
+            if experiment == DEPTH_EXTENSION_EXPERIMENT:
+                with (leaf / "memory.csv").open(newline="") as stream:
+                    samples = [int(row["rss_bytes"]) for row in csv.DictReader(stream)]
+                if not samples:
+                    raise ValueError("memory.csv contains no RSS samples")
+                record["peak_rss_bytes"] = max(samples)
+            records.append(record)
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+    conditions = (
+        [label for label, _ in PAYLOAD_REFINEMENT_GRID]
+        if experiment == PAYLOAD_REFINEMENT_EXPERIMENT
+        else [f"depth-{depth}" for depth in DEPTH_EXTENSION_GRID]
+    )
+    expected_keys = {
+        (condition, run_index)
+        for condition in conditions
+        for run_index in range(1, CANDIDATE_REPETITIONS + 1)
+    }
+    observed_keys = {(record["condition"], record["run_index"]) for record in records}
+    return {
+        "schema_version": 1,
+        "experiment": experiment,
+        "batch_id": batch_id,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": definition["sample_unit"],
+        "required_runs_per_condition": CANDIDATE_REPETITIONS,
+        "complete": observed_keys == expected_keys and len(records) == len(expected_keys),
+        "no_pool_with": definition["no_pool_with"],
+        "records": records,
+    }
+
+
+def summarize_payload_refinement(root: Path, batch_id: str) -> Path:
+    summary = _candidate_scaling_summary(root, batch_id, PAYLOAD_REFINEMENT_EXPERIMENT)
+    path = results_layout(root).manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "payload-refinement-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def summarize_depth_extension(root: Path, batch_id: str) -> Path:
+    summary = _candidate_scaling_summary(root, batch_id, DEPTH_EXTENSION_EXPERIMENT)
+    path = results_layout(root).manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "depth-extension-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def validate_candidate_swap_summary(summary: dict) -> None:
+    experiment = summary.get("experiment")
+    definitions = {
+        SWAP_SESSIONS_EXPERIMENT: {
+            "batch_class": "candidate-independent-swap",
+            "condition": "steady",
+            "nested_unit": "swap event within run",
+            "no_pool_with": [
+                "e-swap-1",
+                "e-swap-2",
+                "e-swap-6",
+                "prior diagnostic rehearsals",
+            ],
+            "metrics": (
+                "compile_ns",
+                "instantiate_ns",
+                "signal_ns",
+                "ack_ns",
+                "convergence_ns",
+                "http_total_ns",
+                "sink_observed_output_gap_ns",
+            ),
+        },
+        ROLLBACK_SESSIONS_EXPERIMENT: {
+            "batch_class": "candidate-rollback-session",
+            "condition": "process-trap-rollback",
+            "nested_unit": "rollback event within run",
+            "no_pool_with": ["e-swap-5", "prior diagnostic rehearsals"],
+            "metrics": (
+                "compile_ns",
+                "instantiate_ns",
+                "signal_ns",
+                "rollback_ns",
+                "http_total_ns",
+            ),
+        },
+    }
+    if experiment not in definitions:
+        raise ValueError("unexpected candidate swap experiment")
+    definition = definitions[experiment]
+    identity = {
+        "schema_version": 1,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": definition["nested_unit"],
+        "required_runs": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "complete": True,
+        "no_pool_with": definition["no_pool_with"],
+    }
+    if any(summary.get(field) != value for field, value in identity.items()):
+        raise ValueError(f"{experiment} summary identity is invalid")
+    records = summary.get("records")
+    if not isinstance(records, list) or len(records) != 5:
+        raise ValueError(f"{experiment} summary requires five independent runs")
+    run_indices = [record.get("run_index") for record in records]
+    if sorted(run_indices) != list(range(1, 6)) or len(set(run_indices)) != 5:
+        raise ValueError(f"{experiment} summary has missing or duplicate run identities")
+    source_shas = set()
+    for record in records:
+        if (
+            record.get("experiment") != experiment
+            or record.get("batch_class") != definition["batch_class"]
+            or record.get("condition") != definition["condition"]
+            or record.get("evidence_class") != "candidate-supplementary"
+            or record.get("thesis_evidence") is not False
+            or record.get("n30_admitted") is not False
+            or record.get("sample_unit") != "independent host run"
+            or record.get("nested_unit") != definition["nested_unit"]
+            or record.get("duration_unit") != "ns"
+            or record.get("event_classes") != ["first-use-aot", "cached"]
+            or record.get("sample_count") != 50
+            or record.get("shared_from") is not None
+            or record.get("no_pool_with") != definition["no_pool_with"]
+        ):
+            raise ValueError(f"{experiment} record crosses the candidate no-pooling boundary")
+        source_sha = record.get("source_git_sha")
+        if not isinstance(source_sha, str) or len(source_sha) != 40 or record.get("source_dirty") is not False:
+            raise ValueError(f"{experiment} record has invalid source provenance")
+        source_shas.add(source_sha)
+        sequence = record.get("sequence")
+        if (
+            not isinstance(sequence, dict)
+            or sequence.get("expected") != sequence.get("received")
+            or sequence.get("gaps") != 0
+            or sequence.get("duplicates") != 0
+        ):
+            raise ValueError(f"{experiment} record is not lossless")
+        events = record.get("events")
+        if not isinstance(events, list) or len(events) != 50:
+            raise ValueError(f"{experiment} record requires exactly 50 events")
+        for event_index, event in enumerate(events):
+            expected_class = candidate_swap_event_class(event_index)
+            expected_plugin = (
+                "wafer_pass_through_v2_panics.wasm"
+                if experiment == ROLLBACK_SESSIONS_EXPERIMENT
+                else "wafer_pass_through_v2.wasm"
+                if event_index % 2 == 0
+                else "wafer_pass_through_v1.wasm"
+            )
+            if (
+                event.get("event_index") != event_index
+                or event.get("event_class") != expected_class
+                or event.get("plugin") != expected_plugin
+                or any(
+                    type(event.get(metric)) is not int or event[metric] < 0
+                    for metric in definition["metrics"]
+                )
+            ):
+                raise ValueError(f"{experiment} event identity or duration is invalid")
+        if experiment == ROLLBACK_SESSIONS_EXPERIMENT and (
+            record.get("attempts") != 50
+            or record.get("rolled_back") != 50
+            or record.get("all_rolled_back") is not True
+        ):
+            raise ValueError("rollback candidate does not contain fifty successful rollbacks")
+    if len(source_shas) != 1:
+        raise ValueError(f"{experiment} summary mixes source revisions")
+
+
+def _candidate_swap_summary(root: Path, batch_id: str, experiment: str) -> dict:
+    layout = results_layout(root)
+    definition = json.loads(CANONICAL_MATRIX_PATH.read_text())["enhanced_candidate"]["experiments"][
+        experiment
+    ]
+    artifact_name = (
+        "hotswap-analysis.json"
+        if experiment == SWAP_SESSIONS_EXPERIMENT
+        else "rollback.json"
+    )
+    result_root = layout.raw_path(experiment, f"rpi5-{batch_id}")
+    records = []
+    for artifact_path in sorted(result_root.rglob(artifact_name)):
+        leaf = artifact_path.parent
+        try:
+            if json.loads((leaf / "canonical-status.json").read_text()).get("status") != "passed":
+                continue
+            evidence = json.loads(artifact_path.read_text())
+            metadata = json.loads((leaf / "metadata.json").read_text())
+            if evidence.get("run_index") != metadata.get("run_index"):
+                raise ValueError("candidate swap run identity differs from metadata")
+            records.append(
+                {
+                    **evidence,
+                    "source_git_sha": metadata["git_sha"],
+                    "source_dirty": metadata["git_dirty"],
+                }
+            )
+        except (KeyError, OSError, TypeError, ValueError):
+            continue
+    run_indices = [record.get("run_index") for record in records]
+    summary = {
+        "schema_version": 1,
+        "experiment": experiment,
+        "batch_id": batch_id,
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run",
+        "nested_unit": definition["nested_units"][0],
+        "required_runs": 5,
+        "events_per_run": 50,
+        "event_classes": ["first-use-aot", "cached"],
+        "complete": len(records) == 5 and sorted(run_indices) == list(range(1, 6)),
+        "no_pool_with": definition["no_pool_with"],
+        "records": records,
+    }
+    validate_candidate_swap_summary(summary)
+    return summary
+
+
+def summarize_swap_sessions(root: Path, batch_id: str) -> Path:
+    summary = _candidate_swap_summary(root, batch_id, SWAP_SESSIONS_EXPERIMENT)
+    path = results_layout(root).manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "independent-swap-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def summarize_rollback_sessions(root: Path, batch_id: str) -> Path:
+    summary = _candidate_swap_summary(root, batch_id, ROLLBACK_SESSIONS_EXPERIMENT)
+    path = results_layout(root).manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "rollback-session-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def validate_ekuiper_profile_summary(summary: dict) -> None:
+    expected_identity = {
+        "schema_version": 1,
+        "experiment": EKUIPER_PROFILE_EXPERIMENT,
+        "batch_class": "diagnostic-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "required_runs_per_cell": 5,
+        "rates_msg_s": list(EKUIPER_PROFILE_RATES),
+        "profiler_states": list(EKUIPER_PROFILE_STATES),
+        "complete": True,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+    }
+    if any(summary.get(field) != value for field, value in expected_identity.items()):
+        raise ValueError("eKuiper profile summary diagnostic identity is invalid")
+    records = summary.get("records")
+    if not isinstance(records, list) or len(records) != 30:
+        raise ValueError("eKuiper profile summary requires exactly 30 independent runs")
+    expected_keys = {
+        (rate, state, run_index)
+        for rate in EKUIPER_PROFILE_RATES
+        for state in EKUIPER_PROFILE_STATES
+        for run_index in range(1, 6)
+    }
+    observed_keys = set()
+    source_shas = set()
+    for record in records:
+        key = (
+            record.get("rate_msg_s"),
+            record.get("profiler_state"),
+            record.get("run_index"),
+        )
+        if key in observed_keys:
+            raise ValueError("eKuiper profile summary duplicates a rate/state/run identity")
+        observed_keys.add(key)
+        if (
+            record.get("experiment") != EKUIPER_PROFILE_EXPERIMENT
+            or record.get("evidence_class") != "diagnostic"
+            or record.get("thesis_evidence") is not False
+            or record.get("n30_admitted") is not False
+            or record.get("sample_unit")
+            != "independent host run at one rate and profiler state"
+            or record.get("shared_from") is not None
+            or not isinstance(record.get("measurement_source_leaf"), str)
+            or record.get("claim_boundary")
+            != "diagnostic-association-only-not-gc-causality"
+            or record.get("no_pool_with") != expected_identity["no_pool_with"]
+        ):
+            raise ValueError("eKuiper profile record crosses the diagnostic boundary")
+        sha = record.get("source_git_sha")
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise ValueError("eKuiper profile record has invalid source provenance")
+        if record.get("source_dirty") is not False:
+            raise ValueError("eKuiper profile record uses dirty source")
+        source_shas.add(sha)
+        overhead = record.get("profiler_overhead", {})
+        paired_state = (
+            "unprofiled-control" if key[1] == "profiled" else "profiled"
+        )
+        if (
+            overhead.get("experiment") != EKUIPER_PROFILE_EXPERIMENT
+            or overhead.get("rate_msg_s") != key[0]
+            or overhead.get("profiler_state") != key[1]
+            or overhead.get("run_index") != key[2]
+            or overhead.get("paired_condition")
+            != f"rate-{key[0]:05d}/{paired_state}"
+            or overhead.get("pair_key") != f"rate-{key[0]:05d}/run-{key[2]:02d}"
+            or overhead.get("claim_boundary")
+            != "diagnostic-association-only-not-gc-causality"
+        ):
+            raise ValueError("eKuiper profile summary has invalid paired overhead evidence")
+    if observed_keys != expected_keys:
+        raise ValueError("eKuiper profile summary has missing or unexpected matched runs")
+    if len(source_shas) != 1:
+        raise ValueError("eKuiper profile summary mixes source revisions")
+
+
+def summarize_ekuiper_profile(root: Path, batch_id: str) -> Path:
+    layout = results_layout(root)
+    result_root = layout.raw_path(EKUIPER_PROFILE_EXPERIMENT, f"rpi5-{batch_id}")
+    records = []
+    for path in sorted(result_root.rglob("ekuiper-runtime-summary.json")):
+        leaf = path.parent
+        try:
+            if json.loads((leaf / "canonical-status.json").read_text()).get("status") != "passed":
+                continue
+            record = json.loads(path.read_text())
+            overhead = json.loads((leaf / "profiler-overhead.json").read_text())
+        except (OSError, TypeError, ValueError):
+            continue
+        record["profiler_overhead"] = overhead
+        records.append(record)
+    summary = {
+        "schema_version": 1,
+        "experiment": EKUIPER_PROFILE_EXPERIMENT,
+        "batch_id": batch_id,
+        "batch_class": "diagnostic-ekuiper-profile",
+        "evidence_class": "diagnostic",
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "required_runs_per_cell": 5,
+        "rates_msg_s": list(EKUIPER_PROFILE_RATES),
+        "profiler_states": list(EKUIPER_PROFILE_STATES),
+        "complete": len(records) == 30,
+        "claim_boundary": "diagnostic-association-only-not-gc-causality",
+        "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
+        "records": records,
+    }
+    validate_ekuiper_profile_summary(summary)
+    path = layout.manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "ekuiper-profile-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(summary, indent=2) + "\n")
+    return path
+
+
+def summarize_capacity_knee(root: Path, batch_id: str) -> Path:
+    layout = results_layout(root)
+    result_root = layout.raw_path(CAPACITY_KNEE_EXPERIMENT, f"rpi5-{batch_id}")
+    by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
+    for path in result_root.rglob("capacity-run.json"):
+        status_path = path.parent / "canonical-status.json"
+        try:
+            if json.loads(status_path.read_text()).get("status") != "passed":
+                continue
+            result = json.loads(path.read_text())
+            validate_candidate_capacity_run_result(result)
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        by_system[result["system"]].append(result)
+    summary = {**estimate_candidate_capacity_envelope(by_system), "batch_id": batch_id}
+    path = layout.manifest_path(
+        "candidate-batches", f"rpi5-{batch_id}", "capacity-knee-summary.json"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
 
 def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
-    result_root = root / "eval/results/e-perf-10" / f"rpi5-{batch_id}"
+    layout = results_layout(root)
+    result_root = layout.raw_path("e-perf-10", f"rpi5-{batch_id}")
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
     capacity_paths = list(result_root.rglob("capacity-run.json"))
     if capacity_paths:
@@ -4734,7 +6528,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
                 "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
             },
         }
-        path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "rate-sweep-summary.json"
+        path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "rate-sweep-summary.json")
         path.write_text(json.dumps(summary, indent=2) + "\n")
         return path
 
@@ -4790,7 +6584,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
         },
         "systems": systems,
     }
-    path = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}" / "rate-sweep-summary.json"
+    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "rate-sweep-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
@@ -4798,6 +6592,18 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
 def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
     if "e-perf-10" in experiments:
         summarize_rate_sweep(root, batch_id)
+    if CAPACITY_KNEE_EXPERIMENT in experiments:
+        summarize_capacity_knee(root, batch_id)
+    if PAYLOAD_REFINEMENT_EXPERIMENT in experiments:
+        summarize_payload_refinement(root, batch_id)
+    if DEPTH_EXTENSION_EXPERIMENT in experiments:
+        summarize_depth_extension(root, batch_id)
+    if SWAP_SESSIONS_EXPERIMENT in experiments:
+        summarize_swap_sessions(root, batch_id)
+    if ROLLBACK_SESSIONS_EXPERIMENT in experiments:
+        summarize_rollback_sessions(root, batch_id)
+    if EKUIPER_PROFILE_EXPERIMENT in experiments:
+        summarize_ekuiper_profile(root, batch_id)
     if "e-iso-7" in experiments:
         summarize_branch_isolation(root, batch_id)
     if "e-swap-4" in experiments:
@@ -4810,9 +6616,13 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
     }
     for experiment in EXPERIMENT_ORDER:
         script = scripts.get(experiment)
-        if experiment not in experiments or script is None:
+        if (
+            experiment not in experiments
+            or experiment in CANONICAL_ALIASES
+            or script is None
+        ):
             continue
-        result_root = root / "eval/results" / experiment / f"rpi5-{batch_id}"
+        result_root = results_layout(root).raw_path(experiment, f"rpi5-{batch_id}")
         subprocess.run([str(root / "eval/scripts" / script), str(result_root)], check=True)
 
 
@@ -4853,17 +6663,22 @@ def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
             continue
         seen.add(key)
         suffix = f" shared_from={item.shared_from}" if item.shared_from else ""
+        cooldown = (
+            f" cooldown={capacity_knee_cooldown_secs()}s"
+            if item.experiment == CAPACITY_KNEE_EXPERIMENT
+            else ""
+        )
         print(
             f"PLAN {item.experiment} condition={item.condition} runs="
             f"{sum(1 for candidate in schedule if candidate.experiment == item.experiment and candidate.condition == item.condition)} "
             f"warmup={item.warmup_secs}s measurement={item.measurement_secs}s "
-            f"sut_cpus={item.runtime_cpus} support_cpus={item.support_cpus}{suffix}"
+            f"sut_cpus={item.runtime_cpus} support_cpus={item.support_cpus}{cooldown}{suffix}"
         )
 
 
 def parse_experiments(raw: str) -> set[str]:
     if raw == "all":
-        return set(CONDITIONS)
+        return set(json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"])
     values = {value.strip() for value in raw.split(",") if value.strip()}
     if not values:
         raise ValueError("--experiments must not be empty")
@@ -4871,10 +6686,12 @@ def parse_experiments(raw: str) -> set[str]:
 
 
 def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], dict[str, dict]]:
-    batch_root = root / "eval/results/capacity-scout" / f"rpi5-{batch_id}"
+    layout = results_layout(root)
+    batch_root = layout.raw_path("capacity-scout", f"rpi5-{batch_id}")
+    ledger = layout.manifest_path("capacity-scout", f"rpi5-{batch_id}")
     decisions = []
     previous_sha256 = None
-    for path in sorted((batch_root / "decisions").glob("decision-*.json")):
+    for path in sorted((ledger / "decisions").glob("decision-*.json")):
         raw = path.read_bytes()
         decision = json.loads(raw)
         if decision.get("decision_index") != len(decisions) + 1:
@@ -4906,7 +6723,7 @@ def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], d
             raise ValueError(f"duplicate accepted capacity-scout logical run: {logical}")
         accepted_paths[logical] = path
     accepted = {}
-    batch_path = batch_root / "batch.json"
+    batch_path = ledger / "batch.json"
     expected_sha = json.loads(batch_path.read_text())["source_git_sha"] if batch_path.is_file() else None
     for logical, path in accepted_paths.items():
         result = json.loads(path.read_text())
@@ -4957,7 +6774,9 @@ def capacity_scout_source_state(root: Path) -> dict:
     return {"git_sha": state["git_sha"], "git_dirty": state["git_dirty"], "git_tags": tags}
 
 
-def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoch: float) -> dict:
+def capacity_scout_current_snapshot(
+    root: Path, ledger: Path, batch_started_epoch: float, evidence_root: Path | None = None
+) -> dict:
     telemetry_available = True
     try:
         temperature = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text())
@@ -4969,15 +6788,16 @@ def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoc
         telemetry_available = False
         temperature = 0
         throttled = False
+    evidence = evidence_root or ledger
     largest_probe = 0
-    for rate_dir in ledger.glob("**/rate-*"):
+    for rate_dir in evidence.glob("**/rate-*"):
         if rate_dir.is_dir():
             largest_probe = max(
                 largest_probe,
                 sum(path.stat().st_size for path in rate_dir.rglob("*") if path.is_file()),
             )
     failures = []
-    for status_path in ledger.rglob("canonical-status.json"):
+    for status_path in evidence.rglob("canonical-status.json"):
         try:
             status = json.loads(status_path.read_text())
         except (OSError, ValueError):
@@ -5010,13 +6830,20 @@ def capacity_scout_current_snapshot(root: Path, ledger: Path, batch_started_epoc
 
 
 def wait_for_capacity_scout_safety(
-    root: Path, ledger: Path, batch_started_epoch: float, item: RunItem, attempt: int
+    root: Path,
+    ledger: Path,
+    batch_started_epoch: float,
+    item: RunItem,
+    attempt: int,
+    evidence_root: Path | None = None,
 ) -> dict:
     wait_started = time.monotonic()
     cooling = False
     cool_since = None
     while True:
-        snapshot = capacity_scout_current_snapshot(root, ledger, batch_started_epoch)
+        snapshot = capacity_scout_current_snapshot(
+            root, ledger, batch_started_epoch, evidence_root
+        )
         action = capacity_scout_safety_action(snapshot)
         write_capacity_scout_progress(
             ledger,
@@ -5116,6 +6943,7 @@ def run_capacity_scout_item_with_timeout(root: Path, batch_id: str, item: RunIte
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run resumable canonical Pi 5 evaluations")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
+    parser.add_argument("--results-root", type=Path)
     parser.add_argument("--experiments", default="all")
     parser.add_argument("--focused", action="store_true")
     parser.add_argument("--capacity-scout", action="store_true")
@@ -5128,7 +6956,12 @@ def main() -> int:
         parser.error("choose exactly one of --dry-run or --execute")
 
     root = args.root.resolve()
+    if args.results_root is not None:
+        os.environ["WAFER_RESULTS_ROOT"] = str(args.results_root)
     try:
+        layout = results_layout(root)
+        if args.execute:
+            layout.prepare()
         focused_freeze = None
         capacity_scout = args.capacity_scout
         if capacity_scout:
@@ -5162,7 +6995,8 @@ def main() -> int:
     if not all(character.isalnum() or character in "._-" for character in batch_id):
         parser.error("--batch-id contains unsafe characters")
     if capacity_scout:
-        ledger = root / "eval/results/capacity-scout" / f"rpi5-{batch_id}"
+        evidence_root = layout.raw_path("capacity-scout", f"rpi5-{batch_id}")
+        ledger = layout.manifest_path("capacity-scout", f"rpi5-{batch_id}")
         batch_path = ledger / "batch.json"
         if batch_path.is_file():
             batch = json.loads(batch_path.read_text())
@@ -5224,11 +7058,18 @@ def main() -> int:
             counters={"pending_runs": len(schedule)},
         )
         for item in schedule:
-            condition_dir = ledger / item.condition
+            condition_dir = layout.raw_path(
+                "capacity-scout", f"rpi5-{batch_id}", item.condition
+            )
             selection = select_attempt(condition_dir, item.run_index)
             attempt = int(selection.path.name.rsplit("-attempt-", 1)[-1])
             safety = wait_for_capacity_scout_safety(
-                root, ledger, float(batch["started_at_epoch"]), item, attempt
+                root,
+                ledger,
+                float(batch["started_at_epoch"]),
+                item,
+                attempt,
+                evidence_root,
             )
             if safety["action"] == "stop":
                 stopped = {"timestamp": utc_now(), "item": item.result_key, **safety}
@@ -5285,7 +7126,12 @@ def main() -> int:
     if focused_freeze is not None:
         os.environ[FOCUSED_MATRIX_SHA_ENV] = focused_freeze["canonical_matrix_sha256"]
 
-    ledger = root / "eval/results/canonical-batches" / f"rpi5-{batch_id}"
+    ledger_group = (
+        "candidate-batches"
+        if experiments <= EXECUTABLE_CANDIDATE_EXPERIMENTS
+        else "canonical-batches"
+    )
+    ledger = layout.manifest_path(ledger_group, f"rpi5-{batch_id}")
     ledger.mkdir(parents=True, exist_ok=True)
     schedule_json = json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
     (ledger / "schedule.json").write_text(schedule_json)
@@ -5325,7 +7171,9 @@ def main() -> int:
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
 
     if validation_items:
-        validation_root = root / "eval/results/e-val-1" / f"rpi5-{batch_id}" / "delay-50ms"
+        validation_root = layout.raw_path(
+            "e-val-1", f"rpi5-{batch_id}", "delay-50ms"
+        )
         gate = evaluate_validation_gate(validation_root, expected_runs=30)
         (ledger / "e-val-1-gate.json").write_text(
             json.dumps(gate.__dict__, indent=2) + "\n"
@@ -5336,6 +7184,14 @@ def main() -> int:
             return 1
 
     for item in remaining_items:
+        if item.experiment == CAPACITY_KNEE_EXPERIMENT:
+            condition_dir = layout.raw_path(
+                item.experiment, f"rpi5-{batch_id}", item.condition
+            )
+            if not select_attempt(condition_dir, item.run_index).skip:
+                apply_capacity_knee_cooldown(
+                    ledger, item, completed, total, len(failures)
+                )
         write_progress(ledger, "item-started", completed, total, item.result_key, len(failures))
         if not run_item(root, batch_id, item):
             failures.append(item.result_key)

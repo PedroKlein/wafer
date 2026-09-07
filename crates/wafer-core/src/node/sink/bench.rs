@@ -15,6 +15,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use hdrhistogram::Histogram;
 use hdrhistogram::serialization::V2Serializer;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterBuilder;
+use serde::Serialize;
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
@@ -288,11 +289,180 @@ pub struct ThroughputSample {
     pub bytes: u64,
 }
 
+const INTERVAL_WIDTH_NS: u64 = 1_000_000_000;
+
+#[derive(Debug, Clone, Serialize)]
+struct IntervalLatencyRow {
+    interval_start_ns: u64,
+    interval_end_ns: u64,
+    interval_start_unix_epoch_ns: u64,
+    interval_end_unix_epoch_ns: u64,
+    latency_count: u64,
+    latency_p50_ns: Option<u64>,
+    latency_p95_ns: Option<u64>,
+    latency_p99_ns: Option<u64>,
+    received_events: u64,
+    throughput_messages: u64,
+    duplicates: u64,
+}
+
+struct IntervalRecorder {
+    measurement_start_unix_epoch_ns: u64,
+    declared_measurement_duration_ns: u64,
+    maximum_rows: usize,
+    current_bucket: usize,
+    histogram: Histogram<u64>,
+    events: u64,
+    unique: u64,
+    duplicates: u64,
+    rows: Vec<IntervalLatencyRow>,
+    overflowed: bool,
+    finalized: bool,
+}
+
+impl IntervalRecorder {
+    #[expect(
+        clippy::expect_used,
+        reason = "histogram bounds are compile-time constants proven by recorder tests"
+    )]
+    fn new(measurement_start_unix_epoch_ns: u64, measurement_secs: u64) -> Self {
+        let maximum_rows =
+            usize::try_from(measurement_secs).unwrap_or(usize::MAX).saturating_add(2);
+        Self {
+            measurement_start_unix_epoch_ns,
+            declared_measurement_duration_ns: measurement_secs.saturating_mul(INTERVAL_WIDTH_NS),
+            maximum_rows,
+            current_bucket: 0,
+            histogram: Histogram::new_with_bounds(1_000, 10_000_000_000, 3)
+                .expect("valid histogram bounds"),
+            events: 0,
+            unique: 0,
+            duplicates: 0,
+            rows: Vec::with_capacity(maximum_rows),
+            overflowed: false,
+            finalized: false,
+        }
+    }
+
+    fn record(&mut self, elapsed_ns: u64, latency_ns: Option<u64>, duplicate: bool) {
+        let bucket = usize::try_from(elapsed_ns / INTERVAL_WIDTH_NS).unwrap_or(usize::MAX);
+        while self.current_bucket < bucket && self.rows.len() < self.maximum_rows {
+            self.finish_current(INTERVAL_WIDTH_NS);
+        }
+        if bucket != self.current_bucket || self.rows.len() == self.maximum_rows {
+            self.overflowed = true;
+            return;
+        }
+        if let Some(latency_ns) = latency_ns {
+            self.histogram.saturating_record(latency_ns.clamp(1_000, 10_000_000_000));
+        }
+        self.events = self.events.saturating_add(1);
+        if duplicate {
+            self.duplicates = self.duplicates.saturating_add(1);
+        } else {
+            self.unique = self.unique.saturating_add(1);
+        }
+    }
+
+    fn finalize(&mut self, elapsed_ns: u64) {
+        if self.finalized {
+            return;
+        }
+        self.finalized = true;
+        if elapsed_ns == 0 {
+            return;
+        }
+        let final_bucket =
+            usize::try_from(elapsed_ns.saturating_sub(1) / INTERVAL_WIDTH_NS).unwrap_or(usize::MAX);
+        if final_bucket >= self.maximum_rows {
+            self.overflowed = true;
+            return;
+        }
+        while self.current_bucket < final_bucket && self.rows.len() < self.maximum_rows {
+            self.finish_current(INTERVAL_WIDTH_NS);
+        }
+        if self.rows.len() < self.maximum_rows {
+            let remainder = elapsed_ns % INTERVAL_WIDTH_NS;
+            self.finish_current(if remainder == 0 { INTERVAL_WIDTH_NS } else { remainder });
+        }
+    }
+
+    fn finish_current(&mut self, width_ns: u64) {
+        let start_ns = u64::try_from(self.current_bucket)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(INTERVAL_WIDTH_NS);
+        let end_ns = start_ns.saturating_add(width_ns);
+        let count = self.histogram.len();
+        self.rows.push(IntervalLatencyRow {
+            interval_start_ns: start_ns,
+            interval_end_ns: end_ns,
+            interval_start_unix_epoch_ns: self
+                .measurement_start_unix_epoch_ns
+                .saturating_add(start_ns),
+            interval_end_unix_epoch_ns: self.measurement_start_unix_epoch_ns.saturating_add(end_ns),
+            latency_count: count,
+            latency_p50_ns: (count > 0).then(|| self.histogram.value_at_quantile(0.50)),
+            latency_p95_ns: (count > 0).then(|| self.histogram.value_at_quantile(0.95)),
+            latency_p99_ns: (count > 0).then(|| self.histogram.value_at_quantile(0.99)),
+            received_events: self.events,
+            throughput_messages: self.unique,
+            duplicates: self.duplicates,
+        });
+        self.histogram.reset();
+        self.events = 0;
+        self.unique = 0;
+        self.duplicates = 0;
+        self.current_bucket = self.current_bucket.saturating_add(1);
+    }
+
+    fn write(&self, path: &Path, aggregate_count: u64) -> std::io::Result<()> {
+        if self.overflowed {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "interval row limit exceeded",
+            ));
+        }
+        let interval_count = self.rows.iter().map(|row| row.latency_count).sum::<u64>();
+        if interval_count != aggregate_count {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "interval latency population {interval_count} differs from aggregate {aggregate_count}"
+                ),
+            ));
+        }
+        let artifact = serde_json::json!({
+            "schema_version": 1,
+            "interval_clock": "monotonic-elapsed",
+            "alignment_clock": "unix-epoch",
+            "alignment_clock_purpose": "cross-process-alignment-only",
+            "measurement_start_unix_epoch_ns": self.measurement_start_unix_epoch_ns,
+            "declared_measurement_duration_ns": self.declared_measurement_duration_ns,
+            "bucket_width_ns": INTERVAL_WIDTH_NS,
+            "maximum_rows": self.maximum_rows,
+            "row_count": self.rows.len(),
+            "aggregate_latency_count": aggregate_count,
+            "late_arrivals": 0,
+            "rows": self.rows,
+        });
+        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))
+    }
+}
+
 const BURST_BUCKET_WIDTH_NS: u64 = 100_000_000;
 const BURST_BUCKET_COUNT: usize = 1_200;
 const BURST_DRAIN_BUCKET_COUNT: usize = 100;
 const BURST_PRIMARY_END_NS: u64 = 120_000_000_000;
 const BURST_DRAIN_END_NS: u64 = 130_000_000_000;
+const BURST_SWAP_OFFSET_NS: u64 = 60_000_000_000;
+const FINE_EVENT_BUCKET_WIDTH_NS: i64 = 10_000_000;
+const FINE_EVENT_BUCKET_COUNT: usize = 400;
+const FINE_EVENT_START_NS: i64 = -2_000_000_000;
+const FINE_EVENT_END_NS: i64 = 2_000_000_000;
+const FINE_EVENT_PARENT_WIDTH_NS: i64 = 100_000_000;
+const FINE_EVENT_PARENT_COUNT: usize = 40;
+const FINE_EVENT_ALIGNMENT_TOLERANCE_NS: u64 = 10_000_000;
+const FINE_EVENT_SAMPLE_CAPACITY: usize = 16_384;
 
 #[derive(Debug, Clone, Copy, Default)]
 struct BurstBucket {
@@ -312,6 +482,22 @@ impl BurstBucket {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct FineEventSample {
+    arrival_unix_ns: u64,
+    duplicate: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct FineEventBucket {
+    start_offset_ns: i64,
+    end_offset_ns: i64,
+    received_unique: u64,
+    received_events: u64,
+    duplicates: u64,
+    rate_msg_s: f64,
+}
+
 struct BurstObservation {
     source_origin_ns: u64,
     origin_mismatch_events: u64,
@@ -324,6 +510,8 @@ struct BurstObservation {
     after_drain_first_offset_ns: Option<u64>,
     after_drain_last_offset_ns: Option<u64>,
     max_arrival_offset_ns: u64,
+    fine_samples: Vec<FineEventSample>,
+    fine_samples_overflowed: bool,
 }
 
 fn burst_bucket_rows(buckets: &[BurstBucket], base_offset_ns: u64) -> Vec<serde_json::Value> {
@@ -355,6 +543,81 @@ fn burst_bucket_totals(buckets: &[BurstBucket]) -> BurstBucket {
     })
 }
 
+fn fine_event_buckets(
+    samples: &[FineEventSample],
+    event_timestamp_ns: u64,
+    width_ns: i64,
+    count: usize,
+) -> Vec<FineEventBucket> {
+    let mut unique = vec![0_u64; count];
+    let mut events = vec![0_u64; count];
+    let mut duplicates = vec![0_u64; count];
+    let coverage_end_ns = FINE_EVENT_START_NS
+        .saturating_add(i64::try_from(count).unwrap_or(i64::MAX).saturating_mul(width_ns));
+    for sample in samples {
+        let offset_ns = signed_timestamp_offset(sample.arrival_unix_ns, event_timestamp_ns);
+        if !(FINE_EVENT_START_NS..coverage_end_ns).contains(&offset_ns) {
+            continue;
+        }
+        let index = usize::try_from(
+            offset_ns.saturating_sub(FINE_EVENT_START_NS).checked_div(width_ns).unwrap_or(i64::MAX),
+        )
+        .unwrap_or(count);
+        let (Some(event_count), Some(unique_count), Some(duplicate_count)) =
+            (events.get_mut(index), unique.get_mut(index), duplicates.get_mut(index))
+        else {
+            continue;
+        };
+        *event_count = event_count.saturating_add(1);
+        if sample.duplicate {
+            *duplicate_count = duplicate_count.saturating_add(1);
+        } else {
+            *unique_count = unique_count.saturating_add(1);
+        }
+    }
+    unique
+        .iter()
+        .zip(&events)
+        .zip(&duplicates)
+        .enumerate()
+        .map(|(index, ((received_unique, received_events), duplicates))| {
+            let start_offset_ns = FINE_EVENT_START_NS
+                .saturating_add(i64::try_from(index).unwrap_or(i64::MAX).saturating_mul(width_ns));
+            FineEventBucket {
+                start_offset_ns,
+                end_offset_ns: start_offset_ns.saturating_add(width_ns),
+                received_unique: *received_unique,
+                received_events: *received_events,
+                duplicates: *duplicates,
+                rate_msg_s: f64::from(u32::try_from(*received_unique).unwrap_or(u32::MAX))
+                    * 1_000_000_000.0
+                    / f64::from(u32::try_from(width_ns).unwrap_or(u32::MAX)),
+            }
+        })
+        .collect()
+}
+
+fn signed_timestamp_offset(timestamp_ns: u64, reference_ns: u64) -> i64 {
+    if timestamp_ns >= reference_ns {
+        i64::try_from(timestamp_ns.saturating_sub(reference_ns)).unwrap_or(i64::MAX)
+    } else {
+        i64::try_from(reference_ns.saturating_sub(timestamp_ns))
+            .unwrap_or(i64::MAX)
+            .checked_neg()
+            .unwrap_or(i64::MIN)
+    }
+}
+
+fn fine_event_totals(buckets: &[FineEventBucket]) -> (u64, u64, u64) {
+    buckets.iter().fold((0, 0, 0), |(unique, events, duplicates), bucket| {
+        (
+            unique.saturating_add(bucket.received_unique),
+            events.saturating_add(bucket.received_events),
+            duplicates.saturating_add(bucket.duplicates),
+        )
+    })
+}
+
 impl BurstObservation {
     fn new(source_origin_ns: u64) -> Self {
         Self {
@@ -369,6 +632,8 @@ impl BurstObservation {
             after_drain_first_offset_ns: None,
             after_drain_last_offset_ns: None,
             max_arrival_offset_ns: 0,
+            fine_samples: Vec::with_capacity(FINE_EVENT_SAMPLE_CAPACITY),
+            fine_samples_overflowed: false,
         }
     }
 
@@ -378,6 +643,21 @@ impl BurstObservation {
         }
         let offset_ns = arrival_ns.saturating_sub(self.source_origin_ns);
         self.max_arrival_offset_ns = self.max_arrival_offset_ns.max(offset_ns);
+        let scheduled_event_ns = self.source_origin_ns.saturating_add(BURST_SWAP_OFFSET_NS);
+        let capture_margin_ns = FINE_EVENT_ALIGNMENT_TOLERANCE_NS;
+        let capture_start = scheduled_event_ns
+            .saturating_sub(FINE_EVENT_START_NS.unsigned_abs())
+            .saturating_sub(capture_margin_ns);
+        let capture_end = scheduled_event_ns
+            .saturating_add(FINE_EVENT_END_NS.unsigned_abs())
+            .saturating_add(capture_margin_ns);
+        if (capture_start..capture_end).contains(&arrival_ns) {
+            if self.fine_samples.len() == FINE_EVENT_SAMPLE_CAPACITY {
+                self.fine_samples_overflowed = true;
+            } else {
+                self.fine_samples.push(FineEventSample { arrival_unix_ns: arrival_ns, duplicate });
+            }
+        }
         if offset_ns < BURST_PRIMARY_END_NS {
             let index = usize::try_from(offset_ns / BURST_BUCKET_WIDTH_NS).unwrap_or(usize::MAX);
             if let Some(bucket) = self.primary.get_mut(index) {
@@ -404,6 +684,93 @@ impl BurstObservation {
             self.after_drain_last_offset_ns =
                 Some(self.after_drain_last_offset_ns.map_or(offset_ns, |last| last.max(offset_ns)));
         }
+    }
+
+    fn write_fine_event_buckets(
+        &self,
+        dir: &Path,
+        receipt_path: Option<&Path>,
+    ) -> std::io::Result<()> {
+        let Some(receipt_path) = receipt_path else { return Ok(()) };
+        if self.fine_samples_overflowed {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "fine event sample capacity exceeded",
+            ));
+        }
+        let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(receipt_path)?)?;
+        let malformed = || {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "actual t0 receipt is malformed")
+        };
+        let event_timestamp_ns = receipt
+            .get("event_timestamp_ns")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(malformed)?;
+        let scheduled_event_timestamp_ns =
+            self.source_origin_ns.saturating_add(BURST_SWAP_OFFSET_NS);
+        let alignment_error_ns =
+            signed_timestamp_offset(event_timestamp_ns, scheduled_event_timestamp_ns);
+        if receipt.get("schema_version").and_then(serde_json::Value::as_u64) != Some(1)
+            || receipt.get("clock").and_then(serde_json::Value::as_str) != Some("unix-epoch")
+            || receipt.get("alignment").and_then(serde_json::Value::as_str) != Some("actual-t0")
+            || receipt.get("source_measurement_start_unix_ns").and_then(serde_json::Value::as_u64)
+                != Some(self.source_origin_ns)
+            || receipt.get("scheduled_event_timestamp_ns").and_then(serde_json::Value::as_u64)
+                != Some(scheduled_event_timestamp_ns)
+            || alignment_error_ns.unsigned_abs() > FINE_EVENT_ALIGNMENT_TOLERANCE_NS
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "actual t0 receipt differs from the frozen E-Swap-4 boundary",
+            ));
+        }
+        let buckets = fine_event_buckets(
+            &self.fine_samples,
+            event_timestamp_ns,
+            FINE_EVENT_BUCKET_WIDTH_NS,
+            FINE_EVENT_BUCKET_COUNT,
+        );
+        let parent_buckets = fine_event_buckets(
+            &self.fine_samples,
+            event_timestamp_ns,
+            FINE_EVENT_PARENT_WIDTH_NS,
+            FINE_EVENT_PARENT_COUNT,
+        );
+        let totals = fine_event_totals(&buckets);
+        if fine_event_totals(&parent_buckets) != totals {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "fine and parent event bucket populations differ",
+            ));
+        }
+        let artifact = serde_json::json!({
+            "schema_version": 1,
+            "clock": "unix-epoch-source-sink-alignment",
+            "clock_purpose": "cross-process-alignment",
+            "alignment": "actual-t0",
+            "source_measurement_start_unix_ns": self.source_origin_ns,
+            "scheduled_event_timestamp_ns": scheduled_event_timestamp_ns,
+            "event_timestamp_ns": event_timestamp_ns,
+            "alignment_error_ns": alignment_error_ns,
+            "alignment_tolerance_ns": FINE_EVENT_ALIGNMENT_TOLERANCE_NS,
+            "bucket_width_ns": FINE_EVENT_BUCKET_WIDTH_NS,
+            "bucket_count": FINE_EVENT_BUCKET_COUNT,
+            "coverage_start_offset_ns": FINE_EVENT_START_NS,
+            "coverage_end_offset_ns": FINE_EVENT_END_NS,
+            "parent_bucket_width_ns": FINE_EVENT_PARENT_WIDTH_NS,
+            "parent_bucket_count": FINE_EVENT_PARENT_COUNT,
+            "received_unique": totals.0,
+            "received_events": totals.1,
+            "duplicates": totals.2,
+            "buckets": buckets,
+            "parent_buckets": parent_buckets,
+            "canonical_series": "throughput-buckets.json",
+            "loss_accounting": "canonical-sequence-and-primary-drain-only",
+        });
+        std::fs::write(
+            dir.join("throughput-buckets-10ms.json"),
+            format!("{}\n", serde_json::to_string_pretty(&artifact)?),
+        )
     }
 }
 
@@ -438,6 +805,8 @@ pub struct BenchSink {
     bucket_bytes: u64,
     /// Completed throughput samples.
     throughput_samples: Vec<ThroughputSample>,
+    interval_recorder: Option<IntervalRecorder>,
+    interval_uses_source_origin: bool,
     burst_observation: Option<Box<BurstObservation>>,
     burst_missing_origin_events: u64,
     burst_phase_received: [u64; 3],
@@ -486,6 +855,8 @@ impl BenchSink {
             bucket_msg_count: 0,
             bucket_bytes: 0,
             throughput_samples: Vec::new(),
+            interval_recorder: None,
+            interval_uses_source_origin: false,
             burst_observation: None,
             burst_missing_origin_events: 0,
             burst_phase_received: [0; 3],
@@ -691,7 +1062,9 @@ impl BenchSink {
         std::fs::write(
             dir.join("throughput-buckets.json"),
             format!("{}\n", serde_json::to_string_pretty(&value)?),
-        )
+        )?;
+        let fine_receipt = std::env::var_os("WAFER_SWAP_ACTUAL_T0_RECEIPT").map(PathBuf::from);
+        observation.write_fine_event_buckets(dir, fine_receipt.as_deref())
     }
 
     /// Export all measurement data to a directory.
@@ -722,6 +1095,12 @@ impl BenchSink {
         csv_file.write_all(csv_content.as_bytes())?;
 
         self.write_burst_evidence(dir)?;
+
+        if let Some(intervals) = &self.interval_recorder
+            && intervals.finalized
+        {
+            intervals.write(&dir.join("interval-latency.json"), self.histogram.len())?;
+        }
 
         if let Some(started) = self.start_wall_time {
             let started_ns =
@@ -901,19 +1280,27 @@ impl Lifecycle for BenchSink {
             }
         }
 
-        // Auto-export if output_dir configured
-        if let Some(ref dir) = self.config.output_dir {
-            if let Err(e) = self.export_to_dir(dir) {
-                tracing::error!("BenchSink export to {:?} failed: {}", dir, e);
+        if let (Some(start), Some(intervals)) =
+            (self.measurement_start, &mut self.interval_recorder)
+        {
+            let elapsed_ns = if self.interval_uses_source_origin {
+                intervals.declared_measurement_duration_ns
             } else {
+                crate::util::duration_ns_saturating(start.elapsed())
+            };
+            intervals.finalize(elapsed_ns);
+        }
+
+        let export_result = self.config.output_dir.as_ref().map_or(Ok(()), |dir| {
+            self.export_to_dir(dir).inspect(|()| {
                 tracing::info!(
                     "BenchSink exported results to {:?} (latency.hdr + throughput.csv)",
                     dir
                 );
-            }
-        }
+            })
+        });
 
-        Box::pin(async { Ok(()) })
+        Box::pin(async move { export_result.map_err(Into::into) })
     }
 }
 
@@ -956,12 +1343,37 @@ impl Sink for BenchSink {
             return Box::pin(async { Ok(()) });
         }
 
-        // Initialize measurement tracking on first post-warmup message
+        let intended_ns = envelope
+            .header
+            .metadata
+            .iter()
+            .find(|(key, _)| key.as_ref() == "bench.intended_ns")
+            .and_then(|(_, value)| value.parse::<u64>().ok());
+        let source_origin_ns = envelope
+            .header
+            .metadata
+            .iter()
+            .find(|(key, _)| key.as_ref() == "bench.measurement_start_unix_ns")
+            .and_then(|(_, value)| value.parse::<u64>().ok())
+            .filter(|value| *value > 0);
+
         let now = Instant::now();
         if self.measurement_start.is_none() {
             self.measurement_start = Some(now);
             self.current_bucket_start = Some(now);
-            self.start_wall_time = Some(SystemTime::now());
+            let start_wall_time = SystemTime::now();
+            self.start_wall_time = Some(start_wall_time);
+            let local_start_unix_ns = start_wall_time
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, crate::util::duration_ns_saturating);
+            let start_unix_ns = source_origin_ns.unwrap_or(local_start_unix_ns);
+            let measurement_secs = std::env::var("WAFER_MEASUREMENT_SECS")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(300);
+            self.interval_uses_source_origin = source_origin_ns.is_some();
+            self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
 
         let arrival_unix_ns = current_time_ns();
@@ -974,23 +1386,18 @@ impl Sink for BenchSink {
         self.bucket_bytes = self.bucket_bytes.saturating_add(payload_len);
         self.flush_bucket_if_needed(now);
 
-        // Extract intended_ns from metadata for latency calculation
-        let intended_ns: Option<u64> = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(k, _)| k.as_ref() == "bench.intended_ns")
-            .and_then(|(_, v)| v.parse().ok());
-
-        if let Some(intended) = intended_ns {
-            let latency_ns = arrival_unix_ns.saturating_sub(intended);
-            // Clamp to histogram range (ignore out-of-range values)
-            if latency_ns >= 1_000 {
-                let _ = self.histogram.record(latency_ns);
-            } else {
-                // Sub-microsecond: record as 1µs minimum
-                let _ = self.histogram.record(1_000);
-            }
+        let latency_ns =
+            intended_ns.map(|intended| arrival_unix_ns.saturating_sub(intended).max(1_000));
+        if let Some(latency_ns) = latency_ns {
+            let _ = self.histogram.record(latency_ns);
+        }
+        if let (Some(start), Some(intervals)) =
+            (self.measurement_start, &mut self.interval_recorder)
+        {
+            let elapsed_ns = source_origin_ns
+                .and_then(|origin| intended_ns.and_then(|intended| intended.checked_sub(origin)))
+                .unwrap_or_else(|| crate::util::duration_ns_saturating(now.duration_since(start)));
+            intervals.record(elapsed_ns, latency_ns, duplicate);
         }
 
         // Hot-swap version tracking
@@ -1022,6 +1429,160 @@ mod tests {
         RuntimeEnvelope::from_string("bench-source", "payload")
             .with_metadata("bench.sequence", seq.to_string())
             .with_metadata("bench.intended_ns", intended_ns.to_string())
+    }
+
+    #[test]
+    fn burst_fine_event_buckets_are_actual_t0_aligned_and_nested() {
+        let source_origin_ns = 1_000_000_000_000;
+        let scheduled_t0 = source_origin_ns + BURST_SWAP_OFFSET_NS;
+        let actual_t0 = scheduled_t0 + 5_000_000;
+        let mut observation = BurstObservation::new(source_origin_ns);
+        for (offset, duplicate) in [
+            (-1_995_000_000_i64, false),
+            (-5_000_000, false),
+            (5_000_000, true),
+            (1_995_000_000, false),
+        ] {
+            let arrival = if offset >= 0 {
+                actual_t0 + u64::try_from(offset).unwrap()
+            } else {
+                actual_t0 - offset.unsigned_abs()
+            };
+            observation.record(source_origin_ns, arrival, duplicate);
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let receipt = dir.path().join("swap-actual-t0.json");
+        std::fs::write(
+            &receipt,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "clock": "unix-epoch",
+                "alignment": "actual-t0",
+                "source_measurement_start_unix_ns": source_origin_ns,
+                "scheduled_event_timestamp_ns": scheduled_t0,
+                "event_timestamp_ns": actual_t0,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        observation.write_fine_event_buckets(dir.path(), Some(&receipt)).unwrap();
+
+        let artifact: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("throughput-buckets-10ms.json")).unwrap(),
+        )
+        .unwrap();
+        let fine = artifact["buckets"].as_array().unwrap();
+        let parents = artifact["parent_buckets"].as_array().unwrap();
+        assert_eq!(fine.len(), 400);
+        assert_eq!(parents.len(), 40);
+        assert_eq!(fine[0]["start_offset_ns"], -2_000_000_000_i64);
+        assert_eq!(fine[399]["end_offset_ns"], 2_000_000_000_i64);
+        assert_eq!(artifact["received_events"], 4);
+        assert_eq!(artifact["received_unique"], 3);
+        assert_eq!(artifact["duplicates"], 1);
+        assert!(
+            std::fs::metadata(dir.path().join("throughput-buckets-10ms.json")).unwrap().len()
+                < 256 * 1024
+        );
+        for (parent_index, parent) in parents.iter().enumerate() {
+            for field in ["received_unique", "received_events", "duplicates"] {
+                let nested = fine[parent_index * 10..(parent_index + 1) * 10]
+                    .iter()
+                    .map(|row| row[field].as_u64().unwrap())
+                    .sum::<u64>();
+                assert_eq!(parent[field], nested);
+            }
+        }
+    }
+
+    #[test]
+    fn burst_fine_event_buckets_reject_actual_t0_outside_tolerance() {
+        let source_origin_ns = 1_000_000_000_000;
+        let observation = BurstObservation::new(source_origin_ns);
+        let dir = tempfile::tempdir().unwrap();
+        let receipt = dir.path().join("swap-actual-t0.json");
+        std::fs::write(
+            &receipt,
+            serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1,
+                "clock": "unix-epoch",
+                "alignment": "actual-t0",
+                "source_measurement_start_unix_ns": source_origin_ns,
+                "scheduled_event_timestamp_ns": source_origin_ns + BURST_SWAP_OFFSET_NS,
+                "event_timestamp_ns": source_origin_ns + BURST_SWAP_OFFSET_NS + 10_000_001,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(observation.write_fine_event_buckets(dir.path(), Some(&receipt)).is_err());
+    }
+
+    #[test]
+    fn interval_recorder_emits_empty_rows_and_reconciles_population() {
+        let mut intervals = IntervalRecorder::new(10_000_000_000, 3);
+        intervals.record(0, Some(10_000), false);
+        intervals.record(2_000_000_000, Some(30_000), false);
+        intervals.finalize(2_500_000_000);
+
+        assert_eq!(intervals.rows.len(), 3);
+        assert_eq!(intervals.rows[1].latency_count, 0);
+        assert_eq!(intervals.rows[1].latency_p99_ns, None);
+        assert_eq!(intervals.rows[2].interval_end_ns, 2_500_000_000);
+        assert_eq!(intervals.rows.iter().map(|row| row.latency_count).sum::<u64>(), 2);
+    }
+
+    #[test]
+    fn source_aligned_interval_window_stops_at_declared_primary_boundary() {
+        let mut intervals = IntervalRecorder::new(1_000_000_000, 120);
+        intervals.record(119_999_999_999, Some(10_000), false);
+        intervals.finalize(intervals.declared_measurement_duration_ns);
+
+        assert_eq!(intervals.rows.len(), 120);
+        assert_eq!(intervals.rows.last().unwrap().interval_end_ns, 120_000_000_000);
+        assert_eq!(intervals.rows.iter().map(|row| row.latency_count).sum::<u64>(), 1);
+    }
+
+    #[test]
+    fn interval_recorder_marks_shutdown_beyond_declared_slack_as_overflow() {
+        let mut intervals = IntervalRecorder::new(0, 1);
+        intervals.record(0, Some(10_000), false);
+        intervals.finalize(3_000_000_001);
+        assert!(intervals.overflowed);
+    }
+
+    #[test]
+    fn interval_recorder_places_exact_boundary_in_next_row() {
+        let mut intervals = IntervalRecorder::new(0, 2);
+        intervals.record(999_999_999, Some(10_000), false);
+        intervals.record(1_000_000_000, Some(20_000), true);
+        intervals.finalize(2_000_000_000);
+
+        assert_eq!(intervals.rows.len(), 2);
+        assert_eq!(intervals.rows[0].throughput_messages, 1);
+        assert_eq!(intervals.rows[1].received_events, 1);
+        assert_eq!(intervals.rows[1].throughput_messages, 0);
+        assert_eq!(intervals.rows[1].duplicates, 1);
+    }
+
+    #[tokio::test]
+    async fn throughput_only_message_is_retained_with_unavailable_latency() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BenchSinkConfig::for_test().with_output_dir(dir.path());
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+        sink.collect(RuntimeEnvelope::from_string("source", "payload")).await.unwrap();
+        sink.close().await.unwrap();
+
+        let value: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("interval-latency.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(value["aggregate_latency_count"], 0);
+        assert_eq!(value["rows"][0]["latency_count"], 0);
+        assert_eq!(value["rows"][0]["latency_p50_ns"], serde_json::Value::Null);
+        assert_eq!(value["rows"][0]["throughput_messages"], 1);
     }
 
     #[tokio::test]
@@ -1476,10 +2037,17 @@ mod tests {
         let hdr_path = tmp_dir.join("latency.hdr");
         let csv_path = tmp_dir.join("throughput.csv");
         let window_path = tmp_dir.join("measurement-window.json");
+        let intervals_path = tmp_dir.join("interval-latency.json");
 
         assert!(hdr_path.exists(), "latency.hdr not created");
         assert!(csv_path.exists(), "throughput.csv not created");
         assert!(window_path.exists(), "measurement-window.json not created");
+        assert!(intervals_path.exists(), "interval-latency.json not created");
+        let intervals: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(intervals_path).unwrap()).unwrap();
+        assert_eq!(intervals["interval_clock"], "monotonic-elapsed");
+        assert_eq!(intervals["row_count"], 1);
+        assert_eq!(intervals["rows"][0]["latency_count"], 20);
 
         let window: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(window_path).unwrap()).unwrap();
@@ -1529,6 +2097,15 @@ mod tests {
             tmp_dir.join("measurement-window.json").exists(),
             "auto-export failed: measurement-window.json missing"
         );
+        assert!(
+            tmp_dir.join("interval-latency.json").exists(),
+            "auto-export failed: interval-latency.json missing"
+        );
+        let intervals: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(tmp_dir.join("interval-latency.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(intervals["rows"][0]["latency_count"], 15);
 
         let hdr = std::fs::read_to_string(tmp_dir.join("latency.hdr")).unwrap();
         assert!(hdr.contains("Recorded values: 15"));

@@ -1,0 +1,27 @@
+[loadgen]
+rate = 1000
+duration_secs = 60
+warmup_secs = 30
+topic = "wafer/telemetry"
+payload_template = "telemetry-120b"
+payload_template_sha256 = "fffb14064f8d7956b5ce410c8298ab5c511bd46e5dffcde8389975337a0e38d1"
+profile = "steady"
+
+[sweep]
+repetitions = 5
+ordering = "seeded rate blocks with five-run balanced system order"
+cooldown_secs = 60
+loss_aggregation = "sum(total_undelivered) / sum(intended)"
+max_loss_percent = 1.0
+achieved_aggregation = "mean(run achieved_rate / intended_rate)"
+min_achieved_ratio = 0.99
+duplicates_allowed = 0
+support_path_censoring = "mqtt-loopback"
+thesis_evidence = false
+n30_admitted = false
+
+[condition_grid_msg_s]
+mqtt-loopback = [4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 15250, 15500, 15750, 16000]
+native = [8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000]
+wafer = [8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000]
+ekuiper = [4000, 5000, 6000, 7000, 8000]

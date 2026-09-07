@@ -9,6 +9,7 @@ import pathlib
 import pytest
 
 from wafer_analysis import paths as utils
+from wafer_analysis import results_layout
 
 
 @pytest.fixture
@@ -71,6 +72,75 @@ def test_explicit_diagnostic_path_resolves_from_repo(fake_results: pathlib.Path)
 def test_explicit_diagnostic_path_must_exist(fake_results: pathlib.Path):
     with pytest.raises(FileNotFoundError, match="Explicit diagnostic path"):
         utils.resolve_result_batch("e-val-1", diagnostic_path="missing")
+
+
+def test_explicit_results_root_alias_resolves_single_source_batch(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = fake_results / "mounted results volume"
+    source = volume / "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01"
+    write_canonical_leaf(source)
+    metadata_path = source / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment="e-perf-1", condition="native")
+    metadata_path.write_text(json.dumps(metadata))
+    matrix_path = fake_results / "eval/canonical-matrix.json"
+    matrix = json.loads(matrix_path.read_text())
+    matrix["experiments"] = {
+        "e-perf-1": {
+            "conditions": ["native"],
+            "repetitions": 1,
+            "required_outputs": ["percentiles.json"],
+        },
+        "e-perf-2": {
+            "conditions": ["native"],
+            "repetitions": 1,
+            "required_outputs": ["percentiles.json"],
+        },
+    }
+    matrix_path.write_text(json.dumps(matrix))
+    refresh_approval_matrix_hash(fake_results)
+    receipt = volume / "manifests/aliases/e-perf-2/rpi5-batch-a/native/run-01.json"
+    receipt.parent.mkdir(parents=True)
+    status_digest = hashlib.sha256((source / "canonical-status.json").read_bytes()).hexdigest()
+    receipt.write_text(json.dumps({
+        "schema_version": 1,
+        "experiment": "e-perf-2",
+        "condition": "native",
+        "run_index": 1,
+        "shared_from_experiment": "e-perf-1",
+        "source_leaf": "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01",
+        "source_status_sha256": status_digest,
+        "sample_identity": "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01",
+        "shared_measurement": True,
+    }))
+    monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
+
+    assert utils.find_canonical_batch("e-perf-2", "batch-a", volume) == source.parents[1]
+
+
+def test_explicit_results_root_supports_spaces_and_restricts_analysis_outputs(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = fake_results / "mounted results volume"
+    for name in ("raw", "manifests", "derived", "reports"):
+        (volume / name).mkdir(parents=True)
+    monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
+
+    diagnostic = volume / "raw/e-val-1/diagnostic"
+    diagnostic.mkdir(parents=True)
+    assert utils.resolve_result_batch(
+        "e-val-1", diagnostic_path="raw/e-val-1/diagnostic", results_root=volume
+    ) == diagnostic
+    assert utils.resolve_analysis_output(
+        "reports", "expanded-n5", "summary.json", results_root=volume
+    ) == volume / "reports/expanded-n5/summary.json"
+    with pytest.raises(ValueError, match="derived or reports"):
+        utils.resolve_analysis_output("raw", "bad.json", results_root=volume)
+    with pytest.raises(ValueError, match="raw|outside the results root"):
+        utils.resolve_result_batch(
+            "e-val-1", diagnostic_path=str(volume / "reports"), results_root=volume
+        )
 
 
 def write_canonical_leaf(

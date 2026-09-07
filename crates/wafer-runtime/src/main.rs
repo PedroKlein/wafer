@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
     // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set (A19).
     let bench_output_dir = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from);
     let bench_cancel = tokio_util::sync::CancellationToken::new();
+    let mut bench_tasks = Vec::new();
     if bench_output_dir.is_some() {
         let cancel = bench_cancel.clone();
         // MemoryRecorder is !Send across the spawn boundary because it
@@ -169,9 +170,9 @@ async fn main() -> Result<()> {
         // owns the recorder and we can retrieve samples after cancel.
         let recorder = Arc::new(tokio::sync::Mutex::new(MemoryRecorder::new()));
         let rec_clone = Arc::clone(&recorder);
-        tokio::spawn(async move {
+        bench_tasks.push(tokio::spawn(async move {
             rec_clone.lock().await.sample_loop(cancel).await;
-        });
+        }));
         // Stash the handle so flush_bench_artifacts can retrieve samples.
         BENCH_RECORDER.get_or_init(|| recorder);
     }
@@ -181,9 +182,9 @@ async fn main() -> Result<()> {
             Arc::new(tokio::sync::Mutex::new(QueueDepthRecorder::new(orchestrator.handle())));
         let queue_clone = Arc::clone(&queue_recorder);
         let cancel = bench_cancel.clone();
-        tokio::spawn(async move {
+        bench_tasks.push(tokio::spawn(async move {
             queue_clone.lock().await.sample_loop(cancel).await;
-        });
+        }));
         QUEUE_DEPTH_RECORDER.get_or_init(|| queue_recorder);
     }
 
@@ -271,7 +272,7 @@ async fn main() -> Result<()> {
 
         // Custom run loop that also handles swap delivery
         run_with_swap(&mut orchestrator, rx).await;
-        flush_bench_artifacts(&orchestrator, &bench_cancel).await;
+        flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
         orchestrator.cancel();
         wait_control_plane(control_plane_tasks).await;
 
@@ -304,7 +305,7 @@ async fn main() -> Result<()> {
         info!(path = %path.display(), "Startup phases written");
     }
 
-    flush_bench_artifacts(&orchestrator, &bench_cancel).await;
+    flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
     orchestrator.cancel();
     wait_control_plane(control_plane_tasks).await;
 
@@ -418,24 +419,48 @@ async fn wait_control_plane(tasks: Vec<JoinHandle<()>>) {
 async fn flush_bench_artifacts(
     orchestrator: &PipelineOrchestrator,
     bench_cancel: &tokio_util::sync::CancellationToken,
+    bench_tasks: &mut Vec<JoinHandle<()>>,
 ) {
     let Some(dir) = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from) else {
         return;
     };
 
-    // 1. Stop the memory sampler task.
     bench_cancel.cancel();
-    // Give the spawned task a moment to observe cancellation and exit.
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    while let Some(task) = bench_tasks.pop() {
+        if let Err(error) = task.await {
+            warn!(%error, "benchmark sampler task failed");
+        }
+    }
 
     // 2. Flush memory.csv.
     if let Some(recorder) = BENCH_RECORDER.get() {
-        let guard = recorder.lock().await;
-        let csv = guard.to_csv();
+        let (csv, samples, start_unix_epoch_ns) = {
+            let guard = recorder.lock().await;
+            (guard.to_csv(), guard.samples().len(), guard.start_unix_epoch_ns())
+        };
         let path = dir.join("memory.csv");
         match std::fs::write(&path, csv) {
             Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), "memory.csv written");
+                info!(path = %path.display(), samples, "memory.csv written");
+                if let Some(start_unix_epoch_ns) = start_unix_epoch_ns {
+                    let clock_path = dir.join("memory-clock.json");
+                    let clock = serde_json::json!({
+                        "schema_version": 1,
+                        "elapsed_clock": "monotonic",
+                        "alignment_clock": "unix-epoch",
+                        "alignment_clock_purpose": "cross-process-alignment-only",
+                        "start_unix_epoch_ns": start_unix_epoch_ns,
+                    });
+                    match serde_json::to_string_pretty(&clock) {
+                        Ok(encoded) => {
+                            if let Err(error) = std::fs::write(&clock_path, format!("{encoded}\n"))
+                            {
+                                warn!(path = %clock_path.display(), %error, "failed to write memory clock");
+                            }
+                        }
+                        Err(error) => warn!(%error, "failed to encode memory clock"),
+                    }
+                }
             }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write memory.csv"),
         }
@@ -445,10 +470,29 @@ async fn flush_bench_artifacts(
         QUEUE_DEPTH_RECORDER.get(),
         std::env::var_os("WAFER_QUEUE_DEPTH_OUTPUT").map(PathBuf::from),
     ) {
-        let guard = recorder.lock().await;
-        match std::fs::write(&path, guard.to_csv()) {
+        let (csv, samples, truncated, start_unix_epoch_ns) = {
+            let guard = recorder.lock().await;
+            (guard.to_csv(), guard.samples().len(), guard.truncated(), guard.start_unix_epoch_ns())
+        };
+        match std::fs::write(&path, csv) {
             Ok(()) => {
-                info!(path = %path.display(), samples = guard.samples().len(), truncated = guard.truncated(), "queue-depth.csv written");
+                info!(path = %path.display(), samples, truncated, "queue-depth.csv written");
+                let clock_path = dir.join("queue-depth-clock.json");
+                let clock = serde_json::json!({
+                    "schema_version": 1,
+                    "elapsed_clock": "monotonic",
+                    "alignment_clock": "unix-epoch",
+                    "alignment_clock_purpose": "cross-process-alignment-only",
+                    "start_unix_epoch_ns": start_unix_epoch_ns,
+                });
+                match serde_json::to_string_pretty(&clock) {
+                    Ok(encoded) => {
+                        if let Err(error) = std::fs::write(&clock_path, format!("{encoded}\n")) {
+                            warn!(path = %clock_path.display(), %error, "failed to write queue clock");
+                        }
+                    }
+                    Err(error) => warn!(%error, "failed to encode queue clock"),
+                }
             }
             Err(e) => warn!(path = %path.display(), error = %e, "failed to write queue-depth.csv"),
         }

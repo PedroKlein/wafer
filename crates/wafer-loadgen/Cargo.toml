@@ -18,6 +18,7 @@ path = "src/main.rs"
 
 [dependencies]
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 rumqttc = "0.25"
 reqwest = { workspace = true }
 clap = { version = "4", features = ["derive"] }

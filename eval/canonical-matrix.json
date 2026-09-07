@@ -17,6 +17,494 @@
     "support_cpus": "0",
     "throttled": "0x0"
   },
+  "enhanced_candidate": {
+    "schema_version": 1,
+    "id": "rpi5-v5-enhanced-candidate",
+    "status": "architecture-frozen-before-n5",
+    "release_lineage": "v5",
+    "signed_v4_immutable": true,
+    "thesis_evidence": false,
+    "campaign_started": false,
+    "n30_admitted": false,
+    "selection_receipt_required": ".plans/rpi5-v5-enhanced-experiment-readiness/n30-selection.json",
+    "capabilities": [
+      "bounded-interval-metrics",
+      "multi-resolution-swap-buckets",
+      "capacity-knee",
+      "payload-refinement",
+      "depth-extension",
+      "independent-swap-sessions",
+      "independent-rollback-sessions",
+      "thermal-storage-characterization",
+      "ekuiper-tail-profiling"
+    ],
+    "evidence_classes": {
+      "canonical_primary": "Existing final estimands; unchanged by candidate instrumentation.",
+      "candidate_supplementary": "Diagnostic N=5 evidence pending post-rehearsal selection.",
+      "diagnostic": "Host qualification and profiler evidence excluded from thesis estimators.",
+      "future_work": "Evidence that is not collected in the Raspberry Pi 5 candidate campaign."
+    },
+    "instrumentation": {
+      "bounded_interval_metrics": {
+        "applies_to": "all canonical and candidate timed runs with latency or throughput outputs",
+        "bucket_width_ms": 1000,
+        "clocks": [
+          "monotonic-elapsed",
+          "unix-epoch-alignment"
+        ],
+        "required_fields": [
+          "interval_start_ns",
+          "interval_end_ns",
+          "latency_count",
+          "latency_p50_ns",
+          "latency_p95_ns",
+          "latency_p99_ns",
+          "throughput_messages",
+          "cpu_percent",
+          "rss_bytes",
+          "pmic_internal_rail_proxy_watts",
+          "temperature_millicelsius",
+          "queue_depth"
+        ],
+        "maximum_rows_rule": "ceil(measurement_window_ms / 1000) + 2",
+        "forbidden_fields": [
+          "message_id",
+          "sequence_id",
+          "per_message_timestamp"
+        ],
+        "required_output": "interval-metrics.json",
+        "nested_unit": "interval within run",
+        "reconciles_to": [
+          "latency.hdr population",
+          "throughput and sequence counters"
+        ]
+      },
+      "multi_resolution_swap_buckets": {
+        "applies_to": [
+          "e-swap-3",
+          "e-swap-4"
+        ],
+        "canonical_bucket_width_ms": 100,
+        "canonical_series_unchanged": true,
+        "event_bucket_width_ms": 10,
+        "event_window_start_ms": -2000,
+        "event_window_end_ms": 2000,
+        "event_bucket_count": 400,
+        "alignment": "actual-t0",
+        "required_output": "throughput-buckets-10ms.json",
+        "nested_unit": "bucket within run",
+        "reconciles_to": "canonical unique/event/duplicate populations"
+      }
+    },
+    "experiments": {
+      "e-perf-capacity-knee": {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run at one system and offered rate",
+        "nested_units": [
+          "one-second interval within run"
+        ],
+        "repetitions": 5,
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "loadgen_profile": "eval/loadgen/capacity-knee.toml",
+        "ordering": {
+          "method": "seeded rate blocks with five-run balanced system order",
+          "default_seed": 1729,
+          "cooldown_secs": 60
+        },
+        "delivery_good": {
+          "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+          "max_loss_percent": 1.0,
+          "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+          "min_achieved_ratio": 0.99,
+          "duplicates_allowed": 0,
+          "support_path_censoring": "mqtt-loopback"
+        },
+        "condition_grid_msg_s": {
+          "mqtt-loopback": [
+            4000,
+            5000,
+            6000,
+            7000,
+            8000,
+            9000,
+            10000,
+            11000,
+            12000,
+            13000,
+            14000,
+            15000,
+            15250,
+            15500,
+            15750,
+            16000
+          ],
+          "native": [
+            8000,
+            9000,
+            10000,
+            11000,
+            12000,
+            13000,
+            14000,
+            15000
+          ],
+          "wafer": [
+            8000,
+            9000,
+            10000,
+            11000,
+            12000,
+            13000,
+            14000,
+            15000
+          ],
+          "ekuiper": [
+            4000,
+            5000,
+            6000,
+            7000,
+            8000
+          ]
+        },
+        "required_outputs": [
+          "capacity-run.json",
+          "latency.hdr",
+          "publisher-summary.json",
+          "subscriber-metadata.json",
+          "resource-usage.csv",
+          "process-audit.json",
+          "interval-metrics.json"
+        ],
+        "analysis": "capacity-knee",
+        "no_pool_with": [
+          "e-perf-10",
+          "prior diagnostic rehearsals"
+        ]
+      },
+      "e-perf-payload-refinement": {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run at one payload size",
+        "nested_units": [
+          "one-second interval within run"
+        ],
+        "repetitions": 5,
+        "payload_bytes": [
+          120,
+          1024,
+          8192,
+          10240,
+          16384,
+          32768,
+          65536,
+          102400,
+          131072,
+          262144
+        ],
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "interval-metrics.json",
+          "payload-manifest.json"
+        ],
+        "analysis": "payload-knee",
+        "no_pool_with": [
+          "e-perf-4",
+          "prior diagnostic rehearsals"
+        ],
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "rate_msg_s": 1000,
+        "execution_path": "in-process bench-source -> pass-through -> bench-sink",
+        "payload_pattern": "repeated-byte-0x42",
+        "ordering": {
+          "method": "seeded condition shuffle per repetition",
+          "default_seed": 1729
+        },
+        "payload_sha256": {
+          "120b": "c2444823dde4c40542129b562b092b693b36c59c909106d291b18a650769b418",
+          "1kb": "9b6ce55f379e9771551de6939556a7e6b949814ae27c2f5cfd5dbeb378ce7c2a",
+          "8kb": "766c00ba277e84ef9550596c7eda86bad4d66a3fee2255924e6388ee9c272792",
+          "10kb": "6dff39006bfd7895ec3ef56f233bcf5977a4cb6bd10e6aeb44d2169a773a886d",
+          "16kb": "db03474b1b90657f9fe742b4eed775e8b9000196bf262d1bd8521f8f7f3edd3f",
+          "32kb": "314a5163f130c25e1f962e1b0316d356d0702438df90c32c2d2dd16c84e551a8",
+          "64kb": "fee47b1f0d7685a226fd5f2b9dd8f525038bbb05fe9d89a5d75c249edac868e3",
+          "100kb": "7dc809b57100c529a1c31c9a89b97f4f2f682a327f23d66afa2f5b3922e3ca4e",
+          "128kb": "97eb39e6f0fb754d60677c47fc58038027025b6351fdc5887e54aea232a5e07b",
+          "256kb": "4b0d375a615c0382b4f958b48e43e7f356b4fcac76e20423294adc07b8d4976e"
+        }
+      },
+      "e-perf-depth-extension": {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run at one pipeline depth",
+        "nested_units": [
+          "one-second interval within run"
+        ],
+        "repetitions": 5,
+        "depths": [
+          1,
+          3,
+          5,
+          10,
+          20,
+          50
+        ],
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "memory.csv",
+          "interval-metrics.json",
+          "topology-manifest.json"
+        ],
+        "analysis": "extended-depth-latency-rss",
+        "no_pool_with": [
+          "e-perf-3",
+          "e-perf-6",
+          "e-perf-8",
+          "prior diagnostic rehearsals"
+        ],
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "rate_msg_s": 1000,
+        "payload_bytes": 128,
+        "execution_path": "in-process bench-source -> identical pass-through chain -> bench-sink",
+        "ordering": {
+          "method": "seeded condition shuffle per repetition",
+          "default_seed": 1729
+        }
+      },
+      "e-swap-independent-sessions": {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run",
+        "nested_units": [
+          "swap event within run"
+        ],
+        "repetitions": 5,
+        "conditions": [
+          "steady"
+        ],
+        "events_per_run": 50,
+        "event_classes": [
+          "first-use-aot",
+          "cached"
+        ],
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_requests.json",
+          "swap_timeline.json",
+          "hotswap-analysis.json",
+          "interval-metrics.json"
+        ],
+        "analysis": "independent-swap-hierarchy",
+        "no_pool_with": [
+          "e-swap-1",
+          "e-swap-2",
+          "e-swap-6",
+          "prior diagnostic rehearsals"
+        ],
+        "warmup_secs": 30,
+        "measurement_secs": 120,
+        "rate_msg_s": 1000,
+        "payload_bytes": 128,
+        "execution_path": "in-process bench-source -> alternating pass-through-v1/v2 hot-swaps -> bench-sink",
+        "ordering": {
+          "method": "seeded run order",
+          "default_seed": 1729
+        }
+      },
+      "e-swap-rollback-sessions": {
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run",
+        "nested_units": [
+          "rollback event within run"
+        ],
+        "repetitions": 5,
+        "conditions": [
+          "process-trap-rollback"
+        ],
+        "events_per_run": 50,
+        "event_classes": [
+          "first-use-aot",
+          "cached"
+        ],
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "sequence.csv",
+          "swap_requests.json",
+          "rollback.json",
+          "interval-metrics.json"
+        ],
+        "analysis": "independent-rollback-hierarchy",
+        "no_pool_with": [
+          "e-swap-5",
+          "prior diagnostic rehearsals"
+        ],
+        "warmup_secs": 30,
+        "measurement_secs": 300,
+        "rate_msg_s": 1000,
+        "payload_bytes": 128,
+        "execution_path": "in-process bench-source -> process-trapping swap with automatic rollback -> bench-sink",
+        "ordering": {
+          "method": "seeded run order",
+          "default_seed": 1729
+        }
+      },
+      "e-host-thermal-storage": {
+        "evidence_class": "diagnostic",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "clean-boot host characterization session",
+        "nested_units": [
+          "load phase within session",
+          "one-second telemetry interval within phase"
+        ],
+        "repetitions": 1,
+        "conditions": [
+          "idle",
+          "sut-core-load-1",
+          "sut-core-load-2",
+          "sut-core-load-3",
+          "cpu-memory",
+          "usb-write",
+          "usb-read",
+          "cpu-memory-usb"
+        ],
+        "required_outputs": [
+          "host-load-ladder.json",
+          "host-telemetry.csv",
+          "kernel-io.log",
+          "usb-integrity.json"
+        ],
+        "analysis": "thermal-storage-characterization",
+        "no_pool_with": [
+          "performance experiments",
+          "prior diagnostic rehearsals"
+        ]
+      },
+      "e-compare-ekuiper-profile": {
+        "evidence_class": "diagnostic",
+        "thesis_evidence": false,
+        "n30_admitted": false,
+        "sample_unit": "independent host run at one rate and profiler state",
+        "nested_units": [
+          "one-second interval within run"
+        ],
+        "repetitions": 5,
+        "rates_msg_s": [
+          1000,
+          4000,
+          8000
+        ],
+        "profiler_states": [
+          "profiled",
+          "unprofiled-control"
+        ],
+        "warmup_secs": 30,
+        "measurement_secs": 60,
+        "loadgen_profile": "eval/loadgen/telemetry-120b.toml",
+        "config": "eval/configs/canonical/e-perf-1-ekuiper.toml",
+        "profiler": {
+          "kind": "external-procfs-process-sampler",
+          "interval_secs": 1,
+          "maximum_rows_per_run": 62,
+          "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+          "graceful_unavailable": true
+        },
+        "ordering": {
+          "method": "seeded paired condition shuffle per repetition",
+          "default_seed": 1729
+        },
+        "required_outputs": [
+          "latency.hdr",
+          "throughput.csv",
+          "interval-metrics.json",
+          "ekuiper-runtime-summary.json",
+          "profiler-overhead.json"
+        ],
+        "analysis": "ekuiper-tail-association",
+        "no_pool_with": [
+          "e-perf-1",
+          "e-perf-10",
+          "prior diagnostic rehearsals"
+        ]
+      }
+    },
+    "primary_invariants": {
+      "existing_primary_estimands_unchanged": true,
+      "delivery_good": {
+        "loss_aggregation": "sum(total_undelivered) / sum(intended)",
+        "max_loss_percent": 1.0,
+        "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
+        "min_achieved_ratio": 0.99,
+        "duplicates_allowed": 0
+      },
+      "mqtt_support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
+      "canonical_aliases": {
+        "e-perf-2": "e-perf-1",
+        "e-perf-8": "e-perf-6",
+        "e-swap-2": "e-swap-1",
+        "e-swap-6": "e-swap-1"
+      },
+      "e_swap_4": {
+        "primary_bucket_count": 1200,
+        "primary_window_secs": [
+          0,
+          120
+        ],
+        "drain_bucket_count": 100,
+        "drain_window_secs": [
+          120,
+          130
+        ],
+        "after_drain_events_allowed": 0,
+        "right_censoring_allowed": false
+      },
+      "e_perf_10_trace_free": true
+    },
+    "storage": {
+      "filesystem": "exFAT",
+      "volume_label": "WAFER_RESULTS",
+      "physical_raw_copies": 1,
+      "mount_paths": {
+        "pi_jetson": "/mnt/wafer-results",
+        "macos": "/Volumes/WAFER_RESULTS"
+      },
+      "manifest_paths": "volume-root-relative",
+      "directories": [
+        "raw",
+        "manifests",
+        "derived",
+        "reports"
+      ],
+      "raw_policy": "append-only; preserve failed and interrupted attempts; never duplicate",
+      "analysis_write_roots": [
+        "derived",
+        "reports"
+      ]
+    },
+    "deferred_claims": {
+      "external_total_input_power": "deferred",
+      "pmic_measurement_boundary": "internal-rail-proxy",
+      "x86_execution": "deferred",
+      "e_perf_5_claim_status": "PENDING",
+      "current_supply": "5 V / 4.2 A; no throttle, temperature, reboot, or I/O gate waiver"
+    }
+  },
   "focused_pilot": {
     "schema_version": 1,
     "id": "rpi5-focused-pilot-followups",
@@ -1044,6 +1532,7 @@
         "sequence.csv",
         "subscriber-metadata.json",
         "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
         "disruption-timeline.json",
         "swap_timeline.json"
       ],
@@ -1088,6 +1577,7 @@
         "throughput.csv",
         "sequence.csv",
         "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
         "burst-source-timing.json",
         "burst-source-summary.json",
         "burst-timeline.json",

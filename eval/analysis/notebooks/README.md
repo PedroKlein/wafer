@@ -39,6 +39,24 @@ Missing and failed diagnostic conditions remain `PENDING` with a null value. The
 
 Percentile summaries are never presented as an empirical CDF.
 
+## Enhanced N=5 visual suite
+
+`eval/analysis/enhanced-visual-manifest.json` defines twelve pre-results chart/table
+families for the v5 candidates and diagnostics: interval latency/throughput,
+capacity knee, delivery-good frequency, payload knee, extended depth latency/RSS,
+the actual-t0 10 ms swap window, independent swap and rollback hierarchies, the
+thermal/load ladder, USB integrity, eKuiper tail association, and PMIC-proxy
+efficiency. `wafer_analysis.enhanced_visuals` validates normalized source tables
+and emits one deterministic SVG and CSV per family plus a local-link HTML report.
+
+Every source row is bound to the explicit batch, clean source SHA, and release
+tag. The validator rejects missing independent N, aliases counted as replication,
+uncensored capacity rows, mixed first-use/cached event populations,
+right-censored E-Swap-4 drain evidence, undeclared units, raw-tree output, and any
+candidate or diagnostic row labeled as final evidence. Until the expanded N=5
+run exists, each explanation states `PENDING`; fixture rendering proves the
+contract and layout only and does not create measured results.
+
 ## Focused-pilot artifact inventory
 
 | Follow-up question | Notebook | Primary artifact |

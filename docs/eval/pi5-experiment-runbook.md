@@ -8,11 +8,12 @@ The final campaign is not authorized by this document. A human-approved launch r
 
 | Class | Purpose | Thesis evidence |
 |---|---|---|
-| Smoke | Check deployment, plugins, affinity, shutdown, and artifact writing | no |
-| Diagnostic scout or targeted pilot | Validate method and changed paths at reduced scale | no |
-| Final canonical batch | Execute the frozen matrix after approval | yes, after all gates pass |
+| `canonical-primary` | Execute an already frozen primary estimand after final approval | yes, after every gate passes |
+| `candidate-supplementary` | Rehearse a proposed v5 experiment or additive bounded view | no; selection is pending |
+| `diagnostic` | Check deployment, host admission, storage, profiling, or a changed path | no |
+| `future-work` | Record evidence that is outside the current Raspberry Pi 5 campaign | no |
 
-A directory name does not determine evidence class. Final evidence requires the approved tag/SHA and batch ID, clean provenance, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis.
+A directory name does not determine evidence class. Canonical-primary evidence requires the approved tag/SHA and batch ID, clean provenance, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30. A post-rehearsal selection receipt must record `include`, `defer`, or `reject` before any candidate can enter a later campaign.
 
 ## Fixed host boundary
 
@@ -162,33 +163,15 @@ Stop the runner normally with SIGINT. Do not delete partial attempts. Stop admis
 
 A threshold miss by a valid SUT run is data, not a reason to tune the threshold or system during the batch.
 
-## Retrieve without overwriting evidence
+## Move the single evidence volume between hosts
 
-Create a remote manifest before transfer:
+V5 raw evidence has one physical copy on the exFAT volume labeled `WAFER_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAFER_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
 
-```sh
-cd <remote-repository-root>
-find eval/results -type f ! -name remote-sha256.txt -print0 \
-  | sort -z | xargs -0 sha256sum > remote-sha256.txt
-mv remote-sha256.txt \
-  eval/results/canonical-batches/rpi5-<batch-id>/remote-sha256.txt
-```
+On the Pi, create the SHA-256 manifest under `manifests/` from volume-root-relative raw paths. Verify it on the Pi before handoff. Then stop every writer, run `sync`, and unmount the volume cleanly. Do not unplug a mounted or busy volume.
 
-From the analysis machine, copy additively into the same repository-relative result layout using a configured host alias:
+After physically moving the drive, mount the same filesystem on macOS and confirm its UUID and label. Verify the same manifest in place before analysis reads any file. Repeat checksum verification after every host transition, including a return to Pi or a later Jetson check. A failed checksum, unexpected file, missing file, stale mount, or unclean unmount blocks use of the evidence.
 
-```sh
-rsync -a --ignore-existing \
-  <pi-host>:<remote-repository-root>/eval/results/ \
-  eval/results/
-```
-
-Retrieve `remote-sha256.txt`, then verify it from the repository root:
-
-```sh
-sha256sum -c eval/results/canonical-batches/rpi5-<batch-id>/remote-sha256.txt
-```
-
-Every listed path and digest must match before the Pi copy is treated as retrieved. Never use `--delete`, overwrite an earlier result tree, or remove failed attempts.
+Raw evidence is append-only and retains failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. Do not use `rsync`, Finder, hardlinks, symlinks, or another disk to create a second raw copy. Receipts and content-free manifests may be committed to the repository; raw artifacts remain on `WAFER_RESULTS`.
 
 ## Verify contracts
 
@@ -219,10 +202,13 @@ Canonical analysis rejects an unapproved, incomplete, wrong-host, dirty, mixed-S
 ## Experiment boundaries to retain
 
 - E-Perf-1 is the matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring.
+- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates.
 - E-Perf-7 disables mechanisms by TOML omission.
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
-- E-Perf-5 remains `PENDING` until the x86 Linux block exists.
+- E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
 - E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
-- E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled.
-- Diagnostic scout, v11-v17, targeted-pilot, laptop, and synthetic data are not pooled with final results.
+- E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled, with zero after-drain arrivals and no right censoring.
+- E-Perf-2 remains an alias view of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Aliases never add independent samples.
+- PMIC remains an internal-rail proxy, not total input power. External USB-C input-power capture is `future-work`.
+- Admission with the retained 5 V / 4.2 A supply is empirical. It receives no threshold waiver for throttling, temperature, reboot, or I/O failure.
+- Diagnostic scout, v11-v17, targeted-pilot, laptop, synthetic, and candidate-supplementary data are not pooled with canonical-primary results.

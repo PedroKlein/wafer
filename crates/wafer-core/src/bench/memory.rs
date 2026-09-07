@@ -6,7 +6,7 @@
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tokio_util::sync::CancellationToken;
 
@@ -15,31 +15,50 @@ use tokio_util::sync::CancellationToken;
 pub struct MemoryRecorder {
     samples: Vec<(u64, u64)>, // (elapsed_ms, rss_bytes)
     start: Option<Instant>,
+    start_unix_epoch_ns: Option<u64>,
 }
 
 impl MemoryRecorder {
     /// Create a new recorder (does not start sampling).
     #[must_use]
     pub const fn new() -> Self {
-        Self { samples: Vec::new(), start: None }
+        Self { samples: Vec::new(), start: None, start_unix_epoch_ns: None }
     }
 
     /// Run the sampling loop at 1Hz until the cancellation token fires.
     pub async fn sample_loop(&mut self, cancel: CancellationToken) {
         self.start = Some(Instant::now());
+        self.start_unix_epoch_ns = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_or(0, crate::util::duration_ns_saturating),
+        );
         let mut ticker = tokio::time::interval(Duration::from_secs(1));
 
         loop {
             tokio::select! {
-                () = cancel.cancelled() => break,
+                () = cancel.cancelled() => {
+                    self.sample();
+                    break;
+                },
                 _ = ticker.tick() => {
-                    if let Some(rss) = read_rss_bytes() {
-                        let elapsed_ms = self.start.map_or(0, |s| crate::util::duration_ms_saturating(s.elapsed()));
-                        self.samples.push((elapsed_ms, rss));
-                    }
+                    self.sample();
                 }
             }
         }
+    }
+
+    fn sample(&mut self) {
+        if let Some(rss) = read_rss_bytes() {
+            let elapsed_ms =
+                self.start.map_or(0, |start| crate::util::duration_ms_saturating(start.elapsed()));
+            self.samples.push((elapsed_ms, rss));
+        }
+    }
+
+    #[must_use]
+    pub const fn start_unix_epoch_ns(&self) -> Option<u64> {
+        self.start_unix_epoch_ns
     }
 
     /// Collected samples as (elapsed_ms, rss_bytes) pairs.
