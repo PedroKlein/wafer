@@ -77,14 +77,15 @@ def validate(matrix: dict, decision: dict, contract: str) -> list[str]:
         return ["enhanced_candidate must be an object"]
 
     if (
-        enhanced.get("release_lineage") != "v6"
+        enhanced.get("release_lineage") != "v7"
         or enhanced.get("signed_v4_immutable") is not True
         or enhanced.get("signed_v5_immutable") is not True
-        or enhanced.get("supersedes_release_tag") != "rpi5-final-rc-v5"
+        or enhanced.get("signed_v6_immutable") is not True
+        or enhanced.get("supersedes_release_tag") != "rpi5-final-rc-v6"
         or enhanced.get("supersession_reason")
-        != "v5 storage label exceeds the exFAT 11 UTF-16 code-unit limit"
+        != "v6 deployment payload omits the results-layout module required by the canonical runner"
     ):
-        errors.append("enhanced architecture must preserve v4/v5 and use the corrective v6 lineage")
+        errors.append("enhanced architecture must preserve v4/v5/v6 and use the corrective v7 lineage")
     if enhanced.get("thesis_evidence") is not False or enhanced.get("n30_admitted") is not False or enhanced.get("campaign_started") is not False:
         errors.append("enhanced candidate suite must remain diagnostic and outside N=30")
     if enhanced.get("selection_receipt_required") != ".plans/rpi5-v5-enhanced-experiment-readiness/n30-selection.json":

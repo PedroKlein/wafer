@@ -125,7 +125,7 @@ E-Perf-2 remains an alternate analysis of E-Perf-1, E-Perf-8 of E-Perf-6, and E-
 
 ## Enhanced evidence storage
 
-V6 raw evidence lives as one physical copy on the exFAT volume labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit and replaces the unrepresentable v5 label. Pi and Jetson use `/mnt/wafer-results`; macOS uses `/Volumes/WAF_RESULTS`. Manifests record volume-root-relative paths. The same full SHA-256 manifest is verified after each mount or host transition, and the drive is synchronized and unmounted cleanly before physical movement.
+V7 raw evidence lives as one physical copy on the exFAT volume labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit and replaces the unrepresentable v5 label. Pi and Jetson use `/mnt/wafer-results`; macOS uses `/Volumes/WAF_RESULTS`. Manifests record volume-root-relative paths. The same full SHA-256 manifest is verified after each mount or host transition, and the drive is synchronized and unmounted cleanly before physical movement.
 
 Raw attempts are append-only, including failed and interrupted attempts. Analysis opens `raw/` read-only and writes only to `derived/` and `reports/`. The method does not depend on symlinks, hardlinks, case-only path distinctions, or POSIX ownership persistence, and it never creates a second raw-data copy.
 

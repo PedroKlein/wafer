@@ -49,6 +49,7 @@ content:
   - eval/loadgen
   - eval/scripts
   - eval/ekuiper
+  - eval/analysis/src/wafer_analysis/results_layout.py
   - eval/RESULT-CONTRACT.md
   - eval/canonical-matrix.json
   - plugins/*/target/wasm32-wasip2/release/*.wasm
@@ -71,9 +72,12 @@ wasm_count="$(find "$ROOT/plugins" -path '*/target/wasm32-wasip2/release/*.wasm'
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/target/release" "$stage/eval" "$stage/plugins"
+mkdir -p "$stage/target/release" "$stage/eval" "$stage/plugins" \
+    "$stage/eval/analysis/src/wafer_analysis"
 cp "$BIN_DIR/wafer" "$BIN_DIR/wafer-loadgen" "$BIN_DIR/waferctl" "$stage/target/release/"
 cp -R "$ROOT/eval/configs" "$ROOT/eval/loadgen" "$ROOT/eval/scripts" "$ROOT/eval/ekuiper" "$stage/eval/"
+cp "$ROOT/eval/analysis/src/wafer_analysis/results_layout.py" \
+    "$stage/eval/analysis/src/wafer_analysis/"
 cp "$ROOT/eval/RESULT-CONTRACT.md" "$ROOT/eval/canonical-matrix.json" "$stage/eval/"
 printf '{"git_sha":"%s","git_dirty":%s,"git_tags":%s}\n' \
     "$REVISION" "$SOURCE_DIRTY" "$SOURCE_TAGS_JSON" > "$stage/SOURCE_STATE.json"
