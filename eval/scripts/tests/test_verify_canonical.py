@@ -1704,6 +1704,23 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
         leaf, metadata = ekuiper_profile_contract_fixture(tmp_path, state)
         assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
 
+    leaf, metadata = ekuiper_profile_contract_fixture(
+        tmp_path / "terminal-partial", "unprofiled-control"
+    )
+    runtime_path = leaf / "ekuiper-runtime-summary.json"
+    runtime = json.loads(runtime_path.read_text())
+    runtime["interval_alignment"]["row_count"] = 61
+    runtime_path.write_text(json.dumps(runtime))
+    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+    runtime["interval_alignment"]["row_count"] = 62
+    runtime_path.write_text(json.dumps(runtime))
+    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+    runtime["interval_alignment"]["row_count"] = 63
+    runtime_path.write_text(json.dumps(runtime))
+    assert "interval alignment" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
+
     leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "invalid", "profiled")
     runtime_path = leaf / "ekuiper-runtime-summary.json"
     runtime = json.loads(runtime_path.read_text())

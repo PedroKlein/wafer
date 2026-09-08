@@ -358,6 +358,21 @@ def test_ekuiper_profile_tables_keep_thirty_runs_and_fifteen_pairs() -> None:
     ).all()
 
 
+def test_ekuiper_profile_tables_accept_bounded_terminal_partial_intervals() -> None:
+    for row_count in (61, 62):
+        summary = ekuiper_profile_summary()
+        summary["records"][0]["interval_alignment"]["row_count"] = row_count
+
+        runs, pairs = ekuiper_profile_tables(summary)
+
+        assert len(runs) == 30
+        assert len(pairs) == 15
+
+    summary["records"][0]["interval_alignment"]["row_count"] = 63
+    with pytest.raises(ValueError, match="interval alignment"):
+        ekuiper_profile_tables(summary)
+
+
 def test_ekuiper_profile_tables_reject_missing_pairs_aliases_and_causal_claims() -> None:
     summary = ekuiper_profile_summary()
     summary["records"].pop()

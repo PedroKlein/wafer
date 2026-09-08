@@ -1425,7 +1425,7 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
         interval_path = leaf / str(interval["path"])
         if (
             interval.get("clock") != "unix-epoch"
-            or int(interval["row_count"]) != 60
+            or not 60 <= int(interval["row_count"]) <= 62
             or int(interval["measurement_end_ns"])
             - int(interval["measurement_start_ns"])
             != 60_000_000_000
