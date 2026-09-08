@@ -1378,6 +1378,93 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
     assert all(invocation["controlled_factors"]["event_offset_ns"] == 60_000_000_000 for invocation in invocations)
 
 
+def test_swap3_stops_subscriber_when_publisher_window_ends(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "attempt"
+    config = tmp_path / "ekuiper.toml"
+    config.write_text("[comparator]\n")
+    item = RunItem(
+        experiment="e-swap-3",
+        condition="ekuiper-restart",
+        run_index=1,
+        config=config.name,
+        warmup_secs=30,
+        measurement_secs=120,
+        loadgen_profile="unused.toml",
+        total_messages=120_000,
+        system="ekuiper",
+    )
+    event_ns = 61_000_000_000
+    times = iter((0, 1_000_000_000, event_ns, event_ns, event_ns + 1_000_000))
+    class Process:
+        def __init__(self, returncode: int) -> None:
+            self.returncode = returncode
+
+        def wait(self, timeout: int) -> int:
+            return self.returncode
+
+        def poll(self) -> int:
+            return self.returncode
+
+    subscriber = Process(1)
+    publisher = Process(0)
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if "validate-canonical.py" in " ".join(command):
+            output_arg = Path(command[command.index("--output") + 1])
+            output_arg.write_text(json.dumps({"git_sha": "test-sha"}))
+        return subprocess.CompletedProcess(command, 0)
+
+    def fake_popen(command: list[str], **kwargs: object) -> object:
+        if command == ["subscribe"]:
+            return subscriber
+        (output / "publisher-timing.json").write_text(
+            json.dumps(
+                {
+                    "measurement_started_unix_epoch_ns": 1_000_000_000,
+                    "event_unix_epoch_ns": event_ns,
+                    "event_offset_ns": 60_000_000_000,
+                }
+            )
+        )
+        return publisher
+
+    observed_timeouts: list[int] = []
+
+    def stop_after_observation(process: object, timeout: int = 30) -> int:
+        assert process is subscriber
+        observed_timeouts.append(timeout)
+        return subscriber.returncode
+
+    def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
+        path = destination / "ekuiper-audit.json"
+        path.write_text("{}\n")
+        return path
+
+    ekuiper_states: list[bool] = []
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination: object())
+    monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
+    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
+    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(runner, "wait_for_ekuiper_rule_ready", lambda rule: None)
+    monkeypatch.setattr(runner, "wait_for_subscriber", stop_after_observation)
+    monkeypatch.setattr(runner.time, "time_ns", lambda: next(times))
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
+
+    assert not runner.run_restart_item(
+        tmp_path,
+        item,
+        runner.AttemptSelection(path=output, skip=False),
+    )
+
+    assert observed_timeouts == [0]
+    assert ekuiper_states == [True, False]
+
+
 def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
     measurement_start = 1_000_000_000_000
     timing = {

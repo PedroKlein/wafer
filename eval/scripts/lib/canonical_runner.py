@@ -4145,9 +4145,9 @@ def run_restart_item(
     subscriber: subprocess.Popen | None = None
     runtime_exit = 0
     ekuiper_audit: Path | None = None
+    is_ekuiper = item.system == "ekuiper"
     telemetry = start_pi_telemetry(root, output)
     try:
-        is_ekuiper = item.system == "ekuiper"
         set_ekuiper_active(root, is_ekuiper)
         facts_path = output / "host-facts.json"
         host_command = [
@@ -4294,7 +4294,7 @@ def run_restart_item(
                     "actual E-Swap-3 action start missed measured t=60 by more than 10 ms"
                 )
             publisher_code = publisher.wait(timeout=item.measurement_secs + 30)
-            subscriber_code = wait_for_subscriber(subscriber)
+            subscriber_code = wait_for_subscriber(subscriber, timeout=0)
             if publisher_code != 0 or subscriber_code != 0:
                 raise RuntimeError(
                     f"loadgen failed: publisher={publisher_code}, subscriber={subscriber_code}"
@@ -4320,6 +4320,8 @@ def run_restart_item(
                 runtime_exit = runtime.wait(timeout=5)
             runtime = None
 
+        if is_ekuiper:
+            set_ekuiper_active(root, False)
         stop_pi_telemetry(telemetry)
         finished_ns = time.time_ns()
         config_sha = hashlib.sha256(config.read_bytes()).hexdigest()
@@ -4367,6 +4369,11 @@ def run_restart_item(
         for process in (publisher, subscriber, runtime):
             if process is not None and process.poll() is None:
                 process.terminate()
+        if is_ekuiper:
+            try:
+                set_ekuiper_active(root, False)
+            except subprocess.CalledProcessError as cleanup_error:
+                error = RuntimeError(f"{error}; eKuiper cleanup failed: {cleanup_error}")
         stop_pi_telemetry(telemetry)
         write_status(output, item, "failed", str(error))
         print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
