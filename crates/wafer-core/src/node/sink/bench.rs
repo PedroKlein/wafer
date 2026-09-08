@@ -1247,6 +1247,14 @@ fn current_time_ns() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating)
 }
 
+fn configured_measurement_secs() -> u64 {
+    std::env::var("WAFER_MEASUREMENT_SECS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(300)
+}
+
 impl Lifecycle for BenchSink {
     fn id(&self) -> &str {
         &self.id
@@ -1261,6 +1269,10 @@ impl Lifecycle for BenchSink {
     }
 
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        if self.config.output_dir.is_some() {
+            self.interval_recorder =
+                Some(IntervalRecorder::new(current_time_ns(), configured_measurement_secs()));
+        }
         Box::pin(async { Ok(()) })
     }
 
@@ -1280,15 +1292,19 @@ impl Lifecycle for BenchSink {
             }
         }
 
-        if let (Some(start), Some(intervals)) =
-            (self.measurement_start, &mut self.interval_recorder)
-        {
-            let elapsed_ns = if self.interval_uses_source_origin {
+        if let Some(intervals) = &mut self.interval_recorder {
+            let elapsed_ns = if self.interval_uses_source_origin || self.measurement_start.is_none()
+            {
                 intervals.declared_measurement_duration_ns
             } else {
-                crate::util::duration_ns_saturating(start.elapsed())
+                self.measurement_start
+                    .map_or(0, |start| crate::util::duration_ns_saturating(start.elapsed()))
             };
             intervals.finalize(elapsed_ns);
+            if self.start_wall_time.is_none() {
+                self.start_wall_time = UNIX_EPOCH
+                    .checked_add(Duration::from_nanos(intervals.measurement_start_unix_epoch_ns));
+            }
         }
 
         let export_result = self.config.output_dir.as_ref().map_or(Ok(()), |dir| {
@@ -1367,11 +1383,7 @@ impl Sink for BenchSink {
                 .duration_since(UNIX_EPOCH)
                 .map_or(0, crate::util::duration_ns_saturating);
             let start_unix_ns = source_origin_ns.unwrap_or(local_start_unix_ns);
-            let measurement_secs = std::env::var("WAFER_MEASUREMENT_SECS")
-                .ok()
-                .and_then(|value| value.parse().ok())
-                .filter(|value| *value > 0)
-                .unwrap_or(300);
+            let measurement_secs = configured_measurement_secs();
             self.interval_uses_source_origin = source_origin_ns.is_some();
             self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
@@ -1564,6 +1576,43 @@ mod tests {
         assert_eq!(intervals.rows[1].received_events, 1);
         assert_eq!(intervals.rows[1].throughput_messages, 0);
         assert_eq!(intervals.rows[1].duplicates, 1);
+    }
+
+    #[tokio::test]
+    async fn zero_arrival_timed_sink_exports_bounded_empty_intervals() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BenchSinkConfig::for_test().with_output_dir(dir.path());
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+        sink.close().await.unwrap();
+
+        let path = dir.path().join("interval-latency.json");
+        assert!(path.is_file(), "zero-arrival timed sink omitted interval-latency.json");
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        let rows = value["rows"].as_array().unwrap();
+        let declared_duration = value["declared_measurement_duration_ns"].as_u64().unwrap();
+        let expected_rows = declared_duration.div_ceil(INTERVAL_WIDTH_NS);
+        assert_eq!(u64::try_from(rows.len()).unwrap(), expected_rows);
+        assert!(rows.len() <= usize::try_from(value["maximum_rows"].as_u64().unwrap()).unwrap());
+        assert_eq!(rows[0]["interval_start_ns"], 0);
+        assert_eq!(rows.last().unwrap()["interval_end_ns"], declared_duration);
+        assert_eq!(value["aggregate_latency_count"], 0);
+        assert!(rows.iter().all(|row| {
+            row["latency_count"] == 0
+                && row["latency_p50_ns"].is_null()
+                && row["latency_p95_ns"].is_null()
+                && row["latency_p99_ns"].is_null()
+                && row["received_events"] == 0
+                && row["throughput_messages"] == 0
+                && row["duplicates"] == 0
+        }));
+        let window: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("measurement-window.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(window["started_ns"], value["measurement_start_unix_epoch_ns"]);
+        assert!(window["finished_ns"].as_u64().unwrap() > window["started_ns"].as_u64().unwrap());
     }
 
     #[tokio::test]
