@@ -4644,7 +4644,7 @@ def run_ekuiper_item(
                 stderr=log,
                 check=False,
             )
-            subscriber_code = wait_for_subscriber(subscriber)
+            subscriber_code = wait_for_subscriber(subscriber, timeout=0)
             measurement_finished_ns = time.time_ns()
             if process_sampler is not None:
                 process_sampler.stop()
@@ -4653,6 +4653,7 @@ def run_ekuiper_item(
             raise RuntimeError(
                 f"loadgen failed: publisher={publisher.returncode}, subscriber={subscriber_code}"
             )
+        set_ekuiper_active(root, False)
         (output / "measurement-window.json").write_text(
             json.dumps(
                 {
@@ -4699,6 +4700,10 @@ def run_ekuiper_item(
                 process_sampler.stop()
             except RuntimeError as sampler_error:
                 error = RuntimeError(f"{error}; {sampler_error}")
+        try:
+            set_ekuiper_active(root, False)
+        except subprocess.CalledProcessError as cleanup_error:
+            error = RuntimeError(f"{error}; eKuiper cleanup failed: {cleanup_error}")
         stop_pi_telemetry(telemetry)
         write_status(output, item, "failed", str(error))
         print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
