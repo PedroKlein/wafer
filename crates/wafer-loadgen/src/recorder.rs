@@ -332,6 +332,8 @@ fn write_fine_event_buckets(
     measurement_start_timestamp_ns: u64,
     scheduled_event_timestamp_ns: u64,
     event_timestamp_ns: u64,
+    alignment_error_ns: i64,
+    alignment_tolerance_ns: i64,
 ) -> anyhow::Result<()> {
     let buckets = event_buckets(
         samples,
@@ -359,6 +361,8 @@ fn write_fine_event_buckets(
         "measurement_start_timestamp_ns": measurement_start_timestamp_ns,
         "scheduled_event_timestamp_ns": scheduled_event_timestamp_ns,
         "event_timestamp_ns": event_timestamp_ns,
+        "alignment_error_ns": alignment_error_ns,
+        "alignment_tolerance_ns": alignment_tolerance_ns,
         "bucket_width_ns": FINE_EVENT_BUCKET_WIDTH_NS,
         "bucket_count": FINE_EVENT_BUCKET_COUNT,
         "coverage_start_offset_ns": FINE_EVENT_COVERAGE_START_NS,
@@ -370,6 +374,8 @@ fn write_fine_event_buckets(
         "duplicates": duplicates,
         "buckets": buckets,
         "parent_buckets": parent_buckets,
+        "canonical_series": "throughput-buckets.json",
+        "loss_accounting": "canonical-sequence-and-primary-drain-only",
     });
     fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
     Ok(())
@@ -461,6 +467,8 @@ impl EventBucketRecorder {
             self.measurement_start_timestamp_ns,
             self.scheduled_event_timestamp_ns,
             action.event_timestamp_ns,
+            action.alignment_error_ns,
+            action.alignment_tolerance_ns,
         )
     }
 
@@ -1261,6 +1269,10 @@ mod tests {
         assert_eq!(fine_rows[399]["end_offset_ns"], 2_000_000_000_i64);
         assert_eq!(fine["alignment"], "actual-t0");
         assert_eq!(fine["event_timestamp_ns"], action.event_timestamp_ns);
+        assert_eq!(fine["alignment_error_ns"], action.alignment_error_ns);
+        assert_eq!(fine["alignment_tolerance_ns"], action.alignment_tolerance_ns);
+        assert_eq!(fine["canonical_series"], "throughput-buckets.json");
+        assert_eq!(fine["loss_accounting"], "canonical-sequence-and-primary-drain-only");
         assert!(
             fs::metadata(dir.path().join("throughput-buckets-10ms.json")).unwrap().len()
                 < 256 * 1024

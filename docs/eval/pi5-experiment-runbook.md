@@ -165,7 +165,7 @@ A threshold miss by a valid SUT run is data, not a reason to tune the threshold 
 
 ## Move the single evidence volume between hosts
 
-V8 raw evidence has one physical copy on the exFAT volume labeled `WAF_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAF_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
+V9 raw evidence has one physical copy on the exFAT volume labeled `WAF_RESULTS`. Mount it at `/mnt/wafer-results` on Pi or Jetson and `/Volumes/WAF_RESULTS` on macOS. Manifests contain paths relative to the volume root, never host-specific absolute paths.
 
 On the Pi, create the SHA-256 manifest under `manifests/` from volume-root-relative raw paths. Verify it on the Pi before handoff. Then stop every writer, run `sync`, and unmount the volume cleanly. Do not unplug a mounted or busy volume.
 

@@ -146,7 +146,7 @@ vcgencmd get_throttled
 
 ## 9. Mount the single results volume
 
-Enhanced v8 evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
+Enhanced v9 evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
 
 Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
@@ -242,7 +242,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v8 campaign storage path.
+Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v9 campaign storage path.
 
 ## Final checklist
 
