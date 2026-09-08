@@ -382,6 +382,34 @@ def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic
     assert overhead["claim_boundary"] == "diagnostic-association-only-not-gc-causality"
 
 
+def test_ekuiper_profile_artifacts_accept_terminal_partial_interval(
+    tmp_path: Path,
+) -> None:
+    profiled = next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == "rate-04000/unprofiled-control" and item.run_index == 1
+    )
+    output = tmp_path / "partial-interval"
+    context = write_ekuiper_profile_fixture(output, profiled, process_available=False)
+    window = json.loads((output / "measurement-window.json").read_text())
+    window["finished_ns"] += 200_000_000
+    (output / "measurement-window.json").write_text(json.dumps(window))
+    intervals = json.loads((output / "interval-metrics.json").read_text())
+    intervals["rows"].append(
+        {
+            "interval_start_ns": 60_000_000_000,
+            "interval_end_ns": 60_000_080_274,
+        }
+    )
+    intervals["row_count"] = 61
+    (output / "interval-metrics.json").write_text(json.dumps(intervals))
+
+    runtime, _ = runner.write_ekuiper_profile_artifacts(profiled, output, context)
+
+    assert runtime["interval_alignment"]["row_count"] == 61
+
+
 def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics(
     tmp_path: Path,
 ) -> None:

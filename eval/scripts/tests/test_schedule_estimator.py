@@ -58,7 +58,7 @@ def test_estimates_exact_schedule_counts_runtime_files_and_bytes(tmp_path: Path)
     )
     assert receipt["campaign_started"] is False
     assert receipt["source"]["canonical_matrix_sha256"] == (
-        "f76230242deefee51a4e9d541769eff4c945c01c71d2e417b52648e0b3b32d81"
+        "cd4b161a1c5d2a7db631357879ea73722f25fca2d19c954c94d6020f7aed67ed"
     )
     expected = {
         "expanded-n5": {

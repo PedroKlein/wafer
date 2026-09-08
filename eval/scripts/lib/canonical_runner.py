@@ -3333,12 +3333,16 @@ def write_ekuiper_profile_artifacts(
     interval_start_ns = int(intervals.get("measurement_start_unix_epoch_ns", -1))
     interval_duration_ns = int(intervals.get("declared_measurement_duration_ns", -1))
     interval_end_ns = interval_start_ns + interval_duration_ns
+    interval_rows = intervals.get("rows", [])
+    interval_row_count = intervals.get("row_count")
     if (
         not measurement_start_ns <= interval_start_ns < measurement_end_ns
         or interval_duration_ns != CANDIDATE_MEASUREMENT_SECS * 1_000_000_000
         or interval_end_ns > measurement_end_ns + 1_000_000_000
-        or intervals.get("row_count") != CANDIDATE_MEASUREMENT_SECS
-        or len(intervals.get("rows", [])) != CANDIDATE_MEASUREMENT_SECS
+        or interval_row_count != len(interval_rows)
+        or not CANDIDATE_MEASUREMENT_SECS
+        <= interval_row_count
+        <= CANDIDATE_MEASUREMENT_SECS + 2
     ):
         raise ValueError("eKuiper profile intervals do not align to the measurement window")
     process_metrics = _ekuiper_profile_process_summary(
