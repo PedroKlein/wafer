@@ -78,8 +78,8 @@ uv run python -m wafer_analysis.expanded_n5 \
   --source-seal /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/source-seal.json \
   --composite /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/composite-index.json \
   --handoff-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/handoff-macos.json \
-  --analyzer-git-sha <signed-v16-wafer-sha> \
-  --analyzer-tag rpi5-final-rc-v16
+  --analyzer-git-sha <signed-v17-wafer-sha> \
+  --analyzer-tag rpi5-final-rc-v17
 ```
 
 The command first rehashes the complete raw manifest. It writes only below

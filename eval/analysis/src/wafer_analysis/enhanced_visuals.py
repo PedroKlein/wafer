@@ -214,12 +214,16 @@ def _validate_interval_rows(family_id: str, frame: pd.DataFrame) -> None:
         expected_rows = set(intervals["expected_interval_rows"])
         if len(expected_rows) != 1 or len(intervals) != next(iter(expected_rows)):
             raise ValueError(f"{family_id}: missing or excess intervals for {identity}")
+        last_index = len(intervals) - 1
         for expected_index, row in enumerate(intervals.itertuples(index=False)):
+            expected_end = (expected_index + 1) * 1_000_000_000
+            end = int(row.interval_end_ns)
             if (
                 int(row.interval_index) != expected_index
                 or int(row.interval_start_ns) != expected_index * 1_000_000_000
-                or int(row.interval_end_ns)
-                != (expected_index + 1) * 1_000_000_000
+                or end <= int(row.interval_start_ns)
+                or end > expected_end
+                or (expected_index != last_index and end != expected_end)
             ):
                 raise ValueError(f"{family_id}: interval grid is not contiguous")
 
@@ -845,7 +849,7 @@ def validate_enhanced_visual_artifacts(
             expected_length = 40 if field == "analyzer_git_sha" else 64
             if re.fullmatch(rf"[0-9a-f]{{{expected_length}}}", str(artifact_manifest.get(field, ""))) is None:
                 raise ValueError(f"completed artifact manifest has invalid {field}")
-        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v16" or not isinstance(
+        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v17" or not isinstance(
             artifact_manifest.get("release_composition"), dict
         ):
             raise ValueError("completed artifact manifest has invalid provenance")

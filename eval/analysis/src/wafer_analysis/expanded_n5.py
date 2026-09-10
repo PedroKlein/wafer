@@ -253,7 +253,12 @@ def load_expanded_n5_selection(
         control = str(item.get("control_generation", ""))
         if (
             ALLOWED_EVIDENCE_RELEASES.get(tag) != sha
-            or tag in {"rpi5-final-rc-v14", "rpi5-final-rc-v15", "rpi5-final-rc-v16"}
+            or tag in {
+                "rpi5-final-rc-v14",
+                "rpi5-final-rc-v15",
+                "rpi5-final-rc-v16",
+                "rpi5-final-rc-v17",
+            }
             or control not in ALLOWED_CONTROL_GENERATIONS
             or metadata.get("git_dirty") is not False
             or metadata.get("git_sha") != sha
@@ -953,8 +958,8 @@ def render_expanded_n5_results(
 ) -> tuple[Path, Path]:
     if re.fullmatch(r"[0-9a-f]{40}", analyzer_git_sha) is None:
         raise ValueError("analyzer Git SHA is invalid")
-    if analyzer_tag != "rpi5-final-rc-v16":
-        raise ValueError("expanded N=5 analysis requires the signed v16 analyzer")
+    if analyzer_tag != "rpi5-final-rc-v17":
+        raise ValueError("expanded N=5 analysis requires the signed v17 analyzer")
     manifest = completed_visual_manifest(datasets, observations)
     validate_expanded_n5_datasets(datasets, selection, manifest)
     return render_completed_n5_visual_suite(

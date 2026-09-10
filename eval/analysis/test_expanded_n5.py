@@ -232,7 +232,7 @@ def test_selection_rejects_unapproved_or_unselected_evidence(
         metadata["git_tags"] = ["rpi5-final-rc-v11"]
     else:
         metadata["git_sha"] = "d" * 40
-        metadata["git_tags"] = ["rpi5-final-rc-v16"]
+        metadata["git_tags"] = ["rpi5-final-rc-v17"]
     if mutation != "unselected":
         write_json(metadata_path, metadata)
         selected["metadata_sha256"] = hashlib.sha256(metadata_path.read_bytes()).hexdigest()
@@ -566,7 +566,7 @@ def test_builds_and_renders_all_completed_families_without_mutating_sources(
         selection,
         observations,
         analyzer_git_sha="e" * 40,
-        analyzer_tag="rpi5-final-rc-v16",
+        analyzer_tag="rpi5-final-rc-v17",
         supporting_tables=supporting,
     )
 
@@ -598,7 +598,7 @@ def test_builds_and_renders_all_completed_families_without_mutating_sources(
     assert hashlib.sha256(observations_artifact.read_bytes()).hexdigest() == (
         artifact_manifest["observations_sha256"]
     )
-    assert artifact_manifest["analyzer_tag"] == "rpi5-final-rc-v16"
+    assert artifact_manifest["analyzer_tag"] == "rpi5-final-rc-v17"
     assert artifact_manifest["source_composite_sha256"] == selection.composite_sha256
     assert {item["id"] for item in artifact_manifest["supporting_artifacts"]} == {
         "ekuiper-compatible-pairs",
@@ -612,7 +612,7 @@ def test_builds_and_renders_all_completed_families_without_mutating_sources(
         second,
         observations,
         analyzer_git_sha="e" * 40,
-        analyzer_tag="rpi5-final-rc-v16",
+        analyzer_tag="rpi5-final-rc-v17",
         supporting_tables=second_supporting,
     )
     for first_root, second_root in ((derived, second_derived), (reports, second_reports)):

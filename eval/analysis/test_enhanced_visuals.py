@@ -315,6 +315,51 @@ def test_dataset_validation_rejects_censoring_drain_class_and_final_label_drift(
         )
 
 
+def test_dataset_validation_accepts_only_terminal_partial_interval() -> None:
+    values = datasets()
+    for family_id in (
+        "interval-latency-throughput",
+        "pmic-proxy-efficiency",
+    ):
+        frame = values[family_id]
+        frame.loc[frame["interval_index"] == 1, "interval_end_ns"] = 1_750_000_000
+
+    validate_enhanced_visual_datasets(
+        values,
+        expected_source_sha=SHA,
+        expected_source_tag=TAG,
+        batch_id=BATCH,
+    )
+
+    for invalid_end in (1_000_000_000, 2_250_000_000):
+        invalid = datasets()
+        for family_id in (
+            "interval-latency-throughput",
+            "pmic-proxy-efficiency",
+        ):
+            frame = invalid[family_id]
+            frame.loc[frame["interval_index"] == 1, "interval_end_ns"] = invalid_end
+        with pytest.raises(ValueError, match="interval grid is not contiguous"):
+            validate_enhanced_visual_datasets(
+                invalid,
+                expected_source_sha=SHA,
+                expected_source_tag=TAG,
+                batch_id=BATCH,
+            )
+
+    values["interval-latency-throughput"].loc[
+        values["interval-latency-throughput"]["interval_index"] == 0,
+        "interval_end_ns",
+    ] = 750_000_000
+    with pytest.raises(ValueError, match="interval grid is not contiguous"):
+        validate_enhanced_visual_datasets(
+            values,
+            expected_source_sha=SHA,
+            expected_source_tag=TAG,
+            batch_id=BATCH,
+        )
+
+
 def test_source_artifact_hash_mismatch_is_rejected(tmp_path: Path) -> None:
     current = layout(tmp_path)
     values = datasets()
