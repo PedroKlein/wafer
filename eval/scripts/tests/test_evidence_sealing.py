@@ -933,6 +933,36 @@ def test_seal_rejects_divergent_partial_artifact_without_overwrite(tmp_path: Pat
     assert not source_seal.exists()
 
 
+def test_seal_accepts_attempt_shaped_result_filename(tmp_path: Path) -> None:
+    volume, facts, verified, reconciliation = fixture(tmp_path)
+    artifact = (
+        volume
+        / "raw/e-val-1/rpi5-expanded-n5/run-01-attempt-01"
+        / "per-run-percentiles/run-01-attempt-01.json"
+    )
+    write_json(artifact, {"p99_ns": 1})
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+
+    completed = run_seal(volume, facts, verified, reconciliation, proc_root=proc_root)
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_seal_rejects_symlinked_attempt_shaped_path(tmp_path: Path) -> None:
+    volume, facts, verified, reconciliation = fixture(tmp_path)
+    campaign = volume / "raw/e-val-1/rpi5-expanded-n5"
+    (campaign / "run-02-attempt-01").symlink_to(campaign / "run-01-attempt-01")
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+
+    completed = run_seal(volume, facts, verified, reconciliation, proc_root=proc_root)
+
+    assert completed.returncode == 1
+    assert "must not be linked" in completed.stderr
+    assert_unsealed(volume, reconciliation)
+
+
 def test_seal_writes_verified_manifest_composite_and_source_receipt(tmp_path: Path) -> None:
     volume, facts, verified, reconciliation = fixture(tmp_path)
     proc_root = tmp_path / "proc"

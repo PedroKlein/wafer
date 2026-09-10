@@ -803,9 +803,10 @@ def build_composite(
     observed_attempts = set()
     for campaign in (root / "raw").glob(f"*/{campaign_name}"):
         for path in campaign.rglob("run-*-attempt-*"):
-            if path.is_symlink() or not path.is_dir():
+            if path.is_symlink():
                 fail(f"campaign attempt path is malformed or linked: {path}")
-            observed_attempts.add(path.relative_to(root).as_posix())
+            if path.is_dir():
+                observed_attempts.add(path.relative_to(root).as_posix())
     if observed_attempts != expected_attempts:
         fail("campaign attempt paths differ from terminal reconciliation")
     counts = reconciliation["counts"]
