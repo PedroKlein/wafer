@@ -38,9 +38,13 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
         text=True,
     )
 
+    assert not any(path.name == "__pycache__" for path in deployed.rglob("*"))
+    assert not any(path.suffix == ".pyc" for path in deployed.rglob("*"))
+    runner_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     result = subprocess.run(
         ["python3", str(deployed / "eval/scripts/lib/canonical_runner.py"), "--help"],
         cwd=deployed,
+        env=runner_env,
         capture_output=True,
         text=True,
         check=False,
@@ -48,9 +52,11 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
     assert result.returncode == 0, result.stderr
     assert "Run resumable canonical Pi 5 evaluations" in result.stdout
 
+    analysis_env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
     analysis = subprocess.run(
         ["uv", "run", "python", "-m", "wafer_analysis.expanded_n5", "--help"],
         cwd=deployed / "eval/analysis",
+        env=analysis_env,
         capture_output=True,
         text=True,
         check=False,
@@ -60,5 +66,3 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
     assert "--handoff-receipt" in analysis.stdout
     assert "--analyzer-tag" in analysis.stdout
     assert (deployed / "eval/scripts/verify-storage-receipt.py").is_file()
-    assert not any(path.name == "__pycache__" for path in deployed.rglob("*"))
-    assert not any(path.suffix == ".pyc" for path in deployed.rglob("*"))
