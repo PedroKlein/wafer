@@ -464,7 +464,7 @@ Every normalized result-time row retains its source result key, release tag/SHA,
 control generation, relative artifact path, and SHA-256. Cross-release matched
 arms are labeled `release-confounded`, excluded from paired estimators, shown as
 separate arms, and accompanied by release-stratified sensitivity tables. The
-signed v15 tag/SHA describes only the analyzer and derived outputs; it never
+signed v16 tag/SHA describes only the analyzer and derived outputs; it never
 relabels v10-v13 evidence. Output is diagnostic and non-poolable under
 `derived/` and `reports/` only. Each of the twelve families emits CSV, SVG, PNG,
 PDF, and HTML, plus one hash-bound result-time observations artifact. Family

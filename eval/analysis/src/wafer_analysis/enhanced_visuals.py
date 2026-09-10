@@ -845,7 +845,7 @@ def validate_enhanced_visual_artifacts(
             expected_length = 40 if field == "analyzer_git_sha" else 64
             if re.fullmatch(rf"[0-9a-f]{{{expected_length}}}", str(artifact_manifest.get(field, ""))) is None:
                 raise ValueError(f"completed artifact manifest has invalid {field}")
-        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v15" or not isinstance(
+        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v16" or not isinstance(
             artifact_manifest.get("release_composition"), dict
         ):
             raise ValueError("completed artifact manifest has invalid provenance")
