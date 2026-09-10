@@ -68,7 +68,7 @@ result key, release tag/SHA, control generation, source-relative path, and
 artifact SHA-256. B00 thermal/USB rows come only from the prerequisite record in
 the composite.
 
-After signed v14 is mounted with the same USB at `/Volumes/WAF_RESULTS`, run:
+After signed v15 is mounted with the same USB at `/Volumes/WAF_RESULTS`, run:
 
 ```bash
 cd eval/analysis
@@ -78,8 +78,8 @@ uv run python -m wafer_analysis.expanded_n5 \
   --source-seal /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/source-seal.json \
   --composite /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/composite-index.json \
   --handoff-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/handoff-macos.json \
-  --analyzer-git-sha <signed-v14-wafer-sha> \
-  --analyzer-tag rpi5-final-rc-v14
+  --analyzer-git-sha <signed-v15-wafer-sha> \
+  --analyzer-tag rpi5-final-rc-v15
 ```
 
 The command first rehashes the complete raw manifest. It writes only below
@@ -93,7 +93,7 @@ E-Perf-5 remain explicit in the report-level external-gap section.
 Matched arms are paired only when both leaves have the same evidence release.
 Cross-release arms are labeled `release-confounded`, remain visible as separate
 arms, and are excluded from paired differences. Release-stratified sensitivity
-CSV/HTML tables are emitted alongside the family artifacts. The analyzer's v14
+CSV/HTML tables are emitted alongside the family artifacts. The analyzer's v15
 tag/SHA is recorded only in derived artifact provenance; raw evidence keeps its
 actual v10-v13 lineage.
 
