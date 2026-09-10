@@ -60,3 +60,5 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
     assert "--handoff-receipt" in analysis.stdout
     assert "--analyzer-tag" in analysis.stdout
     assert (deployed / "eval/scripts/verify-storage-receipt.py").is_file()
+    assert not any(path.name == "__pycache__" for path in deployed.rglob("*"))
+    assert not any(path.suffix == ".pyc" for path in deployed.rglob("*"))

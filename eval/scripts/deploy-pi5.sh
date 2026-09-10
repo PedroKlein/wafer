@@ -83,6 +83,8 @@ cp -R "$ROOT/eval/analysis/src/wafer_analysis" "$stage/eval/analysis/src/"
 cp "$ROOT/eval/analysis/pyproject.toml" "$ROOT/eval/analysis/uv.lock" \
     "$ROOT/eval/analysis/enhanced-visual-manifest.json" "$stage/eval/analysis/"
 cp "$ROOT/eval/RESULT-CONTRACT.md" "$ROOT/eval/canonical-matrix.json" "$stage/eval/"
+find "$stage" -type f -name '*.pyc' -delete
+find "$stage" -type d -name __pycache__ -prune -exec rm -rf {} +
 printf '{"git_sha":"%s","git_dirty":%s,"git_tags":%s}\n' \
     "$REVISION" "$SOURCE_DIRTY" "$SOURCE_TAGS_JSON" > "$stage/SOURCE_STATE.json"
 
