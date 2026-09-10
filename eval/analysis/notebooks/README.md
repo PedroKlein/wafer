@@ -57,6 +57,46 @@ candidate or diagnostic row labeled as final evidence. Until the expanded N=5
 run exists, each explanation states `PENDING`; fixture rendering proves the
 contract and layout only and does not create measured results.
 
+## Completed expanded N=5 review
+
+`wafer_analysis.expanded_n5` is a separate result-time adapter for the immutable
+mixed v10-v13 diagnostic population. It does not relax canonical single-release
+APIs. The adapter requires the complete raw SHA-256 manifest, source-host seal,
+composite index, and macOS `handoff-verified` receipt; it never globs for a
+newest or merely passed attempt. Every normalized row retains its selected
+result key, release tag/SHA, control generation, source-relative path, and
+artifact SHA-256. B00 thermal/USB rows come only from the prerequisite record in
+the composite.
+
+After signed v14 is mounted with the same USB at `/Volumes/WAF_RESULTS`, run:
+
+```bash
+cd eval/analysis
+uv run python -m wafer_analysis.expanded_n5 \
+  --results-root /Volumes/WAF_RESULTS \
+  --manifest /Volumes/WAF_RESULTS/manifests/expanded-n5.sha256 \
+  --source-seal /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/source-seal.json \
+  --composite /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/composite-index.json \
+  --handoff-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/handoff-macos.json \
+  --analyzer-git-sha <signed-v14-wafer-sha> \
+  --analyzer-tag rpi5-final-rc-v14
+```
+
+The command first rehashes the complete raw manifest. It writes only below
+`derived/enhanced-n5/<batch>/` and `reports/enhanced-n5/<batch>/`, with CSV,
+SVG, PNG, PDF, and HTML supporting tables for all twelve families plus a
+hash-bound result-time `observations.json`. The report is headed `DIAGNOSTIC N=5
+REVIEW — NOT THESIS EVIDENCE`. Family observations contain no historical
+`PRE-RESULTS` or `PENDING` text; genuine external gaps such as unmatched x86
+E-Perf-5 remain explicit in the report-level external-gap section.
+
+Matched arms are paired only when both leaves have the same evidence release.
+Cross-release arms are labeled `release-confounded`, remain visible as separate
+arms, and are excluded from paired differences. Release-stratified sensitivity
+CSV/HTML tables are emitted alongside the family artifacts. The analyzer's v14
+tag/SHA is recorded only in derived artifact provenance; raw evidence keeps its
+actual v10-v13 lineage.
+
 ## Focused-pilot artifact inventory
 
 | Follow-up question | Notebook | Primary artifact |

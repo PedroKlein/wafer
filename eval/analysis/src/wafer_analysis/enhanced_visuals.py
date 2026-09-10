@@ -115,7 +115,7 @@ def validate_enhanced_visual_manifest(manifest: dict[str, Any]) -> None:
         or manifest.get("thesis_evidence") is not False
         or manifest.get("n30_admitted") is not False
         or manifest.get("campaign_started") is not False
-        or manifest.get("artifact_formats") != ["svg", "csv", "html"]
+        or manifest.get("artifact_formats") != ["csv", "svg", "png", "pdf", "html"]
     ):
         raise ValueError("enhanced visual manifest identity is invalid")
     if tuple(manifest.get("required_families", ())) != REQUIRED_FAMILIES:
@@ -139,6 +139,34 @@ def validate_enhanced_visual_manifest(manifest: dict[str, Any]) -> None:
             raise ValueError("PMIC visual must preserve the total-input-power exclusion")
         if item["id"] == "ekuiper-tail-association" and "causality" not in item["limits"]:
             raise ValueError("eKuiper visual must preserve the no-causality boundary")
+
+
+def validate_completed_visual_manifest(manifest: dict[str, Any]) -> None:
+    if (
+        manifest.get("schema_version") != 1
+        or manifest.get("status") != "completed"
+        or manifest.get("classification") != "enhanced-n5-candidate-and-diagnostic"
+        or manifest.get("thesis_evidence") is not False
+        or manifest.get("n30_admitted") is not False
+        or manifest.get("campaign_started") is not False
+        or manifest.get("artifact_formats") != ["csv", "svg", "png", "pdf", "html"]
+        or tuple(manifest.get("required_families", ())) != REQUIRED_FAMILIES
+    ):
+        raise ValueError("completed visual manifest identity is invalid")
+    families = manifest.get("families")
+    if not isinstance(families, list) or tuple(
+        item.get("id") for item in families if isinstance(item, dict)
+    ) != REQUIRED_FAMILIES:
+        raise ValueError("completed visual definitions differ from required families")
+    for item in families:
+        missing = (REQUIRED_DEFINITION_FIELDS | {"release_composition"}) - set(item)
+        if missing:
+            raise ValueError(f"{item.get('id')}: missing completed visual fields {sorted(missing)}")
+        if any(item[field] in (None, "", []) for field in REQUIRED_DEFINITION_FIELDS):
+            raise ValueError(f"{item['id']}: completed visual fields must not be empty")
+        text = f"{item['observed_n5_pattern']} {item['limits']}".upper()
+        if "PENDING" in text or "PRE-RESULTS" in text:
+            raise ValueError(f"{item['id']}: stale pre-results text")
 
 
 def _definitions(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -361,7 +389,7 @@ def _write_csv(path: Path, frame: pd.DataFrame) -> None:
     ).to_csv(path, columns=columns, index=False, quoting=csv.QUOTE_MINIMAL, lineterminator="\n")
 
 
-def _plot(path: Path, family: dict[str, Any], frame: pd.DataFrame) -> None:
+def _plot(paths: dict[str, Path], family: dict[str, Any], frame: pd.DataFrame) -> None:
     units = list(dict.fromkeys(frame["unit"].astype(str)))
     figure, axes = plt.subplots(len(units), 1, figsize=(9, max(4, 3.3 * len(units))))
     if len(units) == 1:
@@ -393,9 +421,24 @@ def _plot(path: Path, family: dict[str, Any], frame: pd.DataFrame) -> None:
     )
     figure.tight_layout(rect=(0, 0.04, 1, 0.96))
     figure.savefig(
-        path,
+        paths["svg"],
         format="svg",
         metadata={"Date": None, "Creator": "WAFER enhanced visual suite"},
+    )
+    figure.savefig(
+        paths["png"],
+        format="png",
+        metadata={"Software": "WAFER enhanced visual suite"},
+    )
+    figure.savefig(
+        paths["pdf"],
+        format="pdf",
+        metadata={
+            "CreationDate": None,
+            "ModDate": None,
+            "Creator": "WAFER enhanced visual suite",
+            "Producer": "WAFER enhanced visual suite",
+        },
     )
     plt.close(figure)
 
@@ -405,7 +448,22 @@ def _sha256(path: Path) -> str:
 
 
 def _table(frame: pd.DataFrame) -> str:
-    columns = ["condition", "run_index", "metric", "value", "unit"]
+    columns = [
+        column
+        for column in (
+            "condition",
+            "run_index",
+            "metric",
+            "value",
+            "unit",
+            "source_tag",
+            "control_generation",
+            "source_relative_path",
+            "source_sha256",
+            "pair_status",
+        )
+        if column in frame.columns
+    ]
     rows = []
     for row in (
         frame.sort_values(columns[:3], kind="stable")
@@ -423,18 +481,54 @@ def _table(frame: pd.DataFrame) -> str:
     return f"<table><thead><tr>{headings}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
 
 
+def _dataframe_table(frame: pd.DataFrame) -> str:
+    columns = list(frame.columns)
+    headings = "".join(
+        f'<th scope="col">{html.escape(str(column))}</th>' for column in columns
+    )
+    rows = []
+    for row in frame.itertuples(index=False):
+        values = row._asdict()
+        cells = "".join(
+            f"<td>{html.escape(str(values[column]))}</td>" for column in columns
+        )
+        rows.append(f"<tr>{cells}</tr>")
+    return f"<table><thead><tr>{headings}</tr></thead><tbody>{''.join(rows)}</tbody></table>"
+
+
+def _write_family_table(path: Path, family: dict[str, Any], frame: pd.DataFrame) -> None:
+    path.write_text(
+        "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+        f"<title>{html.escape(family['title'])}</title></head><body>"
+        f"<h1>{html.escape(family['title'])}</h1>"
+        f"<p><strong>Classification:</strong> {html.escape(family['evidence_class'])}</p>"
+        f"<p><strong>Sample unit:</strong> {html.escape(family['sample_unit'])}</p>"
+        f"<p><strong>Observed N=5 pattern:</strong> "
+        f"{html.escape(family['observed_n5_pattern'])}</p>"
+        f"<p><strong>Release composition:</strong> "
+        f"{html.escape(json.dumps(family.get('release_composition', {}), sort_keys=True))}</p>"
+        f"<p><strong>Limits:</strong> {html.escape(family['limits'])}</p>"
+        f"{_table(frame)}</body></html>\n",
+        encoding="utf-8",
+    )
+
+
 def _report(
     path: Path,
     manifest: dict[str, Any],
     datasets: dict[str, pd.DataFrame],
     derived: Path,
+    *,
+    title: str = "Enhanced N=5 candidate and diagnostic visual suite",
+    introduction: str = "PRE-RESULTS — NOT THESIS EVIDENCE. campaign_started=false; candidate selection remains required.",
+    supporting_links: tuple[str, ...] = (),
 ) -> None:
     cards = []
     relative_derived = Path(os.path.relpath(derived, path.parent)).as_posix()
     for family in manifest["families"]:
         family_id = family["id"]
         base = f"{relative_derived}/{family_id}"
-        title = html.escape(family["title"])
+        family_title = html.escape(family["title"])
         fields = html.escape(", ".join(family["source_fields"]))
         units = html.escape(", ".join(family["units"]))
         sample_unit = html.escape(family["sample_unit"])
@@ -444,9 +538,9 @@ def _report(
         cards.append(
             f"""
 <article data-visual-family="{family_id}">
-  <h2>{title}</h2>
-  <a href="{base}.svg"><img src="{base}.svg" alt="{title}"></a>
-  <p><a href="{base}.csv">Local source table</a></p>
+  <h2>{family_title}</h2>
+  <a href="{base}.svg"><img src="{base}.svg" alt="{family_title}"></a>
+  <p><a href="{base}.csv">CSV</a> · <a href="{base}.png">PNG</a> · <a href="{base}.pdf">PDF</a> · <a href="{base}.html">HTML table</a></p>
   <h3>Source fields</h3><p>{fields}</p>
   <h3>Units</h3><p>{units}</p>
   <h3>Sample unit</h3><p>{sample_unit}; independent N={family['independent_n']}.</p>
@@ -456,19 +550,146 @@ def _report(
   <h3>Supporting table</h3>{_table(datasets[family_id])}
 </article>"""
         )
+    supporting = "".join(
+        f'<li><a href="{relative_derived}/{html.escape(name)}.csv">{html.escape(name)} CSV</a> · '
+        f'<a href="{relative_derived}/{html.escape(name)}.html">HTML table</a></li>'
+        for name in supporting_links
+    )
+    external_gaps = "".join(
+        f"<li>{html.escape(str(item['experiment']))}: "
+        f"{html.escape(str(item['status']))} — {html.escape(str(item['reason']))}</li>"
+        for item in manifest.get("external_gaps", [])
+    )
     path.write_text(
         """<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><title>WAFER enhanced N=5 visuals</title></head>
 <body><main>
-<h1>Enhanced N=5 candidate and diagnostic visual suite</h1>
-<p><strong>PRE-RESULTS — NOT THESIS EVIDENCE.</strong>
-campaign_started=false; candidate selection remains required.</p>
 """
+        + f"<h1>{html.escape(title)}</h1>\n<p><strong>{html.escape(introduction)}</strong></p>\n"
+        + (f"<h2>External gaps</h2><ul>{external_gaps}</ul>\n" if external_gaps else "")
+        + (f"<h2>Release sensitivity</h2><ul>{supporting}</ul>\n" if supporting else "")
         + "\n".join(cards)
         + "\n</main></body></html>\n",
         encoding="utf-8",
     )
+
+
+def _render_validated_visual_suite(
+    datasets: dict[str, pd.DataFrame],
+    layout: ResultsLayout,
+    *,
+    batch_id: str,
+    manifest: dict[str, Any],
+    artifact_metadata: dict[str, Any],
+    report_title: str,
+    report_introduction: str,
+    supporting_tables: dict[str, pd.DataFrame] | None = None,
+) -> tuple[Path, Path]:
+    derived = layout.analysis_path("derived", "enhanced-n5", batch_id)
+    reports = layout.analysis_path("reports", "enhanced-n5", batch_id)
+    if derived.exists() or reports.exists():
+        raise FileExistsError("refusing to overwrite enhanced analysis output")
+    derived.mkdir(parents=True)
+    reports.mkdir(parents=True)
+    plt.rcParams["svg.hashsalt"] = "wafer-enhanced-visual-suite-v1"
+    artifacts = []
+    for family in manifest["families"]:
+        family_id = family["id"]
+        paths = {
+            kind: derived / f"{family_id}.{kind}"
+            for kind in ("svg", "png", "pdf", "html")
+        }
+        csv_path = derived / f"{family_id}.csv"
+        _write_csv(csv_path, datasets[family_id])
+        _plot(paths, family, datasets[family_id])
+        _write_family_table(paths["html"], family, datasets[family_id])
+        artifacts.append(
+            {
+                "id": family_id,
+                "csv": csv_path.name,
+                "csv_sha256": _sha256(csv_path),
+                "svg": paths["svg"].name,
+                "svg_sha256": _sha256(paths["svg"]),
+                "png": paths["png"].name,
+                "png_sha256": _sha256(paths["png"]),
+                "pdf": paths["pdf"].name,
+                "pdf_sha256": _sha256(paths["pdf"]),
+                "html": paths["html"].name,
+                "html_sha256": _sha256(paths["html"]),
+                "row_count": len(datasets[family_id]),
+                "source_file_count": datasets[family_id][
+                    "source_relative_path"
+                ].nunique(),
+            }
+        )
+    supporting_artifacts = []
+    for name, frame in sorted((supporting_tables or {}).items()):
+        csv_path = derived / f"{name}.csv"
+        html_path = derived / f"{name}.html"
+        frame.to_csv(csv_path, index=False, lineterminator="\n")
+        html_path.write_text(
+            "<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
+            f"<title>{html.escape(name)}</title></head><body><h1>{html.escape(name)}</h1>"
+            f"{_dataframe_table(frame)}</body></html>\n",
+            encoding="utf-8",
+        )
+        supporting_artifacts.append(
+            {
+                "id": name,
+                "csv": csv_path.name,
+                "csv_sha256": _sha256(csv_path),
+                "html": html_path.name,
+                "html_sha256": _sha256(html_path),
+                "row_count": len(frame),
+            }
+        )
+    observations = None
+    if manifest.get("status") == "completed":
+        observations = derived / "observations.json"
+        observations.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    artifact_manifest = {
+        "schema_version": 1,
+        "classification": manifest["classification"],
+        "thesis_evidence": False,
+        "n30_admitted": False,
+        "campaign_started": False,
+        "batch_id": batch_id,
+        **artifact_metadata,
+        "visual_contract_sha256": hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+        "artifact_count": len(artifacts),
+        "supporting_artifact_count": len(supporting_artifacts),
+        "artifacts": artifacts,
+        "supporting_artifacts": supporting_artifacts,
+        **(
+            {
+                "observations": observations.name,
+                "observations_sha256": _sha256(observations),
+            }
+            if observations is not None
+            else {}
+        ),
+    }
+    manifest_path = derived / "artifact-manifest.json"
+    manifest_path.write_text(
+        json.dumps(artifact_manifest, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _report(
+        reports / "index.html",
+        manifest,
+        datasets,
+        derived,
+        title=report_title,
+        introduction=report_introduction,
+        supporting_links=tuple(item["id"] for item in supporting_artifacts),
+    )
+    validate_enhanced_visual_artifacts(derived, reports, manifest)
+    return derived, reports
 
 
 def render_enhanced_visual_suite(
@@ -492,56 +713,59 @@ def render_enhanced_visual_suite(
         manifest=manifest,
         layout=layout,
     )
-    derived = layout.analysis_path("derived", "enhanced-n5", batch_id)
-    reports = layout.analysis_path("reports", "enhanced-n5", batch_id)
-    if derived.exists() or reports.exists():
-        raise FileExistsError("refusing to overwrite enhanced analysis output")
-    derived.mkdir(parents=True)
-    reports.mkdir(parents=True)
-    plt.rcParams["svg.hashsalt"] = "wafer-enhanced-visual-suite-v1"
-    artifacts = []
-    for family in manifest["families"]:
-        family_id = family["id"]
-        csv_path = derived / f"{family_id}.csv"
-        svg_path = derived / f"{family_id}.svg"
-        _write_csv(csv_path, datasets[family_id])
-        _plot(svg_path, family, datasets[family_id])
-        artifacts.append(
-            {
-                "id": family_id,
-                "csv": csv_path.name,
-                "csv_sha256": _sha256(csv_path),
-                "svg": svg_path.name,
-                "svg_sha256": _sha256(svg_path),
-                "row_count": len(datasets[family_id]),
-                "source_file_count": datasets[family_id][
-                    "source_relative_path"
-                ].nunique(),
-            }
-        )
-    artifact_manifest = {
-        "schema_version": 1,
-        "classification": manifest["classification"],
-        "thesis_evidence": False,
-        "n30_admitted": False,
-        "campaign_started": False,
-        "batch_id": batch_id,
-        "source_git_sha": expected_source_sha,
-        "source_tag": expected_source_tag,
-        "visual_contract_sha256": hashlib.sha256(
-            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
-        "artifact_count": len(artifacts),
-        "artifacts": artifacts,
-    }
-    manifest_path = derived / "artifact-manifest.json"
-    manifest_path.write_text(
-        json.dumps(artifact_manifest, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
+    return _render_validated_visual_suite(
+        datasets,
+        layout,
+        batch_id=batch_id,
+        manifest=manifest,
+        artifact_metadata={
+            "source_git_sha": expected_source_sha,
+            "source_tag": expected_source_tag,
+        },
+        report_title="Enhanced N=5 candidate and diagnostic visual suite",
+        report_introduction=(
+            "PRE-RESULTS — NOT THESIS EVIDENCE. "
+            "campaign_started=false; candidate selection remains required."
+        ),
     )
-    _report(reports / "index.html", manifest, datasets, derived)
-    validate_enhanced_visual_artifacts(derived, reports, manifest)
-    return derived, reports
+
+
+def render_completed_n5_visual_suite(
+    datasets: dict[str, pd.DataFrame],
+    layout: ResultsLayout,
+    *,
+    batch_id: str,
+    manifest: dict[str, Any],
+    source_manifest_sha256: str,
+    source_composite_sha256: str,
+    analyzer_git_sha: str,
+    analyzer_tag: str,
+    release_composition: dict[str, int],
+    supporting_tables: dict[str, pd.DataFrame] | None = None,
+) -> tuple[Path, Path]:
+    if not layout.explicit:
+        raise ValueError("enhanced suite requires an explicit results volume")
+    layout.validate()
+    validate_completed_visual_manifest(manifest)
+    return _render_validated_visual_suite(
+        datasets,
+        layout,
+        batch_id=batch_id,
+        manifest=manifest,
+        artifact_metadata={
+            "source_manifest_sha256": source_manifest_sha256,
+            "source_composite_sha256": source_composite_sha256,
+            "analyzer_git_sha": analyzer_git_sha,
+            "analyzer_tag": analyzer_tag,
+            "release_composition": release_composition,
+        },
+        report_title="DIAGNOSTIC N=5 REVIEW — NOT THESIS EVIDENCE",
+        report_introduction=(
+            "Completed diagnostic observations. candidate selection remains required; "
+            "campaign_started=false; n30_admitted=false."
+        ),
+        supporting_tables=supporting_tables,
+    )
 
 
 def validate_enhanced_visual_artifacts(
@@ -560,14 +784,39 @@ def validate_enhanced_visual_artifacts(
         != REQUIRED_FAMILIES
     ):
         raise ValueError("enhanced artifact manifest is invalid")
+    expected_files = {"artifact-manifest.json"}
+    if manifest.get("status") == "completed":
+        observations = derived / str(artifact_manifest.get("observations", ""))
+        if not observations.is_file() or _sha256(observations) != artifact_manifest.get(
+            "observations_sha256"
+        ):
+            raise ValueError("completed observations hash differs")
+        if json.loads(observations.read_text(encoding="utf-8")) != manifest:
+            raise ValueError("completed observations differ from visual manifest")
+        expected_files.add(observations.name)
     for item in artifact_manifest["artifacts"]:
-        for kind in ("csv", "svg"):
+        for kind in ("csv", "svg", "png", "pdf", "html"):
+            expected_files.add(str(item[kind]))
             path = derived / item[kind]
             if not path.is_file() or not path.stat().st_size:
                 raise ValueError(f"{item['id']}: missing {kind}")
             if _sha256(path) != item[f"{kind}_sha256"]:
                 raise ValueError(f"{item['id']}: {kind} hash differs")
+    supporting_artifacts = artifact_manifest.get("supporting_artifacts", [])
+    if artifact_manifest.get("supporting_artifact_count") != len(supporting_artifacts):
+        raise ValueError("enhanced supporting artifact count differs")
+    for item in supporting_artifacts:
+        for kind in ("csv", "html"):
+            expected_files.add(str(item[kind]))
+            path = derived / item[kind]
+            if not path.is_file() or _sha256(path) != item[f"{kind}_sha256"]:
+                raise ValueError(f"{item['id']}: supporting {kind} hash differs")
+    observed_files = {path.name for path in derived.iterdir() if path.is_file()}
+    if observed_files != expected_files:
+        raise ValueError("enhanced artifact file set differs from manifest")
     report = reports / "index.html"
+    if {path.name for path in reports.iterdir() if path.is_file()} != {"index.html"}:
+        raise ValueError("enhanced report file set differs")
     parser = _ReportParser()
     parser.feed(report.read_text(encoding="utf-8"))
     if tuple(parser.cards) != REQUIRED_FAMILIES:
@@ -587,3 +836,22 @@ def validate_enhanced_visual_artifacts(
         target = (report.parent / link).resolve()
         if not target.is_file():
             raise ValueError(f"enhanced HTML local link is broken: {link}")
+    if manifest.get("status") == "completed":
+        for field in (
+            "source_manifest_sha256",
+            "source_composite_sha256",
+            "analyzer_git_sha",
+        ):
+            expected_length = 40 if field == "analyzer_git_sha" else 64
+            if re.fullmatch(rf"[0-9a-f]{{{expected_length}}}", str(artifact_manifest.get(field, ""))) is None:
+                raise ValueError(f"completed artifact manifest has invalid {field}")
+        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v14" or not isinstance(
+            artifact_manifest.get("release_composition"), dict
+        ):
+            raise ValueError("completed artifact manifest has invalid provenance")
+        text = "\n".join(
+            (derived / f"{family_id}.html").read_text(encoding="utf-8")
+            for family_id in REQUIRED_FAMILIES
+        )
+        if "PRE-RESULTS" in text.upper() or "PENDING" in text.upper():
+            raise ValueError("completed family artifacts contain stale pre-results text")

@@ -47,3 +47,16 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     assert "Run resumable canonical Pi 5 evaluations" in result.stdout
+
+    analysis = subprocess.run(
+        ["uv", "run", "python", "-m", "wafer_analysis.expanded_n5", "--help"],
+        cwd=deployed / "eval/analysis",
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert analysis.returncode == 0, analysis.stderr
+    assert "usage: expanded_n5.py" in analysis.stdout
+    assert "--handoff-receipt" in analysis.stdout
+    assert "--analyzer-tag" in analysis.stdout
+    assert (deployed / "eval/scripts/verify-storage-receipt.py").is_file()

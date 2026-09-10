@@ -5,7 +5,7 @@
   "thesis_evidence": false,
   "n30_admitted": false,
   "campaign_started": false,
-  "artifact_formats": ["svg", "csv", "html"],
+  "artifact_formats": ["csv", "svg", "png", "pdf", "html"],
   "required_families": [
     "interval-latency-throughput",
     "capacity-knee",

@@ -174,8 +174,8 @@ def test_renderer_writes_only_derived_and_reports_with_deterministic_hashes(
     assert hash_tree(first.raw) == before
     assert derived == first.derived / "enhanced-n5" / BATCH
     assert reports == first.reports / "enhanced-n5" / BATCH
-    assert len(list(derived.glob("*.csv"))) == 12
-    assert len(list(derived.glob("*.svg"))) == 12
+    for extension in ("csv", "svg", "png", "pdf", "html"):
+        assert len(list(derived.glob(f"*.{extension}"))) == 12
     validate_enhanced_visual_artifacts(derived, reports)
 
     second = layout(tmp_path / "second")

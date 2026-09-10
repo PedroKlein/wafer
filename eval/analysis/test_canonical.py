@@ -358,6 +358,14 @@ def test_ekuiper_profile_tables_keep_thirty_runs_and_fifteen_pairs() -> None:
     ).all()
 
 
+def test_canonical_ekuiper_profile_remains_single_release_only() -> None:
+    summary = ekuiper_profile_summary()
+    summary["records"][1]["source_git_sha"] = "b" * 40
+
+    with pytest.raises(ValueError, match="mixes source revisions"):
+        ekuiper_profile_tables(summary)
+
+
 def test_ekuiper_profile_tables_accept_bounded_terminal_partial_intervals() -> None:
     for row_count in (61, 62):
         summary = ekuiper_profile_summary()

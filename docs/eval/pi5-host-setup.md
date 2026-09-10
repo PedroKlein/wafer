@@ -216,6 +216,37 @@ admission blocked. The script's fixture mode is for local contract tests only;
 its receipts set `execution_mode=fixture-synthetic` and can never grant either
 admission gate.
 
+After a terminal expanded-N=5 PASS, seal the evidence on the Pi before unmounting. The reconciliation receipt must already exist under the batch manifest tree. Stop every experiment writer first; `seal` refuses to run while a runner, load generator, WAFER process, or eKuiper daemon remains active.
+
+```sh
+./eval/scripts/qualify-results-storage.sh facts \
+  --results-root /mnt/wafer-results \
+  > /tmp/wafer-results-pi-final.json
+./eval/scripts/qualify-results-storage.sh seal \
+  --results-root /mnt/wafer-results \
+  --facts-json /tmp/wafer-results-pi-final.json \
+  --verified-receipt /mnt/wafer-results/manifests/storage-qualification/<id>/verified.json \
+  --terminal-reconciliation /mnt/wafer-results/manifests/n5-batches/<batch>/t19-terminal-reconciliation.json \
+  --expected-reconciliation-sha256 <sha256>
+```
+
+The command writes `manifests/expanded-n5.sha256`, the batch-relative
+`composite-index.json`, and `source-seal.json` with exclusive-create semantics.
+Its production defaults require exactly 661 logical records: 623 unique passed
+raw leaves, 37 aliases, and the B00 prerequisite, with four failed attempts
+preserved but excluded. It verifies portable path identity, file and byte
+counts, the exact v10-v13 lineage, and the complete raw tree before and after
+`sync`. Run `sync` once more after the command returns so the final source-seal
+directory entry is durable. Do not unmount unless all three artifacts exist and
+independently verify.
+
+A retry never overwrites an artifact. It re-verifies a complete seal, and it may
+resume only when an existing partial manifest or composite is byte-identical to
+what the current raw tree and reconciliation require. If any partial artifact
+differs, stop and preserve it for investigation; do not delete it or continue to
+handoff. Handoff must run the byte-identical signed verifier recorded by
+`source-seal.json`; a later verifier revision cannot reinterpret an older seal.
+
 For a macOS handoff, eject the volume on the Pi and mount it at `/Volumes/WAF_RESULTS`. The facts receipt binds the macOS disk identifier plus the same exFAT UUID and label; it does not reuse a Linux `/dev/disk/by-id` path:
 
 ```sh
@@ -227,11 +258,13 @@ For a macOS handoff, eject the volume on the Pi and mount it at `/Volumes/WAF_RE
   --facts-json /tmp/wafer-results-macos.json \
   --verified-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/verified.json \
   --manifest /Volumes/WAF_RESULTS/manifests/expanded-n5.sha256 \
+  --source-seal /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/source-seal.json \
+  --composite /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/composite-index.json \
   --analysis-output /Volumes/WAF_RESULTS/derived/expanded-n5 \
   --host macos
 ```
 
-On Jetson, use `/mnt/wafer-results`, capture Linux facts, and pass `--host jetson`. Both handoffs verify the same volume-relative `raw/` manifest in place. The handoff receipt declares raw input read-only and rejects any analysis output outside `derived/` or `reports/`. Do not proceed if facts capture, corpus verification, or the raw manifest check fails.
+On Jetson, use `/mnt/wafer-results`, capture Linux facts, and pass `--host jetson`. Both handoffs verify the same volume-relative `raw/` manifest in place. When source-seal and composite paths are supplied together, the handoff also recomputes the composite from the terminal reconciliation and rejects any selected-leaf, alias, or raw-tree drift. The receipt declares raw input read-only and rejects any analysis output outside `derived/` or `reports/`. Do not proceed if facts capture, corpus verification, source-seal validation, or the raw manifest check fails.
 
 ## 10. Run preflight and smoke
 

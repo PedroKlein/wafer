@@ -434,10 +434,42 @@ a bounded large-file/many-small-file corpus manifest. The operator then stops
 writers, synchronizes, safely unmounts, and remounts the physical volume. A fresh
 mount identity is mandatory. `verified.json` records expected and observed file
 and byte counts plus missing, extra, and mismatched counts after full SHA-256
-verification; every error count must be zero. macOS and Jetson handoff receipts
-bind the same UUID, stable identifier, and volume-relative raw manifest before
-analysis may open the raw tree. The qualification tooling does not format,
-relabel, mount, unmount, copy, or delete storage.
+verification; every error count must be zero. After a terminal rehearsal PASS,
+the `seal` command rejects active evidence writers, validates the immutable
+terminal reconciliation, writes one sorted volume-relative SHA-256 manifest for
+the complete `raw/` tree, and builds a composite index containing one selected
+passed leaf per physical key, immutable aliases, the qualified prerequisite, and
+unselected failed attempts. Production defaults require the exact 661-record
+composition (623 unique selected raw leaves, 37 aliases, one B00 prerequisite,
+and four excluded failed attempts). It then synchronizes and re-verifies the raw
+tree before writing the Pi source-host seal. Existing seal paths are never
+overwritten; an interrupted seal can resume only from byte-identical manifest
+and composite artifacts. macOS and Jetson handoff receipts bind the same UUID, stable
+identifier, raw manifest, source-host seal, and composite index before analysis
+may open the raw tree. Cross-host checks use path, size, and SHA-256 identity;
+source-local modification times remain recorded but are not treated as portable
+exFAT identity. The exact signed verifier bytes recorded in the source seal are
+required at handoff. The qualification tooling does not format, relabel, mount,
+unmount, copy, or delete storage.
+
+Completed expanded-N5 analysis uses the separate
+`wafer_analysis.expanded_n5` adapter. It requires the validated composite and
+macOS handoff receipt, rehashes the complete raw manifest, and permits only the
+exact v10-v13 tag/SHA tuples and accepted control generations recorded by the
+composite. Canonical and N=30 consumers remain strict single-release
+interfaces. The adapter never treats aliases as extra replicates and never
+selects a different attempt by directory scan.
+
+Every normalized result-time row retains its source result key, release tag/SHA,
+control generation, relative artifact path, and SHA-256. Cross-release matched
+arms are labeled `release-confounded`, excluded from paired estimators, shown as
+separate arms, and accompanied by release-stratified sensitivity tables. The
+signed v14 tag/SHA describes only the analyzer and derived outputs; it never
+relabels v10-v13 evidence. Output is diagnostic and non-poolable under
+`derived/` and `reports/` only. Each of the twelve families emits CSV, SVG, PNG,
+PDF, and HTML, plus one hash-bound result-time observations artifact. Family
+observations cannot retain `PRE-RESULTS` or `PENDING`; genuine external gaps,
+including unmatched x86 E-Perf-5, remain report-level pending limitations.
 
 Validate this architecture before implementing or scheduling candidates:
 

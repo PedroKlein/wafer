@@ -410,4 +410,5 @@ def test_wrapper_is_non_destructive_and_exposes_staged_commands() -> None:
     assert completed.returncode == 0
     assert "prepare" in completed.stdout
     assert "verify-remount" in completed.stdout
+    assert "seal" in completed.stdout
     assert "handoff" in completed.stdout
