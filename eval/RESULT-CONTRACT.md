@@ -339,11 +339,16 @@ rehearsals, and cannot support a GC-causality claim.
 #### Enhanced analysis outputs
 
 `eval/analysis/enhanced-visual-manifest.json` is the machine-readable T12
-contract for twelve candidate and diagnostic chart/table families. The renderer
-writes one deterministic SVG and one source CSV per family under
-`derived/enhanced-n5/<batch-id>/`, an artifact manifest in the same directory,
-and an explanatory local-link report under `reports/enhanced-n5/<batch-id>/`.
-It never writes below `raw/` or `manifests/`.
+contract for twelve candidate and diagnostic chart/table families. For the
+completed expanded N=5 diagnostic, the separate mixed-lineage renderer writes
+one deterministic SVG, PNG, PDF, CSV, and HTML table per family under
+`derived/expanded-n5/<batch-id>/`, an artifact manifest in the same directory,
+and an explanatory local-link report under `reports/expanded-n5/<batch-id>/`.
+The pre-results renderer retains `derived/enhanced-n5/<batch-id>/` and
+`reports/enhanced-n5/<batch-id>/`. On macOS exFAT mounts, validators treat only
+well-formed AppleDouble metadata with a declared counterpart as filesystem
+metadata; orphan, malformed, and ordinary undeclared files remain errors. Neither
+renderer writes below `raw/` or `manifests/`.
 
 Every normalized source row binds the explicit batch, clean source SHA, release
 tag, source-relative path, evidence class, independent run, nested sample, unit,

@@ -401,6 +401,34 @@ def test_renderer_rejects_raw_tree_output_and_repository_local_layout(
         )
 
 
+def test_artifact_validation_accepts_only_declared_appledouble_sidecars(
+    tmp_path: Path,
+) -> None:
+    current = layout(tmp_path)
+    values = datasets()
+    materialize_sources(current, values)
+    derived, reports = render_enhanced_visual_suite(
+        values,
+        current,
+        batch_id=BATCH,
+        expected_source_sha=SHA,
+        expected_source_tag=TAG,
+    )
+    (derived / "._payload-knee.csv").write_bytes(b"\x00\x05\x16\x07metadata")
+    (reports / "._index.html").write_bytes(b"\x00\x05\x16\x07metadata")
+
+    validate_enhanced_visual_artifacts(derived, reports)
+
+    (derived / "._orphan.csv").write_bytes(b"\x00\x05\x16\x07metadata")
+    with pytest.raises(ValueError, match="artifact file set differs"):
+        validate_enhanced_visual_artifacts(derived, reports)
+
+    (derived / "._orphan.csv").unlink()
+    (derived / "._payload-knee.csv").write_bytes(b"not AppleDouble")
+    with pytest.raises(ValueError, match="artifact file set differs"):
+        validate_enhanced_visual_artifacts(derived, reports)
+
+
 def test_manifest_and_artifact_validation_fail_closed(tmp_path: Path) -> None:
     manifest = load_enhanced_visual_manifest()
     changed = json.loads(json.dumps(manifest))

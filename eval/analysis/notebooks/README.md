@@ -78,12 +78,12 @@ uv run python -m wafer_analysis.expanded_n5 \
   --source-seal /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/source-seal.json \
   --composite /Volumes/WAF_RESULTS/manifests/n5-batches/<batch>/composite-index.json \
   --handoff-receipt /Volumes/WAF_RESULTS/manifests/storage-qualification/<id>/handoff-macos.json \
-  --analyzer-git-sha <signed-v17-wafer-sha> \
-  --analyzer-tag rpi5-final-rc-v17
+  --analyzer-git-sha <signed-v18-wafer-sha> \
+  --analyzer-tag rpi5-final-rc-v18
 ```
 
 The command first rehashes the complete raw manifest. It writes only below
-`derived/enhanced-n5/<batch>/` and `reports/enhanced-n5/<batch>/`, with CSV,
+`derived/expanded-n5/<batch>/` and `reports/expanded-n5/<batch>/`, with CSV,
 SVG, PNG, PDF, and HTML supporting tables for all twelve families plus a
 hash-bound result-time `observations.json`. The report is headed `DIAGNOSTIC N=5
 REVIEW — NOT THESIS EVIDENCE`. Family observations contain no historical
@@ -93,8 +93,12 @@ E-Perf-5 remain explicit in the report-level external-gap section.
 Matched arms are paired only when both leaves have the same evidence release.
 Cross-release arms are labeled `release-confounded`, remain visible as separate
 arms, and are excluded from paired differences. Release-stratified sensitivity
-CSV/HTML tables are emitted alongside the family artifacts. The analyzer's v16
-tag/SHA is recorded only in derived artifact provenance; raw evidence keeps its
+CSV/HTML tables are emitted alongside the family artifacts. Signed v18 is
+recorded only in derived artifact provenance. Signed v17 remains immutable but
+is rejected for result publication because it targeted the old `enhanced-n5`
+namespace and counted macOS AppleDouble metadata as logical artifacts. V18
+accepts only valid AppleDouble `._*` metadata with a declared counterpart;
+orphan, malformed, and ordinary extras remain fatal. Raw evidence keeps its
 actual v10-v13 lineage.
 
 ## Focused-pilot artifact inventory

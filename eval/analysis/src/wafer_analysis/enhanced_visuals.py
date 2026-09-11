@@ -589,9 +589,10 @@ def _render_validated_visual_suite(
     report_title: str,
     report_introduction: str,
     supporting_tables: dict[str, pd.DataFrame] | None = None,
+    output_namespace: str = "enhanced-n5",
 ) -> tuple[Path, Path]:
-    derived = layout.analysis_path("derived", "enhanced-n5", batch_id)
-    reports = layout.analysis_path("reports", "enhanced-n5", batch_id)
+    derived = layout.analysis_path("derived", output_namespace, batch_id)
+    reports = layout.analysis_path("reports", output_namespace, batch_id)
     if derived.exists() or reports.exists():
         raise FileExistsError("refusing to overwrite enhanced analysis output")
     derived.mkdir(parents=True)
@@ -769,7 +770,22 @@ def render_completed_n5_visual_suite(
             "campaign_started=false; n30_admitted=false."
         ),
         supporting_tables=supporting_tables,
+        output_namespace="expanded-n5",
     )
+
+
+def _artifact_file_names(directory: Path, expected: set[str]) -> set[str]:
+    observed = set()
+    for path in directory.iterdir():
+        if not path.is_file():
+            continue
+        counterpart = path.name[2:] if path.name.startswith("._") else ""
+        with path.open("rb") as artifact:
+            apple_double = artifact.read(4) == b"\x00\x05\x16\x07"
+        if counterpart in expected and apple_double:
+            continue
+        observed.add(path.name)
+    return observed
 
 
 def validate_enhanced_visual_artifacts(
@@ -815,11 +831,11 @@ def validate_enhanced_visual_artifacts(
             path = derived / item[kind]
             if not path.is_file() or _sha256(path) != item[f"{kind}_sha256"]:
                 raise ValueError(f"{item['id']}: supporting {kind} hash differs")
-    observed_files = {path.name for path in derived.iterdir() if path.is_file()}
+    observed_files = _artifact_file_names(derived, expected_files)
     if observed_files != expected_files:
         raise ValueError("enhanced artifact file set differs from manifest")
     report = reports / "index.html"
-    if {path.name for path in reports.iterdir() if path.is_file()} != {"index.html"}:
+    if _artifact_file_names(reports, {"index.html"}) != {"index.html"}:
         raise ValueError("enhanced report file set differs")
     parser = _ReportParser()
     parser.feed(report.read_text(encoding="utf-8"))
@@ -849,7 +865,7 @@ def validate_enhanced_visual_artifacts(
             expected_length = 40 if field == "analyzer_git_sha" else 64
             if re.fullmatch(rf"[0-9a-f]{{{expected_length}}}", str(artifact_manifest.get(field, ""))) is None:
                 raise ValueError(f"completed artifact manifest has invalid {field}")
-        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v17" or not isinstance(
+        if artifact_manifest.get("analyzer_tag") != "rpi5-final-rc-v18" or not isinstance(
             artifact_manifest.get("release_composition"), dict
         ):
             raise ValueError("completed artifact manifest has invalid provenance")
