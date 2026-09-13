@@ -1,0 +1,6 @@
+{
+  "page": "stateless-hot-swap.md",
+  "find": "There is no separate rollback node-state transition.",
+  "replace": "Rollback enters a dedicated rollback state in the NodeState state machine.",
+  "expected_error": "stateless-hot-swap.md: fabricates a rollback node-state transition"
+}

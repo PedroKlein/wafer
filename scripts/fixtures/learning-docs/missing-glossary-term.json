@@ -1,0 +1,6 @@
+{
+  "page": "rust-in-context.md",
+  "find": "- **Arc**:",
+  "replace": "- **Reference-counted pointer**:",
+  "expected_error": "rust-in-context.md: missing glossary terms: arc"
+}

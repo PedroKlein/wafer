@@ -1,0 +1,6 @@
+{
+  "page": "evaluation-harness.md",
+  "find": "Final N=30 remains PENDING because the frozen final campaign has not been admitted as completed evidence.",
+  "replace": "Final N=30 is COMPLETE and admitted as thesis evidence.",
+  "expected_error": "evaluation-harness.md: promotes pending final N=30 evidence"
+}

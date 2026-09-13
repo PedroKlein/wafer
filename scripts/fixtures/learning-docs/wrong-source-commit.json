@@ -1,0 +1,6 @@
+{
+  "page": "README.md",
+  "find": "fa149e75d8b47e3284a76c9b98d0709e7e6f061c",
+  "replace": "0000000000000000000000000000000000000000",
+  "expected_error": "README.md: source commit is not pinned"
+}

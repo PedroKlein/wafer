@@ -1,0 +1,6 @@
+{
+  "page": "rust-in-context.md",
+  "find": "On the current downstream path, `send_one` waits for a permit with `sender.reserve().await`; waiting there applies backpressure.",
+  "replace": "Configured `Drop` and `DeadLetter` overflow policies currently take effect on the downstream send path.",
+  "expected_error": "rust-in-context.md: contradicts bounded overflow implementation"
+}

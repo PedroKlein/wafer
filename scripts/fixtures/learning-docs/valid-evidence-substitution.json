@@ -1,0 +1,6 @@
+{
+  "page": "README.md",
+  "find": "- **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`",
+  "replace": "- **Source:** [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs) | symbol: `pub mod config`",
+  "expected_error": "README.md: evidence authority drift"
+}

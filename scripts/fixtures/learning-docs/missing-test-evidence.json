@@ -1,0 +1,6 @@
+{
+  "page": "README.md",
+  "find": "- **Test:** [`crates/wafer-config/tests/eval_configs_load.rs`](../../crates/wafer-config/tests/eval_configs_load.rs) | symbol: `fn every_eval_config_loads_and_validates()`",
+  "replace": "- **Check:** [`crates/wafer-config/tests/eval_configs_load.rs`](../../crates/wafer-config/tests/eval_configs_load.rs) | symbol: `fn every_eval_config_loads_and_validates()`",
+  "expected_error": "README.md: missing exact test evidence"
+}

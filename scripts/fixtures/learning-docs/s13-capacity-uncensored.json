@@ -1,0 +1,6 @@
+{
+  "page": "evaluation-harness.md",
+  "find": "Their capacity conclusion is CENSORED/PENDING, even if a SUT leaf contains measurements.",
+  "replace": "Their support-confounded capacity conclusion is final and uncensored.",
+  "expected_error": "evaluation-harness.md: promotes support-confounded capacity evidence"
+}

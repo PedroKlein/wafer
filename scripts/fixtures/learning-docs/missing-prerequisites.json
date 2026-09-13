@@ -1,0 +1,6 @@
+{
+  "page": "workspace-map.md",
+  "find": "> **Prerequisites:** [Learning guide orientation](README.md)",
+  "replace": "> Prerequisites: [Learning guide orientation](README.md)",
+  "expected_error": "workspace-map.md: expected exactly one prerequisites declaration"
+}

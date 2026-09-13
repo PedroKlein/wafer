@@ -1,0 +1,6 @@
+{
+  "page": "shutdown-and-failure.md",
+  "find": "A sink drains envelopes already buffered in its receiver, but the bounded orchestrator deadline means shutdown does not guarantee that every in-flight message completes.",
+  "replace": "Graceful shutdown guarantees that every in-flight message completes before the process exits.",
+  "expected_error": "shutdown-and-failure.md: claims all in-flight work completes"
+}

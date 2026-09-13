@@ -1,0 +1,6 @@
+{
+  "page": "config-to-running-pipeline.md",
+  "find": "- **Source:** [`crates/wafer-core/src/dag/graph.rs`](../../crates/wafer-core/src/dag/graph.rs) | symbols: `pub struct DagGraph`, `pub fn from_config`, `pub fn topo_order`",
+  "replace": "- **Source:** [`crates/wafer-config/src/dag.rs`](../../crates/wafer-config/src/dag.rs) | symbols: `pub struct DagGraph`, `pub fn from_config`, `pub fn topo_order`",
+  "expected_error": "config-to-running-pipeline.md: evidence authority drift"
+}

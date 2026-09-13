@@ -1,0 +1,6 @@
+{
+  "page": "reading-paths.md",
+  "find": "Each route starts with the [workspace and ownership map](workspace-map.md)",
+  "replace": "Each route starts with the [workspace and ownership map](missing-workspace-map.md)",
+  "expected_error": "reading-paths.md: broken local link: missing-workspace-map.md"
+}

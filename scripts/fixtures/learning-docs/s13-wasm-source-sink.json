@@ -1,0 +1,6 @@
+{
+  "page": "plugin-boundary.md",
+  "find": "Sources and sinks remain native adapters created by `create_source` and `create_sink`.",
+  "replace": "Sources and sinks are Wasm roles created by `create_source` and `create_sink`.",
+  "expected_error": "plugin-boundary.md: claims sources or sinks execute as Wasm roles"
+}

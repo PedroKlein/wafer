@@ -1,0 +1,6 @@
+{
+  "page": "README.md",
+  "find": "> **Documentation type:** Explanation",
+  "replace": "> **Documentation type:** Guide",
+  "expected_error": "README.md: invalid Diataxis type: Guide"
+}

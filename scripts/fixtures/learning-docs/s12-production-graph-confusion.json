@@ -1,0 +1,6 @@
+{
+  "page": "config-to-running-pipeline.md",
+  "find": "The production builder constructs `wafer-core::dag::graph::DagGraph`; this is distinct from the standalone `wafer-config::DagGraph`.",
+  "replace": "The production builder uses `wafer-config::DagGraph` to construct the running pipeline.",
+  "expected_error": "config-to-running-pipeline.md: confuses production and standalone DagGraph types"
+}
