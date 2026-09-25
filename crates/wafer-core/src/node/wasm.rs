@@ -1073,6 +1073,10 @@ mod tests {
     use super::*;
     use crate::config::{EngineConfig, FuelBudgets, MemoryLimits};
     use crate::engine::{Capabilities, WaferEngine};
+    use std::sync::Mutex;
+    use tracing::field::{Field, Visit};
+    use tracing::span::{Attributes, Id, Record};
+    use tracing::{Event, Metadata, Subscriber};
 
     const MNIST_FUEL: u64 = 100_000_000;
     const MNIST_MEMORY: usize = 64 * 1024 * 1024;
@@ -1083,6 +1087,44 @@ mod tests {
     const ORDINARY_TRAP_COMPONENT: &[u8] =
         include_bytes!("../../tests/fixtures/transform-panics.component.bin");
     const MNIST_DIGIT: &[u8] = include_bytes!("../../../../tests/fixtures/digit_7.bin");
+
+    #[derive(Clone, Default)]
+    struct EventRecorder {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    struct EventVisitor<'a> {
+        values: &'a mut Vec<String>,
+    }
+
+    impl Visit for EventVisitor<'_> {
+        fn record_debug(&mut self, _field: &Field, value: &dyn std::fmt::Debug) {
+            self.values.push(format!("{value:?}"));
+        }
+    }
+
+    impl Subscriber for EventRecorder {
+        fn enabled(&self, _metadata: &Metadata<'_>) -> bool {
+            true
+        }
+
+        fn new_span(&self, _span: &Attributes<'_>) -> Id {
+            Id::from_u64(1)
+        }
+
+        fn record(&self, _span: &Id, _values: &Record<'_>) {}
+
+        fn record_follows_from(&self, _span: &Id, _follows: &Id) {}
+
+        fn event(&self, event: &Event<'_>) {
+            let mut values = self.events.lock().unwrap();
+            event.record(&mut EventVisitor { values: &mut values });
+        }
+
+        fn enter(&self, _span: &Id) {}
+
+        fn exit(&self, _span: &Id) {}
+    }
 
     #[test]
     fn map_process_error_all_variants() {
@@ -1142,8 +1184,26 @@ mod tests {
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|s| s.limits_mut());
 
-        // Should not panic even with no logs
         flush_logs(&mut store);
+    }
+
+    #[test]
+    fn flush_logs_emits_and_drains_current_entries() {
+        let engine = WaferEngine::new().expect("engine");
+        let state = WaferState::new("test-node", Capabilities::sandbox());
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|s| s.limits_mut());
+        store.data_mut().push_log(LogLevel::Warn, "visible-current-call".into());
+        let recorder = EventRecorder::default();
+        let events = Arc::clone(&recorder.events);
+
+        tracing::subscriber::with_default(recorder, || flush_logs(&mut store));
+
+        assert!(!store.data().has_logs(), "flush must drain the current call's log entries");
+        assert!(
+            events.lock().unwrap().iter().any(|value| value.contains("visible-current-call")),
+            "flush must emit the guest log entry"
+        );
     }
 
     fn mnist_engine() -> anyhow::Result<WaferEngine> {
@@ -1203,6 +1263,126 @@ mod tests {
             .map(|(index, _)| index)
             .ok_or_else(|| anyhow::anyhow!("inference returned no logits"))?;
         Ok((prediction, output.payload))
+    }
+
+    fn trapping_node() -> anyhow::Result<WasmTransformNode> {
+        let fuel = NonZeroU64::new(10_000_000);
+        let epoch = NonZeroU64::new(100);
+        let memory_limit = 32 * 1024 * 1024;
+        let config = EngineConfig {
+            epoch_deadline: epoch,
+            fuel: FuelBudgets { transform: fuel, ..FuelBudgets::default() },
+            memory: MemoryLimits { transform: memory_limit, ..MemoryLimits::default() },
+            ..EngineConfig::default()
+        };
+        let engine = WaferEngine::from_engine_config(&config)?;
+        engine.ensure_epoch_ticker();
+        let component = engine.load_component_from_bytes(ORDINARY_TRAP_COMPONENT, "trap")?;
+        let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
+        let capabilities = Capabilities::sandbox().inference(true);
+        let state = WaferState::new_with_memory_limit("trap", capabilities, memory_limit);
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|state| state.limits_mut());
+        store.set_fuel(fuel.unwrap().get())?;
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(epoch.unwrap().get());
+        let bindings = pre.instantiate(&mut store)?;
+        let mut node = WasmTransformNode::new(store, bindings, pre, fuel);
+        node.configure_runtime(capabilities, memory_limit, epoch, r#"{"mode":"trap"}"#.into());
+        node.set_plugin_version("trap-v1");
+        node.validate_and_init(r#"{"mode":"trap"}"#)?;
+        Ok(node)
+    }
+
+    #[test]
+    fn process_clears_stale_logs_before_guest_call() -> anyhow::Result<()> {
+        let mut node = mnist_node()?;
+        node.store.data_mut().push_log(LogLevel::Error, "stale-previous-call".into());
+        let recorder = EventRecorder::default();
+        let events = Arc::clone(&recorder.events);
+
+        let result = tracing::subscriber::with_default(recorder, || {
+            node.process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))
+        });
+
+        anyhow::ensure!(result.is_ok(), "inference call failed: {result:?}");
+        anyhow::ensure!(!node.store.data().has_logs(), "call left buffered logs");
+        let stale_log_emitted = events
+            .lock()
+            .map_err(|error| anyhow::anyhow!("event recorder lock poisoned: {error}"))?
+            .iter()
+            .any(|value| value.contains("stale-previous-call"));
+        anyhow::ensure!(!stale_log_emitted, "stale log was emitted by the next call");
+        Ok(())
+    }
+
+    #[test]
+    fn trap_recovery_rebuilds_the_runtime_contract_from_cached_pre() -> anyhow::Result<()> {
+        let mut node = trapping_node()?;
+        let first_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
+        let expected_first_slot = first_slot.rep();
+        node.store.data_mut().delete_buffer(first_slot)?;
+        let first = node
+            .process(RuntimeEnvelope::from_string("fixture-source", "first"))
+            .expect_err("fixture must trap");
+        anyhow::ensure!(matches!(first, WasmProcessError::Unrecoverable(_)));
+        let reused_first_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
+        anyhow::ensure!(
+            reused_first_slot.rep() == expected_first_slot,
+            "trap leaked the borrowed input buffer slot"
+        );
+        node.store.data_mut().delete_buffer(reused_first_slot)?;
+
+        node.store.data_mut().push_log(LogLevel::Error, "old-store".into());
+        node.store.data_mut().push_buffer(Bytes::from_static(b"old-store-buffer"))?;
+        let old_state = std::ptr::from_ref(node.store.data());
+        let TransformPre::Ordinary(old_pre) = &node.cached_pre else {
+            anyhow::bail!("trap fixture unexpectedly used inference bindings");
+        };
+        let old_pre = Arc::as_ptr(old_pre);
+
+        node.recover_from_cached_pre()?;
+
+        anyhow::ensure!(!std::ptr::eq(old_state, node.store.data()), "Store state was reused");
+        anyhow::ensure!(node.store.data().table().is_empty(), "old Store resources survived");
+        anyhow::ensure!(!node.store.data().has_logs(), "old Store logs survived");
+        anyhow::ensure!(node.capabilities.allow_inference, "capability grant changed");
+        anyhow::ensure!(node.memory_limit == 32 * 1024 * 1024, "memory limit changed");
+        anyhow::ensure!(node.fuel_limit == NonZeroU64::new(10_000_000), "fuel changed");
+        anyhow::ensure!(node.epoch_deadline == NonZeroU64::new(100), "epoch changed");
+        anyhow::ensure!(node.config_json == r#"{"mode":"trap"}"#, "config changed");
+        anyhow::ensure!(node.plugin_version == "trap-v1", "plugin version changed");
+        let TransformPre::Ordinary(recovered_pre) = &node.cached_pre else {
+            anyhow::bail!("recovery unexpectedly changed to inference bindings");
+        };
+        let recovered_pre = Arc::as_ptr(recovered_pre);
+        anyhow::ensure!(old_pre == recovered_pre, "cached InstancePre changed");
+        anyhow::ensure!(node.store.get_fuel()? <= 10_000_000, "fuel not configured");
+        anyhow::ensure!(
+            wasmtime::ResourceLimiter::memory_growing(
+                node.store.data_mut().limits_mut(),
+                32 * 1024 * 1024,
+                32 * 1024 * 1024 + 1,
+                None,
+            )
+            .is_err(),
+            "memory limiter accepted over-limit growth"
+        );
+
+        let second_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
+        let expected_second_slot = second_slot.rep();
+        node.store.data_mut().delete_buffer(second_slot)?;
+        let second = node
+            .process(RuntimeEnvelope::from_string("fixture-source", "second"))
+            .expect_err("recovered fixture must independently trap");
+        anyhow::ensure!(matches!(second, WasmProcessError::Unrecoverable(_)));
+        let reused_second_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
+        anyhow::ensure!(
+            reused_second_slot.rep() == expected_second_slot,
+            "recovered trap leaked the borrowed input buffer slot"
+        );
+        node.store.data_mut().delete_buffer(reused_second_slot)?;
+        Ok(())
     }
 
     #[test]

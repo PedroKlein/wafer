@@ -19,11 +19,18 @@
 //!
 //! See docs/status/implementation-gaps.md §A16.
 
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::Command;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use wafer_core::orchestrator::launch_pipeline;
-use wafer_types::config::Config;
+use wafer_core::queue::RuntimeEnvelope;
+use wafer_core::runner::error_policy::WasmProcessError;
+use wafer_core::testing::PluginTestHarness;
+use wafer_types::config::{Config, EngineConfig, FuelBudgets};
 
 /// Delay-injector artefact path. Missing artefact skips the test (matches
 /// the pattern in `tests/attack_containment.rs`).
@@ -33,6 +40,11 @@ const DELAY_WASM: &str = concat!(
 );
 const EXPECTED_MIN_MEDIAN_NS: u64 = 45_000_000;
 const EXPECTED_MAX_MEDIAN_NS: u64 = 55_000_000;
+const UPPERCASE_WASM: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
+);
+const ACTIVE_CALL_CHILD: &str = "WAFER_ACTIVE_CALL_SHUTDOWN_CHILD";
 
 /// Inline TOML for a tiny pipeline. Uses the same node types as
 /// `eval/configs/pipeline-c-with-delay.toml` but scaled down so the test
@@ -89,6 +101,65 @@ to = "sink"
 /// Read p50 from the latency.hdr the `BenchSink` wrote. Uses `wafer-loadgen
 /// hdr-summary` — same tool the shakedown scripts use — so this test
 /// exercises the same path we'd exercise on Pi.
+fn build_active_call_config() -> Config {
+    toml::from_str(&format!(
+        r#"
+[pipeline]
+name = "active-call-shutdown"
+
+[engine]
+epoch_deadline = 500
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 1
+warmup_messages = 0
+payload_size = 64
+
+[nodes.delay_a]
+type = "transform"
+plugin = {DELAY_WASM:?}
+
+[nodes.delay_a.config]
+delay_ms = 1000
+
+[nodes.delay_b]
+type = "transform"
+plugin = {DELAY_WASM:?}
+
+[nodes.delay_b.config]
+delay_ms = 1000
+
+[nodes.sink_a]
+type = "sink"
+kind = "stdout"
+
+[nodes.sink_b]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "delay_a"
+
+[[edges]]
+from = "source"
+to = "delay_b"
+
+[[edges]]
+from = "delay_a"
+to = "sink_a"
+
+[[edges]]
+from = "delay_b"
+to = "sink_b"
+"#,
+    ))
+    .expect("active-call config must parse")
+}
+
 fn p50_ns_from(bench_dir: &Path) -> u64 {
     let hdr = bench_dir.join("latency.hdr");
     assert!(hdr.exists(), "latency.hdr missing at {hdr:?}");
@@ -111,6 +182,148 @@ fn p50_ns_from(bench_dir: &Path) -> u64 {
     let count = json["total_count"].as_u64().unwrap_or(0);
     assert!(count > 0, "empty histogram — runner never recorded a sample: {json}");
     json["p50_ns"].as_u64().unwrap()
+}
+
+#[test]
+fn repeated_success_and_guest_error_reset_per_call_state() {
+    if !Path::new(UPPERCASE_WASM).exists() {
+        eprintln!("SKIP: uppercase.wasm not built at {UPPERCASE_WASM}");
+        return;
+    }
+
+    let fuel_limit = NonZeroU64::new(10_000_000).unwrap();
+    let config = EngineConfig {
+        fuel: FuelBudgets { transform: Some(fuel_limit), ..FuelBudgets::default() },
+        ..EngineConfig::default()
+    };
+    let harness = PluginTestHarness::with_engine_config(&config).expect("engine");
+    let mut transform = harness.load_transform(UPPERCASE_WASM).expect("uppercase must load");
+
+    let make_input = || {
+        let mut input = RuntimeEnvelope::from_string("host-source", "hello");
+        input.set_parent_id("host-parent");
+        input.ensure_trace_id();
+        input.retry_count = 3;
+        let header = Arc::make_mut(&mut input.header);
+        header.id = "host-id".into();
+        header.timestamp = 1_700_000_000_000_000_123;
+        header.content_type = "text/plain".into();
+        header.metadata = vec![("host-key".into(), "host-value".into())];
+        input
+    };
+
+    let mut remaining_fuel = Vec::new();
+    for _ in 0..3 {
+        let input = make_input();
+        let trace_id = input.trace_id().expect("trace id").to_string();
+        let output = transform.process(input).expect("repeated success");
+        assert_eq!(&*output.payload, b"HELLO");
+        assert_eq!(&*output.header.id, "host-id");
+        assert_eq!(output.header.timestamp, 1_700_000_000_000_000_123);
+        assert_eq!(&*output.header.source, "host-source");
+        assert_eq!(&*output.header.content_type, "text/plain");
+        assert_eq!(output.header.metadata, vec![("host-key".into(), "host-value".into())]);
+        assert_eq!(output.parent_id(), Some("host-parent"));
+        assert_eq!(output.trace_id(), Some(trace_id.as_str()));
+        assert_eq!(output.retry_count, 3);
+        assert!(
+            transform.node_mut().store_mut().data().table().is_empty(),
+            "success must release the borrowed buffer"
+        );
+        remaining_fuel.push(transform.node_mut().store_mut().get_fuel().expect("fuel enabled"));
+    }
+    assert_eq!(
+        remaining_fuel.get(1),
+        remaining_fuel.get(2),
+        "steady-state calls must start with a reset fuel budget: {remaining_fuel:?}"
+    );
+
+    let error = transform
+        .process(RuntimeEnvelope::new("host-source", Bytes::from_static(&[0xff])))
+        .expect_err("invalid UTF-8 must be a guest error");
+    assert!(matches!(error, WasmProcessError::BadInput(_)), "unexpected guest error: {error:?}");
+    assert!(
+        transform.node_mut().store_mut().data().table().is_empty(),
+        "guest error must release the borrowed buffer"
+    );
+
+    let output =
+        transform.process(make_input()).expect("Store must remain usable after guest error");
+    assert_eq!(&*output.payload, b"HELLO");
+    assert!(transform.node_mut().store_mut().data().table().is_empty());
+}
+
+#[test]
+fn active_wasi_calls_finish_before_small_runtime_shutdown() {
+    assert!(Path::new(DELAY_WASM).is_file(), "required delay component missing: {DELAY_WASM}");
+
+    let mut child = Command::new(std::env::current_exe().expect("current test executable"))
+        .args([
+            "--ignored",
+            "--exact",
+            "active_wasi_calls_finish_before_small_runtime_shutdown_child",
+            "--nocapture",
+        ])
+        .env(ACTIVE_CALL_CHILD, "1")
+        .spawn()
+        .expect("spawn bounded active-call child");
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().expect("poll active-call child") {
+            assert!(status.success(), "active-call child failed with {status}");
+            break;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill timed-out active-call child");
+            child.wait().expect("reap timed-out active-call child");
+            panic!("active-call child exceeded the 15 s hard outer timeout");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "executed in a hard-bounded subprocess by active_wasi_calls_finish_before_small_runtime_shutdown"]
+async fn active_wasi_calls_finish_before_small_runtime_shutdown_child() {
+    assert_eq!(std::env::var(ACTIVE_CALL_CHILD).as_deref(), Ok("1"));
+    let mut orchestrator = launch_pipeline(build_active_call_config(), None)
+        .await
+        .expect("two-delay pipeline must launch");
+    let handle = orchestrator.handle();
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while handle.node_metrics("source").map_or(0, |metrics| metrics.processed()) < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("source must enqueue the fan-out message");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(handle.node_metrics("delay_a").map_or(0, |metrics| metrics.processed()), 0);
+    assert_eq!(handle.node_metrics("delay_b").map_or(0, |metrics| metrics.processed()), 0);
+
+    let cancel_started = Instant::now();
+    orchestrator.cancel();
+    tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete())
+        .await
+        .expect("shutdown must stay within the five-second child bound")
+        .expect("pipeline must shut down without a runner panic");
+    let shutdown_elapsed = cancel_started.elapsed();
+
+    assert!(
+        shutdown_elapsed >= Duration::from_millis(700),
+        "shutdown returned before active one-second guest calls completed: {shutdown_elapsed:?}"
+    );
+    assert_eq!(
+        handle.node_metrics("delay_a").map_or(0, |metrics| metrics.processed()),
+        1,
+        "first active call must finish exactly once before cancellation is observed"
+    );
+    assert_eq!(
+        handle.node_metrics("delay_b").map_or(0, |metrics| metrics.processed()),
+        1,
+        "second active call must finish exactly once before cancellation is observed"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
