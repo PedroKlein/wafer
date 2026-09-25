@@ -37,8 +37,7 @@ use wafer_types::NodeState;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 fn spawn_wasm_runner(tasks: &mut JoinSet<()>, runner: impl Future<Output = ()> + Send + 'static) {
-    let runtime = tokio::runtime::Handle::current();
-    tasks.spawn_blocking(move || runtime.block_on(runner));
+    tasks.spawn(runner);
 }
 
 /// Pipeline orchestrator managing node lifecycle with watch-channel hot-swap.
@@ -958,8 +957,7 @@ async fn recv_or_cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{HashMap, HashSet};
-    use std::sync::Mutex;
+    use std::collections::HashMap;
 
     use testcontainers::runners::AsyncRunner;
     use testcontainers_modules::mosquitto::Mosquitto;
@@ -1225,24 +1223,17 @@ mod tests {
         let _ = orch.handle().try_begin_swap("sink").expect_err("sink rejected");
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn wasm_runner_keeps_block_in_place_on_one_thread() {
+    #[tokio::test]
+    async fn wasm_runner_uses_tokio_executor() {
+        let runtime_thread = std::thread::current().id();
         let mut tasks = JoinSet::new();
-        let thread_ids = Arc::new(Mutex::new(HashSet::new()));
-        let observed = Arc::clone(&thread_ids);
         spawn_wasm_runner(&mut tasks, async move {
-            for _ in 0..10_000 {
-                tokio::task::block_in_place(|| {
-                    observed
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .insert(std::thread::current().id());
-                });
-            }
+            assert_eq!(std::thread::current().id(), runtime_thread);
+            tokio::task::yield_now().await;
+            assert_eq!(std::thread::current().id(), runtime_thread);
         });
 
         tasks.join_next().await.expect("runner task").expect("runner result");
-        assert_eq!(thread_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).len(), 1);
     }
 
     #[tokio::test]
