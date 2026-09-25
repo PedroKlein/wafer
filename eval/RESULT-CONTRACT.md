@@ -196,6 +196,335 @@ before reading. The matrix below is authoritative:
   `metadata.json`, `config.toml`, `stdout.log`, and E-Perf-9
   `startup-preparation.json`.
 
+### Production P2 async A/B experiment
+
+This checked-in specification freezes the host-only asynchronous Preview 2
+candidate. It does not change `wafer:pipeline@0.1.0`, guest WIT, plugin bytes,
+existing evaluation results, or the separately planned P3 PoC.
+
+The workspace and lockfile pin Wasmtime 48.0.2 to
+`e9f1ea232fd245aea338ab3eb7d73487ae75cab1`. At that revision the candidate
+uses `wasmtime_wasi::p2::add_to_linker_async`; host `bindgen!` invocations use
+`imports: { default: async }`, `exports: { default: async }`, and
+`require_store_data_send: true`; generated typed pre-instances use
+`instantiate_async`; and lifecycle and processing calls are awaited.
+`Config::async_support(true)` is excluded because it is a deprecated no-op at
+the pinned revision. The existing synchronous `wasmtime_wasi_nn` linker wiring
+remains, while inference instantiation and exports follow the same async
+Component Model path as Transform.
+
+#### Current and candidate execution paths
+
+| Path | Current implementation | Async candidate | Preserved boundary |
+| --- | --- | --- | --- |
+| Startup and linker | `WaferEngine::build_linker` registers `p2::add_to_linker_sync`; typed `*Pre` values cover Transform, inference, Filter, and Router. | Register `p2::add_to_linker_async` and generate async imports/exports. | One engine and the existing four worlds and capabilities. |
+| Initial instantiation | Launch creates one Store per loaded node, applies limits and metering, calls synchronous `*Pre::instantiate`, then lifecycle. | Await `*Pre::instantiate_async`, `validate`, and `init` in the same sequential launch future. | One Store owner; fuel before start functions; memory, epoch, config, version, and inference grant unchanged. |
+| Lifecycle | `Wasm*Node::validate_and_init` resets configured fuel and epoch, calls `validate` then `init`, and flushes logs. Retirement drops the Store rather than invoking guest `close`. | Await the same ordered calls; do not add new `close` behavior. | No lifecycle-policy or cleanup-order change. |
+| Processing | Transform `process`, Filter `evaluate`, and Router `route` clear logs, reset metering, push one borrowed buffer, synchronously call the guest, flush logs, delete the buffer on every result, and map output/error/trap. | Make the wrappers async and await the generated call while retaining that exact setup/call/cleanup order. | Logs, fuel, relative epoch, borrowed-buffer cleanup, metadata, lineage, retry count, and forwarding unchanged. |
+| Runner scheduling | `spawn_wasm_runner` uses `JoinSet::spawn_blocking` plus `Handle::block_on`; each guest call uses `tokio::task::block_in_place`. | Use ordinary `JoinSet` tasks and await node calls directly. | `ProcessingGuard` spans the call; no per-message spawn, Store mutex, abort, timeout race, or Wasm future in `select!`. |
+| Trap/timeout recovery | After a completed error, `recover_from_cached_pre` creates a fresh Store, reapplies capabilities, memory, fuel, epoch, cached pre-instantiation, and lifecycle. | Await fresh-Store instantiation and lifecycle before receiving another message. | A trapped, interrupted, or cancellation-dropped Store is never reused. |
+| Reconfigure | A fresh Store and cached instance are prepared synchronously; lifecycle runs after swap-in; rejection restores the prior Store, bindings, and config. | Await preparation and lifecycle before commit or rollback. | Atomic between-message reconfigure. |
+| Hot-swap | Preparation already uses `instantiate_async` with a typed pre-instance built from the sync P2 linker; adoption and lifecycle happen between messages. | Use the async P2 linker/bindings throughout preparation and await adoption lifecycle. | Watch signalling, grants, memory limits, canary rollback, and one active call. |
+| Direct harness | `PluginTestHarness` synchronously instantiates and `TransformHarness::process` calls the sync production wrapper. | Use the same async production binding and call route without a test-only exported API. | Production bindings and cached pre-instantiation remain the harness path. |
+
+The inventory is reconciled by these exact searches:
+
+```sh
+DEVELOPER_DIR=/Library/Developer/CommandLineTools git grep -n -E \
+  'add_to_linker_(sync|async)|spawn_blocking|block_in_place|\.instantiate(_async)?\(|call_(validate|init|process|evaluate|route)' \
+  -- crates/wafer-core/src
+
+WASMTIME_REPO=/Users/i572543/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main
+DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C "$WASMTIME_REPO" \
+  grep -n -E 'pub fn add_to_linker_(async|sync)|require_store_data_send' \
+  e9f1ea232fd245aea338ab3eb7d73487ae75cab1 -- \
+  crates/wasi/src/p2 crates/wasmtime/src/runtime/component examples/wasip2-async/main.rs
+```
+
+#### Correctness and strict-simplicity gates
+
+Correctness passes only when the mandatory prepared-artifact matrix passes
+without missing fixtures, required skips, or ignored tests. It covers all four
+worlds, Rust P2 and TinyGo P2 compatibility, repeated success/error/trap
+cleanup, saturated workers, active-call shutdown, fresh-Store recovery,
+reconfigure, hot-swap/rollback, inference, capabilities, memory limits,
+metering, logs, metadata, lineage, retry count, and exactly-once forwarding.
+Formatting, clippy with warnings denied, and workspace tests are mandatory.
+
+Strict simplicity passes only when:
+
+1. production has zero Wasm-runner `spawn_blocking` and zero guest-call
+   `block_in_place` sites;
+2. startup, lifecycle, processing, recovery, reconfigure, and hot-swap use one
+   async linker-to-call path without a sync fallback, feature switch, or
+   duplicate wrapper;
+3. every node directly owns one Store and has at most one in-flight guest call;
+4. no Store mutex, per-message spawn, normal-path abort, cancellation timeout,
+   or Wasm future in `select!` is introduced; and
+5. no equivalent scheduling bridge replaces the removed blocking bridge.
+
+The decision receipt records:
+
+```text
+blocking_bridge_sites = production Wasm-runner spawn_blocking sites
+                      + production guest-call block_in_place sites
+production_p2_execution_paths = distinct sync or async linker-to-call paths
+```
+
+The candidate requires `blocking_bridge_sites = 0` and
+`production_p2_execution_paths = 1`, with both values lower than a nonzero
+baseline and no replacement bridge in the source diff.
+
+#### Metrics and fail-closed decision
+
+For run `i`, after warmup:
+
+```text
+T_arm,i = measured_unique_messages / measurement_duration_seconds
+L_arm,i = p95_ns from the complete latency.hdr
+R_arm,i = max in-window rss_bytes from memory.csv
+```
+
+For each payload condition, throughput and p95 are the medians of the 10 run
+values. RSS is the maximum run-level peak. Deltas use the baseline denominator:
+
+```text
+throughput_delta_pct = 100 * (T_candidate - T_baseline) / T_baseline
+p95_latency_delta_pct = 100 * (L_candidate - L_baseline) / L_baseline
+rss_delta_bytes = R_candidate - R_baseline
+rss_allowance_bytes = max(0.05 * R_baseline, 2 * 1024 * 1024)
+```
+
+| Correctness | Strict simplicity | Every condition: throughput | Every condition: p95 | Every condition: RSS | Decision |
+| --- | --- | --- | --- | --- | --- |
+| pass | pass | `throughput_delta_pct >= -5.0` | `p95_latency_delta_pct <= 5.0` | `rss_delta_bytes <= rss_allowance_bytes` | `adopt-async-p2` |
+| fail | any | any | any | any | `retain-sync-p2` |
+| pass | fail | any | any | any | `retain-sync-p2` |
+| pass | pass | fails any condition | any | any | `retain-sync-p2` |
+| pass | pass | pass | fails any condition | any | `retain-sync-p2` |
+| pass | pass | pass | pass | fails any condition | `retain-sync-p2` |
+| missing, malformed, dirty, unpaired, or fewer than 10 valid pairs | any | any | any | any | `retain-sync-p2` |
+
+There is no inconclusive adoption state. Any unproven gate selects
+`retain-sync-p2`; the candidate code is reverted while tests and investigation
+evidence remain.
+
+#### Matched workload and artifacts
+
+Raw outputs live outside the historical and canonical trees under the active
+plan scratch directory:
+
+```text
+<scratch>/p2-ab/
+├── batch-manifest.json
+├── baseline/120b/pair-01/ ... pair-10/
+├── candidate/120b/pair-01/ ... pair-10/
+├── baseline/1kb/pair-01/ ... pair-10/
+├── candidate/1kb/pair-01/ ... pair-10/
+├── baseline/100kb/pair-01/ ... pair-10/
+├── candidate/100kb/pair-01/ ... pair-10/
+└── p2-decision.json
+```
+
+Each pair completes before the next pair. Odd pairs run baseline then
+candidate; even pairs run candidate then baseline, counterbalancing order while
+preserving strict alternation. A pair contributes only when both leaves pass
+validation. Each leaf contains the normal run-experiment outputs plus
+`p2-ab-manifest.json`:
+
+| File | Required contents |
+| --- | --- |
+| `metadata.json` | Full source SHA, `git_dirty=false`, tool/runtime provenance, config SHA-256, runtime SHA-256, and plugin SHA-256. |
+| `config.toml` | Exact checked-in condition config. Its SHA-256 must match its counterpart in the pair. |
+| `latency.hdr` | Complete post-warmup histogram; `wafer-loadgen hdr-summary` must report 60,000 values and p50/p95/p99 nanoseconds. |
+| `latency-summary.json` | Machine-readable `hdr-summary` output used for p50/p95/p99 and population validation. |
+| `throughput.csv` | Post-warmup throughput samples. The run scalar is 60,000 unique messages divided by the `measurement-window.json` duration. |
+| `memory.csv` | Runtime-owned one-second RSS samples. Using `memory-clock.json`, the run scalar is `max(rss_bytes)` within the measurement window. Missing or empty in-window samples fail the leaf. |
+| `measurement-window.json` | Exact post-warmup Unix-epoch start/end bounds used for the throughput denominator. |
+| `sequence.csv` | Exactly 60,000 measured messages, zero gaps, and zero duplicates. |
+| `stdout.log` | Complete runtime stdout/stderr. A panic, required-test skip, or early runtime exit fails the leaf. |
+| `runtime-provenance.json` | Runtime-owned Wasmtime, Rust, binary, config, plugin, kernel, and effective-metering provenance. |
+| `p2-ab-manifest.json` | Schema below, including hashes of every preceding file. |
+
+`batch-manifest.json` records schema `wafer-p2-async-ab-batch-v1`, generation
+UTC, host/kernel/architecture, full baseline and candidate SHAs, both clean git
+statuses, Wasmtime revision
+`e9f1ea232fd245aea338ab3eb7d73487ae75cab1`, Rust/Cargo/wasm-tools/Python
+versions, the WIT tree hash, the three condition config hashes, runtime and
+pass-through component hashes per arm, `TOKIO_WORKER_THREADS=4`, queue capacity
+1,024, release/locked build mode, 10 pairs per condition, and the counterbalanced
+order rule.
+
+`p2-ab-manifest.json` uses schema `wafer-p2-async-ab-run-v1` and contains:
+
+```json
+{
+  "schema": "wafer-p2-async-ab-run-v1",
+  "arm": "baseline",
+  "condition": "1kb",
+  "pair_index": 1,
+  "git_sha": "<40 lowercase hex characters>",
+  "git_dirty": false,
+  "wasmtime_revision": "e9f1ea232fd245aea338ab3eb7d73487ae75cab1",
+  "controlled_factors": {
+    "payload_bytes": 1024,
+    "payload_pattern": "repeated-byte-0x42",
+    "queue_capacity": 1024,
+    "tokio_worker_threads": 4,
+    "rate_messages_per_second": 1000,
+    "warmup_messages": 30000,
+    "warmup_seconds": 30,
+    "measured_messages": 60000,
+    "measurement_seconds": 60,
+    "outer_duration_seconds": 120,
+    "release": true,
+    "locked": true,
+    "fuel": {"transform": 10000000, "filter": 500000, "router": 500000},
+    "epoch_deadline_ticks": 100,
+    "epoch_tick_ms": 10
+  },
+  "sha256": {
+    "config.toml": "<64 lowercase hex characters>",
+    "wafer-runtime": "<64 lowercase hex characters>",
+    "pass-through.wasm": "<64 lowercase hex characters>",
+    "metadata.json": "<64 lowercase hex characters>",
+    "runtime-provenance.json": "<64 lowercase hex characters>",
+    "latency.hdr": "<64 lowercase hex characters>",
+    "latency-summary.json": "<64 lowercase hex characters>",
+    "throughput.csv": "<64 lowercase hex characters>",
+    "memory.csv": "<64 lowercase hex characters>",
+    "memory-clock.json": "<64 lowercase hex characters>",
+    "measurement-window.json": "<64 lowercase hex characters>",
+    "sequence.csv": "<64 lowercase hex characters>",
+    "stdout.log": "<64 lowercase hex characters>"
+  }
+}
+```
+
+The following is the exact preparation and execution procedure. `BASELINE_SHA`
+and `CANDIDATE_SHA` must be set to the full P1-T1 and P1-T5 commits before
+execution; abbreviated revisions are rejected. It creates detached clean
+worktrees and never uses the developer's dirty working tree.
+
+```sh
+set -euo pipefail
+export DEVELOPER_DIR=/Library/Developer/CommandLineTools
+export TOKIO_WORKER_THREADS=4
+export ROOT=/Users/i572543/.pi/plans/component-model-shippable-improvements/scratch/p2-ab
+export REPO=/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements
+export BASELINE_SHA=<full-40-character-P1-T1-commit>
+export CANDIDATE_SHA=<full-40-character-P1-T5-commit>
+export WASMTIME_REV=e9f1ea232fd245aea338ab3eb7d73487ae75cab1
+
+printf '%s\n' "$BASELINE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+printf '%s\n' "$CANDIDATE_SHA" | grep -Eq '^[0-9a-f]{40}$'
+
+mkdir -p "$ROOT/worktrees" "$ROOT/logs"
+{
+  git --version
+  rustc --version --verbose
+  cargo --version --verbose
+  wasm-tools --version
+  python3 --version
+} >"$ROOT/logs/tool-versions.log" 2>&1
+git -C "$REPO" diff --exit-code "$BASELINE_SHA" "$CANDIDATE_SHA" -- wit plugins/pass-through
+git -C "$REPO" worktree add --detach "$ROOT/worktrees/baseline" "$BASELINE_SHA"
+git -C "$REPO" worktree add --detach "$ROOT/worktrees/candidate" "$CANDIDATE_SHA"
+
+for arm in baseline candidate; do
+  worktree="$ROOT/worktrees/$arm"
+  test -z "$(git -C "$worktree" status --porcelain)"
+  DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+    cargo build --manifest-path "$worktree/plugins/pass-through/Cargo.toml" \
+      --target wasm32-wasip2 --release --locked \
+    >"$ROOT/logs/$arm-build-plugin.log" 2>&1
+  DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+    cargo build --manifest-path "$worktree/Cargo.toml" --release --locked \
+      -p wafer-runtime -p wafer-loadgen \
+    >"$ROOT/logs/$arm-build-host.log" 2>&1
+  wasm-tools validate --features component-model \
+    "$worktree/plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm" \
+    >"$ROOT/logs/$arm-validate-plugin.log" 2>&1
+  test -z "$(git -C "$worktree" status --porcelain)"
+done
+
+git -C "$ROOT/worktrees/baseline" rev-parse HEAD | grep -Fx "$BASELINE_SHA"
+git -C "$ROOT/worktrees/candidate" rev-parse HEAD | grep -Fx "$CANDIDATE_SHA"
+cmp \
+  "$ROOT/worktrees/baseline/plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm" \
+  "$ROOT/worktrees/candidate/plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+
+for condition in 120b 1kb 100kb; do
+  for pair in $(seq -w 1 10); do
+    if [ $((10#$pair % 2)) -eq 1 ]; then
+      arms='baseline candidate'
+    else
+      arms='candidate baseline'
+    fi
+    for arm in $arms; do
+      worktree="$ROOT/worktrees/$arm"
+      config="$worktree/eval/configs/canonical/e-perf-4-$condition.toml"
+      out="$ROOT/$arm/$condition/pair-$pair"
+      test -z "$(git -C "$worktree" status --porcelain)"
+      (
+        cd "$worktree"
+        DEVELOPER_DIR=/Library/Developer/CommandLineTools \
+        TOKIO_WORKER_THREADS=4 \
+        eval/scripts/run-experiment.sh \
+          --config "eval/configs/canonical/e-perf-4-$condition.toml" \
+          --experiment p2-async-ab \
+          --host shakedown-macos \
+          --duration 120 \
+          --measurement-secs 60 \
+          --warmup-secs 30 \
+          --skip-build \
+          --output-dir "$out"
+      ) >"$ROOT/logs/$arm-$condition-pair-$pair.log" 2>&1
+      test -s "$out/latency.hdr"
+      test -s "$out/throughput.csv"
+      test -s "$out/memory.csv"
+      test -s "$out/memory-clock.json"
+      test -s "$out/measurement-window.json"
+      test -s "$out/sequence.csv"
+      "$worktree/target/release/wafer-loadgen" hdr-summary \
+        --hdr "$out/latency.hdr" >"$out/latency-summary.json"
+      python3 "$REPO/eval/scripts/write-p2-ab-manifest.py" \
+        --worktree "$worktree" \
+        --arm "$arm" \
+        --condition "$condition" \
+        --pair "$pair" \
+        --output "$out/p2-ab-manifest.json"
+    done
+  done
+done
+
+python3 "$REPO/eval/scripts/analyze-p2-ab.py" \
+  --root "$ROOT" \
+  --minimum-pairs 10 \
+  --output "$ROOT/p2-decision.json"
+```
+
+The manifest writer also creates `batch-manifest.json` on its first invocation
+and rejects any later invocation whose controlled factors or arm identity do
+not match it. The two named Python entry points are delivered with the
+measurement task, not this specification task. They must implement this schema
+and the formulas in RFC-012 without adding a benchmark dependency. Their
+absence, any failed
+command, fewer than 10 valid pairs per condition, an arm-order violation, a
+hash mismatch, a dirty worktree, a missing/empty mandatory artifact, a sample
+count other than 60,000, a sequence gap/duplicate, or a non-finite metric is a
+failed experiment and therefore selects `retain-sync-p2`.
+
+`p2-decision.json` uses schema `wafer-p2-async-decision-v1`. It records both
+source SHAs, all admitted pair identities, run-level throughput/p95/RSS values,
+condition medians, candidate-minus-baseline deltas, correctness and strict-
+simplicity results, and exactly one decision: `adopt-async-p2` or
+`retain-sync-p2`. Adoption requires every correctness and simplicity gate and,
+for every condition, median throughput degradation no greater than 5%, median
+p95 latency increase no greater than 5%, and candidate peak RSS increase no
+greater than `max(5% of baseline peak RSS, 2 MiB)`. Missing evidence fails
+closed to `retain-sync-p2`.
+
 ### Final amended contract
 
 The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,165 schedule records, and 1,953 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`; diagnostic and focused entries remain in the separate `focused_pilot` object with `thesis_evidence=false`.
