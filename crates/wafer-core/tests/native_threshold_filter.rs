@@ -51,8 +51,8 @@ fn envelope_with_temperature(temp: f64) -> RuntimeEnvelope {
 /// AC3 regression: 1000 mixed-temp records through the native path
 /// produce the exact same Forward/Drop set as the WIT plugin contract
 /// (`value >= min && value <= max`).
-#[test]
-fn native_threshold_filter_matches_wit_semantics() {
+#[tokio::test]
+async fn native_threshold_filter_matches_wit_semantics() {
     const FIELD: &str = "temperature";
     const MIN: f64 = 50.0;
     const MAX: f64 = 99_999.0;
@@ -66,7 +66,7 @@ fn native_threshold_filter_matches_wit_semantics() {
     for (i, temp) in temperature_corpus(1000).into_iter().enumerate() {
         let env = envelope_with_temperature(temp);
         let native = matches!(
-            filter.evaluate(&env).expect("native filter cannot trap"),
+            filter.evaluate(&env).await.expect("native filter cannot trap"),
             FilterOutcome::Forward
         );
         let oracle = (MIN..=MAX).contains(&temp);
@@ -99,8 +99,8 @@ fn native_threshold_filter_matches_wit_semantics() {
 /// inclusive, unlike the legacy `NativeFilter::threshold` which uses
 /// strict `>`. Regressions here would silently drop one record in
 /// `1_000_000` at the boundary — invisible in aggregate but wrong.
-#[test]
-fn native_threshold_filter_boundary_inclusive() {
+#[tokio::test]
+async fn native_threshold_filter_boundary_inclusive() {
     let mut filter = FilterNode::from(NativeFilter::range("t", "temperature", 50.0, 99.5));
 
     let at_min = envelope_with_temperature(50.0);
@@ -108,16 +108,16 @@ fn native_threshold_filter_boundary_inclusive() {
     let at_max = envelope_with_temperature(99.5);
     let above_max = envelope_with_temperature(99.501);
 
-    assert_eq!(filter.evaluate(&at_min).unwrap(), FilterOutcome::Forward);
-    assert_eq!(filter.evaluate(&below_min).unwrap(), FilterOutcome::Drop);
-    assert_eq!(filter.evaluate(&at_max).unwrap(), FilterOutcome::Forward);
-    assert_eq!(filter.evaluate(&above_max).unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&at_min).await.unwrap(), FilterOutcome::Forward);
+    assert_eq!(filter.evaluate(&below_min).await.unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&at_max).await.unwrap(), FilterOutcome::Forward);
+    assert_eq!(filter.evaluate(&above_max).await.unwrap(), FilterOutcome::Drop);
 }
 
 /// Malformed inputs are indistinguishable from a false predicate at the
 /// `FilterOutcome` layer — matching the WIT plugin's `bad_input` return.
-#[test]
-fn native_threshold_filter_malformed_drops() {
+#[tokio::test]
+async fn native_threshold_filter_malformed_drops() {
     let mut filter = FilterNode::from(NativeFilter::range("t", "temperature", 50.0, 99.0));
 
     let missing_field = RuntimeEnvelope::from_string("corpus", r#"{"humidity":80}"#);
@@ -125,9 +125,9 @@ fn native_threshold_filter_malformed_drops() {
     let non_utf8 = RuntimeEnvelope::new("corpus", non_utf8_bytes);
     let non_numeric = RuntimeEnvelope::from_string("corpus", r#"{"temperature":"hot"}"#);
 
-    assert_eq!(filter.evaluate(&missing_field).unwrap(), FilterOutcome::Drop);
-    assert_eq!(filter.evaluate(&non_utf8).unwrap(), FilterOutcome::Drop);
-    assert_eq!(filter.evaluate(&non_numeric).unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&missing_field).await.unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&non_utf8).await.unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&non_numeric).await.unwrap(), FilterOutcome::Drop);
 }
 
 /// AC F1 launcher-wired regression: loading `eval/configs/pipeline-a-native.toml`
@@ -136,8 +136,8 @@ fn native_threshold_filter_malformed_drops() {
 /// branch in `crates/wafer-core/src/orchestrator/launcher.rs`, this test
 /// fails at `build_native_filter_from_def` — catching the exact regression
 /// the direct-construction tests above cannot.
-#[test]
-fn pipeline_a_native_config_wires_launcher_dispatch() {
+#[tokio::test]
+async fn pipeline_a_native_config_wires_launcher_dispatch() {
     let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(|p| p.parent())
@@ -167,7 +167,7 @@ fn pipeline_a_native_config_wires_launcher_dispatch() {
     let hot = envelope_with_temperature(72.5);
     let cold = envelope_with_temperature(30.0);
     let boundary = envelope_with_temperature(50.0);
-    assert_eq!(filter.evaluate(&hot).unwrap(), FilterOutcome::Forward);
-    assert_eq!(filter.evaluate(&cold).unwrap(), FilterOutcome::Drop);
-    assert_eq!(filter.evaluate(&boundary).unwrap(), FilterOutcome::Forward);
+    assert_eq!(filter.evaluate(&hot).await.unwrap(), FilterOutcome::Forward);
+    assert_eq!(filter.evaluate(&cold).await.unwrap(), FilterOutcome::Drop);
+    assert_eq!(filter.evaluate(&boundary).await.unwrap(), FilterOutcome::Forward);
 }

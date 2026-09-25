@@ -149,6 +149,7 @@ fn bench_transform_throughput(c: &mut Criterion) {
     group.sample_size(50);
 
     let harness = PluginTestHarness::new().expect("Failed to create harness");
+    let rt = Runtime::new().expect("tokio runtime");
 
     let message_counts = [100, 1000, 10000];
 
@@ -157,22 +158,26 @@ fn bench_transform_throughput(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("passthrough", count), &count, |b, &count| {
             b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
+                rt.block_on(async {
+                    let mut total = Duration::ZERO;
 
-                for _ in 0..iters {
-                    let mut transform =
-                        harness.load_transform(&passthrough).expect("load pass-through plugin");
-                    let envelope = create_test_envelope(256);
+                    for _ in 0..iters {
+                        let mut transform = harness
+                            .load_transform(&passthrough)
+                            .await
+                            .expect("load pass-through plugin");
+                        let envelope = create_test_envelope(256);
 
-                    let start = Instant::now();
-                    for _ in 0..count {
-                        let out = transform.process(envelope.clone()).unwrap();
-                        black_box(out);
+                        let start = Instant::now();
+                        for _ in 0..count {
+                            let out = transform.process(envelope.clone()).await.unwrap();
+                            black_box(out);
+                        }
+                        total += start.elapsed();
                     }
-                    total += start.elapsed();
-                }
 
-                total
+                    total
+                })
             });
         });
     }
@@ -184,22 +189,26 @@ fn bench_transform_throughput(c: &mut Criterion) {
 
             group.bench_with_input(BenchmarkId::new("uppercase", count), &count, |b, &count| {
                 b.iter_custom(|iters| {
-                    let mut total = Duration::ZERO;
+                    rt.block_on(async {
+                        let mut total = Duration::ZERO;
 
-                    for _ in 0..iters {
-                        let mut transform =
-                            harness.load_transform(&uppercase).expect("load uppercase plugin");
-                        let envelope = create_test_envelope(256);
+                        for _ in 0..iters {
+                            let mut transform = harness
+                                .load_transform(&uppercase)
+                                .await
+                                .expect("load uppercase plugin");
+                            let envelope = create_test_envelope(256);
 
-                        let start = Instant::now();
-                        for _ in 0..count {
-                            let out = transform.process(envelope.clone()).unwrap();
-                            black_box(out);
+                            let start = Instant::now();
+                            for _ in 0..count {
+                                let out = transform.process(envelope.clone()).await.unwrap();
+                                black_box(out);
+                            }
+                            total += start.elapsed();
                         }
-                        total += start.elapsed();
-                    }
 
-                    total
+                        total
+                    })
                 });
             });
         }
@@ -223,6 +232,7 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
     group.sample_size(50);
 
     let harness = PluginTestHarness::new().expect("Failed to create harness");
+    let rt = Runtime::new().expect("tokio runtime");
     let sizes = [64, 256, 1024, 4096, 16384, 65536];
     let iterations = 1000;
 
@@ -231,22 +241,26 @@ fn bench_transform_message_sizes(c: &mut Criterion) {
 
         group.bench_with_input(BenchmarkId::new("process", size), &size, |b, &size| {
             b.iter_custom(|iters| {
-                let mut total = Duration::ZERO;
+                rt.block_on(async {
+                    let mut total = Duration::ZERO;
 
-                for _ in 0..iters {
-                    let mut transform =
-                        harness.load_transform(&passthrough).expect("load pass-through plugin");
-                    let envelope = create_test_envelope(size);
+                    for _ in 0..iters {
+                        let mut transform = harness
+                            .load_transform(&passthrough)
+                            .await
+                            .expect("load pass-through plugin");
+                        let envelope = create_test_envelope(size);
 
-                    let start = Instant::now();
-                    for _ in 0..iterations {
-                        let out = transform.process(envelope.clone()).unwrap();
-                        black_box(out);
+                        let start = Instant::now();
+                        for _ in 0..iterations {
+                            let out = transform.process(envelope.clone()).await.unwrap();
+                            black_box(out);
+                        }
+                        total += start.elapsed();
                     }
-                    total += start.elapsed();
-                }
 
-                total
+                    total
+                })
             });
         });
     }
@@ -269,17 +283,21 @@ fn bench_transform_latency(c: &mut Criterion) {
     group.sample_size(100);
 
     let harness = PluginTestHarness::new().expect("Failed to create harness");
-    let mut transform = harness.load_transform(&passthrough).expect("load pass-through plugin");
+    let rt = Runtime::new().expect("tokio runtime");
+    let mut transform =
+        rt.block_on(harness.load_transform(&passthrough)).expect("load pass-through plugin");
     let envelope = create_test_envelope(256);
 
     group.bench_function("single_message", |b| {
         b.iter_custom(|iters| {
-            let start = Instant::now();
-            for _ in 0..iters {
-                let out = transform.process(envelope.clone()).unwrap();
-                black_box(out);
-            }
-            start.elapsed()
+            rt.block_on(async {
+                let start = Instant::now();
+                for _ in 0..iters {
+                    let out = transform.process(envelope.clone()).await.unwrap();
+                    black_box(out);
+                }
+                start.elapsed()
+            })
         });
     });
 
@@ -288,16 +306,17 @@ fn bench_transform_latency(c: &mut Criterion) {
     println!("\n=== Collecting Latency Percentiles ===");
     let mut latencies = Vec::with_capacity(10000);
 
-    // Warmup
-    for _ in 0..1000 {
-        let _ = transform.process(envelope.clone()).unwrap();
-    }
+    rt.block_on(async {
+        for _ in 0..1000 {
+            let _ = transform.process(envelope.clone()).await.unwrap();
+        }
 
-    for _ in 0..10000 {
-        let start = Instant::now();
-        let _ = transform.process(envelope.clone()).unwrap();
-        latencies.push(start.elapsed());
-    }
+        for _ in 0..10000 {
+            let start = Instant::now();
+            let _ = transform.process(envelope.clone()).await.unwrap();
+            latencies.push(start.elapsed());
+        }
+    });
 
     latencies.sort();
     let p50 = latencies[latencies.len() / 2];

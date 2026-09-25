@@ -174,7 +174,7 @@ impl WaferEngine {
     /// both of which are backed by the same `WaferState` trait impls.
     fn build_linker(&self) -> Result<wasmtime::component::Linker<WaferState>> {
         let mut linker = wasmtime::component::Linker::new(&self.engine);
-        wasmtime_wasi::p2::add_to_linker_sync(&mut linker)
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
         Ok(linker)
     }
@@ -460,8 +460,8 @@ mod tests {
         assert!(linker.is_ok(), "build_linker should succeed");
     }
 
-    #[test]
-    fn inference_component_requires_the_inference_preparation_path() {
+    #[tokio::test]
+    async fn inference_component_requires_the_inference_preparation_path() {
         let engine = WaferEngine::new().expect("engine");
         let component = engine
             .load_component_from_bytes(
@@ -480,6 +480,8 @@ mod tests {
         let state = WaferState::new("inference", Capabilities::sandbox().inference(true));
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|state| state.limits_mut());
-        pre.instantiate(&mut store).expect("granted inference component should instantiate");
+        pre.instantiate_async(&mut store)
+            .await
+            .expect("granted inference component should instantiate");
     }
 }

@@ -35,27 +35,27 @@ fn harness_if_built() -> anyhow::Result<Option<PluginTestHarness>> {
 /// This is the exact site where the pre-existing committed Go bindings had
 /// drifted (2-field node-config) — regenerating without patching would
 /// resurface the mismatch here.
-#[test]
-fn go_uppercase_instantiates_through_host_bindings() -> anyhow::Result<()> {
+#[tokio::test]
+async fn go_uppercase_instantiates_through_host_bindings() -> anyhow::Result<()> {
     let Some(harness) = harness_if_built()? else {
         return Ok(());
     };
-    let _transform = harness.load_transform(UPPERCASE_GO_WASM)?;
+    let _transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
     Ok(())
 }
 
 /// Transform boundary: `process(message) -> result<output-message, ...>`
 /// crosses the Component-Model call, borrows the host-managed buffer via
 /// `types.buffer.read-all`, returns owned bytes.
-#[test]
-fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
+#[tokio::test]
+async fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
     let Some(harness) = harness_if_built()? else {
         return Ok(());
     };
-    let mut transform = harness.load_transform(UPPERCASE_GO_WASM)?;
+    let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     let input = RuntimeEnvelope::from_string("integration-test", "hello world");
-    let output = transform.process(input)?;
+    let output = transform.process(input).await?;
 
     let payload = std::str::from_utf8(&output.payload)?;
     anyhow::ensure!(payload == "HELLO WORLD", "TinyGo plugin must uppercase payload");
@@ -64,12 +64,12 @@ fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
 
 /// Guest-owned output fields must survive the host lifting boundary, while
 /// lineage continues from the host-owned input envelope.
-#[test]
-fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> {
+#[tokio::test]
+async fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> {
     let Some(harness) = harness_if_built()? else {
         return Ok(());
     };
-    let mut transform = harness.load_transform(UPPERCASE_GO_WASM)?;
+    let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     let mut input = RuntimeEnvelope::from_string("host-source", "hello world");
     input.set_parent_id("host-parent");
@@ -81,7 +81,7 @@ fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> 
     header.content_type = "application/host".into();
     header.metadata = vec![("host-key".into(), "host-value".into())];
 
-    let output = transform.process(input)?;
+    let output = transform.process(input).await?;
 
     anyhow::ensure!(&*output.header.id == "guest-host-id", "guest id preserved");
     anyhow::ensure!(
@@ -113,17 +113,17 @@ fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> 
 /// Call the plugin multiple times through the same Store — proves the
 /// borrow<buffer> resource lifecycle (host push → guest read → host drop)
 /// doesn't leak or corrupt state across calls.
-#[test]
-fn go_uppercase_handles_multiple_messages_in_one_store() -> anyhow::Result<()> {
+#[tokio::test]
+async fn go_uppercase_handles_multiple_messages_in_one_store() -> anyhow::Result<()> {
     let Some(harness) = harness_if_built()? else {
         return Ok(());
     };
-    let mut transform = harness.load_transform(UPPERCASE_GO_WASM)?;
+    let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     for i in 0..10 {
         let msg = format!("msg-{i}");
         let input = RuntimeEnvelope::from_string("src", &msg);
-        let output = transform.process(input)?;
+        let output = transform.process(input).await?;
         anyhow::ensure!(
             std::str::from_utf8(&output.payload)? == msg.to_uppercase(),
             "call {i}: payload must uppercase"

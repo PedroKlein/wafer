@@ -235,20 +235,20 @@ impl TransformNode {
 
     /// Process one envelope, returning the transformed envelope or a
     /// `WasmProcessError` variant the runner already handles.
-    pub fn process(
+    pub async fn process(
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> std::result::Result<RuntimeEnvelope, WasmProcessError> {
         match self {
-            Self::Wasm(w) => w.process(envelope),
+            Self::Wasm(w) => w.process(envelope).await,
             Self::Native(n) => ProcessNode::process(n, envelope),
         }
     }
 
     /// Config reload (Wasm only — native transforms reject).
-    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
+    pub async fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
         match self {
-            Self::Wasm(w) => w.try_reconfigure(new_config_json),
+            Self::Wasm(w) => w.try_reconfigure(new_config_json).await,
             Self::Native(_) => Err(WaferError::Runtime(
                 "native baseline transforms do not support reconfigure".into(),
             )),
@@ -256,9 +256,9 @@ impl TransformNode {
     }
 
     /// Recover via cached InstancePre (Wasm) / no-op (Native).
-    pub fn recover_from_cached_pre(&mut self) -> Result<()> {
+    pub async fn recover_from_cached_pre(&mut self) -> Result<()> {
         match self {
-            Self::Wasm(w) => w.recover_from_cached_pre(),
+            Self::Wasm(w) => w.recover_from_cached_pre().await,
             Self::Native(_) => Ok(()),
         }
     }
@@ -319,21 +319,21 @@ impl FilterNode {
 
     /// Native predicates cannot trap, so their `WasmProcessError` slot is
     /// unused; the Wasm path preserves the full trap taxonomy.
-    pub fn evaluate(
+    pub async fn evaluate(
         &mut self,
         envelope: &RuntimeEnvelope,
     ) -> std::result::Result<FilterOutcome, WasmProcessError> {
         match self {
-            Self::Wasm(w) => w.evaluate(envelope),
+            Self::Wasm(w) => w.evaluate(envelope).await,
             Self::Native(n) => n.evaluate_sync(envelope),
         }
     }
 
     /// Reject reconfigure on native filters — they have no config-driven
     /// guest state to replace.
-    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
+    pub async fn try_reconfigure(&mut self, new_config_json: &str) -> Result<()> {
         match self {
-            Self::Wasm(w) => w.try_reconfigure(new_config_json),
+            Self::Wasm(w) => w.try_reconfigure(new_config_json).await,
             Self::Native(_) => Err(WaferError::Runtime(
                 "native baseline filters do not support reconfigure".into(),
             )),
@@ -341,9 +341,9 @@ impl FilterNode {
     }
 
     /// Native filters are stateless — recovery is a no-op success.
-    pub fn recover_from_cached_pre(&mut self) -> Result<()> {
+    pub async fn recover_from_cached_pre(&mut self) -> Result<()> {
         match self {
-            Self::Wasm(w) => w.recover_from_cached_pre(),
+            Self::Wasm(w) => w.recover_from_cached_pre().await,
             Self::Native(_) => Ok(()),
         }
     }

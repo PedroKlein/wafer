@@ -289,10 +289,12 @@ fn bench_production_sanity(_c: &mut Criterion) {
     }
 
     let harness = PluginTestHarness::new().expect("harness");
-    let mut transform = harness.load_transform(&passthrough).expect("load transform");
-
-    let envelope = wafer_core::queue::RuntimeEnvelope::from_string("bench", "sanity");
-    let out = transform.process(envelope).expect("production process call must return Ok");
+    let rt = Runtime::new().expect("tokio runtime");
+    let out = rt.block_on(async {
+        let mut transform = harness.load_transform(&passthrough).await.expect("load transform");
+        let envelope = wafer_core::queue::RuntimeEnvelope::from_string("bench", "sanity");
+        transform.process(envelope).await.expect("production process call must return Ok")
+    });
     assert!(!out.payload.is_empty(), "production path returned empty payload — stub regression?");
     println!("\n=== Production sanity: WasmTransformNode::process returned Ok ===");
 }

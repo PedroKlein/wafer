@@ -152,10 +152,17 @@ pub(crate) enum TransformPre {
 }
 
 impl TransformPre {
-    fn instantiate(&self, store: &mut Store<WaferState>) -> wasmtime::Result<TransformBindings> {
+    async fn instantiate_async(
+        &self,
+        store: &mut Store<WaferState>,
+    ) -> wasmtime::Result<TransformBindings> {
         match self {
-            Self::Ordinary(pre) => pre.instantiate(store).map(TransformBindings::Ordinary),
-            Self::Inference(pre) => pre.instantiate(store).map(TransformBindings::Inference),
+            Self::Ordinary(pre) => {
+                pre.instantiate_async(store).await.map(TransformBindings::Ordinary)
+            }
+            Self::Inference(pre) => {
+                pre.instantiate_async(store).await.map(TransformBindings::Inference)
+            }
         }
     }
 }
@@ -198,7 +205,7 @@ impl PreparedTransformSwap {
 }
 
 impl TransformBindings {
-    fn call_process(
+    async fn call_process(
         &self,
         store: &mut Store<WaferState>,
         message: &transform_node::wafer::pipeline::types::Message,
@@ -210,15 +217,15 @@ impl TransformBindings {
     > {
         match self {
             Self::Ordinary(bindings) => {
-                bindings.wafer_pipeline_transform().call_process(store, message)
+                bindings.wafer_pipeline_transform().call_process(store, message).await
             }
             Self::Inference(bindings) => {
-                bindings.wafer_pipeline_transform().call_process(store, message)
+                bindings.wafer_pipeline_transform().call_process(store, message).await
             }
         }
     }
 
-    fn call_validate(
+    async fn call_validate(
         &self,
         store: &mut Store<WaferState>,
         id: &str,
@@ -226,26 +233,36 @@ impl TransformBindings {
         plugin_version: &str,
     ) -> wasmtime::Result<Option<String>> {
         match self {
-            Self::Ordinary(bindings) => bindings.wafer_pipeline_lifecycle().call_validate(
-                store,
-                &transform_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-                    id: id.to_string(),
-                    config: config.to_string(),
-                    plugin_version: plugin_version.to_string(),
-                },
-            ),
-            Self::Inference(bindings) => bindings.wafer_pipeline_lifecycle().call_validate(
-                store,
-                &crate::engine::bindings::inference_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-                    id: id.to_string(),
-                    config: config.to_string(),
-                    plugin_version: plugin_version.to_string(),
-                },
-            ),
+            Self::Ordinary(bindings) => {
+                bindings
+                    .wafer_pipeline_lifecycle()
+                    .call_validate(
+                        store,
+                        &transform_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                            id: id.to_string(),
+                            config: config.to_string(),
+                            plugin_version: plugin_version.to_string(),
+                        },
+                    )
+                    .await
+            }
+            Self::Inference(bindings) => {
+                bindings
+                    .wafer_pipeline_lifecycle()
+                    .call_validate(
+                        store,
+                        &crate::engine::bindings::inference_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                            id: id.to_string(),
+                            config: config.to_string(),
+                            plugin_version: plugin_version.to_string(),
+                        },
+                    )
+                    .await
+            }
         }
     }
 
-    fn call_init(
+    async fn call_init(
         &self,
         store: &mut Store<WaferState>,
         id: &str,
@@ -253,22 +270,32 @@ impl TransformBindings {
         plugin_version: &str,
     ) -> wasmtime::Result<Result<(), transform_node::wafer::pipeline::types::ProcessError>> {
         match self {
-            Self::Ordinary(bindings) => bindings.wafer_pipeline_lifecycle().call_init(
-                store,
-                &transform_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-                    id: id.to_string(),
-                    config: config.to_string(),
-                    plugin_version: plugin_version.to_string(),
-                },
-            ),
-            Self::Inference(bindings) => bindings.wafer_pipeline_lifecycle().call_init(
-                store,
-                &crate::engine::bindings::inference_node::exports::wafer::pipeline::lifecycle::NodeConfig {
-                    id: id.to_string(),
-                    config: config.to_string(),
-                    plugin_version: plugin_version.to_string(),
-                },
-            ),
+            Self::Ordinary(bindings) => {
+                bindings
+                    .wafer_pipeline_lifecycle()
+                    .call_init(
+                        store,
+                        &transform_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                            id: id.to_string(),
+                            config: config.to_string(),
+                            plugin_version: plugin_version.to_string(),
+                        },
+                    )
+                    .await
+            }
+            Self::Inference(bindings) => {
+                bindings
+                    .wafer_pipeline_lifecycle()
+                    .call_init(
+                        store,
+                        &crate::engine::bindings::inference_node::exports::wafer::pipeline::lifecycle::NodeConfig {
+                            id: id.to_string(),
+                            config: config.to_string(),
+                            plugin_version: plugin_version.to_string(),
+                        },
+                    )
+                    .await
+            }
         }
     }
 }
@@ -357,7 +384,7 @@ impl WasmTransformNode {
         &self.plugin_version
     }
 
-    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+    pub async fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut store = recovery_store(
             &self.store,
@@ -367,20 +394,21 @@ impl WasmTransformNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings =
-            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+        let bindings = self.cached_pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit {
                 message: format!("transform '{node_id}' recovery instantiation failed: {e}"),
-            })?;
+            }
+        })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
-        self.validate_and_init(&config_json)
+        self.validate_and_init(&config_json).await
     }
 
     /// Warm reconfigure: re-instantiate from the cached `InstancePre` and
     /// call `validate() + init()` with `new_config_json`. No compile/instantiate
     /// of a new plugin binary. On failure, roll back to v1 state.
-    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+    pub async fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut new_store = recovery_store(
             &self.store,
@@ -391,13 +419,15 @@ impl WasmTransformNode {
             self.fuel_limit,
         )?;
         let new_bindings =
-            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-                message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
+            self.cached_pre.instantiate_async(&mut new_store).await.map_err(|e| {
+                WaferError::PluginInit {
+                    message: format!("transform '{node_id}' reconfigure instantiation failed: {e}"),
+                }
             })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
-        match self.validate_and_init(new_config_json) {
+        match self.validate_and_init(new_config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -411,11 +441,7 @@ impl WasmTransformNode {
     /// Process one message through the Wasm transform.
     ///
     /// MUST run to completion — never place in a select! branch.
-    #[expect(
-        clippy::needless_pass_by_value,
-        reason = "API contract: transform takes ownership of input envelope (consumed semantically even if implementation only borrows)"
-    )]
-    pub fn process(
+    pub async fn process(
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> Result<RuntimeEnvelope, WasmProcessError> {
@@ -442,7 +468,7 @@ impl WasmTransformNode {
         // Bytes-clone entry per message.
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self.bindings.call_process(&mut self.store, &wit_msg);
+        let result = self.bindings.call_process(&mut self.store, &wit_msg).await;
 
         flush_logs(&mut self.store);
 
@@ -481,7 +507,7 @@ impl WasmTransformNode {
     }
 
     /// Call guest lifecycle validate() and init() before first message processing.
-    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+    pub async fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         // AC F5.AC2: None → unlimited; engine has metering disabled at Config
         // level so the setter must be skipped, not called with a sentinel.
@@ -496,6 +522,7 @@ impl WasmTransformNode {
         if let Some(message) = self
             .bindings
             .call_validate(&mut self.store, &node_id, config_json, &self.plugin_version)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("transform '{}' validate() trapped: {e}", self.node_id()),
             })?
@@ -509,6 +536,7 @@ impl WasmTransformNode {
         }
         self.bindings
             .call_init(&mut self.store, &node_id, config_json, &self.plugin_version)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("transform '{}' init() trapped: {e}", self.node_id()),
             })?
@@ -520,7 +548,7 @@ impl WasmTransformNode {
     }
 
     /// Replace transform internals with rollback if `validate()`/`init()` fails.
-    pub(crate) fn try_hot_swap(
+    pub(crate) async fn try_hot_swap(
         &mut self,
         replacement: PreparedTransformSwap,
     ) -> Result<(), WaferError> {
@@ -533,7 +561,7 @@ impl WasmTransformNode {
         let old_store = std::mem::replace(&mut self.store, replacement.store);
         let old_bindings = std::mem::replace(&mut self.bindings, replacement.bindings);
         let old_pre = std::mem::replace(&mut self.cached_pre, replacement.pre);
-        match self.validate_and_init(&config_json) {
+        match self.validate_and_init(&config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -624,7 +652,7 @@ impl WasmFilterNode {
         self.plugin_version = version.into();
     }
 
-    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+    pub async fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut store = recovery_store(
             &self.store,
@@ -634,19 +662,20 @@ impl WasmFilterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings =
-            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+        let bindings = self.cached_pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit {
                 message: format!("filter '{node_id}' recovery instantiation failed: {e}"),
-            })?;
+            }
+        })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
-        self.validate_and_init(&config_json)
+        self.validate_and_init(&config_json).await
     }
 
     /// Warm reconfigure: re-instantiate from cached InstancePre and re-run
     /// `validate() + init()` with `new_config_json`; roll back on failure.
-    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+    pub async fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut new_store = recovery_store(
             &self.store,
@@ -657,13 +686,15 @@ impl WasmFilterNode {
             self.fuel_limit,
         )?;
         let new_bindings =
-            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-                message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
+            self.cached_pre.instantiate_async(&mut new_store).await.map_err(|e| {
+                WaferError::PluginInit {
+                    message: format!("filter '{node_id}' reconfigure instantiation failed: {e}"),
+                }
             })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
-        match self.validate_and_init(new_config_json) {
+        match self.validate_and_init(new_config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -675,7 +706,7 @@ impl WasmFilterNode {
     }
 
     /// Call guest lifecycle validate() and init() before first message processing.
-    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+    pub async fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_config =
             crate::engine::bindings::filter_node::exports::wafer::pipeline::lifecycle::NodeConfig {
                 id: self.node_id().to_string(),
@@ -695,6 +726,7 @@ impl WasmFilterNode {
             .bindings
             .wafer_pipeline_lifecycle()
             .call_validate(&mut self.store, &node_config)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("filter '{}' validate() trapped: {e}", self.node_id()),
             })?
@@ -709,6 +741,7 @@ impl WasmFilterNode {
         self.bindings
             .wafer_pipeline_lifecycle()
             .call_init(&mut self.store, &node_config)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("filter '{}' init() trapped: {e}", self.node_id()),
             })?
@@ -722,7 +755,7 @@ impl WasmFilterNode {
     /// Evaluate whether a message should be forwarded.
     ///
     /// MUST run to completion — never place in a select! branch.
-    pub fn evaluate(
+    pub async fn evaluate(
         &mut self,
         envelope: &RuntimeEnvelope,
     ) -> Result<FilterOutcome, WasmProcessError> {
@@ -742,7 +775,8 @@ impl WasmFilterNode {
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self.bindings.wafer_pipeline_filter().call_evaluate(&mut self.store, &wit_msg);
+        let result =
+            self.bindings.wafer_pipeline_filter().call_evaluate(&mut self.store, &wit_msg).await;
 
         flush_logs(&mut self.store);
 
@@ -777,7 +811,7 @@ impl WasmFilterNode {
     }
 
     /// Replace filter internals with rollback if `validate()`/`init()` fails.
-    pub fn try_hot_swap(
+    pub async fn try_hot_swap(
         &mut self,
         new_store: Store<WaferState>,
         new_bindings: FilterNode,
@@ -787,7 +821,7 @@ impl WasmFilterNode {
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_pre = std::mem::replace(&mut self.cached_pre, new_pre);
-        match self.validate_and_init(&config_json) {
+        match self.validate_and_init(&config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -877,7 +911,7 @@ impl WasmRouterNode {
         self.plugin_version = version.into();
     }
 
-    pub fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
+    pub async fn recover_from_cached_pre(&mut self) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut store = recovery_store(
             &self.store,
@@ -887,19 +921,20 @@ impl WasmRouterNode {
             self.epoch_deadline,
             self.fuel_limit,
         )?;
-        let bindings =
-            self.cached_pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+        let bindings = self.cached_pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit {
                 message: format!("router '{node_id}' recovery instantiation failed: {e}"),
-            })?;
+            }
+        })?;
         self.store = store;
         self.bindings = bindings;
         let config_json = self.config_json.clone();
-        self.validate_and_init(&config_json)
+        self.validate_and_init(&config_json).await
     }
 
     /// Warm reconfigure: re-instantiate from cached InstancePre and re-run
     /// `validate() + init()` with `new_config_json`; roll back on failure.
-    pub fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
+    pub async fn try_reconfigure(&mut self, new_config_json: &str) -> Result<(), WaferError> {
         let node_id = self.node_id().to_string();
         let mut new_store = recovery_store(
             &self.store,
@@ -910,13 +945,15 @@ impl WasmRouterNode {
             self.fuel_limit,
         )?;
         let new_bindings =
-            self.cached_pre.instantiate(&mut new_store).map_err(|e| WaferError::PluginInit {
-                message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
+            self.cached_pre.instantiate_async(&mut new_store).await.map_err(|e| {
+                WaferError::PluginInit {
+                    message: format!("router '{node_id}' reconfigure instantiation failed: {e}"),
+                }
             })?;
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_config = std::mem::replace(&mut self.config_json, new_config_json.to_string());
-        match self.validate_and_init(new_config_json) {
+        match self.validate_and_init(new_config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -928,7 +965,7 @@ impl WasmRouterNode {
     }
 
     /// Call guest lifecycle validate() and init() before first message processing.
-    pub fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
+    pub async fn validate_and_init(&mut self, config_json: &str) -> Result<(), WaferError> {
         let node_config =
             crate::engine::bindings::router_node::exports::wafer::pipeline::lifecycle::NodeConfig {
                 id: self.node_id().to_string(),
@@ -948,6 +985,7 @@ impl WasmRouterNode {
             .bindings
             .wafer_pipeline_lifecycle()
             .call_validate(&mut self.store, &node_config)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("router '{}' validate() trapped: {e}", self.node_id()),
             })?
@@ -962,6 +1000,7 @@ impl WasmRouterNode {
         self.bindings
             .wafer_pipeline_lifecycle()
             .call_init(&mut self.store, &node_config)
+            .await
             .map_err(|e| WaferError::PluginInit {
                 message: format!("router '{}' init() trapped: {e}", self.node_id()),
             })?
@@ -975,7 +1014,10 @@ impl WasmRouterNode {
     /// Decide which port(s) the message should be routed to.
     ///
     /// MUST run to completion — never place in a select! branch.
-    pub fn route(&mut self, envelope: &RuntimeEnvelope) -> Result<RouteOutcome, WasmProcessError> {
+    pub async fn route(
+        &mut self,
+        envelope: &RuntimeEnvelope,
+    ) -> Result<RouteOutcome, WasmProcessError> {
         self.store.data_mut().clear_log_buffer();
 
         // AC F5.AC2: skip metering setters when unlimited.
@@ -992,7 +1034,8 @@ impl WasmRouterNode {
         let wit_msg = build_wit_message(&mut self.store, envelope)?;
         let payload_rep = wit_msg.payload.rep();
 
-        let result = self.bindings.wafer_pipeline_router().call_route(&mut self.store, &wit_msg);
+        let result =
+            self.bindings.wafer_pipeline_router().call_route(&mut self.store, &wit_msg).await;
 
         flush_logs(&mut self.store);
 
@@ -1026,7 +1069,7 @@ impl WasmRouterNode {
     }
 
     /// Replace router internals with rollback if `validate()`/`init()` fails.
-    pub fn try_hot_swap(
+    pub async fn try_hot_swap(
         &mut self,
         new_store: Store<WaferState>,
         new_bindings: RouterNode,
@@ -1036,7 +1079,7 @@ impl WasmRouterNode {
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
         let old_pre = std::mem::replace(&mut self.cached_pre, new_pre);
-        match self.validate_and_init(&config_json) {
+        match self.validate_and_init(&config_json).await {
             Ok(()) => Ok(()),
             Err(err) => {
                 self.store = old_store;
@@ -1218,7 +1261,7 @@ mod tests {
         Ok(engine)
     }
 
-    fn mnist_node_with_engine(engine: &WaferEngine) -> anyhow::Result<WasmTransformNode> {
+    async fn mnist_node_with_engine(engine: &WaferEngine) -> anyhow::Result<WasmTransformNode> {
         let component = engine.load_component(MNIST_COMPONENT)?;
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
         let capabilities = Capabilities::sandbox().inference(true);
@@ -1228,7 +1271,7 @@ mod tests {
         store.set_fuel(MNIST_FUEL)?;
         store.epoch_deadline_trap();
         store.set_epoch_deadline(1000);
-        let bindings = pre.instantiate(&mut store)?;
+        let bindings = pre.instantiate_async(&mut store).await?;
         let mut node =
             WasmTransformNode::new_inference(store, bindings, pre, NonZeroU64::new(MNIST_FUEL));
         node.configure_runtime(
@@ -1238,17 +1281,18 @@ mod tests {
             r#"{"execution_target":"cpu"}"#.into(),
         );
         node.set_plugin_version("mnist-cpu-v1");
-        node.validate_and_init(r#"{"execution_target":"cpu"}"#)?;
+        node.validate_and_init(r#"{"execution_target":"cpu"}"#).await?;
         Ok(node)
     }
 
-    fn mnist_node() -> anyhow::Result<WasmTransformNode> {
-        mnist_node_with_engine(&mnist_engine()?)
+    async fn mnist_node() -> anyhow::Result<WasmTransformNode> {
+        mnist_node_with_engine(&mnist_engine()?).await
     }
 
-    fn mnist_prediction(node: &mut WasmTransformNode) -> anyhow::Result<(usize, Bytes)> {
-        let output =
-            node.process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))?;
+    async fn mnist_prediction(node: &mut WasmTransformNode) -> anyhow::Result<(usize, Bytes)> {
+        let output = node
+            .process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))
+            .await?;
         let logits = output
             .payload
             .as_chunks::<{ size_of::<f32>() }>()
@@ -1265,7 +1309,7 @@ mod tests {
         Ok((prediction, output.payload))
     }
 
-    fn trapping_node() -> anyhow::Result<WasmTransformNode> {
+    async fn trapping_node() -> anyhow::Result<WasmTransformNode> {
         let fuel = NonZeroU64::new(10_000_000);
         let epoch = NonZeroU64::new(100);
         let memory_limit = 32 * 1024 * 1024;
@@ -1286,24 +1330,25 @@ mod tests {
         store.set_fuel(fuel.unwrap().get())?;
         store.epoch_deadline_trap();
         store.set_epoch_deadline(epoch.unwrap().get());
-        let bindings = pre.instantiate(&mut store)?;
+        let bindings = pre.instantiate_async(&mut store).await?;
         let mut node = WasmTransformNode::new(store, bindings, pre, fuel);
         node.configure_runtime(capabilities, memory_limit, epoch, r#"{"mode":"trap"}"#.into());
         node.set_plugin_version("trap-v1");
-        node.validate_and_init(r#"{"mode":"trap"}"#)?;
+        node.validate_and_init(r#"{"mode":"trap"}"#).await?;
         Ok(node)
     }
 
-    #[test]
-    fn process_clears_stale_logs_before_guest_call() -> anyhow::Result<()> {
-        let mut node = mnist_node()?;
+    #[tokio::test]
+    async fn process_clears_stale_logs_before_guest_call() -> anyhow::Result<()> {
+        let mut node = mnist_node().await?;
         node.store.data_mut().push_log(LogLevel::Error, "stale-previous-call".into());
         let recorder = EventRecorder::default();
         let events = Arc::clone(&recorder.events);
 
-        let result = tracing::subscriber::with_default(recorder, || {
-            node.process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))
-        });
+        let _subscriber = tracing::subscriber::set_default(recorder);
+        let result = node
+            .process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))
+            .await;
 
         anyhow::ensure!(result.is_ok(), "inference call failed: {result:?}");
         anyhow::ensure!(!node.store.data().has_logs(), "call left buffered logs");
@@ -1316,14 +1361,15 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn trap_recovery_rebuilds_the_runtime_contract_from_cached_pre() -> anyhow::Result<()> {
-        let mut node = trapping_node()?;
+    #[tokio::test]
+    async fn trap_recovery_rebuilds_the_runtime_contract_from_cached_pre() -> anyhow::Result<()> {
+        let mut node = trapping_node().await?;
         let first_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
         let expected_first_slot = first_slot.rep();
         node.store.data_mut().delete_buffer(first_slot)?;
         let first = node
             .process(RuntimeEnvelope::from_string("fixture-source", "first"))
+            .await
             .expect_err("fixture must trap");
         anyhow::ensure!(matches!(first, WasmProcessError::Unrecoverable(_)));
         let reused_first_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
@@ -1341,7 +1387,7 @@ mod tests {
         };
         let old_pre = Arc::as_ptr(old_pre);
 
-        node.recover_from_cached_pre()?;
+        node.recover_from_cached_pre().await?;
 
         anyhow::ensure!(!std::ptr::eq(old_state, node.store.data()), "Store state was reused");
         anyhow::ensure!(node.store.data().table().is_empty(), "old Store resources survived");
@@ -1374,6 +1420,7 @@ mod tests {
         node.store.data_mut().delete_buffer(second_slot)?;
         let second = node
             .process(RuntimeEnvelope::from_string("fixture-source", "second"))
+            .await
             .expect_err("recovered fixture must independently trap");
         anyhow::ensure!(matches!(second, WasmProcessError::Unrecoverable(_)));
         let reused_second_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
@@ -1385,18 +1432,18 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn inference_recovery_and_reconfigure_keep_real_model_live() -> anyhow::Result<()> {
-        let mut node = mnist_node()?;
-        let (initial_prediction, initial_payload) = mnist_prediction(&mut node)?;
+    #[tokio::test]
+    async fn inference_recovery_and_reconfigure_keep_real_model_live() -> anyhow::Result<()> {
+        let mut node = mnist_node().await?;
+        let (initial_prediction, initial_payload) = mnist_prediction(&mut node).await?;
 
-        node.recover_from_cached_pre()?;
-        let (recovered_prediction, recovered_payload) = mnist_prediction(&mut node)?;
+        node.recover_from_cached_pre().await?;
+        let (recovered_prediction, recovered_payload) = mnist_prediction(&mut node).await?;
         anyhow::ensure!(recovered_prediction == 7, "recovery changed prediction");
         anyhow::ensure!(recovered_payload == initial_payload, "recovery changed logits");
 
-        node.try_reconfigure("{}")?;
-        let (reconfigured_prediction, reconfigured_payload) = mnist_prediction(&mut node)?;
+        node.try_reconfigure("{}").await?;
+        let (reconfigured_prediction, reconfigured_payload) = mnist_prediction(&mut node).await?;
         anyhow::ensure!(initial_prediction == 7 && reconfigured_prediction == 7);
         anyhow::ensure!(reconfigured_payload == initial_payload, "reconfigure changed logits");
         anyhow::ensure!(node.capabilities.allow_inference, "inference grant was downgraded");
@@ -1404,14 +1451,14 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn rejected_inference_reconfigure_restores_the_prior_store() -> anyhow::Result<()> {
-        let mut node = mnist_node()?;
-        let (_, expected_payload) = mnist_prediction(&mut node)?;
+    #[tokio::test]
+    async fn rejected_inference_reconfigure_restores_the_prior_store() -> anyhow::Result<()> {
+        let mut node = mnist_node().await?;
+        let (_, expected_payload) = mnist_prediction(&mut node).await?;
 
-        let error = node.try_reconfigure(r#"{"execution_target":"cuda"}"#).unwrap_err();
+        let error = node.try_reconfigure(r#"{"execution_target":"cuda"}"#).await.unwrap_err();
         anyhow::ensure!(error.to_string().contains("unknown variant `cuda`"), "{error}");
-        let (prediction, payload) = mnist_prediction(&mut node)?;
+        let (prediction, payload) = mnist_prediction(&mut node).await?;
         anyhow::ensure!(prediction == 7, "rollback changed prediction");
         anyhow::ensure!(payload == expected_payload, "rollback changed logits");
         anyhow::ensure!(node.config_json == r#"{"execution_target":"cpu"}"#);
@@ -1422,7 +1469,7 @@ mod tests {
     #[tokio::test]
     async fn inference_hot_swap_adopts_real_component_between_calls() -> anyhow::Result<()> {
         let engine = mnist_engine()?;
-        let node = mnist_node_with_engine(&engine)?;
+        let node = mnist_node_with_engine(&engine).await?;
         let (progress, _completion) = crate::runner::HotSwapProgress::channel();
         let bytes = std::fs::read(MNIST_COMPONENT)?;
         let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
@@ -1437,9 +1484,10 @@ mod tests {
         .await?;
         let mut node = crate::node::TransformNode::from(node);
 
-        replacement.payload.try_apply_transform(&mut node)?;
-        let output =
-            node.process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))?;
+        replacement.payload.try_apply_transform(&mut node).await?;
+        let output = node
+            .process(RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT)))
+            .await?;
         let logits = output
             .payload
             .as_chunks::<{ size_of::<f32>() }>()
@@ -1462,7 +1510,7 @@ mod tests {
     #[tokio::test]
     async fn inference_hot_swap_cannot_downgrade_the_frozen_grant() -> anyhow::Result<()> {
         let engine = mnist_engine()?;
-        let node = mnist_node_with_engine(&engine)?;
+        let node = mnist_node_with_engine(&engine).await?;
         let (progress, _completion) = crate::runner::HotSwapProgress::channel();
         let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
             &engine,
@@ -1479,19 +1527,21 @@ mod tests {
         let error = replacement
             .payload
             .try_apply_transform(&mut node)
+            .await
             .expect_err("replacement cannot remove inference from a granted node");
         anyhow::ensure!(
             error.to_string().contains("cannot change the node's inference capability")
         );
         let wasm = node.as_wasm_mut().expect("Wasm transform");
-        let (prediction, _) = mnist_prediction(wasm)?;
+        let (prediction, _) = mnist_prediction(wasm).await?;
         anyhow::ensure!(prediction == 7, "rejected replacement changed v1");
         Ok(())
     }
 
-    #[test]
-    fn mnist_inference_preserves_envelope_contract_and_runtime_limits() -> anyhow::Result<()> {
-        let mut node = mnist_node()?;
+    #[tokio::test]
+    async fn mnist_inference_preserves_envelope_contract_and_runtime_limits() -> anyhow::Result<()>
+    {
+        let mut node = mnist_node().await?;
         let mut input = RuntimeEnvelope::new("fixture-source", Bytes::from_static(MNIST_DIGIT));
         input.set_parent_id("parent-7");
         input.ensure_trace_id();
@@ -1507,7 +1557,7 @@ mod tests {
             ("plugin.version".into(), "stale".into()),
         ];
 
-        let output = node.process(input)?;
+        let output = node.process(input).await?;
         anyhow::ensure!(&*output.header.id == "fixture-id", "guest id changed");
         anyhow::ensure!(output.header.timestamp == 1_700_000_000_000_000_007);
         anyhow::ensure!(&*output.header.source == "fixture-source", "guest source changed");

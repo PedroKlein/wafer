@@ -19,6 +19,9 @@ pub mod transform_node {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "transform-node",
+        imports: { default: async },
+        exports: { default: async },
+        require_store_data_send: true,
         with: {
             "wafer:pipeline/types.buffer": crate::engine::WaferBuffer,
         },
@@ -33,6 +36,9 @@ pub mod filter_node {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "filter-node",
+        imports: { default: async },
+        exports: { default: async },
+        require_store_data_send: true,
         with: {
             "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
             "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
@@ -45,6 +51,9 @@ pub(crate) mod inference_node {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "inference-node",
+        imports: { default: async },
+        exports: { default: async },
+        require_store_data_send: true,
         with: {
             "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
             "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
@@ -62,6 +71,9 @@ pub(crate) mod router_node {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "router-node",
+        imports: { default: async },
+        exports: { default: async },
+        require_store_data_send: true,
         with: {
             "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
             "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
@@ -102,6 +114,8 @@ impl std::fmt::Display for WasmBindings {
 // All three worlds share the same canonical traits via `with:` directives above.
 // =============================================================================
 
+use std::future::Future;
+
 use wasmtime::component::Resource;
 
 use super::WaferBuffer;
@@ -129,31 +143,51 @@ impl host_types::Host for WaferState {}
 )]
 impl host_types::HostBuffer for WaferState {
     /// Returns the total byte length of the payload.
-    fn size(&mut self, resource: Resource<WaferBuffer>) -> u64 {
-        let buf =
-            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
-        buf.size()
+    fn size(&mut self, resource: Resource<WaferBuffer>) -> impl Future<Output = u64> + Send {
+        let size = self
+            .table()
+            .get(&resource)
+            .expect("CM invariant: borrow handle valid during call")
+            .size();
+        std::future::ready(size)
     }
 
     /// Reads a slice of the payload. Returns fewer bytes if offset+len exceeds size.
-    fn read(&mut self, resource: Resource<WaferBuffer>, offset: u64, len: u64) -> Vec<u8> {
-        let buf =
-            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
-        buf.read(offset, len)
+    fn read(
+        &mut self,
+        resource: Resource<WaferBuffer>,
+        offset: u64,
+        len: u64,
+    ) -> impl Future<Output = Vec<u8>> + Send {
+        let bytes = self
+            .table()
+            .get(&resource)
+            .expect("CM invariant: borrow handle valid during call")
+            .read(offset, len);
+        std::future::ready(bytes)
     }
 
     /// Reads the entire payload in one call.
-    fn read_all(&mut self, resource: Resource<WaferBuffer>) -> Vec<u8> {
-        let buf =
-            self.table().get(&resource).expect("CM invariant: borrow handle valid during call");
-        buf.read_all()
+    fn read_all(
+        &mut self,
+        resource: Resource<WaferBuffer>,
+    ) -> impl Future<Output = Vec<u8>> + Send {
+        let bytes = self
+            .table()
+            .get(&resource)
+            .expect("CM invariant: borrow handle valid during call")
+            .read_all();
+        std::future::ready(bytes)
     }
 
     /// Called by the Component Model when a `borrow<buffer>` goes out of scope.
     /// Removes the resource from the table, freeing the underlying Bytes handle.
-    fn drop(&mut self, resource: Resource<WaferBuffer>) -> wasmtime::Result<()> {
-        self.table_mut().delete(resource)?;
-        Ok(())
+    fn drop(
+        &mut self,
+        resource: Resource<WaferBuffer>,
+    ) -> impl Future<Output = wasmtime::Result<()>> + Send {
+        let result = self.table_mut().delete(resource).map(|_| ()).map_err(Into::into);
+        std::future::ready(result)
     }
 }
 
@@ -162,7 +196,11 @@ impl host_types::HostBuffer for WaferState {
 /// Pushes log entries to WaferState's per-call buffer. The runner loop
 /// drains this buffer after each Wasm call and emits via the tracing crate.
 impl logging::Host for WaferState {
-    fn log(&mut self, level: host_types::LogLevel, message: String) {
+    fn log(
+        &mut self,
+        level: host_types::LogLevel,
+        message: String,
+    ) -> impl Future<Output = ()> + Send {
         // Map WIT log-level enum to our internal LogLevel
         let internal_level = match level {
             host_types::LogLevel::Trace => LogLevel::Trace,
@@ -172,6 +210,7 @@ impl logging::Host for WaferState {
             host_types::LogLevel::Error => LogLevel::Error,
         };
         self.push_log(internal_level, message);
+        std::future::ready(())
     }
 }
 
@@ -191,53 +230,54 @@ mod tests {
         (state, resource)
     }
 
-    #[test]
-    fn host_buffer_size_returns_payload_length() {
+    #[tokio::test]
+    async fn host_buffer_size_returns_payload_length() {
         let (mut state, resource) = state_with_buffer(b"hello world");
-        assert_eq!(HostBuffer::size(&mut state, resource), 11);
+        assert_eq!(HostBuffer::size(&mut state, resource).await, 11);
     }
 
-    #[test]
-    fn host_buffer_read_returns_slice() {
+    #[tokio::test]
+    async fn host_buffer_read_returns_slice() {
         let (mut state, resource) = state_with_buffer(b"hello world");
-        let slice = HostBuffer::read(&mut state, resource, 0, 5);
+        let slice = HostBuffer::read(&mut state, resource, 0, 5).await;
         assert_eq!(slice, b"hello");
     }
 
-    #[test]
-    fn host_buffer_read_with_offset() {
+    #[tokio::test]
+    async fn host_buffer_read_with_offset() {
         let (mut state, resource) = state_with_buffer(b"hello world");
-        let slice = HostBuffer::read(&mut state, resource, 6, 5);
+        let slice = HostBuffer::read(&mut state, resource, 6, 5).await;
         assert_eq!(slice, b"world");
     }
 
-    #[test]
-    fn host_buffer_read_clamped() {
+    #[tokio::test]
+    async fn host_buffer_read_clamped() {
         let (mut state, resource) = state_with_buffer(b"hi");
         // Request more than available
-        let slice = HostBuffer::read(&mut state, resource, 0, 100);
+        let slice = HostBuffer::read(&mut state, resource, 0, 100).await;
         assert_eq!(slice, b"hi");
     }
 
-    #[test]
-    fn host_buffer_read_all_returns_full_payload() {
+    #[tokio::test]
+    async fn host_buffer_read_all_returns_full_payload() {
         let (mut state, resource) = state_with_buffer(b"full payload");
-        assert_eq!(HostBuffer::read_all(&mut state, resource), b"full payload");
+        assert_eq!(HostBuffer::read_all(&mut state, resource).await, b"full payload");
     }
 
-    #[test]
-    fn host_buffer_drop_removes_from_table() {
+    #[tokio::test]
+    async fn host_buffer_drop_removes_from_table() {
         let (mut state, resource) = state_with_buffer(b"data");
         // Drop should succeed
-        HostBuffer::drop(&mut state, resource).unwrap();
+        HostBuffer::drop(&mut state, resource).await.unwrap();
     }
 
-    #[test]
-    fn logging_host_pushes_to_buffer() {
+    #[tokio::test]
+    async fn logging_host_pushes_to_buffer() {
         let mut state = WaferState::sandboxed("test-node");
 
-        LoggingHost::log(&mut state, host_types::LogLevel::Info, "hello from guest".to_string());
-        LoggingHost::log(&mut state, host_types::LogLevel::Warn, "something odd".to_string());
+        LoggingHost::log(&mut state, host_types::LogLevel::Info, "hello from guest".to_string())
+            .await;
+        LoggingHost::log(&mut state, host_types::LogLevel::Warn, "something odd".to_string()).await;
 
         assert!(state.has_logs());
         let logs: Vec<_> = state.drain_logs().collect();
@@ -248,8 +288,8 @@ mod tests {
         assert_eq!(logs[1].message, "something odd");
     }
 
-    #[test]
-    fn logging_all_levels_mapped_correctly() {
+    #[tokio::test]
+    async fn logging_all_levels_mapped_correctly() {
         let mut state = WaferState::sandboxed("test-node");
 
         let levels = [
@@ -262,7 +302,7 @@ mod tests {
 
         for (wit_level, expected_level) in levels {
             state.clear_log_buffer();
-            LoggingHost::log(&mut state, wit_level, "test".to_string());
+            LoggingHost::log(&mut state, wit_level, "test".to_string()).await;
             let logs: Vec<_> = state.drain_logs().collect();
             assert_eq!(logs[0].level, expected_level);
         }

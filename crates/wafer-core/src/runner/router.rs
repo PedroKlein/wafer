@@ -46,7 +46,7 @@ async fn dispatch_route_outcome(
     }
 }
 
-fn recover_after_timeout(
+async fn recover_after_timeout(
     router: &mut WasmRouterNode,
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
@@ -63,7 +63,7 @@ fn recover_after_timeout(
     );
     state.transition_to_error();
     state.transition_to_recovering();
-    match router.recover_from_cached_pre() {
+    match router.recover_from_cached_pre().await {
         Ok(()) => {
             if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                 metrics.record_recovery(duration_ns);
@@ -88,6 +88,10 @@ fn recover_after_timeout(
     clippy::too_many_arguments,
     reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear select!/match pipeline loop; splitting would fragment the control flow"
+)]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
     receiver: impl Into<TrackedReceiver>,
@@ -109,9 +113,9 @@ pub async fn run_router_loop(
                 let progress = payload.progress();
                 let result = match payload {
                     SwapPayload::Reconfigure { ref new_config_json, .. } => {
-                        router.try_reconfigure(new_config_json)
+                        router.try_reconfigure(new_config_json).await
                     }
-                    SwapPayload::Router { .. } => payload.try_apply_router(&mut router),
+                    SwapPayload::Router { .. } => payload.try_apply_router(&mut router).await,
                     _ => Err(crate::error::WaferError::Runtime(
                         "router node received non-router swap payload".to_string(),
                     )),
@@ -141,13 +145,9 @@ pub async fn run_router_loop(
         };
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        // `block_in_place` signals the multi-thread runtime that this worker
-        // is about to block synchronously, so it can migrate other tasks and
-        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
-        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
-        let result = tokio::task::block_in_place(|| router.route(&envelope));
+        let result = router.route(&envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
@@ -174,7 +174,9 @@ pub async fn run_router_loop(
             }
             Err(WasmProcessError::TimedOut) => {
                 metrics.record_failed();
-                if !recover_after_timeout(&mut router, &state, &metrics, &mut policy, envelope) {
+                if !recover_after_timeout(&mut router, &state, &metrics, &mut policy, envelope)
+                    .await
+                {
                     break;
                 }
             }
@@ -187,7 +189,7 @@ pub async fn run_router_loop(
                 );
                 state.transition_to_error();
                 state.transition_to_recovering();
-                match router.recover_from_cached_pre() {
+                match router.recover_from_cached_pre().await {
                     Ok(()) => {
                         if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                             metrics.record_recovery(duration_ns);

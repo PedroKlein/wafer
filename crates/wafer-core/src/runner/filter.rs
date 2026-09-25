@@ -47,7 +47,7 @@ async fn dispatch_filter_outcome(
     }
 }
 
-fn recover_after_timeout(
+async fn recover_after_timeout(
     filter: &mut FilterNode,
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
@@ -65,7 +65,7 @@ fn recover_after_timeout(
     );
     state.transition_to_error();
     state.transition_to_recovering();
-    match filter.recover_from_cached_pre() {
+    match filter.recover_from_cached_pre().await {
         Ok(()) => {
             if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                 metrics.record_recovery(duration_ns);
@@ -111,9 +111,9 @@ pub async fn run_filter_loop(
                 let progress = payload.progress();
                 let result = match payload {
                     SwapPayload::Reconfigure { ref new_config_json, .. } => {
-                        filter.try_reconfigure(new_config_json)
+                        filter.try_reconfigure(new_config_json).await
                     }
-                    SwapPayload::Filter { .. } => payload.try_apply_filter(&mut filter),
+                    SwapPayload::Filter { .. } => payload.try_apply_filter(&mut filter).await,
                     _ => Err(crate::error::WaferError::Runtime(
                         "filter node received non-filter swap payload".to_string(),
                     )),
@@ -142,13 +142,9 @@ pub async fn run_filter_loop(
         };
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        // `block_in_place` signals the multi-thread runtime that this worker
-        // is about to block synchronously, so it can migrate other tasks and
-        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
-        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
-        let result = tokio::task::block_in_place(|| filter.evaluate(&envelope));
+        let result = filter.evaluate(&envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
@@ -165,7 +161,9 @@ pub async fn run_filter_loop(
                 .await;
             }
             Err(WasmProcessError::TimedOut) => {
-                if !recover_after_timeout(&mut filter, &state, &metrics, &mut policy, envelope) {
+                if !recover_after_timeout(&mut filter, &state, &metrics, &mut policy, envelope)
+                    .await
+                {
                     break;
                 }
             }
@@ -178,7 +176,7 @@ pub async fn run_filter_loop(
                 );
                 state.transition_to_error();
                 state.transition_to_recovering();
-                match filter.recover_from_cached_pre() {
+                match filter.recover_from_cached_pre().await {
                     Ok(()) => {
                         if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                             metrics.record_recovery(duration_ns);

@@ -511,7 +511,7 @@ impl SwapPayload {
         clippy::expect_used,
         reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
     )]
-    pub fn try_apply_transform(
+    pub async fn try_apply_transform(
         self,
         node: &mut crate::node::TransformNode,
     ) -> Result<(), crate::error::WaferError> {
@@ -526,7 +526,7 @@ impl SwapPayload {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
                 .expect("swap payload already consumed");
-            wasm.try_hot_swap(replacement)?;
+            wasm.try_hot_swap(replacement).await?;
         }
         Ok(())
     }
@@ -542,7 +542,7 @@ impl SwapPayload {
         clippy::expect_used,
         reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
     )]
-    pub fn try_apply_filter(
+    pub async fn try_apply_filter(
         self,
         node: &mut crate::node::FilterNode,
     ) -> Result<(), crate::error::WaferError> {
@@ -562,7 +562,7 @@ impl SwapPayload {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
                 .expect("swap payload bindings already consumed");
-            wasm.try_hot_swap(store, bindings, new_pre)?;
+            wasm.try_hot_swap(store, bindings, new_pre).await?;
         }
         Ok(())
     }
@@ -576,7 +576,7 @@ impl SwapPayload {
         clippy::expect_used,
         reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
     )]
-    pub fn try_apply_router(
+    pub async fn try_apply_router(
         self,
         node: &mut WasmRouterNode,
     ) -> Result<(), crate::error::WaferError> {
@@ -591,7 +591,7 @@ impl SwapPayload {
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
                 .expect("swap payload bindings already consumed");
-            node.try_hot_swap(store, bindings, new_pre)?;
+            node.try_hot_swap(store, bindings, new_pre).await?;
         }
         Ok(())
     }

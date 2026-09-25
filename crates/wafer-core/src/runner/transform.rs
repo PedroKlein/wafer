@@ -20,7 +20,7 @@ use crate::runner::{
 };
 use wafer_types::config::HotSwapConfig;
 
-fn recover_after_timeout(
+async fn recover_after_timeout(
     transform: &mut TransformNode,
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
@@ -37,7 +37,7 @@ fn recover_after_timeout(
     );
     state.transition_to_error();
     state.transition_to_recovering();
-    match transform.recover_from_cached_pre() {
+    match transform.recover_from_cached_pre().await {
         Ok(()) => {
             if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                 metrics.record_recovery(duration_ns);
@@ -136,9 +136,11 @@ pub async fn run_transform_loop_with_config(
 
                 let result = match payload {
                     SwapPayload::Reconfigure { ref new_config_json, .. } => {
-                        transform.try_reconfigure(new_config_json)
+                        transform.try_reconfigure(new_config_json).await
                     }
-                    SwapPayload::Transform { .. } => payload.try_apply_transform(&mut transform),
+                    SwapPayload::Transform { .. } => {
+                        payload.try_apply_transform(&mut transform).await
+                    }
                     _ => Err(crate::error::WaferError::Runtime(
                         "transform node received non-transform swap payload".to_string(),
                     )),
@@ -192,13 +194,9 @@ pub async fn run_transform_loop_with_config(
         let safety = envelope.clone();
 
         // 5. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        // `block_in_place` signals the multi-thread runtime that this worker
-        // is about to block synchronously, so it can migrate other tasks and
-        // permit the nested `block_on` inside wasmtime-wasi's sync shim for
-        // WASI async host calls (clock waits, sleeps, I/O). See A16.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
-        let result = tokio::task::block_in_place(|| transform.process(envelope));
+        let result = transform.process(envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
@@ -219,7 +217,9 @@ pub async fn run_transform_loop_with_config(
             }
             Err(WasmProcessError::TimedOut) => {
                 metrics.record_failed();
-                if !recover_after_timeout(&mut transform, &state, &metrics, &mut policy, safety) {
+                if !recover_after_timeout(&mut transform, &state, &metrics, &mut policy, safety)
+                    .await
+                {
                     break;
                 }
             }
@@ -244,7 +244,7 @@ pub async fn run_transform_loop_with_config(
                             wasm.set_cached_pre(c.snapshot.pre.clone());
                         }
                         let rollback_start = Instant::now();
-                        match transform.recover_from_cached_pre() {
+                        match transform.recover_from_cached_pre().await {
                             Ok(()) => {
                                 let rollback_ns =
                                     crate::util::duration_ns_saturating(rollback_start.elapsed());
@@ -336,7 +336,7 @@ pub async fn run_transform_loop_with_config(
                 );
                 state.transition_to_error();
                 state.transition_to_recovering();
-                match transform.recover_from_cached_pre() {
+                match transform.recover_from_cached_pre().await {
                     Ok(()) => {
                         if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                             metrics.record_recovery(duration_ns);
@@ -384,7 +384,7 @@ mod tests {
     ));
     const MNIST_DIGIT: &[u8] = include_bytes!("../../../../tests/fixtures/digit_7.bin");
 
-    fn inference_node(engine: &WaferEngine) -> anyhow::Result<TransformNode> {
+    async fn inference_node(engine: &WaferEngine) -> anyhow::Result<TransformNode> {
         let component = engine.load_component_from_bytes(MNIST_COMPONENT, "mnist")?;
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
         let capabilities = Capabilities::sandbox().inference(true);
@@ -394,7 +394,7 @@ mod tests {
         store.set_fuel(MNIST_FUEL)?;
         store.epoch_deadline_trap();
         store.set_epoch_deadline(1000);
-        let bindings = pre.instantiate(&mut store)?;
+        let bindings = pre.instantiate_async(&mut store).await?;
         let mut node =
             WasmTransformNode::new_inference(store, bindings, pre, NonZeroU64::new(MNIST_FUEL));
         node.configure_runtime(
@@ -404,7 +404,7 @@ mod tests {
             r#"{"execution_target":"cpu"}"#.into(),
         );
         node.set_plugin_version("mnist-cpu-v1");
-        node.validate_and_init(r#"{"execution_target":"cpu"}"#)?;
+        node.validate_and_init(r#"{"execution_target":"cpu"}"#).await?;
         Ok(node.into())
     }
 
@@ -440,7 +440,7 @@ mod tests {
         };
         let engine = WaferEngine::from_engine_config(&config).expect("engine");
         engine.ensure_epoch_ticker();
-        let node = inference_node(&engine).expect("inference node");
+        let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
         let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
             &engine,
@@ -505,7 +505,7 @@ mod tests {
         };
         let engine = WaferEngine::from_engine_config(&config).expect("engine");
         engine.ensure_epoch_ticker();
-        let node = inference_node(&engine).expect("inference node");
+        let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
         let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
             &engine,
@@ -810,8 +810,8 @@ mod tests {
         assert!(output_rx.try_recv().is_err(), "bad input must not be forwarded");
     }
 
-    #[test]
-    fn timed_out_teardown_skips_recovery() {
+    #[tokio::test]
+    async fn timed_out_teardown_skips_recovery() {
         let mut transform =
             TransformNode::Native(crate::node::native::NativeTransform::passthrough("native"));
         let policy = ResolvedErrorPolicy {
@@ -840,7 +840,8 @@ mod tests {
                 &metrics,
                 &mut executor,
                 RuntimeEnvelope::from_string("source", "payload"),
-            ),
+            )
+            .await,
             "timed-out teardown must stop before recovery"
         );
         assert_eq!(metrics.recovery_count(), 0);

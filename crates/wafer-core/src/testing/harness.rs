@@ -9,8 +9,8 @@
 //!
 //! ```ignore
 //! let harness = PluginTestHarness::new().unwrap();
-//! let mut transform = harness.load_transform("path/to/plugin.wasm").unwrap();
-//! let output = transform.process(input_envelope).unwrap();
+//! let mut transform = harness.load_transform("path/to/plugin.wasm").await.unwrap();
+//! let output = transform.process(input_envelope).await.unwrap();
 //! ```
 
 use std::num::NonZeroU64;
@@ -80,14 +80,14 @@ impl PluginTestHarness {
     ///
     /// Returns error if the file cannot be read, doesn't compile, or doesn't
     /// implement the transform-node world.
-    pub fn load_transform(&self, wasm_path: impl AsRef<Path>) -> Result<TransformHarness> {
-        self.load_transform_with_memory_limit(wasm_path, 64 * 1024 * 1024)
+    pub async fn load_transform(&self, wasm_path: impl AsRef<Path>) -> Result<TransformHarness> {
+        self.load_transform_with_memory_limit(wasm_path, 64 * 1024 * 1024).await
     }
 
     /// Same as `load_transform` but with a caller-chosen store memory limit.
     /// Useful for benchmarks that push a large number of messages through a
     /// long-lived Store.
-    pub fn load_transform_with_memory_limit(
+    pub async fn load_transform_with_memory_limit(
         &self,
         wasm_path: impl AsRef<Path>,
         memory_limit: usize,
@@ -119,7 +119,8 @@ impl PluginTestHarness {
         }
 
         let bindings = pre
-            .instantiate(&mut store)
+            .instantiate_async(&mut store)
+            .await
             .map_err(|e| crate::error::WaferError::PluginInit { message: e.to_string() })?;
 
         let mut node = WasmTransformNode::new(store, bindings, pre, self.engine.fuel_limit());
@@ -155,11 +156,11 @@ impl TransformHarness {
     /// Call transform::process() with a test envelope.
     ///
     /// Returns the transformed envelope or the Wasm process error.
-    pub fn process(
+    pub async fn process(
         &mut self,
         input: RuntimeEnvelope,
     ) -> std::result::Result<RuntimeEnvelope, WasmProcessError> {
-        self.node.process(input)
+        self.node.process(input).await
     }
 
     /// Access the underlying node (for lifecycle calls or inspection).
@@ -193,25 +194,25 @@ mod tests {
         assert!(harness.is_ok(), "Harness creation failed: {:?}", harness.err());
     }
 
-    #[test]
-    fn load_transform_nonexistent_path_fails() {
+    #[tokio::test]
+    async fn load_transform_nonexistent_path_fails() {
         let harness = PluginTestHarness::new().unwrap();
-        let result = harness.load_transform("/nonexistent/path.wasm");
+        let result = harness.load_transform("/nonexistent/path.wasm").await;
         assert!(result.is_err());
     }
 
-    #[test]
-    fn pass_through_returns_same_payload() {
+    #[tokio::test]
+    async fn pass_through_returns_same_payload() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built (run `just build-plugin pass-through`)");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         let input = RuntimeEnvelope::from_string("test-source", "hello world");
-        let output = transform.process(input).unwrap();
+        let output = transform.process(input).await.unwrap();
 
         assert_eq!(
             std::str::from_utf8(&output.payload).unwrap(),
@@ -220,18 +221,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pass_through_preserves_source() {
+    #[tokio::test]
+    async fn pass_through_preserves_source() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         let input = RuntimeEnvelope::from_string("my-source", "data");
-        let output = transform.process(input).unwrap();
+        let output = transform.process(input).await.unwrap();
 
         assert_eq!(
             &*output.header.source, "my-source",
@@ -239,39 +240,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn pass_through_sustains_repeated_guest_calls() {
+    #[tokio::test]
+    async fn pass_through_sustains_repeated_guest_calls() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         for _ in 0..10_000 {
             let input = RuntimeEnvelope::from_string("src", "message");
-            let output = transform.process(input).unwrap();
+            let output = transform.process(input).await.unwrap();
             assert_eq!(&*output.payload, b"message");
         }
     }
 
     /// Regression: guest metadata must reach the runtime envelope, or the
     /// sink cannot observe `bench.intended_ns` and records zero samples.
-    #[test]
-    fn pass_through_propagates_metadata() {
+    #[tokio::test]
+    async fn pass_through_propagates_metadata() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         let input = RuntimeEnvelope::from_string("src", "hello")
             .with_metadata("bench.sequence", "42")
             .with_metadata("bench.intended_ns", "1234567890123");
-        let out = transform.process(input).expect("transform must succeed");
+        let out = transform.process(input).await.expect("transform must succeed");
 
         let md: Vec<(&str, &str)> =
             out.header.metadata.iter().map(|(k, v)| (k.as_ref(), v.as_ref())).collect();
@@ -290,15 +291,15 @@ mod tests {
     /// sleep spans ~1.5 s wall time, well past the 100-tick default; a
     /// missing reset traps at the first check point (typically
     /// `cabi_realloc`) around iteration 100.
-    #[test]
-    fn pass_through_survives_epoch_deadline_wraparound() {
+    #[tokio::test]
+    async fn pass_through_survives_epoch_deadline_wraparound() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
             eprintln!("SKIP: pass-through.wasm not built");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         for i in 0..150 {
             std::thread::sleep(std::time::Duration::from_millis(10));
@@ -306,6 +307,7 @@ mod tests {
             let input = RuntimeEnvelope::from_string("src", &payload);
             let out = transform
                 .process(input)
+                .await
                 .unwrap_or_else(|e| panic!("iteration {i} trapped after >{} ms: {e}", i * 10));
             assert_eq!(std::str::from_utf8(&out.payload).unwrap(), payload);
         }
@@ -320,25 +322,25 @@ mod tests {
         "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
     );
 
-    #[test]
-    fn delay_injector_smoke() {
+    #[tokio::test]
+    async fn delay_injector_smoke() {
         if !Path::new(DELAY_INJECTOR_WASM).exists() {
             eprintln!("SKIP: delay-injector.wasm not built");
             return;
         }
 
         let harness = PluginTestHarness::new().unwrap();
-        let mut transform = harness.load_transform(DELAY_INJECTOR_WASM).unwrap();
+        let mut transform = harness.load_transform(DELAY_INJECTOR_WASM).await.unwrap();
 
         // Warm up: first invocation absorbs first-call JIT / instantiation
         // slack. Discard its timing so the asserted floor is realistic.
         let warmup = RuntimeEnvelope::from_string("warmup", "first");
-        let _ = transform.process(warmup).unwrap();
+        let _ = transform.process(warmup).await.unwrap();
 
         // Real measurement.
         let input = RuntimeEnvelope::from_string("src", "payload");
         let started = std::time::Instant::now();
-        let output = transform.process(input).unwrap();
+        let output = transform.process(input).await.unwrap();
         let elapsed = started.elapsed();
 
         // Default delay is 50 ms (see plugin lib.rs). AC2 tolerance: ≥45 ms
@@ -371,8 +373,8 @@ mod tests {
         "/../../plugins/pass-through-v2-panics/target/wasm32-wasip2/release/wafer_pass_through_v2_panics.wasm"
     );
 
-    #[test]
-    fn pass_through_v2_panics_traps_on_first_call() {
+    #[tokio::test]
+    async fn pass_through_v2_panics_traps_on_first_call() {
         if !Path::new(PASS_THROUGH_V2_PANICS_WASM).exists() {
             eprintln!("SKIP: pass-through-v2-panics.wasm not built");
             return;
@@ -384,10 +386,11 @@ mod tests {
         // earlier at stage-and-instantiate.
         let mut transform = harness
             .load_transform(PASS_THROUGH_V2_PANICS_WASM)
+            .await
             .expect("pass-through-v2-panics init() must succeed; only process() should trap");
 
         let input = RuntimeEnvelope::from_string("src", "any-payload");
-        let result = transform.process(input);
+        let result = transform.process(input).await;
         assert!(
             result.is_err(),
             "pass-through-v2-panics.process() must trap on first call, got Ok"
@@ -412,9 +415,9 @@ mod tests {
     /// payload sizes and report which — if any — trap. Ignored so it
     /// never runs in CI. Invoke with
     /// `cargo test --release -p wafer-core --lib -- --ignored --nocapture pass_through_bench_shapes`.
-    #[test]
+    #[tokio::test]
     #[ignore = "E-Perf-4 diagnostic; opt-in"]
-    fn pass_through_bench_shapes() {
+    async fn pass_through_bench_shapes() {
         use bytes::Bytes;
 
         if !Path::new(PASS_THROUGH_WASM).exists() {
@@ -422,14 +425,14 @@ mod tests {
             return;
         }
         let harness = PluginTestHarness::new().unwrap();
-        let mut t = harness.load_transform(PASS_THROUGH_WASM).unwrap();
+        let mut t = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         for size in [16_usize, 128, 1024, 10_240, 102_400] {
             let payload = Bytes::from(vec![0x42u8; size]);
             let env = RuntimeEnvelope::new("bench-source", payload)
                 .with_metadata("bench.sequence", "0")
                 .with_metadata("bench.intended_ns", "1234567890123456789");
-            match t.process(env) {
+            match t.process(env).await {
                 Ok(out) => eprintln!("size={size:>6}: OK payload_len={}", out.payload.len()),
                 Err(e) => eprintln!("size={size:>6}: FAIL {e}"),
             }

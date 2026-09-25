@@ -420,15 +420,17 @@ async fn load_transform_node(
 
     let mut node = if capabilities.allow_inference {
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
-        let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-            message: format!("inference transform '{node_id}' instantiation failed: {e}"),
-        })?;
+        let bindings =
+            pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
+                message: format!("inference transform '{node_id}' instantiation failed: {e}"),
+            })?;
         WasmTransformNode::new_inference(store, bindings, pre, fuel_limit)
     } else {
         let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
-        let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-            message: format!("transform '{node_id}' instantiation failed: {e}"),
-        })?;
+        let bindings =
+            pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
+                message: format!("transform '{node_id}' instantiation failed: {e}"),
+            })?;
         WasmTransformNode::new(store, bindings, pre, fuel_limit)
     };
 
@@ -440,7 +442,7 @@ async fn load_transform_node(
         config_json.clone(),
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
-    node.validate_and_init(&config_json)?;
+    node.validate_and_init(&config_json).await?;
     timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }
@@ -612,7 +614,7 @@ async fn load_filter_node(
         store.set_epoch_deadline(n.get());
     }
 
-    let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+    let bindings = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
         message: format!("filter '{node_id}' instantiation failed: {e}"),
     })?;
 
@@ -625,7 +627,7 @@ async fn load_filter_node(
         config_json.clone(),
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
-    node.validate_and_init(&config_json)?;
+    node.validate_and_init(&config_json).await?;
     timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }
@@ -677,7 +679,7 @@ async fn load_router_node(
         store.set_epoch_deadline(n.get());
     }
 
-    let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+    let bindings = pre.instantiate_async(&mut store).await.map_err(|e| WaferError::PluginInit {
         message: format!("router '{node_id}' instantiation failed: {e}"),
     })?;
 
@@ -690,7 +692,7 @@ async fn load_router_node(
         config_json.clone(),
     );
     node.set_plugin_version(wasm.plugin_version.clone().unwrap_or_default());
-    node.validate_and_init(&config_json)?;
+    node.validate_and_init(&config_json).await?;
     timings.instantiation = timings.instantiation.saturating_add(phase_started.elapsed());
     Ok(node)
 }

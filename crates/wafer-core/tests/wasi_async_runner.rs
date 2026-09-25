@@ -184,8 +184,8 @@ fn p50_ns_from(bench_dir: &Path) -> u64 {
     json["p50_ns"].as_u64().unwrap()
 }
 
-#[test]
-fn repeated_success_and_guest_error_reset_per_call_state() {
+#[tokio::test]
+async fn repeated_success_and_guest_error_reset_per_call_state() {
     if !Path::new(UPPERCASE_WASM).exists() {
         eprintln!("SKIP: uppercase.wasm not built at {UPPERCASE_WASM}");
         return;
@@ -197,7 +197,7 @@ fn repeated_success_and_guest_error_reset_per_call_state() {
         ..EngineConfig::default()
     };
     let harness = PluginTestHarness::with_engine_config(&config).expect("engine");
-    let mut transform = harness.load_transform(UPPERCASE_WASM).expect("uppercase must load");
+    let mut transform = harness.load_transform(UPPERCASE_WASM).await.expect("uppercase must load");
 
     let make_input = || {
         let mut input = RuntimeEnvelope::from_string("host-source", "hello");
@@ -216,7 +216,7 @@ fn repeated_success_and_guest_error_reset_per_call_state() {
     for _ in 0..3 {
         let input = make_input();
         let trace_id = input.trace_id().expect("trace id").to_string();
-        let output = transform.process(input).expect("repeated success");
+        let output = transform.process(input).await.expect("repeated success");
         assert_eq!(&*output.payload, b"HELLO");
         assert_eq!(&*output.header.id, "host-id");
         assert_eq!(output.header.timestamp, 1_700_000_000_000_000_123);
@@ -240,6 +240,7 @@ fn repeated_success_and_guest_error_reset_per_call_state() {
 
     let error = transform
         .process(RuntimeEnvelope::new("host-source", Bytes::from_static(&[0xff])))
+        .await
         .expect_err("invalid UTF-8 must be a guest error");
     assert!(matches!(error, WasmProcessError::BadInput(_)), "unexpected guest error: {error:?}");
     assert!(
@@ -248,7 +249,7 @@ fn repeated_success_and_guest_error_reset_per_call_state() {
     );
 
     let output =
-        transform.process(make_input()).expect("Store must remain usable after guest error");
+        transform.process(make_input()).await.expect("Store must remain usable after guest error");
     assert_eq!(&*output.payload, b"HELLO");
     assert!(transform.node_mut().store_mut().data().table().is_empty());
 }
