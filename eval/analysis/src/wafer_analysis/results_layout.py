@@ -23,6 +23,17 @@ CANONICAL_ALIASES = {
 }
 
 
+def validate_alias_mapping(mapping: dict[str, str]) -> None:
+    for alias in mapping:
+        seen = {alias}
+        source = mapping[alias]
+        while source in mapping:
+            if source in seen:
+                raise ValueError("canonical alias mapping contains a cycle")
+            seen.add(source)
+            source = mapping[source]
+
+
 def validate_segment(value: str) -> str:
     if not _SAFE_SEGMENT.fullmatch(value) or value.endswith((".", " ")):
         raise ValueError(f"path segment is not exFAT-safe: {value!r}")
@@ -174,6 +185,7 @@ class ResultsLayout:
 
 
 def resolve_alias_receipt(receipt_path: Path) -> tuple[dict, Path]:
+    validate_alias_mapping(CANONICAL_ALIASES)
     if receipt_path.is_symlink():
         raise ValueError(f"alias receipt must not be a symlink: {receipt_path}")
     receipt_path = receipt_path.resolve()
@@ -218,6 +230,8 @@ def resolve_alias_receipt(receipt_path: Path) -> tuple[dict, Path]:
     parts = relative_receipt.parts
     run_match = re.fullmatch(r"run-(\d+)\.json", parts[-1]) if len(parts) >= 5 else None
     condition = "/".join(parts[3:-1]) if len(parts) >= 5 else ""
+    if value.get("independent_n_contribution") != 0:
+        raise ValueError(f"alias receipt must add zero independent N: {receipt_path}")
     if (
         parts[0] != "aliases"
         or value.get("experiment") != parts[1]
@@ -225,6 +239,7 @@ def resolve_alias_receipt(receipt_path: Path) -> tuple[dict, Path]:
         or run_match is None
         or value.get("run_index") != int(run_match.group(1))
         or value.get("shared_measurement") is not True
+        or value.get("source_evidence_class") != "final"
         or CANONICAL_ALIASES.get(value.get("experiment"))
         != value.get("shared_from_experiment")
     ):
@@ -245,10 +260,26 @@ def resolve_alias_receipt(receipt_path: Path) -> tuple[dict, Path]:
     ):
         raise ValueError(f"alias source identity differs: {source}")
     status = source / "canonical-status.json"
+    metadata_path = source / "metadata.json"
     try:
-        digest = hashlib.sha256(status.read_bytes()).hexdigest()
+        if status.is_symlink() or status.stat().st_nlink > 1:
+            raise ValueError(f"alias source terminal receipt is linked: {source}")
+        status_bytes = status.read_bytes()
+        status_value = json.loads(status_bytes)
+        metadata = json.loads(metadata_path.read_text())
+        digest = hashlib.sha256(status_bytes).hexdigest()
     except OSError as error:
         raise ValueError(f"alias source has no terminal receipt: {source}") from error
+    except json.JSONDecodeError as error:
+        raise ValueError(f"alias source metadata or status is malformed: {source}") from error
+    if status_value.get("status") != "passed":
+        raise ValueError(f"alias source is not passed: {source}")
+    if (
+        metadata.get("experiment") != value.get("shared_from_experiment")
+        or metadata.get("evidence_class") != "final"
+        or metadata.get("thesis_evidence") is not True
+    ):
+        raise ValueError(f"alias source is non-final evidence: {source}")
     if value.get("source_status_sha256") != digest:
         raise ValueError(f"alias source receipt digest differs: {source}")
     if value.get("sample_identity") != value.get("source_leaf"):

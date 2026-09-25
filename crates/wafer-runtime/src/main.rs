@@ -18,9 +18,10 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use wafer_config::{load_config, validate};
 use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
+use wafer_core::config::NodeDef;
 use wafer_core::engine::Capabilities;
 use wafer_core::orchestrator::PipelineOrchestrator;
-use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
+use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel;
 use wafer_core::orchestrator::launch_pipeline_timed;
 
 mod metadata;
@@ -201,6 +202,18 @@ async fn main() -> Result<()> {
             anyhow::bail!("--swap-node '{node_id}' is not a swappable Wasm node");
         }
 
+        let NodeDef::Transform(wasm) =
+            config.nodes.get(&node_id).context("--swap-node must name a Transform")?
+        else {
+            anyhow::bail!("--swap-node '{node_id}' must name a Transform");
+        };
+        let capabilities = Capabilities {
+            inherit_stdio: wasm.capabilities.inherit_stdio,
+            inherit_env: wasm.capabilities.inherit_env,
+            allow_inference: wasm.capabilities.allow_inference,
+        };
+        let memory_limit = wasm.memory_limit.unwrap_or(config.engine.memory.transform);
+        let fuel_limit = wasm.fuel.or(config.engine.fuel.transform);
         let output_dir = args.swap_output_dir.clone();
         let engine = Arc::clone(orchestrator.engine());
         let cancel = orchestrator.cancel_token().clone();
@@ -226,13 +239,13 @@ async fn main() -> Result<()> {
             };
 
             let (progress, _completion_rx) = wafer_core::runner::HotSwapProgress::channel();
-            // CLI-driven prepare-only smoke path: use the default transform memory limit.
-            let result = prepare_transform_swap_timed(
+            let result = prepare_transform_swap_timed_with_fuel(
                 &engine,
                 &wasm_bytes,
                 &node_id,
-                Capabilities::sandbox(),
-                64 * 1024 * 1024,
+                capabilities,
+                memory_limit,
+                fuel_limit,
                 progress,
             )
             .await;

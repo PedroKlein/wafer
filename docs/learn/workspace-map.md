@@ -84,7 +84,7 @@ The remaining crates have one clear consumer boundary: guest authors use `wafer-
 ## Evidence
 
 - **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`
-- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::validate`
+- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`
 - **Source:** [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs) | symbols: `pub mod config`, `pub use control::*`
 - **Source:** [`crates/wafer-core/src/lib.rs`](../../crates/wafer-core/src/lib.rs) | symbols: `pub mod orchestrator`, `pub mod runner`
 - **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `use wafer_config::{load_config, validate}`, `async fn main()`

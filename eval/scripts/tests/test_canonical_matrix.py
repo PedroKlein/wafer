@@ -31,8 +31,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2105" in result.stdout
-    assert "measured_leaves=1893" in result.stdout
+    assert "schedule_records=2165" in result.stdout
+    assert "measured_leaves=1953" in result.stdout
 
 
 def test_focused_pilot_selection_is_exact_and_diagnostic() -> None:
@@ -49,7 +49,9 @@ def test_focused_pilot_selection_is_exact_and_diagnostic() -> None:
             for tier in ("small", "medium", "large")
             for cache in ("cold", "warm")
         },
-        "e-backpressure": {"saturated-slow-consumer": [1, 2, 3]},
+        "e-backpressure": {
+            policy: [1, 2, 3] for policy in ("slow", "drop", "dead-letter")
+        },
         "e-iso-4": {"infinite-loop": [1, 2, 3]},
         "e-iso-7": {
             condition: [1, 2, 3]
@@ -125,8 +127,8 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["status"] == "frozen-before-execution"
     assert campaign["seed"] == 1729
     assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2105
-    assert campaign["expected_measured_leaves"] == 1893
+    assert campaign["expected_schedule_records"] == 2165
+    assert campaign["expected_measured_leaves"] == 1953
     assert campaign["capacity_grid"] == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -140,7 +142,7 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "epoch_tick_ms": 10,
     }
     assert campaign["ekuiper_operator_concurrency"] == 1
-    assert len(campaign["wafer_config_catalog"]) == 53
+    assert len(campaign["wafer_config_catalog"]) == 55
     assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
     assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
     assert matrix["experiments"]["e-iso-5"]["metering_exceptions"]["memory-exhaust"]["fuel"] is None
@@ -162,14 +164,23 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
 
     assert matrix["experiments"]["e-perf-9"]["cache_scope"] == "linux-filesystem-page-cache"
     assert matrix["experiments"]["e-perf-5"]["incomplete_until"] == "matching x86 Linux batch"
-    assert matrix["experiments"]["e-swap-3"]["conditions"] == [
+    swap3 = matrix["experiments"]["e-swap-3"]
+    assert swap3["conditions"] == [
         "wafer-hotswap",
         "wafer-restart",
         "ekuiper-restart",
     ]
-    assert "throughput-buckets-10ms.json" in matrix["experiments"]["e-swap-3"][
-        "required_outputs"
-    ]
+    assert set(swap3["required_outputs"]) == {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        "disruption-timeline.json",
+        "disruption-analysis.json",
+    }
     burst = matrix["experiments"]["e-swap-4"]
     assert "throughput-buckets-10ms.json" in burst["required_outputs"]
     assert burst["sample_unit"] == "run"
@@ -184,9 +195,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "burst_end_secs": 65,
         "swaps_per_run": 1,
     }
-    assert {"burst-source-timing.json", "burst-source-summary.json"} <= set(
-        burst["required_outputs"]
-    )
+    assert {
+        "burst-source-timing.json",
+        "burst-source-summary.json",
+        "swap-actual-t0.json",
+    } <= set(burst["required_outputs"])
     assert burst["sink_tail_policy"] == {
         "alignment_clock": "unix-epoch-source-sink-alignment",
         "primary_start_secs": 0,
@@ -200,6 +213,19 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "source_completion_deadline_secs": 130,
         "require_full_sequence_reconciliation": True,
     }
+    for experiment in ("e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"):
+        definition = matrix["experiments"][experiment]
+        assert definition["sample_unit"] == "event"
+        assert definition["independent_unit"] == "complete process run"
+        assert "within run" in definition["nested_unit"]
+    assert burst["independent_unit"] == "complete process run"
+    assert burst["nested_unit"] == "one swap within run"
+    focused = matrix["focused_pilot"]["experiments"]
+    assert focused["e-swap-4"]["sample_unit"] == "run"
+    assert "events_per_run" not in focused["e-swap-4"]
+    for experiment in ("e-swap-1", "e-swap-2", "e-swap-4", "e-swap-5", "e-swap-6"):
+        assert focused[experiment]["independent_unit"] == "complete process run"
+        assert "within run" in focused[experiment]["nested_unit"]
     assert all(
         definition["thesis_evidence"] is True
         for definition in matrix["experiments"].values()
@@ -348,22 +374,34 @@ def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
     assert configs[0] == configs[1] == configs[2]
 
 
-def test_backpressure_freezes_internal_queue_pressure_contract() -> None:
-    experiment = json.loads(MATRIX.read_text())["experiments"]["e-backpressure"]
-    config = tomllib.loads((ROOT / experiment["config"]).read_text())
+def test_backpressure_freezes_policy_specific_internal_queue_contract() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    experiment = matrix["experiments"]["e-backpressure"]
+    expected_configs = {
+        "slow": "eval/configs/e-backpressure/pipeline-saturated.toml",
+        "drop": "eval/configs/e-backpressure/pipeline-drop.toml",
+        "dead-letter": "eval/configs/e-backpressure/pipeline-dead-letter.toml",
+    }
 
-    assert experiment["conditions"] == ["saturated-slow-consumer"]
+    assert experiment["conditions"] == ["slow", "drop", "dead-letter"]
+    assert experiment["policy_configs"] == expected_configs
+    assert experiment["measured_queue"] == "slow"
     assert experiment["queue_occupancy_threshold"] == 0.8
     assert experiment["queue_recovery_threshold"] == 0.1
     assert experiment["rss_limit_bytes"] == 268_435_456
     assert {"queue-depth.csv", "backpressure.json", "memory.csv", "sequence.csv"} <= set(
         experiment["required_outputs"]
     )
-    assert config["nodes"]["source"]["kind"] == "bench-source"
-    assert config["nodes"]["source"]["rate"] == 1000.0
-    assert config["nodes"]["slow"]["config"]["delay_ms"] == 5
-    assert config["edges"][0]["capacity"] == 64
-    assert config["edges"][0]["overflow"] == "slow"
+
+    for policy, path in expected_configs.items():
+        config = tomllib.loads((ROOT / path).read_text())
+        assert config["nodes"]["source"]["kind"] == "bench-source"
+        assert config["nodes"]["source"]["rate"] == 1000.0
+        assert config["nodes"]["slow"]["config"]["delay_ms"] == 5
+        assert config["edges"][0]["capacity"] == 64
+        assert config["edges"][0]["overflow"] == policy
+        assert config["edges"][1]["overflow"] == "slow"
+        assert ("dead_letter" in config) == (policy == "dead-letter")
 
 
 def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:

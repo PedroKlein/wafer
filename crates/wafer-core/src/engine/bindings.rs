@@ -1,13 +1,12 @@
-//! Wasmtime [`bindgen!`] outputs for the three WAFER pipeline worlds.
+//! Wasmtime [`bindgen!`] outputs for the WAFER pipeline worlds.
 //!
-//! Each world (`transform-node`, `filter-node`, `router-node`) gets its own
-//! submodule. The first invocation (`transform_node`) generates the canonical
+//! Each world gets its own submodule. The first invocation (`transform_node`) generates the canonical
 //! `wafer:pipeline/types` and `wafer:pipeline/logging` interface bindings;
 //! subsequent invocations redirect to that module via `with:` so `WaferBuffer`
 //! impls are deduplicated and `WaferState` only needs one `HostBuffer`
 //! implementation.
 //!
-//! All three worlds live in the single `wafer:pipeline@0.1.0` package under
+//! All worlds live in the single `wafer:pipeline@0.1.0` package under
 //! `wit/`. See RFC-001 and the top-level `wit/` directory.
 //!
 //! [`bindgen!`]: wasmtime::component::bindgen
@@ -37,6 +36,20 @@ pub mod filter_node {
         with: {
             "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
             "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
+        },
+    });
+}
+
+/// Bindings for the inference-capable Transform world.
+pub(crate) mod inference_node {
+    wasmtime::component::bindgen!({
+        path: "wit",
+        world: "inference-node",
+        with: {
+            "wafer:pipeline/types": super::transform_node::wafer::pipeline::types,
+            "wafer:pipeline/logging": super::transform_node::wafer::pipeline::logging,
+            "wafer:pipeline/lifecycle": super::transform_node::exports::wafer::pipeline::lifecycle,
+            "wafer:pipeline/transform": super::transform_node::exports::wafer::pipeline::transform,
         },
     });
 }

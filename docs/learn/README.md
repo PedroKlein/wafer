@@ -14,7 +14,7 @@ WAFER is a Rust workspace whose runtime loads a typed pipeline configuration and
 
 | Field | Binding for this guide |
 |---|---|
-| Source commit | `fa149e75d8b47e3284a76c9b98d0709e7e6f061c` |
+| Source commit | `92d86b0a511047988de5fbf6551b18b8a09ec455` |
 | Snapshot repository | `github.com/PedroKlein/wafer-poc` |
 | Implementation authority | Rust source, Cargo manifests, WIT files, and tests at the snapshot above |
 | Current implementation | A claim verified directly in those files and named tests |

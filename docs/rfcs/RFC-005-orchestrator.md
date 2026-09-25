@@ -16,6 +16,21 @@
 > node type: transform/filter/router (A10). The builder resolves the
 > per-pipeline + per-node `[error_policy]` cascade (A6). DLQ lineage is
 > assigned at source ingress and preserved through fan-out (A13).
+>
+> **Current release amendment.** `PipelineHandle` exposes loaded-Wasm
+> replacement eligibility and one mutation guard shared by hot-swap and
+> reconfigure. The API reports `replacement_adopted` and
+> `first_post_replacement_local_outcome`; these are local runner facts, not sink
+> convergence. Sink transition, gap, throughput, and sequence remain separate
+> evidence. Initialization rollback applies to eligible Wasm roles, while
+> process-time canary rollback remains Transform-only. A20 Prometheus rollback
+> count export is deferred. Queue dispatch preserves each edge's overflow
+> policy, and retries choose the earliest due deadline and honor typed
+> exhaustion actions.
+>
+> The remainder is the historical design record.
+
+<!-- historical-design-below -->
 
 ## Abstract
 

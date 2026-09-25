@@ -57,28 +57,22 @@ hot-swap) live in `non-functional.md`.
   `mqtt`, `http`.
   *Verify:* `SinkDef` enum in the same file.
 
-- **FR-NODE-4 · Transform / Filter / Router are Wasm components.**
-  *Statement:* Nodes of category `transform`, `filter`, or `router`
-  shall be loaded from a WebAssembly Component-Model binary named by
-  the `plugin` field of `WasmNodeDef`. No inline expression language.
-  *Verify:* `crates/wafer-core/src/engine/loader.rs` accepts only
-  `.wasm` components; startup fails otherwise.
+- **FR-NODE-4 · Processing implementations are explicit.**
+  *Statement:* Transform, Filter, and Router nodes shall select either a WebAssembly Component-Model binary or one of the closed native evaluation functions through `plugin`. Only loaded Wasm implementations are replacement-eligible; there is no inline expression language.
+  *Verify:* `PluginSpec`, launcher dispatch, and loaded-Wasm eligibility tests.
 
-- **FR-NODE-5 · Wasm nodes implement one of four worlds.**
-  *Statement:* Wasm plugins shall implement exactly one of the WIT
-  worlds `transform-node`, `filter-node`, `inference-node`, or
-  `router-node`.
+- **FR-NODE-5 · Wasm nodes implement one of three WIT worlds.**
+  *Statement:* Wasm plugins shall implement exactly one of the three WIT worlds
+  `transform-node`, `filter-node`, or `router-node` in the single
+  `wafer:pipeline@0.1.0` package.
   *Verify:* wit-bindgen linking fails at build time if the exported
   interfaces do not match the world.
 
 ## Message flow
 
-- **FR-MSG-1 · Bounded queues on every edge.**
-  *Statement:* Every edge shall be a bounded `tokio::mpsc` channel
-  with capacity taken from `[[edges]].capacity` or falling back to
-  `[engine].default_queue_capacity` (default 1024).
-  *Verify:* `crates/wafer-core/src/orchestrator/builder.rs` wires
-  every edge as `mpsc::channel(cap)`.
+- **FR-MSG-1 · Bounded destination queues.**
+  *Statement:* The runtime shall create one bounded `tokio::mpsc` receiver per destination. Its capacity is the maximum explicit incoming capacity, or `[engine].default_queue_capacity` (1024) when none is specified. Every queue and DLQ capacity must be greater than zero.
+  *Verify:* receiver-keyed wiring and validation tests in `crates/wafer-core/src/orchestrator/builder.rs` and `crates/wafer-config/src/validation.rs`.
 
 - **FR-MSG-2 · Fan-in as implicit host topology.**
   *Statement:* When multiple upstream edges terminate at the same
@@ -103,12 +97,8 @@ hot-swap) live in `non-functional.md`.
   touching `payload`.
 
 - **FR-MSG-5 · Overflow policies.**
-  *Statement:* Each edge shall enforce an overflow policy:
-  `slow` (backpressure — sender awaits capacity), `drop` (drop the
-  message on a full queue), or `dead-letter` (route to DLQ with
-  `DlqReason::QueueFull`).
-  *Verify:* `OverflowPolicy` variants in the sender wrapper; unit
-  tests per variant.
+  *Statement:* Each sender shall enforce its edge policy: `slow` reserves and awaits capacity, `drop` records a non-blocking full-queue discard, and `dead-letter` attempts delivery to the configured file or MQTT DLQ with `DlqReason::QueueFull`. Destination closed, DLQ full, and DLQ closed are distinct outcomes; fan-out branches retain independent policies.
+  *Verify:* shared `send_matching`/`send_one` regressions and configured DLQ integration tests.
 
 ## Error handling
 
@@ -121,12 +111,8 @@ hot-swap) live in `non-functional.md`.
   `crates/wafer-core/src/runner/error_policy.rs`; mapping tests.
 
 - **FR-ERR-2 · Bounded retry.**
-  *Statement:* Retryable categories (`dependency-failed`,
-  `processing-failed`) shall be retried up to the configured
-  `retries` count with exponential backoff (starting from
-  `backoff_ms`, capped at 30 000 ms). On exhaustion or buffer
-  overflow, the envelope shall be routed to DLQ.
-  *Verify:* `RetryBuffer` unit tests.
+  *Statement:* Retryable categories shall wait exactly `backoff_ms` before the first retry, double later delays to 30 000 ms, wake at the earliest due buffered deadline, and preserve retry count. Exhaustion shall perform the configured terminal action (`skip`, `dlq`, or `teardown`) without requeue; DLQ full and closed remain distinct.
+  *Verify:* paused-time and real-runner retry tests.
 
 - **FR-ERR-3 · DLQ envelope preservation.**
   *Statement:* DLQ envelopes shall preserve the original message
@@ -149,10 +135,13 @@ hot-swap) live in `non-functional.md`.
   the Wasm-node set).
   *Verify:* API handler test.
 
-- **FR-SWAP-3 · Report per-phase timing on swap.**
-  *Statement:* The hot-swap response shall include a `timeline`
-  object with `compile_ns` and `instantiate_ns`.
-  *Verify:* `crates/wafer-core/src/api/handlers.rs::hot_swap`.
+- **FR-SWAP-3 · Report local replacement progress.**
+  *Statement:* A successful replacement response shall report `replacement_adopted` and `first_post_replacement_local_outcome` separately from preparation timing. These fields are runner-local and shall not be described as sink convergence or sequence evidence.
+  *Verify:* `crates/wafer-core/src/api/handlers.rs::hot_swap` and blocked-sink/drop tests.
+
+- **FR-SWAP-4 · Serialize node mutation.**
+  *Statement:* Hot-swap and `/reconfigure` shall share one per-node mutation guard. Eligibility shall include loaded Wasm Transform, Filter, and Router nodes and reject native processing nodes before preparation.
+  *Verify:* mutation race and eligibility tests.
 
 ## Control plane
 
@@ -168,7 +157,7 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-CTL-3 · Node inspection.**
   *Statement:* `GET /api/v1/nodes` shall return an array of
-  `{id, category, state, swappable}`. `GET /api/v1/nodes/{id}` shall
+  `{id, state, processed, failed, replacement_eligible}`. `GET /api/v1/nodes/{id}` shall
   return a single entry or 404.
   *Verify:* API handler tests.
 
@@ -189,15 +178,16 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-PLG-1 · Deny-by-default capabilities.**
   *Statement:* Wasm plugins shall have no access to stdio, environment,
-  filesystem, or `wasi:nn` unless explicitly granted via
-  `[nodes.NAME.capabilities]`.
-  *Verify:* Capability grants in
-  `crates/wafer-core/src/engine/capabilities.rs`.
+  filesystem, or inference by default. Only a Wasm Transform with
+  `allow_inference=true` shall receive the `inference-node` binding,
+  wasi-nn-enabled linker, and ONNX backend. Native Transforms, Filters, and
+  Routers shall reject the grant, and ungranted inference imports shall fail
+  during preparation.
+  *Verify:* capability validation, inference inventory, real-component grant
+  and denial, and lifecycle replacement tests.
 
 - **FR-PLG-2 · Fuel metering.**
-  *Statement:* Each Wasm call shall be bounded by the per-node fuel
-  budget (falling back to `[engine.fuel]` per category). Exhaustion
-  traps as `timed-out`.
+  *Statement:* When configured, each Wasm call shall be bounded by the per-node fuel budget, falling back to `[engine.fuel]` per category. Runtime defaults are unmetered; final evaluation configs enable protection explicitly. Exhaustion traps as `timed-out`.
   *Verify:* Fuel-metering integration test with the `infinite-loop`
   attack plugin.
 

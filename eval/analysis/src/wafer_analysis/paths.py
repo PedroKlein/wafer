@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
 import json
 import os
@@ -9,7 +10,9 @@ import pathlib
 import re
 from collections.abc import Mapping
 
+from .backpressure import validate_backpressure_result
 from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
+from .rollback import validate_swap5_artifacts
 
 APPROVAL_RELATIVE_PATH = pathlib.Path(
     ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
@@ -256,7 +259,16 @@ def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
 
 
 def _validate_json_artifact(path: pathlib.Path) -> None:
-    value = _read_object(path, path.name)
+    try:
+        value = json.loads(path.read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"malformed {path.name}: {error}") from error
+    if path.name == "swap_requests.json":
+        if not isinstance(value, list):
+            raise TypeError("malformed swap_requests.json: expected an array")
+        return
+    if not isinstance(value, dict):
+        raise TypeError(f"malformed {path.name}: expected an object")
     if path.name == "percentiles.json":
         required = {"total_count", "p50_ns", "p95_ns", "p99_ns", "p999_ns"}
         if not required <= value.keys() or any(
@@ -278,6 +290,51 @@ def _validate_json_artifact(path: pathlib.Path) -> None:
         and value.get("schema_version") != 1
     ):
         raise ValueError(f"malformed {path.name}: schema_version must be 1")
+
+
+def _sequence_summary(path: pathlib.Path) -> dict[str, int]:
+    try:
+        with path.open(newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        if len(rows) != 1:
+            raise ValueError("expected one summary row")
+        return {
+            "expected": int(rows[0]["total_expected"]),
+            "received": int(rows[0]["total_received"]),
+            "gaps": int(rows[0]["gap_msgs"]),
+            "duplicates": int(rows[0]["duplicates_count"]),
+        }
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        raise ValueError(f"malformed sequence.csv: {error}") from error
+
+
+def _validate_leaf_semantics(
+    leaf: pathlib.Path, experiment: str, metadata: Mapping[str, object]
+) -> None:
+    if experiment == "e-backpressure":
+        validate_backpressure_result(
+            _read_object(leaf / "backpressure.json", "backpressure.json"),
+            str(metadata.get("condition")),
+        )
+    if experiment != "e-swap-5":
+        return
+    if (leaf / "swap_timeline.json").exists():
+        raise ValueError("E-Swap-5 must not contain a successful-v2 sink timeline")
+    try:
+        requests = json.loads((leaf / "swap_requests.json").read_text())
+    except (OSError, ValueError) as error:
+        raise ValueError(f"malformed swap_requests.json: {error}") from error
+    if not isinstance(requests, list):
+        raise TypeError("malformed swap_requests.json: expected an array")
+    validate_swap5_artifacts(
+        requests,
+        _read_object(leaf / "rollback.json", "rollback.json"),
+        _read_object(
+            leaf / "post-rollback-continuity.json",
+            "post-rollback-continuity.json",
+        ),
+        _sequence_summary(leaf / "sequence.csv"),
+    )
 
 
 def validate_canonical_batch(
@@ -402,6 +459,15 @@ def validate_canonical_batch(
                 )
             if artifact_path.suffix == ".json":
                 _validate_json_artifact(artifact_path)
+        if experiment == "e-swap-3" and (leaf / "publisher-timing.json").exists():
+            raise ValueError(
+                f"malformed canonical schema: temporary publisher-timing.json is forbidden in {leaf}"
+            )
+        if experiment == "e-swap-3" and (leaf / "swap_timeline.json").exists():
+            raise ValueError(
+                f"malformed canonical schema: legacy swap_timeline.json is forbidden in {leaf}"
+            )
+        _validate_leaf_semantics(leaf, experiment, metadata)
 
     if len(shas) != 1:
         raise ValueError(f"mixed source SHAs in canonical batch: {sorted(shas)}")

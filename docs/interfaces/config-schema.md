@@ -32,7 +32,7 @@ description = "MQTT -> filter -> alert"  # optional
 |-------|------|-----------------|-------|
 | `epoch_deadline` | `Option<NonZeroU64>` | `None` | Epoch ticks per Wasm call. Omission disables epoch interruption. |
 | `epoch_tick_ms` | `u64` | `10` | Wall-clock milliseconds per epoch tick. A ticker alone does not impose a deadline. |
-| `default_queue_capacity` | `usize` | `1024` | Fallback capacity for edges without their own. |
+| `default_queue_capacity` | `usize` | `1024` | Fallback capacity when no incoming edge for a destination declares one. |
 | `fuel.transform` | `Option<NonZeroU64>` | `None` | Fuel per Transform call. Omission disables fuel for this category. |
 | `fuel.filter` | `Option<NonZeroU64>` | `None` | Fuel per Filter call. |
 | `fuel.router` | `Option<NonZeroU64>` | `None` | Fuel per Router call. |
@@ -40,7 +40,7 @@ description = "MQTT -> filter -> alert"  # optional
 | `memory.filter` | `usize` | `16_777_216` | Filter linear-memory limit, 16 MiB. |
 | `memory.router` | `usize` | `16_777_216` | Router linear-memory limit, 16 MiB. |
 
-Fuel and epoch values must be positive when present. Zero is rejected; omission produces `None`. `[nodes.NAME.fuel]` overrides a configured pipeline fuel value for one Wasm node.
+Fuel and epoch values must be positive when present. Zero is rejected; omission produces `None`. Queue capacities must be greater than zero: the validator rejects zero for `default_queue_capacity`, `[[edges]].capacity`, retry buffers, and DLQ queues before channel construction. `[nodes.NAME.fuel]` overrides a configured pipeline fuel value for one Wasm node.
 
 Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults. E-Perf-7 disables a mechanism by omitting its field:
 
@@ -53,10 +53,7 @@ Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filt
 
 ## `[error_policy]`
 
-Pipeline-wide default. `[nodes.NAME.error_policy]` overrides the pipeline-level
-table for a specific node; the runner reads the resolved policy at pipeline
-start via `resolve_error_policy` in `crates/wafer-core/src/orchestrator/builder.rs`.
-The default `retry_buffer_capacity` is 1000.
+Pipeline-wide default. A present `[nodes.NAME.error_policy]` table replaces the pipeline table for that node; omitted fields within the node table use `ErrorPolicyConfig` defaults rather than inheriting custom pipeline values. The runner resolves this choice at pipeline start in `crates/wafer-core/src/orchestrator/builder.rs`. The default `retry_buffer_capacity` is 1000.
 
 | Field | Type | Default | Notes |
 |-------|------|---------|-------|
@@ -68,7 +65,7 @@ The default `retry_buffer_capacity` is 1000.
 
 `SimpleAction` values (`#[serde(rename_all = "kebab-case")]`): `skip | dlq | teardown`.
 
-`RetryConfig` fields: `retries: u32`, `backoff_ms: u64`, `exhausted: SimpleAction`.
+`RetryConfig` fields: `retries: u32`, `backoff_ms: u64`, `exhausted: SimpleAction`. The first retry waits exactly `backoff_ms`; later delays double up to 30 seconds. The bounded buffer selects the earliest due entry, so an earlier-deadline retry cannot be stranded behind a later one. Exhaustion honors the configured `skip`, `dlq`, or `teardown` action. DLQ-full and DLQ-closed outcomes are distinct and exhausted envelopes are not requeued.
 
 `unrecoverable` errors are not configurable: they always trigger a node teardown and re-instantiation from the cached `InstancePre`.
 
@@ -80,7 +77,7 @@ Tagged variant on `kind`:
 # MQTT DLQ
 [dead_letter]
 kind          = "mqtt"
-broker        = "mqtt://localhost"
+broker        = "localhost"
 port          = 1883
 topic         = "wafer/dlq"
 queue_capacity = 10000        # default 10 000
@@ -94,6 +91,8 @@ kind          = "file"
 path          = "/var/log/wafer/dlq.jsonl"
 queue_capacity = 5000         # default 5000
 ```
+
+The configured sink is active: the runtime drains DLQ records to the MQTT topic or file. Queue-overflow DLQ records use `QueueFull`; guest-error records retain their error category and retry count. Destination closed, DLQ full, and DLQ closed are separate counters rather than successful dead-letter delivery.
 
 ## `[registry]`
 
@@ -126,17 +125,25 @@ type = "source"       # source | sink | transform | filter | router
 # ...variant-specific fields...
 ```
 
-### Wasm nodes (`transform`, `filter`, `router`)
+### Processing nodes (`transform`, `filter`, `router`)
 
-Struct `WasmNodeDef`:
+The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm component or a closed native evaluation function:
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `plugin` | `string` (required) | Local filesystem path OR OCI reference (`ghcr.io/user/foo:tag`). Auto-detected by the loader; **single field: no `plugin_path` / `plugin_ref` split**. |
+| `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
 | `fuel` | `Option<u64>` | Overrides the pipeline default for this node. |
-| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. |
+| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
-| `error_policy` | `Option<ErrorPolicyConfig>` | Per-node override that replaces the pipeline-level table for this node when present. |
+| `error_policy` | `Option<ErrorPolicyConfig>` | Per-node table that replaces the pipeline-level table when present. |
+| `plugin_version` | `Option<string>` | Opaque version passed as `node-config.plugin-version`; default is empty. |
+
+`allow_inference = true` is valid only when the node is a Wasm Transform. It
+fails semantic validation for a native Transform, Filter, or Router with:
+`allow_inference=true is supported only for Wasm Transform nodes`. Source and
+Sink variants have no processing-node capability table. When omitted or false,
+the ordinary linker contains no wasi-nn imports, so an inference component
+fails closed during preparation.
 
 Example:
 
@@ -203,8 +210,8 @@ Struct `EdgeDef`:
 | `from` | `string` (required) | Node id. |
 | `to` | `string` (required) | Node id. |
 | `port` | `Option<string>` | Router output port name. Only required when `from` is a router. **Single `port` field: no `from_port` / `to_port` split.** |
-| `capacity` | `Option<usize>` | Per-edge queue capacity; falls back to `engine.default_queue_capacity`. |
-| `overflow` | `Option<OverflowPolicy>` | `slow` (default; backpressure) \| `drop` \| `dead-letter`. |
+| `capacity` | `Option<usize>` | Requested destination queue capacity. One physical receiver is created per destination; its capacity is the maximum explicit incoming capacity, or `engine.default_queue_capacity` when none is specified. |
+| `overflow` | `Option<OverflowPolicy>` | Sender-side policy for this edge: `slow` (default; reserve/await), `drop` (non-blocking discard on full), or `dead-letter` (non-blocking DLQ attempt on full). |
 
 Example:
 
@@ -238,3 +245,5 @@ to   = "out"
 ```
 
 Every other field has a sensible default; the runtime uses this snippet as its smoke test.
+
+For fan-in, `capacity` remains edge-shaped configuration but the physical queue is receiver-keyed. If any incoming edge declares a capacity, the destination uses the maximum explicit incoming capacity; the default is used only when none declares one. Tokio does not promise fair ordering across producers.

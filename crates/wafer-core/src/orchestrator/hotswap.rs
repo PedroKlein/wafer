@@ -11,6 +11,7 @@ use crate::engine::Capabilities;
 use crate::engine::WaferEngine;
 use crate::engine::state::WaferState;
 use crate::error::{Result, WaferError};
+use crate::node::wasm::PreparedTransformSwap;
 use crate::runner::{HotSwapProgress, SwapPayload};
 
 // Prepare a transform/filter/router swap payload.
@@ -59,7 +60,7 @@ impl From<SwapError> for WaferError {
 /// Records timestamps of each hot-swap phase for latency decomposition.
 ///
 /// Used by E-Swap-6 to identify which phase dominates swap cost:
-/// compilation, instantiation, signal propagation, or pipeline convergence.
+/// compilation, instantiation, signal propagation, or first post-replacement local outcome.
 ///
 /// See docs/rfcs/RFC-008-evaluation-harness.md — D7A.
 #[derive(Debug, Clone)]
@@ -74,8 +75,8 @@ pub struct SwapTimeline {
     pub signal_sent: Option<std::time::Instant>,
     /// When the node loop acknowledged the swap (picked up watch value).
     pub swap_acked: Option<std::time::Instant>,
-    /// When the first v2 output was observed at the sink.
-    pub first_v2_output: Option<std::time::Instant>,
+    /// When the runner observed the first post-replacement local outcome.
+    pub first_post_replacement_local_outcome: Option<std::time::Instant>,
     /// Duration of process-time rollback to v1, if triggered (A17).
     pub rollback_time_ns: Option<u64>,
 }
@@ -90,7 +91,7 @@ impl SwapTimeline {
             instantiate_done: None,
             signal_sent: None,
             swap_acked: None,
-            first_v2_output: None,
+            first_post_replacement_local_outcome: None,
             rollback_time_ns: None,
         }
     }
@@ -115,9 +116,9 @@ impl SwapTimeline {
         self.swap_acked = Some(std::time::Instant::now());
     }
 
-    /// Mark first v2 output observed.
-    pub fn mark_first_v2_output(&mut self) {
-        self.first_v2_output = Some(std::time::Instant::now());
+    /// Mark first post-replacement local outcome observed.
+    pub fn mark_first_post_replacement_local_outcome(&mut self) {
+        self.first_post_replacement_local_outcome = Some(std::time::Instant::now());
     }
 
     // --- Phase duration accessors ---
@@ -162,10 +163,10 @@ impl SwapTimeline {
         }
     }
 
-    /// Pipeline convergence (swap_acked → first_v2_output).
+    /// First post-replacement local outcome (swap_acked → first_post_replacement_local_outcome).
     #[must_use]
-    pub fn convergence_duration_ns(&self) -> Option<u64> {
-        match (self.swap_acked, self.first_v2_output) {
+    pub fn first_post_replacement_local_outcome_duration_ns(&self) -> Option<u64> {
+        match (self.swap_acked, self.first_post_replacement_local_outcome) {
             (Some(start), Some(end)) => {
                 Some(crate::util::duration_ns_saturating(end.duration_since(start)))
             }
@@ -173,10 +174,10 @@ impl SwapTimeline {
         }
     }
 
-    /// Total end-to-end swap time (request → first_v2_output).
+    /// Total end-to-end swap time (request → first_post_replacement_local_outcome).
     #[must_use]
     pub fn total_duration_ns(&self) -> Option<u64> {
-        self.first_v2_output
+        self.first_post_replacement_local_outcome
             .map(|end| crate::util::duration_ns_saturating(end.duration_since(self.request_time)))
     }
 
@@ -191,7 +192,7 @@ impl SwapTimeline {
   "instantiate_ns": {},
   "signal_ns": {},
   "ack_ns": {},
-  "convergence_ns": {},
+  "first_post_replacement_local_outcome_ns": {},
   "total_ns": {},
   "rollback_time_ns": {}
 }}"#,
@@ -199,7 +200,7 @@ impl SwapTimeline {
             fmt_opt(self.instantiate_duration_ns()),
             fmt_opt(self.signal_duration_ns()),
             fmt_opt(self.ack_duration_ns()),
-            fmt_opt(self.convergence_duration_ns()),
+            fmt_opt(self.first_post_replacement_local_outcome_duration_ns()),
             fmt_opt(self.total_duration_ns()),
             fmt_opt(self.rollback_time_ns),
         )
@@ -213,8 +214,6 @@ pub struct TimedSwapResult {
 }
 
 /// Prepare a transform swap with timeline instrumentation.
-///
-/// Same as `prepare_transform_swap` but records compile and instantiate timestamps.
 pub async fn prepare_transform_swap_timed(
     engine: &WaferEngine,
     wasm_bytes: &[u8],
@@ -223,13 +222,32 @@ pub async fn prepare_transform_swap_timed(
     memory_limit: usize,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
+    prepare_transform_swap_timed_with_fuel(
+        engine,
+        wasm_bytes,
+        node_id,
+        capabilities,
+        memory_limit,
+        engine.fuel_limit(),
+        progress,
+    )
+    .await
+}
+
+/// Prepare a transform swap using the target node's effective fuel limit.
+pub async fn prepare_transform_swap_timed_with_fuel(
+    engine: &WaferEngine,
+    wasm_bytes: &[u8],
+    node_id: &str,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
+    progress: Arc<HotSwapProgress>,
+) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
 
     let component = engine.compile_cached(wasm_bytes)?;
     timeline.mark_compile_done();
-
-    let pre = engine.pre_instantiate_transform(&component)?;
-    let pre = Arc::new(pre);
 
     let mut store = Store::new(
         engine.inner(),
@@ -241,7 +259,7 @@ pub async fn prepare_transform_swap_timed(
     // AC F5.AC2: skip metering setters when unlimited; consume_fuel and
     // epoch_interruption are gated at Config level so calling the setter
     // would return Err when the limit is None.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
@@ -251,16 +269,23 @@ pub async fn prepare_transform_swap_timed(
         store.set_epoch_deadline(n.get());
     }
 
-    let instance = pre
-        .instantiate_async(&mut store)
-        .await
-        .map_err(|e| WaferError::PluginInit { message: format!("instantiation failed: {e}") })?;
+    let replacement = if capabilities.allow_inference {
+        let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
+        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
+        })?;
+        PreparedTransformSwap::inference(store, bindings, pre)
+    } else {
+        let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
+        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
+        })?;
+        PreparedTransformSwap::ordinary(store, bindings, pre)
+    };
     timeline.mark_instantiate_done();
 
     let payload = SwapPayload::Transform {
-        new_store: Arc::new(std::sync::Mutex::new(Some(store))),
-        new_bindings: Arc::new(std::sync::Mutex::new(Some(instance))),
-        new_pre: pre,
+        replacement: Arc::new(std::sync::Mutex::new(Some(replacement))),
         progress,
     };
 
@@ -408,14 +433,14 @@ mod tests {
         tl.mark_swap_acked();
 
         std::thread::sleep(std::time::Duration::from_micros(50));
-        tl.mark_first_v2_output();
+        tl.mark_first_post_replacement_local_outcome();
 
         // All durations should be non-zero
         assert!(tl.compile_duration_ns().unwrap() > 0);
         assert!(tl.instantiate_duration_ns().unwrap() > 0);
         assert!(tl.signal_duration_ns().unwrap() > 0);
         assert!(tl.ack_duration_ns().unwrap() > 0);
-        assert!(tl.convergence_duration_ns().unwrap() > 0);
+        assert!(tl.first_post_replacement_local_outcome_duration_ns().unwrap() > 0);
         assert!(tl.total_duration_ns().unwrap() > 0);
 
         // Total should be >= sum of compile + instantiate
@@ -447,7 +472,7 @@ mod tests {
         tl.mark_instantiate_done();
         tl.mark_signal_sent();
         tl.mark_swap_acked();
-        tl.mark_first_v2_output();
+        tl.mark_first_post_replacement_local_outcome();
 
         let json = tl.to_json();
 

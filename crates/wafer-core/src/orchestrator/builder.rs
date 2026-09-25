@@ -4,7 +4,7 @@
 //! spawning into independent tokio tasks. Queue wiring uses one receiver per
 //! destination node and clones senders for fan-in.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch};
@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, EdgeDef, NodeCategory, NodeDef, OverflowPolicy};
 use crate::dag::graph::DagGraph;
-use crate::error::Result;
+use crate::error::{ConfigError, Result, WaferError};
 use crate::node::wasm::WasmRouterNode;
 use crate::node::{FilterNode, TransformNode};
 use crate::node::{NodeMetrics, NodeStateTracker, QueueMetrics, Sink, Source};
@@ -32,14 +32,16 @@ pub struct BuildOutput {
     pub watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>>,
     /// Shared cancellation token for graceful shutdown.
     pub cancel_token: CancellationToken,
-    /// DLQ receiver — orchestrator spawns DLQ sink task with this.
-    pub dlq_receiver: Option<mpsc::Receiver<DlqEnvelope>>,
+    /// Configured DLQ receiver and sink definition.
+    pub dlq: Option<(mpsc::Receiver<DlqEnvelope>, crate::config::DeadLetterConfig)>,
     /// Per-node state trackers (atomic reads for status queries).
     pub state_trackers: HashMap<Box<str>, Arc<NodeStateTracker>>,
     /// Per-node metrics (atomic reads for Prometheus exposition).
     pub metrics_map: HashMap<Box<str>, Arc<NodeMetrics>>,
     /// Validated DAG graph (for topo order and structural queries).
     pub dag_graph: DagGraph,
+    /// Node IDs whose loaded implementation is a Wasm processing role.
+    pub replacement_eligible: HashSet<Box<str>>,
     pub queue_probes: Vec<QueueProbe>,
 }
 
@@ -164,6 +166,7 @@ fn build_pipeline_inner(
     mut sinks: HashMap<String, Box<dyn Sink + Send>>,
 ) -> Result<BuildOutput> {
     let dag_graph = DagGraph::from_config(config)?;
+    validate_channel_capacities(config)?;
 
     let mut wiring = wire_queues(&config.edges, config.engine.default_queue_capacity);
 
@@ -172,8 +175,11 @@ fn build_pipeline_inner(
     let mut state_trackers: HashMap<Box<str>, Arc<NodeStateTracker>> = HashMap::new();
     let mut metrics_map: HashMap<Box<str>, Arc<NodeMetrics>> = HashMap::new();
 
-    let dlq_capacity = config.dead_letter.as_ref().map_or(1024, dead_letter_capacity);
-    let (dlq_tx, dlq_rx) = mpsc::channel(dlq_capacity);
+    let (dlq_tx, dlq) = config.dead_letter.as_ref().map_or((None, None), |dead_letter| {
+        let (tx, rx) = mpsc::channel(dead_letter_capacity(dead_letter));
+        (Some(tx), Some((rx, dead_letter.clone())))
+    });
+    wiring.dlq_sender.clone_from(&dlq_tx);
 
     let mut node_bundles = Vec::with_capacity(config.nodes.len());
 
@@ -196,11 +202,8 @@ fn build_pipeline_inner(
                 let senders = wiring.collect_downstream_senders(node_id);
 
                 let policy_config = resolve_error_policy(config, node_id);
-                let policy = ErrorPolicyExecutor::new(
-                    policy_config,
-                    Some(dlq_tx.clone()),
-                    node_id_box.clone(),
-                );
+                let policy =
+                    ErrorPolicyExecutor::new(policy_config, dlq_tx.clone(), node_id_box.clone());
 
                 match node_def.category() {
                     NodeCategory::Transform => NodeBundleKind::Transform {
@@ -256,10 +259,11 @@ fn build_pipeline_inner(
         node_bundles,
         watch_senders,
         cancel_token,
-        dlq_receiver: Some(dlq_rx),
+        dlq,
         state_trackers,
         metrics_map,
         dag_graph,
+        replacement_eligible: HashSet::new(),
         queue_probes: wiring.queue_probes,
     })
 }
@@ -269,6 +273,25 @@ const fn dead_letter_capacity(config: &crate::config::DeadLetterConfig) -> usize
         crate::config::DeadLetterConfig::Mqtt { queue_capacity, .. }
         | crate::config::DeadLetterConfig::File { queue_capacity, .. } => *queue_capacity,
     }
+}
+
+fn validate_channel_capacities(config: &Config) -> Result<()> {
+    if config.engine.default_queue_capacity == 0 {
+        return Err(WaferError::Config(ConfigError::Message(
+            "engine.default_queue_capacity must be greater than zero".to_string(),
+        )));
+    }
+    if config.edges.iter().any(|edge| edge.capacity == Some(0)) {
+        return Err(WaferError::Config(ConfigError::Message(
+            "edge capacity must be greater than zero".to_string(),
+        )));
+    }
+    if config.dead_letter.as_ref().is_some_and(|dlq| dead_letter_capacity(dlq) == 0) {
+        return Err(WaferError::Config(ConfigError::Message(
+            "dead_letter.queue_capacity must be greater than zero".to_string(),
+        )));
+    }
+    Ok(())
 }
 
 // =============================================================================
@@ -281,6 +304,7 @@ struct QueueWiring {
     receivers: HashMap<String, TrackedReceiver>,
     /// All edge senders, grouped by source node for collecting downstream outputs.
     edge_senders: Vec<EdgeSender>,
+    dlq_sender: Option<mpsc::Sender<DlqEnvelope>>,
     queue_probes: Vec<QueueProbe>,
 }
 
@@ -301,6 +325,11 @@ impl QueueWiring {
             .map(|e| DownstreamSender {
                 sender: e.sender.clone(),
                 port: e.from_port.clone(),
+                edge: format!("{}:{}->{}:{}", e.from_node, e.from_port, e.to_node, e.to_port)
+                    .into_boxed_str(),
+                source_node: e.from_node.clone(),
+                overflow: e.overflow,
+                dlq_sender: self.dlq_sender.clone(),
                 queue_metrics: Some(Arc::clone(&e.queue_metrics)),
             })
             .collect()
@@ -350,7 +379,7 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
         }
     }
 
-    QueueWiring { receivers, edge_senders, queue_probes }
+    QueueWiring { receivers, edge_senders, dlq_sender: None, queue_probes }
 }
 
 // =============================================================================
@@ -368,4 +397,73 @@ fn resolve_error_policy(config: &Config, node_id: &str) -> ResolvedErrorPolicy {
     };
 
     override_policy.unwrap_or(base).into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig};
+    use crate::runner::send_downstream;
+    use std::time::Duration;
+
+    fn source_sink_config(overflow: OverflowPolicy) -> Config {
+        Config {
+            nodes: HashMap::from([
+                (
+                    "source".to_string(),
+                    NodeDef::Source(SourceDef::Stdin(StdinSourceConfig::default())),
+                ),
+                ("sink".to_string(), NodeDef::Sink(SinkDef::Stdout(StdoutSinkConfig::default()))),
+            ]),
+            edges: vec![EdgeDef {
+                from: "source".to_string(),
+                to: "sink".to_string(),
+                port: None,
+                capacity: Some(1),
+                overflow: Some(overflow),
+            }],
+            ..Config::default()
+        }
+    }
+
+    #[test]
+    fn zero_capacity_build_returns_validation_error_without_panicking() {
+        let mut config = source_sink_config(OverflowPolicy::Slow);
+        config.edges[0].capacity = Some(0);
+
+        let result = std::panic::catch_unwind(|| build_pipeline(&config));
+        let Err(error) = result.expect("zero capacity must not panic") else {
+            panic!("zero capacity must fail before wiring a channel");
+        };
+        assert!(error.to_string().contains("edge capacity must be greater than zero"));
+    }
+
+    #[tokio::test]
+    async fn drop_edge_returns_without_waiting_when_destination_is_full() {
+        let output = build_pipeline(&source_sink_config(OverflowPolicy::Drop)).expect("build");
+        let mut bundles = output.node_bundles.into_iter();
+        let mut source_senders = None;
+        let mut sink_receiver = None;
+        for bundle in &mut bundles {
+            match bundle.kind {
+                NodeBundleKind::Source { senders, .. } => source_senders = Some(senders),
+                NodeBundleKind::Sink { receiver, .. } => sink_receiver = Some(receiver),
+                _ => {}
+            }
+        }
+        let senders = source_senders.expect("source bundle");
+        let _sink_receiver = sink_receiver.expect("sink bundle");
+
+        send_downstream(&senders, RuntimeEnvelope::from_string("source", "first")).await;
+        let second = tokio::time::timeout(
+            Duration::from_millis(20),
+            send_downstream(&senders, RuntimeEnvelope::from_string("source", "second")),
+        )
+        .await;
+
+        assert!(second.is_ok(), "drop policy must never wait for destination capacity");
+        let metrics = senders[0].queue_metrics.as_ref().expect("queue metrics");
+        assert_eq!(metrics.enqueued(), 1);
+        assert_eq!(metrics.dropped(), 1);
+    }
 }

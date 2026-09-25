@@ -33,11 +33,11 @@ pub const DEFAULT_FILENAME: &str = "runtime-provenance.json";
 /// Returns `None` when neither is set so callers can no-op instead of
 /// littering the working directory with provenance files.
 pub fn resolve_output_path() -> Option<PathBuf> {
-    if let Ok(explicit) = std::env::var("WAFER_METADATA_OUTPUT") {
-        if !explicit.is_empty() {
-            let path = PathBuf::from(explicit);
-            return Some(if path.is_dir() { path.join(DEFAULT_FILENAME) } else { path });
-        }
+    if let Ok(explicit) = std::env::var("WAFER_METADATA_OUTPUT")
+        && !explicit.is_empty()
+    {
+        let path = PathBuf::from(explicit);
+        return Some(if path.is_dir() { path.join(DEFAULT_FILENAME) } else { path });
     }
     std::env::var("WAFER_BENCH_OUTPUT_DIR")
         .ok()
@@ -54,11 +54,11 @@ pub fn write_provenance(
     config_path: &Path,
     config: &Config,
 ) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create provenance parent dir {}", parent.display()))?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create provenance parent dir {}", parent.display()))?;
     }
     let payload = provenance_json(orchestrator, config_path, config)?;
     let text = serde_json::to_string_pretty(&payload).context("serialize runtime provenance")?;

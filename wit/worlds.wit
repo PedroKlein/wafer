@@ -33,3 +33,15 @@ world router-node {
     export lifecycle;
     export router;
 }
+
+// A transform with an explicitly granted wasi-nn capability.
+world inference-node {
+    import types;
+    import logging;
+    import wasi:nn/tensor@0.2.0-rc-2024-10-28;
+    import wasi:nn/graph@0.2.0-rc-2024-10-28;
+    import wasi:nn/inference@0.2.0-rc-2024-10-28;
+    import wasi:nn/errors@0.2.0-rc-2024-10-28;
+    export lifecycle;
+    export transform;
+}

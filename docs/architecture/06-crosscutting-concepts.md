@@ -17,19 +17,18 @@ the long-form reasoning lives in the linked RFC / ADR.
 
 ## Envelope shape
 
-Every message that flows between nodes is a `RuntimeEnvelope`: three
-fields, deliberately chosen so a clone is near-free:
+Every message that flows between nodes is a `RuntimeEnvelope` with shared immutable header and payload storage plus host-owned lineage and retry state:
 
 ```rust
 struct RuntimeEnvelope {
-    header:  Arc<EnvelopeHeader>,   // immutable metadata
-    payload: Bytes,                 // refcount-shared byte buffer
-    lineage: Lineage,               // parent_id + trace_id trail
+    header: Arc<EnvelopeHeader>,
+    payload: Bytes,
+    lineage: Lineage,
+    retry_count: u32,
 }
 ```
 
-`Arc<EnvelopeHeader>` holds the immutable per-message metadata (id,
-timestamp, source node, content-type, custom metadata pairs). Cloning
+`Arc<EnvelopeHeader>` holds id, timestamp, source, content type, and metadata. Native ingress timestamps use checked, saturating Unix-epoch nanoseconds. A Transform's guest output owns those message fields; the host preserves them while inheriting host lineage and retry state separately. Guest timestamps are data, not benchmark timing authority. Cloning
 the envelope for fan-out or DLQ preservation is an `Arc` increment on
 the header, a `Bytes` increment on the payload (~5 ns each), and a
 `Lineage` byte-copy (~32 B): call it ~10 ns total. This is what
@@ -52,9 +51,9 @@ Guests read bytes on demand:
 - `buffer.read-all() -> list<u8>`: the full payload as an owned list.
 
 Because the borrow does not transfer ownership, the host retains the
-underlying `Bytes` for the duration of the guest call. Router and
-Filter plugins that decide based on `header.content-type` or metadata
-alone never call `read` at all, achieving genuine zero-copy routing.
+underlying `Bytes` for the duration of the guest call. Router and Filter
+plugins that decide from `message.content-type` or metadata can avoid payload
+reads, producing zero payload-byte copies on that inspection path.
 Outbound `output-message` records return `list<u8>`: the guest builds
 its own owned bytes and hands them to the host at the Canonical-ABI
 boundary. See [ADR-0007](../adr/0007-buffer-resource-zero-copy.md).
@@ -70,18 +69,16 @@ inherit_env      = false
 allow_inference  = false
 ```
 
-Defaults are all `false`: deny-by-default. Every capability granted
-must be spelled out per node. The runtime translates these into WASI
-Preview 2 capability handles at instantiation: `inherit_stdio` wires
-stdin/stdout/stderr into the guest, `inherit_env` grants access to the
-host process env, `allow_inference` unlocks the `wasi:nn/*` imports
-required by the `inference-node` world.
+Defaults are all `false`: deny-by-default. `inherit_stdio` and
+`inherit_env` are translated into WASI Preview 2 capability handles at
+instantiation. `allow_inference = true` is accepted only for a Wasm Transform;
+it selects the `inference-node` binding, wasi-nn linker, and ONNX-backed store.
+Native Transforms, Filters, and Routers reject that grant, while ordinary Wasm
+stores remain wasi-nn-free.
 
-Capabilities are static per-node. Hot-swap does not renegotiate them -
-a swap on a node with `allow_inference = false` cannot suddenly
-require `wasi:nn` unless the operator edits the config and restarts
-the runtime. This is deliberate: capability drift across swaps would
-undermine the RQ2 isolation contract.
+Capabilities are static per node and retained across recovery, reconfigure,
+hot-swap, and rollback. Mutation cannot expand or remove a node's inference
+grant.
 
 ## Fuel and epoch metering
 
@@ -110,12 +107,13 @@ Every host-observable guest failure is classified into one of five
   cached `InstancePre`.
 
 The policy engine (`ErrorPolicyExecutor` in
-`crates/wafer-core/src/runner/error_policy.rs`) is a per-node struct
-holding the effective policy (pipeline-level `[error_policy]` overlaid
-with per-node `[nodes.X.error_policy]`), a bounded retry buffer
-(`VecDeque` capped at `retry_buffer_capacity`, default 1000), and the
-DLQ sender. Retries survive across messages within a node's lifetime
-but are flushed to DLQ (with `DlqReason::HotSwapDrain`) on hot-swap
-and (with `DlqReason::Shutdown`) on graceful shutdown. See
+`crates/wafer-core/src/runner/error_policy.rs`) is a per-node struct. A present
+node policy replaces the pipeline table. Its bounded retry buffer defaults to
+1000 entries, selects the earliest due retry, waits `backoff_ms` before the
+first attempt, doubles later delays to a 30-second cap, and preserves retry
+count through requeue and DLQ serialization. Exhaustion honors `skip`, `dlq`,
+or `teardown`; DLQ-full and DLQ-closed remain distinct outcomes. Buffered
+retries are flushed with `HotSwapDrain` on replacement and `Shutdown` on exit.
+See
 [ADR-0008](../adr/0008-error-policy-engine.md) and [RFC-002
 §D4](../rfcs/RFC-002-host-runtime.md).

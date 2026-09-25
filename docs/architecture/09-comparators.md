@@ -76,8 +76,7 @@ documentation site publishes an explicit edge-processing use case, so
 the domain overlap is real; the remaining WAFER additions are per-node
 hot-swap (Torvyn's task-per-flow reactor forecloses per-node live
 update), first-class IoT-protocol adapters (WAFER ships `mqtt` and
-`http` source/sink node types), and canonical evaluation on constrained hardware (Raspberry Pi 5 4 GB, with optional
-Jetson Orin Nano validation). Framing: *"WAFER adds per-node
+`http` source/sink node types), and canonical evaluation on constrained hardware (Raspberry Pi 5 4 GB, with a matched x86 Linux block). A separate Jetson receipt validates capability-gated MNIST inference on CPU and actual CUDA-provider execution without making a performance claim. Framing: *"WAFER adds per-node
 hot-swap, IoT-protocol integration, and constrained-hardware
 evaluation on top of a Torvyn-shaped streaming core."*
 

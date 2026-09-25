@@ -175,12 +175,12 @@ impl Lifecycle for HttpSink {
         }
 
         // Validate batch configuration
-        if let Some(batch_size) = self.batch_config.batch_size {
-            if batch_size == 0 {
-                return Err(WaferError::Config(ConfigError::Message(
-                    "batch_size must be greater than 0".to_string(),
-                )));
-            }
+        if let Some(batch_size) = self.batch_config.batch_size
+            && batch_size == 0
+        {
+            return Err(WaferError::Config(ConfigError::Message(
+                "batch_size must be greater than 0".to_string(),
+            )));
         }
 
         Ok(())

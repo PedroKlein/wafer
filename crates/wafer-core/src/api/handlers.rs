@@ -37,7 +37,7 @@ pub struct NodeInfoResponse {
     pub state: String,
     pub processed: u64,
     pub failed: u64,
-    pub swappable: bool,
+    pub replacement_eligible: bool,
 }
 
 /// Reconfigure request body.
@@ -93,7 +93,7 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
                 state,
                 processed,
                 failed,
-                swappable: swappable.contains(&id.as_str()),
+                replacement_eligible: swappable.contains(&id.as_str()),
             }
         })
         .collect();
@@ -110,7 +110,25 @@ pub async fn get_node(
         orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
-    Ok(Json(NodeInfoResponse { id, state: format!("{state:?}"), processed, failed, swappable }))
+    Ok(Json(NodeInfoResponse {
+        id,
+        state: format!("{state:?}"),
+        processed,
+        failed,
+        replacement_eligible: swappable,
+    }))
+}
+
+fn replacement_guard_error(error: &crate::error::WaferError) -> (StatusCode, String) {
+    let message = error.to_string();
+    let status = if message.starts_with("swap-in-progress") {
+        StatusCode::CONFLICT
+    } else if message.starts_with("node-not-swappable") {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+    (status, message)
 }
 
 /// POST /api/v1/nodes/:id/hot-swap — trigger hot-swap with new Wasm binary
@@ -125,7 +143,8 @@ pub async fn hot_swap(
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     use crate::config::NodeDef;
     use crate::orchestrator::hotswap::{
-        prepare_filter_swap_timed, prepare_router_swap_timed, prepare_transform_swap_timed,
+        prepare_filter_swap_timed, prepare_router_swap_timed,
+        prepare_transform_swap_timed_with_fuel,
     };
     use crate::orchestrator::launcher::capabilities_from_config;
     use crate::runner::HotSwapProgress;
@@ -140,54 +159,27 @@ pub async fn hot_swap(
     let engine = orch.engine();
     let engine_config = orch.config();
 
-    // Acquire the per-node swap slot before doing ANY preparation. This is
-    // the P0.10 overlapping-swap guard: a concurrent second call for the
-    // same node id short-circuits here with 409 CONFLICT instead of
-    // overwriting the pending watch value.
-    let _swap_guard = match orch.try_begin_swap(&id) {
-        Ok(g) => g,
-        Err(e) => {
-            let msg = e.to_string();
-            let status = if msg.starts_with("swap-in-progress") {
-                StatusCode::CONFLICT
-            } else if msg.starts_with("node-not-swappable") {
-                StatusCode::NOT_FOUND
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            return Err((status, msg));
-        }
-    };
+    let _replacement_guard =
+        orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
 
-    let (kind, capabilities, memory_limit) = match engine_config.nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => {
-            // Native transforms are not swappable (RFC-008 §D5); reject at
-            // the boundary so the caller sees a 400 instead of a 500 from
-            // a downstream WaferError::Runtime.
-            if wasm.plugin.is_native() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "node '{id}' is a native baseline transform (plugin.kind = 'native'); \
-                         native transforms do not support hot-swap"
-                    ),
-                ));
-            }
-            (
-                SwapKind::Transform,
-                capabilities_from_config(&wasm.capabilities),
-                wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
-            )
-        }
+    let (kind, capabilities, memory_limit, transform_fuel) = match engine_config.nodes.get(&id) {
+        Some(NodeDef::Transform(wasm)) => (
+            SwapKind::Transform,
+            capabilities_from_config(&wasm.capabilities),
+            wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
+            wasm.fuel.or(engine_config.engine.fuel.transform),
+        ),
         Some(NodeDef::Filter(wasm)) => (
             SwapKind::Filter,
             capabilities_from_config(&wasm.capabilities),
             wasm.memory_limit.unwrap_or(engine_config.engine.memory.filter),
+            None,
         ),
         Some(NodeDef::Router(wasm)) => (
             SwapKind::Router,
             capabilities_from_config(&wasm.capabilities),
             wasm.memory_limit.unwrap_or(engine_config.engine.memory.router),
+            None,
         ),
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
@@ -202,12 +194,13 @@ pub async fn hot_swap(
     let (progress, completion_rx) = HotSwapProgress::channel();
     let timed_result = match kind {
         SwapKind::Transform => {
-            prepare_transform_swap_timed(
+            prepare_transform_swap_timed_with_fuel(
                 engine,
                 &wasm_bytes,
                 &id,
                 capabilities,
                 memory_limit,
+                transform_fuel,
                 progress,
             )
             .await
@@ -248,16 +241,9 @@ pub async fn hot_swap(
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
-            // B1 (A17): v2 ACKed and then a process-time trap triggered
-            // rollback to v1. The swap did NOT converge; report a distinct
-            // status so callers cannot mistake this for swap_converged.
-            // HTTP 200 because the runtime handled the failure end-to-end;
-            // the API's job is to report accurately, not signal a fault.
             let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
             let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
             let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
-            // Record what phases we do know into the phase histogram so
-            // /metrics doesn't lose these swaps entirely.
             orch.record_hotswap_phase("compile", &id, compile_ns);
             orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
             orch.record_hotswap_phase("signal", &id, signal_ns);
@@ -275,60 +261,60 @@ pub async fn hot_swap(
             }))
             .into_response());
         }
-        Ok(Ok(Err(err))) => {
-            return Err((StatusCode::CONFLICT, err.to_string()));
-        }
+        Ok(Ok(Err(err))) => return Err((StatusCode::CONFLICT, err.to_string())),
         Ok(Err(_)) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "hot-swap runner exited before acknowledgement".to_string(),
+                "hot-swap runner exited before replacement adoption".to_string(),
             ));
         }
         Err(_) => {
             return Err((
                 StatusCode::GATEWAY_TIMEOUT,
-                "hot-swap did not converge within 5s (no post-swap message?)".to_string(),
+                "hot-swap did not report a local post-replacement outcome within 5s".to_string(),
             ));
         }
     };
 
-    let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
-    let convergence_ns =
-        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(report.ack_at));
-    let first_v2_ns =
-        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(signal_at));
-
-    // P0.10 AC1: record every phase into the hot_swap_phase_ns histogram
-    // labelled {phase, node_id}. Six phases total — curl :9090/metrics | rg
-    // hot_swap_phase_ns must show six series after this call.
+    let replacement_adopted_ns = crate::util::duration_ns_saturating(
+        report.replacement_adopted_at.duration_since(signal_at),
+    );
+    let first_post_replacement_local_outcome_ns = crate::util::duration_ns_saturating(
+        report
+            .first_post_replacement_local_outcome_at
+            .duration_since(report.replacement_adopted_at),
+    );
     let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
     let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
     let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
     orch.record_hotswap_phase("compile", &id, compile_ns);
     orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
     orch.record_hotswap_phase("signal", &id, signal_ns);
-    orch.record_hotswap_phase("ack", &id, ack_ns);
-    orch.record_hotswap_phase("first_v2", &id, first_v2_ns);
-    orch.record_hotswap_phase("convergence", &id, convergence_ns);
+    orch.record_hotswap_phase("replacement_adopted", &id, replacement_adopted_ns);
+    orch.record_hotswap_phase(
+        "first_post_replacement_local_outcome",
+        &id,
+        first_post_replacement_local_outcome_ns,
+    );
 
-    // P0.12 AC1: cache the SHA-256 of the plugin bytes so `/reconfigure`
-    // can reject callers whose mental model has diverged from the
-    // actually-running binary.
     {
         use sha2::{Digest, Sha256};
-        let hash = Sha256::digest(&wasm_bytes);
-        orch.record_plugin_hash(&id, hex::encode(hash));
+        orch.record_plugin_hash(&id, hex::encode(Sha256::digest(&wasm_bytes)));
     }
 
     Ok(Json(serde_json::json!({
         "node_id": id,
-        "status": "swap_converged",
+        "replacement_adopted": true,
+        "first_post_replacement_local_outcome": {
+            "disposition": report.first_post_replacement_local_outcome.as_str(),
+            "after_adoption_ns": first_post_replacement_local_outcome_ns,
+        },
         "timeline": {
             "compile_ns": timed_result.timeline.compile_duration_ns(),
             "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
             "signal_ns": timed_result.timeline.signal_duration_ns(),
-            "ack_ns": ack_ns,
-            "convergence_ns": convergence_ns,
+            "replacement_adopted_ns": replacement_adopted_ns,
+            "first_post_replacement_local_outcome_ns": first_post_replacement_local_outcome_ns,
         }
     }))
     .into_response())
@@ -343,22 +329,11 @@ pub async fn reconfigure(
     use crate::config::NodeDef;
     use crate::runner::{HotSwapProgress, SwapPayload};
 
-    // Confirm the node exists and is a Wasm node.
+    let _replacement_guard =
+        orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
+
     match orch.config().nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => {
-            // Native transforms are not reconfigurable (see hot_swap for
-            // the same 400-vs-500 mapping rationale).
-            if wasm.plugin.is_native() {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    format!(
-                        "node '{id}' is a native baseline transform (plugin.kind = 'native'); \
-                         native transforms do not support reconfigure"
-                    ),
-                ));
-            }
-        }
-        Some(NodeDef::Filter(_) | NodeDef::Router(_)) => {}
+        Some(NodeDef::Transform(_) | NodeDef::Filter(_) | NodeDef::Router(_)) => {}
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((
                 StatusCode::NOT_FOUND,
@@ -368,20 +343,16 @@ pub async fn reconfigure(
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     }
 
-    // P0.12 AC1: verify the caller-supplied plugin hash matches the
-    // cached hash for this node. When the caller does not supply one,
-    // fall through (backward-compat). When they do and it mismatches,
-    // 409 CONFLICT with a body starting `plugin-hash-mismatch`.
-    if let Some(expected) = body.expected_plugin_hash.as_deref().filter(|s| !s.is_empty()) {
-        if let Err(e) = orch.verify_plugin_hash(&id, expected) {
-            let msg = e.to_string();
-            let status = if msg.starts_with("plugin-hash-mismatch") {
-                StatusCode::CONFLICT
-            } else {
-                StatusCode::INTERNAL_SERVER_ERROR
-            };
-            return Err((status, msg));
-        }
+    if let Some(expected) = body.expected_plugin_hash.as_deref().filter(|s| !s.is_empty())
+        && let Err(e) = orch.verify_plugin_hash(&id, expected)
+    {
+        let msg = e.to_string();
+        let status = if msg.starts_with("plugin-hash-mismatch") {
+            StatusCode::CONFLICT
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        };
+        return Err((status, msg));
     }
 
     let new_config_json = serde_json::to_string(&body.config)
@@ -397,57 +368,51 @@ pub async fn reconfigure(
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
-            // Defensive: reconfigure does not arm the A17 canary (see
-            // `runner/transform.rs` — canary is Transform-swap-only), so
-            // this arm should be unreachable in practice. Kept so the
-            // match is exhaustive and any future canary extension to
-            // reconfigure surfaces via a distinct status instead of
-            // falling through to `swap_converged`.
             return Ok(Json(serde_json::json!({
                 "node_id": id,
                 "status": "rolled_back",
                 "reason": reason,
-                "timeline": {
-                    "rollback_ns": rollback_time_ns,
-                }
+                "timeline": { "rollback_ns": rollback_time_ns }
             }))
             .into_response());
         }
-        Ok(Ok(Err(err))) => {
-            return Err((StatusCode::CONFLICT, err.to_string()));
-        }
+        Ok(Ok(Err(err))) => return Err((StatusCode::CONFLICT, err.to_string())),
         Ok(Err(_)) => {
             return Err((
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "reconfigure runner exited before acknowledgement".to_string(),
+                "reconfigure runner exited before replacement adoption".to_string(),
             ));
         }
         Err(_) => {
             return Err((
                 StatusCode::GATEWAY_TIMEOUT,
-                "reconfigure did not converge within 5s (no post-swap message?)".to_string(),
+                "reconfigure did not report a local post-replacement outcome within 5s".to_string(),
             ));
         }
     };
 
-    let ack_ns = crate::util::duration_ns_saturating(report.ack_at.duration_since(signal_at));
-    let convergence_ns =
-        crate::util::duration_ns_saturating(report.first_v2_at.duration_since(report.ack_at));
+    let replacement_adopted_ns = crate::util::duration_ns_saturating(
+        report.replacement_adopted_at.duration_since(signal_at),
+    );
+    let first_post_replacement_local_outcome_ns = crate::util::duration_ns_saturating(
+        report
+            .first_post_replacement_local_outcome_at
+            .duration_since(report.replacement_adopted_at),
+    );
 
-    // Reconfigure reuses the cached InstancePre; compile is unused and
-    // instantiation is the tiny cached-pre `.instantiate()` inside try_reconfigure,
-    // which happens between signal and ack. Report compile_ns=0 and
-    // instantiate_ns=0 so evaluation code can distinguish reconfigure from
-    // full hot-swap.
     Ok(Json(serde_json::json!({
         "node_id": id,
-        "status": "reconfigured",
+        "replacement_adopted": true,
+        "first_post_replacement_local_outcome": {
+            "disposition": report.first_post_replacement_local_outcome.as_str(),
+            "after_adoption_ns": first_post_replacement_local_outcome_ns,
+        },
         "timeline": {
             "compile_ns": 0u64,
             "instantiate_ns": 0u64,
             "signal_ns": 0u64,
-            "ack_ns": ack_ns,
-            "convergence_ns": convergence_ns,
+            "replacement_adopted_ns": replacement_adopted_ns,
+            "first_post_replacement_local_outcome_ns": first_post_replacement_local_outcome_ns,
         }
     }))
     .into_response())
@@ -475,17 +440,19 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
                 .expect("String write is infallible");
             writeln!(output, "wafer_node_failed_total{{node=\"{node_id}\"}} {}", m.failed())
                 .expect("String write is infallible");
+            writeln!(
+                output,
+                "wafer_node_retry_exhausted_skip_total{{node=\"{node_id}\"}} {}",
+                m.exhausted_skips()
+            )
+            .expect("String write is infallible");
         }
     }
 
-    // P0.10 AC1: hot_swap_phase_ns histogram, one series set per
-    // (phase, node_id). Emitted whenever the /metrics endpoint is
-    // scraped; empty when no swaps have happened yet.
     let hotswap = orch.hotswap_metrics();
     if let Ok(guard) = hotswap.phase_histogram.read() {
-        output.push_str(
-            "# HELP hot_swap_phase_ns Nanoseconds per hot-swap phase (P0.10, RFC-008 E-Swap-6).\n",
-        );
+        output
+            .push_str("# HELP hot_swap_phase_ns Nanoseconds per runner-local replacement phase.\n");
         output.push_str("# TYPE hot_swap_phase_ns histogram\n");
         for ((phase, node_id), hist) in guard.iter() {
             for (i, upper) in crate::metrics::types::PhaseHistogram::BUCKETS_NS.iter().enumerate() {
@@ -516,14 +483,6 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         }
     }
 
-    // P0.11 AC2: wafer_node_recovery_duration_ms per-node summary
-    // (count + sum + max). Runners record durations into NodeMetrics on
-    // every Recovering → Running transition; a fuller HdrHistogram-shaped
-    // dataset lives in HotSwapMetrics.recovery_duration when explicit
-    // record_recovery_duration() calls are made (currently only from
-    // tests, since the runners write directly into NodeMetrics). Both
-    // surfaces render below — whichever is populated for a given node
-    // ID.
     output.push_str(
         "# HELP wafer_node_recovery_duration_ms Node Error → Recovering → Running duration (P0.11).\n",
     );
@@ -552,8 +511,6 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
             }
         }
     }
-    // Full histogram (bucketed) is available when record_recovery_duration
-    // was called explicitly; preserved for symmetry with hot_swap_phase_ns.
     if let Ok(guard) = hotswap.recovery_duration.read()
         && !guard.is_empty()
     {
@@ -591,4 +548,154 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
     }
 
     ([(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")], output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runner::FirstPostReplacementLocalOutcome;
+    use axum::response::Response;
+    use tokio::sync::watch;
+
+    const MNIST_COMPONENT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../wafer-runtime/tests/fixtures/mnist-inference.component.bin"
+    );
+
+    fn replacement_handle(
+        allow_inference: bool,
+    ) -> (Arc<PipelineHandle>, watch::Receiver<Option<crate::runner::SwapPayload>>) {
+        let config: crate::config::Config = toml::from_str(&format!(
+            r#"
+[engine.fuel]
+transform = 1
+
+[engine.memory]
+transform = 1
+
+[nodes.mnist]
+type = "transform"
+plugin = {MNIST_COMPONENT:?}
+fuel = 100000000
+memory_limit = 67108864
+
+[nodes.mnist.capabilities]
+allow_inference = {allow_inference}
+"#,
+        ))
+        .expect("inference replacement config");
+        let (sender, receiver) = watch::channel(None);
+        (
+            Arc::new(
+                PipelineHandle::for_replacement_test(config, "mnist", sender)
+                    .expect("replacement test handle"),
+            ),
+            receiver,
+        )
+    }
+
+    #[tokio::test]
+    async fn granted_inference_endpoint_reports_local_adoption_separately() {
+        let (handle, mut swaps) = replacement_handle(true);
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+        let response = tokio::spawn(async move {
+            hot_swap(State(handle), Path("mnist".to_string()), Json(request))
+                .await
+                .map(IntoResponse::into_response)
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), swaps.changed())
+            .await
+            .expect("replacement signal timeout")
+            .expect("replacement sender");
+        let payload = swaps.borrow_and_update().clone().expect("replacement payload");
+        assert!(payload.is_inference_transform(), "endpoint downgraded inference preparation");
+        assert!(!response.is_finished(), "endpoint completed before runner-local evidence");
+
+        let progress = payload.progress();
+        progress.mark_replacement_adopted();
+        tokio::task::yield_now().await;
+        assert!(!response.is_finished(), "adoption alone must not imply a local outcome");
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
+
+        let response: Response =
+            response.await.expect("handler task").expect("granted inference response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body =
+            axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("response body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("response json");
+        assert_eq!(body["replacement_adopted"], true);
+        assert_eq!(
+            body["first_post_replacement_local_outcome"]["disposition"],
+            "forwarded/enqueued"
+        );
+    }
+
+    #[tokio::test]
+    async fn inference_reconfigure_waits_for_runner_local_outcome() {
+        let (handle, mut swaps) = replacement_handle(true);
+        let request = ReconfigureRequest {
+            config: serde_json::json!({"execution_target": "cpu"}),
+            expected_plugin_hash: None,
+        };
+        let response = tokio::spawn(async move {
+            reconfigure(State(handle), Path("mnist".to_string()), Json(request))
+                .await
+                .map(IntoResponse::into_response)
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), swaps.changed())
+            .await
+            .expect("reconfigure signal timeout")
+            .expect("reconfigure sender");
+        let payload = swaps.borrow_and_update().clone().expect("reconfigure payload");
+        match &payload {
+            crate::runner::SwapPayload::Reconfigure { new_config_json, .. } => {
+                assert_eq!(new_config_json, r#"{"execution_target":"cpu"}"#);
+            }
+            _ => panic!("expected reconfigure payload"),
+        }
+        assert!(!response.is_finished(), "reconfigure completed before runner-local evidence");
+
+        let progress = payload.progress();
+        progress.mark_replacement_adopted();
+        assert!(!response.is_finished(), "adoption alone must not imply a local outcome");
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
+
+        let response: Response =
+            response.await.expect("handler task").expect("granted reconfigure response");
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn ungranted_inference_endpoint_fails_before_signaling_runner() {
+        let (handle, swaps) = replacement_handle(false);
+        let request = HotSwapRequest { wasm_path: MNIST_COMPONENT.to_string() };
+
+        let error = hot_swap(State(handle), Path("mnist".to_string()), Json(request))
+            .await
+            .map(IntoResponse::into_response)
+            .expect_err("ungranted inference replacement must fail");
+
+        assert_eq!(error.0, StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(error.1.contains("wasi:nn/"), "unexpected denial: {}", error.1);
+        assert!(swaps.borrow().is_none(), "denied swap reached the runner");
+    }
+
+    #[tokio::test]
+    async fn metrics_omit_deferred_rollback_counter() {
+        let handle = PipelineHandle::for_p0_10_test(&["transform"]);
+        let response = metrics(State(Arc::new(handle))).await.into_response();
+        let body =
+            axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("metrics body");
+        let text = std::str::from_utf8(&body).expect("metrics utf8");
+        assert!(
+            !text.contains("wafer_hot_swap_rollbacks_total"),
+            "A20 is deferred and must not be exposed through Prometheus"
+        );
+    }
 }

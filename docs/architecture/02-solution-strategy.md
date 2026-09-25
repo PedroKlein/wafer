@@ -16,8 +16,8 @@ WAFER embeds Wasmtime — the Bytecode Alliance reference implementation. The ch
 
 1. **Full Component Model support.** WAFER defines typed WIT interfaces for every plugin category. Wasmtime is the only runtime with production-grade Component Model support, including resource handles (`borrow<buffer>`), multiple worlds per component, and typed result returns.
 2. **Fuel and epoch metering.** Untrusted plugins run under configurable fuel budgets and epoch deadlines. Wasmtime exposes both mechanisms as first-class APIs integrated with async execution.
-3. **Async Store execution.** Each node runner invokes guest functions through `call_async`, yielding back to the tokio runtime between epoch ticks. This keeps the runtime cooperative and avoids blocking the executor.
-4. **ARM64 support.** WAFER's canonical target is Raspberry Pi 5 4 GB, with Jetson Orin Nano as an optional inference target. Wasmtime's Cranelift backend produces native code for `aarch64` with no external LLVM dependency.
+3. **Tokio-safe synchronous guest calls.** Each node runner invokes generated synchronous bindings inside `tokio::task::block_in_place`; guest calls remain outside cancellation `select!` branches and run to completion. This accommodates the synchronous WASI bridge without blocking unrelated Tokio workers.
+4. **ARM64 support.** WAFER's canonical target is Raspberry Pi 5 4 GB. Wasmtime's Cranelift backend produces native code for `aarch64` with no external LLVM dependency. The same restored inference candidate also completed diagnostic CPU and CUDA-provider execution on Jetson; that run does not establish comparative performance or CUDA operational stability.
 
 Alternatives considered and rejected: Wasmer (incomplete Component Model), WasmEdge (no fuel metering), wasm3 (interpreter-only, no Component Model).
 
@@ -27,7 +27,7 @@ Alternatives considered and rejected: Wasmer (incomplete Component Model), WasmE
 
 **ADR:** [ADR-0004](../adr/0004-native-sources-sinks.md)
 
-Sources and sinks remain native Rust code compiled directly into the runtime binary. Only Transform, Filter, and Router nodes execute as Wasm components. The reasoning:
+Sources and sinks remain native Rust code compiled directly into the runtime binary. Production Transform, Filter, and Router nodes use Wasm components; selected native implementations exist only as evaluation baselines on the same orchestration path. Replacement eligibility follows the loaded Wasm implementation, not merely the node category. The reasoning:
 
 - **I/O capability mismatch.** Sources need TCP sockets, TLS handshakes, MQTT event loops, and HTTP listeners. WASI Preview 2 networking is still maturing and would require proxying every protocol operation through host functions — complexity without benefit.
 - **Performance sensitivity.** The MQTT source runs a `rumqttc` event loop that must poll continuously; inserting a Wasm boundary here would add latency to every received message before it even enters the pipeline.
@@ -87,7 +87,7 @@ The WIT `message` record carries `payload: borrow<buffer>` instead of `payload: 
 
 ### Watch-Channel Hot-Swap — [ADR-0003](../adr/0003-hot-swap-mechanism.md)
 
-Per-node hot-swap uses a `tokio::sync::watch` channel checked between messages. Because each node runs in its own tokio task and processes messages sequentially, there is never an in-flight Wasm call at the swap point. The swap requires no mutex, no drain window, and no routing controller. Convergence time (signal → new instance serving) is bounded by the current message's processing latency plus ~100 µs of pre-instantiation overhead.
+Per-node hot-swap uses a `tokio::sync::watch` channel checked between messages. Because each node runs in its own Tokio task and processes messages sequentially, there is no in-flight Wasm call at the replacement point. The swap requires no routing gate, input drain, or state migration. The API reports replacement adoption plus the first runner-local outcome; sink convergence and sequence continuity are measured separately.
 
 ---
 

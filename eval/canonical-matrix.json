@@ -736,7 +736,17 @@
         "measurement_secs": 10,
         "measurement_boundary": "first offered message through bounded-queue drain recovery",
         "condition_runs": {
-          "saturated-slow-consumer": [
+          "slow": [
+            1,
+            2,
+            3
+          ],
+          "drop": [
+            1,
+            2,
+            3
+          ],
+          "dead-letter": [
             1,
             2,
             3
@@ -830,7 +840,9 @@
         "shares_measurements_with": [
           "e-swap-2",
           "e-swap-6"
-        ]
+        ],
+        "independent_unit": "complete process run",
+        "nested_unit": "swap event within run"
       },
       "e-swap-2": {
         "sample_unit": "event",
@@ -855,7 +867,11 @@
         "shares_measurements_with": [
           "e-swap-1",
           "e-swap-6"
-        ]
+        ],
+        "independent_unit": "complete process run",
+        "nested_unit": "swap event within run",
+        "alias_of": "e-swap-1",
+        "independent_n_contribution": 0
       },
       "e-swap-3": {
         "sample_unit": "run",
@@ -880,7 +896,7 @@
         "thesis_evidence": false
       },
       "e-swap-4": {
-        "sample_unit": "event",
+        "sample_unit": "run",
         "repetitions": 1,
         "warmup_secs": 30,
         "measurement_secs": 120,
@@ -900,7 +916,8 @@
         ],
         "analysis": "05-hotswap-timeline.ipynb",
         "thesis_evidence": false,
-        "events_per_run": 50
+        "independent_unit": "complete process run",
+        "nested_unit": "one swap within run"
       },
       "e-swap-5": {
         "sample_unit": "event",
@@ -917,12 +934,15 @@
           "latency.hdr",
           "throughput.csv",
           "sequence.csv",
-          "swap_timeline.json",
-          "rollback.json"
+          "rollback.json",
+          "swap_requests.json",
+          "post-rollback-continuity.json"
         ],
         "analysis": "05-hotswap-timeline.ipynb",
         "thesis_evidence": false,
-        "events_per_run": 50
+        "events_per_run": 50,
+        "independent_unit": "complete process run",
+        "nested_unit": "rollback event within run"
       },
       "e-swap-6": {
         "sample_unit": "event",
@@ -946,7 +966,11 @@
         "shares_measurements_with": [
           "e-swap-1",
           "e-swap-2"
-        ]
+        ],
+        "independent_unit": "complete process run",
+        "nested_unit": "swap event within run",
+        "alias_of": "e-swap-1",
+        "independent_n_contribution": 0
       }
     },
     "decisions": {
@@ -1032,7 +1056,9 @@
         "e-perf-1"
       ],
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "alias_of": "e-perf-1",
+      "independent_n_contribution": 0
     },
     "e-perf-3": {
       "research_question": "rq1",
@@ -1202,7 +1228,9 @@
         "e-perf-6"
       ],
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "alias_of": "e-perf-6",
+      "independent_n_contribution": 0
     },
     "e-perf-9": {
       "research_question": "rq1",
@@ -1494,7 +1522,9 @@
         "e-swap-6"
       ],
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "independent_unit": "complete process run",
+      "nested_unit": "swap event within run"
     },
     "e-swap-2": {
       "research_question": "rq3",
@@ -1519,7 +1549,11 @@
         "e-swap-6"
       ],
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "independent_unit": "complete process run",
+      "nested_unit": "swap event within run",
+      "alias_of": "e-swap-1",
+      "independent_n_contribution": 0
     },
     "e-swap-3": {
       "research_question": "rq3",
@@ -1537,11 +1571,12 @@
         "latency.hdr",
         "throughput.csv",
         "sequence.csv",
+        "publisher-summary.json",
         "subscriber-metadata.json",
         "throughput-buckets.json",
         "throughput-buckets-10ms.json",
         "disruption-timeline.json",
-        "swap_timeline.json"
+        "disruption-analysis.json"
       ],
       "analysis": "05-hotswap-timeline.ipynb",
       "thesis_evidence": true,
@@ -1588,6 +1623,7 @@
         "burst-source-timing.json",
         "burst-source-summary.json",
         "burst-timeline.json",
+        "swap-actual-t0.json",
         "swap_timeline.json",
         "hotswap-analysis.json",
         "swap_requests.json"
@@ -1617,7 +1653,9 @@
         "after_drain_events_allowed": 0,
         "source_completion_deadline_secs": 130,
         "require_full_sequence_reconciliation": true
-      }
+      },
+      "independent_unit": "complete process run",
+      "nested_unit": "one swap within run"
     },
     "e-swap-5": {
       "research_question": "rq3",
@@ -1634,12 +1672,15 @@
         "latency.hdr",
         "throughput.csv",
         "sequence.csv",
-        "swap_timeline.json",
-        "rollback.json"
+        "rollback.json",
+        "swap_requests.json",
+        "post-rollback-continuity.json"
       ],
       "analysis": "05-hotswap-timeline.ipynb",
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "independent_unit": "complete process run",
+      "nested_unit": "rollback event within run"
     },
     "e-swap-6": {
       "research_question": "rq3",
@@ -1663,20 +1704,31 @@
         "e-swap-2"
       ],
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "independent_unit": "complete process run",
+      "nested_unit": "swap event within run",
+      "alias_of": "e-swap-1",
+      "independent_n_contribution": 0
     },
     "e-backpressure": {
       "research_question": "rq1",
-      "purpose": "Measure saturation and drain behavior on a bounded internal queue with a deterministic slow consumer.",
+      "purpose": "Measure policy-specific saturation, accounting, and drain behavior on one bounded internal queue with a deterministic slow consumer.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 0,
       "warmup_exception": "Queue fill and drain are the measured transient; warmup would remove the event.",
       "measurement_secs": 10,
       "conditions": [
-        "saturated-slow-consumer"
+        "slow",
+        "drop",
+        "dead-letter"
       ],
-      "config": "eval/configs/e-backpressure/pipeline-saturated.toml",
+      "policy_configs": {
+        "slow": "eval/configs/e-backpressure/pipeline-saturated.toml",
+        "drop": "eval/configs/e-backpressure/pipeline-drop.toml",
+        "dead-letter": "eval/configs/e-backpressure/pipeline-dead-letter.toml"
+      },
+      "measured_queue": "slow",
       "offered_messages": 1000,
       "offered_rate_msg_s": 1000,
       "queue_occupancy_threshold": 0.8,
@@ -1720,8 +1772,8 @@
     "status": "frozen-before-execution",
     "seed": 1729,
     "thesis_evidence": true,
-    "expected_schedule_records": 2105,
-    "expected_measured_leaves": 1893,
+    "expected_schedule_records": 2165,
+    "expected_measured_leaves": 1953,
     "capacity_grid": {
       "source_batch_id": "capacity-scout-v3-20260904T045000Z",
       "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -1750,8 +1802,18 @@
     "wafer_config_catalog": [
       {
         "experiment": "e-backpressure",
-        "condition": "saturated-slow-consumer",
+        "condition": "slow",
         "config": "eval/configs/e-backpressure/pipeline-saturated.toml"
+      },
+      {
+        "experiment": "e-backpressure",
+        "condition": "drop",
+        "config": "eval/configs/e-backpressure/pipeline-drop.toml"
+      },
+      {
+        "experiment": "e-backpressure",
+        "condition": "dead-letter",
+        "config": "eval/configs/e-backpressure/pipeline-dead-letter.toml"
       },
       {
         "experiment": "e-iso-1",

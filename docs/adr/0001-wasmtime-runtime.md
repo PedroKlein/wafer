@@ -4,6 +4,18 @@
 - **Status**: Accepted
 - **SPEC Reference**: Section 3.2 (Technology Stack)
 
+> **Current release amendment.** Wasmtime, wasmtime-wasi, and
+> wasmtime-wasi-nn resolve as version `48.0.2` at exact revision
+> `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`; `ort` is pinned at
+> `d1ebde95d386513fea836593815e8f86f7b96a85`. The current WIT exposes a
+> capability-gated `inference-node`; the host registers wasi-nn and constructs
+> an ONNX backend only for a Wasm Transform with `allow_inference=true`.
+>
+> The remainder is the historical selection record and does not define current
+> versions or release capabilities.
+
+<!-- historical-design-below -->
+
 ## Context
 
 The wasm-dag-runtime requires a WebAssembly runtime to execute plugin components. The runtime must support:

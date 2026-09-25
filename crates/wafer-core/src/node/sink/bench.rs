@@ -103,7 +103,7 @@ impl SequenceTracker {
 
     /// Whether any gaps exist.
     #[must_use]
-    pub fn has_gaps(&self) -> bool {
+    pub const fn has_gaps(&self) -> bool {
         !self.gaps.is_empty()
     }
 
@@ -1278,18 +1278,18 @@ impl Lifecycle for BenchSink {
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         // Flush final throughput bucket
-        if self.bucket_msg_count > 0 {
-            if let Some(measurement_start) = self.measurement_start {
-                let now = Instant::now();
-                let elapsed_since_measurement = now.duration_since(measurement_start).as_secs_f64();
-                self.throughput_samples.push(ThroughputSample {
-                    elapsed_secs: elapsed_since_measurement,
-                    msg_count: self.bucket_msg_count,
-                    bytes: self.bucket_bytes,
-                });
-                self.bucket_msg_count = 0;
-                self.bucket_bytes = 0;
-            }
+        if self.bucket_msg_count > 0
+            && let Some(measurement_start) = self.measurement_start
+        {
+            let now = Instant::now();
+            let elapsed_since_measurement = now.duration_since(measurement_start).as_secs_f64();
+            self.throughput_samples.push(ThroughputSample {
+                elapsed_secs: elapsed_since_measurement,
+                msg_count: self.bucket_msg_count,
+                bytes: self.bucket_bytes,
+            });
+            self.bucket_msg_count = 0;
+            self.bucket_bytes = 0;
         }
 
         if let Some(intervals) = &mut self.interval_recorder {
@@ -1413,12 +1413,11 @@ impl Sink for BenchSink {
         }
 
         // Hot-swap version tracking
-        if let Some(ref mut recorder) = self.hotswap_recorder {
-            if let Some((_, version)) =
+        if let Some(ref mut recorder) = self.hotswap_recorder
+            && let Some((_, version)) =
                 envelope.header.metadata.iter().find(|(k, _)| k.as_ref() == "plugin.version")
-            {
-                recorder.record(version.as_ref(), current_time_ns());
-            }
+        {
+            recorder.record(version.as_ref(), current_time_ns());
         }
 
         Box::pin(async { Ok(()) })

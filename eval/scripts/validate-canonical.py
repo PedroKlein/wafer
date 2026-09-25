@@ -8,7 +8,10 @@ import re
 import socket
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_EXPERIMENTS = {
     "e-val-1",
@@ -32,8 +35,8 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_SCHEDULE_RECORDS = 2_105
-FINAL_MEASURED_LEAVES = 1_893
+FINAL_SCHEDULE_RECORDS = 2_165
+FINAL_MEASURED_LEAVES = 1_953
 FOCUSED_REQUIRED_FIELDS = {
     "sample_unit",
     "repetitions",
@@ -56,7 +59,9 @@ FOCUSED_CONDITION_RUNS = {
         for tier in ("small", "medium", "large")
         for cache in ("cold", "warm")
     },
-    "e-backpressure": {"saturated-slow-consumer": [1, 2, 3]},
+    "e-backpressure": {
+        policy: [1, 2, 3] for policy in ("slow", "drop", "dead-letter")
+    },
     "e-iso-4": {"infinite-loop": [1, 2, 3]},
     "e-iso-7": {
         condition: [1, 2, 3]
@@ -296,6 +301,18 @@ def validate_matrix(matrix: dict) -> list[str]:
                 errors.append(f"{experiment_id} events_per_run must be >= 50")
         if sample_unit == "static" and repetitions != 1:
             errors.append(f"{experiment_id} static measurement must have one repetition")
+        if experiment_id in {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-5", "e-swap-6"}:
+            expected_nested = (
+                "rollback event within run"
+                if experiment_id == "e-swap-5"
+                else "one swap within run"
+                if experiment_id == "e-swap-4"
+                else "swap event within run"
+            )
+            if experiment.get("independent_unit") != "complete process run":
+                errors.append(f"{experiment_id} independent_unit must be complete process run")
+            if experiment.get("nested_unit") != expected_nested:
+                errors.append(f"{experiment_id} nested_unit is inconsistent")
 
         if not isinstance(warmup_secs, int) or warmup_secs < 0:
             errors.append(f"{experiment_id} warmup_secs must be a non-negative integer")
@@ -432,6 +449,19 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("e-swap-3 must use 30 run-level repetitions")
     if swap3.get("conditions") != ["wafer-hotswap", "wafer-restart", "ekuiper-restart"]:
         errors.append("e-swap-3 conditions differ from the frozen strategies")
+    swap3_outputs = {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        "disruption-timeline.json",
+        "disruption-analysis.json",
+    }
+    if set(swap3.get("required_outputs", [])) != swap3_outputs:
+        errors.append("e-swap-3 required outputs differ from the final disruption contract")
     alignment = swap3.get("event_alignment", {})
     if alignment != {
         "event_at_secs": 60,
@@ -478,6 +508,48 @@ def validate_matrix(matrix: dict) -> list[str]:
         "require_full_sequence_reconciliation": True,
     }:
         errors.append("e-swap-4 sink tail policy differs from the frozen v3 design")
+    swap4_outputs = {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        "burst-source-timing.json",
+        "burst-source-summary.json",
+        "burst-timeline.json",
+        "swap-actual-t0.json",
+        "swap_timeline.json",
+        "hotswap-analysis.json",
+        "swap_requests.json",
+    }
+    if set(swap4.get("required_outputs", [])) != swap4_outputs:
+        errors.append("e-swap-4 required outputs differ from the final one-event contract")
+
+    backpressure = experiments.get("e-backpressure", {})
+    backpressure_configs = {
+        "slow": "eval/configs/e-backpressure/pipeline-saturated.toml",
+        "drop": "eval/configs/e-backpressure/pipeline-drop.toml",
+        "dead-letter": "eval/configs/e-backpressure/pipeline-dead-letter.toml",
+    }
+    if backpressure.get("conditions") != list(backpressure_configs):
+        errors.append("e-backpressure conditions differ from the policy contract")
+    if backpressure.get("policy_configs") != backpressure_configs:
+        errors.append("e-backpressure policy configs differ from the frozen paths")
+    if backpressure.get("measured_queue") != "slow":
+        errors.append("e-backpressure measured queue must be slow")
+    for policy, relative_path in backpressure_configs.items():
+        try:
+            config = tomllib.loads((ROOT / relative_path).read_text())
+            measured_edges = [
+                edge for edge in config["edges"] if edge["to"] == backpressure.get("measured_queue")
+            ]
+        except (KeyError, OSError, tomllib.TOMLDecodeError):
+            errors.append(f"e-backpressure {policy} config is missing or malformed")
+            continue
+        if len(measured_edges) != 1 or measured_edges[0].get("overflow", "slow") != policy:
+            errors.append(f"e-backpressure {policy} config has the wrong overflow policy")
+        if ("dead_letter" in config) != (policy == "dead-letter"):
+            errors.append(f"e-backpressure {policy} config has the wrong DLQ declaration")
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")

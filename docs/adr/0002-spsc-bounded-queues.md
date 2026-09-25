@@ -4,6 +4,17 @@
 - **Status**: Amended
 - **SPEC Reference**: Section 8.1-8.3 (Queue and Backpressure)
 
+> **Current amendment.** The runtime uses one bounded MPSC receiver per
+> destination, not one SPSC queue per edge. Capacity is the maximum explicit
+> incoming edge capacity, or the engine default when none is explicit. Each
+> sender still carries its own `slow`, `drop`, or `dead-letter` policy. Closed
+> destinations and DLQ-full/DLQ-closed outcomes are counted separately. Tokio
+> provides no fairness or cross-producer ordering guarantee.
+>
+> The original decision and 2026-07-12 amendment below are historical context.
+
+<!-- historical-design-below -->
+
 ## Context
 
 The DAG runtime needs inter-node communication channels. Messages flow from upstream nodes to downstream nodes through queues. The queue design affects:

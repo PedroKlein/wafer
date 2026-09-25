@@ -19,11 +19,12 @@ impl exports::wafer::pipeline::transform::Guest for AttackPlugin {
     fn process(
         _input: exports::wafer::pipeline::transform::Message,
     ) -> Result<exports::wafer::pipeline::transform::OutputMessage, exports::wafer::pipeline::transform::ProcessError> {
-        // Attempt to read /etc/passwd — should fail without FS capability grants
-        let content = std::fs::read_to_string("/etc/passwd")
-            .unwrap_or_else(|_| "access denied".to_string());
-        // If we somehow got here, leak the content (should never happen)
-        panic!("FS access succeeded unexpectedly: {} bytes", content.len());
+        match std::fs::read_to_string("/etc/passwd") {
+            Ok(content) => panic!("fs access unexpectedly succeeded: {} bytes", content.len()),
+            Err(error) => Err(exports::wafer::pipeline::transform::ProcessError::Unrecoverable(
+                format!("fs access denied as expected: {error}"),
+            )),
+        }
     }
 }
 

@@ -2,14 +2,8 @@
 
 These TOML files are runnable examples for the **current runtime binary**.
 
-Important: until runtime-migration gap
-[`A1`](../docs/status/implementation-gaps.md#a1--two-config-schemas-coexist-runtime-uses-the-legacy-one-) is closed,
-`wafer-runtime` still loads the legacy config schema from `wafer-core`.
-Therefore these examples may use legacy fields such as `[[nodes]]`,
-`plugin_path`, `from_port`, and `to_port`.
-
-Do **not** use these examples as the target schema for new documentation or new
-features. For the target operator-facing schema, use
+The examples use the map-keyed schema loaded by `wafer-config`. For the complete
+operator-facing reference, see
 [`docs/interfaces/config-schema.md`](../docs/interfaces/config-schema.md) and
 [`docs/rfcs/RFC-004-config-schema.md`](../docs/rfcs/RFC-004-config-schema.md).
 
@@ -25,7 +19,11 @@ features. For the target operator-facing schema, use
 - `dag-http.toml` — HTTP webhook source/sink example.
 - `dag-overflow-dlq-demo.toml` — overflow / DLQ demonstration.
 - `dag-metrics-demo.toml` — metrics-enabled pipeline.
-- `dag-mnist-inference.toml` — edge inference pipeline.
+- `dag-mnist-inference.toml` — CPU-default MNIST architecture-validation path.
+  Its Wasm Transform sets `allow_inference = true`; build the MNIST and
+  result-format components with the commands in the file before running it.
+  This example demonstrates secondary architecture validation, not inference
+  performance or CUDA stability.
 - `dag-remote.toml` — OCI/remote plugin reference example.
 - `dag-passthrough-with-api.toml` — passthrough pipeline with API settings.
 

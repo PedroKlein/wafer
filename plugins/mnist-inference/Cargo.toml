@@ -1,0 +1,20 @@
+[package]
+name = "wafer-mnist-inference"
+version = "0.1.0"
+edition = "2024"
+description = "MNIST inference plugin using wasi-nn"
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+wafer-plugin = { path = "../../crates/wafer-plugin", features = ["serde"] }
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

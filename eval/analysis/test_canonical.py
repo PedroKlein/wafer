@@ -13,8 +13,11 @@ from wafer_analysis.canonical import (
     candidate_depth_table,
     candidate_payload_table,
     candidate_swap_tables,
+    backpressure_table,
     capacity_tables,
     ekuiper_profile_tables,
+    failed_replacement_table,
+    capacity_competitive_decision,
     metering_table,
     swap3_table,
     swap4_table,
@@ -103,6 +106,94 @@ def test_metering_table_reports_difference_ratio_ci_and_nonparametric_effect() -
     )
 
 
+def backpressure_records() -> list[dict]:
+    records = []
+    for policy in ("slow", "drop", "dead-letter"):
+        for run_index in range(1, 31):
+            counts = {
+                "attempted": 1_000,
+                "accepted": 1_000,
+                "processed": 1_000,
+                "delivered": 1_000,
+                "dropped": 0,
+                "dead_lettered": 0,
+                "downstream_closed": 0,
+                "dlq_full": 0,
+                "dlq_closed": 0,
+                "outstanding": 0,
+            }
+            if policy == "drop":
+                counts.update(accepted=700, processed=700, delivered=700, dropped=300)
+            elif policy == "dead-letter":
+                counts.update(accepted=700, processed=700, delivered=700, dead_lettered=300)
+            equations = {
+                "slow": "attempted = delivered",
+                "drop": "attempted = delivered + dropped",
+                "dead-letter": "attempted = delivered + dead_lettered + dlq_full + dlq_closed",
+            }
+            records.append(
+                {
+                    "schema_version": 2,
+                    "experiment": "e-backpressure",
+                    "condition": policy,
+                    "run_index": run_index,
+                    "sample_unit": "run",
+                    "policy": policy,
+                    "queue": "slow",
+                    "classification": "saturated-and-drained",
+                    "threshold_crossed": True,
+                    "recovered": True,
+                    "peak_occupancy": 1.0,
+                    "occupancy_threshold": 0.8,
+                    "recovery_threshold": 0.1,
+                    "counts": counts,
+                    "rates_msg_s": {
+                        "offered": 1_000.0,
+                        "accepted": float(counts["accepted"]),
+                        "processed": float(counts["processed"]),
+                        "drained": 1_000.0,
+                    },
+                    "sequence": {
+                        "offered": 1_000,
+                        "received": counts["delivered"],
+                        "gaps": 1_000 - counts["delivered"],
+                        "duplicates": 0,
+                    },
+                    "accounting": {
+                        "equation": equations[policy],
+                        "reconciled": True,
+                        "dlq_failures": {"full": 0, "closed": 0, "total": 0},
+                    },
+                    "producer_progress": "backpressured" if policy == "slow" else "nonblocking",
+                    "memory": {"within_limit": True},
+                }
+            )
+    return records
+
+
+def test_backpressure_table_renders_policy_specific_accounting() -> None:
+    table = backpressure_table(backpressure_records())
+    assert table["policy"].tolist() == ["slow", "drop", "dead-letter"]
+    assert table["N_runs"].eq(30).all()
+    slow, drop, dead_letter = table.to_dict("records")
+    assert slow["total_attempted"] == slow["total_delivered"] == 30_000
+    assert drop["total_attempted"] == drop["total_delivered"] + drop["total_dropped"]
+    assert dead_letter["total_attempted"] == (
+        dead_letter["total_delivered"] + dead_letter["total_dead_lettered"]
+    )
+    assert set(table["producer_progress"]) == {"backpressured", "nonblocking"}
+    assert table["rss_within_limit"].all()
+
+
+def test_backpressure_table_rejects_each_policy_malformed_accounting() -> None:
+    for policy in ("slow", "drop", "dead-letter"):
+        records = backpressure_records()
+        record = next(item for item in records if item["policy"] == policy)
+        record["counts"]["attempted"] += 1
+        with pytest.raises(ValueError, match="counters do not reconcile|policy accounting|not lossless"):
+            backpressure_table(records)
+
+
 def capacity_summary() -> dict:
     systems = {}
     for system in ("mqtt-loopback", "native", "wafer", "ekuiper"):
@@ -160,6 +251,15 @@ def capacity_summary() -> dict:
     }
 
 
+def set_capacity_classifications(
+    summary: dict, system: str, classifications: list[str]
+) -> None:
+    for rate, classification in zip(
+        summary["systems"][system]["rates"], classifications, strict=True
+    ):
+        rate["classification"] = classification
+
+
 def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
     rates, boundaries = capacity_tables(capacity_summary())
     assert len(rates) == 20
@@ -176,9 +276,198 @@ def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
         "delivery_ceiling_msg_s",
         "normalized_p99_knee_msg_s",
         "mqtt_support_path_limitation",
+        "wafer_lower_bound_msg_s",
+        "wafer_upper_bound_msg_s",
+        "ekuiper_lower_bound_msg_s",
+        "ekuiper_upper_bound_msg_s",
+        "competitive_ratio_lower_bound",
+        "competitive_ratio_upper_bound",
+        "competitive_threshold",
+        "competitive_branch",
+        "competitive_status",
+        "competitive_reason",
+        "support_confounded_rate_msg_s",
+        "beyond_grid_limitation",
+        "claim_boundary",
     } <= set(boundaries.columns)
     assert boundaries["claim_boundary"].str.contains("support").all()
+    assert boundaries["wafer_lower_bound_msg_s"].eq(15_000).all()
+    assert boundaries["wafer_upper_bound_msg_s"].eq(16_000).all()
+    assert boundaries["ekuiper_lower_bound_msg_s"].eq(15_000).all()
+    assert boundaries["ekuiper_upper_bound_msg_s"].eq(16_000).all()
+    assert boundaries["competitive_ratio_lower_bound"].eq(15_000 / 16_000).all()
+    assert boundaries["competitive_ratio_upper_bound"].eq(16_000 / 15_000).all()
+    assert boundaries["competitive_threshold"].eq(0.70).all()
+    assert boundaries["competitive_status"].eq("PASS").all()
+    assert boundaries["competitive_branch"].eq("censored-worst-case-pass").all()
+    assert boundaries["competitive_reason"].str.contains("meets").all()
+    assert boundaries["support_confounded_rate_msg_s"].eq(16_000).all()
+    assert boundaries["beyond_grid_limitation"].str.contains("16000").all()
     assert set(rates["classification"]) == {"good", "bad", "support-confounded"}
+
+
+def capacity_decision(
+    wafer: list[str], ekuiper: list[str]
+) -> dict:
+    summary = capacity_summary()
+    set_capacity_classifications(summary, "wafer", wafer)
+    set_capacity_classifications(summary, "ekuiper", ekuiper)
+    return capacity_competitive_decision(summary)
+
+
+def test_tested_grid_capacity_identifiable_pass_and_fail() -> None:
+    passed = capacity_decision(
+        ["good", "good", "good", "bad", "bad"],
+        ["good", "good", "good", "bad", "bad"],
+    )
+    assert passed["branch"] == "identifiable-pass"
+    assert passed["status"] == "PASS"
+    assert passed["ratio_lower_bound"] == passed["ratio_upper_bound"] == 1.0
+
+    failed = capacity_decision(
+        ["good", "good", "bad", "bad", "bad"],
+        ["good", "good", "good", "bad", "bad"],
+    )
+    assert failed["systems"]["wafer"]["lower_bound_msg_s"] == 4_000
+    assert failed["systems"]["wafer"]["upper_bound_msg_s"] == 4_000
+    assert failed["systems"]["ekuiper"]["lower_bound_msg_s"] == 8_000
+    assert failed["ratio_lower_bound"] == failed["ratio_upper_bound"] == 0.5
+    assert failed["branch"] == "identifiable-fail"
+    assert failed["status"] == "FAIL"
+
+
+def test_tested_grid_capacity_censored_branches() -> None:
+    worst_case_pass = capacity_decision(
+        ["good", "good", "good", "good", "support-confounded"],
+        ["good", "good", "good", "support-confounded", "support-confounded"],
+    )
+    assert worst_case_pass["ratio_lower_bound"] == 15_000 / 16_000
+    assert worst_case_pass["branch"] == "censored-worst-case-pass"
+    assert worst_case_pass["status"] == "PASS"
+
+    best_case_fail = capacity_decision(
+        ["good", "good", "good", "bad", "bad"],
+        ["good", "good", "good", "good", "support-confounded"],
+    )
+    assert best_case_fail["ratio_upper_bound"] == 8_000 / 15_000
+    assert best_case_fail["branch"] == "censored-best-case-fail"
+    assert best_case_fail["status"] == "FAIL"
+
+    straddling = capacity_decision(
+        ["good", "good", "support-confounded", "support-confounded", "support-confounded"],
+        ["good", "good", "good", "bad", "bad"],
+    )
+    assert straddling["ratio_lower_bound"] == 0.5
+    assert straddling["ratio_upper_bound"] == 2.0
+    assert straddling["branch"] == "censored-straddling"
+    assert straddling["status"] == "CENSORED/PENDING"
+
+
+def test_tested_grid_capacity_rejects_incomplete_and_non_monotonic_population() -> None:
+    incomplete = capacity_decision(
+        ["good", "good", "incomplete", "bad", "bad"],
+        ["good", "good", "good", "bad", "bad"],
+    )
+    assert incomplete["branch"] == "invalid-population"
+    assert incomplete["status"] == "PENDING"
+    assert "incomplete" in incomplete["reason"]
+
+    non_monotonic_summary = capacity_summary()
+    set_capacity_classifications(
+        non_monotonic_summary, "wafer", ["good", "bad", "good", "bad", "bad"]
+    )
+    non_monotonic = capacity_competitive_decision(non_monotonic_summary)
+    assert non_monotonic["branch"] == "invalid-population"
+    assert non_monotonic["status"] == "PENDING"
+    assert "non-monotonic" in non_monotonic["reason"]
+    _, rendered = capacity_tables(non_monotonic_summary)
+    assert rendered["competitive_status"].eq("PENDING").all()
+    assert rendered["competitive_branch"].eq("invalid-population").all()
+
+
+def test_tested_grid_capacity_handles_no_good_rate_and_zero_denominator() -> None:
+    no_good_wafer = capacity_decision(
+        ["bad", "bad", "bad", "bad", "bad"],
+        ["good", "good", "bad", "bad", "bad"],
+    )
+    assert no_good_wafer["systems"]["wafer"]["lower_bound_msg_s"] == 0
+    assert no_good_wafer["ratio_lower_bound"] == 0.0
+    assert no_good_wafer["branch"] == "identifiable-fail"
+    assert no_good_wafer["status"] == "FAIL"
+
+    zero_denominator = capacity_decision(
+        ["bad", "bad", "bad", "bad", "bad"],
+        ["bad", "bad", "bad", "bad", "bad"],
+    )
+    assert zero_denominator["ratio_lower_bound"] is None
+    assert zero_denominator["ratio_upper_bound"] is None
+    assert zero_denominator["branch"] == "zero-denominator"
+    assert zero_denominator["status"] == "PENDING"
+
+
+def test_failed_replacement_table_requires_semantically_valid_rollback() -> None:
+    requests = []
+    events = []
+    for index in range(50):
+        timeline = {
+            "compile_ns": 1,
+            "instantiate_ns": 2,
+            "signal_ns": 3,
+            "rollback_ns": 4 + index,
+        }
+        requests.append({
+            "event_index": index,
+            "plugin": "wafer_pass_through_v2_panics.wasm",
+            "request_started_ns": 1_000 + index * 100,
+            "request_finished_ns": 1_010 + index * 100,
+            "http_status": 200,
+            "body": {"status": "rolled_back", "timeline": timeline},
+        })
+        events.append({"event_index": index, **timeline})
+    sequence = {"expected": 1000, "received": 1000, "gaps": 0, "duplicates": 0}
+    rollback = {
+        "schema_version": 1,
+        "duration_unit": "ns",
+        "independent_unit": "complete process run",
+        "nested_unit": "rollback event within run",
+        "attempts": 50,
+        "rolled_back": 50,
+        "all_rolled_back": True,
+        "sequence": sequence,
+        "events": events,
+    }
+    continuity = {
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "final_rollback_event_index": 49,
+        "final_rollback_finished_ns": requests[-1]["request_finished_ns"],
+        "observation_start_ns": requests[-1]["request_finished_ns"],
+        "observation_end_ns": requests[-1]["request_finished_ns"] + 100,
+        "messages_after_final_rollback": 10,
+        "output_observed_after_final_rollback": True,
+        "successful_v2_transition_observed": False,
+        "interval_metrics_path": "interval-metrics.json",
+        "interval_metrics_sha256": "a" * 64,
+        "sequence": sequence,
+    }
+    record = {
+        "condition": "process-trap-rollback",
+        "run_index": 1,
+        "requests": requests,
+        "rollback": rollback,
+        "continuity": continuity,
+        "sequence": sequence,
+    }
+
+    table = failed_replacement_table([record])
+    assert table.loc[0, "N_runs"] == 1
+    assert table.loc[0, "N_nested_events"] == 50
+    assert table.loc[0, "post_rollback_continuity"]
+
+    drifted = json.loads(json.dumps(record))
+    drifted["rollback"]["rolled_back"] = 49
+    with pytest.raises(ValueError, match="does not reconcile"):
+        failed_replacement_table([drifted])
 
 
 def candidate_scaling_summary(experiment: str, conditions: list[tuple[str, int]]) -> dict:
@@ -473,8 +762,8 @@ def candidate_swap_summary(experiment: str) -> dict:
             "compile_ns": 100,
             "instantiate_ns": 20,
             "signal_ns": 3,
-            "ack_ns": 4,
-            "convergence_ns": 5,
+            "replacement_adopted_ns": 4,
+            "first_post_replacement_local_outcome_ns": 5,
             "http_total_ns": 150,
             "sink_observed_output_gap_ns": 1_000_000,
         }
@@ -766,8 +1055,8 @@ def swap4_runs() -> list[dict]:
                 "compile_ns": 1,
                 "instantiate_ns": 2,
                 "signal_ns": 3,
-                "ack_ns": 4,
-                "convergence_ns": 5,
+                "replacement_adopted_ns": 4,
+                "first_post_replacement_local_outcome_ns": 5,
             },
         }
         for run in range(1, 31)
@@ -780,7 +1069,7 @@ def test_swap4_table_uses_one_event_per_run_and_reports_p95() -> None:
     assert table.loc[0, "N_events"] == 30
     assert table.loc[0, "p95_sink_gap_ns"] == 29_000_000
     assert table.loc[0, "median_compile_ns"] == 1
-    assert table.loc[0, "median_convergence_ns"] == 5
+    assert table.loc[0, "median_first_post_replacement_local_outcome_ns"] == 5
     assert table.loc[0, "runs_with_drain_arrivals"] == 15
     assert table.loc[0, "max_drain_arrival_offset_ns"] == 120_000_000_029
     assert table.loc[0, "drain_right_censored_runs"] == 0
@@ -791,6 +1080,10 @@ def test_swap4_table_uses_one_event_per_run_and_reports_p95() -> None:
     broken = swap4_runs()
     broken[0]["successful_swaps"] = 2
     with pytest.raises(ValueError, match="one successful swap"):
+        swap4_table(broken)
+    broken = swap4_runs()
+    broken[0]["run_index"] = 30
+    with pytest.raises(ValueError, match="30 independent runs"):
         swap4_table(broken)
 
 
@@ -818,7 +1111,40 @@ def test_visual_manifest_never_combines_incompatible_metrics() -> None:
         "recovery",
         "sequence-integrity",
         "burst-one-event-per-run",
+        "failed-replacement-continuity",
     }
+    assert {
+        "boundary-payload",
+        "mqtt-depth",
+        "in-process-depth-rss",
+        "startup-page-cache",
+        "backpressure-policy",
+        "component-density",
+        "containment",
+        "failed-replacement",
+    } <= {row["name"] for row in FINAL_VISUAL_MANIFEST}
+    complete = [
+        {
+            **row,
+            "source_experiments": [row["experiment"]],
+            "estimator": "declared estimator",
+            "independent_unit": "complete process run",
+            "admission_dependency": "approved canonical-primary batch",
+            "output_path": f"reports/canonical/{row['name']}.csv",
+            "output_sha256_source": "reports/canonical/output-manifest.json#files[name].sha256",
+            "thesis_location": "TG2/chapters/08-evaluation-results.tex",
+        }
+        for row in FINAL_VISUAL_MANIFEST
+    ]
+    validate_visual_manifest(complete, require_output_identity=True)
+    missing_identity = json.loads(json.dumps(complete))
+    del missing_identity[0]["thesis_location"]
+    with pytest.raises(ValueError, match="output identity is incomplete"):
+        validate_visual_manifest(missing_identity, require_output_identity=True)
+    escaped_output = json.loads(json.dumps(complete))
+    escaped_output[0]["output_path"] = "../outside.csv"
+    with pytest.raises(ValueError, match="report-relative"):
+        validate_visual_manifest(escaped_output, require_output_identity=True)
     invalid = [
         *FINAL_VISUAL_MANIFEST,
         {"experiment": "e-perf-10", "name": "bad", "metric_group": "offered-rate+p99"},

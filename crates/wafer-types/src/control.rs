@@ -145,8 +145,8 @@ pub struct NodeInfo {
     pub node_type: NodeType,
     /// Current state
     pub state: NodeState,
-    /// Whether this node supports hot-swap (WASM transforms only)
-    pub swappable: bool,
+    /// Whether the loaded node implementation is eligible for replacement.
+    pub replacement_eligible: bool,
     /// Messages processed by this node
     pub messages_processed: u64,
     /// Messages that failed in this node
@@ -334,7 +334,7 @@ mod tests {
             id: "transform-1".to_string(),
             node_type: NodeType::Transform,
             state: NodeState::Running,
-            swappable: true,
+            replacement_eligible: true,
             messages_processed: 5000,
             messages_failed: 10,
             avg_process_us: 150,
@@ -347,7 +347,7 @@ mod tests {
         assert_eq!(parsed.id, node.id);
         assert_eq!(parsed.node_type, node.node_type);
         assert_eq!(parsed.state, node.state);
-        assert_eq!(parsed.swappable, node.swappable);
+        assert_eq!(parsed.replacement_eligible, node.replacement_eligible);
         assert_eq!(parsed.messages_processed, node.messages_processed);
         assert_eq!(parsed.messages_failed, node.messages_failed);
         assert_eq!(parsed.avg_process_us, node.avg_process_us);
@@ -360,7 +360,7 @@ mod tests {
             id: "sink-1".to_string(),
             node_type: NodeType::Sink,
             state: NodeState::Running,
-            swappable: false,
+            replacement_eligible: false,
             messages_processed: 1000,
             messages_failed: 0,
             avg_process_us: 50,

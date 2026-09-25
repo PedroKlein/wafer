@@ -6,12 +6,10 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
 
 ## Language and toolchain
 
-- **Rust via rustup** — stable channel, Edition 2024 (`rust-version = "1.85"`).
+- **Rust via rustup** — exact toolchain `1.98.1`, Edition 2024, workspace MSRV `1.95`.
   Install from <https://rustup.rs/> before running `mise install`; cargo-based
-  mise tools (`cargo:wasm-tools`, `cargo:wkg`, etc.) require `cargo` to already
-  exist. Pinned via `rust-toolchain.toml`; `cargo` picks the right project
-  toolchain automatically. Do not change the toolchain without discussion — it
-  affects both the runtime and every plugin build.
+  mise tools require `cargo` to exist. `rust-toolchain.toml` pins the compiler
+  used by the runtime and every plugin build.
 - **Rust targets:**
   - Host: `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
     `aarch64-apple-darwin` (dev-only).
@@ -47,9 +45,10 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
 
 | Crate | Version pin | Purpose |
 |-------|------------|---------|
-| `wasmtime` | git main (post-41.0.3) | WebAssembly runtime and Component Model implementation. |
-| `wasmtime-wasi` | git main | WASI Preview 2 capability injection. |
-| `wasmtime-wasi-nn` | git main, `onnx` feature | `wasi:nn` for the `inference-node` world. Pinned to git because the 41.0.3 crate has a bug with the ONNX runtime crate API; will move back to crates.io on wasmtime 42.x. |
+| `wasmtime` | `48.0.2`, git revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1` | WebAssembly runtime and Component Model implementation. |
+| `wasmtime-wasi` | same exact revision | WASI Preview 2 capability injection. |
+| `wasmtime-wasi-nn` | same exact revision, `onnx` feature | Provides the capability-gated `wasi:nn@0.2.0-rc-2024-10-28` host implementation for `inference-node`; ordinary linkers do not register it. |
+| `ort` | git revision `d1ebde95d386513fea836593815e8f86f7b96a85` | Exact ONNX Runtime binding pin used by the wasi-nn CPU backend and optional CUDA build. |
 | `wit-bindgen` | latest compatible with the wasmtime commit | Code generation from WIT contracts. |
 | `tokio` | 1.x, features: `rt-multi-thread`, `macros`, `sync`, `time`, `signal`, `fs`, `io-util`, `net` | Async runtime. |
 | `axum` | 0.7 | HTTP control plane. |
@@ -70,7 +69,7 @@ dependencies. Sourced from `Cargo.toml`, `rust-toolchain.toml`, and
 | `reqwest` | 0.12 | HTTP sink (native rustls TLS). |
 | `hyper` | 1.x | HTTP source. |
 | `oci-client` | 0.13 | OCI plugin distribution. |
-| `wkg` (dev) | pinned by `mise.toml` | Component-Model registry CLI (installed via `mise run setup`, or `mise run install-wkg` for only this tool). |
+| `wkg` (dev) | pinned by `mise.toml` | Component-Model registry CLI (installed via `mise run setup`, or `mise run //plugins:install-wkg` for only this tool). |
 
 ## Feature flags
 
@@ -78,8 +77,11 @@ Workspace-level cargo features (see `Cargo.toml`):
 
 - `http-api` (default) — enables the axum control plane. Disable for
   minimal-binary embedded builds.
-- `cuda` — links CUDA-backed ONNX Runtime for `wasi:nn` on Jetson
-  Orin.
+- `cuda` — enables `wasmtime-wasi-nn/onnx-cuda` for host builds with a
+  compatible CUDA-enabled ONNX Runtime. The feature enables the provider but
+  does not prove selection; provider registration, graph placement, and device
+  telemetry are required runtime evidence. The current Jetson diagnostic
+  confirms execution but found intermittent native teardown corruption.
 
 ## Build profiles
 
@@ -110,10 +112,7 @@ size for the trade-offs.
 
 ## Upgrading
 
-- **Wasmtime bump** — when wasmtime 42.x lands with the
-  `wasmtime-wasi-nn` fix, move all three wasmtime crates from git
-  to crates.io in one PR. Regenerate wit-bindgen output; expect
-  minor API adjustments in `crates/wafer-core/src/engine/`.
+- **Wasmtime bump** — update the three Wasmtime crates together from their exact shared revision, rerun Component Model and attack evidence, and re-audit the coupled `ort` pin.
 - **Rust edition bump** — pinned via `rust-toolchain.toml`. Do not
   bump without ensuring `wasm32-wasip2` remains supported on the
   target release.

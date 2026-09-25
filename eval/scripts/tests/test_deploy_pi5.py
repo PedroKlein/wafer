@@ -29,14 +29,34 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "DEPLOY_CAPTURE": str(deployed),
     }
-    subprocess.run(
-        [str(DEPLOY), "--host", "test@example", "--root", "wafer-fresh"],
-        cwd=ROOT,
-        env=env,
-        check=True,
-        capture_output=True,
-        text=True,
-    )
+    release_dir = ROOT / "target/docker-aarch64-linux/release"
+    created_dirs = [
+        path
+        for path in (ROOT / "target", release_dir.parent, release_dir)
+        if not path.exists()
+    ]
+    release_dir.mkdir(parents=True, exist_ok=True)
+    created_binaries = []
+    for name in ("wafer", "wafer-loadgen", "waferctl"):
+        binary = release_dir / name
+        if not binary.exists():
+            binary.write_text("#!/bin/sh\nexit 0\n")
+            binary.chmod(0o755)
+            created_binaries.append(binary)
+    try:
+        subprocess.run(
+            [str(DEPLOY), "--host", "test@example", "--root", "wafer-fresh"],
+            cwd=ROOT,
+            env=env,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        for binary in created_binaries:
+            binary.unlink()
+        for directory in reversed(created_dirs):
+            directory.rmdir()
 
     assert not any(path.name == "__pycache__" for path in deployed.rglob("*"))
     assert not any(path.suffix == ".pyc" for path in deployed.rglob("*"))

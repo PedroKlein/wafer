@@ -1,44 +1,37 @@
-# WAFER DAG Configuration: Chained Transforms
-# Pipeline: stdin → uppercase → filter (only lines containing "KEEP") → stdout
-#
-# Usage:
-#   printf "keep this line\ndrop this one\nKEEP this too" | cargo run -- --config examples/dag-chain.toml
-#
-# Expected Output:
-#   KEEP THIS LINE
-#   KEEP THIS TOO
+# stdin -> JSON normalizer -> threshold filter -> stdout
+# Build first: mise run //plugins:build-plugin json-parse && mise run //plugins:build-plugin threshold-filter
+# Run: printf '%s\n' '{"temperature":72}' '{"temperature":20}' | cargo run -p wafer-runtime -- --config examples/dag-chain.toml
 
+[engine]
 default_queue_capacity = 1024
 
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "stdin"
+[nodes.source]
+type = "source"
+kind = "stdin"
 
-[[nodes]]
-id = "uppercase"
-node_type = "transform"
-[nodes.config]
-plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"
+[nodes.normalize]
+type = "transform"
+plugin = "../plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
 
-[[nodes]]
-id = "filter"
-node_type = "transform"
-[nodes.config]
-plugin_path = "plugins/filter/target/wasm32-wasip2/release/filter_transform.wasm"
-pattern = "KEEP"
+[nodes.filter]
+type = "filter"
+plugin = "../plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm"
 
-[[nodes]]
-id = "sink"
-node_type = "sink"
-sink_type = "stdout"
+[nodes.filter.config]
+field = "temperature"
+min = 50.0
+max = 100.0
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
 
 [[edges]]
 from = "source"
-to = "uppercase"
+to = "normalize"
 
 [[edges]]
-from = "uppercase"
+from = "normalize"
 to = "filter"
 
 [[edges]]

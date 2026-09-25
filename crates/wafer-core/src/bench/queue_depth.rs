@@ -17,6 +17,11 @@ pub struct QueueDepthSample {
     pub accepted: u64,
     pub dequeued: u64,
     pub processed: u64,
+    pub dropped: u64,
+    pub dead_lettered: u64,
+    pub downstream_closed: u64,
+    pub dlq_full: u64,
+    pub dlq_closed: u64,
 }
 
 pub struct QueueDepthRecorder {
@@ -71,6 +76,11 @@ impl QueueDepthRecorder {
                 accepted: snapshot.accepted,
                 dequeued: snapshot.dequeued,
                 processed: snapshot.processed,
+                dropped: snapshot.dropped,
+                dead_lettered: snapshot.dead_lettered,
+                downstream_closed: snapshot.downstream_closed,
+                dlq_full: snapshot.dlq_full,
+                dlq_closed: snapshot.dlq_closed,
             });
         }
     }
@@ -98,11 +108,13 @@ impl QueueDepthRecorder {
 
 #[expect(clippy::let_underscore_must_use, reason = "writing to String is infallible")]
 fn samples_to_csv(samples: &[QueueDepthSample]) -> String {
-    let mut output = String::from("elapsed_ns,queue,depth,capacity,accepted,dequeued,processed\n");
+    let mut output = String::from(
+        "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed\n",
+    );
     for sample in samples {
         let _ = writeln!(
             output,
-            "{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{}",
             sample.elapsed_ns,
             sample.queue,
             sample.depth,
@@ -110,6 +122,11 @@ fn samples_to_csv(samples: &[QueueDepthSample]) -> String {
             sample.accepted,
             sample.dequeued,
             sample.processed,
+            sample.dropped,
+            sample.dead_lettered,
+            sample.downstream_closed,
+            sample.dlq_full,
+            sample.dlq_closed,
         );
     }
     output
@@ -129,11 +146,16 @@ mod tests {
             accepted: 100,
             dequeued: 41,
             processed: 40,
+            dropped: 3,
+            dead_lettered: 2,
+            downstream_closed: 1,
+            dlq_full: 4,
+            dlq_closed: 5,
         }];
 
         assert_eq!(
             samples_to_csv(&samples),
-            "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed\n10,slow,60,64,100,41,40\n"
+            "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed\n10,slow,60,64,100,41,40,3,2,1,4,5\n"
         );
     }
 }

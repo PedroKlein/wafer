@@ -14,7 +14,37 @@ use crate::node::wasm::WasmRouterNode;
 use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
-use crate::runner::{DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, fan_out};
+use crate::runner::{
+    DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, continue_after_policy_action,
+    fan_out, recv_next_or_retry,
+};
+
+async fn dispatch_route_outcome(
+    ports: Vec<String>,
+    metrics: &NodeMetrics,
+    senders: &[DownstreamSender],
+    envelope: RuntimeEnvelope,
+    pending_swap_progress: &mut Option<Arc<HotSwapProgress>>,
+    duration_ns: u64,
+) {
+    if ports.is_empty() {
+        metrics.record_processed(duration_ns);
+        if let Some(progress) = pending_swap_progress.take() {
+            progress.mark_first_post_replacement_local_outcome(
+                crate::runner::FirstPostReplacementLocalOutcome::RouterDropped,
+            );
+        }
+        return;
+    }
+
+    metrics.record_processed(duration_ns);
+    fan_out(&ports, envelope, senders).await;
+    if let Some(progress) = pending_swap_progress.take() {
+        progress.mark_first_post_replacement_local_outcome(
+            crate::runner::FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
+    }
+}
 
 fn recover_after_timeout(
     router: &mut WasmRouterNode,
@@ -23,7 +53,8 @@ fn recover_after_timeout(
     policy: &mut ErrorPolicyExecutor,
     envelope: RuntimeEnvelope,
 ) -> bool {
-    if !policy.handle(&WasmProcessError::TimedOut, envelope) {
+    if !continue_after_policy_action(policy.handle(&WasmProcessError::TimedOut, envelope), metrics)
+    {
         return false;
     }
     tracing::warn!(
@@ -57,10 +88,6 @@ fn recover_after_timeout(
     clippy::too_many_arguments,
     reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
 )]
-#[expect(
-    clippy::too_many_lines,
-    reason = "linear select!/match pipeline loop; splitting into helpers would fragment the control flow"
-)]
 pub async fn run_router_loop(
     mut router: WasmRouterNode,
     receiver: impl Into<TrackedReceiver>,
@@ -91,7 +118,7 @@ pub async fn run_router_loop(
                 };
                 match result {
                     Ok(()) => {
-                        progress.mark_ack();
+                        progress.mark_replacement_adopted();
                         pending_swap_progress = Some(progress);
                         metrics.record_swap();
                     }
@@ -109,19 +136,8 @@ pub async fn run_router_loop(
         }
 
         // 2. Retry buffer priority
-        let envelope = if let Some(retry) = policy.next_ready_retry() {
-            retry
-        } else {
-            // 3. Receive (cancel-safe: ONLY recv in select!)
-            let msg = tokio::select! {
-                biased;
-                () = cancel.cancelled() => None,
-                msg = receiver.recv() => msg,
-            };
-            match msg {
-                Some(e) => e,
-                None => break,
-            }
+        let Some(envelope) = recv_next_or_retry(&mut receiver, &mut policy, &cancel).await else {
+            break;
         };
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
@@ -137,25 +153,24 @@ pub async fn run_router_loop(
 
         // 5. Dispatch result
         match result {
-            Ok(RouteOutcome::Ports(ref ports)) if ports.is_empty() => {
-                // Empty ports list = intentional drop
-                metrics.record_processed(duration_ns);
-                if let Some(progress) = pending_swap_progress.take() {
-                    progress.mark_first_v2();
-                }
-            }
-            Ok(RouteOutcome::Ports(ports)) => {
-                metrics.record_processed(duration_ns);
-                fan_out(&ports, envelope, &senders).await;
-                if let Some(progress) = pending_swap_progress.take() {
-                    progress.mark_first_v2();
-                }
-            }
             Ok(RouteOutcome::Error(e)) => {
                 // Router returned a logical routing error (not a Wasm trap)
                 metrics.record_failed();
                 let wasm_err = WasmProcessError::ProcessingFailed(e.message);
-                policy.handle(&wasm_err, envelope);
+                if !continue_after_policy_action(policy.handle(&wasm_err, envelope), &metrics) {
+                    break;
+                }
+            }
+            Ok(RouteOutcome::Ports(ports)) => {
+                dispatch_route_outcome(
+                    ports,
+                    &metrics,
+                    &senders,
+                    envelope,
+                    &mut pending_swap_progress,
+                    duration_ns,
+                )
+                .await;
             }
             Err(WasmProcessError::TimedOut) => {
                 metrics.record_failed();
@@ -186,7 +201,9 @@ pub async fn run_router_loop(
             }
             Err(e) => {
                 metrics.record_failed();
-                policy.handle(&e, envelope);
+                if !continue_after_policy_action(policy.handle(&e, envelope), &metrics) {
+                    break;
+                }
             }
         }
     }
@@ -201,11 +218,36 @@ mod tests {
     use tokio::sync::{mpsc, watch};
 
     #[tokio::test]
+    async fn replacement_empty_route_reports_runner_local_disposition() {
+        let (progress, rx) = HotSwapProgress::channel();
+        let metrics = NodeMetrics::new();
+        let mut pending_swap_progress = Some(progress.clone());
+        progress.mark_replacement_adopted();
+
+        dispatch_route_outcome(
+            Vec::new(),
+            &metrics,
+            &[],
+            RuntimeEnvelope::from_string("source", "dropped"),
+            &mut pending_swap_progress,
+            0,
+        )
+        .await;
+
+        let report = rx.await.expect("local outcome report").expect("replacement report");
+        assert_eq!(
+            report.first_post_replacement_local_outcome,
+            crate::runner::FirstPostReplacementLocalOutcome::RouterDropped,
+        );
+        assert_eq!(metrics.processed(), 1);
+        assert!(pending_swap_progress.is_none());
+    }
+
+    #[tokio::test]
     async fn test_router_loop_cancellation_exits_cleanly() {
         let (_input_tx, _input_rx) = mpsc::channel::<RuntimeEnvelope>(32);
         let (output_tx, _output_rx) = mpsc::channel(32);
-        let _senders =
-            [DownstreamSender { sender: output_tx, port: "default".into(), queue_metrics: None }];
+        let _senders = [DownstreamSender::slow(output_tx, "default", None)];
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-router");
         let cancel = CancellationToken::new();
@@ -221,8 +263,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_single_port() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: tx, port: "output-a".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(tx, "output-a", None)];
 
         let envelope = RuntimeEnvelope::from_string("src", "hello");
         fan_out(&["output-a".to_string()], envelope, &senders).await;
@@ -236,8 +277,8 @@ mod tests {
         let (tx_a, mut rx_a) = mpsc::channel(32);
         let (tx_b, mut rx_b) = mpsc::channel(32);
         let senders = vec![
-            DownstreamSender { sender: tx_a, port: "port-a".into(), queue_metrics: None },
-            DownstreamSender { sender: tx_b, port: "port-b".into(), queue_metrics: None },
+            DownstreamSender::slow(tx_a, "port-a", None),
+            DownstreamSender::slow(tx_b, "port-b", None),
         ];
 
         let envelope = RuntimeEnvelope::from_string("src", "routed");
@@ -252,8 +293,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_no_matching_port() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: tx, port: "other-port".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(tx, "other-port", None)];
 
         let envelope = RuntimeEnvelope::from_string("src", "lost");
         // Route to a port that doesn't match any sender

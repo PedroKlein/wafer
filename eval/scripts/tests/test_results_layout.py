@@ -151,6 +151,9 @@ def test_alias_receipt_rejects_link_and_tampered_source(tmp_path: Path) -> None:
     source.mkdir(parents=True)
     status = source / "canonical-status.json"
     status.write_text('{"status":"passed"}')
+    (source / "metadata.json").write_text(
+        '{"experiment":"e-perf-1","evidence_class":"final","thesis_evidence":true}'
+    )
     receipt = volume / "manifests/aliases/e-perf-2/rpi5-batch/native/run-01.json"
     atomic_write_json(receipt, {
         "schema_version": 1,
@@ -161,12 +164,14 @@ def test_alias_receipt_rejects_link_and_tampered_source(tmp_path: Path) -> None:
         "source_leaf": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
         "source_status_sha256": hashlib.sha256(status.read_bytes()).hexdigest(),
         "sample_identity": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "source_evidence_class": "final",
+        "independent_n_contribution": 0,
         "shared_measurement": True,
     })
 
     assert resolve_alias_receipt(receipt)[1] == source
     status.write_text('{"status":"failed"}')
-    with pytest.raises(ValueError, match="digest differs"):
+    with pytest.raises(ValueError, match="not passed"):
         resolve_alias_receipt(receipt)
 
     link = receipt.with_name("linked.json")

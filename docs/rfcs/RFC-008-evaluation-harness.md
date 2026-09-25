@@ -79,7 +79,7 @@ E-Perf-10 runs MQTT loopback, Native, protected WAFER, and eKuiper at the common
 
 Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
 
-A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The analysis must report censoring rather than assign an exact SUT ceiling beyond the shared support path.
+A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The pure decision uses only exact tested-grid lower/upper bounds and threshold 0.70; it does not interpolate. Identifiable and bounded worst/best cases can produce PASS or FAIL. Invalid/incomplete populations, zero denominators, no-good-rate cases, and bounds that straddle the threshold remain `CENSORED/PENDING` with an explicit reason.
 
 ### Startup and cross-architecture boundaries
 
@@ -97,7 +97,7 @@ Each strategy has 30 runs and one disruption at measured t=60 seconds:
 - WAFER process restart;
 - eKuiper rule restart.
 
-The subscriber retains bounded observations and writes exactly 200 contiguous 100 ms buckets over `[-10 s,+10 s)` around the actual action-start timestamp. The scheduled t=60 boundary and actual alignment error are recorded; an error over 10 ms invalidates the leaf.
+The subscriber retains bounded observations and writes exactly 200 contiguous 100 ms buckets over `[-10 s,+10 s)` around the actual action-start timestamp. `disruption-timeline.json` is the sole retained final action timeline. `publisher-timing.json` is transient and removed after finalization; legacy `swap_timeline.json` rejects the final leaf. The scheduled t=60 boundary and actual alignment error are recorded; an error over 10 ms invalidates the leaf.
 
 The run-level estimators are:
 
@@ -115,13 +115,21 @@ The restart comparators are measured rather than assigned a synthetic 100 percen
 
 E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 source-origin 100 ms primary buckets over `[0,120s)`, a separate 100-bucket drain series over `[120s,130s)`, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. The source carries `bench.measurement_start_unix_ns`; sink offsets use the explicitly labeled `unix-epoch-source-sink-alignment` clock while scheduling and source-completion duration remain monotonic. Full-run counts reconcile the primary, drain, and O(1) after-drain counters. Any receive at or after 130 seconds, right-censored drain, loss, or duplication rejects the run. Reconciled drain arrivals remain separate completion evidence and do not enter the t=60 disruption estimator. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
 
+### E-Swap-5 failed replacement
+
+A final leaf records the request, rollback, sequence accounting, and `post-rollback-continuity.json`. It must not contain a successful-v2 `swap_timeline.json`. Runtime-local rollback establishes the action outcome; the continuity artifact establishes post-rollback delivery.
+
+## E-Backpressure
+
+The final matrix contains 30 runs each for `slow`, `drop`, and `dead-letter`. All policies reconcile the source-authoritative offered population with delivered and disposition counts. `slow` requires no overflow dispositions; `drop` accounts explicit dropped messages; `dead-letter` separates successful dead-letter delivery from DLQ-full and DLQ-closed failure. Downstream-closed is distinct from queue overflow. No universal lossless criterion is applied across all policies.
+
 ## Statistics and outputs
 
 Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. Intervals and repeated swap events are nested observations, not independent replicates. Candidate-supplementary runs are not pooled with canonical-primary or prior rehearsal runs. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
 
 Figures and tables state N, units, estimator, evidence class, and claim boundary. Percentile summaries are not presented as empirical CDFs. PMIC measurements are labeled as a Raspberry Pi 5 internal-rail proxy, not total board, USB-C input, or total input power. External input-power capture remains `future-work`.
 
-E-Perf-2 remains an alternate analysis of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. These aliases do not multiply sample counts. E-Swap-4 retains 1,200 source-origin primary buckets over `[0,120s)`, 100 separate drain buckets over `[120s,130s)`, zero after-drain arrivals, and no accepted right censoring.
+E-Perf-2 remains an alternate analysis of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Each alias points directly to one final admitted source, preserves its identity/digest, is acyclic, and declares `independent_n_contribution=0`; aliases never multiply sample counts. E-Swap-4 retains 1,200 source-origin primary buckets over `[0,120s)`, 100 separate drain buckets over `[120s,130s)`, zero after-drain arrivals, and no accepted right censoring.
 
 ## Enhanced evidence storage
 

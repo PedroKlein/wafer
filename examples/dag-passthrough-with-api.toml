@@ -1,16 +1,6 @@
-# WAFER DAG Configuration: Passthrough with Control Plane Settings
-#
-# This file uses the config syntax accepted by the current runtime binary.
-# It includes [api] and [metrics] sections, but the binary does not yet launch
-# those servers; see docs/status/implementation-gaps.md A2.
-#
-# Usage:
-#   cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
-#
-# After A2 is closed, expected endpoints include:
-#   curl http://127.0.0.1:9090/health
-#   curl http://127.0.0.1:9090/api/v1/nodes
-#   curl http://127.0.0.1:9091/metrics
+# stdin -> pass-through -> stdout with the control plane enabled
+# Build first: mise run //plugins:build-plugin pass-through
+# Run: cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
 
 [pipeline]
 name = "passthrough-demo"
@@ -22,34 +12,20 @@ bind = "127.0.0.1:9090"
 
 [metrics]
 enabled = true
-# Separate metrics server (optional - defaults to same as api.bind)
-bind = "127.0.0.1:9091"
 path = "/metrics"
-# Global labels added to all metrics (useful for multi-instance deployments)
-[metrics.labels]
-environment = "development"
 
-# Source node: reads from stdin
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "stdin"
+[nodes.source]
+type = "source"
+kind = "stdin"
 
-# Transform node: passes data through unchanged
-[[nodes]]
-id = "passthrough"
-node_type = "transform"
-swappable = true
-[nodes.config]
-plugin_path = "plugins/pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
+[nodes.passthrough]
+type = "transform"
+plugin = "../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
 
-# Sink node: writes to stdout
-[[nodes]]
-id = "sink"
-node_type = "sink"
-sink_type = "stdout"
+[nodes.sink]
+type = "sink"
+kind = "stdout"
 
-# Edge definitions: source -> passthrough -> sink
 [[edges]]
 from = "source"
 to = "passthrough"

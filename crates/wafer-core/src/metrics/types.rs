@@ -90,7 +90,7 @@ pub struct HotSwapMetrics {
     /// P0.10 (A3 residual): per-phase, per-node histogram of hot-swap
     /// timings for E-Swap-6 phase decomposition. Keyed by
     /// `(phase, node_id)` for six phases: compile, instantiate, signal,
-    /// ack, first_v2, convergence. Wrapped in RwLock because the label
+    /// replacement_adopted, first_post_replacement_local_outcome. Wrapped in RwLock because the label
     /// set is small (`num_swappable_nodes * 6`) and the map is only
     /// touched inside record/emit paths, not on the message hot path.
     pub phase_histogram:

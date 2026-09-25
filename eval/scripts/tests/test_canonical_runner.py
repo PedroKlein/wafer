@@ -653,7 +653,15 @@ def test_schedule_covers_performance_matrix() -> None:
         "startup-preparation.json",
         "startup.json",
     }
-    assert len(by_experiment["e-backpressure"]) == 30
+    assert len(by_experiment["e-backpressure"]) == 90
+    assert {
+        (item.condition, item.run_index)
+        for item in by_experiment["e-backpressure"]
+    } == {
+        (policy, run_index)
+        for policy in ("slow", "drop", "dead-letter")
+        for run_index in range(1, 31)
+    }
     assert all(item.warmup_secs == 30 for item in by_experiment["e-perf-4"])
     assert all(item.runtime_cpus == "1-3" for item in schedule)
     assert all(item.support_cpus == "0" for item in schedule)
@@ -697,7 +705,7 @@ def test_focused_schedule_matches_frozen_condition_runs() -> None:
     schedule = build_focused_schedule(seed=matrix["focused_pilot"]["seed"])
 
     assert {item.result_key for item in schedule} == expected
-    assert len(schedule) == len(expected) == 137
+    assert len(schedule) == len(expected) == 143
     assert [item.run_index for item in schedule if item.experiment == "e-swap-3"] == [1, 2, 3]
     assert {item.condition for item in schedule if item.experiment == "e-swap-3"} == {
         "wafer-hotswap"
@@ -714,7 +722,7 @@ def test_focused_freeze_matches_canonical_matrix_and_schedule() -> None:
     expected = [item.__dict__ for item in build_focused_schedule(seed=1729)]
 
     assert schedule == expected
-    assert receipt["selected_leaf_count"] == len(schedule) == 137
+    assert receipt["selected_leaf_count"] == len(schedule) == 143
     assert receipt["schedule_sha256"] == hashlib.sha256(schedule_bytes).hexdigest()
     assert receipt["thesis_evidence"] is False
 
@@ -746,8 +754,8 @@ def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:
                     "compile_ns": 100_000_000,
                     "instantiate_ns": 10_000_000,
                     "signal_ns": 1_000,
-                    "ack_ns": 2_000_000,
-                    "convergence_ns": 3_000_000,
+                    "replacement_adopted_ns": 2_000_000,
+                    "first_post_replacement_local_outcome_ns": 3_000_000,
                 }
             },
         },
@@ -761,8 +769,8 @@ def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:
                     "compile_ns": 100_000,
                     "instantiate_ns": 200_000,
                     "signal_ns": 1_000,
-                    "ack_ns": 300_000,
-                    "convergence_ns": 400_000,
+                    "replacement_adopted_ns": 300_000,
+                    "first_post_replacement_local_outcome_ns": 400_000,
                 }
             },
         },
@@ -802,8 +810,8 @@ def test_candidate_swap_evidence_labels_first_use_and_cached_events() -> None:
                     "compile_ns": 10 + index,
                     "instantiate_ns": 20 + index,
                     "signal_ns": 30 + index,
-                    "ack_ns": 40 + index,
-                    "convergence_ns": 50 + index,
+                    "replacement_adopted_ns": 40 + index,
+                    "first_post_replacement_local_outcome_ns": 50 + index,
                 }
             },
         }
@@ -884,6 +892,64 @@ def test_candidate_rollback_evidence_requires_fifty_lossless_events() -> None:
         runner.build_candidate_rollback_evidence(requests[:-1], item, "raw/test", sequence)
 
 
+def swap5_requests_fixture() -> list[dict]:
+    return [
+        {
+            "event_index": index,
+            "plugin": "wafer_pass_through_v2_panics.wasm",
+            "request_started_ns": 1_000_000_000 + index * 6_000_000_000,
+            "request_finished_ns": 1_010_000_000 + index * 6_000_000_000,
+            "request_duration_ns": 10_000_000,
+            "request_duration_clock": "monotonic",
+            "http_status": 200,
+            "body": {
+                "status": "rolled_back",
+                "timeline": {
+                    "compile_ns": 1,
+                    "instantiate_ns": 2,
+                    "signal_ns": 3,
+                    "rollback_ns": 4,
+                },
+            },
+        }
+        for index in range(50)
+    ]
+
+
+def test_swap5_rollback_and_post_rollback_continuity_reconcile() -> None:
+    requests = swap5_requests_fixture()
+    sequence = {"expected": 300_000, "received": 300_000, "gaps": 0, "duplicates": 0}
+    intervals = {
+        "rows": [
+            {
+                "interval_start_unix_epoch_ns": requests[-1]["request_finished_ns"],
+                "interval_end_unix_epoch_ns": requests[-1]["request_finished_ns"] + 1_000_000_000,
+                "throughput_messages": 1_000,
+            }
+        ]
+    }
+    rollback = runner.build_swap5_rollback(requests, sequence)
+    continuity = runner.build_post_rollback_continuity(
+        requests, intervals, sequence, interval_metrics_sha256="a" * 64
+    )
+
+    runner.validate_swap5_artifacts(requests, rollback, continuity, sequence)
+    assert rollback["attempts"] == rollback["rolled_back"] == 50
+    assert continuity["output_observed_after_final_rollback"] is True
+    assert continuity["messages_after_final_rollback"] == 1_000
+
+    fabricated = json.loads(json.dumps(continuity))
+    fabricated["successful_v2_transition_observed"] = True
+    with pytest.raises(ValueError, match="successful v2 transition"):
+        runner.validate_swap5_artifacts(requests, rollback, fabricated, sequence)
+
+    missing_output = json.loads(json.dumps(continuity))
+    missing_output["messages_after_final_rollback"] = 0
+    missing_output["output_observed_after_final_rollback"] = False
+    with pytest.raises(ValueError, match="post-rollback output"):
+        runner.validate_swap5_artifacts(requests, rollback, missing_output, sequence)
+
+
 def candidate_swap_summary_fixture(experiment: str) -> dict:
     rollback = experiment == runner.ROLLBACK_SESSIONS_EXPERIMENT
     records = []
@@ -905,9 +971,9 @@ def candidate_swap_summary_fixture(experiment: str) -> dict:
                 "signal_ns": 30,
                 "http_total_ns": 100,
             }
-            event["rollback_ns" if rollback else "ack_ns"] = 40
+            event["rollback_ns" if rollback else "replacement_adopted_ns"] = 40
             if not rollback:
-                event["convergence_ns"] = 50
+                event["first_post_replacement_local_outcome_ns"] = 50
                 event["sink_observed_output_gap_ns"] = 1_000
             events.append(event)
         record = {
@@ -1059,8 +1125,8 @@ def test_hotswap_evidence_rejects_unit_name_conflation() -> None:
                 "compile_ms": 1.0,
                 "instantiate_ns": 1,
                 "signal_ns": 1,
-                "ack_ns": 1,
-                "convergence_ns": 1,
+                "replacement_adopted_ns": 1,
+                "first_post_replacement_local_outcome_ns": 1,
             }
         },
     }
@@ -1078,7 +1144,9 @@ def test_shared_hotswap_result_preserves_one_source_without_copying_raw(tmp_path
     source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
     source.mkdir(parents=True)
     (source / "canonical-status.json").write_text('{"status":"passed"}')
-    (source / "metadata.json").write_text('{"experiment":"e-swap-1"}')
+    (source / "metadata.json").write_text(
+        '{"experiment":"e-swap-1","evidence_class":"final","thesis_evidence":true}'
+    )
     item = RunItem(
         experiment="e-swap-2",
         condition="steady",
@@ -1095,6 +1163,8 @@ def test_shared_hotswap_result_preserves_one_source_without_copying_raw(tmp_path
     assert receipt_path == tmp_path / "eval/results/aliases/e-swap-2/rpi5-batch/steady/run-01.json"
     assert receipt["source_leaf"] == str(source.relative_to(tmp_path))
     assert receipt["sample_identity"] == receipt["source_leaf"]
+    assert receipt["source_evidence_class"] == "final"
+    assert receipt["independent_n_contribution"] == 0
     assert receipt["shared_measurement"] is True
     assert not (tmp_path / "eval/results/e-swap-2").exists()
 
@@ -1112,6 +1182,9 @@ def test_shared_result_uses_explicit_root_with_spaces_without_raw_copy(
     source = layout.raw / "e-perf-1/rpi5-batch/native/run-01-attempt-01"
     source.mkdir(parents=True)
     (source / "canonical-status.json").write_text('{"status":"passed"}')
+    (source / "metadata.json").write_text(
+        '{"experiment":"e-perf-1","evidence_class":"final","thesis_evidence":true}'
+    )
     item = RunItem(
         experiment="e-perf-2",
         condition="native",
@@ -1129,11 +1202,35 @@ def test_shared_result_uses_explicit_root_with_spaces_without_raw_copy(
     assert not (volume / "raw/e-perf-2").exists()
 
 
+def test_shared_result_rejects_nonfinal_source(tmp_path: Path) -> None:
+    source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
+    source.mkdir(parents=True)
+    (source / "canonical-status.json").write_text('{"status":"passed"}')
+    (source / "metadata.json").write_text(
+        '{"experiment":"e-swap-1","evidence_class":"diagnostic","thesis_evidence":false}'
+    )
+    item = RunItem(
+        experiment="e-swap-2",
+        condition="steady",
+        run_index=1,
+        config="unused.toml",
+        warmup_secs=30,
+        measurement_secs=120,
+        shared_from="e-swap-1",
+    )
+
+    with pytest.raises(ValueError, match="not final admitted evidence"):
+        copy_shared_result(tmp_path, "batch", item)
+
+
 def test_shared_hotswap_result_rejects_changed_immutable_source(tmp_path: Path) -> None:
     source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
     source.mkdir(parents=True)
     status = source / "canonical-status.json"
     status.write_text('{"status":"passed"}')
+    (source / "metadata.json").write_text(
+        '{"experiment":"e-swap-1","evidence_class":"final","thesis_evidence":true}'
+    )
     item = RunItem(
         experiment="e-swap-2",
         condition="steady",
@@ -1375,7 +1472,55 @@ def test_swap3_strategies_share_boundary_and_commands_except_strategy() -> None:
     assert all("--timing-receipt" in invocation["publisher_command"] for invocation in invocations)
     assert all("--publisher-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
     assert all("--action-timing-receipt" in invocation["subscriber_command"] for invocation in invocations)
+    assert all(
+        invocation["controlled_factors"]["action_timing_receipt"]
+        == "disruption-timeline.json"
+        for invocation in invocations
+    )
     assert all(invocation["controlled_factors"]["event_offset_ns"] == 60_000_000_000 for invocation in invocations)
+
+
+def test_swap3_postprocess_removes_publisher_timing_temporary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = next(
+        candidate
+        for candidate in build_schedule({"e-swap-3"}, seed=1729)
+        if candidate.condition == "wafer-hotswap" and candidate.run_index == 1
+    )
+    throughput, timeline, publisher, subscriber = swap3_fixture()
+    fine = fine_event_fixture(
+        throughput,
+        experiment="e-swap-3",
+        event_timestamp_ns=timeline["event_timestamp_ns"],
+        scheduled_timestamp_ns=timeline["scheduled_event_timestamp_ns"],
+    )
+    (tmp_path / "metadata.json").write_text(json.dumps({"experiment": "e-swap-3"}))
+    (tmp_path / "publisher-summary.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "measurement_duration_ns": 120_000_000_000,
+                "deadline_misses": 0,
+                **publisher,
+            }
+        )
+    )
+    (tmp_path / "subscriber-metadata.json").write_text(json.dumps(subscriber))
+    (tmp_path / "throughput-buckets.json").write_text(json.dumps(throughput))
+    (tmp_path / "throughput-buckets-10ms.json").write_text(json.dumps(fine))
+    (tmp_path / "disruption-timeline.json").write_text(json.dumps(timeline))
+    (tmp_path / "publisher-timing.json").write_text(
+        json.dumps({"event_unix_epoch_ns": timeline["event_timestamp_ns"]})
+    )
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *args, **kwargs: None)
+    monkeypatch.setattr(runner, "compose_interval_metrics", lambda output, required: None)
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    assert not (tmp_path / "publisher-timing.json").exists()
+    assert (tmp_path / "disruption-analysis.json").is_file()
 
 
 def test_swap3_stops_subscriber_when_publisher_window_ends(
@@ -1558,7 +1703,7 @@ def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
         "request_duration_ns": 5_000_000,
         "request_duration_clock": "monotonic",
         "http_status": 200,
-        "body": {"timeline": {field: 1 for field in ("compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns")}},
+        "body": {"timeline": {field: 1 for field in ("compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns", "first_post_replacement_local_outcome_ns")}},
     }]
     sink = {"transitions": [{"from": "v1", "to": "v2", "pause_ns": 80_000_000}]}
     buckets = []
@@ -1624,6 +1769,21 @@ def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
     return timing, source, request, sink, throughput, sequence
 
 
+
+def swap4_actual_t0_fixture(timing: dict, requests: list[dict]) -> dict:
+    return {
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "alignment": "actual-t0",
+        "source_measurement_start_unix_ns": timing["measurement_start_ns"],
+        "scheduled_event_timestamp_ns": timing["scheduled_swap_ns"],
+        "event_timestamp_ns": requests[0]["request_started_ns"],
+        "alignment_error_ns": requests[0]["request_started_ns"] - timing["scheduled_swap_ns"],
+        "alignment_tolerance_ns": 10_000_000,
+    }
+
+
+
 def test_swap4_fine_event_buckets_are_nested_without_replacing_tail_accounting() -> None:
     timing, _, requests, _, throughput, _ = swap4_fixture()
     fine = fine_event_fixture(
@@ -1654,6 +1814,7 @@ def test_swap4_schedule_has_30_runs_with_one_event_at_measured_t60() -> None:
 
 def test_swap4_timeline_requires_one_centered_swap_and_reconciled_phases() -> None:
     timing, source, requests, sink, throughput, sequence = swap4_fixture()
+    actual_t0_receipt = swap4_actual_t0_fixture(timing, requests)
     timeline = build_swap4_timeline(timing, source, requests, sink, throughput, sequence)
 
     assert timeline["successful_swaps"] == 1
@@ -1666,8 +1827,12 @@ def test_swap4_timeline_requires_one_centered_swap_and_reconciled_phases() -> No
     assert timeline["drain_received_events"] == 1
     assert timeline["drain_duration_after_window_ns"] == 500_000
     assert timeline["source_completion_offset_ns"] == 120_001_000_000
-    validate_swap4_artifacts(timeline, throughput, requests, sink)
+    validate_swap4_artifacts(timeline, throughput, requests, sink, actual_t0_receipt)
 
+    invalid_receipt = json.loads(json.dumps(actual_t0_receipt))
+    invalid_receipt["alignment_error_ns"] += 1
+    with pytest.raises(ValueError, match="actual-t0 receipt"):
+        validate_swap4_artifacts(timeline, throughput, requests, sink, invalid_receipt)
     invalid = json.loads(json.dumps(timeline))
     invalid["successful_swaps"] = 0
     with pytest.raises(ValueError, match="exactly one"):
@@ -1740,19 +1905,55 @@ def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
     runs[0]["hotswap_analysis"]["events"].append({"sink_observed_output_gap_ns": 1})
     with pytest.raises(ValueError, match="one event"):
         summarize_swap4_runs(runs)
+    runs = [
+        {
+            "run_index": index,
+            "burst_timeline": {
+                "successful_swaps": 1,
+                "sequence": {"gaps": 0, "duplicates": 0},
+                "drain_received_events": 0,
+                "drain_last_offset_ns": None,
+                "drain_right_censored": False,
+            },
+            "hotswap_analysis": {"sample_count": 1, "events": [{"sink_observed_output_gap_ns": index * 1_000_000}]},
+        }
+        for index in range(1, 31)
+    ]
+    runs[0]["run_index"] = 30
+    with pytest.raises(ValueError, match="30 independent run indices"):
+        summarize_swap4_runs(runs)
+
+
+def queue_sample(elapsed_ns: int, depth: int, accepted: int, processed: int) -> dict:
+    return {
+        "elapsed_ns": elapsed_ns,
+        "queue": "slow",
+        "depth": depth,
+        "capacity": 64,
+        "accepted": accepted,
+        "dequeued": processed,
+        "processed": processed,
+        "dropped": 0,
+        "dead_lettered": 0,
+        "downstream_closed": 0,
+        "dlq_full": 0,
+        "dlq_closed": 0,
+    }
 
 
 def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:
     samples = [
-        {"elapsed_ns": 0, "queue": "source->slow", "depth": 0, "capacity": 64, "accepted": 0, "processed": 0},
-        {"elapsed_ns": 100_000_000, "queue": "source->slow", "depth": 60, "capacity": 64, "accepted": 100, "processed": 40},
-        {"elapsed_ns": 200_000_000, "queue": "source->slow", "depth": 64, "capacity": 64, "accepted": 140, "processed": 76},
-        {"elapsed_ns": 300_000_000, "queue": "source->slow", "depth": 4, "capacity": 64, "accepted": 140, "processed": 136},
-        {"elapsed_ns": 400_000_000, "queue": "source->slow", "depth": 0, "capacity": 64, "accepted": 140, "processed": 140},
+        queue_sample(0, 0, 0, 0),
+        queue_sample(100_000_000, 60, 100, 40),
+        queue_sample(200_000_000, 64, 140, 76),
+        queue_sample(300_000_000, 4, 140, 136),
+        queue_sample(400_000_000, 0, 140, 140),
     ]
 
     result = analyze_backpressure(
         samples,
+        policy="slow",
+        measured_queue="slow",
         offered_messages=200,
         offered_duration_ns=200_000_000,
         occupancy_threshold=0.8,
@@ -1773,10 +1974,10 @@ def test_backpressure_requires_observed_queue_pressure_and_recovery() -> None:
 def test_backpressure_postprocess_writes_lossless_memory_bounded_summary(tmp_path: Path) -> None:
     (tmp_path / "metadata.json").write_text("{}")
     (tmp_path / "queue-depth.csv").write_text(
-        "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed\n"
-        "0,slow,0,64,0,0,0\n"
-        "100000000,slow,64,64,500,436,435\n"
-        "1000000000,slow,0,64,1000,1000,1000\n"
+        "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed\n"
+        "0,slow,0,64,0,0,0,0,0,0,0,0\n"
+        "100000000,slow,64,64,500,436,435,0,0,0,0,0\n"
+        "1000000000,slow,0,64,1000,1000,1000,0,0,0,0,0\n"
     )
     (tmp_path / "memory.csv").write_text(
         "elapsed_ms,rss_bytes\n0,100000000\n1000,110000000\n"
@@ -1787,7 +1988,7 @@ def test_backpressure_postprocess_writes_lossless_memory_bounded_summary(tmp_pat
     )
     item = RunItem(
         experiment="e-backpressure",
-        condition="saturated-slow-consumer",
+        condition="slow",
         run_index=1,
         config="eval/configs/e-backpressure/pipeline-saturated.toml",
         warmup_secs=0,
@@ -1799,19 +2000,164 @@ def test_backpressure_postprocess_writes_lossless_memory_bounded_summary(tmp_pat
 
     result = json.loads((tmp_path / "backpressure.json").read_text())
     assert result["classification"] == "saturated-and-drained"
-    assert result["sequence"]["lossless"] is True
+    assert result["policy"] == "slow"
+    assert result["accounting"]["reconciled"] is True
+    assert result["counts"]["attempted"] == result["counts"]["delivered"] == 1_000
     assert result["memory"]["within_limit"] is True
     assert set(result["rates_msg_s"]) == {"offered", "accepted", "processed", "drained"}
 
 
+def test_backpressure_postprocess_accounts_for_trailing_drops(tmp_path: Path) -> None:
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "queue-depth.csv").write_text(
+        "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed\n"
+        "0,slow,0,64,0,0,0,0,0,0,0,0\n"
+        "100000000,slow,64,64,500,436,435,0,0,0,0,0\n"
+        "1000000000,slow,0,64,700,700,700,300,0,0,0,0\n"
+    )
+    (tmp_path / "memory.csv").write_text(
+        "elapsed_ms,rss_bytes\n0,100000000\n1000,110000000\n"
+    )
+    (tmp_path / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "700,700,0,0,0\n"
+    )
+    item = RunItem(
+        experiment="e-backpressure",
+        condition="drop",
+        run_index=1,
+        config="eval/configs/e-backpressure/pipeline-drop.toml",
+        warmup_secs=0,
+        measurement_secs=10,
+        total_messages=1000,
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    result = json.loads((tmp_path / "backpressure.json").read_text())
+    assert result["counts"]["attempted"] == 1_000
+    assert result["counts"]["delivered"] == 700
+    assert result["counts"]["dropped"] == 300
+    assert result["sequence"] == {
+        "offered": 1_000,
+        "received": 700,
+        "gaps": 300,
+        "duplicates": 0,
+    }
+
+    (tmp_path / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "699,700,0,0,0\n"
+    )
+    with pytest.raises(ValueError, match="observed sequence span"):
+        postprocess_run(ROOT, item, tmp_path)
+
+
+def policy_backpressure_result(policy: str) -> dict:
+    counts = {
+        "attempted": 1_000,
+        "accepted": 1_000,
+        "processed": 1_000,
+        "delivered": 1_000,
+        "dropped": 0,
+        "dead_lettered": 0,
+        "downstream_closed": 0,
+        "dlq_full": 0,
+        "dlq_closed": 0,
+        "outstanding": 0,
+    }
+    if policy == "drop":
+        counts.update(accepted=700, processed=700, delivered=700, dropped=300)
+    elif policy == "dead-letter":
+        counts.update(
+            accepted=700,
+            processed=700,
+            delivered=700,
+            dead_lettered=250,
+            dlq_full=40,
+            dlq_closed=10,
+        )
+    gaps = counts["attempted"] - counts["delivered"]
+    return {
+        "schema_version": 2,
+        "experiment": "e-backpressure",
+        "condition": policy,
+        "run_index": 1,
+        "sample_unit": "run",
+        "policy": policy,
+        "queue": "slow",
+        "classification": "saturated-and-drained",
+        "threshold_crossed": True,
+        "recovered": True,
+        "peak_occupancy": 1.0,
+        "occupancy_threshold": 0.8,
+        "recovery_threshold": 0.1,
+        "counts": counts,
+        "rates_msg_s": {
+            "offered": 1_000.0,
+            "accepted": float(counts["accepted"]),
+            "processed": float(counts["processed"]),
+            "drained": 1_000.0,
+        },
+        "sequence": {
+            "offered": 1_000,
+            "received": counts["delivered"],
+            "gaps": gaps,
+            "duplicates": 0,
+        },
+        "accounting": {
+            "reconciled": True,
+            "dlq_failures": {
+                "full": counts["dlq_full"],
+                "closed": counts["dlq_closed"],
+                "total": counts["dlq_full"] + counts["dlq_closed"],
+            },
+        },
+        "producer_progress": "backpressured" if policy == "slow" else "nonblocking",
+        "memory": {"within_limit": True},
+    }
+
+
+def test_backpressure_validates_each_policy_without_universal_losslessness() -> None:
+    equations = {
+        "slow": "attempted = delivered",
+        "drop": "attempted = delivered + dropped",
+        "dead-letter": "attempted = delivered + dead_lettered + dlq_full + dlq_closed",
+    }
+    for policy, equation in equations.items():
+        result = policy_backpressure_result(policy)
+        result["accounting"]["equation"] = equation
+        validate_backpressure_result(result, policy)
+
+
+def test_backpressure_dead_letter_requires_visible_dlq_failure_accounting() -> None:
+    result = policy_backpressure_result("dead-letter")
+    result["accounting"]["equation"] = (
+        "attempted = delivered + dead_lettered + dlq_full + dlq_closed"
+    )
+    validate_backpressure_result(result, "dead-letter")
+
+    hidden = json.loads(json.dumps(result))
+    hidden["accounting"]["dlq_failures"] = {"full": 0, "closed": 0, "total": 0}
+    with pytest.raises(ValueError, match="DLQ failure accounting"):
+        validate_backpressure_result(hidden, "dead-letter")
+
+    missing_equation = json.loads(json.dumps(result))
+    del missing_equation["accounting"]["equation"]
+    with pytest.raises(ValueError, match="accounting equation"):
+        validate_backpressure_result(missing_equation, "dead-letter")
+
+
 def test_backpressure_does_not_infer_saturation_from_offered_rate() -> None:
     samples = [
-        {"elapsed_ns": 0, "queue": "source->sink", "depth": 0, "capacity": 64, "accepted": 0, "processed": 0},
-        {"elapsed_ns": 100_000_000, "queue": "source->sink", "depth": 0, "capacity": 64, "accepted": 100, "processed": 100},
+        queue_sample(0, 0, 0, 0),
+        queue_sample(100_000_000, 0, 100, 100),
     ]
 
     result = analyze_backpressure(
         samples,
+        policy="slow",
+        measured_queue="slow",
         offered_messages=10_000,
         offered_duration_ns=100_000_000,
         occupancy_threshold=0.8,
@@ -1822,8 +2168,10 @@ def test_backpressure_does_not_infer_saturation_from_offered_rate() -> None:
     assert result["threshold_crossed"] is False
     assert result["rates_msg_s"]["offered"] == 100_000.0
     assert result["rates_msg_s"]["accepted"] == 1000.0
+    result["condition"] = "slow"
+    result["run_index"] = 1
     with pytest.raises(ValueError, match="did not cross"):
-        validate_backpressure_result(result)
+        validate_backpressure_result(result, "slow")
 
 
 def _startup_artifact() -> dict:
@@ -2524,7 +2872,7 @@ def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free(
 def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
     schedule = build_schedule(set(matrix["experiments"]), seed=1729)
-    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_105
+    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_165
     keys = [item.result_key for item in schedule]
     assert len(keys) == len(set(keys))
     for experiment, definition in matrix["experiments"].items():
@@ -3398,12 +3746,71 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
     assert "branch-isolation.json" in iso_7_outputs
     assert not {"latency.hdr", "throughput.csv", "sequence.csv"} & iso_7_outputs
     assert {"recovery.csv", "recovery.json"} <= set(matrix["e-iso-8"]["required_outputs"])
-    for index in range(1, 7):
+    for index in (1, 2, 4, 6):
         assert "swap_timeline.json" in matrix[f"e-swap-{index}"]["required_outputs"]
+    assert "swap_timeline.json" not in matrix["e-swap-3"]["required_outputs"]
     for index in (1, 2, 4, 6):
         outputs = set(matrix[f"e-swap-{index}"]["required_outputs"])
         assert {"swap_requests.json", "hotswap-analysis.json"} <= outputs
-    assert "rollback.json" in matrix["e-swap-5"]["required_outputs"]
+    rollback_outputs = set(matrix["e-swap-5"]["required_outputs"])
+    assert "swap_timeline.json" not in rollback_outputs
+    assert {
+        "swap_requests.json",
+        "rollback.json",
+        "post-rollback-continuity.json",
+        "sequence.csv",
+    } <= rollback_outputs
+
+
+def test_swap3_final_artifact_sets_match_matrix_runner_verifier_and_analysis() -> None:
+    matrix_outputs = set(
+        json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"][
+            "e-swap-3"
+        ]["required_outputs"]
+    )
+    item = next(
+        candidate
+        for candidate in build_schedule({"e-swap-3"}, seed=1729)
+        if candidate.condition == "wafer-hotswap" and candidate.run_index == 1
+    )
+    invocation = build_swap3_invocation(ROOT, item, Path("/tmp/e-swap-3"))
+    producer_outputs = {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        invocation["controlled_factors"]["publisher_summary"],
+        invocation["controlled_factors"]["action_timing_receipt"],
+        "disruption-analysis.json",
+    }
+    verifier_outputs = {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        "disruption-timeline.json",
+        "disruption-analysis.json",
+    }
+    analysis_outputs = {
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json",
+        "throughput-buckets.json",
+        "throughput-buckets-10ms.json",
+        "disruption-timeline.json",
+        "disruption-analysis.json",
+    }
+
+    assert matrix_outputs == producer_outputs
+    assert matrix_outputs == verifier_outputs
+    assert matrix_outputs == analysis_outputs
 
 
 def test_isolation_derivations_use_raw_runtime_metrics() -> None:

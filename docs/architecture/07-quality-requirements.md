@@ -13,7 +13,9 @@ These non-functional requirements define the current evaluation boundaries. `eva
 | NFR-PERF-5 | Compare architecture-specific isolation cost. | E-Perf-5 requires matched Raspberry Pi 5 and x86 Linux runs at the same source and method. It remains `PENDING` without both. |
 | NFR-PERF-6 | Measure startup cache-state effects. | E-Perf-9 compares Linux filesystem page-cache cold/warm conditions. The runtime disk compiled-component cache is disabled, so no AOT-cache criterion is derived from this experiment. |
 
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point.
+Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 uses tested-grid bounds without interpolation and cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point; unresolved ratios remain `CENSORED/PENDING`.
+
+E-Backpressure evaluates `slow`, `drop`, and `dead-letter` with separate equations over source-authoritative offered counts, delivered counts, and the applicable dropped/dead-lettered/DLQ-failure counters. No universal lossless criterion applies.
 
 ## RQ2: fault containment
 

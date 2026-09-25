@@ -18,7 +18,12 @@ backlog for closing gaps is tracked in the plan_tasks system.
 
 ## Active plans
 
-Run `plan_tasks --list-plans` for the full inventory. Current focus:
+Use the Pi `plan_tasks` list-plans action for the full inventory. Current focus is the
+`tg2-pre-campaign-remediation` plan: runtime/evaluation remediation and the V1
+clean-candidate gate are complete; documentation parity and final independent
+review remain before release or campaign execution.
+
+Historical inputs:
 
 - [`docs/history/plans/thesis-hardening.md`](../history/plans/thesis-hardening.md) —
   **9/9 done (closed 2026-08-02)**. Landed: A17 process-time hot-swap

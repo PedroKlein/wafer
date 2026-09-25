@@ -275,10 +275,10 @@ def config_errors() -> list[str]:
         "epoch_tick_ms": 10,
     }:
         errors.append("final canonical metering policy differs from documented values")
-    if campaign.get("expected_schedule_records") != 2105:
-        errors.append("final schedule record count is not 2105")
-    if campaign.get("expected_measured_leaves") != 1893:
-        errors.append("final measured leaf count is not 1893")
+    if campaign.get("expected_schedule_records") != 2165:
+        errors.append("final schedule record count is not 2165")
+    if campaign.get("expected_measured_leaves") != 1953:
+        errors.append("final measured leaf count is not 1953")
     if campaign.get("capacity_grid", {}).get("common_rate_points_msg_s") != [
         1_000,
         4_000,

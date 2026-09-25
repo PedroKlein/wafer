@@ -34,14 +34,14 @@ Install the mise-managed WIT/OCI tooling, including `wkg`:
 ```bash
 mise install
 # or, for only wkg:
-mise run install-wkg
+mise run //plugins:install-wkg
 ```
 
 For authenticated pushes/pulls, log into your registry:
 
 ```bash
-mise run registry-login <username> <ghcr-pat-with-packages-scope>
-mise run registry-status         # confirm the docker credential is stored
+mise run //plugins:registry-login <username> <ghcr-pat-with-packages-scope>
+mise run //plugins:registry-status         # confirm the docker credential is stored
 ```
 
 `GITHUB_TOKEN` in your shell environment is also honoured by the OCI
@@ -51,16 +51,16 @@ client for anonymous vs authenticated pulls.
 
 ```bash
 # Build the plugin (produces plugins/<name>/target/wasm32-wasip2/release/wafer_<name>.wasm)
-mise run build-plugin uppercase
+mise run //plugins:build-plugin uppercase
 
 # Push to the default registry
-mise run publish-plugin uppercase 1.0.0
+mise run //plugins:publish-plugin uppercase 1.0.0
 
 # Or push with an inline credential (useful in CI)
-mise run publish-plugin-auth "$GITHUB_USER" "$GITHUB_TOKEN" uppercase 1.0.0
+mise run //plugins:publish-plugin-auth "$GITHUB_USER" "$GITHUB_TOKEN" uppercase 1.0.0
 
 # Push everything you have built at once
-mise run publish-all 1.0.0
+mise run //plugins:publish-all 1.0.0
 ```
 
 Package naming convention: `<registry>/wafer-<plugin_name>:<version>`.
@@ -72,15 +72,15 @@ The default registry is `ghcr.io/pedroklein`; override via the
 `WAFER_REGISTRY` environment variable:
 
 ```bash
-WAFER_REGISTRY=custom-registry.io/myorg mise run publish-plugin uppercase 1.0.0
+WAFER_REGISTRY=custom-registry.io/myorg mise run //plugins:publish-plugin uppercase 1.0.0
 ```
 
 ## Pull a plugin manually
 
 ```bash
-mise run pull-plugin uppercase 1.0.0
+mise run //plugins:pull-plugin uppercase 1.0.0
 # or with inline credentials
-mise run pull-plugin-auth "$GITHUB_USER" "$GITHUB_TOKEN" uppercase 1.0.0
+mise run //plugins:pull-plugin-auth "$GITHUB_USER" "$GITHUB_TOKEN" uppercase 1.0.0
 ```
 
 The pulled `.wasm` blob is stored in the local cache (see below) and
@@ -126,17 +126,17 @@ that run `examples/dag-remote.toml` with and without the cache.
 
 | `mise` task | What it does |
 |---------------|-------------|
-| `mise run build-plugin <name>` | Build one plugin for `wasm32-wasip2`. |
-| `mise run build-plugins` | Build every plugin in `plugins/`. |
-| `mise run list-plugins` | List built plugins with byte sizes. |
-| `mise run install-wkg` | Install the mise-managed `cargo:wkg` tool. |
-| `mise run registry-login <user> <token>` | Store a docker credential for `ghcr.io`. |
-| `mise run registry-status` | Show the current credential (masked). |
-| `mise run publish-plugin <name> <version>` | Push using stored docker credentials. |
-| `mise run publish-plugin-auth <user> <token> <name> <version>` | Push with inline credentials. |
-| `mise run publish-all <version>` | Push every built plugin. |
-| `mise run pull-plugin <name> <version>` | Pull one plugin into the cache. |
-| `mise run pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
+| `mise run //plugins:build-plugin <name>` | Build one plugin for `wasm32-wasip2`. |
+| `mise run //plugins:build-plugins` | Build every Rust plugin in `plugins/`, including attacks. |
+| `mise run //plugins:list-plugins` | List built plugins with byte sizes. |
+| `mise run //plugins:install-wkg` | Install the mise-managed `cargo:wkg` tool. |
+| `mise run //plugins:registry-login <user> <token>` | Store a docker credential for `ghcr.io`. |
+| `mise run //plugins:registry-status` | Show the current credential (masked). |
+| `mise run //plugins:publish-plugin <name> <version>` | Push using stored docker credentials. |
+| `mise run //plugins:publish-plugin-auth <user> <token> <name> <version>` | Push with inline credentials. |
+| `mise run //plugins:publish-all <version>` | Push every built plugin. |
+| `mise run //plugins:pull-plugin <name> <version>` | Pull one plugin into the cache. |
+| `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
 | `mise run run-remote` | Run the sample pipeline with OCI-hosted plugins. |
 | `mise run run-remote-nocache` | Same, bypassing the local cache. |
@@ -145,7 +145,7 @@ that run `examples/dag-remote.toml` with and without the cache.
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
-| `WAFER_REGISTRY` | Registry namespace used by `mise run publish-*` / `mise run pull-*`. | `ghcr.io/pedroklein` |
+| `WAFER_REGISTRY` | Registry namespace used by the `//plugins:publish-*` and `//plugins:pull-*` tasks. | `ghcr.io/pedroklein` |
 | `WAFER_REGISTRY_CACHE_DIR` | Override the local cache directory. | `~/.cache/wafer/packages` |
 | `GITHUB_TOKEN` | Anonymous fallback / CI authentication for `ghcr.io`. | (unset) |
 
@@ -155,7 +155,7 @@ Hot-swap accepts a local filesystem path today. To swap a running
 Wasm node to a newer OCI-hosted version:
 
 1. Publish the new version to your registry.
-2. `mise run pull-plugin uppercase 1.1.0` — populate the local cache and
+2. `mise run //plugins:pull-plugin uppercase 1.1.0` — populate the local cache and
    discover the resulting `.wasm` path in
    `~/.cache/wafer/packages/…/wafer_uppercase.wasm`.
 3. `POST /api/v1/nodes/<id>/hot-swap` with

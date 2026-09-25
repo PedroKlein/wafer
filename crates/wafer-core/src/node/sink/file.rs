@@ -93,21 +93,22 @@ impl Lifecycle for FileSink {
     }
 
     fn validate(&self) -> Result<()> {
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() && !parent.exists() {
-                return Err(WaferError::Config(ConfigError::Message(format!(
-                    "Parent directory does not exist: {}",
-                    parent.display()
-                ))));
-            }
+        if let Some(parent) = self.path.parent()
+            && !parent.as_os_str().is_empty()
+            && !parent.exists()
+        {
+            return Err(WaferError::Config(ConfigError::Message(format!(
+                "Parent directory does not exist: {}",
+                parent.display()
+            ))));
         }
 
-        if let Some(batch_size) = self.batch_config.batch_size {
-            if batch_size == 0 {
-                return Err(WaferError::Config(ConfigError::Message(
-                    "batch_size must be greater than 0".to_string(),
-                )));
-            }
+        if let Some(batch_size) = self.batch_config.batch_size
+            && batch_size == 0
+        {
+            return Err(WaferError::Config(ConfigError::Message(
+                "batch_size must be greater than 0".to_string(),
+            )));
         }
 
         Ok(())

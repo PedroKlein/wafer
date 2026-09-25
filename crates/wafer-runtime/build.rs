@@ -41,12 +41,11 @@ fn wasmtime_version_from_lockfile(text: &str) -> Option<String> {
             in_wasmtime_pkg = true;
             continue;
         }
-        if in_wasmtime_pkg {
-            if let Some(rest) = line.strip_prefix("version = \"") {
-                if let Some(v) = rest.strip_suffix('"') {
-                    return Some(v.to_string());
-                }
-            }
+        if in_wasmtime_pkg
+            && let Some(rest) = line.strip_prefix("version = \"")
+            && let Some(v) = rest.strip_suffix('"')
+        {
+            return Some(v.to_string());
         }
     }
     None

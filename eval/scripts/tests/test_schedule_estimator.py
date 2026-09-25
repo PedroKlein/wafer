@@ -58,32 +58,32 @@ def test_estimates_exact_schedule_counts_runtime_files_and_bytes(tmp_path: Path)
     )
     assert receipt["campaign_started"] is False
     assert receipt["source"]["canonical_matrix_sha256"] == (
-        "6c86fc0895174f80017fc0b7f38965c8290cf4fc8f16911e4951173c64d212d2"
+        "4dc0a18fa0ae54cb5272cf668b6f980b3ea17aefceae5ae017f70608a8b3b8ab"
     )
     expected = {
         "expanded-n5": {
-            "schedule_records": 661,
-            "measured_or_static_leaves": 624,
+            "schedule_records": 671,
+            "measured_or_static_leaves": 634,
             "shared_aliases": 37,
-            "nominal_seconds": 69_980,
-            "estimated_file_count": 10_746,
-            "estimated_bytes": 17_258_032_804,
+            "nominal_seconds": 70_080,
+            "estimated_file_count": 10_960,
+            "estimated_bytes": 17_477_586_929,
         },
         "all-candidate-n30": {
-            "schedule_records": 3_936,
-            "measured_or_static_leaves": 3_724,
+            "schedule_records": 3_996,
+            "measured_or_static_leaves": 3_784,
             "shared_aliases": 212,
-            "nominal_seconds": 406_380,
-            "estimated_file_count": 63_702,
-            "estimated_bytes": 85_581_776_354,
+            "nominal_seconds": 406_980,
+            "estimated_file_count": 64_979,
+            "estimated_bytes": 86_899_101_104,
         },
         "primary-only-n30": {
-            "schedule_records": 2_105,
-            "measured_or_static_leaves": 1_893,
+            "schedule_records": 2_165,
+            "measured_or_static_leaves": 1_953,
             "shared_aliases": 212,
-            "nominal_seconds": 163_860,
-            "estimated_file_count": 30_813,
-            "estimated_bytes": 42_116_112_343,
+            "nominal_seconds": 164_460,
+            "estimated_file_count": 32_089,
+            "estimated_bytes": 43_433_437_093,
         },
     }
     for name, values in expected.items():

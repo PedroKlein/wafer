@@ -40,11 +40,11 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2105
-measured_leaves=1893
+schedule_records=2165
+measured_leaves=1953
 ```
 
-The 2,105 records include 212 shared-result aliases. The 1,893 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,165 records include shared-result aliases with `independent_n_contribution=0`. The 1,953 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
@@ -52,7 +52,7 @@ The current estimate is:
 |---|---:|---|
 | Nominal active-run time | 45.52 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
 | Operational estimate | 50.07 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
-| Storage estimate | 43.04 GiB | Conservative accounting over all 2,105 schedule records at the immutable v16 average of 17,564,330 bytes per leaf, plus 25 percent margin; shared aliases normally consume less |
+| Storage estimate | 43,433,437,093 bytes | Current primary N=30 estimate over all 2,165 schedule records, including the three E-Backpressure policies; regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
 Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.

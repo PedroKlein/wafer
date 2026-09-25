@@ -226,86 +226,86 @@ impl PublishArgs {
     }
 
     fn apply_loadgen_profile(&mut self, profile: LoadgenProfile) -> anyhow::Result<()> {
-        if self.broker_host == "localhost" {
-            if let Some(value) = profile.broker_host {
-                self.broker_host = value;
-            }
+        if self.broker_host == "localhost"
+            && let Some(value) = profile.broker_host
+        {
+            self.broker_host = value;
         }
-        if self.broker_port == 1883 {
-            if let Some(value) = profile.broker_port {
-                self.broker_port = value;
-            }
+        if self.broker_port == 1883
+            && let Some(value) = profile.broker_port
+        {
+            self.broker_port = value;
         }
-        if self.topic == "wafer/bench/input" {
-            if let Some(value) = profile.topic {
-                self.topic = value;
-            }
+        if self.topic == "wafer/bench/input"
+            && let Some(value) = profile.topic
+        {
+            self.topic = value;
         }
-        if self.rate == 1000 {
-            if let Some(value) = profile.rate {
-                self.rate = value;
-            }
+        if self.rate == 1000
+            && let Some(value) = profile.rate
+        {
+            self.rate = value;
         }
-        if self.duration_secs == 60 {
-            if let Some(value) = profile.duration_secs {
-                self.duration_secs = value;
-            }
+        if self.duration_secs == 60
+            && let Some(value) = profile.duration_secs
+        {
+            self.duration_secs = value;
         }
-        if self.payload_size == 128 {
-            if let Some(value) = profile.payload_size {
-                self.payload_size = value;
-            }
+        if self.payload_size == 128
+            && let Some(value) = profile.payload_size
+        {
+            self.payload_size = value;
         }
-        if self.profile == "steady" {
-            if let Some(value) = profile.profile {
-                self.profile = value;
-            }
+        if self.profile == "steady"
+            && let Some(value) = profile.profile
+        {
+            self.profile = value;
         }
-        if self.client_id == "wafer-loadgen-pub" {
-            if let Some(value) = profile.client_id {
-                self.client_id = value;
-            }
+        if self.client_id == "wafer-loadgen-pub"
+            && let Some(value) = profile.client_id
+        {
+            self.client_id = value;
         }
-        if self.payload_template.is_none() {
-            if let Some(name) = profile.payload_template {
-                self.payload_template =
-                    Some(name.parse::<PayloadTemplate>().map_err(|e| anyhow::anyhow!("{e}"))?);
-            }
+        if self.payload_template.is_none()
+            && let Some(name) = profile.payload_template
+        {
+            self.payload_template =
+                Some(name.parse::<PayloadTemplate>().map_err(|e| anyhow::anyhow!("{e}"))?);
         }
-        if self.burst_multiplier == 2 {
-            if let Some(value) = profile.burst_multiplier {
-                self.burst_multiplier = value;
-            }
+        if self.burst_multiplier == 2
+            && let Some(value) = profile.burst_multiplier
+        {
+            self.burst_multiplier = value;
         }
-        if self.burst_on_secs == 10 {
-            if let Some(value) = profile.burst_on_secs {
-                self.burst_on_secs = value;
-            }
+        if self.burst_on_secs == 10
+            && let Some(value) = profile.burst_on_secs
+        {
+            self.burst_on_secs = value;
         }
-        if self.burst_cycle_secs == 60 {
-            if let Some(value) = profile.burst_cycle_secs {
-                self.burst_cycle_secs = value;
-            }
+        if self.burst_cycle_secs == 60
+            && let Some(value) = profile.burst_cycle_secs
+        {
+            self.burst_cycle_secs = value;
         }
-        if self.ramp_start_rate == 100 {
-            if let Some(value) = profile.ramp_start_rate {
-                self.ramp_start_rate = value;
-            }
+        if self.ramp_start_rate == 100
+            && let Some(value) = profile.ramp_start_rate
+        {
+            self.ramp_start_rate = value;
         }
-        if self.ramp_step_rate == 100 {
-            if let Some(value) = profile.ramp_step_rate {
-                self.ramp_step_rate = value;
-            }
+        if self.ramp_step_rate == 100
+            && let Some(value) = profile.ramp_step_rate
+        {
+            self.ramp_step_rate = value;
         }
-        if self.ramp_step_interval_secs == 10 {
-            if let Some(value) = profile.ramp_step_interval_secs {
-                self.ramp_step_interval_secs = value;
-            }
+        if self.ramp_step_interval_secs == 10
+            && let Some(value) = profile.ramp_step_interval_secs
+        {
+            self.ramp_step_interval_secs = value;
         }
-        if self.ramp_max_rate == 10_000 {
-            if let Some(value) = profile.ramp_max_rate {
-                self.ramp_max_rate = value;
-            }
+        if self.ramp_max_rate == 10_000
+            && let Some(value) = profile.ramp_max_rate
+        {
+            self.ramp_max_rate = value;
         }
         Ok(())
     }
@@ -318,15 +318,15 @@ impl PublishArgs {
             self.hotswap_wasm_path =
                 profile.new_plugin_path.or(profile.new_plugin).map(PathBuf::from);
         }
-        if (self.hotswap_swap_at_secs - 30.0).abs() < f64::EPSILON {
-            if let Some(value) = profile.trigger_after_secs {
-                self.hotswap_swap_at_secs = value;
-            }
+        if (self.hotswap_swap_at_secs - 30.0).abs() < f64::EPSILON
+            && let Some(value) = profile.trigger_after_secs
+        {
+            self.hotswap_swap_at_secs = value;
         }
-        if self.hotswap_api_url == "http://localhost:9090" {
-            if let Some(value) = profile.api_url {
-                self.hotswap_api_url = value;
-            }
+        if self.hotswap_api_url == "http://localhost:9090"
+            && let Some(value) = profile.api_url
+        {
+            self.hotswap_api_url = value;
         }
     }
 

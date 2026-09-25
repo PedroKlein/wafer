@@ -1,163 +1,174 @@
 # Implementation Status
 
-Current implementation state of WAFER after the `runtime-migration` plan
-(2026-07-20). Replaces the legacy `docs/MVP.md`. Factual: what is built,
-what is tested. Aspirational items and future work live in `ROADMAP.md` at
-the repo root; documented-but-not-yet-wired items are catalogued in
-[`implementation-gaps.md`](./implementation-gaps.md).
+Current implementation state after the TG2 pre-campaign remediation. Source,
+WIT, routes, and executable tests outrank earlier design prose. Historical gaps
+remain in [`implementation-gaps.md`](implementation-gaps.md).
 
-> **Post-runtime-migration + evaluation-infrastructure + eval-followups + thesis-hardening.**
-> A1–A19 are closed with evidence. Thesis-hardening (9/9 done 2026-08-02):
-> A17 (process-time hot-swap rollback) landed via T1 + a subsequent
-> B1/B2/M1/M2 polish pass (canary window + bounded retry +
-> `HotSwapError::RolledBack` API surface + fuel-on-recover); RQ3
-> auto-rollback claim upgraded to ✅ PASS. A19 (runtime-side memory
-> sampler) landed via T4 using the `memory-stats` crate. Only open
-> gap: **A20** (Prometheus `wafer_hot_swap_rollbacks_total` counter
-> — observability follow-up filed 2026-08-02; ~1 h to close; does
-> not affect thesis numbers). `wafer-config` is the runtime loader,
-> the axum control plane launches by default, and `waferctl` calls
-> only the routes that exist on the server.
+## Runtime crates
 
-## Runtime crates (7 workspace members)
+The workspace contains seven members:
 
-| Crate | Kind | Status |
-|-------|------|--------|
-| `wafer-core` | library | Implemented. Public API stable; production Wasm nodes call guest `validate()`/`init()` before first message (A14). |
-| `wafer-config` | library | Types + validator implemented and unit-tested; now the runtime binary loader (A1 closed). |
-| `wafer-types` | library | Implemented. Domain types shared by every other crate. |
-| `wafer-plugin` | library | Implemented. Guest-side SDK: `macro_rules!` only, no proc macros. |
-| `wafer-runtime` | binary | Loads TOML via `wafer-config`, launches the axum control plane and same-port metrics by default, and shuts down gracefully on SIGTERM (A1, A2 closed). |
-| `wafer-loadgen` | binary | Implemented (baseline). Open-loop generator with HdrHistogram sink; sequence-number tracker for hot-swap loss detection. |
-| `waferctl` | binary | Calls the real HTTP route table (`/health`, `/api/v1/nodes[/{id}[/hot-swap]]`, `/api/v1/pipeline/shutdown`, `/metrics`) and requires `--wasm-path` for hot-swap (A11 closed). |
+| Crate | Current responsibility |
+|---|---|
+| `wafer-types` | Shared configuration, control, event, and metric types. |
+| `wafer-config` | TOML loading, semantic validation, and standalone DAG validation. |
+| `wafer-core` | Wasmtime engine, nodes, receiver-keyed queues, runners, DLQ, registry, metrics, and HTTP API. |
+| `wafer-plugin` | Rust guest-side macros and optional JSON config parsing. |
+| `wafer-runtime` | Binary startup, validation, pipeline launch, control plane, signals, and evaluation hooks. |
+| `wafer-loadgen` | Open-loop publication, subscription, sequence, latency, and summary tooling. |
+| `waferctl` | Operator client for the implemented HTTP routes. |
 
-## WIT contracts
+Rust is pinned to `1.98.1` with workspace MSRV `1.95`. Wasmtime `48.0.2`
+resolves at revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`.
 
-Four packages under `wit/`, all at `@0.1.0`, all mapped to the current
-runtime and every first-party plugin:
+## WIT surface
 
-- `pipeline:types@0.1.0` — `buffer` resource, `message` /
-  `output-message` records, `process-error` variant (5 variants),
-  `port-id`, `log-level`.
-- `pipeline:node@0.1.0` — `lifecycle`, `transform`, `filter`;
-  worlds `transform-node`, `filter-node`, `inference-node`.
-- `pipeline:routing@0.1.0` — `router` interface; world `router-node`.
-- `pipeline:host@0.1.0` — `logging` interface (universally imported).
+The five project files under `wit/` form one package,
+`wafer:pipeline@0.1.0`. The current release exposes four worlds:
+`transform-node`, `filter-node`, `router-node`, and `inference-node`. The last
+is a Transform specialization that imports the pinned
+`wasi:nn@0.2.0-rc-2024-10-28` interfaces. Its linker and ONNX-backed store are
+created only for a Wasm Transform with `allow_inference = true`; ordinary
+stores remain wasi-nn-free.
 
-See `docs/interfaces/wit-contracts.md` for the full reference.
+The input message borrows a host buffer. Transform output owns its id,
+timestamp, source, content type, metadata, and payload; those fields survive
+lifting. Native ingress timestamps are checked Unix-epoch nanoseconds. Host
+lineage and retry count remain separate runtime fields.
 
-## Plugin inventory (20 plugins)
+## Plugin inventory and language boundary
 
-| Category | Count | Names |
-|----------|-------|-------|
-| Transform | 9 | `pass-through`, `uppercase`, `json-parse`, `cayenne-decoder`, `tensor-prep`, `mnist-inference` (uses `inference-node` world), `vibration-features`, `anomaly-detector`, `result-format`. |
-| Filter | 2 | `threshold-filter`, `quality-rules`. |
-| Router | 1 | `content-router`. |
-| Attack | 6 | `buffer-overflow`, `cross-read`, `fs-access`, `infinite-loop`, `memory-exhaust`, `panic` — under `plugins/attacks/`. Compilable stubs; implementation is finalised during RQ2 evaluation. |
-| Polyglot mirrors | 2 | `plugins/go/uppercase/` (TinyGo), `plugins/python/threshold-filter/` (`componentize-py`). |
+The release verification builds and validates 16 Rust processing/evaluation
+components and six attack components. The six attack components are executable
+containment stimuli, not production operators; `mise run mandatory-attack-evidence`
+runs S1–S6 plus a healthy reference and rejects skipped, duplicate, malformed,
+or provenance-inconsistent evidence. S5 must prove the filesystem read was
+denied rather than merely observing a later trap. This receipt is a release
+prerequisite, not admitted campaign evidence.
 
-Total: **12 Rust + 6 attack + 2 polyglot = 20 plugins.** Every Rust
-plugin builds under `mise run build-plugin <name>`; the polyglot mirrors
-have their own Makefile targets.
+The bounded Go interoperability claim covers only
+`plugins/go/uppercase`: release verification builds it with TinyGo, validates
+the component, and executes five host-boundary tests. The Python
+threshold-filter remains a stub and is not support evidence.
 
-## Node categories
+## Inference validation
 
-Five categories in the config schema (`NodeCategory` enum in
-`wafer-types`):
+The restored `mnist-inference` component embeds the checked-in MNIST-8 ONNX
+model and executes through the current Transform lifecycle and wasi-nn host
+path. The local clean candidate
+`92d86b0a511047988de5fbf6551b18b8a09ec455` registered
+`CPUExecutionProvider`, produced ten finite scores, and predicted digit 7. Tests
+cover grant denial, initial launch, recovery, reconfigure, hot-swap, and
+process-time rollback without skipping.
 
-- `source` (native) — `stdin`, `file`, `mqtt`, `http`.
-- `sink` (native) — `stdout`, `file`, `mqtt`, `http`.
-- `transform` (Wasm) — implements `transform-node` or
-  `inference-node`.
-- `filter` (Wasm) — implements `filter-node`.
-- `router` (Wasm) — implements `router-node`.
+A machine-bound Jetson run of the same candidate separately proved
+`CUDAExecutionProvider` registration, placement of all eight optimized model
+nodes on CUDA, nonzero device activity, and the same prediction. CUDA teardown
+was intermittent after successful pipeline completion (`2/3` clean exits at
+25W and `4/5` in MAXN_SUPER), so CUDA operational stability and production
+readiness remain unverified. These are diagnostic architecture results, not
+latency, throughput, speedup, energy, or final thesis evidence.
 
-No Joiner node type. Fan-in is implicit host topology (multi-producer
-`mpsc`).
+### Restoration history and supersession
+
+Inference was functional in the February 2026 implementation, then regressed in
+stages: the July WIT rewrite removed its pinned dependency and left the guest on
+an incompatible contract, the active runtime migration disconnected the
+wasi-nn linker, and the August single-package collapse removed the stale world
+and plugin. The pre-campaign R6 work correctly documented that then-current
+three-world source but incorrectly treated the missing path as a durable release
+boundary. Its inference-disabled R6, V1, V2, and Q1 receipts are historical and
+cannot validate the restored source. The current four-world implementation and
+the clean V1/H1 receipts supersede that conclusion without rewriting the old
+artifacts.
+
+## Node and queue behavior
+
+Configuration accepts Source, Sink, Transform, Filter, and Router categories.
+Transform, Filter, and Router may use loaded Wasm components or selected native
+baseline functions. Replacement eligibility is derived from the loaded
+implementation: only loaded Wasm processing roles are eligible.
+
+The builder creates one physical bounded `tokio::mpsc` receiver per destination
+and clones senders for fan-in. The receiver capacity is the maximum explicit
+incoming edge capacity, or the engine default when none is explicit. Tokio does
+not guarantee fairness or ordering across producers.
+
+Each sender retains its edge policy:
+
+- `slow` reserves and waits for destination capacity;
+- `drop` discards on a full destination;
+- `dead-letter` attempts non-blocking delivery to the configured file or MQTT DLQ.
+
+Destination closed, dropped, dead-lettered, DLQ full, and DLQ closed are
+distinct counters. Zero queue, retry-buffer, and DLQ capacities fail validation
+before channel construction.
+
+## Error policy
+
+The five guest categories map to skip, retry, DLQ, teardown, or recovery paths.
+A present per-node policy replaces the pipeline policy table. Retry state is
+stored on the envelope, the first retry waits exactly the configured backoff,
+later waits double to 30 seconds, and the bounded buffer selects the earliest
+due entry even while upstream is idle.
+
+Exhaustion honors the configured `skip`, `dlq`, or `teardown` action. Exhausted
+skip, DLQ full, and DLQ closed remain observable and exhausted messages are not
+requeued. Unrecoverable errors re-instantiate from cached `InstancePre`.
+
+## Replacement and reconfiguration
+
+Hot-swap and reconfigure share one per-node mutation guard and occur between
+messages through a watch channel. They do not stop routing, drain input queues,
+or migrate guest state.
+
+A successful API response separates `replacement_adopted` from
+`first_post_replacement_local_outcome`. The local outcome can be forwarded and
+enqueued, filter-dropped, or router-no-route. It is not sink convergence,
+sequence continuity, throughput, or loss evidence. Sink-owned evaluation
+artifacts supply those claims.
+
+Initialization rollback applies to eligible Wasm roles. Process-time canary
+rollback is bounded and implemented only for Transform. A20 remains deferred:
+runner-local rollback evidence exists, but `/metrics` does not expose
+`wafer_hot_swap_rollbacks_total`.
 
 ## HTTP control plane
 
-Wired endpoints (see `docs/interfaces/http-api.md`):
+Implemented routes:
 
 - `GET /health`
 - `GET /ready`
 - `GET /metrics`
 - `GET /api/v1/nodes`
 - `GET /api/v1/nodes/{id}`
-- `POST /api/v1/nodes/{id}/hot-swap` — dispatches on `NodeKind` (transform, filter, router).
-- `POST /api/v1/nodes/{id}/reconfigure` — warm config-only swap via cached `InstancePre` (A5).
+- `POST /api/v1/nodes/{id}/hot-swap`
+- `POST /api/v1/nodes/{id}/reconfigure`
 - `POST /api/v1/pipeline/shutdown`
 
-## Hot-swap
+Node responses expose `replacement_eligible`; current handler errors are plain
+text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
 
-Implemented via `watch::Sender<Option<SwapPayload>>` per Wasm node
-(RFC-005, ADR-0003, ADR-0012). The `SwapTimeline` records per-phase
-timing (`compile`, `instantiate`, `signal`, `ack`, `convergence`) and
-all five values are returned via the HTTP response (A3, A3b, A10). The
-runner marks `ack` after replacing store/bindings/pre and running guest
-`validate()`/`init()` on the replacement (A4); init failure rolls back
-to v1 and returns HTTP `409` with the guest error message. Config-only
-reconfigure via `POST /api/v1/nodes/{id}/reconfigure` reuses the cached
-`InstancePre` and reports `compile_ns=0`, `instantiate_ns=0` (A5).
+## Evaluation-contract state
 
-## Error policy
+- E-Swap-3 retains `disruption-timeline.json` as its sole final action timeline;
+  `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected.
+- E-Swap-4 uses one swap per independent run and source-origin primary/drain accounting.
+- E-Swap-5 requires request, rollback, sequence, and
+  `post-rollback-continuity.json`; it rejects a fabricated successful-v2 timeline.
+- E-Backpressure has separate `slow`, `drop`, and `dead-letter` conditions and policy-specific accounting.
+- E-Perf-10 reports only tested-grid bounds. Unidentified ratios remain
+  `CENSORED/PENDING`; no interpolation is used.
+- Aliases add zero independent N and may reference only one direct admitted final source.
+- The final N=30 campaign and matched x86 E-Perf-5 evidence remain pending.
 
-Five-category dispatch (`ErrorPolicyExecutor` in
-`crates/wafer-core/src/runner/error_policy.rs`) implementing:
+## Current exclusions
 
-- Pipeline-wide `[error_policy]` default policy + per-node override cascade (A6).
-- Bounded retry buffer (default 1000 entries) with exponential
-  backoff capped at 30 s.
-- Structured `DlqEnvelope` written to MQTT or file DLQ, carrying
-  production-generated `trace_id`/`parent_id` lineage (A13).
-- Hot-swap and shutdown flush retry buffers to DLQ with the
-  appropriate `DlqReason`.
-- On unrecoverable errors the runner transitions `Error → Recovering`,
-  re-instantiates from the cached `InstancePre`, re-runs
-  `validate()`/`init()`, and returns to `Running` (A7 recovery half).
-- Retry exhaustion counting per envelope and a
-  `wafer_node_recovery_duration_ms` metric are pending (A7 residual).
-
-## Metering and isolation
-
-- **Fuel** — per-category defaults in `[engine.fuel]`; per-node
-  overrides on `WasmNodeDef` (A8). Exhaustion traps as
-  `WasmProcessError::TimedOut`.
-- **Epoch** — OS-thread ticker (`std::thread::spawn`), ticks every
-  `epoch_tick_ms` (default 10 ms); interrupt after `epoch_deadline`
-  ticks (default 100 → 1000 ms wall clock).
-- **`StoreLimits`** — per-category memory defaults in `[engine.memory]`
-  (Transform 64 MiB, Filter/Router 16 MiB) with per-node
-  `memory_limit` override (A8).
-- **Capabilities** — deny-by-default (`inherit_stdio`,
-  `inherit_env`, `allow_inference` — all `false` unless granted);
-  configured capabilities are applied at initial instantiation and
-  preserved across transform hot-swap (A9).
-
-## AOT cache
-
-Blake3-keyed disk + memory tier for compiled components
-(ADR-0013). Reduces hot-swap prepare on RPi 4 from ~30 ms to ~2 ms
-(see `docs/benchmarks/hot-swap.md`).
-
-## Testing
-
-- **Unit tests** — per crate; `cargo test --workspace` runs all.
-- **Integration tests** — under `tests/` (workspace root).
-  Cover hot-swap, error dispatch, DLQ format, multi-topology
-  configs.
-- **Attack containment tests** — six scenarios (S1–S6), one per
-  attack plugin, exercised through `TestPipeline`.
-- **`bench::node_latency`** — per-hop tap around WIT boundary.
-- **`bench::memory`** — `/proc/self/statm` sampler at 1 Hz.
-
-## What is not in the current runtime
-
-- No windowing / watermarks / event-time processing.
-- No stateful joins (see ADR-0010 — merge is topology, not a node).
-- No distributed / multi-node deployment.
-- No hot-swap of native Source / Sink nodes.
-- No OTLP / Jaeger trace exporter (stdout `tracing` only).
-- No Grafana dashboards checked in.
-- Signature verification (cosign) at plugin load — planned; see
-  ROADMAP.
+- Stable or production-ready CUDA teardown, inference performance, model
+  accuracy evaluation, and accelerator energy claims.
+- Python plugin support.
+- Stateful joins, windowing, watermarks, and exactly-once semantics.
+- Native Source/Sink replacement or topology mutation.
+- State migration between component versions.
+- Signature verification at OCI load.
+- OTLP/Jaeger export and checked-in Grafana dashboards.

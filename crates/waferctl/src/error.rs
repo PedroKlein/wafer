@@ -82,10 +82,10 @@ impl CliError {
             }
         });
 
-        if let Some(ref hint) = self.hint {
-            if let Some(err_obj) = obj.get_mut("error").and_then(serde_json::Value::as_object_mut) {
-                err_obj.insert("hint".to_string(), serde_json::Value::String(hint.clone()));
-            }
+        if let Some(ref hint) = self.hint
+            && let Some(err_obj) = obj.get_mut("error").and_then(serde_json::Value::as_object_mut)
+        {
+            err_obj.insert("hint".to_string(), serde_json::Value::String(hint.clone()));
         }
 
         // Try to pretty-print, fall back to compact

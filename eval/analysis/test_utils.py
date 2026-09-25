@@ -74,15 +74,13 @@ def test_explicit_diagnostic_path_must_exist(fake_results: pathlib.Path):
         utils.resolve_result_batch("e-val-1", diagnostic_path="missing")
 
 
-def test_explicit_results_root_alias_resolves_single_source_batch(
-    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def alias_fixture(fake_results: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
     volume = fake_results / "mounted results volume"
     source = volume / "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01"
     write_canonical_leaf(source)
     metadata_path = source / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
-    metadata.update(experiment="e-perf-1", condition="native")
+    metadata.update(experiment="e-perf-1", condition="native", evidence_class="final")
     metadata_path.write_text(json.dumps(metadata))
     matrix_path = fake_results / "eval/canonical-matrix.json"
     matrix = json.loads(matrix_path.read_text())
@@ -102,21 +100,96 @@ def test_explicit_results_root_alias_resolves_single_source_batch(
     refresh_approval_matrix_hash(fake_results)
     receipt = volume / "manifests/aliases/e-perf-2/rpi5-batch-a/native/run-01.json"
     receipt.parent.mkdir(parents=True)
-    status_digest = hashlib.sha256((source / "canonical-status.json").read_bytes()).hexdigest()
-    receipt.write_text(json.dumps({
-        "schema_version": 1,
-        "experiment": "e-perf-2",
-        "condition": "native",
-        "run_index": 1,
-        "shared_from_experiment": "e-perf-1",
-        "source_leaf": "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01",
-        "source_status_sha256": status_digest,
-        "sample_identity": "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01",
-        "shared_measurement": True,
-    }))
+    source_leaf = "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01"
+    receipt.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "experiment": "e-perf-2",
+                "condition": "native",
+                "run_index": 1,
+                "shared_from_experiment": "e-perf-1",
+                "source_leaf": source_leaf,
+                "source_status_sha256": hashlib.sha256(
+                    (source / "canonical-status.json").read_bytes()
+                ).hexdigest(),
+                "sample_identity": source_leaf,
+                "source_evidence_class": "final",
+                "independent_n_contribution": 0,
+                "shared_measurement": True,
+            }
+        )
+    )
+    return volume, source, receipt
+
+
+def test_explicit_results_root_alias_resolves_single_source_batch(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume, source, _ = alias_fixture(fake_results)
     monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
 
     assert utils.find_canonical_batch("e-perf-2", "batch-a", volume) == source.parents[1]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("independent_n_contribution", 1, "zero independent N"),
+        ("source_evidence_class", "diagnostic", "canonical mapping"),
+        ("sample_identity", "raw/e-perf-1/copied/run-01", "sample identity"),
+        ("source_status_sha256", "0" * 64, "receipt digest differs"),
+    ],
+)
+def test_alias_receipt_rejects_inflation_or_source_identity_drift(
+    fake_results: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    volume, _, receipt = alias_fixture(fake_results)
+    contents = json.loads(receipt.read_text())
+    contents[field] = value
+    receipt.write_text(json.dumps(contents))
+    monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
+
+    with pytest.raises(ValueError, match=message):
+        utils.find_canonical_batch("e-perf-2", "batch-a", volume)
+
+
+def test_alias_receipt_rejects_nonfinal_source_metadata(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume, source, _ = alias_fixture(fake_results)
+    metadata_path = source / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata["evidence_class"] = "diagnostic"
+    metadata["thesis_evidence"] = False
+    metadata_path.write_text(json.dumps(metadata))
+    monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
+
+    with pytest.raises(ValueError, match="non-final evidence"):
+        utils.find_canonical_batch("e-perf-2", "batch-a", volume)
+
+
+def test_alias_receipt_rejects_links(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume, _, receipt = alias_fixture(fake_results)
+    monkeypatch.setattr(results_layout.os.path, "ismount", lambda _: True)
+    contents = receipt.read_bytes()
+    receipt.unlink()
+    target = receipt.with_name("target.json")
+    target.write_bytes(contents)
+    receipt.symlink_to(target.name)
+    with pytest.raises(ValueError, match="symlink"):
+        utils.find_canonical_batch("e-perf-2", "batch-a", volume)
+
+    receipt.unlink()
+    receipt.hardlink_to(target)
+    with pytest.raises(ValueError, match="hardlinked"):
+        utils.find_canonical_batch("e-perf-2", "batch-a", volume)
 
 
 def test_explicit_results_root_supports_spaces_and_restricts_analysis_outputs(
@@ -179,6 +252,124 @@ def write_canonical_leaf(
                 "git_tags": ["rpi5-eval-v1"],
                 "throttled": throttled,
                 "thesis_evidence": True,
+            }
+        )
+    )
+
+
+def write_swap3_canonical_leaf(
+    path: pathlib.Path,
+    *,
+    status: str = "passed",
+    run_index: int = 1,
+) -> None:
+    write_canonical_leaf(path, status=status, run_index=run_index)
+    metadata_path = path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment="e-swap-3", condition="wafer-hotswap")
+    metadata_path.write_text(json.dumps(metadata))
+    repo = path.parents[5]
+    matrix_path = repo / "eval/canonical-matrix.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "experiments": {
+                    "e-swap-3": {
+                        "conditions": ["wafer-hotswap"],
+                        "repetitions": 1,
+                        "required_outputs": [
+                            "latency.hdr",
+                            "throughput.csv",
+                            "sequence.csv",
+                            "publisher-summary.json",
+                            "subscriber-metadata.json",
+                            "throughput-buckets.json",
+                            "throughput-buckets-10ms.json",
+                            "disruption-timeline.json",
+                            "disruption-analysis.json",
+                        ],
+                    }
+                }
+            }
+        )
+    )
+    refresh_approval_matrix_hash(repo)
+    for name, content in {
+        "latency.hdr": "fixture\n",
+        "throughput.csv": "fixture\n",
+        "sequence.csv": "fixture\n",
+        "publisher-summary.json": json.dumps({"schema_version": 1}),
+        "subscriber-metadata.json": json.dumps({"schema_version": 1}),
+        "throughput-buckets.json": json.dumps({"schema_version": 1}),
+        "throughput-buckets-10ms.json": json.dumps({"schema_version": 1}),
+        "disruption-timeline.json": json.dumps({"schema_version": 1}),
+        "disruption-analysis.json": json.dumps({"schema_version": 1}),
+    }.items():
+        (path / name).write_text(content)
+
+
+def write_swap5_canonical_leaf(path: pathlib.Path) -> None:
+    write_canonical_leaf(path)
+    metadata_path = path / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment="e-swap-5", condition="process-trap-rollback")
+    metadata_path.write_text(json.dumps(metadata))
+    requests = []
+    events = []
+    for index in range(50):
+        timeline = {
+            "compile_ns": 1,
+            "instantiate_ns": 2,
+            "signal_ns": 3,
+            "rollback_ns": 4,
+        }
+        requests.append(
+            {
+                "event_index": index,
+                "plugin": "wafer_pass_through_v2_panics.wasm",
+                "request_finished_ns": 1_000 + index * 100,
+                "http_status": 200,
+                "body": {"status": "rolled_back", "timeline": timeline},
+            }
+        )
+        events.append({"event_index": index, **timeline})
+    sequence = {"expected": 1_000, "received": 1_000, "gaps": 0, "duplicates": 0}
+    (path / "sequence.csv").write_text(
+        "total_expected,total_received,gap_events,gap_msgs,duplicates_count\n"
+        "1000,1000,0,0,0\n"
+    )
+    (path / "swap_requests.json").write_text(json.dumps(requests))
+    (path / "rollback.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "duration_unit": "ns",
+                "independent_unit": "complete process run",
+                "nested_unit": "rollback event within run",
+                "attempts": 50,
+                "rolled_back": 50,
+                "all_rolled_back": True,
+                "sequence": sequence,
+                "events": events,
+            }
+        )
+    )
+    final_finished = requests[-1]["request_finished_ns"]
+    (path / "post-rollback-continuity.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "clock": "unix-epoch",
+                "final_rollback_event_index": 49,
+                "final_rollback_finished_ns": final_finished,
+                "observation_start_ns": final_finished,
+                "observation_end_ns": final_finished + 100,
+                "messages_after_final_rollback": 10,
+                "output_observed_after_final_rollback": True,
+                "successful_v2_transition_observed": False,
+                "interval_metrics_path": "interval-metrics.json",
+                "interval_metrics_sha256": "a" * 64,
+                "sequence": sequence,
             }
         )
     )
@@ -294,6 +485,82 @@ def test_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
 
     with pytest.raises(ValueError, match="duplicate canonical run"):
         utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_canonical_analysis_rejects_semantically_invalid_swap5_artifacts(
+    fake_results: pathlib.Path,
+) -> None:
+    matrix_path = fake_results / "eval/canonical-matrix.json"
+    matrix_path.write_text(
+        json.dumps(
+            {
+                "experiments": {
+                    "e-swap-5": {
+                        "conditions": ["process-trap-rollback"],
+                        "repetitions": 1,
+                        "required_outputs": [
+                            "sequence.csv",
+                            "swap_requests.json",
+                            "rollback.json",
+                            "post-rollback-continuity.json",
+                        ],
+                    }
+                }
+            }
+        )
+    )
+    refresh_approval_matrix_hash(fake_results)
+    batch = fake_results / "eval/results/e-swap-5/rpi5-batch-a"
+    leaf = batch / "process-trap-rollback/run-01-attempt-01"
+    write_swap5_canonical_leaf(leaf)
+    assert utils.validate_canonical_batch(batch, "e-swap-5") == "1" * 40
+
+    rollback_path = leaf / "rollback.json"
+    rollback = json.loads(rollback_path.read_text())
+    rollback["rolled_back"] = 49
+    rollback_path.write_text(json.dumps(rollback))
+    with pytest.raises(ValueError, match="rollback evidence does not reconcile"):
+        utils.validate_canonical_batch(batch, "e-swap-5")
+
+
+def test_alias_mapping_rejects_cycles() -> None:
+    with pytest.raises(ValueError, match="cycle"):
+        results_layout.validate_alias_mapping({"a": "b", "b": "a"})
+
+
+def test_swap3_canonical_batch_rejects_legacy_swap_timeline(
+    fake_results: pathlib.Path,
+):
+    batch = fake_results / "eval/results/e-swap-3/rpi5-batch-a"
+    leaf = batch / "wafer-hotswap/run-01-attempt-01"
+    write_swap3_canonical_leaf(leaf)
+    (leaf / "swap_timeline.json").write_text('{"schema_version":1}\n')
+
+    with pytest.raises(ValueError, match="legacy swap_timeline.json is forbidden"):
+        utils.validate_canonical_batch(batch, "e-swap-3")
+
+
+def test_swap3_canonical_batch_rejects_retained_publisher_timing(
+    fake_results: pathlib.Path,
+):
+    batch = fake_results / "eval/results/e-swap-3/rpi5-batch-a"
+    leaf = batch / "wafer-hotswap/run-01-attempt-01"
+    write_swap3_canonical_leaf(leaf)
+    (leaf / "publisher-timing.json").write_text('{"event_unix_epoch_ns":1060005000000}\n')
+
+    with pytest.raises(ValueError, match="temporary publisher-timing.json is forbidden"):
+        utils.validate_canonical_batch(batch, "e-swap-3")
+
+
+def test_swap3_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
+    fake_results: pathlib.Path,
+):
+    batch = fake_results / "eval/results/e-swap-3/rpi5-batch-a"
+    write_swap3_canonical_leaf(batch / "wafer-hotswap/run-01-attempt-01")
+    write_swap3_canonical_leaf(batch / "wafer-hotswap/run-01-attempt-02")
+
+    with pytest.raises(ValueError, match="duplicate canonical run"):
+        utils.validate_canonical_batch(batch, "e-swap-3")
 
 
 def test_canonical_batch_rejects_malformed_schema(fake_results: pathlib.Path):

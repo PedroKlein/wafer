@@ -33,17 +33,15 @@ sequenceDiagram
 
 ### 1. Create and identify the envelope
 
-A native source adapter returns a `RuntimeEnvelope`. Its immutable `EnvelopeHeader` is held by `Arc`, its payload by `Bytes`, and its lineage is owned directly. `run_source_loop` calls `envelope.ensure_trace_id()` before forwarding the message.
+A native source adapter returns a `RuntimeEnvelope`. Its immutable `EnvelopeHeader` is held by `Arc`, its payload by `Bytes`, and its lineage and retry count are host-owned. New ingress timestamps are checked, saturating Unix-epoch nanoseconds. `run_source_loop` calls `envelope.ensure_trace_id()` before forwarding the message.
 
 `send_downstream` moves the envelope when there is one destination. With multiple destinations, it clones for all but the last sender. Those clones increment `Arc` and `Bytes` reference counts instead of copying the header and payload bytes. The envelope clone tests verify both shared backing stores.
 
-### 2. Wait for queue capacity
+### 2. Apply the configured edge policy
 
-Every downstream send reaches `send_one`. It waits on `sender.reserve().await`, records queue metrics after obtaining a permit, and then moves the envelope into the channel.
+Every downstream send reaches `send_one`. The configured edge overflow policy is preserved in `DownstreamSender`: `slow` waits with `sender.sender.reserve().await`, while `drop` and `dead-letter` use non-blocking `try_send`. Dead-letter delivery targets the configured file or MQTT sink. Destination closed, DLQ full, and DLQ closed are distinct outcomes.
 
-The prose anchor `sender.reserve().await` describes the call in `send_one`; the exact source expression is `sender.sender.reserve().await` because `DownstreamSender` wraps Tokio's sender.
-
-**Known drift:** The builder retains configured overflow metadata in `EdgeSender`, but drops it when creating `DownstreamSender`. This path therefore waits for capacity and does not currently dispatch configured `Drop` or `DeadLetter` behavior.
+The physical queue is destination-keyed. Fan-in edges share one receiver whose capacity is the maximum explicit incoming value; a sender's policy still applies independently to that edge.
 
 ### 3. Receive outside the guest
 
@@ -68,9 +66,9 @@ The runner executes `tokio::task::block_in_place(|| transform.process(envelope))
 
 ### 5. Map the guest result
 
-The transform interface returns either an `output-message` or one of five `process-error` variants. A successful output carries `payload: list<u8>`. The host turns that vector into new `Bytes`, copies output metadata, and inherits lineage from the input.
+The transform interface returns either an `output-message` or one of five `process-error` variants. A successful output carries `payload: list<u8>`. The host lifts the guest-provided id, timestamp, source, content type, metadata, and payload into a new envelope, then inherits host lineage and retry count from the input separately.
 
-Input payload access uses `borrow<buffer>`, but transform output is a WIT `list<u8>` that becomes new host `Bytes`; the whole boundary is not zero-copy. The current mapping uses the guest's `source`, payload, and metadata. It creates a fresh host envelope, so the guest-provided output ID, timestamp, and content type are not copied into the resulting header.
+Input payload access uses `borrow<buffer>`, but Transform output is a WIT `list<u8>` that becomes new host `Bytes`; the whole boundary is not zero-copy. Guest-provided timestamps remain message data and never replace host-owned benchmark clocks.
 
 The borrowed input resource remains host-owned. `process` captures its resource representation before the guest call and calls `delete_buffer` afterward even if Wasmtime returned a trap. Cleanup failure becomes `WasmProcessError::Unrecoverable`.
 
@@ -112,11 +110,11 @@ The envelope unit tests establish shared host-side clone storage. The source-loo
 
 ## Status boundaries
 
-**Current implementation:** Source ingress assigns a trace ID, bounded sends await permits, the transform runner invokes Wasm outside its cancellation `select!`, and the transform wrapper resets limits, cleans up the borrowed resource, preserves output metadata, and inherits lineage.
+**Current implementation:** Source ingress assigns a trace ID, configured edge overflow reaches the shared send seam, the transform runner invokes Wasm outside its cancellation `select!`, and the transform wrapper resets limits, cleans up the borrowed resource, preserves every guest output field, and inherits host lineage and retry state.
 
 **Intended design:** Borrowed input resources allow guests such as filters and routers to avoid payload reads. That is a targeted optimization, not a claim that all host and guest marshalling is zero-copy.
 
-**Known drift:** Configured edge overflow metadata does not reach `DownstreamSender`. Transform output mapping also regenerates ID, timestamp, and content type instead of using those three guest output fields.
+**Known drift:** None for the path described above. Host-side `Arc`/`Bytes` clones do not make Transform output or WIT strings zero-copy; fan-in also has no fairness or ordering guarantee.
 
 ## Evidence
 

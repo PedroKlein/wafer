@@ -44,7 +44,9 @@ ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
-from results_layout import resolve_alias_receipt
+from backpressure import validate_backpressure_result
+from rollback import validate_swap5_artifacts
+from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from interval_metrics import validate_interval_metrics
@@ -988,10 +990,33 @@ def check_burst_timeline(path: Path) -> list[str]:
         violations.append("burst-timeline.json drain offsets are invalid")
     internal_phases = value.get("internal_swap_phases_ns", {})
     if set(internal_phases) != {
-        "compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns"
+        "compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns", "first_post_replacement_local_outcome_ns"
     } or any(type(duration) is not int or duration < 0 for duration in internal_phases.values()):
         violations.append("burst-timeline.json internal swap phases are invalid")
     return violations
+
+
+def _check_swap4_actual_t0_receipt(
+    receipt: dict,
+    *,
+    measurement_start_ns: int,
+    scheduled_swap_ns: int,
+    actual_swap_ns: int,
+) -> list[str]:
+    if (
+        receipt.get("schema_version") != 1
+        or receipt.get("clock") != "unix-epoch"
+        or receipt.get("alignment") != "actual-t0"
+        or receipt.get("source_measurement_start_unix_ns") != measurement_start_ns
+        or receipt.get("scheduled_event_timestamp_ns") != scheduled_swap_ns
+        or receipt.get("event_timestamp_ns") != actual_swap_ns
+        or receipt.get("alignment_error_ns") != actual_swap_ns - scheduled_swap_ns
+        or receipt.get("alignment_tolerance_ns") != 10_000_000
+        or abs(actual_swap_ns - scheduled_swap_ns) > 10_000_000
+    ):
+        return ["swap-actual-t0.json does not reconcile with the declared swap timing"]
+    return []
+
 
 
 def check_swap4_reconciliation(leaf: Path) -> list[str]:
@@ -1000,8 +1025,12 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
     throughput = _load_json(
         leaf / "throughput-buckets.json", "throughput-buckets.json", violations
     )
+    fine = _load_json(
+        leaf / "throughput-buckets-10ms.json", "throughput-buckets-10ms.json", violations
+    )
     sink_timeline = _load_json(leaf / "swap_timeline.json", "swap_timeline.json", violations)
     analysis = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
+    actual_t0 = _load_json(leaf / "swap-actual-t0.json", "swap-actual-t0.json", violations)
     source_timing = _load_json(
         leaf / "burst-source-timing.json", "burst-source-timing.json", violations
     )
@@ -1012,7 +1041,7 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
         requests = json.loads((leaf / "swap_requests.json").read_text())
     except (OSError, ValueError) as error:
         return violations + [f"swap_requests.json is unreadable: {error}"]
-    if None in (timeline, throughput, sink_timeline, analysis, source_timing, source_summary):
+    if None in (timeline, throughput, fine, sink_timeline, analysis, actual_t0, source_timing, source_summary):
         return violations
     violations.extend(_check_swap4_throughput(throughput))
     try:
@@ -1027,8 +1056,18 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
             violations.append("E-Swap-4 source timing does not reconcile")
         if not isinstance(requests, list) or len(requests) != 1:
             violations.append("final E-Swap-4 must contain exactly one swap request")
-        elif timeline["swap_ns"] != requests[0]["request_started_ns"]:
-            violations.append("E-Swap-4 actual swap timestamp differs from its request")
+        else:
+            if timeline["swap_ns"] != requests[0]["request_started_ns"]:
+                violations.append("E-Swap-4 actual swap timestamp differs from its request")
+            else:
+                violations.extend(
+                    _check_swap4_actual_t0_receipt(
+                        actual_t0,
+                        measurement_start_ns=timeline["measurement_start_ns"],
+                        scheduled_swap_ns=timeline["scheduled_swap_ns"],
+                        actual_swap_ns=timeline["swap_ns"],
+                    )
+                )
         if len(transitions) != 1 or len(events) != 1 or analysis.get("sample_count") != 1:
             violations.append("final E-Swap-4 must contain exactly one swap event")
         elif (
@@ -1046,6 +1085,14 @@ def check_swap4_reconciliation(leaf: Path) -> list[str]:
             "measurement_start_ns"
         ):
             violations.append("E-Swap-4 source and sink origins do not reconcile")
+        if (
+            fine.get("source_measurement_start_unix_ns")
+            != actual_t0.get("source_measurement_start_unix_ns")
+            or fine.get("scheduled_event_timestamp_ns")
+            != actual_t0.get("scheduled_event_timestamp_ns")
+            or fine.get("event_timestamp_ns") != actual_t0.get("event_timestamp_ns")
+        ):
+            violations.append("E-Swap-4 actual-t0 receipt differs from the fine event buckets")
         if timeline["sequence"]["received"] != throughput["received_events"]:
             violations.append("E-Swap-4 sequence and bucket populations do not reconcile")
         if (
@@ -1226,41 +1273,39 @@ def check_focused_leaf(
     if experiment == "e-backpressure":
         result = _load_json(leaf / "backpressure.json", "backpressure.json", violations)
         if result is not None:
-            if result.get("classification") != "saturated-and-drained":
-                violations.append("backpressure classification must be saturated-and-drained")
-            peak_occupancy = result.get("peak_occupancy")
-            occupancy_threshold = result.get("occupancy_threshold")
-            if (
-                result.get("threshold_crossed") is not True
-                or result.get("recovered") is not True
-                or not isinstance(peak_occupancy, (int, float))
-                or not isinstance(occupancy_threshold, (int, float))
-                or peak_occupancy < occupancy_threshold
-            ):
-                violations.append("backpressure evidence did not cross and recover below thresholds")
-            if set(result.get("rates_msg_s", {})) != {"offered", "accepted", "processed", "drained"}:
-                violations.append("backpressure rates must separate offered, accepted, processed, and drained")
-            if result.get("rates_msg_s", {}).get("drained") is None:
-                violations.append("backpressure drain rate is missing")
-            if result.get("sequence", {}).get("lossless") is not True:
-                violations.append("backpressure slow policy is not lossless")
-            if result.get("memory", {}).get("within_limit") is not True:
-                violations.append("backpressure RSS exceeds the frozen limit")
+            try:
+                validate_backpressure_result(result, condition)
+            except ValueError as error:
+                violations.append(str(error))
 
-    if experiment == "e-iso-4":
+    if experiment in {"e-iso-1", "e-iso-2", "e-iso-3", "e-iso-4", "e-iso-5", "e-iso-6"}:
         result = _load_json(leaf / "containment.json", "containment.json", violations)
         if result is not None:
-            traps = int(result.get("traps_total", 0))
-            recoveries = sum(int(node.get("recovery_count", 0)) for node in result.get("nodes", []))
-            if result.get("contained") is not True or traps <= 0:
-                violations.append("epoch containment did not record a contained trap")
-            if recoveries != traps:
-                violations.append(f"epoch recovery count differs from traps: {recoveries} != {traps}")
-        try:
-            if "cannot enter component instance" in (leaf / "stdout.log").read_text(errors="replace"):
-                violations.append("epoch recovery reused an interrupted component instance")
-        except OSError:
-            pass
+            try:
+                traps = int(result.get("traps_total", 0))
+                nodes = result.get("nodes", [])
+                if not isinstance(nodes, list) or not nodes:
+                    raise ValueError
+                recoveries = sum(int(node.get("recovery_count", 0)) for node in nodes)
+                if sum(int(node.get("traps_total", 0)) for node in nodes) != traps:
+                    raise ValueError
+            except (TypeError, ValueError):
+                violations.append("containment.json contains invalid runtime metrics")
+            else:
+                if result.get("condition") != condition:
+                    violations.append("containment evidence expected condition differs from the leaf")
+                if result.get("contained") is not True or traps <= 0:
+                    violations.append("containment evidence did not record a contained trap")
+                if result.get("runtime_panic") is not False:
+                    violations.append("containment evidence recorded a runtime panic")
+                if experiment == "e-iso-4" and recoveries != traps:
+                    violations.append(f"epoch recovery count differs from traps: {recoveries} != {traps}")
+        if experiment == "e-iso-4":
+            try:
+                if "cannot enter component instance" in (leaf / "stdout.log").read_text(errors="replace"):
+                    violations.append("epoch recovery reused an interrupted component instance")
+            except OSError:
+                pass
 
     if experiment == "e-iso-7":
         result = _load_json(leaf / "branch-isolation.json", "branch-isolation.json", violations)
@@ -1346,8 +1391,8 @@ def check_focused_leaf(
                 violations.append(f"hot-swap analysis must contain {expected_events} events")
             else:
                 required = {
-                    "compile_ns", "instantiate_ns", "signal_ns", "ack_ns",
-                    "convergence_ns", "http_total_ns", "sink_observed_output_gap_ns",
+                    "compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns",
+                    "first_post_replacement_local_outcome_ns", "http_total_ns", "sink_observed_output_gap_ns",
                 }
                 if any(
                     any(type(event.get(field)) is not int or event[field] < 0 for field in required)
@@ -1358,15 +1403,40 @@ def check_focused_leaf(
     if experiment.startswith("e-swap-"):
         violations.extend(_sequence_violations(leaf / "sequence.csv"))
     if experiment == "e-swap-5":
-        result = _load_json(leaf / "rollback.json", "rollback.json", violations)
-        if result is not None:
-            expected_events = definition.get("events_per_run")
-            if (
-                result.get("attempts") != expected_events
-                or result.get("rolled_back") != expected_events
-                or result.get("all_rolled_back") is not True
-            ):
-                violations.append(f"rollback evidence must show {expected_events} successful rollbacks")
+        if (leaf / "swap_timeline.json").exists():
+            violations.append("E-Swap-5 must not contain a successful-v2 sink timeline")
+        try:
+            requests = json.loads((leaf / "swap_requests.json").read_text())
+            if not isinstance(requests, list):
+                raise ValueError("must contain an array")
+        except (OSError, ValueError) as error:
+            violations.append(f"swap_requests.json is unreadable: {error}")
+            requests = None
+        rollback = _load_json(leaf / "rollback.json", "rollback.json", violations)
+        continuity = _load_json(
+            leaf / "post-rollback-continuity.json",
+            "post-rollback-continuity.json",
+            violations,
+        )
+        try:
+            with (leaf / "sequence.csv").open(newline="") as stream:
+                rows = list(csv.DictReader(stream))
+            if len(rows) != 1:
+                raise ValueError("sequence.csv must contain one summary row")
+            sequence = {
+                "expected": int(rows[0]["total_expected"]),
+                "received": int(rows[0]["total_received"]),
+                "gaps": int(rows[0]["gap_msgs"]),
+                "duplicates": int(rows[0]["duplicates_count"]),
+            }
+        except (KeyError, OSError, TypeError, ValueError) as error:
+            violations.append(f"E-Swap-5 sequence evidence is invalid: {error}")
+            sequence = None
+        if None not in (requests, rollback, continuity, sequence):
+            try:
+                validate_swap5_artifacts(requests, rollback, continuity, sequence)
+            except ValueError as error:
+                violations.append(str(error))
     return violations
 
 
@@ -1595,7 +1665,7 @@ def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -
     except (KeyError, OSError, TypeError, ValueError):
         violations.append(f"{artifact_name} sequence evidence is not lossless or reconciled")
     required = (
-        {"compile_ns", "instantiate_ns", "signal_ns", "ack_ns", "convergence_ns", "http_total_ns", "sink_observed_output_gap_ns"}
+        {"compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns", "first_post_replacement_local_outcome_ns", "http_total_ns", "sink_observed_output_gap_ns"}
         if experiment == "e-swap-independent-sessions"
         else {"compile_ns", "instantiate_ns", "signal_ns", "rollback_ns", "http_total_ns"}
     )
@@ -1622,7 +1692,7 @@ def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -
             timeline = request["body"]["timeline"]
             fields = {"compile_ns", "instantiate_ns", "signal_ns"}
             if experiment == "e-swap-independent-sessions":
-                fields |= {"ack_ns", "convergence_ns"}
+                fields |= {"replacement_adopted_ns", "first_post_replacement_local_outcome_ns"}
                 if event["sink_observed_output_gap_ns"] != json.loads(
                     (leaf / "swap_timeline.json").read_text()
                 )["transitions"][event["event_index"]]["pause_ns"]:
@@ -2096,6 +2166,10 @@ def check_leaf(
             ))
         violations.extend(check_capacity_artifact_reconciliation(leaf))
     if experiment == "e-swap-3" and not focused:
+        if "publisher-timing.json" in files:
+            violations.append("final E-Swap-3 must not retain publisher-timing.json")
+        if "swap_timeline.json" in files:
+            violations.append("final E-Swap-3 must not retain legacy swap_timeline.json")
         violations.extend(check_throughput_buckets(leaf / "throughput-buckets.json", 200))
         violations.extend(
             check_fine_event_buckets(

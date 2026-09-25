@@ -1,9 +1,9 @@
 //! Host state stored in each Wasmtime `Store<WaferState>`.
 //!
 //! `WaferState` is the `T` in `Store<T>`. It carries WAFER-specific context:
-//! WASI sandbox, resource table for `WaferBuffer` handles, optional wasi-nn,
-//! per-call log buffer for the `pipeline:host/logging` import, per-node memory
-//! limits, and the node identity for structured logging.
+//! WASI sandbox, resource table for `WaferBuffer` handles, per-call log buffer
+//! for the `pipeline:host/logging` import, per-node memory limits, and the
+//! node identity for structured logging.
 //!
 //! See docs/rfcs/RFC-002-host-runtime.md D8
 //! and docs/rfcs/RFC-007-performance-optimizations.md (StoreLimits amendment).
@@ -11,6 +11,9 @@
 use wasmtime::component::ResourceTable;
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_nn::InMemoryRegistry;
+use wasmtime_wasi_nn::backend::onnx::OnnxBackend;
+use wasmtime_wasi_nn::wit::{WasiNnCtx, WasiNnView};
 
 use super::Capabilities;
 
@@ -49,6 +52,7 @@ pub struct WaferState {
     table: ResourceTable,
     /// Per-node memory limits enforced by wasmtime's `ResourceLimiter`.
     limits: StoreLimits,
+    nn_ctx: Option<WasiNnCtx>,
     /// Buffered log messages from the current Wasm call.
     /// Cleared before each call, flushed to tracing after.
     log_buffer: Vec<LogEntry>,
@@ -82,6 +86,9 @@ impl WaferState {
         }
 
         let ctx = builder.build();
+        let nn_ctx = capabilities.allow_inference.then(|| {
+            WasiNnCtx::new([OnnxBackend::default().into()], InMemoryRegistry::new().into())
+        });
 
         let limits = StoreLimitsBuilder::new()
             .memory_size(memory_limit)
@@ -93,6 +100,7 @@ impl WaferState {
             ctx,
             table: ResourceTable::new(),
             limits,
+            nn_ctx,
             log_buffer: Vec::with_capacity(16),
             node_id: node_id.into(),
         }
@@ -120,6 +128,20 @@ impl WaferState {
     #[inline]
     pub const fn table_mut(&mut self) -> &mut ResourceTable {
         &mut self.table
+    }
+
+    #[expect(
+        clippy::expect_used,
+        reason = "only the inference linker calls this for a Store built with the inference grant"
+    )]
+    pub(crate) fn nn_view(&mut self) -> WasiNnView<'_> {
+        let nn_ctx = self.nn_ctx.as_mut().expect("inference linker requires an inference Store");
+        WasiNnView::new(&mut self.table, nn_ctx)
+    }
+
+    #[cfg(test)]
+    const fn has_inference(&self) -> bool {
+        self.nn_ctx.is_some()
     }
 
     /// Access the store limits (for `Store::limiter`).
@@ -154,7 +176,7 @@ impl WaferState {
 
     /// Check if there are buffered log entries.
     #[inline]
-    pub fn has_logs(&self) -> bool {
+    pub const fn has_logs(&self) -> bool {
         !self.log_buffer.is_empty()
     }
 
@@ -248,10 +270,19 @@ mod tests {
 
     #[test]
     fn capabilities_applied() {
-        // Sandboxed: no capabilities
-        let _state = WaferState::sandboxed("node");
-        // With stdio: shouldn't panic
-        let _state = WaferState::new("node", Capabilities::with_stdio());
+        let sandboxed = WaferState::sandboxed("node");
+        assert!(!sandboxed.has_inference());
+
+        let inference = WaferState::new("node", Capabilities::sandbox().inference(true));
+        assert!(inference.has_inference());
+    }
+
+    #[test]
+    fn inference_state_keeps_store_send() {
+        fn assert_send<T: Send>() {}
+
+        assert_send::<WaferState>();
+        assert_send::<wasmtime::Store<WaferState>>();
     }
 
     #[test]

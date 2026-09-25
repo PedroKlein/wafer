@@ -5,10 +5,18 @@
 - **Amends:** —
 - **Amended by:** RFC-003 (§A3 — envelope shape redesigned to `Arc<EnvelopeHeader>` + `Bytes` payload + `Lineage`); RFC-005 (§D6 — drain phase replaced with watch-channel between-messages hot-swap)
 
-> **Implementation notes.** The runtime envelope has a `Lineage` field
-> assigned at source ingress and preserved through fan-out (A13). DLQ
-> reads `trace_id` and `parent_id`. See §"Implementation Notes" for the
-> current state after amendment.
+> **Current release amendment.** Queue wiring is receiver-keyed: one physical
+> bounded channel per destination, with maximum explicit incoming capacity and
+> independent sender-side `slow`, `drop`, or `dead-letter` policy. Retries retain
+> count, wait the configured first backoff, select the earliest due entry, and
+> honor `skip`, `dlq`, or `teardown` on exhaustion. Transform output fields are
+> guest-owned data; host lineage and retry state remain separate. Replacement
+> uses a guarded watch-channel handoff between messages, with no input drain.
+>
+> The design discussion below is historical. Later RFC amendments and current
+> source take precedence where terminology or behavior differs.
+
+<!-- historical-design-below -->
 
 ## Abstract
 

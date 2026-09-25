@@ -10,7 +10,7 @@ Trace one processing plugin from its WIT world through generated guest and host 
 
 ## Prerequisites
 
-Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows source at commit `fa149e75d8b47e3284a76c9b98d0709e7e6f061c`.
+Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows source at verified candidate `92d86b0a511047988de5fbf6551b18b8a09ec455`, which supersedes the earlier pinned learning-doc baseline `256718897781aa66bbf9dd55eecbc5b2d7730d3c`.
 
 ## Flow
 
@@ -30,12 +30,12 @@ sequenceDiagram
     Guest-->>Node: typed result or process-error
 ```
 
-1. `wit/worlds.wit` exposes exactly three guest worlds: `transform-node`, `filter-node`, and `router-node`. Their shared lifecycle and message types come from the other WIT files. Transform, Filter, and Router are the Wasm processing roles. Sources and sinks remain native adapters created by `create_source` and `create_sink`.
-2. A guest chooses one world with `wit_bindgen::generate!`, implements the generated lifecycle and processing traits, and calls `export!`. `plugins/pass-through/src/lib.rs` is the smallest complete transform example. The threshold filter reads its payload through `wafer_plugin::payload_as_str!`, while the content router calls `read_all()` directly.
-3. The host runs `wasmtime::component::bindgen!` once per world in `engine/bindings.rs`. The filter and router invocations reuse the canonical types and logging bindings generated for the transform world.
+1. `wit/worlds.wit` exposes four guest worlds: `transform-node`, `filter-node`, `router-node`, and `inference-node`. Their shared lifecycle and message types come from the other project WIT files. Transform, Filter, and Router remain the processing roles; `inference-node` is a Transform specialization with pinned wasi-nn imports, not another topology role. Sources and sinks remain native adapters created by `create_source` and `create_sink`.
+2. A guest chooses one world with `wit_bindgen::generate!`, implements the generated lifecycle and processing traits, and calls `export!`. `plugins/pass-through/src/lib.rs` is the smallest complete transform example. The threshold filter reads its payload through `wafer_plugin::payload_as_str!`, the content router calls `read_all()` directly, and `plugins/mnist-inference/src/lib.rs` invokes wasi-nn through generated `inference-node` bindings.
+3. The host runs `wasmtime::component::bindgen!` for each world in `engine/bindings.rs`. Ordinary and inference Transform bindings reuse the canonical types, lifecycle, transform, and logging definitions while retaining distinct private pre-instantiation types.
 4. `launch_pipeline_timed` builds native sources and sinks separately. For a Wasm processing node, `resolve_and_load_component` asks `WaferRegistry::resolve` for a local or OCI artifact, reads and hashes its bytes, then calls `WaferEngine::load_component_from_bytes`.
-5. `WaferEngine` owns the Wasmtime `Engine`. Its private `build_linker` adds WASI; the typed `pre_instantiate_*` method adds the generated world to the `Linker` and creates a typed pre-instance.
-6. The launcher creates a fresh `Store<WaferState>`, installs memory and optional fuel or epoch limits, instantiates the typed pre-instance, and calls `validate_and_init`. The node wrapper then owns the Store, bindings, and cached pre-instance.
+5. `WaferEngine` owns the Wasmtime `Engine`. Its private `build_linker` adds WASI. Ordinary `pre_instantiate_*` paths add only their generated world; `pre_instantiate_inference` additionally registers wasi-nn before creating the typed pre-instance.
+6. The launcher creates a fresh `Store<WaferState>`, installs memory and optional fuel or epoch limits, instantiates the typed pre-instance, and calls `validate_and_init`. Only a Wasm Transform with `allow_inference = true` receives an ONNX-backed inference state. The node wrapper then owns the Store, bindings, and cached pre-instance.
 7. For each call, `build_wit_message` installs a host buffer resource and passes a borrowed handle. After the generated call returns, the wrapper flushes guest logs, calls `delete_buffer`, and maps the typed result or trap into the host error model.
 
 ## Rust
@@ -54,7 +54,7 @@ Do not duplicate signatures here. When the WIT and this walkthrough disagree, th
 
 ## Status boundaries
 
-**Current implementation:** The three WIT worlds, both binding-generation paths, registry resolution, Engine/Linker/Store lifecycle, guest lifecycle calls, buffer cleanup, and native source/sink factories are present in the cited source. The WASI delay integration test exercises a real transform component when its prebuilt fixture and release load-generator binary exist.
+**Current implementation:** The four WIT worlds, both binding-generation directions, registry resolution, ordinary and inference Engine/Linker/Store lifecycle, guest lifecycle calls, buffer cleanup, and native source/sink factories are present in the cited source. Inference is default deny and restricted to Wasm Transform nodes. Non-skipping tests exercise granted and denied components, lifecycle store replacement, and the known-digit CPU path.
 
 **Intended design:** Borrowed buffers make payload transfer demand-driven and keep protocol adapters outside the guest contract. A plugin can still call `read-all`, as all three cited first-party examples currently do.
 
@@ -64,17 +64,20 @@ Do not duplicate signatures here. When the WIT and this walkthrough disagree, th
 
 - **Source:** [`wit/pipeline-types.wit`](../../wit/pipeline-types.wit) | symbols: `resource buffer`, `record message`, `record output-message`
 - **Source:** [`wit/pipeline-node.wit`](../../wit/pipeline-node.wit) | symbols: `interface lifecycle`, `interface transform`, `interface filter`
-- **Source:** [`wit/worlds.wit`](../../wit/worlds.wit) | symbols: `world transform-node`, `world filter-node`, `world router-node`
+- **Source:** [`wit/worlds.wit`](../../wit/worlds.wit) | symbols: `world transform-node`, `world filter-node`, `world router-node`, `world inference-node`
 - **Source:** [`plugins/pass-through/Cargo.toml`](../../plugins/pass-through/Cargo.toml) | symbols: `crate-type = ["cdylib"]`, `wit-bindgen = "0.53"`
-- **Source:** [`crates/wafer-core/src/engine/bindings.rs`](../../crates/wafer-core/src/engine/bindings.rs) | symbols: `pub mod transform_node`, `pub mod filter_node`, `pub(crate) mod router_node`
-- **Source:** [`crates/wafer-core/src/engine/loader.rs`](../../crates/wafer-core/src/engine/loader.rs) | symbols: `fn build_linker`, `pub fn pre_instantiate_transform`, `pub fn pre_instantiate_filter`, `pub fn pre_instantiate_router`
+- **Source:** [`crates/wafer-core/src/engine/bindings.rs`](../../crates/wafer-core/src/engine/bindings.rs) | symbols: `pub mod transform_node`, `pub mod filter_node`, `pub(crate) mod router_node`, `pub(crate) mod inference_node`
+- **Source:** [`crates/wafer-core/src/engine/loader.rs`](../../crates/wafer-core/src/engine/loader.rs) | symbols: `fn build_linker`, `pub fn pre_instantiate_transform`, `pub(crate) fn pre_instantiate_inference`, `pub fn pre_instantiate_filter`, `pub fn pre_instantiate_router`
 - **Source:** [`crates/wafer-core/src/orchestrator/launcher.rs`](../../crates/wafer-core/src/orchestrator/launcher.rs) | symbols: `fn create_source`, `fn create_sink`, `async fn resolve_and_load_component`
 - **Source:** [`plugins/pass-through/src/lib.rs`](../../plugins/pass-through/src/lib.rs) | symbols: `wit_bindgen::generate!`, `impl exports::wafer::pipeline::transform::Guest`, `export!(PassThrough)`
+- **Source:** [`plugins/mnist-inference/src/lib.rs`](../../plugins/mnist-inference/src/lib.rs) | symbols: `world: "inference-node"`, `graph::load`, `GraphExecutionContext`
 - **Source:** [`crates/wafer-plugin/src/lib.rs`](../../crates/wafer-plugin/src/lib.rs) | symbols: `macro_rules! payload_as_str`, `$input.payload.read_all()`
 - **Source:** [`plugins/content-router/src/lib.rs`](../../plugins/content-router/src/lib.rs) | symbols: `world: "router-node"`, `let bytes = input.payload.read_all()`
 - **Source:** [`crates/wafer-core/src/registry/client.rs`](../../crates/wafer-core/src/registry/client.rs) | symbols: `pub async fn resolve`, `fn resolve_local`, `async fn resolve_oci`
 - **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `fn build_wit_message`, `pub fn validate_and_init`, `delete_buffer`
 - **Test:** [`crates/wafer-core/tests/wasi_async_runner.rs`](../../crates/wafer-core/tests/wasi_async_runner.rs) | symbol: `async fn delay_injector_runs_without_wasi_runtime_panic()`
+- **Test:** [`crates/wafer-core/tests/inference_inventory.rs`](../../crates/wafer-core/tests/inference_inventory.rs) | symbols: `fn root_wit_defines_the_pinned_inference_world()`, `fn host_bindings_include_inference_without_changing_ordinary_worlds()`
+- **Test:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `fn inference_recovery_and_reconfigure_keep_real_model_live()`, `fn inference_hot_swap_adopts_real_component_between_calls()`
 
 ## Checkpoint
 

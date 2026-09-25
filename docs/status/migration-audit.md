@@ -5,6 +5,12 @@
 **Source archive:** bit-for-bit copies of the deleted source documents are preserved under [`../rfcs/source-decisions/`](../rfcs/source-decisions/).
 **Audit trail:** raw scout files live under `.delegation-runner/doc-refactor/migration-audit/`.
 
+This entire file is a historical migration audit. Its implementation snippets
+record the state seen in 2026-07 and do not override current source or
+[`implementation-status.md`](implementation-status.md).
+
+<!-- historical-design-below -->
+
 ## Methodology
 This audit checks two things for every concrete decision row in the deleted decision documents. For provenance, each original source document is archived intact under [`docs/rfcs/source-decisions/`](../rfcs/source-decisions/) and can be compared against `git show HEAD:docs/decisions/<file>`. The audit references 12 concrete deleted source files; the wildcard `docs/decisions/*` is descriptive and is not an additional archived file.
 

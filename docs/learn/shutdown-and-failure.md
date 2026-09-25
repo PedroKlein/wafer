@@ -66,12 +66,12 @@ WIT defines five process-error categories. `ErrorPolicyExecutor::handle` treats 
 | Category | Current executor behavior |
 |---|---|
 | `bad-input` | Apply the configured simple action: skip, DLQ, or return a teardown signal. |
-| `dependency-failed` | Add to the bounded retry buffer with capped exponential backoff, or send to DLQ when full or exhausted. |
-| `processing-failed` | Use the same bounded retry path. |
+| `dependency-failed` | Add to the bounded retry buffer with capped exponential backoff, or apply its configured exhausted action. |
+| `processing-failed` | Use the same bounded retry and terminal-action path. |
 | `timed-out` | Apply the configured simple action. The transform runner then recreates the store before continuing when policy permits. |
 | `unrecoverable` | Return control to the runner's recovery path rather than queue a normal retry. |
 
-The transform runner gives ready retries priority over fresh messages. It preserves a safety clone before calling Wasm so an error path still owns the original content. Pending retry entries are flushed to the DLQ on shutdown or before a hot-swap is applied.
+The runners give ready retries priority over fresh messages and wake at the earliest due deadline even when upstream is idle. Retry count survives requeue. Once exhausted, `skip`, `dlq`, or `teardown` is honored; DLQ-full and DLQ-closed remain distinct outcomes and the envelope is not requeued. Transform preserves a safety clone before calling Wasm. Pending retries are flushed to the DLQ on shutdown or before replacement.
 
 Wasmtime traps are mapped separately: epoch interruption becomes `TimedOut`; other traps become `Unrecoverable`. A timeout triggers store recovery. An unrecoverable transform trap can first use the bounded hot-swap canary rollback path when one is active, then falls back to re-instantiation from the cached pre-instantiated component. If recovery fails, that node loop exits.
 
@@ -97,7 +97,7 @@ Queue receive and native source polling are cancellation points. The `biased` or
 
 ### `Result` does not imply propagation unless the caller uses it
 
-`ErrorPolicyExecutor::handle` returns a boolean teardown signal for some actions. The timeout path uses that result. The current generic transform, filter, and router error branches call `handle` without branching on its return value, so a configured simple teardown action is not uniformly enforced by those branches.
+`ErrorPolicyExecutor::handle` returns a typed `ErrorPolicyAction`. The shared runner handler converts `ExhaustedSkip` into one counter increment, continues after successful/DLQ-failed non-teardown outcomes, and returns false for `Teardown` so each processing loop enters recovery.
 
 ## Design
 
@@ -116,7 +116,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 **Intended design:** The combination of bounded retries, DLQ routing, store recovery, and cooperative cleanup aims to keep one bad message or guest instance from leaving the process indefinitely stuck.
 
-**Known drift:** Shutdown is not reverse-topological and does not prove completion of every in-flight message. Edge overflow `Drop` and `DeadLetter` policies are not dispatched by the current downstream sender path. Retry exhaustion currently goes directly to DLQ, and generic processing-error branches ignore the boolean teardown result returned by `ErrorPolicyExecutor::handle`.
+**Known drift:** Shutdown is not reverse-topological and does not prove completion of every in-flight message. A failed DLQ enqueue is observable but cannot recover the already-exhausted message.
 
 ## Evidence
 
@@ -124,7 +124,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 - **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `source.close().await`
 - **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `tokio::task::block_in_place(|| transform.process(envelope))`, `policy.flush_to_dlq("shutdown")`
 - **Source:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbols: `pub async fn run_sink_loop`, `receiver.try_recv()`, `sink.flush().await`, `sink.close().await`
-- **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
+- **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub(crate) fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
 - **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_shutdown_completes_all_tasks()`, `async fn test_cancel_triggers_shutdown()`
 - **Test:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbol: `async fn test_sink_loop_cancel_drains_and_flushes()`
 - **Test:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbol: `fn test_flush_to_dlq_drains_all_entries()`

@@ -1,0 +1,46 @@
+[pipeline]
+name = "e-backpressure-drop"
+description = "Bounded queue saturation with nonblocking overflow drops"
+
+[engine]
+epoch_deadline = 100
+epoch_tick_ms = 10
+
+[engine.fuel]
+transform = 10000000
+filter = 500000
+router = 500000
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 1000
+warmup_messages = 0
+payload_size = 128
+
+[nodes.slow]
+type = "transform"
+plugin = "../../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
+
+[nodes.slow.config]
+delay_ms = 5
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "slow"
+capacity = 64
+overflow = "drop"
+
+[[edges]]
+from = "slow"
+to = "sink"
+capacity = 64
+overflow = "slow"

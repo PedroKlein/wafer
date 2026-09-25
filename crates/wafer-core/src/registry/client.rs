@@ -91,21 +91,19 @@ impl WaferRegistry {
     async fn resolve_oci(&self, oci_ref: &OciReference) -> Result<ResolvedPlugin, RegistryError> {
         let cache_key = oci_ref.tag.clone();
 
-        if !self.config.no_cache {
-            if let Some(entry) = self.cache.get(&oci_ref.registry, &oci_ref.repository, &cache_key)
-            {
-                tracing::info!("Using cached {} (age: {:?})", oci_ref.as_str(), entry.age);
+        if !self.config.no_cache
+            && let Some(entry) = self.cache.get(&oci_ref.registry, &oci_ref.repository, &cache_key)
+        {
+            tracing::info!("Using cached {} (age: {:?})", oci_ref.as_str(), entry.age);
 
-                let content = std::fs::read(&entry.path).map_err(|e| {
-                    RegistryError::Cache(format!("failed to read cached file: {e}"))
-                })?;
+            let content = std::fs::read(&entry.path)
+                .map_err(|e| RegistryError::Cache(format!("failed to read cached file: {e}")))?;
 
-                return Ok(ResolvedPlugin::new(
-                    PluginSource::Oci(oci_ref.clone()),
-                    compute_hash(&content),
-                    entry.path,
-                ));
-            }
+            return Ok(ResolvedPlugin::new(
+                PluginSource::Oci(oci_ref.clone()),
+                compute_hash(&content),
+                entry.path,
+            ));
         }
 
         let content = self.fetch_oci(oci_ref).await?;

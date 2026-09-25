@@ -111,16 +111,16 @@ The largest crate. Contains all runtime logic grouped into modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `engine` | Wasmtime lifecycle: component loading, AOT cache (blake3-keyed), `InstancePre` pooling, `WaferBuffer` resource, WASI capability scoping, `StoreLimits`, WIT bindgen glue, host function impls (`pipeline:host/logging`). |
-| `orchestrator` | Pipeline lifecycle: `Pipeline` handle, `builder` (task-per-node construction, mpsc wiring, watch-channel per Wasm node), `launcher` (JoinSet startup), `hotswap` (`SwapCoordinator`, `SwapTimeline`). |
+| `engine` | Wasmtime lifecycle: component loading, AOT cache (blake3-keyed), `InstancePre` pooling, `WaferBuffer` resource, WASI capability scoping, `StoreLimits`, WIT bindgen glue, host function impls (`wafer:pipeline/logging`). |
+| `orchestrator` | Pipeline lifecycle: `Pipeline` handle, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
 | `runner` | Per-category async loops — one each for source, sink, transform, filter, router. Each loop owns its `Store`, receives from mpsc, sends to downstream mpsc, and integrates with the error policy executor. |
 | `dag` | Petgraph wrapper: `DagGraph`, topological sort, cycle rejection. |
-| `queue` | `bounded.rs` (thin tokio::mpsc wrapper), `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>` + `Bytes` payload + `Lineage`). |
+| `queue` | `bounded.rs` tracking wrappers and `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
 | `node` | Abstractions: `ProcessNode` trait, `NodeState` FSM, native vs Wasm implementations, per-node metrics. |
 | `dlq` | Dead-letter queue writer — routes `DlqEnvelope` to the configured MQTT topic or file. |
 | `metrics` | `MetricsRegistry`, atomic counters on the hot path, Prometheus snapshot builder for the scrape endpoint. |
 | `bench` | Measurement helpers: per-hop HdrHistogram tap, memory sampler. |
-| `config` | Runtime-internal config wiring: schema introspection, hot-swap diff computation. |
+| `config` | Re-exports the shared `wafer-types` configuration surface for core consumers. |
 | `testing` | `TestPipeline` harness shared by unit tests, integration tests, and benchmarks. |
 | `api` | Axum HTTP server: route wiring, handlers (health, ready, list-nodes, get-node, hot-swap, shutdown, metrics scrape). |
 | `error` | `WaferError`, `RegistryError`, top-level `Result` alias. |
@@ -154,12 +154,13 @@ CLI client for the running control plane. Built with `clap` derive API
 and dual-output formatting (human-readable tables via `tabled`, machine-
 parseable JSON via `--json`). Subcommands map 1:1 to the HTTP API:
 
-- `status` → `GET /health` + `GET /ready`.
+- `status` → `GET /ready` + `GET /api/v1/nodes`.
 - `nodes` → `GET /api/v1/nodes`.
 - `hot-swap <id> <path>` → `POST /api/v1/nodes/{id}/hot-swap`.
 - `shutdown` → `POST /api/v1/pipeline/shutdown`.
+- raw metrics → `GET /metrics`.
 
-Error responses follow RFC 9457 Problem Details.
+The server also exposes `POST /api/v1/nodes/{id}/reconfigure`; the current CLI has no reconfigure subcommand. Handler errors are plain text, not RFC 9457 Problem Details.
 
 ### `wafer-loadgen`
 
@@ -231,7 +232,7 @@ flowchart LR
 | Observability | `metrics` module (counters), `api::metrics` (scrape), `tracing` spans emitted from every runner loop and host function. |
 | Error handling | Stratified: `thiserror` in library boundaries, five-category WIT `process-error` at the guest–host edge, `anyhow` only in binaries. |
 | Backpressure | Bounded `tokio::mpsc` channels on every edge; overflow policy configurable per-edge (slow / drop / dead-letter). |
-| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits`, epoch-based preemption, WASI capability scoping. |
+| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits`, optional fuel/epoch bounds, and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend. |
 | Hot-swap | Watch-channel signal from orchestrator → runner; between-messages replacement of `Store` + `Instance`. See [ADR-0012](../adr/0012-watch-channel-hot-swap.md). |
 
 ## Related documents

@@ -202,6 +202,8 @@ pub async fn launch_pipeline_timed(
         }
     }
 
+    mark_replacement_eligible(&mut build_output);
+
     let orchestrator = PipelineOrchestrator::from_build_output(build_output, config, engine);
     let handle = orchestrator.handle();
     for (node_id, hash) in plugin_hashes {
@@ -212,6 +214,20 @@ pub async fn launch_pipeline_timed(
         .saturating_sub(timings.component_load_compile)
         .saturating_sub(timings.instantiation);
     Ok(TimedPipelineLaunch { orchestrator, timings })
+}
+
+fn mark_replacement_eligible(build_output: &mut crate::orchestrator::builder::BuildOutput) {
+    for bundle in &build_output.node_bundles {
+        let is_loaded_wasm = match &bundle.kind {
+            NodeBundleKind::Transform { node: Some(node), .. } => !node.is_native(),
+            NodeBundleKind::Filter { node: Some(node), .. } => !node.is_native(),
+            NodeBundleKind::Router { node: Some(_), .. } => true,
+            _ => false,
+        };
+        if is_loaded_wasm {
+            build_output.replacement_eligible.insert(bundle.node_id.clone());
+        }
+    }
 }
 
 // =============================================================================
@@ -382,20 +398,17 @@ async fn load_transform_node(
     plugin_hashes.insert(node_id.into(), plugin_hash);
 
     let phase_started = Instant::now();
-    let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
-
-    let state = WaferState::new_with_memory_limit(
-        node_id,
-        capabilities_from_config(&wasm.capabilities),
-        wasm.memory_limit.unwrap_or(default_memory),
-    );
+    let capabilities = capabilities_from_config(&wasm.capabilities);
+    let memory_limit = wasm.memory_limit.unwrap_or(default_memory);
+    let fuel_limit = wasm.fuel.or(default_fuel);
+    let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: None → unlimited; engine construction leaves consume_fuel /
     // epoch_interruption off in that case, so calling the setter would trap
     // or error. Fuel + epoch must be set before instantiation — start functions
     // consume fuel, and the epoch ticker is running from engine init.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
@@ -405,15 +418,24 @@ async fn load_transform_node(
         store.set_epoch_deadline(n.get());
     }
 
-    let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
-        message: format!("transform '{node_id}' instantiation failed: {e}"),
-    })?;
+    let mut node = if capabilities.allow_inference {
+        let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
+        let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+            message: format!("inference transform '{node_id}' instantiation failed: {e}"),
+        })?;
+        WasmTransformNode::new_inference(store, bindings, pre, fuel_limit)
+    } else {
+        let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
+        let bindings = pre.instantiate(&mut store).map_err(|e| WaferError::PluginInit {
+            message: format!("transform '{node_id}' instantiation failed: {e}"),
+        })?;
+        WasmTransformNode::new(store, bindings, pre, fuel_limit)
+    };
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmTransformNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
-        capabilities_from_config(&wasm.capabilities),
-        wasm.memory_limit.unwrap_or(default_memory),
+        capabilities,
+        memory_limit,
         engine.epoch_deadline(),
         config_json.clone(),
     );
@@ -791,6 +813,151 @@ mod tests {
             resolve_bench_sink_output_dir(Some("/configured/output"), Some(run_dir.as_os_str())),
             Some(run_dir.to_path_buf())
         );
+    }
+
+    #[tokio::test]
+    #[expect(clippy::large_futures, reason = "test launches the real Wasm-capable pipeline")]
+    async fn native_transform_and_filter_are_not_replacement_eligible() {
+        let config: Config = toml::from_str(
+            r#"
+[pipeline]
+name = "native-replacement-eligibility"
+
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.transform]
+type = "transform"
+plugin = { kind = "native", function = "passthrough" }
+
+[nodes.filter]
+type = "filter"
+plugin = { kind = "native", function = "threshold" }
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "sink"
+"#,
+        )
+        .expect("native config");
+        let mut orchestrator = launch_pipeline(config, None).await.expect("launch native pipeline");
+        let handle = orchestrator.handle();
+
+        assert!(handle.swappable_nodes().is_empty());
+        let _ = handle.try_begin_swap("transform").expect_err("native transform rejected");
+        let _ = handle.try_begin_swap("filter").expect_err("native filter rejected");
+        let _ = handle.try_begin_swap("source").expect_err("source rejected");
+        let _ = handle.try_begin_swap("sink").expect_err("sink rejected");
+
+        orchestrator.shutdown().await.expect("shutdown native pipeline");
+    }
+
+    #[tokio::test]
+    #[expect(clippy::large_futures, reason = "test launches the real Wasm pipeline")]
+    async fn loaded_wasm_transform_filter_and_router_are_replacement_eligible() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let transform =
+            root.join("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+        let filter = root.join(
+            "plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm",
+        );
+        let router = root
+            .join("plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm");
+        if !transform.exists() || !filter.exists() || !router.exists() {
+            return;
+        }
+        let config: Config = toml::from_str(&format!(
+            r#"
+[pipeline]
+name = "wasm-replacement-eligibility"
+
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.transform]
+type = "transform"
+plugin = {transform:?}
+
+[nodes.filter]
+type = "filter"
+plugin = {filter:?}
+
+[nodes.filter.config]
+field = "temperature"
+min = 0.0
+max = 100.0
+
+[nodes.router]
+type = "router"
+plugin = {router:?}
+
+[nodes.router.config]
+route_field = "type"
+default_port = "default"
+routes = {{ telemetry = "default" }}
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "router"
+
+[[edges]]
+from = "router"
+to = "sink"
+port = "default"
+"#,
+            transform = transform.display(),
+            filter = filter.display(),
+            router = router.display(),
+        ))
+        .expect("wasm config");
+        let mut orchestrator = launch_pipeline(config, None).await.expect("launch wasm pipeline");
+        let handle = orchestrator.handle();
+        let eligible = handle.swappable_nodes();
+
+        assert!(eligible.contains(&"transform"));
+        assert!(eligible.contains(&"filter"));
+        assert!(eligible.contains(&"router"));
+        assert!(!eligible.contains(&"source"));
+        assert!(!eligible.contains(&"sink"));
+
+        orchestrator.shutdown().await.expect("shutdown wasm pipeline");
+    }
+
+    #[test]
+    fn inference_grant_reaches_the_engine_capability() {
+        let config =
+            ConfigCapabilities { inherit_stdio: true, inherit_env: false, allow_inference: true };
+
+        let capabilities = capabilities_from_config(&config);
+        assert!(capabilities.inherit_stdio);
+        assert!(!capabilities.inherit_env);
+        assert!(capabilities.allow_inference);
     }
 
     #[test]

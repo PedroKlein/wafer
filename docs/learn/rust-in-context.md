@@ -40,7 +40,7 @@ Configuration node categories use an enum instead. That set is closed and every 
 
 An async function can pause at `.await` while other Tokio tasks run. `run_source_loop` owns a source adapter and downstream senders; `run_sink_loop` owns a sink adapter and one receiver. `PipelineOrchestrator::spawn_bundles` moves each prepared bundle into its runner task.
 
-The pipeline builder calls `mpsc::channel(capacity)`. A bounded channel accepts at most that many queued values. On the current downstream path, `send_one` waits for a permit with `sender.reserve().await`; waiting there applies backpressure. One receiver is created per destination, and upstream nodes receive cloned sender handles. That shape permits fan-in without multiple consumers racing for the same destination stream.
+The pipeline builder calls `mpsc::channel(capacity)`. A bounded channel accepts at most that many queued values. One receiver is created per destination and uses the maximum explicit incoming edge capacity; upstream nodes receive cloned sender handles. `send_one` reserves a permit for `slow`, uses non-blocking `try_send` for `drop` and `dead-letter`, and records closed/full outcomes separately. This permits fan-in without multiple consumers racing for the same destination stream, but does not promise producer fairness or ordering.
 
 ## Arc and RAII
 
@@ -70,18 +70,18 @@ RAII ties cleanup to ownership. `ProcessingGuard` marks a node as processing whe
 
 **Intended design:** These Rust mechanisms reinforce ownership boundaries: data types do not perform I/O, messages move through bounded queues, adapters are owned by their tasks, and guards pair state changes with cleanup.
 
-**Known drift:** Names such as "zero-copy envelope" can overstate the whole path. The host envelope shares header and payload storage across Rust clones, but crossing WIT still marshals data according to the Component Model bindings. The configured edge overflow value is initially stored in `EdgeSender`, but `collect_downstream_senders` does not copy it into `DownstreamSender`; `send_one` waits on `sender.reserve()`. The current downstream path therefore does not dispatch the configured `Drop` or `DeadLetter` behavior described by broader documentation. Consult the [WIT contract reference](../interfaces/wit-contracts.md) for the guest boundary, and verify host behavior in `node/wasm.rs`.
+**Known drift:** None for the behavior described above. The phrase "zero-copy envelope" remains deliberately bounded to shared host storage and borrow-only inspection; Component Model lifting/lowering still materializes strings, metadata, and Transform output bytes. Fan-in remains unordered.
 
 ## Evidence
 
 - **Source:** [`Cargo.toml`](../../Cargo.toml) | symbols: `[workspace]`, `members = [`
-- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::validate`
+- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`
 - **Source:** [`crates/wafer-config/src/loader.rs`](../../crates/wafer-config/src/loader.rs) | symbols: `pub fn load_config`, `Result<Config, ConfigError>`
 - **Source:** [`crates/wafer-types/src/config/mod.rs`](../../crates/wafer-types/src/config/mod.rs) | symbols: `pub enum NodeDef`, `pub const fn category`
 - **Source:** [`crates/wafer-core/src/node/traits.rs`](../../crates/wafer-core/src/node/traits.rs) | symbols: `pub trait Lifecycle`, `pub trait Transform`, `Box<dyn Future`
 - **Source:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `pub struct RuntimeEnvelope`, `Arc<EnvelopeHeader>`, `pub payload: Bytes`
 - **Source:** [`crates/wafer-core/src/node/state.rs`](../../crates/wafer-core/src/node/state.rs) | symbols: `pub struct ProcessingGuard`, `impl Drop for ProcessingGuard`
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `fn collect_downstream_senders`, `overflow: edge.overflow.unwrap_or_default()`
+- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `fn collect_downstream_senders`, `overflow: e.overflow`
 - **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `async fn send_one`, `sender.sender.reserve().await`
 - **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`
 - **Test:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbol: `async fn test_source_loop_messages_flow()`

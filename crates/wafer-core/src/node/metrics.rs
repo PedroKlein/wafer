@@ -18,6 +18,11 @@ const MAX_RECOVERY_SAMPLES: usize = 65_536;
 pub struct QueueMetrics {
     enqueued: AtomicU64,
     dequeued: AtomicU64,
+    dropped: AtomicU64,
+    dead_lettered: AtomicU64,
+    downstream_closed: AtomicU64,
+    dlq_full: AtomicU64,
+    dlq_closed: AtomicU64,
 }
 
 impl QueueMetrics {
@@ -29,6 +34,31 @@ impl QueueMetrics {
     #[inline]
     pub fn record_dequeued(&self) {
         self.dequeued.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_dropped(&self) {
+        self.dropped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_dead_lettered(&self) {
+        self.dead_lettered.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_downstream_closed(&self) {
+        self.downstream_closed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_dlq_full(&self) {
+        self.dlq_full.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn record_dlq_closed(&self) {
+        self.dlq_closed.fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
@@ -44,6 +74,31 @@ impl QueueMetrics {
     #[inline]
     pub fn depth(&self) -> u64 {
         self.enqueued().saturating_sub(self.dequeued())
+    }
+
+    #[inline]
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn dead_lettered(&self) -> u64 {
+        self.dead_lettered.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn downstream_closed(&self) -> u64 {
+        self.downstream_closed.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn dlq_full(&self) -> u64 {
+        self.dlq_full.load(Ordering::Relaxed)
+    }
+
+    #[inline]
+    pub fn dlq_closed(&self) -> u64 {
+        self.dlq_closed.load(Ordering::Relaxed)
     }
 }
 
@@ -65,6 +120,8 @@ pub struct NodeMetrics {
     retries: AtomicU64,
     /// Total messages sent to the dead-letter queue.
     dlq: AtomicU64,
+    /// Total retry-exhausted messages consumed by the skip action.
+    exhausted_skips: AtomicU64,
     /// Total hot-swap operations completed on this node.
     swaps: AtomicU64,
     /// P0.11 (A7 residual): cumulative Recovering → Running time in
@@ -96,6 +153,7 @@ impl NodeMetrics {
             process_ns: AtomicU64::new(0),
             retries: AtomicU64::new(0),
             dlq: AtomicU64::new(0),
+            exhausted_skips: AtomicU64::new(0),
             swaps: AtomicU64::new(0),
             recovery_ns_total: AtomicU64::new(0),
             recovery_count: AtomicU64::new(0),
@@ -131,6 +189,12 @@ impl NodeMetrics {
     #[inline]
     pub fn record_dlq(&self) {
         self.dlq.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a retry-exhausted message consumed by the skip action.
+    #[inline]
+    pub fn record_exhausted_skip(&self) {
+        self.exhausted_skips.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a completed hot-swap operation.
@@ -254,6 +318,12 @@ impl NodeMetrics {
         self.dlq.load(Ordering::Relaxed)
     }
 
+    /// Total retry-exhausted messages consumed by the skip action.
+    #[inline]
+    pub fn exhausted_skips(&self) -> u64 {
+        self.exhausted_skips.load(Ordering::Relaxed)
+    }
+
     /// Total hot-swap completions.
     #[inline]
     pub fn swaps(&self) -> u64 {
@@ -290,6 +360,7 @@ mod tests {
         assert_eq!(m.process_ns(), 0);
         assert_eq!(m.retries(), 0);
         assert_eq!(m.dlq(), 0);
+        assert_eq!(m.exhausted_skips(), 0);
         assert_eq!(m.swaps(), 0);
     }
 
@@ -321,8 +392,10 @@ mod tests {
         m.record_retry();
         m.record_retry();
         m.record_dlq();
+        m.record_exhausted_skip();
         assert_eq!(m.retries(), 2);
         assert_eq!(m.dlq(), 1);
+        assert_eq!(m.exhausted_skips(), 1);
     }
 
     #[test]

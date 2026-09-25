@@ -1,0 +1,33 @@
+meta {
+  name: Reconfigure Node
+  type: http
+  seq: 4
+}
+
+post {
+  url: {{baseUrl}}/api/v1/nodes/{{nodeId}}/reconfigure
+  body: json
+  auth: none
+}
+
+body:json {
+  {
+    "config": {
+      "threshold": 42
+    }
+  }
+}
+
+vars:pre-request {
+  nodeId: transform
+}
+
+docs {
+  Re-instantiates an eligible loaded Wasm node from its cached component with
+  new JSON configuration. The optional expected_plugin_hash field guards
+  against reconfiguring a different component after a successful hot-swap.
+}
+
+assert {
+  res.status: in [200, 404, 409, 500, 504]
+}

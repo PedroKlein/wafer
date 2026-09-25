@@ -15,6 +15,7 @@ use std::time::Duration;
 use wasmtime::{Config, Engine, component::Component};
 
 use super::bindings::filter_node::FilterNodePre;
+use super::bindings::inference_node::InferenceNodePre;
 use super::bindings::router_node::RouterNodePre;
 use super::bindings::transform_node::TransformNodePre;
 use super::cache::ComponentCache;
@@ -207,6 +208,27 @@ impl WaferEngine {
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })
     }
 
+    /// Prepare an inference-capable Transform component.
+    pub(crate) fn pre_instantiate_inference(
+        &self,
+        component: &Component,
+    ) -> Result<InferenceNodePre<WaferState>> {
+        let mut linker = self.build_linker()?;
+        wasmtime_wasi_nn::wit::add_to_linker(&mut linker, WaferState::nn_view)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        super::bindings::transform_node::TransformNode::add_to_linker::<
+            _,
+            wasmtime::component::HasSelf<WaferState>,
+        >(&mut linker, |state: &mut WaferState| state)
+        .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+
+        let instance_pre = linker
+            .instantiate_pre(component)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        InferenceNodePre::new(instance_pre)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })
+    }
+
     /// Create a `FilterNodePre` from a compiled component.
     ///
     /// Analogous to [`Self::pre_instantiate_transform`] but for filter-node world.
@@ -288,6 +310,8 @@ impl WaferEngine {
 mod tests {
     use super::*;
     use crate::config::{DEFAULT_EPOCH_TICK_MS, FuelBudgets, HotSwapConfig, MemoryLimits};
+    use crate::engine::Capabilities;
+    use wasmtime::Store;
 
     #[test]
     fn engine_creation_default() {
@@ -369,10 +393,9 @@ mod tests {
     #[test]
     fn load_component_nonexistent_file() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let result = engine.load_component("/nonexistent/path/to/component.wasm");
-        assert!(result.is_err());
-
-        let err = result.err().expect("Expected error");
+        let err = engine
+            .load_component("/nonexistent/path/to/component.wasm")
+            .expect_err("nonexistent component must fail to load");
         match err {
             WaferError::ComponentLoad { path, .. } => {
                 assert_eq!(path.to_string_lossy(), "/nonexistent/path/to/component.wasm");
@@ -400,8 +423,7 @@ mod tests {
     #[test]
     fn compile_cached_invalid_bytes() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let result = engine.compile_cached(b"not valid wasm");
-        assert!(result.is_err());
+        let _ = engine.compile_cached(b"not valid wasm").unwrap_err();
     }
 
     #[test]
@@ -436,5 +458,28 @@ mod tests {
         let engine = WaferEngine::new().expect("engine");
         let linker = engine.build_linker();
         assert!(linker.is_ok(), "build_linker should succeed");
+    }
+
+    #[test]
+    fn inference_component_requires_the_inference_preparation_path() {
+        let engine = WaferEngine::new().expect("engine");
+        let component = engine
+            .load_component_from_bytes(
+                include_bytes!("../../tests/fixtures/inference-test-component.component.bin"),
+                "inference-test-component",
+            )
+            .expect("component");
+
+        let denied = engine.pre_instantiate_transform(&component);
+        assert!(denied.is_err(), "ordinary Transform linker must fail closed on wasi-nn imports");
+        if let Err(denied) = denied {
+            assert!(denied.to_string().contains("wasi:nn/"), "unexpected denial: {denied}");
+        }
+
+        let pre = engine.pre_instantiate_inference(&component).expect("inference pre");
+        let state = WaferState::new("inference", Capabilities::sandbox().inference(true));
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|state| state.limits_mut());
+        pre.instantiate(&mut store).expect("granted inference component should instantiate");
     }
 }

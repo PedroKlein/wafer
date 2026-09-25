@@ -5,12 +5,14 @@ Current state lives in `docs/status/implementation-status.md`. Design
 decisions that these items would build on are captured in
 `docs/rfcs/` and `docs/adr/`.
 
-## Near-term — evaluation infrastructure
+## Near-term — release and final evaluation
 
-The macOS shakedown pass is **complete** (25/26 experiments green). The
-canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md)
-documents per-experiment gaps and is the input document for the follow-up
-canonical-runs work on Raspberry Pi 5 4 GB.
+The TG2 pre-campaign runtime and evaluation-contract remediation is verified on
+a clean candidate. The restored MNIST inference path is also verified locally
+and on Jetson, while cross-repository parity and final independent review remain
+before any release, pilot, or final campaign. The Jetson receipt confirms CUDA
+provider execution but not stable CUDA teardown or inference performance.
+The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
 
 Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 
@@ -36,17 +38,13 @@ Remaining work for thesis-grade numbers:
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 
-## Runtime migration — close documentation drift
+## Runtime migration — closed
 
-The `clean-runtime` refactor extracted the new config + types into
-`wafer-types` + `wafer-config`, but the runtime binary still loads the
-legacy `wafer-core::config` schema. Every entry in
-`docs/status/implementation-gaps.md` is a scheduled follow-up here.
+The runtime uses `wafer-types` plus `wafer-config`; the legacy schema and prior
+A1–A19 gaps are closed. `docs/status/implementation-gaps.md` preserves their
+historical filing state.
 
-Executable backlog: `plan_tasks --plan-name runtime-migration` (34 tasks,
-covering gaps A1–A15, verification gates, and commit checkpoints).
-
-Status (2026-08-02): A1–A19 closed. Only open gap is **A20**
+Only open gap is **A20**
 (Prometheus rollback counter, observability follow-up, ~1 h). The
 recovery-transition histogram (formerly A7 residual) landed via
 T4 alongside the `wafer_node_recovery_duration_ms` scrape hook.
@@ -75,6 +73,11 @@ thesis but on the credible-next-step list.
 - **Cosign signature verification** — `[registry].verify_cosign = true`
   enforces signature policy at plugin load. Requires `cosign` on
   `PATH`. See `docs/operations/registry.md` § Supply-chain notes.
+- **Inference hardening** — isolate the intermittent CUDA teardown corruption
+  observed after successful Jetson inference, then extend validation beyond the
+  current MNIST architecture check. CPU inference and actual CUDA-provider
+  execution are implemented; performance, energy, and production-readiness
+  claims remain out of scope.
 - **`wasi:http` capability** — grant plugins access to outbound HTTP
   when needed by transforms that call external APIs; today only
   native HTTP sinks / sources exist.
@@ -117,5 +120,5 @@ Items considered and explicitly deferred (see the relevant RFCs):
   contradicts the per-node isolation contribution.
 - **Host-native expression filters** — RFC-007 §D6 rejected this
   because it undermines the "Wasm plugins are viable" argument.
-- **`Sender::reserve` cancel-safe send path** — RFC-007 §D7
-  rejected as unnecessary given the current cancellation model.
+- **Custom queue implementation** — rejected while bounded Tokio mpsc plus
+  `Sender::reserve` satisfies the current cancel-safe slow path.

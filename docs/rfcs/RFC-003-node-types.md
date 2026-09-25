@@ -4,6 +4,19 @@
 - **Original session date:** 2026-07-06
 - **Amends:** RFC-001 (§A1 removes Joiner world; §A2 Transform strict 1:1), RFC-002 (§A3 RuntimeEnvelope redesigned with Arc header)
 
+> **Current release amendment.** The config retains five node categories, while
+> the single WIT package exposes four worlds. `inference-node` is a
+> capability-gated Transform specialization, not a sixth category. Transform,
+> Filter, and Router can select Wasm or bounded native evaluation implementations; replacement
+> eligibility is based on the loaded Wasm implementation, not the category name.
+> Fan-in shares one destination receiver and has no fairness or cross-producer
+> ordering guarantee.
+>
+> The remainder is the historical design record and may use superseded type or
+> package names.
+
+<!-- historical-design-below -->
+
 ## Abstract
 
 This RFC designs the host-side node type system — the Rust types, traits, and dispatch patterns that realize the WIT contracts defined in RFC-001. It revisits the operator taxonomy from first principles, producing three amendments to prior RFCs: removing the Joiner WIT world (merge is a zero-cost host topology operation via multi-producer mpsc), simplifying Transform to strict 1:1 return semantics, and redesigning RuntimeEnvelope with an Arc-wrapped immutable header for near-free cloning during fan-out and DLQ safety copies. The RFC establishes five node categories (Source, Sink, Transform, Filter, Router), a struct-with-inner-enum dispatch pattern (`AnyNode` + `NodeKind`), trait-object processing interfaces, ownership-vs-borrow trait signature differentiation, fuel budget differentiation by node category, and router fan-out move optimization. Merge is explicitly not a node — it is expressed as multiple senders to one tokio mpsc receiver.

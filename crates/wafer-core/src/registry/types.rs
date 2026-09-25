@@ -210,6 +210,6 @@ mod tests {
     #[test]
     fn test_registry_config_cache_ttl() {
         let config = RegistryConfig { cache_ttl_hours: 12, ..Default::default() };
-        assert_eq!(config.cache_ttl(), Duration::from_secs(12 * 3600));
+        assert_eq!(config.cache_ttl(), Duration::from_hours(12));
     }
 }

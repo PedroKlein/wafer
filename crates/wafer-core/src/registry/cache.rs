@@ -107,14 +107,13 @@ impl PackageCache {
                     let version_path =
                         version_entry.map_err(|e| RegistryError::Cache(e.to_string()))?.path();
 
-                    if let Ok(metadata) = fs::metadata(&version_path) {
-                        if let Ok(modified) = metadata.modified() {
-                            if let Ok(age) = SystemTime::now().duration_since(modified) {
-                                if age > self.ttl && fs::remove_file(&version_path).is_ok() {
-                                    removed = removed.saturating_add(1);
-                                }
-                            }
-                        }
+                    if let Ok(metadata) = fs::metadata(&version_path)
+                        && let Ok(modified) = metadata.modified()
+                        && let Ok(age) = SystemTime::now().duration_since(modified)
+                        && age > self.ttl
+                        && fs::remove_file(&version_path).is_ok()
+                    {
+                        removed = removed.saturating_add(1);
                     }
                 }
             }

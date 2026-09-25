@@ -9,6 +9,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER = ROOT / "eval/scripts/verify-result-contract.py"
 SPEC = importlib.util.spec_from_file_location("verify_result_contract", VERIFIER)
@@ -34,8 +36,13 @@ def run(path: Path, *, canonical: bool = True) -> subprocess.CompletedProcess[st
 def test_alias_receipt_dereferences_single_raw_source(tmp_path: Path) -> None:
     source = tmp_path / "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01"
     source.mkdir(parents=True)
-    for name in ("config.toml", "metadata.json", "stdout.log"):
-        (source / name).write_text("{}" if name.endswith(".json") else "fixture\n")
+    for name in ("config.toml", "stdout.log"):
+        (source / name).write_text("fixture\n")
+    (source / "metadata.json").write_text(json.dumps({
+        "experiment": "e-perf-1",
+        "evidence_class": "final",
+        "thesis_evidence": True,
+    }))
     status = source / "canonical-status.json"
     status.write_text('{"status":"passed"}')
     receipt = tmp_path / "manifests/aliases/e-perf-2/rpi5-batch/native/run-01.json"
@@ -49,6 +56,8 @@ def test_alias_receipt_dereferences_single_raw_source(tmp_path: Path) -> None:
         "source_leaf": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
         "source_status_sha256": hashlib.sha256(status.read_bytes()).hexdigest(),
         "sample_identity": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "source_evidence_class": "final",
+        "independent_n_contribution": 0,
         "shared_measurement": True,
     }))
 
@@ -56,6 +65,55 @@ def test_alias_receipt_dereferences_single_raw_source(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert "OK: 1 leaf run" in result.stdout
+
+
+def test_alias_receipt_rejects_candidate_source_and_n_inflation(tmp_path: Path) -> None:
+    source = tmp_path / "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01"
+    source.mkdir(parents=True)
+    status = source / "canonical-status.json"
+    status.write_text('{"status":"passed"}')
+    (source / "config.toml").write_text("[pipeline]\nname='fixture'\n")
+    (source / "stdout.log").write_text("fixture\n")
+    (source / "metadata.json").write_text(json.dumps({
+        "experiment": "e-perf-1",
+        "evidence_class": "candidate-supplementary",
+        "thesis_evidence": False,
+    }))
+    receipt = tmp_path / "manifests/aliases/e-perf-2/rpi5-batch/native/run-01.json"
+    receipt.parent.mkdir(parents=True)
+    value = {
+        "schema_version": 1,
+        "experiment": "e-perf-2",
+        "condition": "native",
+        "run_index": 1,
+        "shared_from_experiment": "e-perf-1",
+        "source_leaf": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "source_status_sha256": hashlib.sha256(status.read_bytes()).hexdigest(),
+        "sample_identity": "raw/e-perf-1/rpi5-batch/native/run-01-attempt-01",
+        "source_evidence_class": "final",
+        "independent_n_contribution": 0,
+        "shared_measurement": True,
+    }
+    receipt.write_text(json.dumps(value))
+    result = run(receipt, canonical=False)
+    assert result.returncode == 1
+    assert "non-final evidence" in result.stdout
+
+    (source / "metadata.json").write_text(json.dumps({
+        "experiment": "e-perf-1",
+        "evidence_class": "final",
+        "thesis_evidence": True,
+    }))
+    value["independent_n_contribution"] = 1
+    receipt.write_text(json.dumps(value))
+    result = run(receipt, canonical=False)
+    assert result.returncode == 1
+    assert "independent N" in result.stdout
+
+
+def test_alias_mapping_rejects_cycles() -> None:
+    with pytest.raises(ValueError, match="cycle"):
+        CONTRACT.validate_alias_mapping({"e-perf-2": "e-perf-1", "e-perf-1": "e-perf-2"})
 
 
 def test_interval_fragment_without_composed_output_is_rejected(tmp_path: Path) -> None:
@@ -309,20 +367,56 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
                 json.dumps({"rule": {"options": {"concurrency": 1}}})
             )
     if experiment == "e-backpressure":
+        policy_counts = {
+            "slow": {"accepted": 1000, "delivered": 1000, "dropped": 0, "dead_lettered": 0, "dlq_full": 0, "dlq_closed": 0},
+            "drop": {"accepted": 700, "delivered": 700, "dropped": 300, "dead_lettered": 0, "dlq_full": 0, "dlq_closed": 0},
+            "dead-letter": {"accepted": 700, "delivered": 700, "dropped": 0, "dead_lettered": 250, "dlq_full": 40, "dlq_closed": 10},
+        }[condition]
+        counts = {
+            "attempted": 1000,
+            "processed": policy_counts["accepted"],
+            "downstream_closed": 0,
+            "outstanding": 0,
+            **policy_counts,
+        }
+        equations = {
+            "slow": "attempted = delivered",
+            "drop": "attempted = delivered + dropped",
+            "dead-letter": "attempted = delivered + dead_lettered + dlq_full + dlq_closed",
+        }
         (result / "backpressure.json").write_text(json.dumps({
+            "schema_version": 2,
+            "experiment": "e-backpressure",
+            "condition": condition,
+            "run_index": 1,
+            "sample_unit": "run",
+            "policy": condition,
+            "queue": "slow",
             "classification": "saturated-and-drained",
             "threshold_crossed": True,
             "recovered": True,
             "peak_occupancy": 1.0,
             "occupancy_threshold": 0.8,
-            "rates_msg_s": {"offered": 1000.0, "accepted": 150.0, "processed": 150.0, "drained": 140.0},
-            "sequence": {"lossless": True},
+            "recovery_threshold": 0.1,
+            "rates_msg_s": {"offered": 1000.0, "accepted": float(counts["accepted"]), "processed": float(counts["processed"]), "drained": 140.0},
+            "counts": counts,
+            "sequence": {"offered": 1000, "received": counts["delivered"], "gaps": 1000 - counts["delivered"], "duplicates": 0},
+            "accounting": {
+                "equation": equations[condition],
+                "reconciled": True,
+                "dlq_failures": {"full": counts["dlq_full"], "closed": counts["dlq_closed"], "total": counts["dlq_full"] + counts["dlq_closed"]},
+            },
+            "producer_progress": "backpressured" if condition == "slow" else "nonblocking",
             "memory": {"within_limit": True},
         }))
-    if experiment == "e-iso-4":
+    if experiment in {"e-iso-1", "e-iso-2", "e-iso-3", "e-iso-4", "e-iso-5", "e-iso-6"}:
         (result / "containment.json").write_text(json.dumps({
+            "experiment": experiment,
+            "condition": condition,
             "contained": True,
             "traps_total": 2,
+            "runtime_panic": False,
+            "healthy_messages_out": 2,
             "nodes": [{"node_id": "attack", "traps_total": "2", "recovery_count": "2"}],
         }))
     if experiment == "e-iso-7":
@@ -389,8 +483,8 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
             "compile_ns": 1,
             "instantiate_ns": 1,
             "signal_ns": 1,
-            "ack_ns": 1,
-            "convergence_ns": 1,
+            "replacement_adopted_ns": 1,
+            "first_post_replacement_local_outcome_ns": 1,
             "http_total_ns": 5,
             "sink_observed_output_gap_ns": 1,
         }
@@ -398,15 +492,66 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
             "duration_unit": "ns", "sample_count": 50, "events": [event] * 50,
         }))
     if experiment == "e-swap-5":
+        sequence = {"expected": 1000, "received": 1000, "gaps": 0, "duplicates": 0}
+        requests = []
+        events = []
+        for index in range(50):
+            timeline = {
+                "compile_ns": 1,
+                "instantiate_ns": 2,
+                "signal_ns": 3,
+                "rollback_ns": 4,
+            }
+            requests.append({
+                "event_index": index,
+                "plugin": "wafer_pass_through_v2_panics.wasm",
+                "request_started_ns": 1_000_000_000 + index * 6_000_000_000,
+                "request_finished_ns": 1_010_000_000 + index * 6_000_000_000,
+                "request_duration_ns": 10_000_000,
+                "request_duration_clock": "monotonic",
+                "http_status": 200,
+                "body": {"status": "rolled_back", "timeline": timeline},
+            })
+            events.append({"event_index": index, **timeline})
+        (result / "swap_requests.json").write_text(json.dumps(requests))
         (result / "rollback.json").write_text(json.dumps({
-            "attempts": 50, "rolled_back": 50, "all_rolled_back": True,
+            "schema_version": 1,
+            "duration_unit": "ns",
+            "independent_unit": "complete process run",
+            "nested_unit": "rollback event within run",
+            "attempts": 50,
+            "rolled_back": 50,
+            "all_rolled_back": True,
+            "sequence": sequence,
+            "events": events,
+        }))
+        (result / "post-rollback-continuity.json").write_text(json.dumps({
+            "schema_version": 1,
+            "clock": "unix-epoch",
+            "final_rollback_event_index": 49,
+            "final_rollback_finished_ns": requests[-1]["request_finished_ns"],
+            "observation_start_ns": requests[-1]["request_finished_ns"],
+            "observation_end_ns": requests[-1]["request_finished_ns"] + 1_000_000_000,
+            "messages_after_final_rollback": 1,
+            "output_observed_after_final_rollback": True,
+            "successful_v2_transition_observed": False,
+            "interval_metrics_path": "interval-metrics.json",
+            "interval_metrics_sha256": "a" * 64,
+            "sequence": sequence,
         }))
     return result
 
 
 def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
     cases = [
-        ("e-backpressure", "saturated-slow-consumer", "wafer", "backpressure.json", lambda value: value.update(classification="not-saturated"), "backpressure classification"),
+        ("e-backpressure", "slow", "wafer", "backpressure.json", lambda value: value.update(classification="not-saturated"), "did not cross"),
+        ("e-backpressure", "drop", "wafer", "backpressure.json", lambda value: value["counts"].update(dropped=299), "drop policy accounting"),
+        ("e-backpressure", "dead-letter", "wafer", "backpressure.json", lambda value: value["accounting"].update(dlq_failures={"full": 0, "closed": 0, "total": 0}), "DLQ failure accounting"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(contained=False), "contained trap"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: (value.update(traps_total=0), value["nodes"][0].update(traps_total="0")), "contained trap"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(runtime_panic=True), "runtime panic"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(condition="panic"), "expected condition"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(traps_total="bogus"), "invalid runtime metrics"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(recovery_count="1"), "epoch recovery count"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(target_shortfall_messages=1, offered_messages=999, received_messages=999, throughput={"total_messages": 999}, latency_ns={"sample_count": 999}), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(gap_messages=1), "branch A is not lossless"),
@@ -414,7 +559,7 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"]["latency_ns"].update(sample_count=999), "counts do not share the measurement boundary"),
         ("e-perf-9", "small-cold", "wafer", "startup.json", lambda value: value.update(processed_messages=2), "exactly one processed message"),
         ("e-swap-1", "steady", "wafer", "hotswap-analysis.json", lambda value: value.update(sample_count=49), "must contain 50 events"),
-        ("e-swap-5", "process-trap-rollback", "wafer", "rollback.json", lambda value: value.update(rolled_back=49), "50 successful rollbacks"),
+        ("e-swap-5", "process-trap-rollback", "wafer", "rollback.json", lambda value: value.update(rolled_back=49), "rollback evidence does not reconcile"),
         ("e-perf-10", "ekuiper/rate-01000", "ekuiper", "ekuiper-audit.json", lambda value: value["rule"]["options"].update(concurrency=3), "frozen operator concurrency 1"),
         ("e-perf-10", "wafer/rate-01000", "wafer", "subscriber-metadata.json", lambda value: value.update(sequence_end_exclusive=None), "subscriber sequence boundary"),
         (
@@ -443,6 +588,28 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
             completed = run_focused(result)
         assert completed.returncode == 1, (experiment, completed.stdout, completed.stderr)
         assert expected in completed.stdout, (experiment, completed.stdout)
+
+
+def test_swap5_accepts_rollback_continuity_and_rejects_fabricated_timeline() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        result = make_focused_result(
+            Path(tmp), "e-swap-5", "process-trap-rollback", "wafer"
+        )
+        completed = run_focused(result)
+        assert completed.returncode == 0, completed.stdout + completed.stderr
+
+        (result / "swap_timeline.json").write_text(
+            json.dumps({"transitions": [{"from": "v1", "to": "v2", "pause_ns": 1}]})
+        )
+        completed = run_focused(result)
+        assert completed.returncode == 1
+        assert "must not contain a successful-v2 sink timeline" in completed.stdout
+
+        (result / "swap_timeline.json").unlink()
+        (result / "post-rollback-continuity.json").unlink()
+        completed = run_focused(result)
+        assert completed.returncode == 1
+        assert "post-rollback-continuity.json" in completed.stdout
 
 
 def test_focused_verifier_rejects_loss_in_loadgen_sequence_schema() -> None:
@@ -669,12 +836,156 @@ def test_final_matrix_missing_new_artifacts_has_experiment_diagnostics() -> None
         capacity, _ = CONTRACT.check_leaf(
             leaf, "e-perf-10", canonical=True, canonical_matrix=matrix
         )
-        swap, _ = CONTRACT.check_leaf(
+        swap3, _ = CONTRACT.check_leaf(
             leaf, "e-swap-3", canonical=True, canonical_matrix=matrix
         )
+        swap4, _ = CONTRACT.check_leaf(
+            leaf, "e-swap-4", canonical=True, canonical_matrix=matrix
+        )
     assert "missing required canonical artefact for e-perf-10: capacity-run.json" in capacity
-    assert "missing required canonical artefact for e-swap-3: throughput-buckets.json" in swap
-    assert "missing required canonical artefact for e-swap-3: disruption-timeline.json" in swap
+    assert "missing required canonical artefact for e-swap-3: publisher-summary.json" in swap3
+    assert "missing required canonical artefact for e-swap-3: throughput-buckets.json" in swap3
+    assert "missing required canonical artefact for e-swap-3: disruption-timeline.json" in swap3
+    assert "missing required canonical artefact for e-swap-3: disruption-analysis.json" in swap3
+    assert "missing required canonical artefact for e-swap-4: swap-actual-t0.json" in swap4
+
+
+def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Path:
+    source = make_result(root / "source")
+    leaf = root / "e-swap-3" / "rpi5-2026-08-30T00-00-00Z" / strategy / "run-01"
+    leaf.parent.mkdir(parents=True, exist_ok=True)
+    source.rename(leaf)
+    metadata_path = leaf / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata.update(experiment="e-swap-3", condition=strategy, system="wafer")
+    metadata_path.write_text(json.dumps(metadata))
+    buckets = {
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "clock_purpose": "cross-process-alignment",
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
+        "bucket_width_ns": 100_000_000,
+        "coverage_start_offset_ns": -10_000_000_000,
+        "coverage_end_offset_ns": 10_000_000_000,
+        "received_unique": 200,
+        "received_events": 200,
+        "duplicates": 0,
+        "buckets": [
+            {
+                "start_offset_ns": -10_000_000_000 + index * 100_000_000,
+                "end_offset_ns": -10_000_000_000 + (index + 1) * 100_000_000,
+                "received_unique": 1,
+                "received_events": 1,
+                "duplicates": 0,
+                "rate_msg_s": 10.0,
+            }
+            for index in range(200)
+        ],
+    }
+    disruption = {
+        "schema_version": 1,
+        "timestamp_clock": "unix-epoch",
+        "timestamp_clock_purpose": "cross-process-alignment",
+        "scheduling_clock": "monotonic",
+        "duration_clock": "monotonic",
+        "strategy": strategy,
+        "measurement_start_timestamp_ns": 1_000_000_000_000,
+        "scheduled_event_timestamp_ns": 1_060_000_000_000,
+        "scheduled_event_offset_ns": 60_000_000_000,
+        "event_timestamp_ns": 1_060_005_000_000,
+        "event_offset_from_measurement_start_ns": 60_005_000_000,
+        "alignment_error_ns": 5_000_000,
+        "alignment_tolerance_ns": 10_000_000,
+        "action_start_timestamp_ns": 1_060_005_000_000,
+        "action_end_timestamp_ns": 1_060_005_000_001,
+        "action_end_offset_ns": 1,
+        "action_start_monotonic_ns": 5_000_000_000,
+        "action_end_monotonic_ns": 5_000_000_001,
+        "action_duration_ns": 1,
+    }
+    analysis = {
+        "schema_version": 1,
+        "strategy": strategy,
+        "baseline_rate_msg_s": 1_000,
+        "event_min_rate_msg_s": 980,
+        "dip_percent": 2.0,
+        "interruption_ns": 100_000_000,
+        "recovery_ns": 200_000_000,
+        "recovery_right_censored": False,
+        "action_duration_ns": 1,
+        "loss": 0,
+        "duplicates": 0,
+        "messages": {
+            "intended": 120_000,
+            "rejected": 0,
+            "enqueued": 120_000,
+            "received_events": 120_000,
+            "received_unique": 120_000,
+        },
+        "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
+    }
+    publisher = {
+        "schema_version": 1,
+        "intended": 120_000,
+        "rejected": 0,
+        "enqueued": 120_000,
+        "measurement_duration_ns": 120_000_000_000,
+        "deadline_misses": 0,
+    }
+    subscriber = {
+        "started_at_ns": 1,
+        "ended_at_ns": 2,
+        "exit_reason": "total-messages",
+        "git_sha": "1" * 40,
+        "host_tag": "rpi5",
+        "sequence_end_exclusive": 120_000,
+        "ignored_sequence_count": 0,
+        "unexpected_sequence_count": 0,
+        "total_recorded": 120_000,
+        "total_messages": 120_000,
+        "parse_errors": 0,
+        "negative_latency_count": 0,
+        "latency_p50_ns": 1,
+        "latency_p95_ns": 2,
+        "latency_p99_ns": 3,
+        "histogram_lowest_ns": 1_000,
+        "histogram_highest_ns": 10_000_000_000,
+        "histogram_sig_digits": 3,
+        "sequence": {
+            "total_received": 120_000,
+            "total_gaps": 0,
+            "total_duplicates": 0,
+        },
+    }
+    (leaf / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
+    (leaf / "publisher-summary.json").write_text(json.dumps(publisher))
+    (leaf / "subscriber-metadata.json").write_text(json.dumps(subscriber))
+    (leaf / "throughput-buckets.json").write_text(json.dumps(buckets))
+    (leaf / "throughput-buckets-10ms.json").write_text(
+        json.dumps(fine_bucket_fixture(buckets, "e-swap-3"))
+    )
+    (leaf / "disruption-timeline.json").write_text(json.dumps(disruption))
+    (leaf / "disruption-analysis.json").write_text(json.dumps(analysis))
+    interval_fragment = json.loads((leaf / "interval-latency.json").read_text())
+    interval_fragment["aggregate_latency_count"] = 120_000
+    interval_fragment["rows"][0]["latency_count"] = 120_000
+    interval_fragment["rows"][0]["received_events"] = 120_000
+    interval_fragment["rows"][0]["throughput_messages"] = 120_000
+    (leaf / "interval-latency.json").write_text(json.dumps(interval_fragment))
+    interval_metrics = json.loads((leaf / "interval-metrics.json").read_text())
+    interval_metrics["aggregate_latency_count"] = 120_000
+    interval_metrics["rows"][0]["latency_count"] = 120_000
+    interval_metrics["rows"][0]["received_events"] = 120_000
+    interval_metrics["rows"][0]["throughput_messages"] = 120_000
+    interval_metrics["rows"][0]["throughput_messages_per_second"] = 1_000.0
+    (leaf / "interval-metrics.json").write_text(json.dumps(interval_metrics))
+    return leaf
 
 
 def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
@@ -1041,10 +1352,10 @@ def candidate_swap_leaf(tmp_path: Path, *, rollback: bool) -> tuple[Path, dict, 
             timeline["rollback_ns"] = 40 + index
             event["rollback_ns"] = 40 + index
         else:
-            timeline.update(ack_ns=40 + index, convergence_ns=50 + index)
+            timeline.update(replacement_adopted_ns=40 + index, first_post_replacement_local_outcome_ns=50 + index)
             event.update(
-                ack_ns=40 + index,
-                convergence_ns=50 + index,
+                replacement_adopted_ns=40 + index,
+                first_post_replacement_local_outcome_ns=50 + index,
                 sink_observed_output_gap_ns=1_000 + index,
             )
             transitions.append({"pause_ns": 1_000 + index})
@@ -1232,6 +1543,74 @@ def test_candidate_rollback_verifier_reconciles_all_events(tmp_path: Path) -> No
     )
 
 
+def test_final_swap3_leaf_accepts_all_declared_strategies_and_rejects_legacy_timeline(
+    tmp_path: Path,
+) -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart"):
+        leaf = make_swap3_canonical_leaf(tmp_path / strategy, strategy)
+        violations, warnings = CONTRACT.check_leaf(
+            leaf, "e-swap-3", canonical=True, canonical_matrix=matrix
+        )
+        assert violations == [], (strategy, violations)
+        assert warnings == []
+
+    stale = make_swap3_canonical_leaf(tmp_path / "stale", "wafer-hotswap")
+    (stale / "swap_timeline.json").write_text(
+        json.dumps({
+            "schema_version": 1,
+            "strategy": "wafer-hotswap",
+            "event_timestamp_ns": 1_060_005_000_000,
+        })
+    )
+    violations, _ = CONTRACT.check_leaf(
+        stale, "e-swap-3", canonical=True, canonical_matrix=matrix
+    )
+    assert "final E-Swap-3 must not retain legacy swap_timeline.json" in violations
+
+    retained_temporary = make_swap3_canonical_leaf(tmp_path / "retained-temporary", "wafer-hotswap")
+    (retained_temporary / "publisher-timing.json").write_text(
+        json.dumps({"event_unix_epoch_ns": 1_060_005_000_000})
+    )
+    violations, _ = CONTRACT.check_leaf(
+        retained_temporary, "e-swap-3", canonical=True, canonical_matrix=matrix
+    )
+    assert "final E-Swap-3 must not retain publisher-timing.json" in violations
+
+
+@pytest.mark.parametrize(
+    ("mutate", "expected"),
+    [
+        (
+            lambda leaf: (leaf / "publisher-summary.json").unlink(),
+            "missing required canonical artefact for e-swap-3: publisher-summary.json",
+        ),
+        (
+            lambda leaf: (leaf / "disruption-analysis.json").unlink(),
+            "missing required canonical artefact for e-swap-3: disruption-analysis.json",
+        ),
+        (
+            lambda leaf: (leaf / "disruption-analysis.json").write_text(
+                json.dumps({"schema_version": 1, "strategy": "invalid"})
+            ),
+            "disruption-analysis.json strategy is invalid",
+        ),
+    ],
+)
+def test_final_swap3_contract_fails_missing_or_malformed_required_artifacts(
+    tmp_path: Path,
+    mutate,
+    expected: str,
+) -> None:
+    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
+    leaf = make_swap3_canonical_leaf(tmp_path / "leaf")
+    mutate(leaf)
+    violations, _ = CONTRACT.check_leaf(
+        leaf, "e-swap-3", canonical=True, canonical_matrix=matrix
+    )
+    assert expected in violations or expected in " ".join(violations)
+
+
 def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
     buckets = {
         "schema_version": 1,
@@ -1320,7 +1699,7 @@ def test_final_event_and_burst_artifact_schemas_fail_closed() -> None:
         "drain_duration_after_window_ns": 0,
         "max_arrival_offset_ns": 119_999_000_000,
         "drain_right_censored": False,
-        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "ack_ns": 1, "convergence_ns": 1},
+        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "replacement_adopted_ns": 1, "first_post_replacement_local_outcome_ns": 1},
     }
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -1464,7 +1843,7 @@ def swap4_timeline_fixture() -> dict:
         "max_arrival_offset_ns": 120_001_000_000,
         "drain_right_censored": False,
         "sink_observed_output_gap_ns": 80_000_000,
-        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "ack_ns": 1, "convergence_ns": 1},
+        "internal_swap_phases_ns": {"compile_ns": 1, "instantiate_ns": 1, "signal_ns": 1, "replacement_adopted_ns": 1, "first_post_replacement_local_outcome_ns": 1},
     }
 
 
@@ -1738,6 +2117,20 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
     )
 
 
+def swap4_actual_t0_fixture(timeline: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "clock": "unix-epoch",
+        "alignment": "actual-t0",
+        "source_measurement_start_unix_ns": timeline["measurement_start_ns"],
+        "scheduled_event_timestamp_ns": timeline["scheduled_swap_ns"],
+        "event_timestamp_ns": timeline["swap_ns"],
+        "alignment_error_ns": timeline["swap_alignment_error_ns"],
+        "alignment_tolerance_ns": timeline["swap_alignment_tolerance_ns"],
+    }
+
+
+
 def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path) -> None:
     timeline = swap4_timeline_fixture()
     throughput = swap4_throughput_fixture()
@@ -1757,10 +2150,16 @@ def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path
         "sample_count": 1,
         "events": [{"sink_observed_output_gap_ns": 80_000_000}],
     }))
+    (tmp_path / "swap-actual-t0.json").write_text(
+        json.dumps(swap4_actual_t0_fixture(timeline))
+    )
     (tmp_path / "swap_requests.json").write_text(json.dumps([{
         "request_started_ns": timeline["swap_ns"],
         "body": {"timeline": timeline["internal_swap_phases_ns"]},
     }]))
+    (tmp_path / "throughput-buckets-10ms.json").write_text(
+        json.dumps(fine_bucket_fixture(throughput, "e-swap-4"))
+    )
     assert CONTRACT.check_burst_timeline(tmp_path / "burst-timeline.json") == []
     assert CONTRACT.check_swap4_reconciliation(tmp_path) == []
     invalid_timeline = json.loads(json.dumps(timeline))
@@ -1777,6 +2176,14 @@ def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path
     source["source_completion_offset_ns"] += 1
     (tmp_path / "burst-source-summary.json").write_text(json.dumps(source))
     assert "source timing" in " ".join(CONTRACT.check_swap4_reconciliation(tmp_path))
+    (tmp_path / "burst-source-summary.json").write_text(json.dumps({
+        "measurement_start_ns": timeline["measurement_start_ns"],
+        "source_completion_offset_ns": timeline["source_completion_offset_ns"],
+    }))
+    receipt = swap4_actual_t0_fixture(timeline)
+    receipt["event_timestamp_ns"] += 1
+    (tmp_path / "swap-actual-t0.json").write_text(json.dumps(receipt))
+    assert "swap-actual-t0.json" in " ".join(CONTRACT.check_swap4_reconciliation(tmp_path))
 
 if __name__ == "__main__":
     test_canonical_result_accepts_complete_leaf()

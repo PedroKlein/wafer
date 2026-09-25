@@ -4,17 +4,17 @@ This document defines the current hot-swap measurements and preserves earlier be
 
 ## Runtime phases
 
-A stateless hot-swap has five internal phases:
+A stateless hot-swap reports preparation and runner-local progress separately:
 
-| Phase | Runtime action | Artifact field |
+| Phase | Runtime action | API field |
 |---|---|---|
-| Compile | Compile the replacement component from bytes. Runtime cache behavior depends on the path and provenance. | `compile_ns` |
-| Instantiate | Instantiate a fresh store with the target limits and capabilities. | `instantiate_ns` |
+| Compile | Compile the replacement component from bytes. | `compile_ns` |
+| Instantiate | Instantiate a fresh Store with the target limits and capabilities. | `instantiate_ns` |
 | Signal | Publish the prepared payload to the node runner. | `signal_ns` |
-| Acknowledge | The runner adopts the replacement between messages. | `ack_ns` |
-| Convergence | The first replacement output reaches the sink. | `convergence_ns` |
+| Replacement adoption | The runner validates, initializes, and installs the replacement between messages. | `replacement_adopted_ns` |
+| First runner-local outcome | The first post-adoption call forwards/enqueues, filter-drops, or produces no route. | `first_post_replacement_local_outcome_ns` |
 
-`swap_requests.json` records the HTTP boundary and internal phases. `swap_timeline.json` records sink-observed version transitions and output interarrival gaps. `hotswap-analysis.json` index-matches them. HTTP duration, internal phase duration, and sink-observed gap are not interchangeable.
+Replacement adoption and a runner-local outcome are not sink convergence. HTTP duration, local phase timing, sink transition/gap, throughput, and sequence evidence are distinct measurements.
 
 The replacement is stateless. Guest memory is not transferred between versions. Capabilities and effective per-node limits are retained by the host configuration.
 
@@ -26,11 +26,15 @@ E-Swap-1 measures 50 repeated swaps in one process for phase and sink-gap distri
 
 ### Restart comparison
 
-E-Swap-3 uses 30 independent runs for each of WAFER hot-swap, WAFER restart, and eKuiper rule restart. Each run has one action at measured t=60. The subscriber writes 200 actual-t0-aligned 100 ms buckets over `[-10,+10)` so dip, interruption, action duration, recovery, loss, and duplication are measured for all three strategies.
+E-Swap-3 uses 30 independent runs for each of WAFER hot-swap, WAFER restart, and eKuiper rule restart. Each run has one action at measured t=60. The nine final artifacts use `disruption-timeline.json` as the sole retained action timeline. `publisher-timing.json` is transient and must be removed after finalization; legacy `swap_timeline.json` is invalid in a final E-Swap-3 leaf. The subscriber writes 200 actual-t0-aligned 100 ms buckets over `[-10,+10)`.
 
 ### True burst
 
 E-Swap-4 uses 30 independent runs. The source emits 1,000 msg/s before measured second 55, 2,000 msg/s from 55 through 65, and 1,000 msg/s afterward. Exactly one stateless swap is scheduled at second 60. Each run contributes one sink gap to the across-run p95. The primary sink series stays fixed at 1,200 source-origin 100 ms buckets over `[0,120s)`; a separate 100-bucket `[120s,130s)` drain records valid completion arrivals without folding them into the primary series. Full sequence counts must reconcile and any later receive fails closed.
+
+### Failed replacement
+
+E-Swap-5 records one request, rollback evidence, sequence accounting, and `post-rollback-continuity.json`. A failed replacement must not contain a successful-v2 `swap_timeline.json`. Process-time canary rollback is implemented only for Transform, and the continuity artifact—not the API's local rollback response—owns the post-rollback delivery claim.
 
 ## Cache boundary
 

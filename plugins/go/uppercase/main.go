@@ -44,29 +44,16 @@ func process(input transform.Message) cm.Result[transform.OutputMessageShape, tr
 	payload := input.Payload.ReadAll()
 	bytes := payload.Slice()
 
-	// Empty payload: pass through
-	if len(bytes) == 0 {
-		output := types.OutputMessage{
-			ID:          input.ID,
-			Timestamp:   input.Timestamp,
-			Source:      input.Source,
-			ContentType: input.ContentType,
-			Metadata:    input.Metadata,
-			Payload:     cm.ToList([]uint8{}),
-		}
-		result.SetOK(output)
-		return result
-	}
-
-	text := string(bytes)
-	uppercased := strings.ToUpper(text)
+	metadata := append([][2]string(nil), input.Metadata.Slice()...)
+	metadata = append(metadata, [2]string{"plugin", "go-uppercase"})
+	uppercased := strings.ToUpper(string(bytes))
 
 	output := types.OutputMessage{
-		ID:          input.ID,
-		Timestamp:   input.Timestamp,
-		Source:      input.Source,
-		ContentType: input.ContentType,
-		Metadata:    input.Metadata,
+		ID:          "guest-" + input.ID,
+		Timestamp:   input.Timestamp + 7,
+		Source:      "guest-" + input.Source,
+		ContentType: "text/uppercase",
+		Metadata:    cm.ToList(metadata),
 		Payload:     cm.ToList([]uint8(uppercased)),
 	}
 	result.SetOK(output)

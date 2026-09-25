@@ -8,8 +8,8 @@ traverse, see [03-building-blocks.md](./03-building-blocks.md).
 
 > **Implementation status.** The scenarios below describe the current
 > production behavior. Historical drift banners (A3, A4, A7, A9, A10,
-> A13, A14, A15, A17) are closed — hot-swap phase telemetry, ACK-phase
-> `init()`, production Wasm lifecycle `validate()` / `init()`, source /
+> A13, A14, A15, A17) are closed — local replacement telemetry,
+> replacement-time `init()`, production Wasm lifecycle `validate()` / `init()`, source /
 > fan-out lineage assignment, per-node-type `/hot-swap` dispatch,
 > retry-exhaustion + `Recovering` state transitions,
 > capability-aware instantiation, and process-time hot-swap rollback
@@ -71,20 +71,17 @@ sequenceDiagram
 
 ### Backpressure detail
 
-Every edge is a `tokio::mpsc::channel` whose capacity comes from the
-per-edge `capacity` field (defaults to `engine.default_queue_capacity = 1024`).
-When a sender calls `send()` and the channel is full, the configured
-`OverflowPolicy` applies:
+The builder creates one `tokio::mpsc::channel` per destination receiver. Edge configuration remains edge-shaped: the physical queue uses the maximum explicit incoming capacity, or `engine.default_queue_capacity = 1024` only when no incoming edge specifies one. Zero capacities fail validation before channel construction. Each sender retains its own `OverflowPolicy`:
 
 | Policy | Behaviour |
 |--------|-----------|
-| `slow` (default) | Sender `await`s until space frees — backpressure propagates upstream. |
-| `drop` | Message is silently dropped; sender continues immediately. |
-| `dead-letter` | Message is routed to the DLQ; sender continues. |
+| `slow` (default) | Reserve a permit and wait for space, propagating backpressure. |
+| `drop` | On a full destination, discard without waiting and count the drop. |
+| `dead-letter` | On a full destination, make a non-blocking send to the configured file or MQTT DLQ. |
 
-Fan-in (multiple upstream edges converging on one node) uses the same
-`mpsc` receiver — multiple senders, single consumer. No separate merge
-abstraction exists; the receiver drains from all producers fairly.
+A closed destination is distinct from overflow. Successful dead-letter delivery, DLQ-full, and DLQ-closed are separate counters. Source, Transform, and Filter broadcast to all downstream edges; Router selects labeled ports. Fan-out applies each matching edge's policy independently and attempts non-slow branches before waiting on slow branches.
+
+Fan-in uses one destination receiver with cloned senders. No separate merge abstraction exists, and Tokio provides no fairness or cross-producer ordering guarantee.
 
 ---
 
@@ -120,8 +117,8 @@ sequenceDiagram
     Runner->>Runner: Flush retry buffer → DLQ (reason: HotSwapDrain)
     Runner->>OldStore: Drop old Store + Instance
     destroy OldStore
-    Runner->>NewStore: Fence in pre-instantiated replacement
-    Runner->>Runner: Resume main loop (select! on input/cancel)
+    Runner->>NewStore: Install, validate, and initialize replacement
+    Runner->>Runner: Mark replacement adoption; resume main loop
     deactivate Runner
 
     Note over Runner: Next input_rx.recv() uses<br/>the new Store + Instance
@@ -133,21 +130,13 @@ sequenceDiagram
   mid-execution. It observes the swap signal only at the top of the next
   loop iteration — after the current message completes (if any) and before
   the next one is dequeued from the `select!` branch.
-- **Pre-instantiation off the hot path.** Compilation and `InstancePre`
-  creation happen in the API handler (or a background task). The runner
-  only performs the final Store/Instance swap — a sub-microsecond pointer
-  exchange.
+- **Preparation off the message path.** Compilation and typed instantiation happen before signalling. The runner installs the prepared values and runs guest validation/initialization before marking replacement adoption.
 - **Retry buffer flush.** Outstanding retry entries are sent to the DLQ
   with `DlqReason::HotSwapDrain` because the new plugin version may have
   incompatible semantics. No retries survive the boundary.
-- **`watch` channel semantics.** `tokio::sync::watch` is a single-producer
-  single-consumer latest-value channel. If a second swap arrives before the
-  runner processes the first, only the latest payload is observed — which
-  is the correct behaviour (the most recent binary wins).
-- **Timeline recording.** `SwapTimeline` captures `compile_ns` and
-  `instantiate_ns` during preparation; `signal_ns`, `ack_ns`, and
-  `convergence_ns` are recorded internally for benchmarking
-  (see `docs/benchmarks/hot-swap.md`).
+- **Serialized mutation.** Hot-swap and reconfigure share one per-node guard. Concurrent requests cannot overwrite a pending watch value: one proceeds and the other receives a conflict.
+- **Runner-local reporting.** The response separates `replacement_adopted` from `first_post_replacement_local_outcome`. A local forward, filter drop, or no-route outcome is not sink convergence, sequence continuity, loss, or throughput evidence.
+- **Rollback boundary.** Initialization rollback exists for every eligible Wasm role. Process-time canary rollback is implemented only for Transform; Filter and Router do not make that claim. A20 remains deferred, so `/metrics` has no rollback-total series.
 
 For the full design rationale, see [ADR-0003](../adr/0003-hot-swap-mechanism.md)
 and [ADR-0012](../adr/0012-watch-channel-hot-swap.md).
@@ -172,18 +161,9 @@ applies the configured policy.
 
 ### Retry buffer
 
-Retryable errors (`dependency-failed`, `processing-failed`) push the
-`RuntimeEnvelope` into a bounded `VecDeque` (capacity default: 100) with
-exponential backoff (`backoff_ms × 2^retry_count`, capped at 30 s). The
-runner polls the buffer between input messages.
+Retryable errors (`dependency-failed`, `processing-failed`) enter a bounded `VecDeque` (default capacity 1000). The first retry waits exactly `backoff_ms`; later waits double to the 30-second cap. The runner selects the earliest due entry across the buffer and wakes for that deadline even when upstream input is idle.
 
-**Current status:** the retry buffer plumbing exists
-(`crates/wafer-core/src/runner/error_policy.rs`), but retry-count
-increment and `DlqReason::RetriesExhausted` emission are not yet wired
-in `try_retry` — retryable errors currently re-enter the buffer with
-`retry_count = 0` until the buffer overflows and the oldest entry is
-evicted to the DLQ with `DlqReason::RetryBufferFull`. Full
-retries-exhausted semantics are planned; see `docs/rfcs/RFC-002-host-runtime.md`.
+`retry_count` is stored on `RuntimeEnvelope` and survives requeue and DLQ serialization. Once the retry budget is spent, the configured terminal action is honored: `ExhaustedSkip` is counted, `dlq` preserves `RetriesExhausted`, and `teardown` enters recovery. DLQ-full and DLQ-closed remain distinguishable and never requeue an exhausted envelope.
 
 ### DLQ envelope
 
@@ -194,17 +174,7 @@ replay), and tracing correlation IDs (`trace_id`, `parent_id`).
 
 ### Recovery from `Unrecoverable`
 
-**Target design:** When a node enters `Recovering`, the runner
-re-instantiates from the cached `InstancePre`. On success the node
-returns to `Running`; on failure the retry buffer is flushed to DLQ
-with `DlqReason::RecoveryFailed` and the failure is reported to the
-orchestrator for escalation.
-
-**Current status:** recovery is not yet implemented. All three runner
-loops (`runner/transform.rs`, `runner/filter.rs`, `runner/router.rs`)
-currently log the unrecoverable error and `break` — the node exits
-rather than transitioning through `Recovering`. See
-`docs/rfcs/RFC-002-host-runtime.md` for the target lifecycle.
+When an action requests teardown or an unrecoverable error occurs, the runner enters `Recovering`, creates a fresh Store from the cached `InstancePre`, reapplies limits, and runs lifecycle validation and initialization. Success returns to `Running`; failure ends that node loop. Transform may first attempt its bounded process-time canary rollback when one is active.
 
 ### Graceful shutdown
 

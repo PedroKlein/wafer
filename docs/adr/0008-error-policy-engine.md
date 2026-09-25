@@ -14,6 +14,16 @@
 > (A7). DLQ lineage carries the source-assigned `trace_id` and fan-out
 > `parent_id` (A13). Default retry-buffer capacity is 1000 as
 > documented.
+>
+> **Current amendment.** The first retry waits exactly `backoff_ms`; later
+> delays double to 30 seconds, and the buffer selects the earliest due entry.
+> Retry exhaustion honors `skip`, `dlq`, or `teardown`; exhausted skip,
+> DLQ-full, and DLQ-closed are distinct runner outcomes. A present per-node
+> policy replaces the pipeline policy table rather than merging field by field.
+>
+> The remainder is the historical design record.
+
+<!-- historical-design-below -->
 
 ## Context
 

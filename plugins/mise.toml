@@ -20,6 +20,15 @@ description = "Validate the pass-through plugin WASM component"
 depends = [":plugin"]
 run = "wasm-tools validate --features component-model pass-through/target/wasm32-wasip2/release/pass_through_transform.wasm"
 
+[tasks.mnist-inference]
+description = "Build the MNIST inference plugin"
+run = "cargo build --release --locked --manifest-path mnist-inference/Cargo.toml --target wasm32-wasip2"
+
+[tasks.validate-mnist-inference]
+description = "Validate the MNIST inference plugin WASM component"
+depends = [":mnist-inference"]
+run = "wasm-tools validate --features component-model mnist-inference/target/wasm32-wasip2/release/wafer_mnist_inference.wasm"
+
 [tasks.build-plugins]
 description = "Build all Rust plugins (regular + attacks) for wasm32-wasip2 (release)"
 run = '''
@@ -44,6 +53,23 @@ if [ $# -ne 1 ]; then
 fi
 cargo build --release --manifest-path "$1/Cargo.toml" --target wasm32-wasip2
 ' --
+'''
+
+[tasks.attack-evidence]
+description = "Build, validate, and execute the mandatory containment-attack evidence path"
+run = '''
+set -euo pipefail
+if [ "$(uname)" = "Darwin" ] && [ -x /Library/Developer/CommandLineTools/usr/bin/clang ]; then
+  export SDKROOT=${SDKROOT:-/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk}
+  export CC=${CC:-/Library/Developer/CommandLineTools/usr/bin/clang}
+  export CXX=${CXX:-/Library/Developer/CommandLineTools/usr/bin/clang++}
+  export AR=${AR:-/Library/Developer/CommandLineTools/usr/bin/ar}
+  export RANLIB=${RANLIB:-/Library/Developer/CommandLineTools/usr/bin/ranlib}
+  export CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER=${CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER:-/Library/Developer/CommandLineTools/usr/bin/clang}
+fi
+out=${WAFER_ATTACK_EVIDENCE_DIR:-../eval/results/attack-evidence/$(date -u +%Y-%m-%dT%H-%M-%SZ)}
+mkdir -p "$out"
+python3 ../eval/scripts/run-attack-evidence.py --output-dir "$out"
 '''
 
 [tasks.check-plugins]

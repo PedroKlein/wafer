@@ -8,8 +8,8 @@ HOTSWAP_DURATION_FIELDS = (
     "compile_ns",
     "instantiate_ns",
     "signal_ns",
-    "ack_ns",
-    "convergence_ns",
+    "replacement_adopted_ns",
+    "first_post_replacement_local_outcome_ns",
     "http_total_ns",
     "sink_observed_output_gap_ns",
 )

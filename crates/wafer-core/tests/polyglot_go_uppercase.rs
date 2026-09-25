@@ -10,6 +10,7 @@
 //! shape changes but Go regeneration is skipped.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::testing::PluginTestHarness;
@@ -61,20 +62,51 @@ fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Payload metadata must round-trip: source, id, timestamp, content-type must
-/// all survive the Rust → Wasm → Rust hop. Guards against silent field
-/// truncation if `node-config` / `message` records ever drift again.
+/// Guest-owned output fields must survive the host lifting boundary, while
+/// lineage continues from the host-owned input envelope.
 #[test]
-fn go_uppercase_preserves_envelope_metadata() -> anyhow::Result<()> {
+fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> {
     let Some(harness) = harness_if_built()? else {
         return Ok(());
     };
     let mut transform = harness.load_transform(UPPERCASE_GO_WASM)?;
 
-    let input = RuntimeEnvelope::from_string("my-source", "data");
+    let mut input = RuntimeEnvelope::from_string("host-source", "hello world");
+    input.set_parent_id("host-parent");
+    input.ensure_trace_id();
+    let trace_id = input.trace_id().expect("host trace id").to_string();
+    let header = Arc::make_mut(&mut input.header);
+    header.id = "host-id".into();
+    header.timestamp = 1_700_000_000_000_000_123;
+    header.content_type = "application/host".into();
+    header.metadata = vec![("host-key".into(), "host-value".into())];
+
     let output = transform.process(input)?;
 
-    anyhow::ensure!(&*output.header.source == "my-source", "source preserved");
+    anyhow::ensure!(&*output.header.id == "guest-host-id", "guest id preserved");
+    anyhow::ensure!(
+        output.header.timestamp == 1_700_000_000_000_000_130,
+        "guest timestamp preserved"
+    );
+    anyhow::ensure!(&*output.header.source == "guest-host-source", "guest source preserved");
+    anyhow::ensure!(
+        &*output.header.content_type == "text/uppercase",
+        "guest content type preserved"
+    );
+    anyhow::ensure!(
+        output.header.metadata
+            == vec![
+                ("host-key".into(), "host-value".into()),
+                ("plugin".into(), "go-uppercase".into()),
+            ],
+        "guest metadata preserved"
+    );
+    anyhow::ensure!(
+        std::str::from_utf8(&output.payload)? == "HELLO WORLD",
+        "guest payload preserved"
+    );
+    anyhow::ensure!(output.parent_id() == Some("host-parent"), "host parent lineage retained");
+    anyhow::ensure!(output.trace_id() == Some(trace_id.as_str()), "host trace lineage retained");
     Ok(())
 }
 

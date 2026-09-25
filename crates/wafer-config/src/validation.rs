@@ -7,7 +7,10 @@
 //! ALL errors are accumulated before returning — the user sees the full picture
 //! rather than fixing problems one at a time.
 
-use wafer_types::config::{Config, NodeCategory, OverflowPolicy, SinkDef, SourceDef};
+use wafer_types::config::{Config, NodeCategory, NodeDef, OverflowPolicy, SinkDef, SourceDef};
+
+pub const UNSUPPORTED_ALLOW_INFERENCE_MESSAGE: &str =
+    "allow_inference=true is supported only for Wasm Transform nodes";
 
 use crate::error::ValidationError;
 
@@ -26,6 +29,8 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_stdin_singleton(config, &mut errors);
     check_stdout_singleton(config, &mut errors);
     check_dead_letter_required_for_overflow(config, &mut errors);
+    check_queue_capacities(config, &mut errors);
+    check_unsupported_allow_inference(config, &mut errors);
     check_orphan_nodes(config, &mut errors);
     check_no_cycles(config, &mut errors);
 
@@ -179,6 +184,55 @@ fn check_dead_letter_required_for_overflow(config: &Config, errors: &mut Vec<Val
     }
 }
 
+fn check_queue_capacities(config: &Config, errors: &mut Vec<ValidationError>) {
+    if config.engine.default_queue_capacity == 0 {
+        errors
+            .push(ValidationError::new("engine.default_queue_capacity must be greater than zero"));
+    }
+    if config.error_policy.retry_buffer_capacity == 0 {
+        errors.push(ValidationError::new(
+            "error_policy.retry_buffer_capacity must be greater than zero",
+        ));
+    }
+    for (index, edge) in config.edges.iter().enumerate() {
+        if edge.capacity == Some(0) {
+            errors.push(ValidationError::new(format!(
+                "edges[{index}].capacity must be greater than zero"
+            )));
+        }
+    }
+    for (node_id, node) in &config.nodes {
+        let policy = match node {
+            wafer_types::config::NodeDef::Transform(wasm)
+            | wafer_types::config::NodeDef::Filter(wasm)
+            | wafer_types::config::NodeDef::Router(wasm) => wasm.error_policy.as_ref(),
+            wafer_types::config::NodeDef::Source(_) | wafer_types::config::NodeDef::Sink(_) => None,
+        };
+        if policy.is_some_and(|policy| policy.retry_buffer_capacity == 0) {
+            errors.push(ValidationError::new(format!(
+                "nodes.{node_id}.error_policy.retry_buffer_capacity must be greater than zero"
+            )));
+        }
+    }
+    let dead_letter_capacity = config.dead_letter.as_ref().map(|dead_letter| match dead_letter {
+        wafer_types::config::DeadLetterConfig::Mqtt { queue_capacity, .. }
+        | wafer_types::config::DeadLetterConfig::File { queue_capacity, .. } => *queue_capacity,
+    });
+    if dead_letter_capacity == Some(0) {
+        errors.push(ValidationError::new("dead_letter.queue_capacity must be greater than zero"));
+    }
+}
+
+fn check_unsupported_allow_inference(config: &Config, errors: &mut Vec<ValidationError>) {
+    if config.nodes.values().any(|node| match node {
+        NodeDef::Transform(wasm) => wasm.capabilities.allow_inference && wasm.plugin.is_native(),
+        NodeDef::Filter(wasm) | NodeDef::Router(wasm) => wasm.capabilities.allow_inference,
+        NodeDef::Source(_) | NodeDef::Sink(_) => false,
+    }) {
+        errors.push(ValidationError::new(UNSUPPORTED_ALLOW_INFERENCE_MESSAGE));
+    }
+}
+
 /// Every node must be connected by at least one edge (no isolated nodes in a multi-node graph).
 ///
 /// Single-node pipelines are allowed (test fixtures, benchmarks).
@@ -231,8 +285,8 @@ fn check_no_cycles(config: &Config, errors: &mut Vec<ValidationError>) {
 mod tests {
     use super::*;
     use wafer_types::config::{
-        Config, EdgeDef, NodeDef, OverflowPolicy, PluginSpec, SinkDef, SourceDef,
-        StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
+        Capabilities, Config, EdgeDef, NodeDef, OverflowPolicy, PluginSpec, PluginSpecStructured,
+        SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
 
     // -------------------------------------------------------------------------
@@ -250,6 +304,28 @@ mod tests {
     fn transform(plugin: &str) -> NodeDef {
         NodeDef::Transform(WasmNodeDef {
             plugin: PluginSpec::WasmPath(plugin.to_string()),
+            ..Default::default()
+        })
+    }
+
+    fn transform_with_capabilities(plugin: &str, capabilities: Capabilities) -> NodeDef {
+        NodeDef::Transform(WasmNodeDef {
+            plugin: PluginSpec::WasmPath(plugin.to_string()),
+            capabilities,
+            ..Default::default()
+        })
+    }
+
+    fn inference_capabilities() -> Capabilities {
+        Capabilities { allow_inference: true, ..Default::default() }
+    }
+
+    fn native_transform_with_inference() -> NodeDef {
+        NodeDef::Transform(WasmNodeDef {
+            plugin: PluginSpec::Structured(PluginSpecStructured::Native {
+                function: "passthrough".to_string(),
+            }),
+            capabilities: inference_capabilities(),
             ..Default::default()
         })
     }
@@ -351,6 +427,118 @@ mod tests {
     }
 
     #[test]
+    fn test_allow_inference_true_is_valid_for_wasm_transform() {
+        let config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                (
+                    "transform",
+                    transform_with_capabilities(
+                        "transform.wasm",
+                        Capabilities {
+                            inherit_stdio: false,
+                            inherit_env: false,
+                            allow_inference: true,
+                        },
+                    ),
+                ),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "transform"), edge("transform", "out")],
+        );
+
+        validate(&config).expect("Wasm Transform should accept allow_inference=true");
+    }
+
+    #[test]
+    fn test_allow_inference_true_is_rejected_for_native_transform() {
+        let config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                ("transform", native_transform_with_inference()),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "transform"), edge("transform", "out")],
+        );
+
+        let errors = validate(&config).expect_err("native Transform must not obtain inference");
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].message, UNSUPPORTED_ALLOW_INFERENCE_MESSAGE);
+    }
+
+    #[test]
+    fn test_allow_inference_true_is_rejected_for_filter_and_router() {
+        let filter_config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                (
+                    "filter",
+                    NodeDef::Filter(WasmNodeDef {
+                        plugin: PluginSpec::WasmPath("filter.wasm".to_string()),
+                        capabilities: inference_capabilities(),
+                        ..Default::default()
+                    }),
+                ),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "filter"), edge("filter", "out")],
+        );
+        let filter_errors = validate(&filter_config).expect_err("Filter must not obtain inference");
+        assert_eq!(filter_errors[0].message, UNSUPPORTED_ALLOW_INFERENCE_MESSAGE);
+
+        let router_config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                (
+                    "router",
+                    NodeDef::Router(WasmNodeDef {
+                        plugin: PluginSpec::WasmPath("router.wasm".to_string()),
+                        capabilities: inference_capabilities(),
+                        ..Default::default()
+                    }),
+                ),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "router"), edge_with_port("router", "out", "default")],
+        );
+        let router_errors = validate(&router_config).expect_err("Router must not obtain inference");
+        assert_eq!(router_errors[0].message, UNSUPPORTED_ALLOW_INFERENCE_MESSAGE);
+    }
+
+    #[test]
+    fn test_allow_inference_false_or_omitted_stays_valid() {
+        let omitted = simple_config(
+            vec![
+                ("in", stdin_source()),
+                ("transform", transform("transform.wasm")),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "transform"), edge("transform", "out")],
+        );
+        validate(&omitted).expect("omitted allow_inference should remain valid");
+
+        let explicit_false = simple_config(
+            vec![
+                ("in", stdin_source()),
+                (
+                    "transform",
+                    transform_with_capabilities(
+                        "transform.wasm",
+                        Capabilities {
+                            inherit_stdio: true,
+                            inherit_env: false,
+                            allow_inference: false,
+                        },
+                    ),
+                ),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "transform"), edge("transform", "out")],
+        );
+        validate(&explicit_false).expect("allow_inference=false should remain valid");
+    }
+
+    #[test]
     fn test_transform_allows_multiple_inbound() {
         // Two edges to same transform is OK (implicit merge)
         let config = simple_config(
@@ -429,7 +617,6 @@ mod tests {
             vec![("in", stdin_source()), ("out", stdout_sink())],
             vec![edge_with_overflow("in", "out", OverflowPolicy::DeadLetter)],
         );
-        // dead_letter is None by default
         let result = validate(&config);
         let errors = result.unwrap_err();
         assert!(
@@ -437,6 +624,34 @@ mod tests {
                 .iter()
                 .any(|e| e.message.contains("dead-letter") || e.message.contains("dead_letter"))
         );
+    }
+
+    #[test]
+    fn zero_queue_capacities_fail_validation_before_channel_construction() {
+        let mut config = simple_config(
+            vec![("in", stdin_source()), ("out", stdout_sink())],
+            vec![edge("in", "out")],
+        );
+        config.engine.default_queue_capacity = 0;
+        config.edges[0].capacity = Some(0);
+        config.error_policy.retry_buffer_capacity = 0;
+        config.dead_letter = Some(wafer_types::config::DeadLetterConfig::File {
+            path: "/tmp/wafer-dlq.jsonl".to_string(),
+            queue_capacity: 0,
+        });
+
+        let errors = validate(&config).expect_err("all zero capacities must be rejected");
+        for field in [
+            "engine.default_queue_capacity",
+            "edges[0].capacity",
+            "error_policy.retry_buffer_capacity",
+            "dead_letter.queue_capacity",
+        ] {
+            assert!(
+                errors.iter().any(|error| error.message.contains(field)),
+                "missing validation error for {field}: {errors:?}"
+            );
+        }
     }
 
     #[test]

@@ -65,7 +65,16 @@ def test_sampler_flushes_on_termination_and_marks_failures_separately() -> None:
             [sys.executable, str(ROOT / "eval/scripts/lib/pi_telemetry.py"), str(output), "0.05"],
             env=environment,
         )
-        time.sleep(0.3)
+        deadline = time.monotonic() + 5
+        telemetry = output / "pi-telemetry.csv"
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                break
+            if telemetry.is_file() and len(telemetry.read_text().splitlines()) >= 2:
+                break
+            time.sleep(0.02)
+        assert process.poll() is None, "telemetry sampler exited before becoming ready"
+        assert telemetry.is_file(), "telemetry sampler did not become ready"
         process.terminate()
         assert process.wait(timeout=5) == 0
         assert (output / "power-boundary.json").is_file()

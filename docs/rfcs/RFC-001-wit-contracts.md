@@ -4,12 +4,20 @@
 - **Original session date:** 2026-07-05
 - **Amended by:** RFC-003 (§A1 removes Joiner world; §A2 replaces `process-outcome` wrapper with direct `result<output-message, process-error>` return); RFC-002 (§A3 replaces `list<u8>` host-side payload with `Arc<EnvelopeHeader> + Bytes` runtime envelope)
 
-> **Implementation notes.** The WIT files define the lifecycle and
-> message shapes. Production host wiring assigns envelope lineage at
-> source ingress and preserves it through fan-out (A13). Production Wasm
-> nodes call guest `validate()` and `init()` before the first message
-> and on hot-swap replacement (A14). See §"Implementation Notes" for
-> the current post-amendment shape.
+> **Current release amendment.** The five project files under `wit/` now form
+> one `wafer:pipeline@0.1.0` package with `transform-node`, `filter-node`,
+> `router-node`, and the capability-gated `inference-node` Transform
+> specialization. `inference-node` imports the pinned
+> `wasi:nn@0.2.0-rc-2024-10-28` dependency. `node-config` includes the opaque
+> `plugin-version` field. Native ingress uses Unix-epoch nanoseconds;
+> Transform output id, timestamp, source, content type, metadata, and payload
+> survive lifting, while host lineage and retry state remain separate.
+>
+> The design discussion below is the historical decision record. Package names,
+> world inventory, field lists, and performance estimates there do not override
+> the current WIT files or the interface reference.
+
+<!-- historical-design-below -->
 
 ## Abstract
 
@@ -114,4 +122,4 @@ Four packages adopted:
 - **F2 (error categories):** Implemented verbatim — five-variant `process-error` in `wit/pipeline-types.wit`.
 - **F7 (init config):** Implemented verbatim — `node-config { id: string, config: string }` in `wit/pipeline-node.wit`.
 - **F9 (host imports):** Implemented — `pipeline:host/logging` with `log(level: log-level, message: string)` in `wit/pipeline-host.wit`.
-- **F10 (inference node):** Implemented — `inference-node` world with `wasi:nn` imports in `wit/pipeline-node.wit`.
+- **F10 (inference node):** Restored after the single-package regression — `inference-node` in `wit/worlds.wit` exports current lifecycle/transform interfaces and imports the pinned `wasi:nn` package. The host registers those imports only for a Wasm Transform with `allow_inference=true`.

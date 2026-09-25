@@ -12,4 +12,4 @@ mod validation;
 pub use dag::DagGraph;
 pub use error::{ConfigError, ValidationError};
 pub use loader::load_config;
-pub use validation::validate;
+pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate};

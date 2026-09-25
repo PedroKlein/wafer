@@ -110,10 +110,10 @@ different revision, re-run the script and pipe the CSV through the
 - Canonical Pi/x86 numbers deferred to `canonical-runs` plan — same CSV
   contract, different `host_tag`. Wasm sizes are architecture-independent
   so those runs measure the container floor on ARM/x86, not the Wasm.
-- Once `mnist-inference` builds successfully (the crate is present but
-  fails to resolve WIT deps under the current `wit/` layout), extend the
-  index to include it as the thirteenth plugin. That will produce the
-  first "ML-heavy" data point for the table.
+- `mnist-inference` now builds against the restored `inference-node` world,
+  but it is not part of the frozen E-Density-1 index. Adding the model-bearing
+  component would require a separately reviewed matrix amendment; its current
+  component identity is recorded by the inference-restoration receipt instead.
 
 ## Cross-references
 

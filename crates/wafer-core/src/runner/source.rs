@@ -73,8 +73,7 @@ mod tests {
     async fn test_source_loop_messages_flow() {
         let (tx, source) = ChannelSource::new("test-src");
         let (out_tx, mut out_rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(out_tx, "out", None)];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -115,8 +114,7 @@ mod tests {
     async fn test_source_loop_eof_terminates() {
         let (tx, source) = ChannelSource::new("eof-src");
         let (out_tx, _out_rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(out_tx, "out", None)];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
@@ -141,8 +139,7 @@ mod tests {
     async fn test_source_loop_cancel_stops() {
         let (_tx, source) = ChannelSource::new("cancel-src");
         let (out_tx, _out_rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: out_tx, port: "out".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(out_tx, "out", None)];
         let cancel = CancellationToken::new();
         let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());

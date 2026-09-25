@@ -153,8 +153,8 @@ def build_complete_fixture(root: Path) -> None:
                 "compile_ns": 1,
                 "instantiate_ns": 2,
                 "signal_ns": 3,
-                "ack_ns": 4,
-                "convergence_ns": 5,
+                "replacement_adopted_ns": 4,
+                "first_post_replacement_local_outcome_ns": 5,
             },
         },
     )
@@ -220,22 +220,52 @@ def build_complete_fixture(root: Path) -> None:
         "rate-sweep-summary.json",
         capacity_envelope_fixture(),
     )
-    for run in (1, 2):
-        write_passed_artifact(
-            root / "e-backpressure" / "saturated" / f"run-{run:02d}",
-            "backpressure.json",
-            {
-                "classification": "saturated-and-drained",
-                "peak_occupancy": 1,
-                "rates_msg_s": {
-                    "offered": 1_000,
-                    "accepted": 150,
-                    "processed": 150,
-                    "drained": 140,
+    for policy in ("slow", "drop", "dead-letter"):
+        for run in range(1, 31):
+            delivered = 1_000 if policy == "slow" else 700
+            dropped = 300 if policy == "drop" else 0
+            dead_lettered = 300 if policy == "dead-letter" else 0
+            equations = {
+                "slow": "attempted = delivered",
+                "drop": "attempted = delivered + dropped",
+                "dead-letter": "attempted = delivered + dead_lettered + dlq_full + dlq_closed",
+            }
+            write_passed_artifact(
+                root / "e-backpressure" / policy / f"run-{run:02d}",
+                "backpressure.json",
+                {
+                    "schema_version": 2,
+                    "experiment": "e-backpressure",
+                    "condition": policy,
+                    "run_index": run,
+                    "sample_unit": "run",
+                    "policy": policy,
+                    "queue": "slow",
+                    "classification": "saturated-and-drained",
+                    "threshold_crossed": True,
+                    "recovered": True,
+                    "peak_occupancy": 1.0,
+                    "occupancy_threshold": 0.8,
+                    "recovery_threshold": 0.1,
+                    "counts": {
+                        "attempted": 1_000,
+                        "accepted": delivered,
+                        "processed": delivered,
+                        "delivered": delivered,
+                        "dropped": dropped,
+                        "dead_lettered": dead_lettered,
+                        "downstream_closed": 0,
+                        "dlq_full": 0,
+                        "dlq_closed": 0,
+                        "outstanding": 0,
+                    },
+                    "rates_msg_s": {"offered": 1_000, "accepted": delivered, "processed": delivered, "drained": 140},
+                    "sequence": {"offered": 1_000, "received": delivered, "gaps": 1_000 - delivered, "duplicates": 0},
+                    "accounting": {"equation": equations[policy], "reconciled": True, "dlq_failures": {"full": 0, "closed": 0, "total": 0}},
+                    "producer_progress": "backpressured" if policy == "slow" else "nonblocking",
+                    "memory": {"within_limit": True},
                 },
-                "memory": {"within_limit": True},
-            },
-        )
+            )
     for tier in ("small", "medium", "large"):
         for cache_state in ("cold", "warm"):
             for run in (1, 2):
@@ -346,7 +376,7 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
 
     expected_independent_runs = {
         "06-fault-injection.ipynb": ("N=8", "N_runs"),
-        "09-backpressure.ipynb": ("N=2", "N_runs"),
+        "09-backpressure.ipynb": ("N=90", "N_runs"),
         "09-saturation.ipynb": ("N=600", "N_runs"),
         "10-aot-startup.ipynb": ("N=12", "N_runs"),
     }

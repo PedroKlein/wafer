@@ -1,6 +1,6 @@
 {
   "page": "message-through-wasm.md",
-  "find": "Input payload access uses `borrow<buffer>`, but transform output is a WIT `list<u8>` that becomes new host `Bytes`; the whole boundary is not zero-copy.",
+  "find": "Input payload access uses `borrow<buffer>`, but Transform output is a WIT `list<u8>` that becomes new host `Bytes`; the whole boundary is not zero-copy.",
   "replace": "The entire Component Model boundary is fully zero-copy for both transform input and output.",
   "expected_error": "message-through-wasm.md: claims the whole Wasm boundary is zero-copy"
 }

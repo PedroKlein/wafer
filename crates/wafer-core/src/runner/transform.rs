@@ -16,7 +16,7 @@ use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState,
-    send_downstream,
+    continue_after_policy_action, recv_next_or_retry, send_downstream,
 };
 use wafer_types::config::HotSwapConfig;
 
@@ -27,7 +27,8 @@ fn recover_after_timeout(
     policy: &mut ErrorPolicyExecutor,
     envelope: RuntimeEnvelope,
 ) -> bool {
-    if !policy.handle(&WasmProcessError::TimedOut, envelope) {
+    if !continue_after_policy_action(policy.handle(&WasmProcessError::TimedOut, envelope), metrics)
+    {
         return false;
     }
     tracing::warn!(
@@ -111,15 +112,15 @@ pub async fn run_transform_loop_with_config(
     let mut rollback_retry = None;
     loop {
         // 0. Check if canary window has expired (drop snapshot to free memory)
-        if let Some(ref c) = canary {
-            if c.window_expired() {
-                tracing::debug!(
-                    node = transform.node_id(),
-                    successes = c.counters.success_count,
-                    "canary window closed — rollback snapshot dropped"
-                );
-                canary = None;
-            }
+        if let Some(ref c) = canary
+            && c.window_expired()
+        {
+            tracing::debug!(
+                node = transform.node_id(),
+                successes = c.counters.success_count,
+                "canary window closed — rollback snapshot dropped"
+            );
+            canary = None;
         }
 
         // 1. Hot-swap check (non-blocking, between messages)
@@ -144,7 +145,7 @@ pub async fn run_transform_loop_with_config(
                 };
                 match result {
                     Ok(()) => {
-                        progress.mark_ack();
+                        progress.mark_replacement_adopted();
                         pending_swap_progress = Some(progress);
                         metrics.record_swap();
                         // Install canary snapshot for process-time rollback (A17).
@@ -180,18 +181,10 @@ pub async fn run_transform_loop_with_config(
         // 2. Retry buffer priority — retries before fresh messages
         let envelope = if let Some(retry) = rollback_retry.take() {
             retry
-        } else if let Some(retry) = policy.next_ready_retry() {
-            retry
         } else {
-            // 3. Receive from channel (cancel-safe: ONLY recv in select!)
-            let msg = tokio::select! {
-                biased;
-                () = cancel.cancelled() => None,
-                msg = receiver.recv() => msg,
-            };
-            match msg {
-                Some(e) => e,
-                None => break, // Cancelled or channel closed
+            match recv_next_or_retry(&mut receiver, &mut policy, &cancel).await {
+                Some(envelope) => envelope,
+                None => break,
             }
         };
 
@@ -215,7 +208,9 @@ pub async fn run_transform_loop_with_config(
                 metrics.record_processed(duration_ns);
                 send_downstream(&senders, output).await;
                 if let Some(progress) = pending_swap_progress.take() {
-                    progress.mark_first_v2();
+                    progress.mark_first_post_replacement_local_outcome(
+                        crate::runner::FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+                    );
                 }
                 // Record success in canary window
                 if let Some(ref mut c) = canary {
@@ -268,10 +263,9 @@ pub async fn run_transform_loop_with_config(
                                 }
                                 metrics.record_rollback();
                                 // B1: notify the API caller with a RolledBack
-                                // outcome (not swap_converged) BEFORE the
-                                // next v1 message could call mark_first_v2.
+                                // outcome before a later v1 message can report a local outcome.
                                 // Taking the progress ensures the sender is
-                                // consumed — subsequent mark_first_v2 calls
+                                // consumed — subsequent mark_first_post_replacement_local_outcome calls
                                 // become no-ops.
                                 if let Some(progress) = pending_swap_progress.take() {
                                     progress.report_rolled_back(rollback_ns, msg.clone());
@@ -356,7 +350,9 @@ pub async fn run_transform_loop_with_config(
             }
             Err(e) => {
                 metrics.record_failed();
-                policy.handle(&e, safety);
+                if !continue_after_policy_action(policy.handle(&e, safety), &metrics) {
+                    break;
+                }
             }
         }
     }
@@ -368,8 +364,204 @@ pub async fn run_transform_loop_with_config(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{EngineConfig, FuelBudgets, MemoryLimits};
+    use crate::engine::{Capabilities, WaferEngine, WaferState};
+    use crate::node::wasm::WasmTransformNode;
     use crate::runner::error_policy::ResolvedErrorPolicy;
+    use std::num::NonZeroU64;
     use tokio::sync::{mpsc, watch};
+    use wasmtime::Store;
+
+    const MNIST_FUEL: u64 = 100_000_000;
+    const MNIST_MEMORY: usize = 64 * 1024 * 1024;
+    const MNIST_COMPONENT: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../wafer-runtime/tests/fixtures/mnist-inference.component.bin"
+    ));
+    const TRAP_COMPONENT: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/transform-panics.component.bin"
+    ));
+    const MNIST_DIGIT: &[u8] = include_bytes!("../../../../tests/fixtures/digit_7.bin");
+
+    fn inference_node(engine: &WaferEngine) -> anyhow::Result<TransformNode> {
+        let component = engine.load_component_from_bytes(MNIST_COMPONENT, "mnist")?;
+        let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
+        let capabilities = Capabilities::sandbox().inference(true);
+        let state = WaferState::new_with_memory_limit("mnist", capabilities, MNIST_MEMORY);
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|state| state.limits_mut());
+        store.set_fuel(MNIST_FUEL)?;
+        store.epoch_deadline_trap();
+        store.set_epoch_deadline(1000);
+        let bindings = pre.instantiate(&mut store)?;
+        let mut node =
+            WasmTransformNode::new_inference(store, bindings, pre, NonZeroU64::new(MNIST_FUEL));
+        node.configure_runtime(
+            capabilities,
+            MNIST_MEMORY,
+            NonZeroU64::new(1000),
+            r#"{"execution_target":"cpu"}"#.into(),
+        );
+        node.set_plugin_version("mnist-cpu-v1");
+        node.validate_and_init(r#"{"execution_target":"cpu"}"#)?;
+        Ok(node.into())
+    }
+
+    fn prediction(output: &RuntimeEnvelope) -> Option<usize> {
+        output
+            .payload
+            .as_chunks::<{ size_of::<f32>() }>()
+            .0
+            .iter()
+            .map(|chunk| f32::from_le_bytes(*chunk))
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.total_cmp(b))
+            .map(|(index, _)| index)
+    }
+
+    async fn wait_for_swap(metrics: &NodeMetrics) {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while metrics.swaps() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("replacement adoption timeout");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inference_hot_swap_reports_enqueue_without_sink_collection() {
+        let config = EngineConfig {
+            epoch_deadline: NonZeroU64::new(1000),
+            fuel: FuelBudgets { transform: NonZeroU64::new(MNIST_FUEL), ..FuelBudgets::default() },
+            memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
+            ..EngineConfig::default()
+        };
+        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        engine.ensure_epoch_ticker();
+        let node = inference_node(&engine).expect("inference node");
+        let (progress, completion) = HotSwapProgress::channel();
+        let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
+            &engine,
+            MNIST_COMPONENT,
+            "mnist",
+            Capabilities::sandbox().inference(true),
+            MNIST_MEMORY,
+            NonZeroU64::new(MNIST_FUEL),
+            progress,
+        )
+        .await
+        .expect("inference replacement");
+
+        let (input_tx, input_rx) = mpsc::channel(2);
+        let (output_tx, mut output_rx) = mpsc::channel(2);
+        let (swap_tx, swap_rx) = watch::channel(None);
+        let metrics = Arc::new(NodeMetrics::new());
+        let runner_metrics = Arc::clone(&metrics);
+        swap_tx.send(Some(replacement.payload)).expect("replacement signal");
+        let runner = tokio::spawn(run_transform_loop_with_config(
+            node,
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "mnist"),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            runner_metrics,
+            HotSwapConfig::default(),
+        ));
+
+        wait_for_swap(&metrics).await;
+        input_tx
+            .send(RuntimeEnvelope::new("fixture", bytes::Bytes::from_static(MNIST_DIGIT)))
+            .await
+            .expect("post-replacement input");
+
+        let report =
+            completion.await.expect("replacement progress").expect("replacement local outcome");
+        assert_eq!(
+            report.first_post_replacement_local_outcome,
+            crate::runner::FirstPostReplacementLocalOutcome::ForwardedEnqueued
+        );
+        assert!(!output_rx.is_empty(), "local outcome must precede sink collection");
+        let mut outputs = Vec::new();
+        while let Ok(output) = output_rx.try_recv() {
+            outputs.push(output);
+        }
+        assert!(outputs.iter().all(|output| prediction(output) == Some(7)));
+
+        drop(input_tx);
+        runner.await.expect("runner task");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn inference_process_trap_rolls_back_and_replays_on_fresh_store() {
+        let config = EngineConfig {
+            epoch_deadline: NonZeroU64::new(1000),
+            fuel: FuelBudgets { transform: NonZeroU64::new(MNIST_FUEL), ..FuelBudgets::default() },
+            memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
+            ..EngineConfig::default()
+        };
+        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        engine.ensure_epoch_ticker();
+        let node = inference_node(&engine).expect("inference node");
+        let (progress, completion) = HotSwapProgress::channel();
+        let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
+            &engine,
+            TRAP_COMPONENT,
+            "mnist",
+            Capabilities::sandbox().inference(true),
+            MNIST_MEMORY,
+            NonZeroU64::new(MNIST_FUEL),
+            progress,
+        )
+        .await
+        .expect("inference trap replacement");
+
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (output_tx, mut output_rx) = mpsc::channel(1);
+        let (swap_tx, swap_rx) = watch::channel(None);
+        let state = Arc::new(NodeStateTracker::running());
+        let metrics = Arc::new(NodeMetrics::new());
+        swap_tx.send(Some(replacement.payload)).expect("replacement signal");
+        let mut input = RuntimeEnvelope::new("fixture", bytes::Bytes::from_static(MNIST_DIGIT));
+        input.set_parent_id("parent-before-trap");
+        input.ensure_trace_id();
+        input.retry_count = 4;
+        let trace_id = input.trace_id().expect("trace id").to_string();
+        input_tx.send(input).await.expect("input receiver");
+        drop(input_tx);
+
+        run_transform_loop_with_config(
+            node,
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "mnist"),
+            CancellationToken::new(),
+            state,
+            Arc::clone(&metrics),
+            HotSwapConfig {
+                canary_success_count: 32,
+                canary_window_ms: 10_000,
+                max_rollback_retries: 1,
+            },
+        )
+        .await;
+
+        let outcome = completion.await.expect("rollback outcome");
+        assert!(matches!(outcome, Err(crate::runner::HotSwapError::RolledBack { .. })));
+        let output = output_rx.recv().await.expect("replayed inference output");
+        assert_eq!(prediction(&output), Some(7));
+        assert_eq!(output.parent_id(), Some("parent-before-trap"));
+        assert_eq!(output.trace_id(), Some(trace_id.as_str()));
+        assert_eq!(output.retry_count, 4);
+        assert_eq!(metrics.rollbacks(), 1);
+        assert_eq!(metrics.recovery_count(), 1);
+        assert_eq!(metrics.processed(), 1, "only the replayed v1 result is forwarded");
+        assert!(output_rx.try_recv().is_err(), "trapping message must be replayed exactly once");
+    }
 
     /// Creates test infrastructure for the transform loop.
     #[expect(
@@ -390,11 +582,7 @@ mod tests {
     ) {
         let (input_tx, input_rx) = mpsc::channel(32);
         let (output_tx, output_rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
-            sender: output_tx,
-            port: "default".into(),
-            queue_metrics: None,
-        }];
+        let senders = vec![DownstreamSender::slow(output_tx, "default", None)];
         let (swap_tx, swap_rx) = watch::channel(None);
         let policy =
             ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-transform");
@@ -444,5 +632,217 @@ mod tests {
         assert_eq!(metrics.processed(), 2);
         assert_eq!(metrics.failed(), 1);
         assert_eq!(metrics.process_ns(), 3000);
+    }
+
+    fn retry_policy(
+        exhausted: crate::runner::error_policy::ResolvedSimpleAction,
+    ) -> ResolvedErrorPolicy {
+        ResolvedErrorPolicy {
+            bad_input: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            dependency_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 0,
+                backoff_ms: 1,
+                exhausted,
+            },
+            processing_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 0,
+                backoff_ms: 1,
+                exhausted,
+            },
+            timed_out: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 1,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_exhausted_skip_consumes_poison_and_forwards_next_message() {
+        let (input_tx, input_rx) = mpsc::channel(2);
+        let (output_tx, mut output_rx) = mpsc::channel(1);
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(1);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        let metrics = Arc::new(NodeMetrics::new());
+        input_tx.send(RuntimeEnvelope::from_string("source", "{}")).await.expect("input receiver");
+        input_tx
+            .send(RuntimeEnvelope::from_string("source", r#"{"temperature":1}"#))
+            .await
+            .expect("input receiver");
+        drop(input_tx);
+
+        let handle = tokio::spawn(run_transform_loop(
+            TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(
+                retry_policy(crate::runner::error_policy::ResolvedSimpleAction::Skip),
+                Some(dlq_tx),
+                "node",
+            ),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+        ));
+
+        handle.await.expect("runner task");
+        assert_eq!(
+            output_rx.recv().await.expect("forwarded successor").payload_as_string(),
+            r#"{"temperature":1}"#
+        );
+        assert!(output_rx.try_recv().is_err(), "poison envelope must be consumed exactly once");
+        assert!(dlq_rx.try_recv().is_err(), "skip must not write a DLQ record");
+        assert_eq!(metrics.exhausted_skips(), 1, "exhausted skip must be counted once");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_exhausted_dlq_records_final_count_without_requeue() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (output_tx, _output_rx) = mpsc::channel(1);
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(1);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        input_tx.send(RuntimeEnvelope::from_string("source", "{}")).await.expect("input receiver");
+        drop(input_tx);
+
+        run_transform_loop(
+            TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(
+                retry_policy(crate::runner::error_policy::ResolvedSimpleAction::Dlq),
+                Some(dlq_tx),
+                "node",
+            ),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::new(NodeMetrics::new()),
+        )
+        .await;
+
+        let record = dlq_rx.recv().await.expect("one exhausted DLQ record");
+        assert_eq!(record.retry_count, 0);
+        assert_eq!(
+            record.reason,
+            crate::runner::error_policy::DlqReason::RetriesExhausted { max_retries: 0 }
+        );
+        assert!(dlq_rx.try_recv().is_err(), "exhausted envelope must not be requeued");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn retry_exhausted_teardown_stops_the_real_transform_runner() {
+        let (input_tx, input_rx) = mpsc::channel(2);
+        let (output_tx, mut output_rx) = mpsc::channel(1);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        input_tx.send(RuntimeEnvelope::from_string("source", "{}")).await.expect("input receiver");
+        input_tx
+            .send(RuntimeEnvelope::from_string("source", r#"{"temperature":1}"#))
+            .await
+            .expect("input receiver");
+        drop(input_tx);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            run_transform_loop(
+                TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+                input_rx,
+                vec![DownstreamSender::slow(output_tx, "default", None)],
+                swap_rx,
+                ErrorPolicyExecutor::new(
+                    retry_policy(crate::runner::error_policy::ResolvedSimpleAction::Teardown),
+                    None,
+                    "node",
+                ),
+                CancellationToken::new(),
+                Arc::new(NodeStateTracker::running()),
+                Arc::new(NodeMetrics::new()),
+            ),
+        )
+        .await;
+
+        assert!(result.is_ok(), "teardown must stop the runner");
+        assert!(output_rx.try_recv().is_err(), "teardown must not process the successor");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn bad_input_teardown_stops_the_real_transform_runner() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (output_tx, mut output_rx) = mpsc::channel(1);
+        let policy = ResolvedErrorPolicy {
+            bad_input: crate::runner::error_policy::ResolvedSimpleAction::Teardown,
+            dependency_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 1,
+                exhausted: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            },
+            processing_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 1,
+                exhausted: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            },
+            timed_out: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 1,
+        };
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        let cancel = CancellationToken::new();
+        let state = Arc::new(NodeStateTracker::running());
+        let metrics = Arc::new(NodeMetrics::new());
+        input_tx
+            .send(RuntimeEnvelope::new("source", bytes::Bytes::from_static(&[0xff])))
+            .await
+            .expect("input receiver");
+        drop(input_tx);
+
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            run_transform_loop(
+                TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+                input_rx,
+                vec![DownstreamSender::slow(output_tx, "default", None)],
+                swap_rx,
+                ErrorPolicyExecutor::new(policy, None, "node"),
+                cancel,
+                state,
+                metrics,
+            ),
+        )
+        .await;
+
+        assert!(result.is_ok(), "teardown must terminate the runner");
+        assert!(output_rx.try_recv().is_err(), "bad input must not be forwarded");
+    }
+
+    #[test]
+    fn timed_out_teardown_skips_recovery() {
+        let mut transform =
+            TransformNode::Native(crate::node::native::NativeTransform::passthrough("native"));
+        let policy = ResolvedErrorPolicy {
+            bad_input: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            dependency_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 1,
+                exhausted: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            },
+            processing_failed: crate::runner::error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 1,
+                exhausted: crate::runner::error_policy::ResolvedSimpleAction::Skip,
+            },
+            timed_out: crate::runner::error_policy::ResolvedSimpleAction::Teardown,
+            retry_buffer_capacity: 1,
+        };
+        let state = NodeStateTracker::running();
+        let metrics = NodeMetrics::new();
+        let mut executor = ErrorPolicyExecutor::new(policy, None, "node");
+
+        assert!(
+            !recover_after_timeout(
+                &mut transform,
+                &state,
+                &metrics,
+                &mut executor,
+                RuntimeEnvelope::from_string("source", "payload"),
+            ),
+            "timed-out teardown must stop before recovery"
+        );
+        assert_eq!(metrics.recovery_count(), 0);
     }
 }

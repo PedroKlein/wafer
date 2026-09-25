@@ -89,10 +89,10 @@ pub struct SubscribeArgs {
 }
 
 fn parse_broker(s: &str) -> (String, u16) {
-    if let Some((host, port)) = s.rsplit_once(':') {
-        if let Ok(port) = port.parse::<u16>() {
-            return (host.to_owned(), port);
-        }
+    if let Some((host, port)) = s.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+    {
+        return (host.to_owned(), port);
     }
     (s.to_owned(), 1883)
 }

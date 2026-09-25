@@ -29,7 +29,18 @@ RESULTS_LAYOUT_ROOT = EVAL_ROOT / "analysis" / "src" / "wafer_analysis"
 if str(RESULTS_LAYOUT_ROOT) not in sys.path:
     sys.path.insert(0, str(RESULTS_LAYOUT_ROOT))
 
-from results_layout import CANONICAL_ALIASES, ResultsLayout, atomic_write_json
+from backpressure import validate_backpressure_result
+from rollback import (
+    build_post_rollback_continuity,
+    build_swap5_rollback,
+    validate_swap5_artifacts,
+)
+from results_layout import (
+    CANONICAL_ALIASES,
+    ResultsLayout,
+    atomic_write_json,
+    validate_alias_mapping,
+)
 from interval_metrics import compose_interval_metrics
 from write_metadata import merge_metadata
 
@@ -170,8 +181,8 @@ HOTSWAP_PHASE_FIELDS = (
     "compile_ns",
     "instantiate_ns",
     "signal_ns",
-    "ack_ns",
-    "convergence_ns",
+    "replacement_adopted_ns",
+    "first_post_replacement_local_outcome_ns",
 )
 FOCUSED_MATRIX_SHA_ENV = "WAFER_FOCUSED_MATRIX_SHA256"
 CAPACITY_SCOUT_SYSTEMS = RATE_SWEEP_SYSTEMS
@@ -932,7 +943,7 @@ def build_swap3_invocation(root: Path, item: RunItem, output: Path) -> dict:
             "coverage_start_offset_ns": SWAP3_COVERAGE_START_NS,
             "coverage_end_offset_ns": SWAP3_COVERAGE_END_NS,
             "publisher_timing_receipt": "publisher-timing.json",
-            "action_timing_receipt": "swap_timeline.json",
+            "action_timing_receipt": "disruption-timeline.json",
             "publisher_summary": "publisher-summary.json",
             "subscriber_artifact": "throughput-buckets.json",
         },
@@ -1476,6 +1487,28 @@ def build_swap4_timeline(
     }
 
 
+def validate_swap4_actual_t0_receipt(
+    receipt: dict,
+    *,
+    measurement_start_ns: int,
+    scheduled_swap_ns: int,
+    actual_swap_ns: int,
+) -> None:
+    if (
+        receipt.get("schema_version") != 1
+        or receipt.get("clock") != "unix-epoch"
+        or receipt.get("alignment") != "actual-t0"
+        or receipt.get("source_measurement_start_unix_ns") != measurement_start_ns
+        or receipt.get("scheduled_event_timestamp_ns") != scheduled_swap_ns
+        or receipt.get("event_timestamp_ns") != actual_swap_ns
+        or receipt.get("alignment_error_ns") != actual_swap_ns - scheduled_swap_ns
+        or receipt.get("alignment_tolerance_ns") != SWAP4_ALIGNMENT_TOLERANCE_NS
+        or abs(actual_swap_ns - scheduled_swap_ns) > SWAP4_ALIGNMENT_TOLERANCE_NS
+    ):
+        raise ValueError("E-Swap-4 actual-t0 receipt does not reconcile")
+
+
+
 def _swap4_bucket_totals(
     buckets: object, start_offset_ns: int, count: int, label: str
 ) -> dict[str, int]:
@@ -1516,6 +1549,7 @@ def validate_swap4_artifacts(
     throughput: dict,
     requests: list[dict],
     sink_timeline: dict,
+    actual_t0_receipt: dict | None = None,
 ) -> None:
     if len(requests) != 1 or len(sink_timeline.get("transitions", [])) != 1:
         raise ValueError("E-Swap-4 requires exactly one request and one sink transition")
@@ -1526,6 +1560,13 @@ def validate_swap4_artifacts(
     scheduled_swap = int(timeline["scheduled_swap_ns"])
     actual_swap = int(timeline["swap_ns"])
     burst_end = int(timeline["burst_end_ns"])
+    if actual_t0_receipt is not None:
+        validate_swap4_actual_t0_receipt(
+            actual_t0_receipt,
+            measurement_start_ns=measurement_start,
+            scheduled_swap_ns=scheduled_swap,
+            actual_swap_ns=actual_swap,
+        )
     if (
         timeline.get("timestamp_clock") != "unix-epoch"
         or timeline.get("timestamp_clock_purpose") != "cross-process-alignment"
@@ -1999,6 +2040,8 @@ def validate_fine_event_buckets(
 def analyze_backpressure(
     samples: list[dict],
     *,
+    policy: str,
+    measured_queue: str,
     offered_messages: int,
     offered_duration_ns: int,
     occupancy_threshold: float,
@@ -2011,18 +2054,31 @@ def analyze_backpressure(
     if not 0 <= recovery_threshold < occupancy_threshold <= 1:
         raise ValueError("queue thresholds must satisfy 0 <= recovery < occupancy <= 1")
 
+    runtime_counters = {
+        "accepted",
+        "dequeued",
+        "processed",
+        "dropped",
+        "dead_lettered",
+        "downstream_closed",
+        "dlq_full",
+        "dlq_closed",
+    }
     by_queue: dict[str, list[dict]] = {}
     for sample in samples:
+        if not runtime_counters <= sample.keys():
+            raise ValueError("queue-depth samples lack R1 overflow counters")
         capacity = int(sample["capacity"])
         depth = int(sample["depth"])
         if capacity <= 0 or depth < 0 or depth > capacity:
             raise ValueError("queue depth must be within its positive capacity")
         by_queue.setdefault(str(sample["queue"]), []).append(sample)
 
-    selected_queue, selected = max(
-        by_queue.items(),
-        key=lambda item: max(int(row["depth"]) / int(row["capacity"]) for row in item[1]),
-    )
+    try:
+        selected = by_queue[measured_queue]
+    except KeyError as error:
+        raise ValueError("configured backpressure queue is absent") from error
+    selected_queue = measured_queue
     selected.sort(key=lambda row: int(row["elapsed_ns"]))
     peak_index = max(
         range(len(selected)),
@@ -2045,8 +2101,12 @@ def analyze_backpressure(
     if elapsed_ns <= 0:
         raise ValueError("queue-depth samples must span positive elapsed time")
 
-    accepted = max(int(row["accepted"]) for row in selected)
-    processed = max(int(row["processed"]) for row in selected)
+    counters = {
+        field: max(int(row[field]) for row in selected)
+        for field in runtime_counters
+    }
+    accepted = counters["accepted"]
+    processed = counters["processed"]
     drained_rate = None
     if recovered:
         drain_duration_ns = int(recovery["elapsed_ns"]) - int(peak["elapsed_ns"])
@@ -2054,9 +2114,23 @@ def analyze_backpressure(
         if drain_duration_ns > 0 and drained_messages >= 0:
             drained_rate = drained_messages * 1_000_000_000 / drain_duration_ns
 
+    counts = {
+        "attempted": offered_messages,
+        "accepted": accepted,
+        "processed": processed,
+        "delivered": processed,
+        "dropped": counters["dropped"],
+        "dead_lettered": counters["dead_lettered"],
+        "downstream_closed": counters["downstream_closed"],
+        "dlq_full": counters["dlq_full"],
+        "dlq_closed": counters["dlq_closed"],
+        "outstanding": accepted - processed,
+    }
     return {
-        "schema_version": 1,
-        "clock": "monotonic",
+        "schema_version": 2,
+        "experiment": "e-backpressure",
+        "sample_unit": "run",
+        "policy": policy,
         "queue": selected_queue,
         "sample_count": len(selected),
         "capacity_messages": int(peak["capacity"]),
@@ -2073,12 +2147,21 @@ def analyze_backpressure(
             if threshold_crossed
             else "not-saturated"
         ),
-        "counts": {
-            "offered": offered_messages,
-            "accepted": accepted,
-            "processed": processed,
-            "outstanding": accepted - processed,
+        "counts": counts,
+        "accounting": {
+            "equation": {
+                "slow": "attempted = delivered",
+                "drop": "attempted = delivered + dropped",
+                "dead-letter": "attempted = delivered + dead_lettered + dlq_full + dlq_closed",
+            }[policy],
+            "reconciled": False,
+            "dlq_failures": {
+                "full": counters["dlq_full"],
+                "closed": counters["dlq_closed"],
+                "total": counters["dlq_full"] + counters["dlq_closed"],
+            },
         },
+        "producer_progress": "backpressured" if policy == "slow" else "nonblocking",
         "rates_msg_s": {
             "offered": offered_messages * 1_000_000_000 / offered_duration_ns,
             "accepted": accepted * 1_000_000_000 / elapsed_ns,
@@ -2091,19 +2174,6 @@ def analyze_backpressure(
 def read_queue_depth(path: Path) -> list[dict]:
     with path.open(newline="") as handle:
         return [dict(row) for row in csv.DictReader(handle)]
-
-
-def validate_backpressure_result(result: dict) -> None:
-    if result.get("classification") != "saturated-and-drained":
-        raise ValueError("backpressure run did not cross and recover below queue thresholds")
-    if set(result.get("rates_msg_s", {})) != {"offered", "accepted", "processed", "drained"}:
-        raise ValueError("backpressure rates must include offered, accepted, processed, and drained")
-    if result["rates_msg_s"]["drained"] is None:
-        raise ValueError("backpressure run has no measurable drain rate")
-    if not result.get("sequence", {}).get("lossless"):
-        raise ValueError("backpressure slow policy lost or duplicated messages")
-    if not result.get("memory", {}).get("within_limit"):
-        raise ValueError("backpressure run exceeded the frozen RSS bound")
 
 
 def validate_candidate_scaling_definition(experiment: str, definition: dict) -> None:
@@ -2529,8 +2599,18 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     ),
     "e-backpressure": (
         Condition(
-            "saturated-slow-consumer",
+            "slow",
             "eval/configs/e-backpressure/pipeline-saturated.toml",
+            total_messages=1_000,
+        ),
+        Condition(
+            "drop",
+            "eval/configs/e-backpressure/pipeline-drop.toml",
+            total_messages=1_000,
+        ),
+        Condition(
+            "dead-letter",
+            "eval/configs/e-backpressure/pipeline-dead-letter.toml",
             total_messages=1_000,
         ),
     ),
@@ -3746,6 +3826,7 @@ def stamp_focused_metadata(root: Path, metadata: dict) -> None:
 
 
 def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
+    validate_alias_mapping(CANONICAL_ALIASES)
     if item.shared_from is None:
         raise ValueError("shared result has no source experiment")
     if CANONICAL_ALIASES.get(item.experiment) != item.shared_from:
@@ -3756,6 +3837,13 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if source is None:
         raise RuntimeError(f"shared source is incomplete: {source_dir}")
     status_path = source / "canonical-status.json"
+    metadata = json.loads((source / "metadata.json").read_text())
+    if (
+        metadata.get("experiment") != item.shared_from
+        or metadata.get("evidence_class") != "final"
+        or metadata.get("thesis_evidence") is not True
+    ):
+        raise ValueError("shared source is not final admitted evidence")
     source_status_sha256 = hashlib.sha256(status_path.read_bytes()).hexdigest()
     receipt = layout.manifest_path(
         "aliases",
@@ -3773,6 +3861,8 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
         "source_leaf": layout.relative(source),
         "source_status_sha256": source_status_sha256,
         "sample_identity": layout.relative(source),
+        "source_evidence_class": "final",
+        "independent_n_contribution": 0,
         "shared_measurement": True,
     }
     if receipt.is_file():
@@ -3916,6 +4006,8 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                         ),
                         "scheduled_event_timestamp_ns": scheduled_swap_ns,
                         "event_timestamp_ns": request_started_ns,
+                        "alignment_error_ns": request_started_ns - scheduled_swap_ns,
+                        "alignment_tolerance_ns": SWAP4_ALIGNMENT_TOLERANCE_NS,
                     },
                 )
                 request_started_monotonic_ns = time.monotonic_ns()
@@ -3980,7 +4072,7 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
         if runtime_exit != 0:
             raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
         if (
-            item.experiment != ROLLBACK_SESSIONS_EXPERIMENT
+            item.experiment not in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT}
             and not (output / "swap_timeline.json").is_file()
         ):
             (output / "swap_timeline.json").write_text(
@@ -3994,13 +4086,7 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 and isinstance(request["body"], dict)
                 and request["body"].get("status") == "rolled_back"
             )
-            rollback = {
-                "attempts": len(requests),
-                "rolled_back": rolled_back,
-                "all_rolled_back": rolled_back == len(requests),
-            }
-            (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
-            if not rollback["all_rolled_back"]:
+            if rolled_back != len(requests):
                 raise RuntimeError(
                     f"only {rolled_back}/{len(requests)} failed swaps rolled back"
                 )
@@ -4010,6 +4096,9 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 raise RuntimeError(f"only {successful}/{len(requests)} hot swaps succeeded")
 
         sequence = _read_lossless_sequence(output / "sequence.csv")
+        if item.experiment == "e-swap-5":
+            rollback = build_swap5_rollback(requests, sequence)
+            (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
         if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT:
             rollback = build_candidate_rollback_evidence(
                 requests, item, results_layout(root).relative(output), sequence
@@ -4095,7 +4184,7 @@ def loadgen_command(
         if item.experiment == "e-swap-3" and event_aligned:
             command.extend([
                 "--publisher-timing-receipt", str(output / "publisher-timing.json"),
-                "--action-timing-receipt", str(output / "swap_timeline.json"),
+                "--action-timing-receipt", str(output / "disruption-timeline.json"),
             ])
         if trace_file is not None:
             command.extend(["--trace-file", str(trace_file)])
@@ -4288,7 +4377,7 @@ def run_restart_item(
                 "action_end_monotonic_ns": action_finished_monotonic_ns,
                 "action_duration_ns": action_duration_ns,
             }
-            write_json_atomic(output / "swap_timeline.json", action_timing)
+            write_json_atomic(output / "disruption-timeline.json", action_timing)
             if abs(alignment_error_ns) > SWAP3_ALIGNMENT_TOLERANCE_NS:
                 raise RuntimeError(
                     "actual E-Swap-3 action start missed measured t=60 by more than 10 ms"
@@ -5856,7 +5945,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             shutil.copyfile(branch_a_window, output / "measurement-window.json")
 
     if item.experiment == "e-swap-3":
-        timeline = json.loads((output / "swap_timeline.json").read_text())
+        timeline = json.loads((output / "disruption-timeline.json").read_text())
         throughput = json.loads((output / "throughput-buckets.json").read_text())
         fine = json.loads((output / "throughput-buckets-10ms.json").read_text())
         publisher = json.loads((output / "publisher-summary.json").read_text())
@@ -5869,8 +5958,10 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             expected_event_timestamp_ns=int(timeline["event_timestamp_ns"]),
         )
         analysis = analyze_swap3_disruption(throughput, timeline, publisher, subscriber)
-        (output / "disruption-timeline.json").write_text(json.dumps(timeline, indent=2) + "\n")
         (output / "disruption-analysis.json").write_text(json.dumps(analysis, indent=2) + "\n")
+        publisher_timing = output / "publisher-timing.json"
+        if publisher_timing.exists():
+            publisher_timing.unlink()
 
     if item.experiment in {"e-swap-1", "e-swap-4", SWAP_SESSIONS_EXPERIMENT}:
         requests = json.loads((output / "swap_requests.json").read_text())
@@ -5891,23 +5982,50 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             with (output / "sequence.csv").open(newline="") as stream:
                 sequence = next(csv.DictReader(stream))
             throughput = json.loads((output / "throughput-buckets.json").read_text())
+            source_timing = json.loads((output / "burst-source-timing.json").read_text())
             timeline = build_swap4_timeline(
-                json.loads((output / "burst-source-timing.json").read_text()),
+                source_timing,
                 json.loads((output / "burst-source-summary.json").read_text()),
                 requests,
                 sink_timeline,
                 throughput,
                 sequence,
             )
+            actual_t0_receipt = json.loads((output / "swap-actual-t0.json").read_text())
             fine = json.loads((output / "throughput-buckets-10ms.json").read_text())
-            validate_swap4_artifacts(timeline, throughput, requests, sink_timeline)
+            validate_swap4_artifacts(
+                timeline,
+                throughput,
+                requests,
+                sink_timeline,
+                actual_t0_receipt,
+            )
             validate_fine_event_buckets(
                 fine,
                 throughput,
                 experiment="e-swap-4",
-                expected_event_timestamp_ns=int(timeline["swap_ns"]),
+                expected_event_timestamp_ns=int(actual_t0_receipt["event_timestamp_ns"]),
             )
             (output / "burst-timeline.json").write_text(json.dumps(timeline, indent=2) + "\n")
+
+    if item.experiment == "e-swap-5":
+        timeline_path = output / "swap_timeline.json"
+        if timeline_path.exists():
+            raise ValueError("E-Swap-5 must not contain a successful-v2 sink timeline")
+        requests = json.loads((output / "swap_requests.json").read_text())
+        rollback = json.loads((output / "rollback.json").read_text())
+        sequence = _read_lossless_sequence(output / "sequence.csv")
+        interval_path = output / "interval-metrics.json"
+        continuity = build_post_rollback_continuity(
+            requests,
+            json.loads(interval_path.read_text()),
+            sequence,
+            interval_metrics_sha256=hashlib.sha256(interval_path.read_bytes()).hexdigest(),
+        )
+        validate_swap5_artifacts(requests, rollback, continuity, sequence)
+        (output / "post-rollback-continuity.json").write_text(
+            json.dumps(continuity, indent=2) + "\n"
+        )
 
     if item.experiment == "e-backpressure":
         definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"][
@@ -5919,34 +6037,61 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         )
         offered_messages = int(source["total_messages"])
         offered_duration_ns = int(offered_messages / float(source["rate"]) * 1_000_000_000)
+        policy = item.condition
+        measured_queue = str(definition["measured_queue"])
+        if definition["policy_configs"].get(policy) != item.config:
+            raise ValueError("backpressure condition/config differs from the matrix")
+        measured_edges = [edge for edge in config["edges"] if edge["to"] == measured_queue]
+        if len(measured_edges) != 1 or measured_edges[0].get("overflow", "slow") != policy:
+            raise ValueError("backpressure config overflow policy differs from its condition")
         summary = analyze_backpressure(
             read_queue_depth(output / "queue-depth.csv"),
+            policy=policy,
+            measured_queue=measured_queue,
             offered_messages=offered_messages,
             offered_duration_ns=offered_duration_ns,
             occupancy_threshold=float(definition["queue_occupancy_threshold"]),
             recovery_threshold=float(definition["queue_recovery_threshold"]),
         )
+        summary["condition"] = item.condition
+        summary["run_index"] = item.run_index
         with (output / "memory.csv").open(newline="") as handle:
             rss_peak = max(int(row["rss_bytes"]) for row in csv.DictReader(handle))
         with (output / "sequence.csv").open(newline="") as handle:
             sequence = next(csv.DictReader(handle))
+        observed_expected = int(sequence["total_expected"])
         received = int(sequence["total_received"])
-        gaps = int(sequence["gap_msgs"])
+        observed_gaps = int(sequence["gap_msgs"])
         duplicates = int(sequence["duplicates_count"])
+        if observed_expected != received + observed_gaps or observed_expected > offered_messages:
+            raise ValueError("backpressure observed sequence span does not reconcile")
+        summary["counts"]["delivered"] = received
         summary["sequence"] = {
             "offered": offered_messages,
             "received": received,
-            "gaps": gaps,
+            "gaps": offered_messages - received,
             "duplicates": duplicates,
-            "lossless": received == offered_messages and gaps == 0 and duplicates == 0,
         }
+        counts = summary["counts"]
+        if policy == "slow":
+            reconciled = counts["attempted"] == counts["delivered"]
+        elif policy == "drop":
+            reconciled = counts["attempted"] == counts["delivered"] + counts["dropped"]
+        else:
+            reconciled = counts["attempted"] == (
+                counts["delivered"]
+                + counts["dead_lettered"]
+                + counts["dlq_full"]
+                + counts["dlq_closed"]
+            )
+        summary["accounting"]["reconciled"] = reconciled
         summary["memory"] = {
             "peak_rss_bytes": rss_peak,
             "limit_bytes": int(definition["rss_limit_bytes"]),
             "within_limit": rss_peak <= int(definition["rss_limit_bytes"]),
         }
         (output / "backpressure.json").write_text(json.dumps(summary, indent=2) + "\n")
-        validate_backpressure_result(summary)
+        validate_backpressure_result(summary, policy)
 
     if item.experiment.startswith("e-iso-"):
         containment = derive_containment(output)
@@ -6198,8 +6343,8 @@ def validate_candidate_swap_summary(summary: dict) -> None:
                 "compile_ns",
                 "instantiate_ns",
                 "signal_ns",
-                "ack_ns",
-                "convergence_ns",
+                "replacement_adopted_ns",
+                "first_post_replacement_local_outcome_ns",
                 "http_total_ns",
                 "sink_observed_output_gap_ns",
             ),

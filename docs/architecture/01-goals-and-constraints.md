@@ -10,7 +10,7 @@ The evaluated contribution is the integration of typed DAG composition, per-stag
 
 ## Research questions and pass criteria
 
-The evaluation validates that each architectural property holds in practice on constrained hardware (Raspberry Pi 5 4 GB, with optional Jetson Orin validation).
+The final evaluation validates each primary architectural property on a Raspberry Pi 5 4 GB, with a matched x86 Linux block for E-Perf-5. Jetson MNIST inference is separate diagnostic architecture validation and does not add a research question or performance result.
 
 ### RQ1: What is the performance cost of typed Wasm boundaries on edge hardware?
 
@@ -39,7 +39,7 @@ Do Wasm capability-scoped boundaries contain misbehaving nodes without affecting
 | RQ2d | Throughput of healthy stages during fault | < 1 % drop |
 | RQ2e | Cross-contamination (state leakage after crash) | Zero leakage |
 
-Attack scenarios S1–S6 implemented as six dedicated plugins under `plugins/attacks/`.
+Attack scenarios S1–S6 are six dedicated components under `plugins/attacks/`. The mandatory pre-campaign target builds and validates all six plus a healthy reference, executes every scenario without skipping, and records explicit filesystem-read denial. Those local receipts are prerequisites, not final campaign evidence.
 
 ### RQ3: What is the disruption cost of replacing a stage at runtime?
 
@@ -85,7 +85,7 @@ Pipelines are directed acyclic graphs. Cycles are rejected at config load time v
 
 ### C3: Bounded queues with backpressure
 
-Every edge between nodes is a bounded `tokio::mpsc` channel (default capacity 1024). When a queue fills, the `OverflowPolicy` determines behaviour: `slow` (sender blocks: backpressure propagates upstream), `drop` (message discarded), or `dead-letter` (message routed to DLQ). Unbounded queues do not exist.
+Every destination has one bounded `tokio::mpsc` receiver. Edge-shaped configuration chooses sender policy; the physical queue uses the maximum explicit incoming capacity, or default 1024 when none is explicit. `slow` waits, `drop` discards on full, and `dead-letter` attempts the configured DLQ. Fan-in has no fairness or cross-producer ordering guarantee. Unbounded and zero-capacity queues do not exist.
 
 ### C4: Wasm Component Model sandbox
 
@@ -93,7 +93,7 @@ Every processing stage (transform, filter, router) runs in its own `wasmtime::St
 
 ### C5: Edge hardware target
 
-The primary deployment target is Linux-capable devices with ≥ 4 GB RAM (Raspberry Pi 5 4 GB, optionally Jetson Orin). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. This constraint drives decisions around single-process design, AOT compilation caching, memory limits, and the absence of distributed coordination.
+The primary deployment target is a Linux-capable device with at least 4 GB RAM (Raspberry Pi 5 4 GB). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. The restored inference path has separate functional validation on Jetson but is not part of the canonical performance campaign.
 
 ### C6: Stateless node replacement
 
@@ -101,7 +101,7 @@ Hot-swap replaces a node's Wasm instance between messages. It does not preserve 
 
 ### C7: WIT as the contract boundary
 
-All plugin-to-host interaction is defined in WIT (WebAssembly Interface Types). The four packages (`pipeline:types`, `pipeline:node`, `pipeline:routing`, `pipeline:host`, all `@0.1.0`) form the contract. Any language that compiles to `wasm32-wasip2` and implements the appropriate world can serve as a pipeline stage.
+All project plugin-to-host interaction is defined in one WIT package, `wafer:pipeline@0.1.0`, containing `types`, `lifecycle`, `transform`, `filter`, `router`, and `logging` interfaces plus four worlds. `inference-node` is a default-deny Transform specialization that also imports the pinned `wasi:nn` package. The verified non-Rust claim is bounded to the TinyGo uppercase component; Python remains a stub.
 
 ## Scope qualifiers
 
@@ -111,7 +111,7 @@ These terms have bounded meanings throughout the architecture:
 - **"Isolation"** = memory containment + capability scoping. Not information-flow control or covert-channel elimination.
 - **"Hot-swap"** = stateless node replacement. Not state-preserving live update.
 - **"Competitive performance"** = target-load p95 within 2x eKuiper and, when support permits an identifiable comparison, WAFER delivery ceiling at least 70 percent of eKuiper's. Not near-native performance for arbitrary computation.
-- **"Pipeline"** = stateless transform DAG (parse, filter, route, inference). Not a full stream processor with windowing or exactly-once semantics.
+- **"Pipeline"** = stateless transform DAG (parse, filter, route, and capability-gated inference). Windowing and exactly-once semantics are outside the current release.
 
 ## Related documents
 

@@ -32,7 +32,8 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 - **DAG pipelines** — Data flows are declared as directed acyclic graphs via TOML configuration files. Cycles are rejected at build time.
 - **Five node categories** — `Source`, `Sink`, `Transform`, `Filter`, `Router`. Sources and Sinks are native Rust; Transform / Filter / Router are Wasm components.
-- **WIT-typed boundaries** — Every Wasm call goes through one of the four `pipeline:*@0.1.0` WIT packages (`pipeline:types`, `pipeline:node`, `pipeline:routing`, `pipeline:host`). Worlds: `transform-node`, `filter-node`, `inference-node`, `router-node`.
+- **WIT-typed boundaries** — Project interfaces live in one `wafer:pipeline@0.1.0` package with four worlds: `transform-node`, `filter-node`, `router-node`, and the capability-gated `inference-node`. The last also imports the pinned `wasi:nn` package.
+- **Inference is default deny** — Only a Wasm Transform with `allow_inference = true` receives the wasi-nn linker and ONNX backend. The immutable grant survives recovery, reconfigure, hot-swap, and rollback; a requested GPU target alone is not provider-selection evidence.
 - **Bounded queues** — Every edge is a bounded tokio `mpsc` channel with a configurable capacity and an overflow policy (`slow`/backpressure, `drop`, `dead-letter`). Backpressure propagates end-to-end.
 - **Fan-out / fan-in** — Fan-out is expressed by Router nodes (1→N) that return output port names. Fan-in (N→1) is an **implicit host topology**: multiple upstream nodes are wired as multi-producer senders on the downstream node's single `mpsc` receiver. There is no first-class Joiner node type; fan-in requires no Wasm.
 - **Hot-swap (watch-channel, between messages)** — Each Wasm node's task holds a `watch::Receiver<Option<SwapPayload>>`. At the top of every runner loop iteration the task polls `swap_rx.has_changed()` — if a swap payload is available it drops the old instance and installs the pre-instantiated replacement, then enters its usual `select!` between cancellation and the input channel. State inside the guest instance is lost by design (see Invariant 7).
@@ -71,7 +72,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 |-----------|----------|
 | `crates/` | Rust workspace crates (see table above) |
 | `plugins/` | Wasm plugin source (e.g. `pass-through`, `uppercase`, `json-parse`, `threshold-filter`, `content-router`, `mnist-inference`, `tensor-prep`, `cayenne-decoder`, `quality-rules`, `anomaly-detector`, `vibration-features`, `result-format`, `attacks/…`) |
-| `wit/` | WIT interface definitions for the four `pipeline:*@0.1.0` packages and the `transform-node` / `filter-node` / `inference-node` / `router-node` worlds |
+| `wit/` | The single `wafer:pipeline@0.1.0` project package, the four `transform-node` / `filter-node` / `router-node` / `inference-node` worlds, and pinned dependency WIT |
 | `examples/` | Runtime-schema pipeline TOML examples (passthrough, uppercase, filter, chain, fanout, file-io, mqtt, http, overflow-dlq-demo, metrics-demo, mnist-inference, remote OCI, …). See `examples/README.md` before copying config shape. |
 | `tests/` | Integration tests |
 | `docs/` | Project documentation (see Documentation Map below) |

@@ -1,59 +1,43 @@
-# WAFER DAG Configuration: Fan-out Pattern
-# Pipeline: stdin -> router -> [sink-a, sink-b]
-#
-# Tests content-based routing to multiple outputs.
-# The router plugin inspects message content and routes to different ports.
-# Messages with {"route": "a"} go to /tmp/fanout-a.txt
-# Messages with {"route": "b"} go to /tmp/fanout-b.txt
-#
-# Usage:
-#   echo '{"route": "a", "data": "hello"}' | cargo run -- --config examples/dag-fanout.toml
-#   cat /tmp/fanout-a.txt /tmp/fanout-b.txt
+# stdin -> content router -> two file sinks
+# Build first: mise run //plugins:build-plugin content-router
+# Run: echo '{"route":"a","data":"hello"}' | cargo run -p wafer-runtime -- --config examples/dag-fanout.toml
 
+[engine]
 default_queue_capacity = 1024
 
-# Source node: reads from stdin
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "stdin"
+[nodes.source]
+type = "source"
+kind = "stdin"
 
-# Router node: routes messages to different output ports based on content
-[[nodes]]
-id = "router"
-node_type = "router"
-[nodes.config]
-plugin_path = "plugins/content-router/target/wasm32-wasip2/release/content_router.wasm"
+[nodes.router]
+type = "router"
+plugin = "../plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm"
 
-# Sink A: receives messages routed to port-a
-[[nodes]]
-id = "sink-a"
-node_type = "sink"
-sink_type = "file"
-[nodes.config]
+[nodes.router.config]
+route_field = "route"
+default_port = "port-b"
+routes = { a = "port-a", b = "port-b" }
+
+[nodes.sink-a]
+type = "sink"
+kind = "file"
 path = "/tmp/fanout-a.txt"
 
-# Sink B: receives messages routed to port-b
-[[nodes]]
-id = "sink-b"
-node_type = "sink"
-sink_type = "file"
-[nodes.config]
+[nodes.sink-b]
+type = "sink"
+kind = "file"
 path = "/tmp/fanout-b.txt"
 
-# Edge: source -> router
 [[edges]]
 from = "source"
 to = "router"
 
-# Edge: router (port-a) -> sink-a
 [[edges]]
 from = "router"
 to = "sink-a"
-from_port = "port-a"
+port = "port-a"
 
-# Edge: router (port-b) -> sink-b
 [[edges]]
 from = "router"
 to = "sink-b"
-from_port = "port-b"
+port = "port-b"

@@ -10,6 +10,8 @@ from collections.abc import Iterable
 import numpy as np
 import pandas as pd
 
+from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
+from .rollback import validate_swap5_artifacts
 from .stats import bootstrap_ci, cliffs_delta
 
 FINAL_VISUAL_MANIFEST = (
@@ -76,12 +78,63 @@ FINAL_VISUAL_MANIFEST = (
         "name": "burst-pause",
         "metric_group": "burst-one-event-per-run",
     },
+    {
+        "experiment": "e-perf-4",
+        "name": "boundary-payload",
+        "metric_group": "payload-boundary-cost",
+    },
+    {
+        "experiment": "e-perf-3",
+        "name": "mqtt-depth",
+        "metric_group": "mqtt-depth-scaling",
+    },
+    {
+        "experiment": "e-perf-6/8",
+        "name": "in-process-depth-rss",
+        "metric_group": "in-process-depth-rss-scaling",
+    },
+    {
+        "experiment": "e-perf-9",
+        "name": "startup-page-cache",
+        "metric_group": "startup-page-cache",
+    },
+    {
+        "experiment": "e-backpressure",
+        "name": "backpressure-policy",
+        "metric_group": "backpressure-policy-accounting",
+    },
+    {
+        "experiment": "e-density-1",
+        "name": "component-density",
+        "metric_group": "component-density",
+    },
+    {
+        "experiment": "e-iso-1/2/3/4/5/6",
+        "name": "containment",
+        "metric_group": "containment",
+    },
+    {
+        "experiment": "e-swap-5",
+        "name": "failed-replacement",
+        "metric_group": "failed-replacement-continuity",
+    },
 )
 
 _ALLOWED_METRIC_GROUPS = {row["metric_group"] for row in FINAL_VISUAL_MANIFEST}
+_OUTPUT_IDENTITY_FIELDS = {
+    "source_experiments",
+    "estimator",
+    "independent_unit",
+    "admission_dependency",
+    "output_path",
+    "output_sha256_source",
+    "thesis_location",
+}
 
 
-def validate_visual_manifest(manifest: Iterable[dict]) -> None:
+def validate_visual_manifest(
+    manifest: Iterable[dict], *, require_output_identity: bool = False
+) -> None:
     seen: set[tuple[str, str]] = set()
     for row in manifest:
         key = (str(row.get("experiment", "")), str(row.get("name", "")))
@@ -90,6 +143,28 @@ def validate_visual_manifest(manifest: Iterable[dict]) -> None:
             raise ValueError("visual manifest names must be unique and non-empty")
         if metric not in _ALLOWED_METRIC_GROUPS:
             raise ValueError(f"combined or unknown metric group: {metric}")
+        if require_output_identity or bool(_OUTPUT_IDENTITY_FIELDS & row.keys()):
+            missing = _OUTPUT_IDENTITY_FIELDS - row.keys()
+            if missing or not all(row.get(field) for field in _OUTPUT_IDENTITY_FIELDS):
+                raise ValueError(f"visual output identity is incomplete: {sorted(missing)}")
+            sources = row["source_experiments"]
+            if (
+                not isinstance(sources, list)
+                or not sources
+                or not all(isinstance(source, str) and source for source in sources)
+            ):
+                raise TypeError("visual source_experiments must be a non-empty list")
+            output_path = row["output_path"]
+            if (
+                not isinstance(output_path, str)
+                or not output_path.startswith("reports/")
+                or ".." in output_path.split("/")
+            ):
+                raise ValueError("visual output path must be report-relative")
+            if ".sha256" not in str(row["output_sha256_source"]):
+                raise ValueError("visual output hash provenance is invalid")
+            if not str(row["thesis_location"]).startswith("TG2/"):
+                raise ValueError("visual thesis location is invalid")
         seen.add(key)
 
 
@@ -390,8 +465,8 @@ def candidate_swap_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                 "compile_ns",
                 "instantiate_ns",
                 "signal_ns",
-                "ack_ns",
-                "convergence_ns",
+                "replacement_adopted_ns",
+                "first_post_replacement_local_outcome_ns",
                 "http_total_ns",
                 "sink_observed_output_gap_ns",
             ),
@@ -787,6 +862,167 @@ def candidate_capacity_table(summary: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+CAPACITY_COMPETITIVE_THRESHOLD = 0.70
+
+
+def _tested_grid_bounds(result: dict, tested_rates: list[int]) -> dict:
+    rates = result.get("rates")
+    invalid = {
+        "valid": False,
+        "lower_bound_msg_s": None,
+        "upper_bound_msg_s": None,
+        "support_confounded_rate_msg_s": None,
+    }
+    if not result.get("complete") or not isinstance(rates, list):
+        return {**invalid, "reason": "incomplete system population"}
+    if [rate.get("rate_msg_s") for rate in rates] != tested_rates:
+        return {**invalid, "reason": "system rates differ from tested grid"}
+    classifications = [rate.get("classification") for rate in rates]
+    if "incomplete" in classifications:
+        return {**invalid, "reason": "incomplete tested-rate cell"}
+    seen_bad = False
+    seen_censored = False
+    for classification in classifications:
+        if classification == "bad":
+            if seen_censored:
+                return {**invalid, "reason": "non-contiguous support censoring"}
+            seen_bad = True
+        elif classification == "good":
+            if seen_bad or seen_censored:
+                return {**invalid, "reason": "non-monotonic delivery classification"}
+        elif classification == "support-confounded":
+            seen_censored = True
+        else:
+            return {**invalid, "reason": "invalid delivery classification"}
+    good_rates = [
+        rate for rate, classification in zip(tested_rates, classifications, strict=True)
+        if classification == "good"
+    ]
+    unresolved = [
+        rate for rate, classification in zip(tested_rates, classifications, strict=True)
+        if classification == "support-confounded"
+    ]
+    lower = max(good_rates, default=0)
+    upper = max(unresolved) if unresolved else lower
+    return {
+        "valid": True,
+        "reason": "tested-grid bounds derived without interpolation",
+        "lower_bound_msg_s": lower,
+        "upper_bound_msg_s": upper,
+        "support_confounded_rate_msg_s": min(unresolved, default=None),
+    }
+
+
+def capacity_competitive_decision(summary: dict) -> dict:
+    tested_rates = summary.get("rate_points_msg_s")
+    systems = summary.get("systems")
+    if not isinstance(tested_rates, list) or not isinstance(systems, dict):
+        return {
+            "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
+            "branch": "invalid-population",
+            "status": "PENDING",
+            "reason": "capacity population is malformed",
+        }
+    bounds = {
+        system: _tested_grid_bounds(systems.get(system, {}), tested_rates)
+        for system in ("wafer", "ekuiper")
+    }
+    invalid = [system for system, value in bounds.items() if not value["valid"]]
+    common = {
+        "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
+        "systems": bounds,
+        "support_confounded_rate_msg_s": min(
+            (
+                value["support_confounded_rate_msg_s"]
+                for value in bounds.values()
+                if value.get("support_confounded_rate_msg_s") is not None
+            ),
+            default=None,
+        ),
+        "beyond_grid_limitation": (
+            f"tested-grid only; no claim beyond {max(tested_rates)} msg/s"
+            if tested_rates
+            else "tested grid is unavailable"
+        ),
+        "claim_boundary": (
+            "co-located gateway envelope; tested-grid delivery ceiling bounded by "
+            "the MQTT support path"
+        ),
+    }
+    if invalid:
+        return {
+            **common,
+            "ratio_lower_bound": None,
+            "ratio_upper_bound": None,
+            "branch": "invalid-population",
+            "status": "PENDING",
+            "reason": "; ".join(
+                f"{system}: {bounds[system]['reason']}" for system in invalid
+            ),
+        }
+    wafer = bounds["wafer"]
+    ekuiper = bounds["ekuiper"]
+    ratio_lower = (
+        wafer["lower_bound_msg_s"] / ekuiper["upper_bound_msg_s"]
+        if ekuiper["upper_bound_msg_s"] > 0
+        else None
+    )
+    ratio_upper = (
+        wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
+        if ekuiper["lower_bound_msg_s"] > 0
+        else None
+    )
+    collapsed = all(
+        value["lower_bound_msg_s"] == value["upper_bound_msg_s"]
+        for value in bounds.values()
+    )
+    if collapsed and ratio_lower is not None:
+        status = "PASS" if ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD else "FAIL"
+        return {
+            **common,
+            "ratio_lower_bound": ratio_lower,
+            "ratio_upper_bound": ratio_lower,
+            "branch": f"identifiable-{status.lower()}",
+            "status": status,
+            "reason": "collapsed tested-grid bounds identify the competitive ratio",
+        }
+    if ratio_lower is not None and ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD:
+        return {
+            **common,
+            "ratio_lower_bound": ratio_lower,
+            "ratio_upper_bound": ratio_upper,
+            "branch": "censored-worst-case-pass",
+            "status": "PASS",
+            "reason": "WAFER lower bound divided by eKuiper upper bound meets the threshold",
+        }
+    if ratio_upper is not None and ratio_upper < CAPACITY_COMPETITIVE_THRESHOLD:
+        return {
+            **common,
+            "ratio_lower_bound": ratio_lower,
+            "ratio_upper_bound": ratio_upper,
+            "branch": "censored-best-case-fail",
+            "status": "FAIL",
+            "reason": "WAFER upper bound divided by eKuiper lower bound misses the threshold",
+        }
+    if ratio_lower is None or ratio_upper is None:
+        return {
+            **common,
+            "ratio_lower_bound": ratio_lower,
+            "ratio_upper_bound": ratio_upper,
+            "branch": "zero-denominator",
+            "status": "PENDING",
+            "reason": "eKuiper tested-grid bound is zero; competitive ratio is undefined",
+        }
+    return {
+        **common,
+        "ratio_lower_bound": ratio_lower,
+        "ratio_upper_bound": ratio_upper,
+        "branch": "censored-straddling",
+        "status": "CENSORED/PENDING",
+        "reason": "tested-grid ratio bounds do not determine the threshold",
+    }
+
+
 def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     if (
         summary.get("schema_version") != 1
@@ -806,6 +1042,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         "ekuiper",
     }:
         raise ValueError("final capacity summary requires all four systems")
+    decision = capacity_competitive_decision(summary)
     rate_rows = []
     boundary_rows = []
     for system, result in systems.items():
@@ -877,12 +1114,78 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                 "highest_support_uncensored_rate_msg_s": support[
                     "highest_support_uncensored_rate_msg_s"
                 ],
+                "wafer_lower_bound_msg_s": decision["systems"]["wafer"][
+                    "lower_bound_msg_s"
+                ],
+                "wafer_upper_bound_msg_s": decision["systems"]["wafer"][
+                    "upper_bound_msg_s"
+                ],
+                "ekuiper_lower_bound_msg_s": decision["systems"]["ekuiper"][
+                    "lower_bound_msg_s"
+                ],
+                "ekuiper_upper_bound_msg_s": decision["systems"]["ekuiper"][
+                    "upper_bound_msg_s"
+                ],
+                "competitive_ratio_lower_bound": decision["ratio_lower_bound"],
+                "competitive_ratio_upper_bound": decision["ratio_upper_bound"],
+                "competitive_threshold": decision["threshold"],
+                "competitive_branch": decision["branch"],
+                "competitive_status": decision["status"],
+                "competitive_reason": decision["reason"],
+                "support_confounded_rate_msg_s": decision[
+                    "support_confounded_rate_msg_s"
+                ],
+                "beyond_grid_limitation": decision["beyond_grid_limitation"],
                 "units": "messages/second",
-                "claim_boundary": "co-located gateway envelope; SUT ceilings stop at the MQTT support path",
+                "claim_boundary": decision["claim_boundary"],
                 "thesis_evidence": True,
             }
         )
     return pd.DataFrame(rate_rows), pd.DataFrame(boundary_rows)
+
+
+def backpressure_table(records: list[dict]) -> pd.DataFrame:
+    grouped = _require_runs(records, BACKPRESSURE_POLICIES)
+    rows = []
+    for policy, runs in grouped.items():
+        for run in runs:
+            validate_backpressure_result(run, policy)
+        counts = [run["counts"] for run in runs]
+        rows.append(
+            {
+                "policy": policy,
+                "N_runs": len(runs),
+                "median_peak_occupancy": float(
+                    np.median([run["peak_occupancy"] for run in runs])
+                ),
+                "median_offered_msg_s": float(
+                    np.median([run["rates_msg_s"]["offered"] for run in runs])
+                ),
+                "median_accepted_msg_s": float(
+                    np.median([run["rates_msg_s"]["accepted"] for run in runs])
+                ),
+                "median_processed_msg_s": float(
+                    np.median([run["rates_msg_s"]["processed"] for run in runs])
+                ),
+                "median_drained_msg_s": float(
+                    np.median([run["rates_msg_s"]["drained"] for run in runs])
+                ),
+                "total_attempted": sum(value["attempted"] for value in counts),
+                "total_delivered": sum(value["delivered"] for value in counts),
+                "total_dropped": sum(value["dropped"] for value in counts),
+                "total_dead_lettered": sum(value["dead_lettered"] for value in counts),
+                "total_dlq_full": sum(value["dlq_full"] for value in counts),
+                "total_dlq_closed": sum(value["dlq_closed"] for value in counts),
+                "accounting_equation": runs[0]["accounting"]["equation"],
+                "producer_progress": runs[0]["producer_progress"],
+                "rss_within_limit": all(run["memory"]["within_limit"] for run in runs),
+                "units": "occupancy ratio, messages/second, messages, boolean",
+                "estimator": "run-level medians with exact policy-specific counter totals",
+                "claim_boundary": "bounded internal queue under deterministic slow-consumer pressure",
+                "thesis_evidence": True,
+            }
+        )
+    return pd.DataFrame(rows)
 
 
 def swap3_table(runs: list[dict]) -> pd.DataFrame:
@@ -941,6 +1244,51 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def failed_replacement_table(records: list[dict]) -> pd.DataFrame:
+    if len(records) != 1:
+        raise ValueError("E-Swap-5 requires one independent run")
+    record = records[0]
+    if record.get("condition") != "process-trap-rollback" or record.get("run_index") != 1:
+        raise ValueError("E-Swap-5 run identity is invalid")
+    requests = record.get("requests")
+    rollback = record.get("rollback")
+    continuity = record.get("continuity")
+    sequence = record.get("sequence")
+    if (
+        not isinstance(requests, list)
+        or not isinstance(rollback, dict)
+        or not isinstance(continuity, dict)
+        or not isinstance(sequence, dict)
+    ):
+        raise ValueError("E-Swap-5 analysis input is malformed")
+    validate_swap5_artifacts(requests, rollback, continuity, sequence)
+    durations = [event["rollback_ns"] for event in rollback["events"]]
+    return pd.DataFrame(
+        [
+            {
+                "experiment": "e-swap-5",
+                "condition": "process-trap-rollback",
+                "N_runs": 1,
+                "N_nested_events": len(durations),
+                "median_rollback_ns": float(np.median(durations)),
+                "post_rollback_messages": continuity[
+                    "messages_after_final_rollback"
+                ],
+                "post_rollback_continuity": continuity[
+                    "output_observed_after_final_rollback"
+                ],
+                "total_loss": record["sequence"]["gaps"],
+                "total_duplicates": record["sequence"]["duplicates"],
+                "units": "nanoseconds, messages, runs, rollback events",
+                "estimator": "one complete run with nested rollback-event durations",
+                "threshold": "50 successful rollbacks; post-rollback output; zero loss and duplication",
+                "claim_boundary": "failed replacement rollback and observed continuity without a successful v2 transition",
+                "thesis_evidence": True,
+            }
+        ]
+    )
+
+
 def swap4_table(runs: list[dict]) -> pd.DataFrame:
     indices = {int(run.get("run_index", 0)) for run in runs}
     if len(runs) != 30 or indices != set(range(1, 31)):
@@ -969,8 +1317,8 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
             "compile_ns",
             "instantiate_ns",
             "signal_ns",
-            "ack_ns",
-            "convergence_ns",
+            "replacement_adopted_ns",
+            "first_post_replacement_local_outcome_ns",
         )
     }
     return pd.DataFrame(

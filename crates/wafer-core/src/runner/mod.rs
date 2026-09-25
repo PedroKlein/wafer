@@ -14,23 +14,24 @@ pub mod source;
 pub mod transform;
 
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 use wasmtime::Store;
 
 use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
-use crate::engine::bindings::transform_node::{TransformNode, TransformNodePre};
 use crate::engine::state::WaferState;
-use crate::node::QueueMetrics;
-use crate::node::wasm::WasmRouterNode;
+use crate::node::wasm::{PreparedTransformSwap, TransformPre, WasmRouterNode};
+use crate::node::{NodeMetrics, QueueMetrics};
 use crate::queue::RuntimeEnvelope;
+use crate::runner::error_policy::{ErrorPolicyAction, ErrorPolicyExecutor};
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
-use wafer_types::config::HotSwapConfig;
+use wafer_types::config::{HotSwapConfig, OverflowPolicy};
 
 // =============================================================================
-// Hot-swap progress (A3b): runner-reported ACK and first-v2 convergence
+// Replacement progress: runner-reported adoption and first local outcome
 // =============================================================================
 
 /// Error surfaces when a hot-swap fails after signal but before ACK, or
@@ -43,7 +44,7 @@ pub enum HotSwapError {
     /// inside the canary window triggered an automatic rollback to v1. This
     /// is NOT a swap-failed-at-init case — the swap technically applied and
     /// was then reverted. Kept as `Err` so the API caller cannot mistake
-    /// a rolled-back swap for `swap_converged`.
+    /// a rolled-back swap for stable completion.
     RolledBack {
         /// Wall-clock duration of the `recover_from_cached_pre` call that
         /// restored v1, in nanoseconds.
@@ -67,30 +68,43 @@ impl std::fmt::Display for HotSwapError {
 
 impl std::error::Error for HotSwapError {}
 
-/// Outcome the runner reports back to the API for a hot-swap request.
-pub type HotSwapOutcome = Result<HotSwapReport, HotSwapError>;
-
-/// Report returned by the runner loop after a hot-swap completes both
-/// phases: ACK (payload applied to node) and first v2 output produced.
-#[derive(Debug, Clone, Copy)]
-pub struct HotSwapReport {
-    pub ack_at: std::time::Instant,
-    pub first_v2_at: std::time::Instant,
+/// First post-replacement runner-local result.
+/// Sink transition, sequence, and throughput remain independent evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FirstPostReplacementLocalOutcome {
+    ForwardedEnqueued,
+    FilterDropped,
+    RouterDropped,
 }
 
-/// Shared progress marker installed by the hot-swap API path and updated
-/// by the target runner loop.
-///
-/// Concurrency: both marks are set exactly once via `OnceLock`, and the
-/// oneshot sender is taken from the mutex the moment both timestamps are
-/// available or when `report_init_failed` is called. If the runner loop
-/// exits early (drop of `HotSwapProgress`), the API caller's
-/// `oneshot::Receiver` observes a channel-closed error and reports a
-/// clear failure instead of fabricating timings.
+impl FirstPostReplacementLocalOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ForwardedEnqueued => "forwarded/enqueued",
+            Self::FilterDropped => "filter-dropped",
+            Self::RouterDropped => "router-dropped",
+        }
+    }
+}
+
+/// Outcome the runner reports back to the API for a replacement request.
+pub type HotSwapOutcome = Result<HotSwapReport, HotSwapError>;
+
+/// Runner-local replacement adoption and first local outcome.
+#[derive(Debug, Clone, Copy)]
+pub struct HotSwapReport {
+    pub replacement_adopted_at: std::time::Instant,
+    pub first_post_replacement_local_outcome_at: std::time::Instant,
+    pub first_post_replacement_local_outcome: FirstPostReplacementLocalOutcome,
+}
+
+/// Shared progress marker installed by the API path and updated by the target runner.
 #[derive(Debug)]
 pub struct HotSwapProgress {
-    ack: OnceLock<std::time::Instant>,
-    first_v2: OnceLock<std::time::Instant>,
+    replacement_adopted: OnceLock<std::time::Instant>,
+    first_post_replacement_local_outcome:
+        OnceLock<(std::time::Instant, FirstPostReplacementLocalOutcome)>,
     tx: Mutex<Option<oneshot::Sender<HotSwapOutcome>>>,
 }
 
@@ -104,24 +118,25 @@ impl HotSwapProgress {
     pub fn channel() -> (Arc<Self>, oneshot::Receiver<HotSwapOutcome>) {
         let (tx, rx) = oneshot::channel();
         let progress = Arc::new(Self {
-            ack: OnceLock::new(),
-            first_v2: OnceLock::new(),
+            replacement_adopted: OnceLock::new(),
+            first_post_replacement_local_outcome: OnceLock::new(),
             tx: Mutex::new(Some(tx)),
         });
         (progress, rx)
     }
 
-    /// Called by the runner loop the moment the swap payload has been
-    /// applied to the target node (store/bindings/pre replaced and init OK).
-    pub fn mark_ack(&self) {
-        let _ = self.ack.set(std::time::Instant::now());
+    /// Called after the replacement instance validates and initializes.
+    pub fn mark_replacement_adopted(&self) {
+        let _ = self.replacement_adopted.set(std::time::Instant::now());
         self.try_complete();
     }
 
-    /// Called by the runner loop after the first successful post-swap
-    /// output was produced by the new instance.
-    pub fn mark_first_v2(&self) {
-        let _ = self.first_v2.set(std::time::Instant::now());
+    /// Called after the first post-replacement runner-local result.
+    pub fn mark_first_post_replacement_local_outcome(
+        &self,
+        outcome: FirstPostReplacementLocalOutcome,
+    ) {
+        let _ = self.first_post_replacement_local_outcome.set((std::time::Instant::now(), outcome));
         self.try_complete();
     }
 
@@ -134,13 +149,9 @@ impl HotSwapProgress {
         }
     }
 
-    /// A17: called by the runner loop after v2 was ACKed but a subsequent
-    /// process-time trap triggered a rollback to v1. Consumes the sender so
-    /// the API caller receives `RolledBack` (with rollback duration) rather
-    /// than waiting for a `mark_first_v2` that will never fire.
-    ///
-    /// Idempotent — subsequent `mark_first_v2` calls become no-ops because
-    /// the sender is already taken.
+    /// A17: records a post-adoption rollback before any local outcome completes.
+    /// A response already returned for local adoption remains an adoption record,
+    /// not a stable-canary completion claim.
     pub fn report_rolled_back(&self, rollback_time_ns: u64, reason: impl Into<String>) {
         if let Some(tx) = self.take_sender() {
             let _ =
@@ -156,13 +167,22 @@ impl HotSwapProgress {
     }
 
     fn try_complete(&self) {
-        let (Some(ack_at), Some(first_v2_at)) =
-            (self.ack.get().copied(), self.first_v2.get().copied())
+        let (
+            Some(replacement_adopted_at),
+            Some((first_post_replacement_local_outcome_at, first_post_replacement_local_outcome)),
+        ) = (
+            self.replacement_adopted.get().copied(),
+            self.first_post_replacement_local_outcome.get().copied(),
+        )
         else {
             return;
         };
         if let Some(tx) = self.take_sender() {
-            let _ = tx.send(Ok(HotSwapReport { ack_at, first_v2_at }));
+            let _ = tx.send(Ok(HotSwapReport {
+                replacement_adopted_at,
+                first_post_replacement_local_outcome_at,
+                first_post_replacement_local_outcome,
+            }));
         }
     }
 }
@@ -181,7 +201,7 @@ impl HotSwapProgress {
 /// this snapshot to roll back to v1. The snapshot is consumed on rollback
 /// (single-shot) and dropped when the canary window closes.
 pub(crate) struct TransformRollbackSnapshot {
-    pub pre: Arc<TransformNodePre<WaferState>>,
+    pub pre: TransformPre,
 }
 
 impl std::fmt::Debug for TransformRollbackSnapshot {
@@ -259,7 +279,7 @@ impl std::fmt::Debug for TransformCanaryState {
 
 impl TransformCanaryState {
     /// Create a new canary state from the v1 InstancePre retained before swap.
-    pub fn new(pre: Arc<TransformNodePre<WaferState>>, config: HotSwapConfig) -> Self {
+    pub fn new(pre: TransformPre, config: HotSwapConfig) -> Self {
         Self { snapshot: TransformRollbackSnapshot { pre }, counters: CanaryCounters::new(config) }
     }
 
@@ -298,7 +318,41 @@ impl TransformCanaryState {
 pub struct DownstreamSender {
     pub sender: mpsc::Sender<RuntimeEnvelope>,
     pub port: Box<str>,
+    pub edge: Box<str>,
+    pub source_node: Box<str>,
+    pub overflow: OverflowPolicy,
+    pub dlq_sender: Option<mpsc::Sender<error_policy::DlqEnvelope>>,
     pub queue_metrics: Option<Arc<QueueMetrics>>,
+}
+
+impl DownstreamSender {
+    #[cfg(test)]
+    fn test_sender(
+        sender: mpsc::Sender<RuntimeEnvelope>,
+        port: impl Into<Box<str>>,
+        overflow: OverflowPolicy,
+        dlq_sender: Option<mpsc::Sender<error_policy::DlqEnvelope>>,
+        queue_metrics: Option<Arc<QueueMetrics>>,
+    ) -> Self {
+        Self {
+            sender,
+            port: port.into(),
+            edge: "test:default->sink:default".into(),
+            source_node: "test".into(),
+            overflow,
+            dlq_sender,
+            queue_metrics,
+        }
+    }
+
+    #[cfg(test)]
+    fn slow(
+        sender: mpsc::Sender<RuntimeEnvelope>,
+        port: impl Into<Box<str>>,
+        queue_metrics: Option<Arc<QueueMetrics>>,
+    ) -> Self {
+        Self::test_sender(sender, port, OverflowPolicy::Slow, None, queue_metrics)
+    }
 }
 
 pub struct TrackedReceiver {
@@ -339,6 +393,53 @@ impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
     }
 }
 
+pub(crate) fn continue_after_policy_action(
+    action: ErrorPolicyAction,
+    metrics: &NodeMetrics,
+) -> bool {
+    match action {
+        ErrorPolicyAction::ExhaustedSkip => {
+            metrics.record_exhausted_skip();
+            true
+        }
+        ErrorPolicyAction::Teardown => false,
+        ErrorPolicyAction::Continue | ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => {
+            true
+        }
+    }
+}
+
+pub(crate) async fn recv_next_or_retry(
+    receiver: &mut TrackedReceiver,
+    policy: &mut ErrorPolicyExecutor,
+    cancel: &CancellationToken,
+) -> Option<RuntimeEnvelope> {
+    loop {
+        if let Some(retry) = policy.next_ready_retry() {
+            return Some(retry);
+        }
+
+        let incoming = match policy.next_retry_deadline() {
+            Some(deadline) => {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return None,
+                    message = receiver.recv() => message,
+                    () = tokio::time::sleep_until(deadline) => continue,
+                }
+            }
+            None => {
+                tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => return None,
+                    message = receiver.recv() => message,
+                }
+            }
+        };
+        return incoming;
+    }
+}
+
 /// Payload for watch-channel hot-swap signaling.
 ///
 /// Contains everything needed to replace a node's Wasm instance:
@@ -350,9 +451,7 @@ impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
 #[derive(Clone)]
 pub enum SwapPayload {
     Transform {
-        new_store: Arc<std::sync::Mutex<Option<Store<WaferState>>>>,
-        new_bindings: Arc<std::sync::Mutex<Option<TransformNode>>>,
-        new_pre: Arc<TransformNodePre<WaferState>>,
+        replacement: Arc<std::sync::Mutex<Option<PreparedTransformSwap>>>,
         progress: Arc<HotSwapProgress>,
     },
     Filter {
@@ -383,6 +482,18 @@ impl SwapPayload {
         }
     }
 
+    #[cfg(all(test, feature = "http-api"))]
+    pub(crate) fn is_inference_transform(&self) -> bool {
+        match self {
+            Self::Transform { replacement, .. } => replacement
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_ref()
+                .is_some_and(PreparedTransformSwap::allows_inference),
+            Self::Filter { .. } | Self::Router { .. } | Self::Reconfigure { .. } => false,
+        }
+    }
+
     /// Apply this swap payload to a transform node, replacing its internals
     /// only after `validate() + init()` succeed on the replacement.
     ///
@@ -394,8 +505,8 @@ impl SwapPayload {
     ///
     /// # Panics
     ///
-    /// Panics if the swap payload's store or bindings have already been consumed.
-    /// This is a bug — each `SwapPayload` is single-consumer.
+    /// Panics if the swap payload has already been consumed. This is a bug —
+    /// each `SwapPayload` is single-consumer.
     #[expect(
         clippy::expect_used,
         reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
@@ -404,23 +515,18 @@ impl SwapPayload {
         self,
         node: &mut crate::node::TransformNode,
     ) -> Result<(), crate::error::WaferError> {
-        if let Self::Transform { new_store, new_bindings, new_pre, .. } = self {
+        if let Self::Transform { replacement, .. } = self {
             let wasm = node.as_wasm_mut().ok_or_else(|| {
                 crate::error::WaferError::Runtime(
                     "native baseline transforms do not support hot-swap".into(),
                 )
             })?;
-            let store = new_store
+            let replacement = replacement
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload bindings already consumed");
-            wasm.try_hot_swap(store, bindings, new_pre)?;
+                .expect("swap payload already consumed");
+            wasm.try_hot_swap(replacement)?;
         }
         Ok(())
     }
@@ -495,87 +601,125 @@ impl SwapPayload {
 // Shared Helpers
 // =============================================================================
 
-/// Send an envelope to ALL downstream senders (broadcast for transforms/filters).
-///
-/// For transforms and filters, every downstream edge gets the message.
-/// The bounded send awaits capacity, preserving the default lossless policy.
-///
-/// # Panics
-///
-/// Panics if `senders` is empty after the early-return check (unreachable).
-#[expect(clippy::indexing_slicing, reason = "senders[0] is guarded by len() == 1 check")]
-#[expect(
-    clippy::expect_used,
-    reason = "split_last() is called after verifying senders is non-empty"
-)]
+/// Send an envelope to all downstream senders.
 pub async fn send_downstream(senders: &[DownstreamSender], envelope: RuntimeEnvelope) {
-    if senders.is_empty() {
-        return;
-    }
-
-    if senders.len() == 1 {
-        // Single downstream — move without cloning
-        send_one(&senders[0], envelope).await;
-        return;
-    }
-
-    // Multiple downstream — clone for N-1, move for last
-    let (last, rest) = senders.split_last().expect("checked non-empty above");
-    for sender in rest {
-        send_one(sender, envelope.clone()).await;
-    }
-    send_one(last, envelope).await;
+    send_matching(senders, envelope, |_| true).await;
 }
 
-/// Fan-out an envelope to specific ports based on routing decision.
-///
-/// Clone for N-1 matching ports, move original to last matching port.
-/// Non-matching senders are skipped. If no ports match any sender, the
-/// envelope is silently dropped.
-///
-/// # Panics
-///
-/// Panics if `matching` is empty after the early-return check (unreachable).
-#[expect(clippy::indexing_slicing, reason = "matching[0] guarded by len() == 1 check")]
-#[expect(clippy::expect_used, reason = "split_last() called after verifying matching is non-empty")]
+/// Fan out an envelope to the ports selected by routing.
 pub async fn fan_out(ports: &[String], envelope: RuntimeEnvelope, senders: &[DownstreamSender]) {
-    // Collect senders that match the requested ports
-    let matching: Vec<&DownstreamSender> =
-        senders.iter().filter(|s| ports.iter().any(|p| p.as_str() == &*s.port)).collect();
-
-    if matching.is_empty() {
-        return;
-    }
-
     let parent_id = envelope.header.id.to_string();
-
-    if matching.len() == 1 {
-        let mut child = envelope;
-        child.set_parent_id(parent_id);
-        send_one(matching[0], child).await;
-        return;
-    }
-
-    // Clone for N-1 ports, move for last (Session 3 D12)
-    let (last, rest) = matching.split_last().expect("checked non-empty above");
-    for sender in rest {
-        let mut child = envelope.clone();
-        child.set_parent_id(parent_id.clone());
-        send_one(sender, child).await;
-    }
     let mut child = envelope;
     child.set_parent_id(parent_id);
-    send_one(last, child).await;
+    send_matching(senders, child, |sender| ports.iter().any(|port| port.as_str() == &*sender.port))
+        .await;
+}
+
+async fn send_matching(
+    senders: &[DownstreamSender],
+    envelope: RuntimeEnvelope,
+    matches: impl Fn(&DownstreamSender) -> bool,
+) {
+    let mut remaining = senders.iter().filter(|sender| matches(sender)).count();
+    if remaining == 0 {
+        return;
+    }
+    let mut envelope = Some(envelope);
+    for slow in [false, true] {
+        for sender in senders {
+            if matches(sender) && (sender.overflow == OverflowPolicy::Slow) == slow {
+                let message = if remaining == 1 { envelope.take() } else { envelope.clone() };
+                remaining = remaining.saturating_sub(1);
+                if let Some(message) = message {
+                    send_one(sender, message).await;
+                }
+            }
+        }
+    }
 }
 
 async fn send_one(sender: &DownstreamSender, envelope: RuntimeEnvelope) {
-    let Ok(permit) = sender.sender.reserve().await else {
-        return;
-    };
-    if let Some(metrics) = &sender.queue_metrics {
-        metrics.record_enqueued();
+    match sender.overflow {
+        OverflowPolicy::Slow => {
+            let Ok(permit) = sender.sender.reserve().await else {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_downstream_closed();
+                }
+                return;
+            };
+            if let Some(metrics) = &sender.queue_metrics {
+                metrics.record_enqueued();
+            }
+            permit.send(envelope);
+        }
+        OverflowPolicy::Drop => match sender.sender.try_send(envelope) {
+            Ok(()) => {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_enqueued();
+                }
+            }
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_dropped();
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_downstream_closed();
+                }
+            }
+        },
+        OverflowPolicy::DeadLetter => match sender.sender.try_send(envelope) {
+            Ok(()) => {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_enqueued();
+                }
+            }
+            Err(mpsc::error::TrySendError::Full(envelope)) => {
+                let Some(dlq_sender) = &sender.dlq_sender else {
+                    if let Some(metrics) = &sender.queue_metrics {
+                        metrics.record_dlq_closed();
+                    }
+                    return;
+                };
+                let dlq_envelope = error_policy::DlqEnvelope {
+                    timestamp: std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(0, crate::util::duration_ms_saturating),
+                    source_node: sender.source_node.clone(),
+                    error_category: None,
+                    error_message: "destination queue full".to_string(),
+                    retry_count: envelope.retry_count,
+                    reason: error_policy::DlqReason::QueueFull { edge: sender.edge.clone() },
+                    trace_id: envelope.lineage.trace_id.as_ref().map(ToString::to_string),
+                    parent_id: envelope.lineage.parent_id.as_ref().map(ToString::to_string),
+                    original: envelope,
+                };
+                match dlq_sender.try_send(dlq_envelope) {
+                    Ok(()) => {
+                        if let Some(metrics) = &sender.queue_metrics {
+                            metrics.record_dead_lettered();
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        if let Some(metrics) = &sender.queue_metrics {
+                            metrics.record_dlq_full();
+                        }
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        if let Some(metrics) = &sender.queue_metrics {
+                            metrics.record_dlq_closed();
+                        }
+                    }
+                }
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                if let Some(metrics) = &sender.queue_metrics {
+                    metrics.record_downstream_closed();
+                }
+            }
+        },
     }
-    permit.send(envelope);
 }
 
 #[cfg(test)]
@@ -602,13 +746,35 @@ mod tests {
         // Neither mark yet: receiver must not have a value ready.
         assert!(rx.try_recv().is_err(), "progress must not report before ack");
 
-        progress.mark_ack();
+        progress.mark_replacement_adopted();
         assert!(rx.try_recv().is_err(), "progress must not report on ack alone");
 
-        progress.mark_first_v2();
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
         let outcome = rx.await.expect("progress completes");
         let report = outcome.expect("outcome should be Ok");
-        assert!(report.first_v2_at >= report.ack_at);
+        assert!(report.first_post_replacement_local_outcome_at >= report.replacement_adopted_at);
+    }
+
+    #[tokio::test]
+    async fn replacement_progress_reports_local_enqueue_before_sink_collection() {
+        let (progress, rx) = HotSwapProgress::channel();
+        let (sender, receiver) = mpsc::channel(1);
+        let downstream = DownstreamSender::slow(sender, "default", None);
+
+        progress.mark_replacement_adopted();
+        send_downstream(&[downstream], RuntimeEnvelope::from_string("source", "payload")).await;
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
+
+        let report = rx.await.expect("local outcome report").expect("replacement report");
+        assert_eq!(
+            report.first_post_replacement_local_outcome,
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
+        assert_eq!(receiver.len(), 1, "sink queue must remain uncollected at local report");
     }
 
     #[tokio::test]
@@ -624,16 +790,20 @@ mod tests {
     #[tokio::test]
     async fn hot_swap_progress_ignores_late_marks() {
         let (progress, rx) = HotSwapProgress::channel();
-        progress.mark_ack();
-        progress.mark_first_v2();
+        progress.mark_replacement_adopted();
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
         let outcome = rx.await.expect("first report");
         let first = outcome.expect("first report should be Ok");
 
         // Late marks must not panic or corrupt the report.
-        progress.mark_ack();
-        progress.mark_first_v2();
+        progress.mark_replacement_adopted();
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
         // Nothing to receive after the sender was consumed.
-        assert!(first.first_v2_at >= first.ack_at);
+        assert!(first.first_post_replacement_local_outcome_at >= first.replacement_adopted_at);
     }
 
     // ---- A17: rollback reporting ----
@@ -642,7 +812,7 @@ mod tests {
     async fn hot_swap_progress_reports_rolled_back_after_ack() {
         // Simulates v2 ACKing then trapping in canary window.
         let (progress, rx) = HotSwapProgress::channel();
-        progress.mark_ack();
+        progress.mark_replacement_adopted();
         progress.report_rolled_back(139_000, "pass-through-v2-panics: intentional trap");
         let outcome = rx.await.expect("progress reports rollback");
         match outcome {
@@ -656,19 +826,18 @@ mod tests {
 
     #[tokio::test]
     async fn hot_swap_progress_rolled_back_precludes_later_first_v2() {
-        // Regression for B1: after rollback fires, a subsequent mark_first_v2
-        // (e.g. from a v1 message that races the rollback path) must be a
-        // no-op — the API caller must not observe swap_converged for a
-        // swap that actually rolled back.
+        // A late local outcome must not replace a rollback reported before adoption completed.
         let (progress, rx) = HotSwapProgress::channel();
-        progress.mark_ack();
+        progress.mark_replacement_adopted();
         progress.report_rolled_back(42, "trap");
         // This is the race the bug allowed: v1 keeps producing output.
-        progress.mark_first_v2();
+        progress.mark_first_post_replacement_local_outcome(
+            FirstPostReplacementLocalOutcome::ForwardedEnqueued,
+        );
         let outcome = rx.await.expect("progress reports rollback");
         assert!(
             matches!(outcome, Err(HotSwapError::RolledBack { .. })),
-            "rolled-back outcome must survive a late mark_first_v2, got {outcome:?}"
+            "rolled-back outcome must survive a late local outcome, got {outcome:?}"
         );
     }
 
@@ -759,14 +928,211 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn slow_policy_waits_for_capacity_then_enqueues() {
+        let metrics = Arc::new(QueueMetrics::default());
+        let (tx, mut rx) = mpsc::channel(1);
+        let sender = DownstreamSender::slow(tx, "out", Some(Arc::clone(&metrics)));
+
+        send_downstream(
+            std::slice::from_ref(&sender),
+            RuntimeEnvelope::from_string("source", "first"),
+        )
+        .await;
+        let mut pending = tokio::spawn(async move {
+            send_downstream(&[sender], RuntimeEnvelope::from_string("source", "second")).await;
+        });
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending).await.is_err(),
+            "slow policy must wait while the destination is full"
+        );
+        assert_eq!(rx.recv().await.expect("first message").payload_as_string(), "first");
+        tokio::time::timeout(std::time::Duration::from_secs(1), pending)
+            .await
+            .expect("slow policy must resume after capacity is freed")
+            .expect("send task");
+        assert_eq!(rx.recv().await.expect("second message").payload_as_string(), "second");
+        assert_eq!(metrics.enqueued(), 2);
+    }
+
+    #[tokio::test]
+    async fn single_slow_branch_keeps_only_one_envelope_while_waiting() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.send(RuntimeEnvelope::from_string("seed", "full")).await.expect("fill downstream queue");
+        let sender = DownstreamSender::slow(tx, "out", None);
+        let envelope = RuntimeEnvelope::from_string("source", "payload");
+        let header = Arc::clone(&envelope.header);
+        let mut pending = tokio::spawn(async move {
+            send_downstream(&[sender], envelope).await;
+        });
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut pending).await.is_err(),
+            "slow branch must wait for capacity"
+        );
+        assert_eq!(
+            Arc::strong_count(&header),
+            2,
+            "a single branch must retain only the original envelope while it waits"
+        );
+        rx.recv().await.expect("filled message");
+        pending.await.expect("send task");
+    }
+
+    #[tokio::test]
+    async fn mixed_fan_out_keeps_drop_independent_of_a_slow_sibling() {
+        let slow_metrics = Arc::new(QueueMetrics::default());
+        let drop_metrics = Arc::new(QueueMetrics::default());
+        let (slow_tx, mut slow_rx) = mpsc::channel(1);
+        let (drop_tx, mut drop_rx) = mpsc::channel(1);
+        slow_tx.send(RuntimeEnvelope::from_string("seed", "slow")).await.expect("fill slow queue");
+        drop_tx.send(RuntimeEnvelope::from_string("seed", "drop")).await.expect("fill drop queue");
+        let senders = vec![
+            DownstreamSender::test_sender(
+                slow_tx,
+                "slow",
+                OverflowPolicy::Slow,
+                None,
+                Some(Arc::clone(&slow_metrics)),
+            ),
+            DownstreamSender::test_sender(
+                drop_tx,
+                "drop",
+                OverflowPolicy::Drop,
+                None,
+                Some(Arc::clone(&drop_metrics)),
+            ),
+        ];
+
+        let mut task = tokio::spawn(async move {
+            fan_out(
+                &["slow".to_string(), "drop".to_string()],
+                RuntimeEnvelope::from_string("source", "payload"),
+                &senders,
+            )
+            .await;
+        });
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut task).await.is_err(),
+            "full slow branch must still backpressure independently"
+        );
+        assert_eq!(drop_metrics.dropped(), 1, "full drop branch must account immediately");
+        assert_eq!(slow_rx.recv().await.expect("filled slow message").payload_as_string(), "slow");
+        tokio::time::timeout(std::time::Duration::from_secs(1), task)
+            .await
+            .expect("slow branch must resume")
+            .expect("fan-out task");
+        assert_eq!(
+            slow_rx.recv().await.expect("forwarded slow message").payload_as_string(),
+            "payload"
+        );
+        assert_eq!(
+            drop_rx.recv().await.expect("original drop message").payload_as_string(),
+            "drop"
+        );
+    }
+
+    #[tokio::test]
+    async fn dead_letter_policy_preserves_edge_context_and_counts_diversion() {
+        let metrics = Arc::new(QueueMetrics::default());
+        let (destination_tx, _destination_rx) = mpsc::channel(1);
+        destination_tx
+            .send(RuntimeEnvelope::from_string("seed", "full"))
+            .await
+            .expect("fill destination");
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(1);
+        let sender = DownstreamSender::test_sender(
+            destination_tx,
+            "out",
+            OverflowPolicy::DeadLetter,
+            Some(dlq_tx),
+            Some(Arc::clone(&metrics)),
+        );
+
+        send_downstream(&[sender], RuntimeEnvelope::from_string("source", "payload")).await;
+
+        let record = dlq_rx.recv().await.expect("overflow record");
+        assert_eq!(&*record.source_node, "test");
+        assert_eq!(
+            record.reason,
+            error_policy::DlqReason::QueueFull { edge: "test:default->sink:default".into() }
+        );
+        assert_eq!(record.error_message, "destination queue full");
+        assert_eq!(record.original.payload_as_string(), "payload");
+        assert_eq!(metrics.dead_lettered(), 1);
+        assert_eq!(metrics.dropped(), 0);
+    }
+
+    #[tokio::test]
+    async fn full_or_closed_dlq_is_not_counted_as_success() {
+        let metrics = Arc::new(QueueMetrics::default());
+        let (destination_tx, _destination_rx) = mpsc::channel(1);
+        destination_tx
+            .send(RuntimeEnvelope::from_string("seed", "full"))
+            .await
+            .expect("fill destination");
+        let (dlq_tx, _dlq_rx) = mpsc::channel(1);
+        let sender = DownstreamSender::test_sender(
+            destination_tx,
+            "out",
+            OverflowPolicy::DeadLetter,
+            Some(dlq_tx),
+            Some(Arc::clone(&metrics)),
+        );
+
+        send_downstream(
+            std::slice::from_ref(&sender),
+            RuntimeEnvelope::from_string("source", "first"),
+        )
+        .await;
+        send_downstream(&[sender], RuntimeEnvelope::from_string("source", "second")).await;
+        assert_eq!(metrics.dead_lettered(), 1);
+        assert_eq!(metrics.dlq_full(), 1);
+
+        let closed_metrics = Arc::new(QueueMetrics::default());
+        let (closed_destination_tx, _closed_destination_rx) = mpsc::channel(1);
+        closed_destination_tx
+            .send(RuntimeEnvelope::from_string("seed", "full"))
+            .await
+            .expect("fill destination");
+        let (closed_dlq_tx, closed_dlq_rx) = mpsc::channel(1);
+        drop(closed_dlq_rx);
+        let closed_sender = DownstreamSender::test_sender(
+            closed_destination_tx,
+            "out",
+            OverflowPolicy::DeadLetter,
+            Some(closed_dlq_tx),
+            Some(Arc::clone(&closed_metrics)),
+        );
+        send_downstream(&[closed_sender], RuntimeEnvelope::from_string("source", "payload")).await;
+        assert_eq!(closed_metrics.dead_lettered(), 0);
+        assert_eq!(closed_metrics.dlq_closed(), 1);
+    }
+
+    #[tokio::test]
+    async fn closed_destination_is_not_counted_as_overflow() {
+        let metrics = Arc::new(QueueMetrics::default());
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let sender = DownstreamSender::test_sender(
+            tx,
+            "out",
+            OverflowPolicy::Drop,
+            None,
+            Some(Arc::clone(&metrics)),
+        );
+
+        send_downstream(&[sender], RuntimeEnvelope::from_string("source", "payload")).await;
+        assert_eq!(metrics.downstream_closed(), 1);
+        assert_eq!(metrics.dropped(), 0);
+    }
+
+    #[tokio::test]
     async fn test_send_downstream_single() {
         let metrics = Arc::new(QueueMetrics::default());
         let (tx, rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender {
-            sender: tx,
-            port: "out".into(),
-            queue_metrics: Some(Arc::clone(&metrics)),
-        }];
+        let senders = vec![DownstreamSender::slow(tx, "out", Some(Arc::clone(&metrics)))];
         let mut receiver = TrackedReceiver::new(rx, Arc::clone(&metrics));
         let envelope = RuntimeEnvelope::from_string("src", "hello");
 
@@ -782,10 +1148,8 @@ mod tests {
     async fn test_send_downstream_multiple() {
         let (tx1, mut rx1) = mpsc::channel(32);
         let (tx2, mut rx2) = mpsc::channel(32);
-        let senders = vec![
-            DownstreamSender { sender: tx1, port: "a".into(), queue_metrics: None },
-            DownstreamSender { sender: tx2, port: "b".into(), queue_metrics: None },
-        ];
+        let senders =
+            vec![DownstreamSender::slow(tx1, "a", None), DownstreamSender::slow(tx2, "b", None)];
         let envelope = RuntimeEnvelope::from_string("src", "broadcast");
 
         send_downstream(&senders, envelope).await;
@@ -807,8 +1171,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_single_port_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: tx, port: "port-a".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(tx, "port-a", None)];
         let envelope = RuntimeEnvelope::from_string("src", "routed");
 
         fan_out(&["port-a".to_string()], envelope, &senders).await;
@@ -822,8 +1185,8 @@ mod tests {
         let (tx_a, mut rx_a) = mpsc::channel(32);
         let (tx_b, mut rx_b) = mpsc::channel(32);
         let senders = vec![
-            DownstreamSender { sender: tx_a, port: "port-a".into(), queue_metrics: None },
-            DownstreamSender { sender: tx_b, port: "port-b".into(), queue_metrics: None },
+            DownstreamSender::slow(tx_a, "port-a", None),
+            DownstreamSender::slow(tx_b, "port-b", None),
         ];
         let mut envelope = RuntimeEnvelope::from_string("src", "fan");
         envelope.ensure_trace_id();
@@ -845,8 +1208,7 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_no_match() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders =
-            vec![DownstreamSender { sender: tx, port: "other".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(tx, "other", None)];
         let envelope = RuntimeEnvelope::from_string("src", "lost");
 
         fan_out(&["nonexistent".to_string()], envelope, &senders).await;
@@ -858,10 +1220,103 @@ mod tests {
     #[tokio::test]
     async fn test_fan_out_empty_ports_list() {
         let (tx, mut rx) = mpsc::channel(32);
-        let senders = vec![DownstreamSender { sender: tx, port: "x".into(), queue_metrics: None }];
+        let senders = vec![DownstreamSender::slow(tx, "x", None)];
         let envelope = RuntimeEnvelope::from_string("src", "drop");
 
         fan_out(&[], envelope, &senders).await;
         rx.try_recv().unwrap_err();
+    }
+
+    #[test]
+    fn exhausted_skip_action_records_once_without_counting_other_actions() {
+        let metrics = NodeMetrics::new();
+        assert!(continue_after_policy_action(ErrorPolicyAction::Continue, &metrics));
+        assert!(continue_after_policy_action(ErrorPolicyAction::DlqFull, &metrics));
+        assert!(continue_after_policy_action(ErrorPolicyAction::DlqClosed, &metrics));
+        assert_eq!(metrics.exhausted_skips(), 0);
+
+        assert!(continue_after_policy_action(ErrorPolicyAction::ExhaustedSkip, &metrics));
+        assert_eq!(metrics.exhausted_skips(), 1);
+        assert!(!continue_after_policy_action(ErrorPolicyAction::Teardown, &metrics));
+        assert_eq!(metrics.exhausted_skips(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn later_earlier_retry_wakes_while_input_is_idle() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let policy = error_policy::ResolvedErrorPolicy {
+            bad_input: error_policy::ResolvedSimpleAction::Skip,
+            dependency_failed: error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 100,
+                exhausted: error_policy::ResolvedSimpleAction::Skip,
+            },
+            processing_failed: error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 1_000,
+                exhausted: error_policy::ResolvedSimpleAction::Skip,
+            },
+            timed_out: error_policy::ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 2,
+        };
+        let mut policy = ErrorPolicyExecutor::new(policy, None, "node");
+        policy.handle(
+            &error_policy::WasmProcessError::ProcessingFailed("long".into()),
+            RuntimeEnvelope::from_string("source", "long"),
+        );
+        policy.handle(
+            &error_policy::WasmProcessError::DependencyFailed("short".into()),
+            RuntimeEnvelope::from_string("source", "short"),
+        );
+
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(async move {
+            let mut receiver = TrackedReceiver::from(input_rx);
+            recv_next_or_retry(&mut receiver, &mut policy, &cancel).await
+        });
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(100)).await;
+        let envelope = task.await.expect("retry task").expect("due retry");
+        assert_eq!(envelope.payload_as_string(), "short");
+        drop(input_tx);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn due_retry_wakes_while_input_is_idle() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let policy = error_policy::ResolvedErrorPolicy {
+            bad_input: error_policy::ResolvedSimpleAction::Skip,
+            dependency_failed: error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 100,
+                exhausted: error_policy::ResolvedSimpleAction::Skip,
+            },
+            processing_failed: error_policy::ResolvedRetryConfig {
+                retries: 1,
+                backoff_ms: 100,
+                exhausted: error_policy::ResolvedSimpleAction::Skip,
+            },
+            timed_out: error_policy::ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 1,
+        };
+        let mut policy = ErrorPolicyExecutor::new(policy, None, "node");
+        let retry = RuntimeEnvelope::from_string("source", "retry");
+        policy.handle(&error_policy::WasmProcessError::ProcessingFailed("transient".into()), retry);
+
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(async move {
+            let mut receiver = TrackedReceiver::from(input_rx);
+            recv_next_or_retry(&mut receiver, &mut policy, &cancel).await
+        });
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(std::time::Duration::from_millis(99)).await;
+        assert!(!task.is_finished(), "retry must not run before backoff_ms");
+        tokio::time::advance(std::time::Duration::from_millis(1)).await;
+
+        let envelope = task.await.expect("retry task").expect("due retry");
+        assert_eq!(envelope.payload_as_string(), "retry");
+        drop(input_tx);
     }
 }

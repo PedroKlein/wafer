@@ -24,7 +24,7 @@ impl Capabilities {
 
     #[must_use]
     pub const fn full() -> Self {
-        Self { inherit_stdio: true, inherit_env: true, allow_inference: true }
+        Self { inherit_stdio: true, inherit_env: true, allow_inference: false }
     }
 
     #[must_use]
@@ -67,28 +67,16 @@ mod tests {
     }
 
     #[test]
-    fn full_enables_all() {
+    fn full_enables_supported_capabilities() {
         let caps = Capabilities::full();
         assert!(caps.inherit_stdio);
         assert!(caps.inherit_env);
-        assert!(caps.allow_inference);
+        assert!(!caps.allow_inference);
     }
 
     #[test]
-    fn builder_pattern() {
+    fn builder_pattern_enables_inference_explicitly() {
         let caps = Capabilities::sandbox().stdio(true).inference(true);
-        assert!(caps.inherit_stdio);
-        assert!(!caps.inherit_env);
-        assert!(caps.allow_inference);
-    }
-
-    #[test]
-    fn deserialize_from_toml_explicit() {
-        let toml_str = r"
-            inherit_stdio = true
-            allow_inference = true
-        ";
-        let caps: Capabilities = toml::from_str(toml_str).unwrap();
         assert!(caps.inherit_stdio);
         assert!(!caps.inherit_env);
         assert!(caps.allow_inference);

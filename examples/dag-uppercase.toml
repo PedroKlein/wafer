@@ -1,29 +1,21 @@
-# WAFER DAG Configuration: Uppercase Transform
-# Pipeline: stdin → uppercase transform → stdout
-#
-# Usage:
-#   echo "hello world" | cargo run -- --config examples/dag-uppercase.toml
-#
-# Expected Output:
-#   HELLO WORLD
+# stdin -> uppercase -> stdout
+# Build first: mise run //plugins:build-plugin uppercase
+# Run: echo "hello world" | cargo run -p wafer-runtime -- --config examples/dag-uppercase.toml
 
+[engine]
 default_queue_capacity = 1024
 
-[[nodes]]
-id = "source"
-node_type = "source"
-source_type = "stdin"
+[nodes.source]
+type = "source"
+kind = "stdin"
 
-[[nodes]]
-id = "uppercase"
-node_type = "transform"
-[nodes.config]
-plugin_path = "plugins/uppercase/target/wasm32-wasip2/release/uppercase_transform.wasm"
+[nodes.uppercase]
+type = "transform"
+plugin = "../plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
 
-[[nodes]]
-id = "sink"
-node_type = "sink"
-sink_type = "stdout"
+[nodes.sink]
+type = "sink"
+kind = "stdout"
 
 [[edges]]
 from = "source"

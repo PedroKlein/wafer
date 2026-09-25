@@ -13,7 +13,9 @@ This reference lists the current quantitative requirements. The narrative explan
 | NFR-PERF-5 | Isolation-cost ratios are portable across architectures. | `PENDING` until matched Raspberry Pi 5 and x86 Linux blocks exist. | E-Perf-5 |
 | NFR-PERF-6 | Linux filesystem page-cache startup effect is reported honestly. | Cold/warm phase estimates with disk compiled-component cache disabled. No AOT-cache claim. | E-Perf-9 |
 
-E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-10 reports support censoring when MQTT loopback is delivery-bad.
+E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-10 uses exact tested-grid bounds without interpolation; an invalid, support-censored, or threshold-straddling ratio remains `CENSORED/PENDING`.
+
+E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each policy reconciles the source-authoritative offered population with delivered and policy-specific disposition counters; no universal lossless criterion applies.
 
 ## RQ2: isolation
 

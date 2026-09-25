@@ -17,7 +17,7 @@ edition = "2024"
 authors = ["Pedro Klein <pedroklein1@hotmail.com>"]
 repository = "https://github.com/PedroKlein/wafer"
 license = "MIT"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [workspace.dependencies]
 # Internal crates
@@ -28,14 +28,11 @@ wafer-types = { path = "crates/wafer-types" }
 # Graph
 petgraph = "0.8"
 
-# NOTE: Using git main branch for wasmtime because:
-# 1. wasmtime-wasi-nn 41.0.3 on crates.io has a bug with ort (ONNX Runtime) crate API
-# 2. PR #12379 (merged Jan 23, 2026) fixes "assertion failed: self.threads.is_empty()"
-#    panic in concurrent.rs that occurred with async component model in long-lived pipelines
-# Can switch back to crates.io when wasmtime 42.x releases.
-wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main" }
-wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main" }
-wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", branch = "main", features = [
+# The post-#12379 revision preserves async Component Model stability while keeping
+# wasmtime-wasi-nn on its compatible ort release candidate.
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1" }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1" }
+wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", features = [
   "onnx",
 ] }
 
@@ -180,5 +177,5 @@ missing_errors_doc = "warn"
 missing_panics_doc = "warn"
 
 [patch.crates-io]
-# NOTE: ort version must match what wasmtime-wasi-nn expects. Cannot upgrade independently.
-ort = { git = "https://github.com/pykeio/ort", tag = "v2.0.0-rc.10" }
+# ort must match the release candidate required by wasmtime-wasi-nn 48.0.2.
+ort = { git = "https://github.com/pykeio/ort", rev = "d1ebde95d386513fea836593815e8f86f7b96a85" }

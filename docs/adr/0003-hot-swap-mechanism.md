@@ -17,6 +17,17 @@
 > `InstancePre` for a bounded canary window; if v2 traps during
 > `process()`, the runtime restores v1 automatically (bounded by
 > `max_rollback_retries` to prevent thrash).
+>
+> **Current response boundary.** Successful replacement reports
+> `replacement_adopted` and `first_post_replacement_local_outcome`; neither is
+> sink convergence. Sink transition, sequence, throughput, and gap artifacts
+> remain authoritative for external disruption. Process-time rollback is
+> Transform-only, and A20 rollback-count export remains deferred.
+>
+> The remainder is the historical design record; old ACK/convergence names are
+> preserved only as prior terminology.
+
+<!-- historical-design-below -->
 
 ## Context
 

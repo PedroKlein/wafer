@@ -4,6 +4,19 @@
 - **Original session date:** 2026-07-06
 - **Depends on:** RFC-001 (WIT contracts), RFC-002 (host runtime), RFC-003 (node type architecture)
 
+> **Current release amendment.** Runtime metering defaults are unlimited
+> (`None`); positive values opt in and zero is rejected. A present per-node
+> error-policy table replaces, rather than field-merges with, the pipeline
+> table. The physical queue is destination-keyed and uses the maximum explicit
+> incoming capacity. `allow_inference=true` is accepted only for a Wasm
+> Transform and selects the inference linker/store path; native Transforms,
+> Filters, and Routers reject the grant before plugin loading.
+>
+> The remainder is the historical design record. Current field behavior is
+> defined by `wafer-types`, `wafer-config`, and the config reference.
+
+<!-- historical-design-below -->
+
 ## Abstract
 
 WAFER's pipeline configuration needed a complete redesign after Sessions 1–3 removed the Joiner node type, added Filter as a first-class node, introduced the error policy engine, and established fuel/epoch metering. This RFC replaces the array-based `[[nodes]]` schema with a map-keyed `[nodes.NAME]` structure, consolidates the dual `Config`/`DagConfig` types into a single `Config`, introduces a unified `plugin` field with OCI auto-detection, adds hierarchical error policy configuration (pipeline-level defaults with per-node overrides), defines edge topology without `to_port` (since Joiner was removed), and adopts two-phase validation with accumulated errors. The result is a seven-section TOML schema whose minimal viable config is seven lines.

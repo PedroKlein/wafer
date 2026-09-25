@@ -15,7 +15,7 @@ name        = "telemetry-gateway"
 description = "MQTT sensor ingest → threshold filter → alert / log"
 ```
 
-Both fields are optional and appear in log output plus the `/api/v1/nodes` response header.
+Both fields are optional; `name` is used in runtime logging. Node API responses do not include pipeline metadata.
 
 ## Tune the engine (`[engine]`)
 
@@ -28,7 +28,7 @@ Runtime fuel limits and `epoch_deadline` default to `None`. Omit them for unlimi
 [engine]
 epoch_deadline         = 100      # optional epoch ticks per Wasm call
 epoch_tick_ms          = 10       # default wall-clock ms per epoch tick
-default_queue_capacity = 1024     # default per-edge capacity
+default_queue_capacity = 1024     # fallback destination capacity
 
 [engine.fuel]
 transform = 10_000_000
@@ -61,11 +61,11 @@ backoff_ms = 100
 exhausted  = "dlq"
 ```
 
-Per-node override in `[nodes.NAME.error_policy]` merges field-by-field
-on top of these values.
+A present `[nodes.NAME.error_policy]` table replaces the pipeline table for that node. Fields omitted from the node table use the built-in defaults; they do not inherit custom pipeline values.
 
-`unrecoverable` is intentionally not configurable — those errors
-always trigger node teardown and re-instantiation.
+The first retry waits exactly `backoff_ms`; subsequent delays double to the 30-second cap. The runtime selects the earliest due buffered retry. Exhaustion performs its configured `skip`, `dlq`, or `teardown` action, and DLQ-full/DLQ-closed outcomes remain distinct.
+
+`unrecoverable` is intentionally not configurable — those errors always trigger node teardown and re-instantiation.
 
 ## Route the dead-letter queue (`[dead_letter]`)
 
@@ -75,7 +75,7 @@ Choose one variant.
 # Ship DLQ to an MQTT broker
 [dead_letter]
 kind          = "mqtt"
-broker        = "mqtt://localhost"
+broker        = "localhost"
 port          = 1883
 topic         = "wafer/dlq"
 queue_capacity = 10000
@@ -91,9 +91,7 @@ queue_capacity = 5000
 
 ## Define nodes (`[nodes.NAME]`)
 
-Nodes are a **map** keyed by id; the `type` field discriminates the
-variant. Wasm variants (`transform`, `filter`, `router`) always have a
-single `plugin` field — local path or OCI reference, auto-detected.
+Nodes are a **map** keyed by id; the `type` field discriminates the variant. Transform, Filter, and Router use one `plugin` field. A string selects a local path or OCI reference; `{ kind = "native", function = "..." }` selects a built-in evaluation baseline. Only loaded Wasm implementations are replacement-eligible.
 
 ```toml
 [nodes.mqtt-in]
@@ -104,9 +102,10 @@ topic  = "sensors/#"
 qos    = 1
 
 [nodes.parse]
-type   = "transform"
-plugin = "./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
-fuel   = 5_000_000                   # override [engine.fuel.transform] for this node
+type           = "transform"
+plugin         = "./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
+plugin_version = "v1"                # opaque value passed to lifecycle.init
+fuel           = 5_000_000            # override [engine.fuel.transform] for this node
 
 [nodes.parse.capabilities]
 inherit_stdio    = false
@@ -117,7 +116,7 @@ allow_inference  = false
 strict = true
 
 [nodes.parse.error_policy]
-bad_input = "skip"                   # override pipeline default of "dlq"
+bad_input = "skip"                   # replaces the pipeline table for this node
 
 [nodes.threshold]
 type   = "filter"
@@ -178,8 +177,11 @@ capacity = 4096
 overflow = "dead-letter"
 ```
 
-Fan-in is implicit — if two edges terminate at the same node, the host
-wires multiple senders onto that node's single `mpsc` receiver.
+Source, Transform, and Filter broadcast to every downstream edge. Router sends only to edges whose `port` was returned by the guest.
+
+Fan-in is implicit — if two edges terminate at the same node, the host wires multiple senders onto that node's single `mpsc` receiver. `capacity` is still written on edges, but the physical queue is receiver-keyed: its capacity is the maximum explicit incoming capacity, or `engine.default_queue_capacity` only when no incoming edge declares one. Producer ordering and fairness are not guaranteed.
+
+All queue, retry-buffer, and DLQ capacities must be greater than zero; validation rejects zero before any channel is created. `slow` waits for a permit, `drop` discards only when the destination is full, and `dead-letter` makes a non-blocking attempt to the configured file or MQTT DLQ. Destination closed, DLQ full, and DLQ closed are separate outcomes.
 
 ## Expose the control plane and metrics (`[api]` / `[metrics]`)
 
@@ -210,15 +212,9 @@ verification.
 
 ## Validate before you run
 
-Every config is validated by `wafer_config::validate` at startup.
-Failures include: missing referenced node id, cycle in the graph,
-router edge without a declared `port`, unknown `type`, and empty
-`plugin` field. Run the runtime with `--check` to validate without
-starting the pipeline:
+Every config is validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, zero capacity, or an inference grant on an ineligible role. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`.
 
-```bash
-cargo run -p wafer-runtime -- --config my-pipeline.toml --check
-```
+The runtime has no standalone `--check` flag. Repository examples and evaluation configs are validated by the `wafer-config` test suites; starting `wafer-runtime --config <path>` also validates before launch.
 
 ## Full example — telemetry gateway
 

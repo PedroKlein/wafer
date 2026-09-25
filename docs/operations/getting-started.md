@@ -8,11 +8,9 @@ first WAFER pipeline. If any step fails, jump to
 
 - **Rust via rustup**. Install from <https://rustup.rs/> before running
   `mise install`; several mise-managed helper tools are installed through
-  Cargo and require `cargo` to already exist. The workspace is pinned via
-  `rust-toolchain.toml`, so `cargo` picks the project stable channel,
-  `rustfmt`/`clippy` components, and `wasm32-wasip2` target automatically.
-  `Cargo.toml` declares `rust-version = "1.85"` as the minimum supported Rust,
-  not the exact installed toolchain.
+  Cargo and require `cargo` to already exist. `rust-toolchain.toml` pins Rust
+  `1.98.1` with `rustfmt`, `clippy`, and `wasm32-wasip2`; `Cargo.toml` declares
+  workspace MSRV `1.95`.
 - **`mise`** — primary development tool manager and command runner via
   `mise.toml`. Install via <https://mise.jdx.dev/> or your package manager.
   Rust itself remains controlled by `rust-toolchain.toml`. After cloning, run
@@ -50,7 +48,7 @@ example TOML configs under `examples/`.
 
 ```bash
 mise run build             # entire workspace
-mise run build-plugins     # every plugin under plugins/
+mise run //plugins:build-plugins  # every Rust plugin, including attacks
 ```
 
 The plugin build cross-compiles each crate to `wasm32-wasip2`; the
@@ -82,12 +80,7 @@ RUST_LOG=debug cargo run -p wafer-runtime -- --config examples/dag-passthrough.t
 
 ## 4 — Explore the control plane
 
-> **Current runtime caveat.** The API/metrics endpoint contract is documented,
-> but the current runtime binary does not yet launch the HTTP server; see
-> [`../status/implementation-gaps.md`](../status/implementation-gaps.md#a2--http-control-plane-never-launched-by-runtime-binary-).
-> Use this section as the target behavior until A2 is closed.
-
-By default the axum control plane binds to `127.0.0.1:9090`. In a
+By default the runtime launches the axum control plane at `127.0.0.1:9090`. In a
 second terminal:
 
 ```bash
@@ -95,15 +88,13 @@ curl -s http://127.0.0.1:9090/health
 # {"status": "ok"}
 
 curl -s http://127.0.0.1:9090/ready
-# {"status": "ready"}
+# {"ready": true}
 
 curl -s http://127.0.0.1:9090/api/v1/nodes | jq
-# [ {"id": "input", ...}, {"id": "upper", ...}, {"id": "output", ...} ]
+# [{"id":"source","state":"Running","processed":0,"failed":0,"replacement_eligible":false}, ...]
 
 curl -s http://127.0.0.1:9090/metrics | head
-# # HELP wafer_messages_in Total messages received per node
-# # TYPE wafer_messages_in counter
-# wafer_messages_in{node="upper"} 3
+# wafer_node_processed_total{node="upper"} 3
 ```
 
 For an interactive collection, import
@@ -117,26 +108,27 @@ Start the uppercase pipeline as above. In a second terminal, build a
 different transform and hot-swap it in:
 
 ```bash
-mise run build-plugin json-parse
+mise run //plugins:build-plugin json-parse
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"node_id":"upper","status":"swap_converged","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"ack_ns":...,"convergence_ns":...}}
+# {"node_id":"upper","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded-enqueued","after_adoption_ns":...},"timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
 ```
 
-The `upper` node's Wasm instance is replaced between messages; the
-next line you type at the source is parsed as JSON rather than
-upper-cased.
+The response proves adoption and a runner-local outcome, not sink convergence.
+The `upper` node's Wasm instance is replaced between messages; the next valid
+JSON line is processed by the replacement.
 
 ## 6 — Shut down cleanly
 
 ```bash
 curl -X POST http://127.0.0.1:9090/api/v1/pipeline/shutdown
-# HTTP 200; the runtime exits with an ordered graceful shutdown
+# HTTP 200; cancellation has been signalled
 ```
 
-Or press `Ctrl-C`. Either path runs the same sequence: sources stop →
-runners drain → retry buffers flush to DLQ → sinks close.
+Or press `Ctrl-C`. Cleanup is cooperative and bounded: sources close,
+processing loops flush retries, sinks drain their current receiver buffers,
+and remaining tasks may be aborted after the shutdown deadline.
 
 ## What to read next
 
@@ -161,8 +153,8 @@ runners drain → retry buffers flush to DLQ → sinks close.
 - **Port 9090 already in use** — set `[api].bind = "127.0.0.1:PORT"`
   in the pipeline TOML or export `WAFER_API_BIND=...`.
 - **Hot-swap 404 for a node that exists** — make sure the target node
-  is a Wasm node (Transform / Filter / Router). Native Source and
-  Sink nodes are not swappable; they report `swappable = false` on
+  is a loaded Wasm node (Transform / Filter / Router). Native processing
+  baselines and native Source/Sink nodes report `replacement_eligible = false` on
   `GET /api/v1/nodes/{id}`.
 
 ## Notebook outputs

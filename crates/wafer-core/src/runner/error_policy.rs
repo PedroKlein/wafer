@@ -4,9 +4,11 @@
 
 use std::collections::VecDeque;
 use std::fmt;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use serde::Serialize;
 use tokio::sync::mpsc;
+use tokio::time::Instant;
 
 use crate::config;
 use crate::queue::RuntimeEnvelope;
@@ -37,7 +39,8 @@ pub enum WasmProcessError {
 }
 
 /// Category tag for error classification in DLQ envelopes and metrics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ErrorCategory {
     BadInput,
     DependencyFailed,
@@ -59,7 +62,8 @@ impl fmt::Display for ErrorCategory {
 }
 
 /// Why a message ended up in the dead-letter queue.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum DlqReason {
     BadInput,
     RetriesExhausted { max_retries: u32 },
@@ -91,13 +95,29 @@ impl fmt::Display for DlqReason {
 pub struct DlqEnvelope {
     pub timestamp: u64,
     pub source_node: Box<str>,
-    pub error_category: ErrorCategory,
+    pub error_category: Option<ErrorCategory>,
     pub error_message: String,
     pub retry_count: u32,
     pub reason: DlqReason,
     pub original: RuntimeEnvelope,
     pub trace_id: Option<String>,
     pub parent_id: Option<String>,
+}
+
+impl DlqEnvelope {
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(&serde_json::json!({
+            "timestamp": self.timestamp,
+            "source_node": self.source_node,
+            "error_category": self.error_category,
+            "error_message": self.error_message,
+            "retry_count": self.retry_count,
+            "reason": self.reason,
+            "original": crate::dlq::SerializableEnvelope::from(self.original.clone()),
+            "trace_id": self.trace_id,
+            "parent_id": self.parent_id,
+        }))
+    }
 }
 
 /// A single entry in the retry buffer awaiting backoff expiration.
@@ -108,7 +128,7 @@ struct RetryEntry {
     next_attempt_at: Instant,
 }
 
-/// Bounded FIFO retry buffer with backoff-aware dequeue.
+/// Bounded retry buffer that selects the earliest due entry.
 struct RetryBuffer {
     entries: VecDeque<RetryEntry>,
     capacity: usize,
@@ -127,10 +147,20 @@ impl RetryBuffer {
         self.entries.push_back(entry);
     }
 
-    /// Peek front entry; return it only if its backoff has expired.
     fn next_ready(&mut self) -> Option<RuntimeEnvelope> {
-        let ready = self.entries.front().is_some_and(|e| e.next_attempt_at <= Instant::now());
-        if ready { self.entries.pop_front().map(|e| e.envelope) } else { None }
+        let now = Instant::now();
+        let due = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.next_attempt_at <= now)
+            .min_by_key(|(_, entry)| entry.next_attempt_at)
+            .map(|(index, _)| index)?;
+        self.entries.remove(due).map(|entry| entry.envelope)
+    }
+
+    fn next_deadline(&self) -> Option<Instant> {
+        self.entries.iter().map(|entry| entry.next_attempt_at).min()
     }
 
     fn len(&self) -> usize {
@@ -208,6 +238,15 @@ impl From<config::ErrorPolicyConfig> for ResolvedErrorPolicy {
 /// Per-loop error handling executor — retry, backoff, DLQ dispatch.
 ///
 /// Owned by each node loop (not shared). Holds the retry buffer and DLQ sender.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ErrorPolicyAction {
+    Continue,
+    ExhaustedSkip,
+    Teardown,
+    DlqFull,
+    DlqClosed,
+}
+
 pub struct ErrorPolicyExecutor {
     config: ResolvedErrorPolicy,
     retry_buffer: RetryBuffer,
@@ -228,56 +267,65 @@ impl ErrorPolicyExecutor {
 
     /// Dispatch an error according to its category.
     ///
-    /// Returns `true` if the loop should continue processing, or `false`
-    /// when the configured action requires the loop to stop.
-    pub fn handle(&mut self, error: &WasmProcessError, envelope: RuntimeEnvelope) -> bool {
+    /// Returns the terminal action that the runner must honor.
+    pub(crate) fn handle(
+        &mut self,
+        error: &WasmProcessError,
+        envelope: RuntimeEnvelope,
+    ) -> ErrorPolicyAction {
         match error {
             WasmProcessError::BadInput(msg) => {
                 match self.config.bad_input {
                     ResolvedSimpleAction::Skip => {}
-                    ResolvedSimpleAction::Dlq => self.send_to_dlq(
-                        envelope,
-                        ErrorCategory::BadInput,
-                        msg.clone(),
-                        0,
-                        DlqReason::BadInput,
-                    ),
-                    ResolvedSimpleAction::Teardown => return false,
+                    ResolvedSimpleAction::Dlq => {
+                        return self.send_to_dlq(
+                            envelope,
+                            ErrorCategory::BadInput,
+                            msg.clone(),
+                            0,
+                            DlqReason::BadInput,
+                        );
+                    }
+                    ResolvedSimpleAction::Teardown => return ErrorPolicyAction::Teardown,
                 }
-                true
+                ErrorPolicyAction::Continue
             }
             WasmProcessError::DependencyFailed(msg) => {
-                self.try_retry(envelope, ErrorCategory::DependencyFailed, msg.clone());
-                true
+                self.try_retry(envelope, ErrorCategory::DependencyFailed, msg.clone())
             }
             WasmProcessError::ProcessingFailed(msg) => {
-                self.try_retry(envelope, ErrorCategory::ProcessingFailed, msg.clone());
-                true
+                self.try_retry(envelope, ErrorCategory::ProcessingFailed, msg.clone())
             }
             WasmProcessError::TimedOut => {
                 match self.config.timed_out {
                     ResolvedSimpleAction::Skip => {}
-                    ResolvedSimpleAction::Dlq => self.send_to_dlq(
-                        envelope,
-                        ErrorCategory::TimedOut,
-                        "timed out".to_string(),
-                        0,
-                        DlqReason::RetriesExhausted { max_retries: 0 },
-                    ),
-                    ResolvedSimpleAction::Teardown => return false,
+                    ResolvedSimpleAction::Dlq => {
+                        return self.send_to_dlq(
+                            envelope,
+                            ErrorCategory::TimedOut,
+                            "timed out".to_string(),
+                            0,
+                            DlqReason::RetriesExhausted { max_retries: 0 },
+                        );
+                    }
+                    ResolvedSimpleAction::Teardown => return ErrorPolicyAction::Teardown,
                 }
-                true
+                ErrorPolicyAction::Continue
             }
             WasmProcessError::Unrecoverable(_) => {
                 // Caller must enter recovery state.
-                false
+                ErrorPolicyAction::Teardown
             }
         }
     }
 
-    /// Next retry entry whose backoff has expired. O(1) check.
-    pub fn next_ready_retry(&mut self) -> Option<RuntimeEnvelope> {
+    /// Next retry entry whose backoff has expired.
+    pub(crate) fn next_ready_retry(&mut self) -> Option<RuntimeEnvelope> {
         self.retry_buffer.next_ready()
+    }
+
+    pub(crate) fn next_retry_deadline(&self) -> Option<Instant> {
+        self.retry_buffer.next_deadline()
     }
 
     /// Flush all pending retries to DLQ (called on shutdown or hot-swap drain).
@@ -304,15 +352,13 @@ impl ErrorPolicyExecutor {
         self.retry_buffer.len()
     }
 
-    /// Attempt to add an envelope to the retry buffer. If buffer is full, send to DLQ.
-    /// If we've already exhausted our retry budget for this envelope, send it
-    /// to the DLQ with `DlqReason::RetriesExhausted` instead of requeuing.
+    /// Attempt to add an envelope to the retry buffer or apply its configured terminal action.
     fn try_retry(
         &mut self,
         mut envelope: RuntimeEnvelope,
         category: ErrorCategory,
         error_msg: String,
-    ) {
+    ) -> ErrorPolicyAction {
         // P0.11 (A7 residual): persist per-envelope retry_count on the envelope
         // itself so a retry that succeeds partially then fails again keeps
         // its history. Previously we hard-coded retry_count = 0 for every
@@ -323,20 +369,27 @@ impl ErrorPolicyExecutor {
         let current = envelope.retry_count;
 
         if current >= max_retries {
-            // Budget exhausted — straight to DLQ.
-            self.send_to_dlq(
+            return match retry_config.exhausted {
+                ResolvedSimpleAction::Skip => ErrorPolicyAction::ExhaustedSkip,
+                ResolvedSimpleAction::Dlq => self.send_to_dlq(
+                    envelope,
+                    category,
+                    error_msg,
+                    current,
+                    DlqReason::RetriesExhausted { max_retries },
+                ),
+                ResolvedSimpleAction::Teardown => ErrorPolicyAction::Teardown,
+            };
+        }
+
+        if self.retry_buffer.is_full() {
+            return self.send_to_dlq(
                 envelope,
                 category,
                 error_msg,
                 current,
-                DlqReason::RetriesExhausted { max_retries },
+                DlqReason::RetryBufferFull,
             );
-            return;
-        }
-
-        if self.retry_buffer.is_full() {
-            self.send_to_dlq(envelope, category, error_msg, current, DlqReason::RetryBufferFull);
-            return;
         }
 
         let next_retry_count = current.saturating_add(1);
@@ -354,6 +407,7 @@ impl ErrorPolicyExecutor {
             retry_count: next_retry_count,
             next_attempt_at,
         });
+        ErrorPolicyAction::Continue
     }
 
     const fn retry_config(&self, category: ErrorCategory) -> ResolvedRetryConfig {
@@ -365,14 +419,11 @@ impl ErrorPolicyExecutor {
 
     fn compute_backoff(&self, category: ErrorCategory, retry_count: u32) -> Duration {
         let retry = self.retry_config(category);
-        let ms = retry.backoff_ms.saturating_mul(1u64 << retry_count.min(20));
+        let exponent = retry_count.saturating_sub(1).min(20);
+        let ms = retry.backoff_ms.saturating_mul(1u64 << exponent);
         Duration::from_millis(ms.min(MAX_BACKOFF_MS))
     }
 
-    #[expect(
-        clippy::let_underscore_must_use,
-        reason = "DLQ try_send: non-blocking by design; if DLQ channel is full, drop is intentional"
-    )]
     fn send_to_dlq(
         &self,
         envelope: RuntimeEnvelope,
@@ -380,8 +431,11 @@ impl ErrorPolicyExecutor {
         error_message: String,
         retry_count: u32,
         reason: DlqReason,
-    ) {
-        let Some(sender) = &self.dlq_sender else { return };
+    ) -> ErrorPolicyAction {
+        let Some(sender) = &self.dlq_sender else {
+            tracing::warn!(node = %self.source_node, ?reason, "DLQ unavailable");
+            return ErrorPolicyAction::DlqClosed;
+        };
 
         let timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -393,7 +447,7 @@ impl ErrorPolicyExecutor {
         let dlq_envelope = DlqEnvelope {
             timestamp,
             source_node: self.source_node.clone(),
-            error_category: category,
+            error_category: Some(category),
             error_message,
             retry_count,
             reason,
@@ -402,9 +456,17 @@ impl ErrorPolicyExecutor {
             parent_id,
         };
 
-        // try_send: non-blocking — if DLQ channel is full, drop the envelope.
-        // Backpressure on DLQ should never stall the processing pipeline.
-        let _ = sender.try_send(dlq_envelope);
+        match sender.try_send(dlq_envelope) {
+            Ok(()) => ErrorPolicyAction::Continue,
+            Err(mpsc::error::TrySendError::Full(envelope)) => {
+                tracing::warn!(node = %self.source_node, reason = ?envelope.reason, "DLQ full");
+                ErrorPolicyAction::DlqFull
+            }
+            Err(mpsc::error::TrySendError::Closed(envelope)) => {
+                tracing::warn!(node = %self.source_node, reason = ?envelope.reason, "DLQ closed");
+                ErrorPolicyAction::DlqClosed
+            }
+        }
     }
 }
 
@@ -446,11 +508,15 @@ mod tests {
         let should_continue =
             executor.handle(&WasmProcessError::BadInput("invalid json".into()), envelope);
 
-        assert!(should_continue, "loop should continue after BadInput");
+        assert_eq!(
+            should_continue,
+            ErrorPolicyAction::Continue,
+            "loop should continue after BadInput"
+        );
         assert_eq!(executor.pending_retries(), 0, "should not retry");
 
         let dlq = rx.try_recv().expect("should have DLQ entry");
-        assert_eq!(dlq.error_category, ErrorCategory::BadInput);
+        assert_eq!(dlq.error_category, Some(ErrorCategory::BadInput));
         assert_eq!(dlq.reason, DlqReason::BadInput);
         assert_eq!(dlq.error_message, "invalid json");
         assert_eq!(&*dlq.source_node, "test-node");
@@ -464,7 +530,7 @@ mod tests {
         let should_continue =
             executor.handle(&WasmProcessError::DependencyFailed("db timeout".into()), envelope);
 
-        assert!(should_continue);
+        assert_eq!(should_continue, ErrorPolicyAction::Continue);
         assert_eq!(executor.pending_retries(), 1);
         // Nothing in DLQ yet — it's in the retry buffer
         rx.try_recv().unwrap_err();
@@ -478,7 +544,7 @@ mod tests {
         let should_continue =
             executor.handle(&WasmProcessError::ProcessingFailed("null pointer".into()), envelope);
 
-        assert!(should_continue);
+        assert_eq!(should_continue, ErrorPolicyAction::Continue);
         assert_eq!(executor.pending_retries(), 1);
         rx.try_recv().unwrap_err();
     }
@@ -490,7 +556,7 @@ mod tests {
 
         let should_continue = executor.handle(&WasmProcessError::TimedOut, envelope);
 
-        assert!(should_continue, "should continue after timeout");
+        assert_eq!(should_continue, ErrorPolicyAction::Continue, "should continue after timeout");
         assert_eq!(executor.pending_retries(), 0, "should not retry timed out");
         assert!(rx.try_recv().is_err(), "should not go to DLQ");
     }
@@ -503,7 +569,7 @@ mod tests {
         let should_continue =
             executor.handle(&WasmProcessError::Unrecoverable("stack overflow".into()), envelope);
 
-        assert!(!should_continue, "should signal recovery needed");
+        assert_eq!(should_continue, ErrorPolicyAction::Teardown, "should signal recovery needed");
         assert_eq!(executor.pending_retries(), 0);
         assert!(rx.try_recv().is_err(), "unrecoverable does not DLQ directly");
     }
@@ -540,7 +606,7 @@ mod tests {
 
         let dlq = rx.try_recv().expect("overflow should go to DLQ");
         assert_eq!(dlq.reason, DlqReason::RetryBufferFull);
-        assert_eq!(dlq.error_category, ErrorCategory::DependencyFailed);
+        assert_eq!(dlq.error_category, Some(ErrorCategory::DependencyFailed));
     }
 
     #[test]
@@ -583,24 +649,20 @@ mod tests {
         let config = test_policy(100, 1000, 100);
         let executor = ErrorPolicyExecutor::new(config, None, "node");
 
-        // retry_count=0: 1000 * 2^0 = 1000ms
         assert_eq!(
             executor.compute_backoff(ErrorCategory::ProcessingFailed, 0),
             Duration::from_secs(1)
         );
-        // retry_count=1: 1000 * 2^1 = 2000ms
         assert_eq!(
             executor.compute_backoff(ErrorCategory::ProcessingFailed, 1),
-            Duration::from_secs(2)
+            Duration::from_secs(1)
         );
-        // retry_count=4: 1000 * 2^4 = 16000ms
         assert_eq!(
             executor.compute_backoff(ErrorCategory::ProcessingFailed, 4),
-            Duration::from_secs(16)
+            Duration::from_secs(8)
         );
-        // retry_count=5: 1000 * 2^5 = 32000ms → capped at 30000
         assert_eq!(
-            executor.compute_backoff(ErrorCategory::ProcessingFailed, 5),
+            executor.compute_backoff(ErrorCategory::ProcessingFailed, 6),
             Duration::from_secs(30)
         );
         // retry_count=20: would overflow but capped
@@ -623,15 +685,13 @@ mod tests {
     }
 
     #[test]
-    fn test_no_dlq_sender_does_not_panic() {
-        // No DLQ sender — messages are silently dropped
+    fn missing_guest_error_dlq_is_observable_without_panicking() {
         let config = ResolvedErrorPolicy::default();
         let mut executor = ErrorPolicyExecutor::new(config, None, "node");
 
-        let should_continue =
+        let action =
             executor.handle(&WasmProcessError::BadInput("bad".into()), test_envelope("data"));
-        assert!(should_continue);
-        // No panic — graceful degradation
+        assert_eq!(action, ErrorPolicyAction::DlqClosed);
     }
 
     #[test]
@@ -667,8 +727,6 @@ mod tests {
         // First failure schedules a retry with retry_count = 1.
         assert_eq!(executor.pending_retries(), 1);
         // Peek: drain the entry (waiting past the backoff window).
-        // Backoff is exponential: 100 ms << retry_count. First retry has
-        // retry_count=1 → 200 ms backoff. Sleep well past it.
         std::thread::sleep(std::time::Duration::from_millis(250));
         let requeued = executor.next_ready_retry().expect("one retry expected");
         assert_eq!(requeued.retry_count, 1, "retry_count must be incremented before requeue");
@@ -697,5 +755,151 @@ mod tests {
             other => panic!("expected RetriesExhausted, got {other:?}"),
         }
         assert_eq!(dlq.retry_count, 3, "DLQ envelope preserves retry_count history");
+    }
+
+    #[test]
+    fn retry_exhaustion_honors_skip_dlq_and_teardown() {
+        for (action, expect_dlq) in [
+            (ResolvedSimpleAction::Skip, false),
+            (ResolvedSimpleAction::Dlq, true),
+            (ResolvedSimpleAction::Teardown, false),
+        ] {
+            let (tx, mut rx) = mpsc::channel(1);
+            let mut policy = test_policy(0, 100, 1);
+            policy.processing_failed.exhausted = action;
+            let mut executor = ErrorPolicyExecutor::new(policy, Some(tx), "node");
+
+            let should_continue = executor.handle(
+                &WasmProcessError::ProcessingFailed("poison".into()),
+                test_envelope("poison"),
+            );
+
+            assert_eq!(
+                should_continue,
+                match action {
+                    ResolvedSimpleAction::Skip => ErrorPolicyAction::ExhaustedSkip,
+                    ResolvedSimpleAction::Dlq => ErrorPolicyAction::Continue,
+                    ResolvedSimpleAction::Teardown => ErrorPolicyAction::Teardown,
+                },
+                "{action:?} continuation"
+            );
+            assert_eq!(executor.pending_retries(), 0, "{action:?} must not requeue exhaustion");
+            assert_eq!(rx.try_recv().is_ok(), expect_dlq, "{action:?} DLQ outcome");
+        }
+    }
+
+    #[test]
+    fn retry_exhausted_skip_returns_accountable_action() {
+        let mut policy = test_policy(0, 100, 1);
+        policy.processing_failed.exhausted = ResolvedSimpleAction::Skip;
+        let mut executor = ErrorPolicyExecutor::new(policy, None, "node");
+
+        let action = executor
+            .handle(&WasmProcessError::ProcessingFailed("poison".into()), test_envelope("poison"));
+        assert_eq!(
+            action,
+            ErrorPolicyAction::ExhaustedSkip,
+            "exhausted skip must be distinguishable for runner accounting"
+        );
+    }
+
+    #[test]
+    fn full_guest_error_dlq_is_observable_without_requeue_or_teardown() {
+        let (tx, mut rx) = mpsc::channel(1);
+        tx.try_send(DlqEnvelope {
+            timestamp: 0,
+            source_node: "node".into(),
+            error_category: None,
+            error_message: String::new(),
+            retry_count: 0,
+            reason: DlqReason::Shutdown,
+            original: test_envelope("existing"),
+            trace_id: None,
+            parent_id: None,
+        })
+        .expect("fill DLQ");
+        let mut policy = test_policy(0, 100, 1);
+        policy.processing_failed.exhausted = ResolvedSimpleAction::Dlq;
+        let mut executor = ErrorPolicyExecutor::new(policy, Some(tx), "node");
+
+        let action = executor
+            .handle(&WasmProcessError::ProcessingFailed("poison".into()), test_envelope("poison"));
+        assert_eq!(action, ErrorPolicyAction::DlqFull);
+        assert_eq!(executor.pending_retries(), 0, "DLQ-full exhaustion must not requeue");
+        assert_eq!(
+            rx.try_recv().expect("existing DLQ item").original.payload_as_string(),
+            "existing"
+        );
+        assert!(rx.try_recv().is_err(), "full DLQ must not fabricate successful delivery");
+    }
+
+    #[test]
+    fn closed_guest_error_dlq_is_observable_without_requeue_or_teardown() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let mut policy = test_policy(0, 100, 1);
+        policy.processing_failed.exhausted = ResolvedSimpleAction::Dlq;
+        let mut executor = ErrorPolicyExecutor::new(policy, Some(tx), "node");
+
+        let action = executor
+            .handle(&WasmProcessError::ProcessingFailed("poison".into()), test_envelope("poison"));
+        assert_eq!(action, ErrorPolicyAction::DlqClosed);
+        assert_eq!(executor.pending_retries(), 0, "closed DLQ must not requeue");
+        assert_ne!(action, ErrorPolicyAction::Teardown, "closed DLQ must not teardown");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn later_earlier_retry_wakes_at_its_own_deadline() {
+        let mut policy = test_policy(1, 1_000, 2);
+        policy.dependency_failed.backoff_ms = 100;
+        let mut executor = ErrorPolicyExecutor::new(policy, None, "node");
+
+        executor.handle(&WasmProcessError::ProcessingFailed("long".into()), test_envelope("long"));
+        executor
+            .handle(&WasmProcessError::DependencyFailed("short".into()), test_envelope("short"));
+
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let due = executor.next_ready_retry();
+        assert_eq!(
+            due.as_ref().map(RuntimeEnvelope::payload_as_string),
+            Some("short".to_string()),
+            "the later short-backoff retry must not wait behind the long-backoff front entry"
+        );
+        assert_eq!(executor.pending_retries(), 1, "the long retry must remain buffered");
+    }
+
+    #[test]
+    fn non_retry_teardown_actions_are_terminal() {
+        let mut policy = test_policy(1, 100, 1);
+        policy.bad_input = ResolvedSimpleAction::Teardown;
+        policy.timed_out = ResolvedSimpleAction::Teardown;
+        let mut executor = ErrorPolicyExecutor::new(policy, None, "node");
+
+        assert_eq!(
+            executor.handle(&WasmProcessError::BadInput("invalid".into()), test_envelope("bad")),
+            ErrorPolicyAction::Teardown
+        );
+        assert_eq!(
+            executor.handle(&WasmProcessError::TimedOut, test_envelope("timeout")),
+            ErrorPolicyAction::Teardown
+        );
+        assert_eq!(executor.pending_retries(), 0);
+    }
+
+    #[test]
+    fn first_retry_waits_exactly_the_configured_backoff() {
+        let config = test_policy(3, 125, 1);
+        let executor = ErrorPolicyExecutor::new(config, None, "node");
+
+        assert_eq!(
+            executor.compute_backoff(ErrorCategory::ProcessingFailed, 1),
+            Duration::from_millis(125),
+            "first retry must wait backoff_ms exactly"
+        );
+        assert_eq!(
+            executor.compute_backoff(ErrorCategory::ProcessingFailed, 2),
+            Duration::from_millis(250),
+            "second retry doubles the first delay"
+        );
     }
 }

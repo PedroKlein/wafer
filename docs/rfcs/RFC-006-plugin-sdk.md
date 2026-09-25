@@ -3,7 +3,18 @@
 - **Status:** Implemented
 - **Original session date:** 2026-07-12
 - **Amends:** —
-- **Amended by:** —
+- **Amended by:** TG2 release-surface reconciliation
+
+> **Current release amendment.** Rust components target the four current WIT
+> worlds. The six attack components are mandatory executable test stimuli, not
+> production plugins. The bounded Go claim covers only the TinyGo uppercase
+> component's build, validation, and real-host execution. Python remains a stub
+> and is not support evidence. `mnist-inference` targets the capability-gated
+> `inference-node` world and executes through the real wasi-nn host path.
+>
+> The remainder is the historical SDK and inventory decision record.
+
+<!-- historical-design-below -->
 
 ## Abstract
 

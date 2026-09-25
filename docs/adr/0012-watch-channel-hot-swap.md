@@ -5,6 +5,17 @@
 - **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
 - **Supersedes**: ADR-0003 drain phase (§2 DRAIN)
 
+> **Current amendment.** Hot-swap and reconfigure share one per-node mutation
+> guard, so concurrent requests do not overwrite pending watch values. Loaded
+> Wasm Transform, Filter, and Router nodes are eligible; native implementations
+> are not. The API reports replacement adoption plus the first runner-local
+> outcome, not sink convergence. Process-time canary rollback is Transform-only.
+>
+> The remainder is the historical mechanism record; ACK/convergence names below
+> are superseded by the current response vocabulary.
+
+<!-- historical-design-below -->
+
 ## Context
 
 ADR-0003 defined a four-phase "drain-and-flip" hot-swap algorithm: PREPARE → DRAIN → FLIP → RETIRE. The DRAIN phase stops routing new messages to the old node, waits for in-flight Wasm calls to complete (up to a configurable timeout), then atomically flips. This model assumed a shared-ownership concurrency style where an external `RoutingController` could stop message flow independently of the node's own task.

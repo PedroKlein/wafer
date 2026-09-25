@@ -117,10 +117,10 @@ bd query "label=decision AND status=open"
   the receiver end — there is no Joiner node.
 - **ADR-0003** was rewritten. The original filename
   `0003-drain-and-flip-hotswap.md` was replaced by `0003-hot-swap-mechanism.md`.
-  The current mechanism is a `watch::Sender<Option<SwapPayload>>` per Wasm node:
-  the runner selects between the input `mpsc::Receiver` and the swap channel, and
-  the swap happens at the next message boundary. The 4-phase drain-and-flip is
-  historical only.
+  The current mechanism is a `watch::Sender<Option<SwapPayload>>` per eligible
+  loaded Wasm node. The runner checks the watch value between messages before
+  waiting for input; hot-swap and reconfigure share a per-node mutation guard.
+  The 4-phase drain-and-flip is historical only.
 - **ADR-0012** documents the specific watch-channel implementation and is a
   companion to the rewritten ADR-0003. Read ADR-0003 for the higher-level
   mechanism choice, ADR-0012 for the implementation-level tactic.

@@ -147,7 +147,7 @@ pub enum PluginSpecStructured {
 impl PluginSpec {
     /// Returns the Wasm path if this spec is a Wasm binding.
     #[must_use]
-    pub fn wasm_path(&self) -> Option<&str> {
+    pub const fn wasm_path(&self) -> Option<&str> {
         match self {
             Self::WasmPath(p) => Some(p.as_str()),
             Self::Structured(PluginSpecStructured::Wasm { path }) => Some(path.as_str()),
@@ -157,7 +157,7 @@ impl PluginSpec {
 
     /// Returns the native function name if this spec is a native binding.
     #[must_use]
-    pub fn native_function(&self) -> Option<&str> {
+    pub const fn native_function(&self) -> Option<&str> {
         match self {
             Self::Structured(PluginSpecStructured::Native { function }) => Some(function.as_str()),
             _ => None,
@@ -166,7 +166,7 @@ impl PluginSpec {
 
     /// True when this plugin binding is native (no Wasm boundary).
     #[must_use]
-    pub fn is_native(&self) -> bool {
+    pub const fn is_native(&self) -> bool {
         self.native_function().is_some()
     }
 }

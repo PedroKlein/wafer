@@ -51,6 +51,7 @@
 use std::path::Path;
 use std::time::Duration;
 
+use serde_json::json;
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::runner::error_policy::WasmProcessError;
@@ -149,12 +150,12 @@ fn check_prereqs(paths: &[&str]) -> bool {
 /// either the epoch deadline or the fuel budget depending on host
 /// speed and wasmtime version. Every acceptable outcome MUST still be
 /// a genuine sandbox interception, not an in-band error return.
-fn assert_contained(
+fn run_containment(
     attack_path: &str,
     label: &str,
     allowed: &[ContainedAs],
     memory_limit: Option<usize>,
-) {
+) -> (ContainedAs, String) {
     let harness = PluginTestHarness::new().expect("engine must construct");
 
     // (1) Healthy transform succeeds BEFORE the attack.
@@ -183,6 +184,7 @@ fn assert_contained(
         allowed.contains(&got),
         "attack {label} produced {got:?} but allowed={allowed:?}; err={err:?}"
     );
+    let raw = format!("{err:?}");
     // Record what we saw so `-- --nocapture` runs are self-describing.
     eprintln!("[attack_containment] {label}: contained as {got:?}  ({err:?})");
 
@@ -197,6 +199,154 @@ fn assert_contained(
         "post-attack",
         "healthy plugin must still echo after the attack"
     );
+    (got, raw)
+}
+
+fn assert_contained(
+    attack_path: &str,
+    label: &str,
+    allowed: &[ContainedAs],
+    memory_limit: Option<usize>,
+) {
+    let _ = run_containment(attack_path, label, allowed, memory_limit);
+}
+
+fn fs_access_error_proves_denial(raw: &str) {
+    assert!(
+        raw.contains("fs access denied as expected"),
+        "filesystem containment must prove the denied branch, got: {raw}"
+    );
+    assert!(
+        !raw.contains("fs access unexpectedly succeeded"),
+        "a successful read followed by panic must fail containment, got: {raw}"
+    );
+}
+
+#[derive(Clone, Copy)]
+struct MandatoryScenario {
+    scenario_id: &'static str,
+    label: &'static str,
+    attack_path: &'static str,
+    allowed: &'static [ContainedAs],
+    memory_limit: Option<usize>,
+    outcome: &'static str,
+}
+
+fn mandatory_scenarios() -> [MandatoryScenario; 6] {
+    [
+        MandatoryScenario {
+            scenario_id: "S1",
+            label: "S1 buffer-overflow",
+            attack_path: ATK_BUFFER_OVERFLOW,
+            allowed: &[ContainedAs::Trap],
+            memory_limit: None,
+            outcome: "buffer-overflow-trap",
+        },
+        MandatoryScenario {
+            scenario_id: "S2",
+            label: "S2 cross-read",
+            attack_path: ATK_CROSS_READ,
+            allowed: &[ContainedAs::Trap],
+            memory_limit: None,
+            outcome: "cross-read-trap",
+        },
+        MandatoryScenario {
+            scenario_id: "S3",
+            label: "S3 infinite-loop",
+            attack_path: ATK_INFINITE_LOOP,
+            allowed: &[ContainedAs::TimedOut, ContainedAs::Trap],
+            memory_limit: None,
+            outcome: "epoch-timeout",
+        },
+        MandatoryScenario {
+            scenario_id: "S4",
+            label: "S4 memory-exhaust",
+            attack_path: ATK_MEMORY_EXHAUST,
+            allowed: &[ContainedAs::Trap],
+            memory_limit: Some(MEMORY_EXHAUST_LIMIT),
+            outcome: "memory-limit-trap",
+        },
+        MandatoryScenario {
+            scenario_id: "S5",
+            label: "S5 fs-access",
+            attack_path: ATK_FS_ACCESS,
+            allowed: &[ContainedAs::Trap],
+            memory_limit: None,
+            outcome: "fs-read-denied-trap",
+        },
+        MandatoryScenario {
+            scenario_id: "S6",
+            label: "S6 panic",
+            attack_path: ATK_PANIC,
+            allowed: &[ContainedAs::Trap],
+            memory_limit: None,
+            outcome: "guest-panic-trap",
+        },
+    ]
+}
+
+#[test]
+#[ignore = "run via eval/scripts/run-attack-evidence.py"]
+fn mandatory_attack_evidence_receipt() {
+    let output = std::env::var("WAFER_ATTACK_EVIDENCE_OUTPUT")
+        .expect("mandatory attack evidence output path must be provided");
+    for path in [
+        PASS_THROUGH_WASM,
+        ATK_BUFFER_OVERFLOW,
+        ATK_CROSS_READ,
+        ATK_INFINITE_LOOP,
+        ATK_MEMORY_EXHAUST,
+        ATK_FS_ACCESS,
+        ATK_PANIC,
+    ] {
+        assert!(Path::new(path).is_file(), "mandatory attack evidence missing artifact: {path}");
+    }
+
+    let scenarios = mandatory_scenarios()
+        .into_iter()
+        .map(|scenario| {
+            let (contained_as, raw) = run_containment(
+                scenario.attack_path,
+                scenario.label,
+                scenario.allowed,
+                scenario.memory_limit,
+            );
+            if scenario.scenario_id == "S5" {
+                fs_access_error_proves_denial(&raw);
+            }
+            json!({
+                "scenario_id": scenario.scenario_id,
+                "executed": true,
+                "healthy_before": true,
+                "healthy_after": true,
+                "outcome": scenario.outcome,
+                "contained_as": match contained_as {
+                    ContainedAs::Trap => "trap",
+                    ContainedAs::TimedOut => "timed_out",
+                },
+                "error": raw,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    let unique_outcomes = scenarios
+        .iter()
+        .map(|scenario| scenario["outcome"].as_str().unwrap().to_string())
+        .collect::<Vec<_>>();
+
+    std::fs::write(
+        output,
+        serde_json::to_vec_pretty(&json!({
+            "healthy_reference": {
+                "executed": true,
+                "path": PASS_THROUGH_WASM,
+            },
+            "scenarios": scenarios,
+            "unique_outcomes": unique_outcomes,
+        }))
+        .expect("mandatory attack evidence receipt must serialize"),
+    )
+    .expect("mandatory attack evidence receipt must write");
 }
 
 // ---------------------------------------------------------------------------
@@ -374,18 +524,30 @@ fn memory_exhaust_contained() {
 
 /// S5: fs-access — calls `std::fs::read_to_string(\"/etc/passwd\")`.
 /// Under `WaferState::sandbox()` no WASI preopen is granted, so the
-/// call must fail. The plugin then panics on both branches (whether
-/// the read succeeded or the `unwrap_or_else` returned "access
-/// denied"), yielding a trap either way. This test asserts the trap
-/// happens without asserting on which branch produced it — the
-/// safety property is "no successful FS read AND `process()` did not
-/// return Ok", which is exactly what containment means.
+/// call must fail. The plugin emits distinct panic markers for the
+/// denied and succeeded branches; containment must prove the denied
+/// branch happened, not merely that a later panic occurred.
 #[test]
 fn fs_access_contained() {
     if !check_prereqs(&[PASS_THROUGH_WASM, ATK_FS_ACCESS]) {
         return;
     }
     assert_contained(ATK_FS_ACCESS, "S5 fs-access", &[ContainedAs::Trap], None);
+}
+
+#[test]
+fn fs_access_containment_proves_read_denial() {
+    if !check_prereqs(&[ATK_FS_ACCESS]) {
+        return;
+    }
+
+    let harness = PluginTestHarness::new().expect("engine must construct");
+    let mut attacker = harness.load_transform(ATK_FS_ACCESS).expect("attack plugin must load");
+    let err = attacker
+        .process(RuntimeEnvelope::from_string("attacker", "trigger"))
+        .expect_err("fs-access must trap when the sandbox denies filesystem reads");
+    let raw = format!("{err:?}");
+    fs_access_error_proves_denial(&raw);
 }
 
 /// S6: panic — `panic!("malicious payload triggers panic")`. Under

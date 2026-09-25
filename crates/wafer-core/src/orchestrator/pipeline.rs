@@ -7,8 +7,9 @@
 //!
 //! See docs/rfcs/RFC-005-orchestrator.md D6, D11, D12.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
+use std::io::{BufWriter, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -59,11 +60,9 @@ pub struct PipelineHandle {
     metrics: HashMap<Box<str>, Arc<NodeMetrics>>,
     engine: Arc<WaferEngine>,
     running: Arc<AtomicBool>,
-    /// P0.10 (A3 residual): per-node compare-and-swap guards preventing
-    /// two concurrent swap requests for the same node from both winning
-    /// the watch-channel race. Populated at build time for every
-    /// swappable node. Independent of `watch_senders` so that internal
-    /// (non-API) swap paths can also participate.
+    /// Loaded Wasm processing roles eligible for replacement.
+    replacement_eligible: HashSet<Box<str>>,
+    /// Per-node compare-and-swap guards shared by hot-swap and reconfigure.
     swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
     /// P0.10 (A3 residual): shared hot-swap-metrics store, populated on
     /// every successful swap via [`record_hotswap_phase`](Self::record_hotswap_phase)
@@ -87,6 +86,11 @@ pub struct QueueSnapshot {
     pub accepted: u64,
     pub dequeued: u64,
     pub processed: u64,
+    pub dropped: u64,
+    pub dead_lettered: u64,
+    pub downstream_closed: u64,
+    pub dlq_full: u64,
+    pub dlq_closed: u64,
 }
 
 /// RAII guard returned by [`PipelineHandle::try_begin_swap`]. Dropping
@@ -138,7 +142,7 @@ impl PipelineHandle {
 
     /// P0.10 (A3 residual): record a single hot-swap phase timing on the
     /// shared `hot_swap_phase_ns` histogram. Phase label is one of
-    /// {compile, instantiate, signal, ack, first_v2, convergence}.
+    /// {compile, instantiate, signal, replacement_adopted, first_post_replacement_local_outcome}.
     pub fn record_hotswap_phase(&self, phase: &str, node_id: &str, ns: u64) {
         let key = (phase.to_owned(), node_id.to_owned());
         if let Ok(guard) = self.hotswap_metrics.phase_histogram.read()
@@ -243,11 +247,27 @@ impl PipelineHandle {
             metrics: HashMap::new(),
             engine: Arc::new(WaferEngine::new().expect("test engine")),
             running: Arc::new(AtomicBool::new(true)),
+            replacement_eligible: HashSet::from_iter(
+                swappable_ids.iter().map(|id| Box::<str>::from(*id)),
+            ),
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
             plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
             queue_probes: Vec::new(),
         }
+    }
+
+    #[cfg(all(test, feature = "http-api"))]
+    pub(crate) fn for_replacement_test(
+        config: Config,
+        node_id: &str,
+        sender: watch::Sender<Option<SwapPayload>>,
+    ) -> Result<Self> {
+        let mut handle = Self::for_p0_10_test(&[node_id]);
+        handle.engine = Arc::new(WaferEngine::from_engine_config(&config.engine)?);
+        handle.config = config;
+        handle.watch_senders.insert(node_id.into(), sender);
+        Ok(handle)
     }
 
     /// Send a hot-swap payload to a specific node via its watch channel.
@@ -256,6 +276,9 @@ impl PipelineHandle {
     ///
     /// Returns error if the node doesn't exist or doesn't support hot-swap.
     pub fn send_swap(&self, node_id: &str, payload: SwapPayload) -> Result<()> {
+        if !self.replacement_eligible.contains(node_id) {
+            return Err(WaferError::Runtime(format!("node-not-swappable: {node_id}")));
+        }
         let sender = self.watch_senders.get(node_id).ok_or_else(|| {
             WaferError::Runtime(format!(
                 "cannot hot-swap node '{node_id}': not found or not a Wasm node"
@@ -305,14 +328,19 @@ impl PipelineHandle {
                 accepted: probe.metrics.enqueued(),
                 dequeued: probe.metrics.dequeued(),
                 processed: self.metrics.get(&probe.queue).map_or(0, |metrics| metrics.processed()),
+                dropped: probe.metrics.dropped(),
+                dead_lettered: probe.metrics.dead_lettered(),
+                downstream_closed: probe.metrics.downstream_closed(),
+                dlq_full: probe.metrics.dlq_full(),
+                dlq_closed: probe.metrics.dlq_closed(),
             })
             .collect()
     }
 
-    /// Get all node IDs that support hot-swap.
+    /// Get loaded Wasm processing roles eligible for replacement.
     #[must_use]
     pub fn swappable_nodes(&self) -> Vec<&str> {
-        self.watch_senders.keys().map(|k| &**k).collect()
+        self.replacement_eligible.iter().map(|node_id| &**node_id).collect()
     }
 
     /// Access the current configuration.
@@ -344,10 +372,12 @@ pub struct PipelineOrchestrator {
     /// Wasm engine for hot-swap compilation.
     engine: Arc<WaferEngine>,
     /// DLQ task handle (spawned separately from node tasks).
-    dlq_handle: Option<tokio::task::JoinHandle<()>>,
+    dlq_handle: Option<tokio::task::JoinHandle<Result<()>>>,
     /// Shared running flag used by API handles.
     running: Arc<AtomicBool>,
-    /// Per-node in-progress-swap flags (see [`PipelineHandle::try_begin_swap`]).
+    /// Loaded Wasm processing roles eligible for replacement.
+    replacement_eligible: HashSet<Box<str>>,
+    /// Per-node mutation flags shared by hot-swap and reconfigure.
     swap_in_progress: HashMap<Box<str>, Arc<AtomicBool>>,
     /// Shared hot-swap metrics store, held for the /metrics handler.
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
@@ -371,9 +401,9 @@ impl PipelineOrchestrator {
         engine: Arc<WaferEngine>,
     ) -> Self {
         let swap_in_progress = build_output
-            .watch_senders
-            .keys()
-            .map(|k| (k.clone(), Arc::new(AtomicBool::new(false))))
+            .replacement_eligible
+            .iter()
+            .map(|node_id| (node_id.clone(), Arc::new(AtomicBool::new(false))))
             .collect::<HashMap<_, _>>();
 
         let mut orchestrator = Self {
@@ -386,16 +416,16 @@ impl PipelineOrchestrator {
             engine,
             dlq_handle: None,
             running: Arc::new(AtomicBool::new(true)),
+            replacement_eligible: build_output.replacement_eligible,
             swap_in_progress,
             hotswap_metrics: Arc::new(crate::metrics::types::HotSwapMetrics::default()),
             plugin_hashes: Arc::new(std::sync::RwLock::new(HashMap::new())),
             queue_probes: build_output.queue_probes,
         };
 
-        // Spawn DLQ sink task if configured
-        if let Some(dlq_rx) = build_output.dlq_receiver {
+        if let Some((dlq_rx, dlq_config)) = build_output.dlq {
             let cancel = build_output.cancel_token.clone();
-            let handle = tokio::spawn(run_dlq_sink(dlq_rx, cancel));
+            let handle = tokio::spawn(run_dlq_sink(dlq_rx, cancel, dlq_config));
             orchestrator.dlq_handle = Some(handle);
         }
 
@@ -416,6 +446,7 @@ impl PipelineOrchestrator {
             metrics: self.metrics.clone(),
             engine: Arc::clone(&self.engine),
             running: Arc::clone(&self.running),
+            replacement_eligible: self.replacement_eligible.clone(),
             swap_in_progress: self.swap_in_progress.clone(),
             hotswap_metrics: Arc::clone(&self.hotswap_metrics),
             plugin_hashes: Arc::clone(&self.plugin_hashes),
@@ -588,7 +619,8 @@ impl PipelineOrchestrator {
         // Wait for DLQ task
         if let Some(handle) = self.dlq_handle.take() {
             match tokio::time::timeout(Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {}
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => return Err(e),
                 Ok(Err(e)) => tracing::error!(error = %e, "DLQ task panicked"),
                 Err(_) => tracing::warn!("DLQ task did not exit within timeout"),
             }
@@ -652,7 +684,11 @@ impl PipelineOrchestrator {
         // Wait for DLQ task
         if let Some(handle) = self.dlq_handle.take() {
             match tokio::time::timeout(Duration::from_secs(5), handle).await {
-                Ok(Ok(())) => {}
+                Ok(Ok(Ok(()))) => {}
+                Ok(Ok(Err(e))) => {
+                    tracing::error!(error = %e, "DLQ sink failed");
+                    had_panic = true;
+                }
                 Ok(Err(e)) => {
                     tracing::error!(error = %e, "DLQ task panicked");
                     had_panic = true;
@@ -705,10 +741,10 @@ impl PipelineOrchestrator {
         self.watch_senders.len()
     }
 
-    /// Get all node IDs that support hot-swap.
+    /// Get loaded Wasm processing roles eligible for replacement.
     #[must_use]
     pub fn swappable_nodes(&self) -> Vec<&str> {
-        self.watch_senders.keys().map(|k| &**k).collect()
+        self.replacement_eligible.iter().map(|node_id| &**node_id).collect()
     }
 
     /// Access the current configuration.
@@ -748,7 +784,7 @@ impl PipelineOrchestrator {
         let mut f = std::fs::File::create(&path)?;
         writeln!(
             f,
-            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count"
+            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count,retry_exhausted_skips"
         )?;
         let mut recovery = std::fs::File::create(dir.join("recovery.csv"))?;
         writeln!(recovery, "node_id,sample_index,duration_ns")?;
@@ -763,6 +799,7 @@ impl PipelineOrchestrator {
             let traps_total = m.failed();
             let messages_in = messages_out.saturating_add(traps_total);
             let recovery_count = m.recovery_count();
+            let exhausted_skips = m.exhausted_skips();
             // error_state_seconds: cumulative time in Error/Recovering states.
             // recovery_ns_total accumulates the full Error→Recovering→Running
             // duration for each recovery cycle.
@@ -774,7 +811,7 @@ impl PipelineOrchestrator {
             let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
             writeln!(
                 f,
-                "{node_id},{messages_in},{messages_out},{traps_total},{error_state_secs:.6},{recovery_count}"
+                "{node_id},{messages_in},{messages_out},{traps_total},{error_state_secs:.6},{recovery_count},{exhausted_skips}"
             )?;
             for (sample_index, duration_ns) in m.recovery_samples_ns().into_iter().enumerate() {
                 writeln!(recovery, "{node_id},{sample_index},{duration_ns}")?;
@@ -820,44 +857,101 @@ async fn run_passthrough_loop(
     }
 }
 
-/// Simple DLQ sink that drains envelopes until cancelled.
-///
-/// In a full deployment, this would write to a file, MQTT topic, or HTTP endpoint.
-/// For now, it logs and drops. The DLQ channel is bounded — if this task falls
-/// behind, senders will see backpressure.
+/// Configured DLQ sink that drains envelopes until cancellation or sender closure.
 async fn run_dlq_sink(
     mut receiver: tokio::sync::mpsc::Receiver<DlqEnvelope>,
     cancel: CancellationToken,
-) {
-    loop {
-        tokio::select! {
-            biased;
-            () = cancel.cancelled() => {
-                // Drain remaining messages before exiting
-                while let Ok(envelope) = receiver.try_recv() {
-                    tracing::warn!(
-                        node = %envelope.source_node,
-                        reason = ?envelope.reason,
-                        "DLQ: message during shutdown drain"
-                    );
-                }
-                break;
+    config: crate::config::DeadLetterConfig,
+) -> Result<()> {
+    match config {
+        crate::config::DeadLetterConfig::File { path, .. } => {
+            let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+            let mut writer = BufWriter::new(file);
+            while let Some(envelope) = recv_or_cancel(&mut receiver, &cancel).await {
+                writer.write_all(&envelope.to_json_bytes().map_err(|error| {
+                    WaferError::Runtime(format!("failed to serialize DLQ record: {error}"))
+                })?)?;
+                writer.write_all(b"\n")?;
             }
-            msg = receiver.recv() => {
-                match msg {
-                    Some(envelope) => {
-                        tracing::warn!(
-                            node = %envelope.source_node,
-                            category = ?envelope.error_category,
-                            reason = ?envelope.reason,
-                            retry_count = envelope.retry_count,
-                            "DLQ: dead letter received"
-                        );
-                    }
-                    None => break, // All senders dropped
-                }
-            }
+            writer.flush()?;
         }
+        crate::config::DeadLetterConfig::Mqtt { broker, port, topic, tls, auth, .. } => {
+            let mut options = rumqttc::MqttOptions::new("wafer-dlq", broker, port);
+            options.set_keep_alive(Duration::from_secs(30));
+            if let Some(auth) = auth {
+                options.set_credentials(auth.username, auth.password);
+            }
+            if let Some(tls) = tls {
+                let transport = if let Some(ca_path) = tls.ca {
+                    let ca = std::fs::read(ca_path)?;
+                    let client_auth = match (tls.cert, tls.key) {
+                        (Some(cert), Some(key)) => {
+                            Some((std::fs::read(cert)?, std::fs::read(key)?))
+                        }
+                        (None, None) => None,
+                        _ => {
+                            return Err(WaferError::Config(crate::error::ConfigError::Message(
+                                "dead_letter TLS cert and key must be configured together"
+                                    .to_string(),
+                            )));
+                        }
+                    };
+                    rumqttc::Transport::tls(ca, client_auth, None)
+                } else {
+                    rumqttc::Transport::tls_with_default_config()
+                };
+                options.set_transport(transport);
+            }
+            let (client, mut eventloop) = rumqttc::AsyncClient::new(options, 10);
+            let eventloop_handle = tokio::spawn(async move {
+                loop {
+                    match eventloop.poll().await {
+                        Ok(rumqttc::Event::Outgoing(rumqttc::Outgoing::Disconnect)) => break,
+                        Ok(_) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+                Ok::<(), rumqttc::ConnectionError>(())
+            });
+            while let Some(envelope) = recv_or_cancel(&mut receiver, &cancel).await {
+                client
+                    .publish(
+                        &topic,
+                        rumqttc::QoS::AtLeastOnce,
+                        false,
+                        envelope.to_json_bytes().map_err(|error| {
+                            WaferError::Runtime(format!("failed to serialize DLQ record: {error}"))
+                        })?,
+                    )
+                    .await
+                    .map_err(|error| {
+                        WaferError::Runtime(format!("DLQ MQTT publish failed: {error}"))
+                    })?;
+            }
+            client.disconnect().await.map_err(|error| {
+                WaferError::Runtime(format!("DLQ MQTT disconnect failed: {error}"))
+            })?;
+            eventloop_handle
+                .await
+                .map_err(|error| {
+                    WaferError::Runtime(format!("DLQ MQTT event loop panicked: {error}"))
+                })?
+                .map_err(|error| {
+                    WaferError::Runtime(format!("DLQ MQTT event loop failed: {error}"))
+                })?;
+        }
+    }
+    Ok(())
+}
+
+async fn recv_or_cancel(
+    receiver: &mut tokio::sync::mpsc::Receiver<DlqEnvelope>,
+    cancel: &CancellationToken,
+) -> Option<DlqEnvelope> {
+    tokio::select! {
+        biased;
+        () = cancel.cancelled() => receiver.try_recv().ok(),
+        message = receiver.recv() => message,
     }
 }
 
@@ -867,9 +961,13 @@ mod tests {
     use std::collections::{HashMap, HashSet};
     use std::sync::Mutex;
 
+    use testcontainers::runners::AsyncRunner;
+    use testcontainers_modules::mosquitto::Mosquitto;
+    use tokio::sync::{Barrier, mpsc};
+
     use crate::config::{
-        Config, EdgeDef, EngineConfig, NodeDef, SinkDef, SourceDef, StdinSourceConfig,
-        StdoutSinkConfig, WasmNodeDef,
+        Config, DeadLetterConfig, EdgeDef, EngineConfig, NodeDef, SinkDef, SourceDef,
+        StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
     use crate::orchestrator::builder::{build_pipeline, build_pipeline_with_io};
     use crate::queue::RuntimeEnvelope;
@@ -882,6 +980,35 @@ mod tests {
             port: None,
             capacity: None,
             overflow: None,
+        }
+    }
+
+    fn ensure_docker_host() {
+        if std::env::var_os("DOCKER_HOST").is_some() {
+            return;
+        }
+        let path =
+            format!("{}/.colima/default/docker.sock", std::env::var("HOME").unwrap_or_default());
+        if std::path::Path::new(&path).exists() {
+            // SAFETY: this test setup completes before testcontainers creates its Docker client.
+            unsafe { std::env::set_var("DOCKER_HOST", format!("unix://{path}")) };
+        }
+    }
+
+    fn dlq_test_envelope(payload: &str) -> DlqEnvelope {
+        let original = RuntimeEnvelope::from_string("source", payload);
+        DlqEnvelope {
+            timestamp: 1,
+            source_node: "source".into(),
+            error_category: None,
+            error_message: "destination queue full".to_string(),
+            retry_count: 0,
+            reason: crate::runner::error_policy::DlqReason::QueueFull {
+                edge: "source:default->sink:default".into(),
+            },
+            trace_id: None,
+            parent_id: None,
+            original,
         }
     }
 
@@ -923,6 +1050,156 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn configured_file_dlq_persists_json_lines() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dlq.jsonl");
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        let cancel = CancellationToken::new();
+        tx.send(dlq_test_envelope("failed-message")).await.expect("enqueue DLQ record");
+        drop(tx);
+
+        run_dlq_sink(
+            rx,
+            cancel,
+            DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 2 },
+        )
+        .await
+        .expect("configured file DLQ must persist the record");
+
+        let contents = std::fs::read_to_string(path).expect("configured DLQ file");
+        let record: serde_json::Value =
+            serde_json::from_str(contents.trim()).expect("one JSONL record");
+        assert_eq!(record["source_node"], "source");
+        assert_eq!(record["reason"]["type"], "queue_full");
+        assert_eq!(record["original"]["retry_count"], 0);
+    }
+
+    #[tokio::test]
+    async fn cancelled_file_dlq_drains_all_buffered_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("dlq.jsonl");
+        let (tx, rx) = tokio::sync::mpsc::channel(3);
+        tx.send(dlq_test_envelope("first")).await.expect("first DLQ record");
+        tx.send(dlq_test_envelope("second")).await.expect("second DLQ record");
+        drop(tx);
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+
+        run_dlq_sink(
+            rx,
+            cancel,
+            DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 3 },
+        )
+        .await
+        .expect("cancellation must drain buffered file DLQ records");
+
+        let lines: Vec<_> = std::fs::read_to_string(path)
+            .expect("configured DLQ file")
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("DLQ JSONL record"))
+            .collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0]["original"]["payload"], "Zmlyc3Q=");
+        assert_eq!(lines[1]["original"]["payload"], "c2Vjb25k");
+    }
+
+    #[tokio::test]
+    #[expect(
+        clippy::panic_in_result_fn,
+        reason = "the broker-backed delivery assertions must fail this integration test"
+    )]
+    async fn configured_mqtt_dlq_delivers_serialized_record() -> anyhow::Result<()> {
+        ensure_docker_host();
+        let broker = Mosquitto::default().start().await?;
+        let host = broker.get_host().await?;
+        let port = broker.get_host_port_ipv4(1883).await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let topic = format!("wafer/core-dlq/{}", std::process::id());
+
+        let options = rumqttc::MqttOptions::new(
+            format!("wafer-core-dlq-sub-{}", std::process::id()),
+            host.to_string(),
+            port,
+        );
+        let (subscriber, mut eventloop) = rumqttc::AsyncClient::new(options, 10);
+        subscriber.subscribe(&topic, rumqttc::QoS::AtLeastOnce).await?;
+        loop {
+            if matches!(
+                eventloop.poll().await?,
+                rumqttc::Event::Incoming(rumqttc::Packet::SubAck(_))
+            ) {
+                break;
+            }
+        }
+
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        tx.send(dlq_test_envelope("brokered-message")).await?;
+        drop(tx);
+        let sink = tokio::spawn(run_dlq_sink(
+            rx,
+            CancellationToken::new(),
+            DeadLetterConfig::Mqtt {
+                broker: host.to_string(),
+                port,
+                topic: topic.clone(),
+                queue_capacity: 1,
+                tls: None,
+                auth: None,
+            },
+        ));
+
+        let payload = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if let rumqttc::Event::Incoming(rumqttc::Packet::Publish(message)) =
+                    eventloop.poll().await?
+                {
+                    return Ok::<_, rumqttc::ConnectionError>(message.payload.to_vec());
+                }
+            }
+        })
+        .await??;
+        sink.await??;
+
+        let record: serde_json::Value = serde_json::from_slice(&payload)?;
+        assert_eq!(record["source_node"], "source");
+        assert_eq!(record["reason"]["type"], "queue_full");
+        assert_eq!(record["error_message"], "destination queue full");
+        assert_eq!(record["original"]["payload"], "YnJva2VyZWQtbWVzc2FnZQ==");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_mqtt_dlq_surfaces_event_loop_failure() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("reserve loopback port");
+        let port = listener.local_addr().expect("loopback address").port();
+        drop(listener);
+
+        let (tx, rx) = tokio::sync::mpsc::channel(2);
+        tx.send(dlq_test_envelope("failed-message")).await.expect("enqueue DLQ record");
+        drop(tx);
+
+        let result = tokio::time::timeout(
+            Duration::from_secs(1),
+            run_dlq_sink(
+                rx,
+                CancellationToken::new(),
+                DeadLetterConfig::Mqtt {
+                    broker: "127.0.0.1".to_string(),
+                    port,
+                    topic: "wafer/test-dlq".to_string(),
+                    queue_capacity: 2,
+                    tls: None,
+                    auth: None,
+                },
+            ),
+        )
+        .await
+        .expect("closed loopback broker must not hang the DLQ sink");
+
+        assert!(result.is_err(), "MQTT delivery failure must not report success");
+    }
+
+    #[tokio::test]
     async fn test_build_creates_correct_watch_senders() {
         let config = test_config();
         let engine = Arc::new(WaferEngine::new().expect("engine"));
@@ -931,7 +1208,21 @@ mod tests {
         let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
 
         assert_eq!(orch.wasm_node_count(), 1);
-        assert!(orch.swappable_nodes().contains(&"t1"));
+        assert!(orch.swappable_nodes().is_empty(), "unloaded configured roles are not eligible");
+    }
+
+    #[tokio::test]
+    async fn replacement_eligibility_uses_loaded_wasm_roles() {
+        let config = test_config();
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let mut build_output = build_pipeline(&config).expect("build");
+        build_output.replacement_eligible.insert("t1".into());
+
+        let orch = PipelineOrchestrator::from_build_output(build_output, config, engine);
+        assert_eq!(orch.swappable_nodes(), vec!["t1"]);
+        drop(orch.handle().try_begin_swap("t1").expect("eligible Wasm role"));
+        let _ = orch.handle().try_begin_swap("src").expect_err("source rejected");
+        let _ = orch.handle().try_begin_swap("sink").expect_err("sink rejected");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1031,6 +1322,7 @@ mod tests {
         let metrics = orchestrator.node_metrics("src").expect("source metrics");
         metrics.record_recovery(12_345);
         metrics.record_recovery(67_890);
+        metrics.record_exhausted_skip();
         let output = tempfile::tempdir().expect("tempdir");
         orchestrator.export_per_node_metrics(output.path()).expect("export metrics");
 
@@ -1038,6 +1330,10 @@ mod tests {
             .expect("read recovery samples");
         assert!(recovery.contains("src,0,12345"));
         assert!(recovery.contains("src,1,67890"));
+        let node_metrics = std::fs::read_to_string(output.path().join("per_node_metrics.csv"))
+            .expect("read node metrics");
+        assert!(node_metrics.contains("retry_exhausted_skips"));
+        assert!(node_metrics.contains("src,0,0,0,0.000080,2,1"));
 
         orchestrator.shutdown().await.expect("shutdown");
     }
@@ -1108,6 +1404,11 @@ mod tests {
                 accepted: 5,
                 dequeued: 5,
                 processed: 5,
+                dropped: 0,
+                dead_lettered: 0,
+                downstream_closed: 0,
+                dlq_full: 0,
+                dlq_closed: 0,
             }]
         );
 
@@ -1176,6 +1477,54 @@ mod tests {
             .expect("after guard dropped, next request must succeed");
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn replacement_guard_serializes_swap_and_reconfigure() {
+        let handle = Arc::new(PipelineHandle::for_p0_10_test(&["transform"]));
+        let start = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(3));
+        let (result_tx, mut result_rx) = mpsc::channel(2);
+        let mut claimants = Vec::new();
+
+        for operation in ["hot-swap", "reconfigure"] {
+            let handle = Arc::clone(&handle);
+            let start = Arc::clone(&start);
+            let release = Arc::clone(&release);
+            let result_tx = result_tx.clone();
+            claimants.push(tokio::spawn(async move {
+                start.wait().await;
+                let result = handle.try_begin_swap("transform");
+                let claim = result.as_ref().map(|_| operation).map_err(ToString::to_string);
+                result_tx.send(claim).await.expect("test receiver remains available");
+                release.wait().await;
+                drop(result);
+            }));
+        }
+        drop(result_tx);
+
+        start.wait().await;
+        let first = result_rx.recv().await.expect("first claimant result");
+        let second = result_rx.recv().await.expect("second claimant result");
+        let results = [first, second];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results.iter().filter(|result| result.is_err()).count(),
+            1,
+            "one same-node claimant must receive an early conflict",
+        );
+        assert!(
+            results
+                .iter()
+                .find_map(|result| result.as_ref().err())
+                .is_some_and(|error| error.contains("swap-in-progress")),
+            "the rejected cross-operation claimant must see swap-in-progress",
+        );
+
+        release.wait().await;
+        for claimant in claimants {
+            claimant.await.expect("claimant task");
+        }
+    }
+
     /// Non-swappable / unknown node yields node-not-swappable, distinct
     /// from the in-progress error so the API handler can map it to 404
     /// instead of 409.
@@ -1196,24 +1545,29 @@ mod tests {
         clippy::significant_drop_tightening,
         reason = "RwLockReadGuard held for assertions across the for loop — intentional"
     )]
-    fn phase_histogram_records_six_phases() {
+    fn phase_histogram_records_local_replacement_phases() {
         let handle = PipelineHandle::for_p0_10_test(&["transform"]);
 
         for (phase, ns) in [
             ("compile", 50_000_000_u64),
             ("instantiate", 5_000_000_u64),
             ("signal", 1_000_u64),
-            ("ack", 50_000_u64),
-            ("first_v2", 200_000_u64),
-            ("convergence", 10_000_000_u64),
+            ("replacement_adopted", 50_000_u64),
+            ("first_post_replacement_local_outcome", 200_000_u64),
         ] {
             handle.record_hotswap_phase(phase, "transform", ns);
         }
 
         let hs = handle.hotswap_metrics();
         let guard = hs.phase_histogram.read().unwrap();
-        assert_eq!(guard.len(), 6, "expected exactly six (phase, node) series");
-        for phase in ["compile", "instantiate", "signal", "ack", "first_v2", "convergence"] {
+        assert_eq!(guard.len(), 5, "expected exactly five local (phase, node) series");
+        for phase in [
+            "compile",
+            "instantiate",
+            "signal",
+            "replacement_adopted",
+            "first_post_replacement_local_outcome",
+        ] {
             let key = (phase.to_owned(), "transform".to_owned());
             let h = guard.get(&key).unwrap_or_else(|| panic!("missing phase: {phase}"));
             assert_eq!(

@@ -47,11 +47,11 @@ impl<T> BatchBuffer<T> {
     }
 
     /// Returns `true` if the buffer contains no items.
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.buffer.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.buffer.len()
     }
 

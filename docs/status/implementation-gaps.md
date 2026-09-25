@@ -10,8 +10,24 @@ plan.
 gap is closed, mark it `Status: Closed` with a commit reference; do not delete
 the entry.
 
-**Verified against implementation on 2026-07-18** by the doc-refactor
-verification (see `.delegation-runner/doc-refactor/verify-synthesis.md`).
+## Current release boundary
+
+The entries below preserve the state observed when each gap was filed. Their
+`Current state`, examples, and proposed fixes are historical unless a later
+closure paragraph says otherwise. Current release behavior is summarized in
+[`implementation-status.md`](implementation-status.md) and verified by the TG2
+V1 receipt. A1–A19 and A21 are closed. A20 remains intentionally open: internal
+Transform rollback evidence exists, but `/metrics` does not expose
+`wafer_hot_swap_rollbacks_total`. The later inference-restoration work added the
+fourth WIT world, default-deny wasi-nn linker/store path, MNIST component, and
+lifecycle preservation. Its Jetson receipt confirms CUDA provider execution but
+leaves intermittent CUDA teardown as a separate unresolved defect.
+
+**Historical verification baseline:** implementation was first audited on
+2026-07-18 by the doc-refactor verification (see
+`.delegation-runner/doc-refactor/verify-synthesis.md`).
+
+<!-- historical-design-below -->
 
 **Root cause pattern:** the `clean-runtime` refactor extracted the new schema
 and types into `wafer-types` + `wafer-config`, but did not rewire
@@ -246,7 +262,7 @@ and architecture claims assume the rewire happened; it did not.
   or `inherit_env` is denied.
 - **Fix:** Blocked on A1 (config carries capabilities). Thread
   `wafer_types::config::Capabilities` through the launcher and swap paths.
-- **Closed by:** runtime-migration plan A9 — launcher uses `capabilities_from_config(&wasm.capabilities)` for transform/filter/router instantiation; hot-swap API path looks up the target node's `wasm.capabilities` and passes them to `prepare_*_swap_timed`; `grep Capabilities::sandbox crates/wafer-core/src/{orchestrator,api}` returns no matches. Residual: wasi-nn integration test with a model on hardware remains successor-plan work.
+- **Closed by:** runtime-migration plan A9 — launcher uses `capabilities_from_config(&wasm.capabilities)` for transform/filter/router instantiation; hot-swap API path looks up the target node's `wasm.capabilities` and passes them to `prepare_*_swap_timed`; `grep Capabilities::sandbox crates/wafer-core/src/{orchestrator,api}` returns no matches. The inference-restoration successor work later added role-aware validation, an inference-only linker/store, immutable-grant preservation through recovery/reconfigure/hot-swap/rollback, and real CPU/Jetson model execution. The original `Current state`, impact, and proposed fix above remain historical filing context.
 
 ## A10 — Hot-swap endpoint is transform-specific, documented as generic (Closed 2026-07-20) 🟢
 
@@ -507,7 +523,7 @@ canary rollback, `TransformCanaryState`, `set_cached_pre`,
 `NodeMetrics::record_rollback`.
 
 **Post-verify hardening (2026-08-02, commit `78519ea`).** Cross-family
-review (hai-proxy/independent-model x 3) surfaced four polish gaps in the initial
+independent review surfaced four polish gaps in the initial
 T1 landing; all four fixed in one patch:
 
 - **B1 (correctness).** `pending_swap_progress` was not cleared on
@@ -546,7 +562,7 @@ T1 landing; all four fixed in one patch:
   + rollback progress reporting)
 
 **Second post-verify pass (2026-08-02, commits `ba17d0f` + `5fe58a5`).**
-A follow-up cross-family review (hai-proxy/independent-model x 4) surfaced four
+A follow-up independent review surfaced four
 additional issues; all fixed:
 
 - **BL-1.** `eval/scripts/run-e-swap-shakedown.sh` fired two POSTs

@@ -101,3 +101,33 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 **Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, and never overwrites passed attempts. Retrieval is additive and verified path-for-path with SHA-256 manifests.
 
 **Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or targeted-pilot outcomes.
+
+## R11: tested-grid bounds are reported as exact capacity
+
+**Likelihood:** Medium when the best observed rate is at a grid boundary or MQTT support is censored.
+
+**Impact:** High for the competitive-capacity claim.
+
+**Mitigation:** E-Perf-10 reports lower/upper bounds only at tested rates, uses no interpolation, and applies the frozen 0.70 decision branches including zero-denominator and invalid-population handling.
+
+**Residual:** A straddling or support-censored ratio remains `CENSORED/PENDING`; evidence beyond the tested grid requires a new experiment.
+
+## R12: local replacement telemetry is mistaken for delivery evidence
+
+**Likelihood:** Medium because API timing is available before sink analysis.
+
+**Impact:** High for live-update claims.
+
+**Mitigation:** `replacement_adopted` and the first runner-local outcome are reported separately from sink transition, gap, throughput, and sequence artifacts. E-Swap-5 requires `post-rollback-continuity.json` and rejects a fabricated successful-v2 timeline.
+
+**Residual:** A locally enqueued output can still be delayed or lost downstream; only sink-owned evidence supports convergence.
+
+## R13: prerequisite evidence is promoted prematurely
+
+**Likelihood:** Low after fail-closed admission checks.
+
+**Impact:** High for isolation and observability claims.
+
+**Mitigation:** `mise run mandatory-attack-evidence` must execute the healthy reference and exact S1–S6 set, including explicit filesystem denial, before a campaign. Its receipt remains provisional until release and admission binding.
+
+**Residual:** A20 is intentionally deferred: internal Transform rollback evidence exists, but `/metrics` lacks `wafer_hot_swap_rollbacks_total`.

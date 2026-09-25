@@ -58,7 +58,10 @@ EXPECTED_EVIDENCE = {
         (
             "Source",
             "crates/wafer-config/src/lib.rs",
-            ("pub use loader::load_config", "pub use validation::validate"),
+            (
+                "pub use loader::load_config",
+                "pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}",
+            ),
         ),
         ("Source", "crates/wafer-types/src/lib.rs", ("pub mod config", "pub use control::*")),
         ("Source", "crates/wafer-core/src/lib.rs", ("pub mod orchestrator", "pub mod runner")),
@@ -105,7 +108,10 @@ EXPECTED_EVIDENCE = {
         (
             "Source",
             "crates/wafer-config/src/lib.rs",
-            ("pub use loader::load_config", "pub use validation::validate"),
+            (
+                "pub use loader::load_config",
+                "pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}",
+            ),
         ),
         (
             "Source",
@@ -135,7 +141,7 @@ EXPECTED_EVIDENCE = {
         (
             "Source",
             "crates/wafer-core/src/orchestrator/builder.rs",
-            ("fn collect_downstream_senders", "overflow: edge.overflow.unwrap_or_default()"),
+            ("fn collect_downstream_senders", "overflow: e.overflow"),
         ),
         (
             "Source",
@@ -298,7 +304,7 @@ EXPECTED_EVIDENCE = {
         (
             "Source",
             "crates/wafer-core/src/runner/error_policy.rs",
-            ("pub fn handle", "pub fn flush_to_dlq", "DlqReason::Shutdown"),
+            ("pub(crate) fn handle", "pub fn flush_to_dlq", "DlqReason::Shutdown"),
         ),
         (
             "Test",
@@ -324,17 +330,20 @@ EXPECTED_EVIDENCE = {
     "plugin-boundary.md": {
         ("Source", "wit/pipeline-types.wit", ("resource buffer", "record message", "record output-message")),
         ("Source", "wit/pipeline-node.wit", ("interface lifecycle", "interface transform", "interface filter")),
-        ("Source", "wit/worlds.wit", ("world transform-node", "world filter-node", "world router-node")),
+        ("Source", "wit/worlds.wit", ("world transform-node", "world filter-node", "world router-node", "world inference-node")),
         ("Source", "plugins/pass-through/Cargo.toml", ("crate-type = [\"cdylib\"]", "wit-bindgen = \"0.53\"")),
-        ("Source", "crates/wafer-core/src/engine/bindings.rs", ("pub mod transform_node", "pub mod filter_node", "pub(crate) mod router_node")),
-        ("Source", "crates/wafer-core/src/engine/loader.rs", ("fn build_linker", "pub fn pre_instantiate_transform", "pub fn pre_instantiate_filter", "pub fn pre_instantiate_router")),
+        ("Source", "crates/wafer-core/src/engine/bindings.rs", ("pub mod transform_node", "pub mod filter_node", "pub(crate) mod router_node", "pub(crate) mod inference_node")),
+        ("Source", "crates/wafer-core/src/engine/loader.rs", ("fn build_linker", "pub fn pre_instantiate_transform", "pub(crate) fn pre_instantiate_inference", "pub fn pre_instantiate_filter", "pub fn pre_instantiate_router")),
         ("Source", "crates/wafer-core/src/orchestrator/launcher.rs", ("fn create_source", "fn create_sink", "async fn resolve_and_load_component")),
         ("Source", "plugins/pass-through/src/lib.rs", ("wit_bindgen::generate!", "impl exports::wafer::pipeline::transform::Guest", "export!(PassThrough)")),
+        ("Source", "plugins/mnist-inference/src/lib.rs", ("world: \"inference-node\"", "graph::load", "GraphExecutionContext")),
         ("Source", "crates/wafer-plugin/src/lib.rs", ("macro_rules! payload_as_str", "$input.payload.read_all()")),
         ("Source", "plugins/content-router/src/lib.rs", ("world: \"router-node\"", "let bytes = input.payload.read_all()")),
         ("Source", "crates/wafer-core/src/registry/client.rs", ("pub async fn resolve", "fn resolve_local", "async fn resolve_oci")),
         ("Source", "crates/wafer-core/src/node/wasm.rs", ("fn build_wit_message", "pub fn validate_and_init", "delete_buffer")),
         ("Test", "crates/wafer-core/tests/wasi_async_runner.rs", ("async fn delay_injector_runs_without_wasi_runtime_panic()",)),
+        ("Test", "crates/wafer-core/tests/inference_inventory.rs", ("fn root_wit_defines_the_pinned_inference_world()", "fn host_bindings_include_inference_without_changing_ordinary_worlds()")),
+        ("Test", "crates/wafer-core/src/node/wasm.rs", ("fn inference_recovery_and_reconfigure_keep_real_model_live()", "fn inference_hot_swap_adopts_real_component_between_calls()")),
     },
     "stateless-hot-swap.md": {
         ("Source", "crates/wafer-core/src/orchestrator/builder.rs", ("watch::channel(None)", "watch_senders.insert")),
@@ -344,7 +353,7 @@ EXPECTED_EVIDENCE = {
         ("Source", "crates/wafer-core/src/runner/transform.rs", ("swap_rx.has_changed()", "transform.recover_from_cached_pre()", "metrics.record_rollback()")),
         ("Source", "crates/wafer-core/src/node/wasm.rs", ("pub fn try_hot_swap", "self.store = old_store", "pub fn recover_from_cached_pre")),
         ("Source", "crates/wafer-core/src/node/metrics.rs", ("pub fn record_swap", "pub fn record_rollback", "pub fn record_recovery")),
-        ("Source", "crates/wafer-core/src/api/handlers.rs", ("pub async fn hot_swap", "\"status\": \"rolled_back\"", "\"status\": \"swap_converged\"")),
+        ("Source", "crates/wafer-core/src/api/handlers.rs", ("pub async fn hot_swap", "\"status\": \"rolled_back\"", "\"replacement_adopted\": true")),
         ("Test", "crates/wafer-core/tests/hotswap_process_time_rollback.rs", ("async fn hotswap_process_time_rollback()", "async fn hotswap_bounded_rollback_thrash()")),
     },
     "evaluation-harness.md": {
@@ -446,7 +455,7 @@ FIXTURE_CONTRACT = {
         "workspace-map.md: expected exactly one prerequisites declaration",
     ),
     "missing-source.json": (
-        "7631325796d33394aff36105c9280001ee209a4c807bc9d57319ceec69bde438",
+        "76377d600891b0db83b527c81f52cfd3968f89dd85e9f04b6940ff05d08179db",
         "workspace-map.md: broken local link: ../../crates/wafer-config/src/missing.rs",
     ),
     "missing-symbol.json": (
@@ -458,7 +467,7 @@ FIXTURE_CONTRACT = {
         "README.md: missing exact test evidence",
     ),
     "overflow-policy-contradiction.json": (
-        "0898862fe2a787aeed5a5dda318037862024530d60ae513bd66fdb4d7bd4fdf7",
+        "6d95a1a453851f88cd660f0a8718acb84c4f98d9060f63d907a2e255de292e95",
         "rust-in-context.md: contradicts bounded overflow implementation",
     ),
     "s12-core-graph-evidence-substitution.json": (
@@ -490,7 +499,7 @@ FIXTURE_CONTRACT = {
         "message-through-wasm.md: places the Wasm call inside cancellation select",
     ),
     "s12-zero-copy-boundary.json": (
-        "c8f343f4901b0abd1bd6f5faee22ef8c2705a4c11ed0b17ece968babd4888ed9",
+        "bacfd0ca3509b46e280d818da421451e123100f19eede6c70223c2d4b50220f1",
         "message-through-wasm.md: claims the whole Wasm boundary is zero-copy",
     ),
     "valid-but-wrong-diataxis-type.json": (
@@ -506,7 +515,7 @@ FIXTURE_CONTRACT = {
         "README.md: invalid Diataxis type: Guide",
     ),
     "wrong-source-commit.json": (
-        "1c257e6fe448dae3e789e5e3b4aa67abb6d0794444bf17862dda219bed93236c",
+        "dad2c8d193aef5d59209381bf4ebd8b8e53b7d258a803777c7b8a9e2fe96c89f",
         "README.md: source commit is not pinned",
     ),
     "s13-capacity-uncensored.json": (
@@ -542,7 +551,7 @@ FIXTURE_CONTRACT = {
         "evaluation-harness.md: inflates independent N with nested or aliased observations",
     ),
     "s13-post-convergence-rollback.json": (
-        "e272e2d3e31cdf030b36df02879f1e7926aac148d290a915d1c767af5e4d2e9b",
+        "dec34df30f7965cdb4c72557a02f6ba424748a59931ae4d8dbd506259725ef0c",
         "stateless-hot-swap.md: claims every canary rollback rewrites the completed API outcome",
     ),
     "s13-state-retention.json": (
@@ -558,7 +567,7 @@ FIXTURE_CONTRACT = {
         "evaluation-harness.md: expected Diataxis type Tutorial, found Reference",
     ),
     "s13-wrong-source-commit.json": (
-        "e71b67452b7271b2105a9af18df68e0782620d58a257db00665ff5075aa1c2b8",
+        "262c325234f1dc91b397fe88fd2775c321ba6243814a2cd98dc0e6bb0b93dfb0",
         "stateless-hot-swap.md: source commit is not pinned",
     ),
 }
@@ -772,7 +781,7 @@ def validate_s13_contract(pages: dict[str, str], errors: list[str]) -> None:
         for required in S13_REQUIRED_TEXT[name]:
             if required not in text:
                 errors.append(f"{name}: missing required implementation anchor: {required}")
-        if "fa149e75d8b47e3284a76c9b98d0709e7e6f061c" not in text:
+        if "92d86b0a511047988de5fbf6551b18b8a09ec455" not in text:
             errors.append(f"{name}: source commit is not pinned")
 
     for name, links in S13_NAV_LINKS.items():
@@ -830,7 +839,7 @@ def validate_pages(pages: dict[str, str]) -> list[str]:
             errors.append(f"{name}: state-preserving replacement claim is not allowed")
 
     readme = pages.get("README.md", "")
-    if "fa149e75d8b47e3284a76c9b98d0709e7e6f061c" not in readme:
+    if "92d86b0a511047988de5fbf6551b18b8a09ec455" not in readme:
         errors.append("README.md: source commit is not pinned")
     if "## Orientation" not in readme:
         errors.append("README.md: must remain an orientation page")

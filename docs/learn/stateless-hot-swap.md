@@ -10,7 +10,7 @@ Follow replacement preparation, watch-channel delivery, between-message applicat
 
 ## Prerequisites
 
-Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router have prepared replacement payloads and between-message application, but the transform runner owns the canary rollback logic described below. This walkthrough follows source at commit `fa149e75d8b47e3284a76c9b98d0709e7e6f061c`.
+Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router support replacement and between-message application, but the Transform runner owns the canary rollback logic below. This walkthrough follows the V1-verified candidate `92d86b0a511047988de5fbf6551b18b8a09ec455`.
 
 ## Flow
 
@@ -26,10 +26,10 @@ sequenceDiagram
     API->>Watch: send replacement
     Runner->>Watch: borrow_and_update between messages
     Runner->>Guest: validate and init
-    Guest-->>Runner: ACK
+    Guest-->>Runner: replacement_adopted
     Runner->>Guest: process next message
-    alt first output succeeds
-        Runner-->>API: HotSwapProgress converged
+    alt first local outcome completes
+        Runner-->>API: first_post_replacement_local_outcome
     else process traps in canary window
         Runner->>Runner: re-instantiate prior pre-instance
         Runner-->>API: rolled_back outcome
@@ -40,8 +40,8 @@ sequenceDiagram
 2. The API acquires a per-node swap guard, reads replacement bytes, and selects the preparation function for the node category. `prepare_transform_swap_timed` compiles through the engine cache, pre-instantiates the typed world, creates a new Store and bindings, and packages them in `SwapPayload::Transform` with `HotSwapProgress`.
 3. `PipelineHandle::send_swap` publishes the payload through the node's watch sender. The transform runner polls `swap_rx.has_changed()` before selecting another message, so replacement happens between guest calls rather than by cancelling one.
 4. `SwapPayload::try_apply_transform` takes ownership of the prepared Store and bindings. `WasmTransformNode::try_hot_swap` temporarily retains the old Store, bindings, and pre-instance, runs the replacement's `validate_and_init`, and keeps the old values only if that initialization fails.
-5. On success, the runner marks ACK, records a swap, and retains the prior `InstancePre` during a bounded canary window. The first successful output completes `HotSwapProgress`.
-6. If the new transform traps while that canary is active, the runner restores the prior cached pre-instance and calls `transform.recover_from_cached_pre()`. This creates another fresh Store, re-instantiates prior code, runs lifecycle initialization, retries the trapped envelope, and records recovery and rollback metrics. It reports a `rolled_back` API outcome only while the caller is still waiting; a rollback after an earlier successful output cannot replace the completed `swap_converged` response.
+5. On success, the runner marks `replacement_adopted`, records a swap, and retains the prior `InstancePre` during a bounded canary window. The first forwarded/enqueued, filter-dropped, or router-no-route result completes `first_post_replacement_local_outcome`.
+6. If the new Transform traps while that canary is active, the runner restores the prior cached pre-instance and calls `transform.recover_from_cached_pre()`. This creates another fresh Store, re-instantiates prior code, runs lifecycle initialization, retries the trapped envelope, and records recovery and rollback metrics. It reports `rolled_back` only while the caller is waiting; a later rollback cannot rewrite an already completed local-outcome response.
 
 ## Rust
 
@@ -49,7 +49,7 @@ A Tokio watch channel stores the latest `Option<SwapPayload>`. The payload is cl
 
 The live node is not shared behind a hot-path mutex. The runner owns it. `std::mem::replace` provides an initialization-failure transaction: the candidate becomes active for validation, and the old host objects can be put back if validation or initialization fails.
 
-`HotSwapProgress` combines `OnceLock` timestamps with a oneshot result. ACK alone is not convergence. Successful output supplies the second marker. Before the first successful post-swap result consumes the progress sender, a process-time rollback completes the pending caller with an explicit `rolled_back` error outcome. After a successful result has already reported `swap_converged`, a later canary rollback cannot rewrite that completed response; recovery state and metrics are then the remaining record.
+`HotSwapProgress` combines `OnceLock` timestamps with a oneshot result. Adoption alone does not complete the response. The first runner-local outcome supplies the second marker. Before that marker consumes the sender, a process-time rollback completes the pending caller with `rolled_back`. After a successful local outcome has already returned, a later canary rollback cannot rewrite the response; recovery state and metrics are then the remaining local record.
 
 ## Design
 
@@ -61,9 +61,9 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 ## Status boundaries
 
-**Current implementation:** Watch senders exist for configured processing categories; replacement payloads are prepared for Transform, Filter, and Router; runner loops apply them between messages. The transform runner additionally implements configured canary recovery and reports ACK, first output, rollback, recovery, and phase observations.
+**Current implementation:** Watch senders exist only for loaded Wasm processing nodes; replacement payloads are prepared for Transform, Filter, and Router; runner loops apply them between messages. The Transform runner additionally implements configured canary recovery. Hot-swap and reconfigure share one per-node mutation guard.
 
-**Intended design:** The API and metrics divide preparation, signal, ACK, convergence, and recovery so disruption can be measured without claiming that any one timestamp is the complete user-visible pause.
+**Intended design:** The API and metrics divide preparation, signal, replacement adoption, first runner-local outcome, rollback, and recovery so each claim has one owner. None is sink evidence; sink transition, sequence continuity, loss, throughput, and gap require evaluation artifacts.
 
 **Known drift:** Current builder comments call every configured processing category a Wasm node even though Transform and Filter can select native baseline functions. Those native variants reject a Wasm swap. Also, only the transform runner establishes process-time canary rollback; do not generalize it to Filter or Router. The integration tests are conditional on prebuilt component fixtures.
 
@@ -76,7 +76,7 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 - **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `swap_rx.has_changed()`, `transform.recover_from_cached_pre()`, `metrics.record_rollback()`
 - **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `pub fn try_hot_swap`, `self.store = old_store`, `pub fn recover_from_cached_pre`
 - **Source:** [`crates/wafer-core/src/node/metrics.rs`](../../crates/wafer-core/src/node/metrics.rs) | symbols: `pub fn record_swap`, `pub fn record_rollback`, `pub fn record_recovery`
-- **Source:** [`crates/wafer-core/src/api/handlers.rs`](../../crates/wafer-core/src/api/handlers.rs) | symbols: `pub async fn hot_swap`, `"status": "rolled_back"`, `"status": "swap_converged"`
+- **Source:** [`crates/wafer-core/src/api/handlers.rs`](../../crates/wafer-core/src/api/handlers.rs) | symbols: `pub async fn hot_swap`, `"status": "rolled_back"`, `"replacement_adopted": true`
 - **Test:** [`crates/wafer-core/tests/hotswap_process_time_rollback.rs`](../../crates/wafer-core/tests/hotswap_process_time_rollback.rs) | symbols: `async fn hotswap_process_time_rollback()`, `async fn hotswap_bounded_rollback_thrash()`
 
 ## Checkpoint

@@ -4,7 +4,7 @@
 //! zero-copy payload sharing from MQTT/network sources.
 
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use uuid::Uuid;
@@ -51,13 +51,7 @@ impl RuntimeEnvelope {
     /// Create a new envelope with a generated UUID and current timestamp.
     #[must_use]
     pub fn new(source: impl Into<Box<str>>, payload: Bytes) -> Self {
-        let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map_or_else(
-            |_| {
-                tracing::warn!("system clock before UNIX epoch, using 0 as timestamp");
-                0
-            },
-            |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX),
-        );
+        let timestamp = unix_epoch_nanos(SystemTime::now());
 
         let header = EnvelopeHeader {
             id: Uuid::new_v4().to_string().into_boxed_str(),
@@ -68,6 +62,23 @@ impl RuntimeEnvelope {
         };
 
         Self { header: Arc::new(header), payload, lineage: Lineage::default(), retry_count: 0 }
+    }
+
+    /// Create an envelope from fields supplied by a transform guest.
+    pub(crate) fn from_output_fields(
+        id: Box<str>,
+        timestamp: u64,
+        source: Box<str>,
+        content_type: Box<str>,
+        metadata: Vec<(Box<str>, Box<str>)>,
+        payload: Bytes,
+    ) -> Self {
+        Self {
+            header: Arc::new(EnvelopeHeader { id, timestamp, source, content_type, metadata }),
+            payload,
+            lineage: Lineage::default(),
+            retry_count: 0,
+        }
     }
 
     /// Create an envelope from a UTF-8 string payload.
@@ -119,6 +130,20 @@ impl RuntimeEnvelope {
     }
 }
 
+fn unix_epoch_nanos(now: SystemTime) -> u64 {
+    now.duration_since(UNIX_EPOCH).map_or_else(
+        |_| {
+            tracing::warn!("system clock before UNIX epoch, using 0 as timestamp");
+            0
+        },
+        duration_to_unix_epoch_nanos,
+    )
+}
+
+fn duration_to_unix_epoch_nanos(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
 impl Default for RuntimeEnvelope {
     fn default() -> Self {
         Self::new(Box::<str>::from("unknown"), Bytes::new())
@@ -159,6 +184,30 @@ mod tests {
         assert!(envelope.header.timestamp > 0);
         assert_eq!(&*envelope.header.source, "sensor-a");
         assert!(envelope.header.metadata.is_empty());
+    }
+
+    #[test]
+    fn new_timestamp_is_unix_epoch_nanoseconds() {
+        let envelope = RuntimeEnvelope::from_string("sensor-a", "data");
+        assert!(
+            envelope.header.timestamp > 1_000_000_000_000_000_000,
+            "timestamp must be nanoseconds since the Unix epoch, not milliseconds: {}",
+            envelope.header.timestamp
+        );
+    }
+
+    #[test]
+    fn unix_epoch_nanos_clamps_pre_epoch_and_saturates() {
+        assert_eq!(unix_epoch_nanos(UNIX_EPOCH), 0);
+        assert_eq!(
+            unix_epoch_nanos(UNIX_EPOCH.checked_add(Duration::from_nanos(42)).expect("valid time")),
+            42
+        );
+        assert_eq!(
+            unix_epoch_nanos(UNIX_EPOCH.checked_sub(Duration::from_nanos(1)).expect("valid time")),
+            0
+        );
+        assert_eq!(duration_to_unix_epoch_nanos(Duration::from_secs(u64::MAX)), u64::MAX);
     }
 
     #[test]

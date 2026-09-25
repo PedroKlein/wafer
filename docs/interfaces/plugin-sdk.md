@@ -115,8 +115,7 @@ log_warn!("dropped duplicate");
 log_error!("upstream unreachable");
 ```
 
-Each macro calls `pipeline::host::logging::log` with the corresponding
-`LogLevel`. Messages appear in the host's `tracing` span for the
+Each macro calls the generated `wafer:pipeline/logging.log` import with the corresponding `LogLevel`. Messages appear in the host's `tracing` span for the
 emitting node, so they are visible in structured logs and integrate
 with the standard `RUST_LOG=<node_id>=debug` filter.
 
@@ -176,7 +175,16 @@ fn close() {}
   should not implement wall-clock waits.
 - No I/O helpers. Native sources and sinks handle protocol I/O; Wasm
   plugins are pure transforms.
-- No `wasi:nn` wrapper. The `inference-node` world imports `wasi:nn`
-  directly; the SDK does not re-export or wrap it.
+- No high-level `wasi:nn` wrapper in `wafer-plugin`. The
+  `mnist-inference` component generates bindings for `inference-node` directly
+  and calls the pinned wasi-nn interfaces. The host exposes those imports only
+  to a Wasm Transform with `allow_inference = true`.
 - No async. Every WIT export is synchronous; the host runs each guest
-  call on a dedicated tokio task.
+  call on a dedicated Tokio task.
+
+## Language boundary
+
+The Rust SDK is the maintained authoring surface. The TinyGo uppercase
+component is a bounded interoperability demonstration that is built, validated,
+and executed through the real host in release verification. The Python
+threshold-filter directory remains a stub and is not support evidence.
