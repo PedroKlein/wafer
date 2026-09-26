@@ -1,0 +1,8 @@
+$ git diff --cached --check
+$ git diff --cached --name-only | grep -v ^experiments/p3/
+all_staged_paths_under_experiments_p3=true
+$ grep floating inputs in toolchain-manifest.json
+floating_inputs_absent=true
+$ git diff --cached --exit-code -- Cargo.toml Cargo.lock rust-toolchain.toml wit crates/wafer-core/src
+production_paths_staged_diff_empty=true
+exit_status=0

@@ -1,0 +1,137 @@
+$ "$TOOLS/bin/wit-bindgen" rust --format --world guest --out-dir experiments/p3/probes/guest-bindgen/generated experiments/p3/probes/guest-bindgen/wit
+Generating "experiments/p3/probes/guest-bindgen/generated/guest.rs"
+$ "$TOOLS/bin/wasm-tools" component wit experiments/p3/probes/guest-bindgen/wit
+package wafer:p3-probe@0.0.0;
+
+interface probe {
+  transform: async func(payload: list<u8>) -> list<u8>;
+}
+
+world guest {
+  export probe;
+}
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 build --manifest-path experiments/p3/probes/guest-bindgen/Cargo.toml --target wasm32-wasip2 --locked
+   Compiling bitflags v2.13.2
+   Compiling wit-bindgen v0.62.0
+   Compiling wafer-p3-guest-bindgen-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/probes/guest-bindgen)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.65s
+$ "$TOOLS/bin/wasm-tools" validate --features all "$ARTIFACT"
+$ "$TOOLS/bin/wasm-tools" component wit "$ARTIFACT"
+package root:component;
+
+world root {
+  import wasi:io/poll@0.2.9;
+  import wasi:clocks/monotonic-clock@0.2.9;
+  import wasi:io/error@0.2.9;
+  import wasi:io/streams@0.2.9;
+  import wasi:cli/stdout@0.2.9;
+  import wasi:cli/stderr@0.2.9;
+  import wasi:cli/stdin@0.2.9;
+  import wasi:cli/environment@0.2.9;
+  import wasi:cli/exit@0.2.9;
+  import wasi:cli/terminal-input@0.2.9;
+  import wasi:cli/terminal-output@0.2.9;
+  import wasi:cli/terminal-stdin@0.2.9;
+  import wasi:cli/terminal-stdout@0.2.9;
+  import wasi:cli/terminal-stderr@0.2.9;
+
+  export wafer:p3-probe/probe@0.0.0;
+}
+package wasi:io@0.2.9 {
+  interface poll {
+    resource pollable {
+      block: func();
+    }
+
+    poll: func(in: list<borrow<pollable>>) -> list<u32>;
+  }
+  interface error {
+    resource error;
+  }
+  interface streams {
+    use error.{error};
+    use poll.{pollable};
+
+    resource input-stream;
+
+    resource output-stream {
+      check-write: func() -> result<u64, stream-error>;
+      write: func(contents: list<u8>) -> result<_, stream-error>;
+      blocking-flush: func() -> result<_, stream-error>;
+      subscribe: func() -> pollable;
+    }
+
+    variant stream-error {
+      last-operation-failed(error),
+      closed,
+    }
+  }
+}
+
+
+package wasi:clocks@0.2.9 {
+  interface monotonic-clock {
+    use wasi:io/poll@0.2.9.{pollable};
+
+    type duration = u64;
+
+    subscribe-duration: func(when: duration) -> pollable;
+  }
+}
+
+
+package wasi:cli@0.2.9 {
+  interface stdout {
+    use wasi:io/streams@0.2.9.{output-stream};
+
+    get-stdout: func() -> output-stream;
+  }
+  interface stderr {
+    use wasi:io/streams@0.2.9.{output-stream};
+
+    get-stderr: func() -> output-stream;
+  }
+  interface stdin {
+    use wasi:io/streams@0.2.9.{input-stream};
+
+    get-stdin: func() -> input-stream;
+  }
+  interface environment {
+    get-environment: func() -> list<tuple<string, string>>;
+  }
+  interface exit {
+    exit: func(status: result);
+  }
+  interface terminal-input {
+    resource terminal-input;
+  }
+  interface terminal-output {
+    resource terminal-output;
+  }
+  interface terminal-stdin {
+    use terminal-input.{terminal-input};
+
+    get-terminal-stdin: func() -> option<terminal-input>;
+  }
+  interface terminal-stdout {
+    use terminal-output.{terminal-output};
+
+    get-terminal-stdout: func() -> option<terminal-output>;
+  }
+  interface terminal-stderr {
+    use terminal-output.{terminal-output};
+
+    get-terminal-stderr: func() -> option<terminal-output>;
+  }
+}
+
+
+package wafer:p3-probe@0.0.0 {
+  interface probe {
+    transform: async func(payload: list<u8>) -> list<u8>;
+  }
+}
+$ shasum -a 256 "$ARTIFACT" experiments/p3/probes/guest-bindgen/generated/*
+5be20a18c9cfee0993db83867f0d02109e4cab6669a7e950bb41010c9cf28c14  experiments/p3/probes/guest-bindgen/target/wasm32-wasip2/debug/wafer_p3_guest_bindgen_probe.wasm
+cb63b5774ac1894dc0f68d897d4d1be49b0db1864f3f264dcd17cffa24347e97  experiments/p3/probes/guest-bindgen/generated/guest.rs
+exit_status=0

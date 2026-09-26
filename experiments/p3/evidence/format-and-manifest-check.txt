@@ -1,0 +1,6 @@
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo fmt --all -- --check
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 fmt --manifest-path experiments/p3/probes/Cargo.toml -- --check
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 fmt --manifest-path experiments/p3/probes/production-pin/Cargo.toml -- --check
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 fmt --manifest-path experiments/p3/probes/guest-bindgen/Cargo.toml -- --check
+$ python3 -m json.tool experiments/p3/toolchain-manifest.json
+exit_status=0

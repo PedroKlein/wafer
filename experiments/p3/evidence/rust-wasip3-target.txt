@@ -1,0 +1,5 @@
+$ rustup target add wasm32-wasip3 --toolchain 1.98.1
+error: toolchain '1.98.1-aarch64-apple-darwin' has no prebuilt artifacts available for target 'wasm32-wasip3'
+note: this may happen to a low-tier target as per https://doc.rust-lang.org/nightly/rustc/platform-support.html
+note: you can find instructions on that page to build the target support from source
+exit_status=1

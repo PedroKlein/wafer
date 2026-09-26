@@ -1,0 +1,16 @@
+[package]
+name = "wafer-p3-production-pin-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+publish = false
+
+[workspace]
+
+[lib]
+path = "../host-api.rs"
+
+[dependencies]
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", default-features = false, features = ["cranelift", "runtime", "component-model-async"] }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", default-features = false, features = ["p3"] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", default-features = false, features = ["p3", "component-model-async"] }

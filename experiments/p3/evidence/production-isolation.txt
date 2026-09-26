@@ -1,0 +1,23 @@
+$ cmp experiments/p3/evidence/baseline/cargo-tree-features.txt <(tail -n +3 experiments/p3/evidence/after-cargo-tree-features.txt | sed \"$d\")
+feature_tree_identical=true
+$ git diff --exit-code 5787540cea5ed7409c636f0c28cdac65938721e8 -- Cargo.toml Cargo.lock rust-toolchain.toml wit crates/wafer-core/src/engine/loader.rs crates/wafer-core/src/engine/bindings.rs
+production_diff_empty=true
+$ shasum -a 256 production files
+388116a9f8f7f0865a41ae4d4fcf2156dab43e42bd72e097955ba85198ed5ccd  Cargo.toml
+ca5f919bd18ce8d9d23632f24cf45d9c48cccd6b8da0be707baf8970213fd53d  Cargo.lock
+f18994da0020d9ccb5b16101f8f5c07a6df18b920413290025e63c613e87c047  rust-toolchain.toml
+1dc7756d48db6d76eefcc19f089f29dc9da7f33f60eecd9706bce8e9e7698925  wit/pipeline-host.wit
+c7601c2ba76a276e4658ae8a4c6623b77254a534b6ef9790384f5054c45db16d  wit/pipeline-node.wit
+e71043d395e5fcab3c26845c77bbab95cea16eab7ebdf0fb0e0858f4cd53bff2  wit/pipeline-routing.wit
+4c30fd97c6d1ab1d4329ee795d3a8385fbf47212403ba630af31cbfcebb508ed  wit/pipeline-types.wit
+55ff628fbd26afbd869198c452c89b3958631ec978d6cc35d3c3bc89d4b207ac  wit/worlds.wit
+5a1828b678c8c8b990f5dc2f2c8a25ec4e91e3e4deadafa40da9c9aa5f924192  crates/wafer-core/src/engine/loader.rs
+cfecbc714ea63a123b8efac0e805c719142a1a2cd395b488ca1a6723a9f080f3  crates/wafer-core/src/engine/bindings.rs
+$ python3 P3-feature-count
+experiments/p3/evidence/baseline/cargo-tree-features.txt
+  wasmtime-wasi feature "p3": 0
+  wasmtime-wasi-http feature "p3": 0
+experiments/p3/evidence/after-cargo-tree-features.txt
+  wasmtime-wasi feature "p3": 0
+  wasmtime-wasi-http feature "p3": 0
+exit_status=0

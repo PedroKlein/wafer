@@ -1,0 +1,9 @@
+package wafer:p3-probe@0.0.0;
+
+interface probe {
+    transform: async func(payload: list<u8>) -> list<u8>;
+}
+
+world guest {
+    export probe;
+}

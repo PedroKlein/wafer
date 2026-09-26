@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "experiment": "experimental-wasi-p3-poc",
+  "task": "P1-T1",
+  "production_readiness": "experimental-only-not-production-ready",
+  "specification": {
+    "name": "WASI 0.3.0",
+    "status": "stable-ratified",
+    "release_url": "https://github.com/WebAssembly/WASI/releases/tag/v0.3.0",
+    "announcement_url": "https://bytecodealliance.org/articles/WASI-0.3"
+  },
+  "production_baseline": {
+    "wafer_source_commit": "5787540cea5ed7409c636f0c28cdac65938721e8",
+    "wasmtime_version": "48.0.2",
+    "wasmtime_revision": "e9f1ea232fd245aea338ab3eb7d73487ae75cab1",
+    "wasmtime_tree": "70a03bcc0824bec5438c6c62dd2e5f2f26b89830",
+    "wasmtime_git_archive_sha256": "143375fa51955d406e544ea220ec7674592f2c389c57059783ff63da57d1c999",
+    "source_url": "https://github.com/bytecodealliance/wasmtime/tree/e9f1ea232fd245aea338ab3eb7d73487ae75cab1",
+    "wasi_http_features": [
+      "p2"
+    ],
+    "preserved": true
+  },
+  "experimental_stack": {
+    "wasmtime": {
+      "version": "50.0.0-dev",
+      "revision": "11eac9de8693e1a69f86815d1a58918edd5c1785",
+      "tree": "f903eb0f72729c74a57a6fe9b34108911834089c",
+      "git_archive_sha256": "21576e33853605e4ece78518d925b7cb6538f258c47892f1801119cc140c6e37",
+      "source_url": "https://github.com/bytecodealliance/wasmtime/tree/11eac9de8693e1a69f86815d1a58918edd5c1785"
+    },
+    "wasmtime_wasi": {
+      "version": "50.0.0-dev",
+      "revision": "11eac9de8693e1a69f86815d1a58918edd5c1785",
+      "source_url": "https://github.com/bytecodealliance/wasmtime/blob/11eac9de8693e1a69f86815d1a58918edd5c1785/crates/wasi/src/p3/mod.rs"
+    },
+    "wasmtime_wasi_http": {
+      "version": "50.0.0-dev",
+      "revision": "11eac9de8693e1a69f86815d1a58918edd5c1785",
+      "source_url": "https://github.com/bytecodealliance/wasmtime/blob/11eac9de8693e1a69f86815d1a58918edd5c1785/crates/wasi-http/src/p3/mod.rs"
+    },
+    "wit_bindgen": {
+      "version": "0.62.0",
+      "crate_sha256": "53cb4b5556c3a791e86838ea287782bdafa704d55b0e68b5b81a3a16b9ea5f4b",
+      "source_url": "https://crates.io/crates/wit-bindgen/0.62.0"
+    },
+    "wit_bindgen_cli": {
+      "version": "0.62.0",
+      "crate_sha256": "5f4e7b1b929423682a4b97d2e289ef20d837713f623226f467f059a3ce433d0b",
+      "installed_binary_sha256": "075be7ebcd88059f7d19f528d9fda68b159147d9b8f4067d2d9f3b2fb01bdba9",
+      "source_url": "https://crates.io/crates/wit-bindgen-cli/0.62.0"
+    },
+    "wasm_tools": {
+      "version": "1.259.0",
+      "crate_sha256": "5b08fa752345df58158a86aa48cb747e019f75609de93800f89e3b9274d8040c",
+      "installed_binary_sha256": "af05e2817f45421782fdf4af8faaba370d3a03c24a11a9b9c434c4f0366373eb",
+      "source_url": "https://crates.io/crates/wasm-tools/1.259.0"
+    },
+    "rust": {
+      "channel": "1.98.1",
+      "rustc_commit": "48a229ceaefd4985c50990b14116b6d856af0985",
+      "cargo_commit": "797e8a9bca276c1c9f9f738d2a20f484fa4eea9d",
+      "host": "aarch64-apple-darwin",
+      "channel_manifest_url": "https://static.rust-lang.org/dist/channel-rust-1.98.1.toml",
+      "channel_manifest_sha256": "a7c8774a5fd8441c997d94c029776cbc5eb111e9d72ab5d256fa69866644347e",
+      "rustc_binary_sha256": "766eda9d8f53afd6fc7f27b3cd2e444dd22afacb5afa710a5625fc8e45b8c941",
+      "cargo_binary_sha256": "6e17e865f3a20dd55a1d212f849f58b77124179f0de7c52973096d84ba34118d"
+    }
+  },
+  "cargo_recipe": {
+    "wasmtime_features": [
+      "cranelift",
+      "runtime"
+    ],
+    "wasmtime_wasi_features": [
+      "p3"
+    ],
+    "wasmtime_wasi_http_features": [
+      "p3"
+    ],
+    "transitive_features": [
+      "wasmtime/component-model",
+      "wasmtime/async",
+      "wasmtime/component-model-async",
+      "wasmtime/component-model-bytes"
+    ],
+    "engine_switches": {
+      "wasm_component_model_async": true,
+      "concurrency_support": true
+    },
+    "linker_calls": [
+      "wasmtime_wasi::p3::add_to_linker",
+      "wasmtime_wasi_http::p3::add_to_linker"
+    ],
+    "driver": "Store::run_concurrent",
+    "instantiation": "wasmtime_wasi::p3::bindings::Command::instantiate_async",
+    "invocation": "command.wasi_cli_run().call_run"
+  },
+  "rust_guest_target": {
+    "probe_target": "wasm32-wasip2",
+    "native_wasm32_wasip3_target_listed_by_rustc": true,
+    "native_wasm32_wasip3_prebuilt_available_for_selected_toolchain": false,
+    "impact": "wit-bindgen 0.62.0 can compile and validate a native async WIT export, but Rust 1.98.1 cannot install a prebuilt wasm32-wasip3 standard library on this host; full P3 WASI imports require a separately pinned build-std/WASI SDK route in a later task"
+  },
+  "evidence": {
+    "host_probe_manifest": "experiments/p3/probes/Cargo.toml",
+    "host_probe_lock": "experiments/p3/probes/Cargo.lock",
+    "host_probe_source": "experiments/p3/probes/host-api.rs",
+    "candidate_compile_log": "experiments/p3/evidence/p3-host-api-compile.txt",
+    "minimal_feature_log": "experiments/p3/evidence/p3-minimal-feature-probe.txt",
+    "production_pin_compile_log": "experiments/p3/evidence/production-pin-p3-probe.txt",
+    "guest_bindgen_log": "experiments/p3/evidence/wit-bindgen-async-probe.txt",
+    "tool_install_log": "experiments/p3/evidence/tool-install.txt",
+    "native_target_log": "experiments/p3/evidence/rust-wasip3-target.txt",
+    "baseline_feature_tree": "experiments/p3/evidence/baseline/cargo-tree-features.txt",
+    "baseline_locked_check": "experiments/p3/evidence/baseline/cargo-check-workspace.txt"
+  }
+}

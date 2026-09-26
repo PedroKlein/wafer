@@ -1,0 +1,50 @@
+$ date -u +%Y-%m-%dT%H:%M:%SZ
+2026-09-26T21:45:57Z
+$ rustc +1.98.1 --version --verbose
+rustc 1.98.1 (48a229cea 2026-09-01)
+binary: rustc
+commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+commit-date: 2026-09-01
+host: aarch64-apple-darwin
+release: 1.98.1
+LLVM version: 22.1.8
+$ cargo +1.98.1 --version --verbose
+cargo 1.98.1 (797e8a9bc 2026-08-05)
+release: 1.98.1
+commit-hash: 797e8a9bca276c1c9f9f738d2a20f484fa4eea9d
+commit-date: 2026-08-05
+host: aarch64-apple-darwin
+libgit2: 1.9.4 (sys:0.21.0 vendored)
+libcurl: 8.7.1 (sys:0.4.90+curl-8.21.0 system ssl:(SecureTransport) LibreSSL/3.3.6)
+ssl: OpenSSL 3.6.3 9 Jun 2026
+os: Mac OS 27.0.0 [64-bit]
+$ rustup target list --toolchain 1.98.1 | grep ^wasm32-wasi
+wasm32-wasip1
+wasm32-wasip1-threads
+wasm32-wasip2 (installed)
+$ "$TOOLS/bin/wasm-tools" --version
+wasm-tools 1.259.0
+$ "$TOOLS/bin/wit-bindgen" --version
+wit-bindgen-cli 0.62.0
+$ shasum -a 256 selected downloads and binaries
+a7c8774a5fd8441c997d94c029776cbc5eb111e9d72ab5d256fa69866644347e  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/downloads/channel-rust-1.98.1.toml
+5b08fa752345df58158a86aa48cb747e019f75609de93800f89e3b9274d8040c  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/downloads/wasm-tools-1.259.0.crate
+53cb4b5556c3a791e86838ea287782bdafa704d55b0e68b5b81a3a16b9ea5f4b  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/downloads/wit-bindgen-0.62.0.crate
+5f4e7b1b929423682a4b97d2e289ef20d837713f623226f467f059a3ce433d0b  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/downloads/wit-bindgen-cli-0.62.0.crate
+af05e2817f45421782fdf4af8faaba370d3a03c24a11a9b9c434c4f0366373eb  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools
+075be7ebcd88059f7d19f528d9fda68b159147d9b8f4067d2d9f3b2fb01bdba9  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wit-bindgen
+$ git show selected candidate metadata
+commit=11eac9de8693e1a69f86815d1a58918edd5c1785
+tree=f903eb0f72729c74a57a6fe9b34108911834089c
+author_date=2026-09-26T16:37:42Z
+subject=[stack-switching] Interop with ASan (#14398)
+$ git archive selected candidate | shasum -a 256
+21576e33853605e4ece78518d925b7cb6538f258c47892f1801119cc140c6e37  -
+$ git show production pin metadata
+commit=e9f1ea232fd245aea338ab3eb7d73487ae75cab1
+tree=70a03bcc0824bec5438c6c62dd2e5f2f26b89830
+author_date=2026-09-10T13:48:19-05:00
+subject=Release Wasmtime 48.0.2 (#14310)
+$ git archive production pin | shasum -a 256
+143375fa51955d406e544ea220ec7674592f2c389c57059783ff63da57d1c999  -
+exit_status=0

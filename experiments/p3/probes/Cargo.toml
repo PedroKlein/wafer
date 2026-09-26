@@ -1,0 +1,16 @@
+[package]
+name = "wafer-p3-host-api-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[workspace]
+
+[lib]
+path = "host-api.rs"
+
+[dependencies]
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["cranelift", "runtime", "component-model-async"] }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["p3"] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["p3", "component-model-async"] }
