@@ -1,38 +1,104 @@
-# WAFER — WebAssembly Flow Execution Runtime
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="brand/wafer-lockup-dark.svg">
+    <img src="brand/wafer-lockup.svg" alt="WAFER: WebAssembly Flow Execution Runtime" width="640">
+  </picture>
+</p>
 
-**WAFER** is a single-process Rust runtime that executes typed DAGs of
-WebAssembly components on IoT edge gateways. It targets the gap between
-cloud-managed platforms (Kubernetes-based edge stacks) and monolithic
-edge rules engines: typed Wasm nodes give per-stage fault isolation,
-between-messages hot-swap, and optional exact-destination outbound HTTP,
-without leaving the single-process envelope of a lightweight gateway.
+<p align="center">
+  A single-process runtime for typed, sandboxed data pipelines on edge gateways.
+</p>
 
-This repository is the experimental artefact for an undergraduate
-thesis at UFRGS (TCC/TG2, Pedro Klein). The runtime IS the
-contribution; the thesis measures its viability against `eKuiper` and a
-native-Rust baseline across three research questions (performance,
-isolation, hot-swap disruption).
+<p align="center">
+  <a href="#run-a-pipeline">Run WAFER</a> ·
+  <a href="docs/architecture/00-vision.md">Explore the architecture</a> ·
+  <a href="docs/status/implementation-status.md">Project status</a>
+</p>
 
-## Quickstart
+WAFER executes directed acyclic graphs (DAGs) whose processing stages are
+WebAssembly Component Model components. Native adapters handle ingress and
+egress; bounded Tokio queues connect stages; each Wasm stage owns an isolated
+Wasmtime Store and can be replaced between messages.
+
+WAFER is part of an ongoing undergraduate research project. The runtime is
+public now; the thesis and supporting research materials will be released
+publicly soon.
+
+> [!NOTE]
+> WAFER is a research prototype. Final empirical conclusions remain pending the
+> admitted Raspberry Pi 5 campaign. Current diagnostic and rehearsal results are
+> not final thesis evidence.
+
+## What WAFER does
+
+<p align="center">
+  <img src="brand/wafer-runtime-overview.svg" alt="Native inputs flow through bounded queues and isolated Wasm Transform, Filter, and Router stages inside one WAFER process, then leave through native outputs. The control plane manages hot-swap, reconfiguration, metrics, and health." width="100%">
+</p>
+
+| Property | Current design |
+| --- | --- |
+| Typed plugins | One `wafer:pipeline@0.1.0` WIT package with Transform, Filter, Router, and capability-gated Inference worlds. |
+| Fault containment | One Store and linear memory per Wasm node, with configurable fuel, epoch, memory, and capability limits. |
+| Backpressure | One bounded receiver per destination; each incoming edge chooses `slow`, `drop`, or `dead-letter`. |
+| Live replacement | Loaded Wasm processing nodes switch to a prepared instance between messages. Guest state is not migrated. |
+| I/O boundary | Sources and sinks are native Rust adapters. Processing guests can receive exact-destination outbound `wasi:http` grants. |
+| Deployment | One Linux process and one TOML pipeline definition; no Kubernetes or per-stage containers. |
+
+WAFER does not provide distributed execution, stateful windows, exactly-once
+semantics, or state migration between component versions.
+
+## Run a pipeline
+
+Prerequisites: [Rust via rustup](https://rustup.rs/),
+[mise](https://mise.jdx.dev/), and a C toolchain.
 
 ```bash
 git clone https://github.com/PedroKlein/wafer.git
 cd wafer
-
-# Prerequisites: rustup/Rust, mise, and a C toolchain.
-# Install Rust first from https://rustup.rs/ if `cargo --version` fails.
-# See docs/operations/dependencies.md for the full list.
-
-mise trust           # one-time trust for this repo's mise.toml, if prompted
-mise run setup       # verifies Rust, then installs pinned helper tools
-mise run build       # build the runtime and workspace crates
-mise run build-plugins   # cross-compile every plugin to wasm32-wasip2
-
-mise run run                                # runs examples/dag-passthrough.toml
-mise run run examples/dag-uppercase.toml    # or a specific pipeline
+mise trust
+mise run setup
+mise run //plugins:build-plugin uppercase
+printf 'hello wafer\n' | mise run run examples/dag-uppercase.toml
+# HELLO WAFER
 ```
 
-The HTTP control plane binds to `127.0.0.1:9090` by default:
+The example loads this pipeline:
+
+```toml
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.uppercase]
+type = "transform"
+plugin = "../plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "uppercase"
+
+[[edges]]
+from = "uppercase"
+to = "sink"
+```
+
+More runnable topologies are under [`examples/`](examples/), including MQTT,
+HTTP, fan-out, dead-letter handling, metrics, OCI-hosted components, and the
+secondary MNIST inference scenario.
+
+## Observe and update a running pipeline
+
+Start a pipeline without piping EOF into it and leave that terminal open:
+
+```bash
+mise run run examples/dag-uppercase.toml
+```
+
+The control plane listens on `127.0.0.1:9090` by default. From another terminal:
 
 ```bash
 curl -s http://127.0.0.1:9090/health
@@ -40,46 +106,57 @@ curl -s http://127.0.0.1:9090/api/v1/nodes | jq
 curl -s http://127.0.0.1:9090/metrics | head
 ```
 
-For a step-by-step walkthrough including hot-swap and graceful
-shutdown, read
-[`docs/operations/getting-started.md`](docs/operations/getting-started.md).
+A loaded Wasm Transform, Filter, or Router reports
+`replacement_eligible: true`. Prepare another compatible component and replace
+it without stopping the pipeline:
+
+```bash
+curl -X POST http://127.0.0.1:9090/api/v1/nodes/uppercase/hot-swap \
+  -H 'content-type: application/json' \
+  -d '{"wasm_path":"./path/to/replacement.component.wasm"}'
+```
+
+The response reports local replacement adoption and the first runner-local
+outcome. It does not prove downstream delivery or zero loss; evaluation-owned
+sink and sequence artifacts establish those claims.
+
+## Repository map
+
+| Path | Contents |
+| --- | --- |
+| [`crates/`](crates/) | Runtime, core engine, configuration, shared types, CLI, load generator, and guest SDK. |
+| [`wit/`](wit/) | Project WIT package and pinned dependency interfaces. |
+| [`plugins/`](plugins/) | Rust processing components, attack fixtures, and bounded language demonstrations. |
+| [`examples/`](examples/) | Runnable pipeline configurations. |
+| [`docs/`](docs/) | Architecture, interfaces, operations, decisions, status, and benchmark documentation. |
+| [`eval/`](eval/) | Experiment definitions, result contract, execution tooling, and analysis. |
+| [`brand/`](brand/) | WAFER mark and light/dark repository lockups. |
 
 ## Documentation
 
-- [Architecture — vision, goals, building blocks, runtime view](docs/architecture/)
-- [Requirements — functional and non-functional](docs/requirements/)
-- [Interfaces — WIT contracts, HTTP API, config schema, plugin SDK](docs/interfaces/)
-- [Operations — getting started, configuration, MQTT, registry, observability](docs/operations/)
-- [Status — implementation status, evaluation progress](docs/status/)
-- [ADRs](docs/adr/) — short Nygard-format decision records.
-- [RFCs](docs/rfcs/) — long-form design decisions with alternatives and implementation notes.
-- [Benchmarks](docs/benchmarks/) — measurement reports.
-- [Workflows](docs/workflows/) — discussion / planning / implementation session recipes.
+- [Getting started](docs/operations/getting-started.md)
+- [Architecture overview](docs/architecture/00-vision.md)
+- [Configuration reference](docs/interfaces/config-schema.md)
+- [WIT contracts](docs/interfaces/wit-contracts.md)
+- [Plugin SDK](docs/interfaces/plugin-sdk.md)
+- [HTTP API](docs/interfaces/http-api.md)
+- [Implementation status](docs/status/implementation-status.md)
+- [ADRs](docs/adr/) and [RFCs](docs/rfcs/)
+- [Source-guided learning path](docs/learn/README.md)
 
-Start with [`docs/architecture/00-vision.md`](docs/architecture/00-vision.md).
+## Development
 
-## Repository layout
-
-```
-crates/          Rust workspace: wafer-core, wafer-config, wafer-types,
-                 wafer-plugin, wafer-runtime, wafer-loadgen, waferctl.
-plugins/         WebAssembly plugin sources (Rust + polyglot mirrors).
-wit/             WIT contracts for one wafer:pipeline@0.1.0 package,
-                 split across types, lifecycle, processing, routing, and host interfaces.
-examples/        Runtime-schema pipeline TOML examples; read examples/README.md before copying config shape.
-tests/           Integration tests.
-docs/            Documentation (arc42-lite, RFCs, ADRs).
-eval/            Evaluation harness inputs / outputs.
+```bash
+mise tasks ls --all
+mise run build
+mise run test
+mise run fmt
+mise run clippy
 ```
 
-## Contributing
-
-Development conventions live in `.agents/AGENTS.md` and the domain
-skills under `.agents/skills/`. The tool manager and command runner is
-`mise`; run `mise run setup` for pinned helper tools and `mise tasks ls` for the
-full task list. All code must pass `mise run fmt`, `mise run clippy`,
-and `mise run test`.
+Rust is pinned in [`rust-toolchain.toml`](rust-toolchain.toml). Development
+conventions and domain-specific guidance live in [`.agents/`](.agents/).
 
 ## License
 
-See `LICENSE` (project root).
+WAFER is available under the [MIT License](LICENSE).
