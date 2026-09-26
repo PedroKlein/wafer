@@ -25,6 +25,7 @@ for provenance.
 | [RFC-009](RFC-009-implementation-architecture.md) | Implementation architecture | Implemented | 2026-07-12 |
 | [RFC-010](RFC-010-io-integration.md) | Phase 4 — I/O integration (MQTT, HTTP, file) | Implemented | 2026-07-15 |
 | [RFC-011](RFC-011-doc-refactor.md) | Documentation refactor execution plan | Superseded (retrospective archive) | 2026-07-18 |
+| [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model evolution | Async P2 + bounded HTTP implemented; P3 PoC approved | 2026-09-25 |
 
 ## Amendments summary
 
@@ -62,6 +63,8 @@ that points back.
    the shipped crates.
 8. **RFC-010** — the Phase-4 I/O integration (MQTT / HTTP / file) that made
    the runtime end-to-end usable.
+9. **RFC-012** — the Component Model direction: adopted async P2 host bindings,
+   bounded outbound HTTP, and the approved pre-release P3 streaming PoC.
 
 For short, executive summaries of individual decisions, see the Nygard-format
 ADRs under [`../adr/`](../adr/).
