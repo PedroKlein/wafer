@@ -10,7 +10,7 @@ Trace an evaluation claim from its machine-readable experiment definition throug
 
 ## Prerequisites
 
-Read this against commit `92d86b0a511047988de5fbf6551b18b8a09ec455`. Do not open or quote raw result values to complete the walkthrough. Paths, schemas, validators, and tests are enough to understand the evidence boundary.
+Read this against commit `f173151a8951736b4d82e10ce2b1c4417b02cf99`. Do not open or quote raw result values to complete the walkthrough. Paths, schemas, validators, and tests are enough to understand the evidence boundary.
 
 ## Flow
 

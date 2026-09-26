@@ -47,7 +47,7 @@ The physical queue is destination-keyed. Fan-in edges share one receiver whose c
 
 `run_transform_loop_with_config` first checks swap and retry state. When neither supplies a message, a biased `tokio::select!` waits for cancellation or `receiver.recv()`. After a message arrives, the runner clones it into `safety` for retry or DLQ handling.
 
-The runner executes `tokio::task::block_in_place(|| transform.process(envelope))` after the cancellation `select!`, not as one of its branches. Cancellation can stop the next receive, but it does not drop an active Wasmtime call and poison its `Store`.
+The runner awaits `transform.process(envelope).await` after the cancellation `select!`, not as one of its branches. Wasmtime's asynchronous P2 binding may yield while servicing host calls, but cancellation can stop only the next receive; it does not drop an active Wasm future and leave its `Store` inconsistent.
 
 ### 4. Build the WIT input
 
@@ -90,9 +90,9 @@ The source loop and channel send consume an owned `RuntimeEnvelope`. The transfo
 
 The WIT borrow prevents transfer of buffer ownership to the guest. The host registers the resource before the call and removes it after the call. The cleanup is explicit rather than automatic Rust lifetime checking because the handle lives in Wasmtime's resource table.
 
-### `block_in_place` protects the Tokio worker pool
+### Async host bindings do not make the guest concurrently callable
 
-The generated binding call is synchronous and can use Wasmtime's synchronous WASI bridge. `block_in_place` tells the multi-thread Tokio runtime that the worker may block so other tasks can move. It does not make the guest call cancellable.
+The project's WIT exports remain synchronous from the guest's perspective. The host uses Wasmtime's async-enabled P2 bindings and awaits the generated call directly, so a guest host call such as outbound `wasi:http` can yield to Tokio without a nested runtime or blocking bridge. The node still owns one Store and permits one guest call at a time.
 
 ## Design
 
@@ -110,7 +110,7 @@ The envelope unit tests establish shared host-side clone storage. The source-loo
 
 ## Status boundaries
 
-**Current implementation:** Source ingress assigns a trace ID, configured edge overflow reaches the shared send seam, the transform runner invokes Wasm outside its cancellation `select!`, and the transform wrapper resets limits, cleans up the borrowed resource, preserves every guest output field, and inherits host lineage and retry state.
+**Current implementation:** Source ingress assigns a trace ID, configured edge overflow reaches the shared send seam, the transform runner awaits Wasm outside its cancellation `select!`, and the transform wrapper resets limits, cleans up the borrowed resource, preserves every guest output field, and inherits host lineage and retry state.
 
 **Intended design:** Borrowed input resources allow guests such as filters and routers to avoid payload reads. That is a targeted optimization, not a claim that all host and guest marshalling is zero-copy.
 
@@ -120,9 +120,9 @@ The envelope unit tests establish shared host-side clone storage. The source-loo
 
 - **Source:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `pub struct RuntimeEnvelope`, `Arc<EnvelopeHeader>`, `pub payload: Bytes`
 - **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `envelope.ensure_trace_id()`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `tokio::task::block_in_place(|| transform.process(envelope))`
+- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`
 - **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `pub async fn send_downstream`, `async fn send_one`, `sender.sender.reserve().await`
-- **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `fn build_wit_message`, `pub fn process`, `delete_buffer`
+- **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `fn build_wit_message`, `pub async fn process`, `delete_buffer`
 - **Source:** [`wit/pipeline-types.wit`](../../wit/pipeline-types.wit) | symbols: `record message`, `payload: borrow<buffer>`, `record output-message`
 - **Source:** [`wit/pipeline-node.wit`](../../wit/pipeline-node.wit) | symbols: `interface transform`, `process: func(input: message)`
 - **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`

@@ -89,7 +89,7 @@ Every destination has one bounded `tokio::mpsc` receiver. Edge-shaped configurat
 
 ### C4: Wasm Component Model sandbox
 
-Every processing stage (transform, filter, router) runs in its own `wasmtime::Store` with independent linear memory and WASI capability scoping. Fuel and epoch interruption are available but optional at runtime. Final evaluation configs enable both explicitly except for declared ablations and attack stimuli. Stages cannot access each other's memory. The only communication path is through the host-mediated bounded queues.
+Every processing stage (transform, filter, router) runs in its own `wasmtime::Store` with independent linear memory and WASI capability scoping. Fuel and epoch interruption are available but optional at runtime. Final evaluation configs enable both explicitly except for declared ablations and attack stimuli. Stages cannot access each other's memory. Pipeline messages travel through host-mediated bounded queues; a Wasm processing node may separately receive exact-destination outbound `wasi:http` authority through static configuration.
 
 ### C5: Edge hardware target
 
@@ -111,7 +111,7 @@ These terms have bounded meanings throughout the architecture:
 - **"Isolation"** = memory containment + capability scoping. Not information-flow control or covert-channel elimination.
 - **"Hot-swap"** = stateless node replacement. Not state-preserving live update.
 - **"Competitive performance"** = target-load p95 within 2x eKuiper and, when support permits an identifiable comparison, WAFER delivery ceiling at least 70 percent of eKuiper's. Not near-native performance for arbitrary computation.
-- **"Pipeline"** = stateless transform DAG (parse, filter, route, and capability-gated inference). Windowing and exactly-once semantics are outside the current release.
+- **"Pipeline"** = stateless processing DAG (parse, filter, route, capability-gated inference, and optionally bounded outbound HTTP). Windowing and exactly-once semantics are outside the current release.
 
 ## Related documents
 
@@ -120,3 +120,4 @@ These terms have bounded meanings throughout the architecture:
 - [RFC-005 Orchestrator](../rfcs/RFC-005-orchestrator.md): hot-swap mechanism design.
 - [ADR-0002 Bounded Queues](../adr/0002-spsc-bounded-queues.md): queue topology choice.
 - [ADR-0008 Error Policy Engine](../adr/0008-error-policy-engine.md): five-category dispatch.
+- [ADR-0016 Default-Deny Outbound `wasi:http`](../adr/0016-outbound-wasi-http-capability.md): exact-destination network authority.

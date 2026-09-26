@@ -1,6 +1,6 @@
 {
   "page": "message-through-wasm.md",
-  "find": "The runner executes `tokio::task::block_in_place(|| transform.process(envelope))` after the cancellation `select!`, not as one of its branches.",
+  "find": "The runner awaits `transform.process(envelope).await` after the cancellation `select!`, not as one of its branches.",
   "replace": "The Wasm transform call runs inside the cancellation `select!` so cancellation can interrupt it immediately.",
   "expected_error": "message-through-wasm.md: places the Wasm call inside cancellation select"
 }

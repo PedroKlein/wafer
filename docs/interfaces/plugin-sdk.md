@@ -173,14 +173,14 @@ fn close() {}
   them.
 - No timer / sleep helpers. Fuel and epoch bound execution; plugins
   should not implement wall-clock waits.
-- No I/O helpers. Native sources and sinks handle protocol I/O; Wasm
-  plugins are pure transforms.
+- No I/O abstraction in `wafer-plugin`. Native sources and sinks own protocol boundaries, managed credentials, retries, and delivery semantics. A Wasm processing component can import P2 `wasi:http` directly when its node has an exact-destination `outbound_http` grant.
 - No high-level `wasi:nn` wrapper in `wafer-plugin`. The
   `mnist-inference` component generates bindings for `inference-node` directly
   and calls the pinned wasi-nn interfaces. The host exposes those imports only
   to a Wasm Transform with `allow_inference = true`.
-- No async. Every WIT export is synchronous; the host runs each guest
-  call on a dedicated Tokio task.
+- No guest-async SDK. Every project WIT export remains synchronous. The host uses Wasmtime's asynchronous P2 bindings and awaits each call from the node's ordinary Tokio task, one call at a time.
+
+For the outbound HTTP configuration and policy boundary, see [`config-schema.md`](config-schema.md#outbound-wasihttp-capability) and [ADR-0016](../adr/0016-outbound-wasi-http-capability.md).
 
 ## Language boundary
 

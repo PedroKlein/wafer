@@ -122,7 +122,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 - **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub async fn shutdown`, `pub async fn run_until_complete`, `self.tasks.shutdown().await`
 - **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `source.close().await`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `tokio::task::block_in_place(|| transform.process(envelope))`, `policy.flush_to_dlq("shutdown")`
+- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq("shutdown")`
 - **Source:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbols: `pub async fn run_sink_loop`, `receiver.try_recv()`, `sink.flush().await`, `sink.close().await`
 - **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub(crate) fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
 - **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_shutdown_completes_all_tasks()`, `async fn test_cancel_triggers_shutdown()`

@@ -3,9 +3,9 @@
 **WAFER** is a single-process Rust runtime that executes typed DAGs of
 WebAssembly components on IoT edge gateways. It targets the gap between
 cloud-managed platforms (Kubernetes-based edge stacks) and monolithic
-edge rules engines: typed Wasm nodes give per-stage fault isolation and
-between-messages hot-swap, without leaving the single-process envelope
-of a lightweight gateway.
+edge rules engines: typed Wasm nodes give per-stage fault isolation,
+between-messages hot-swap, and optional exact-destination outbound HTTP,
+without leaving the single-process envelope of a lightweight gateway.
 
 This repository is the experimental artefact for an undergraduate
 thesis at UFRGS (TCC/TG2, Pedro Klein). The runtime IS the
@@ -64,8 +64,8 @@ Start with [`docs/architecture/00-vision.md`](docs/architecture/00-vision.md).
 crates/          Rust workspace: wafer-core, wafer-config, wafer-types,
                  wafer-plugin, wafer-runtime, wafer-loadgen, waferctl.
 plugins/         WebAssembly plugin sources (Rust + polyglot mirrors).
-wit/             WIT contracts (pipeline:types, pipeline:node,
-                 pipeline:routing, pipeline:host — all @0.1.0).
+wit/             WIT contracts for one wafer:pipeline@0.1.0 package,
+                 split across types, lifecycle, processing, routing, and host interfaces.
 examples/        Runtime-schema pipeline TOML examples; read examples/README.md before copying config shape.
 tests/           Integration tests.
 docs/            Documentation (arc42-lite, RFCs, ADRs).

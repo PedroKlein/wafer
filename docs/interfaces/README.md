@@ -12,4 +12,7 @@ and configuration authors.
 
 Inference is a default-deny Wasm Transform specialization.
 `allow_inference = true` selects the wasi-nn-enabled linker and store for that
-node; other processing roles and native Transforms reject the grant.
+node; other processing roles and native Transforms reject the grant. Outbound
+`wasi:http` is also default deny. Wasm Transform, Filter, and Router nodes may
+receive immutable exact-destination grants through `capabilities.outbound_http`;
+see `config-schema.md` and ADR-0016.

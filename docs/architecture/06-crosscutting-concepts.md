@@ -60,25 +60,23 @@ boundary. See [ADR-0007](../adr/0007-buffer-resource-zero-copy.md).
 
 ## Capabilities
 
-`Capabilities` is a three-field struct in the config:
+`Capabilities` contains three boolean grants and an outbound HTTP destination list:
 
 ```toml
 [nodes.parser.capabilities]
-inherit_stdio    = false
-inherit_env      = false
-allow_inference  = false
+inherit_stdio   = false
+inherit_env     = false
+allow_inference = false
+outbound_http   = [
+  { scheme = "https", host = "api.example.com" },
+]
 ```
 
-Defaults are all `false`: deny-by-default. `inherit_stdio` and
-`inherit_env` are translated into WASI Preview 2 capability handles at
-instantiation. `allow_inference = true` is accepted only for a Wasm Transform;
-it selects the `inference-node` binding, wasi-nn linker, and ONNX-backed store.
-Native Transforms, Filters, and Routers reject that grant, while ordinary Wasm
-stores remain wasi-nn-free.
+The booleans default to `false`, and `outbound_http` defaults to an empty list: deny-by-default. `inherit_stdio` and `inherit_env` are translated into WASI Preview 2 capability handles at instantiation. `allow_inference = true` is accepted only for a Wasm Transform; it selects the `inference-node` binding, wasi-nn linker, and ONNX-backed store. Native processing nodes reject inference and outbound HTTP grants.
 
-Capabilities are static per node and retained across recovery, reconfigure,
-hot-swap, and rollback. Mutation cannot expand or remove a node's inference
-grant.
+A Wasm Transform, Filter, or Router may receive outbound `wasi:http` authority for exact normalized `(scheme, host, effective-port)` destinations. The host enforces the grant for every request, resolves DNS once before connecting, rejects `CONNECT`, and does not follow redirects. DNS names may connect only to globally routable addresses; intentional loopback or private access requires an exact IP-literal grant.
+
+Capabilities are static per node and retained across recovery, reconfigure, hot-swap, and rollback. Mutation cannot change inference or outbound HTTP authority. See [ADR-0016](../adr/0016-outbound-wasi-http-capability.md).
 
 ## Fuel and epoch metering
 

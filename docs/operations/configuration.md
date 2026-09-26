@@ -108,9 +108,10 @@ plugin_version = "v1"                # opaque value passed to lifecycle.init
 fuel           = 5_000_000            # override [engine.fuel.transform] for this node
 
 [nodes.parse.capabilities]
-inherit_stdio    = false
-inherit_env      = false
-allow_inference  = false
+inherit_stdio   = false
+inherit_env     = false
+allow_inference = false
+outbound_http   = []
 
 [nodes.parse.config]                 # free-form; serialised to JSON, passed to lifecycle.init
 strict = true
@@ -143,6 +144,22 @@ topic  = "alerts"
 type = "sink"
 kind = "stdout"
 ```
+
+### Grant bounded outbound HTTP
+
+A Wasm Transform, Filter, or Router can import P2 `wasi:http`. The host links the interface for every processing component, but requests are denied unless their normalized scheme, host, and effective port match an explicit grant:
+
+```toml
+[nodes.enrich.capabilities]
+outbound_http = [
+  { scheme = "https", host = "api.example.com" },
+  { scheme = "http", host = "127.0.0.1", port = 8080 },
+]
+```
+
+Omission and an empty list both deny all destinations. Use only `http` or `https`; omitted ports become 80 or 443. Wildcards, CIDR blocks, paths, queries, user information, duplicate normalized destinations, and port zero fail validation. DNS grants connect only to globally routable addresses from one resolution snapshot. Grant an exact IP literal when intentional loopback or private-network access is required. Redirects are returned to the guest rather than followed by the host, and `CONNECT` is always denied.
+
+The grant is immutable until pipeline restart. Recovery, reconfigure, hot-swap, and rollback retain the original set; guest configuration cannot add authority. Native sources and sinks remain the transport boundary when credentials, retries, long-lived connections, backpressure, or delivery semantics matter. See the [configuration reference](../interfaces/config-schema.md#outbound-wasihttp-capability) and [ADR-0016](../adr/0016-outbound-wasi-http-capability.md).
 
 ## Wire edges (`[[edges]]`)
 
@@ -212,7 +229,7 @@ verification.
 
 ## Validate before you run
 
-Every config is validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, zero capacity, or an inference grant on an ineligible role. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`.
+Every config is validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, zero capacity, an inference grant on an ineligible role, or an invalid outbound HTTP destination. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`. Non-empty `outbound_http` lists are accepted only for Wasm processing nodes.
 
 The runtime has no standalone `--check` flag. Repository examples and evaluation configs are validated by the `wafer-config` test suites; starting `wafer-runtime --config <path>` also validates before launch.
 
