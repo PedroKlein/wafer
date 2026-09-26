@@ -120,3 +120,9 @@ outdated in that respect. The current Wasm-only categories are
 this ADR specifies.
 
 See Also: [RFC-003 — Node Type Architecture](../rfcs/RFC-003-node-types.md).
+
+## Amendment (2026-09-26 — bounded guest HTTP)
+
+[ADR-0016](0016-outbound-wasi-http-capability.md) permits an opt-in processing node to make outbound `wasi:http` requests to an immutable set of exact destinations. This does not introduce Wasm Source or Sink categories and does not change this ADR's transport boundary.
+
+Native Sources and Sinks remain the default modules for HTTP or MQTT at a pipeline boundary and remain the owners of managed credentials, TLS client identity, retries, long-lived connections, backpressure, and delivery semantics. The guest capability is appropriate only when a bounded request/response operation is intrinsic to Transform, Filter, or Router processing.

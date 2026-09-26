@@ -133,7 +133,7 @@ The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm c
 |-------|------|-------|
 | `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
 | `fuel` | `Option<u64>` | Overrides the pipeline default for this node. |
-| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
+| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. ADR-0016 freezes the planned `outbound_http` field described below; parser/runtime support lands in P2-T2. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
 | `error_policy` | `Option<ErrorPolicyConfig>` | Per-node table that replaces the pipeline-level table when present. |
 | `plugin_version` | `Option<string>` | Opaque version passed as `node-config.plugin-version`; default is empty. |
@@ -164,6 +164,24 @@ strict = true
 [nodes.parse.error_policy]
 bad_input = "skip"          # override pipeline default of "dlq"
 ```
+
+#### Planned outbound `wasi:http` capability
+
+[ADR-0016](../adr/0016-outbound-wasi-http-capability.md) freezes this P2-compatible configuration interface. It is **not implemented at this checkpoint**; until P2-T2 lands, the runtime does not preserve this field or expose wasi:http, so configurations must not rely on it as a grant.
+
+```toml
+[nodes.enrich.capabilities]
+outbound_http = [
+  { scheme = "https", host = "api.example.com" },       # effective port 443
+  { scheme = "http", host = "127.0.0.1", port = 8080 },
+]
+```
+
+Omission and `outbound_http = []` both deny every outbound request. A destination contains only `scheme`, `host`, and optional `port`. Scheme is exactly `http` or `https`; omitted ports normalize to 80 or 443 respectively. Matching uses the normalized `(scheme, host, effective-port)` tuple. Wildcards, CIDR blocks, suffixes, paths, queries, fragments, user information, port ranges, and port zero are invalid.
+
+DNS names use lowercase ASCII comparison without a trailing dot. DNS grants may connect only to globally routable unicast addresses from a single policy-controlled resolution snapshot. Intentional loopback or private-network access requires an exact IP-literal grant. Unspecified, multicast, broadcast, and link-local literals are never grantable. Redirects are returned to the guest and are not followed automatically.
+
+The grant is immutable until pipeline restart. Recovery, reconfigure, hot-swap, and rollback reconstruct the exact original set; guest lifecycle JSON and hot-swap request bodies cannot add destinations. Denial is returned as `wasi:http` `http-request-denied`, without logging request bodies, query strings, cookies, authorization values, or arbitrary headers.
 
 ### Source and Sink
 

@@ -107,6 +107,7 @@ bd query "label=decision AND status=open"
 | 0013 | AOT Cache + Per-Node Metering (fuel/epoch/limits)  | Accepted                                 | 2026-07-12 | [RFC-007](../rfcs/RFC-007-performance-optimizations.md) |
 | 0014 | Guest SDK Design (thread_local + macros)           | Accepted                                 | 2026-07-12 | [RFC-006](../rfcs/RFC-006-plugin-sdk.md) |
 | 0015 | Command Runner: mise                               | Accepted                                 | 2026-07-19 | — |
+| 0016 | Default-Deny Outbound `wasi:http`                  | Accepted (implementation pending)        | 2026-09-26 | [RFC-012](../rfcs/RFC-012-wasi-0.3-evaluation.md) |
 
 ### Notes on recent changes (2026-07-18 doc-refactor)
 
