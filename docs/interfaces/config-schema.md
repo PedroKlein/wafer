@@ -133,7 +133,7 @@ The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm c
 |-------|------|-------|
 | `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
 | `fuel` | `Option<u64>` | Overrides the pipeline default for this node. |
-| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference}`, all default `false`. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. ADR-0016 freezes the planned `outbound_http` field described below; parser/runtime support lands in P2-T2. |
+| `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference, outbound_http}`. Booleans default to `false`; `outbound_http` defaults to an empty deny-all list. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
 | `error_policy` | `Option<ErrorPolicyConfig>` | Per-node table that replaces the pipeline-level table when present. |
 | `plugin_version` | `Option<string>` | Opaque version passed as `node-config.plugin-version`; default is empty. |
@@ -165,9 +165,9 @@ strict = true
 bad_input = "skip"          # override pipeline default of "dlq"
 ```
 
-#### Planned outbound `wasi:http` capability
+#### Outbound `wasi:http` capability
 
-[ADR-0016](../adr/0016-outbound-wasi-http-capability.md) freezes this P2-compatible configuration interface. It is **not implemented at this checkpoint**; until P2-T2 lands, the runtime does not preserve this field or expose wasi:http, so configurations must not rely on it as a grant.
+[ADR-0016](../adr/0016-outbound-wasi-http-capability.md) defines this optional P2-compatible capability. WAFER links wasi:http for Wasm processing nodes but grants no destination unless `outbound_http` contains an exact entry.
 
 ```toml
 [nodes.enrich.capabilities]

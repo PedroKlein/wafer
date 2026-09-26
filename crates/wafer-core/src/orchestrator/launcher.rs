@@ -398,10 +398,10 @@ async fn load_transform_node(
     plugin_hashes.insert(node_id.into(), plugin_hash);
 
     let phase_started = Instant::now();
-    let capabilities = capabilities_from_config(&wasm.capabilities);
+    let capabilities = capabilities_from_config(&wasm.capabilities)?;
     let memory_limit = wasm.memory_limit.unwrap_or(default_memory);
     let fuel_limit = wasm.fuel.or(default_fuel);
-    let state = WaferState::new_with_memory_limit(node_id, capabilities, memory_limit);
+    let state = WaferState::new_with_memory_limit(node_id, capabilities.clone(), memory_limit);
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: None → unlimited; engine construction leaves consume_fuel /
@@ -595,10 +595,11 @@ async fn load_filter_node(
 
     let phase_started = Instant::now();
     let pre = Arc::new(engine.pre_instantiate_filter(&component)?);
+    let capabilities = capabilities_from_config(&wasm.capabilities)?;
 
     let state = WaferState::new_with_memory_limit(
         node_id,
-        capabilities_from_config(&wasm.capabilities),
+        capabilities.clone(),
         wasm.memory_limit.unwrap_or(default_memory),
     );
     let mut store = Store::new(engine.inner(), state);
@@ -621,7 +622,7 @@ async fn load_filter_node(
     let config_json = node_config_json(wasm)?;
     let mut node = WasmFilterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
-        capabilities_from_config(&wasm.capabilities),
+        capabilities,
         wasm.memory_limit.unwrap_or(default_memory),
         engine.epoch_deadline(),
         config_json.clone(),
@@ -660,10 +661,11 @@ async fn load_router_node(
 
     let phase_started = Instant::now();
     let pre = Arc::new(engine.pre_instantiate_router(&component)?);
+    let capabilities = capabilities_from_config(&wasm.capabilities)?;
 
     let state = WaferState::new_with_memory_limit(
         node_id,
-        capabilities_from_config(&wasm.capabilities),
+        capabilities.clone(),
         wasm.memory_limit.unwrap_or(default_memory),
     );
     let mut store = Store::new(engine.inner(), state);
@@ -686,7 +688,7 @@ async fn load_router_node(
     let config_json = node_config_json(wasm)?;
     let mut node = WasmRouterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
     node.configure_runtime(
-        capabilities_from_config(&wasm.capabilities),
+        capabilities,
         wasm.memory_limit.unwrap_or(default_memory),
         engine.epoch_deadline(),
         config_json.clone(),
@@ -778,12 +780,12 @@ fn node_config_json(wasm: &WasmNodeDef) -> Result<String> {
     })
 }
 
-pub(crate) const fn capabilities_from_config(config: &ConfigCapabilities) -> Capabilities {
-    Capabilities {
-        inherit_stdio: config.inherit_stdio,
-        inherit_env: config.inherit_env,
-        allow_inference: config.allow_inference,
-    }
+pub(crate) fn capabilities_from_config(config: &ConfigCapabilities) -> Result<Capabilities> {
+    Capabilities::try_from(config).map_err(|error| {
+        WaferError::Config(ConfigError::Message(format!(
+            "invalid outbound HTTP capability: {error}"
+        )))
+    })
 }
 
 fn plugin_source(plugin: &str) -> PluginSource {
@@ -797,7 +799,9 @@ fn plugin_source(plugin: &str) -> PluginSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{BenchSinkConfigToml, BenchSourceConfigToml};
+    use crate::config::{
+        BenchSinkConfigToml, BenchSourceConfigToml, HttpHost, HttpScheme, OutboundHttpDestination,
+    };
     use crate::node::Lifecycle;
 
     #[test]
@@ -953,13 +957,29 @@ port = "default"
 
     #[test]
     fn inference_grant_reaches_the_engine_capability() {
-        let config =
-            ConfigCapabilities { inherit_stdio: true, inherit_env: false, allow_inference: true };
+        let config = ConfigCapabilities {
+            inherit_stdio: true,
+            allow_inference: true,
+            outbound_http: vec![OutboundHttpDestination {
+                scheme: HttpScheme::Https,
+                host: "API.EXAMPLE.COM".to_string(),
+                port: None,
+            }],
+            ..Default::default()
+        };
 
-        let capabilities = capabilities_from_config(&config);
+        let capabilities = capabilities_from_config(&config).expect("valid capabilities");
         assert!(capabilities.inherit_stdio);
         assert!(!capabilities.inherit_env);
         assert!(capabilities.allow_inference);
+        assert_eq!(capabilities.outbound_http_destinations().len(), 1);
+        assert_eq!(
+            capabilities
+                .outbound_http_destinations()
+                .first()
+                .map(|destination| (&destination.host, destination.port)),
+            Some((&HttpHost::Dns("api.example.com".into()), 443))
+        );
     }
 
     #[test]

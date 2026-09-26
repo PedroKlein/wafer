@@ -35,6 +35,9 @@ wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e
 wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", features = [
   "onnx",
 ] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "e9f1ea232fd245aea338ab3eb7d73487ae75cab1", default-features = false, features = [
+  "p2",
+] }
 
 # Async runtime
 tokio = { version = "1", features = [
@@ -42,6 +45,8 @@ tokio = { version = "1", features = [
   "rt-multi-thread",
   "macros",
   "io-std",
+  "io-util",
+  "net",
   "sync",
   "time",
   "signal",
@@ -72,6 +77,9 @@ reqwest = { version = "0.12", default-features = false, features = [
   "json",
   "rustls-tls",
 ] }
+rustls = "0.23"
+tokio-rustls = "0.26"
+webpki-roots = "1"
 
 # Metrics
 prometheus-client = "0.23"

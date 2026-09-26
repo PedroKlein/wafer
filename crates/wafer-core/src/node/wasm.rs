@@ -389,7 +389,7 @@ impl WasmTransformNode {
         let mut store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -413,7 +413,7 @@ impl WasmTransformNode {
         let mut new_store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -557,6 +557,11 @@ impl WasmTransformNode {
                 "hot-swap cannot change the node's inference capability".into(),
             ));
         }
+        if replacement.store.data().capabilities() != &self.capabilities {
+            return Err(WaferError::Runtime(
+                "hot-swap cannot change the node's capabilities".into(),
+            ));
+        }
         let config_json = self.config_json.clone();
         let old_store = std::mem::replace(&mut self.store, replacement.store);
         let old_bindings = std::mem::replace(&mut self.bindings, replacement.bindings);
@@ -657,7 +662,7 @@ impl WasmFilterNode {
         let mut store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -680,7 +685,7 @@ impl WasmFilterNode {
         let mut new_store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -817,6 +822,11 @@ impl WasmFilterNode {
         new_bindings: FilterNode,
         new_pre: Arc<FilterNodePre<WaferState>>,
     ) -> Result<(), WaferError> {
+        if new_store.data().capabilities() != &self.capabilities {
+            return Err(WaferError::Runtime(
+                "hot-swap cannot change the node's capabilities".into(),
+            ));
+        }
         let config_json = self.config_json.clone();
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
@@ -916,7 +926,7 @@ impl WasmRouterNode {
         let mut store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -939,7 +949,7 @@ impl WasmRouterNode {
         let mut new_store = recovery_store(
             &self.store,
             &node_id,
-            self.capabilities,
+            self.capabilities.clone(),
             self.memory_limit,
             self.epoch_deadline,
             self.fuel_limit,
@@ -1075,6 +1085,11 @@ impl WasmRouterNode {
         new_bindings: RouterNode,
         new_pre: Arc<RouterNodePre<WaferState>>,
     ) -> Result<(), WaferError> {
+        if new_store.data().capabilities() != &self.capabilities {
+            return Err(WaferError::Runtime(
+                "hot-swap cannot change the node's capabilities".into(),
+            ));
+        }
         let config_json = self.config_json.clone();
         let old_store = std::mem::replace(&mut self.store, new_store);
         let old_bindings = std::mem::replace(&mut self.bindings, new_bindings);
@@ -1120,8 +1135,17 @@ mod tests {
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
     use tracing::{Event, Metadata, Subscriber};
+    use wafer_types::config::{CanonicalHttpDestination, HttpHost, HttpScheme};
 
     const MNIST_FUEL: u64 = 100_000_000;
+
+    fn loopback_http_destination(port: u16) -> CanonicalHttpDestination {
+        CanonicalHttpDestination {
+            scheme: HttpScheme::Http,
+            host: HttpHost::Ip(std::net::Ipv4Addr::LOCALHOST.into()),
+            port,
+        }
+    }
     const MNIST_MEMORY: usize = 64 * 1024 * 1024;
     const MNIST_COMPONENT: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1265,7 +1289,7 @@ mod tests {
         let component = engine.load_component(MNIST_COMPONENT)?;
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
         let capabilities = Capabilities::sandbox().inference(true);
-        let state = WaferState::new_with_memory_limit("mnist", capabilities, MNIST_MEMORY);
+        let state = WaferState::new_with_memory_limit("mnist", capabilities.clone(), MNIST_MEMORY);
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|state| state.limits_mut());
         store.set_fuel(MNIST_FUEL)?;
@@ -1309,7 +1333,9 @@ mod tests {
         Ok((prediction, output.payload))
     }
 
-    async fn trapping_node() -> anyhow::Result<WasmTransformNode> {
+    async fn trapping_node_with_capabilities(
+        capabilities: Capabilities,
+    ) -> anyhow::Result<WasmTransformNode> {
         let fuel = NonZeroU64::new(10_000_000);
         let epoch = NonZeroU64::new(100);
         let memory_limit = 32 * 1024 * 1024;
@@ -1323,8 +1349,7 @@ mod tests {
         engine.ensure_epoch_ticker();
         let component = engine.load_component_from_bytes(ORDINARY_TRAP_COMPONENT, "trap")?;
         let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
-        let capabilities = Capabilities::sandbox().inference(true);
-        let state = WaferState::new_with_memory_limit("trap", capabilities, memory_limit);
+        let state = WaferState::new_with_memory_limit("trap", capabilities.clone(), memory_limit);
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|state| state.limits_mut());
         store.set_fuel(fuel.unwrap().get())?;
@@ -1336,6 +1361,15 @@ mod tests {
         node.set_plugin_version("trap-v1");
         node.validate_and_init(r#"{"mode":"trap"}"#).await?;
         Ok(node)
+    }
+
+    async fn trapping_node() -> anyhow::Result<WasmTransformNode> {
+        trapping_node_with_capabilities(
+            Capabilities::sandbox()
+                .inference(true)
+                .outbound_http(vec![loopback_http_destination(8080)]),
+        )
+        .await
     }
 
     #[tokio::test]
@@ -1393,11 +1427,22 @@ mod tests {
         anyhow::ensure!(node.store.data().table().is_empty(), "old Store resources survived");
         anyhow::ensure!(!node.store.data().has_logs(), "old Store logs survived");
         anyhow::ensure!(node.capabilities.allow_inference, "capability grant changed");
+        anyhow::ensure!(
+            node.store.data().capabilities() == &node.capabilities,
+            "recovery changed the outbound HTTP grant"
+        );
         anyhow::ensure!(node.memory_limit == 32 * 1024 * 1024, "memory limit changed");
         anyhow::ensure!(node.fuel_limit == NonZeroU64::new(10_000_000), "fuel changed");
         anyhow::ensure!(node.epoch_deadline == NonZeroU64::new(100), "epoch changed");
         anyhow::ensure!(node.config_json == r#"{"mode":"trap"}"#, "config changed");
         anyhow::ensure!(node.plugin_version == "trap-v1", "plugin version changed");
+        let reconfigure = r#"{"mode":"trap-reconfigured","outbound_http":[{"scheme":"http","host":"127.0.0.1","port":9090}]}"#;
+        node.try_reconfigure(reconfigure).await?;
+        anyhow::ensure!(
+            node.store.data().capabilities() == &node.capabilities,
+            "reconfigure changed the outbound HTTP grant"
+        );
+        anyhow::ensure!(node.config_json == reconfigure);
         let TransformPre::Ordinary(recovered_pre) = &node.cached_pre else {
             anyhow::bail!("recovery unexpectedly changed to inference bindings");
         };
@@ -1429,6 +1474,37 @@ mod tests {
             "recovered trap leaked the borrowed input buffer slot"
         );
         node.store.data_mut().delete_buffer(reused_second_slot)?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hot_swap_rejects_outbound_http_expansion() -> anyhow::Result<()> {
+        let original = Capabilities::sandbox().outbound_http(vec![loopback_http_destination(8080)]);
+        let mut node = trapping_node_with_capabilities(original.clone()).await?;
+        let expanded = Capabilities::sandbox()
+            .outbound_http(vec![loopback_http_destination(8080), loopback_http_destination(8081)]);
+        let mut store = recovery_store(
+            &node.store,
+            "trap",
+            expanded,
+            node.memory_limit,
+            node.epoch_deadline,
+            node.fuel_limit,
+        )?;
+        let TransformPre::Ordinary(pre) = &node.cached_pre else {
+            anyhow::bail!("trap fixture unexpectedly used inference bindings");
+        };
+        let bindings = pre.instantiate_async(&mut store).await?;
+        let replacement = PreparedTransformSwap::ordinary(store, bindings, Arc::clone(pre));
+
+        let error = node
+            .try_hot_swap(replacement)
+            .await
+            .expect_err("hot-swap must reject capability expansion");
+
+        anyhow::ensure!(error.to_string().contains("cannot change the node's capabilities"));
+        anyhow::ensure!(node.capabilities == original);
+        anyhow::ensure!(node.store.data().capabilities() == &original);
         Ok(())
     }
 

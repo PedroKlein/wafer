@@ -11,11 +11,13 @@
 use wasmtime::component::ResourceTable;
 use wasmtime::{StoreLimits, StoreLimitsBuilder};
 use wasmtime_wasi::{WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpView};
 use wasmtime_wasi_nn::InMemoryRegistry;
 use wasmtime_wasi_nn::backend::onnx::OnnxBackend;
 use wasmtime_wasi_nn::wit::{WasiNnCtx, WasiNnView};
 
 use super::Capabilities;
+use super::http::OutboundHttpHooks;
 
 /// Default per-node memory limit (16 MiB).
 /// Constrains guest linear memory growth — OOM is contained to a single node (RQ2).
@@ -50,6 +52,9 @@ pub struct WaferState {
     ctx: WasiCtx,
     /// Resource table for `WaferBuffer` handles + WASI resources.
     table: ResourceTable,
+    capabilities: Capabilities,
+    http_ctx: WasiHttpCtx,
+    http_hooks: OutboundHttpHooks,
     /// Per-node memory limits enforced by wasmtime's `ResourceLimiter`.
     limits: StoreLimits,
     nn_ctx: Option<WasiNnCtx>,
@@ -76,6 +81,7 @@ impl WaferState {
         capabilities: Capabilities,
         memory_limit: usize,
     ) -> Self {
+        let node_id = node_id.into();
         let mut builder = WasiCtxBuilder::new();
 
         if capabilities.inherit_stdio {
@@ -99,10 +105,13 @@ impl WaferState {
         Self {
             ctx,
             table: ResourceTable::new(),
+            http_ctx: WasiHttpCtx::new(),
+            http_hooks: OutboundHttpHooks::new(node_id.clone(), capabilities.outbound_http_grant()),
+            capabilities,
             limits,
             nn_ctx,
             log_buffer: Vec::with_capacity(16),
-            node_id: node_id.into(),
+            node_id,
         }
     }
 
@@ -142,6 +151,10 @@ impl WaferState {
     #[cfg(test)]
     const fn has_inference(&self) -> bool {
         self.nn_ctx.is_some()
+    }
+
+    pub(crate) const fn capabilities(&self) -> &Capabilities {
+        &self.capabilities
     }
 
     /// Access the store limits (for `Store::limiter`).
@@ -220,6 +233,16 @@ impl WaferState {
 impl WasiView for WaferState {
     fn ctx(&mut self) -> WasiCtxView<'_> {
         WasiCtxView { ctx: &mut self.ctx, table: &mut self.table }
+    }
+}
+
+impl WasiHttpView for WaferState {
+    fn http(&mut self) -> WasiHttpCtxView<'_> {
+        WasiHttpCtxView {
+            ctx: &mut self.http_ctx,
+            table: &mut self.table,
+            hooks: &mut self.http_hooks,
+        }
     }
 }
 

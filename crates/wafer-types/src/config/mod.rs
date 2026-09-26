@@ -12,8 +12,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 pub use engine::{
-    Capabilities, DeadLetterConfig, EngineConfig, ErrorCategory, ErrorPolicyConfig, FuelBudgets,
-    HotSwapConfig, MemoryLimits, OverflowPolicy, RetryConfig, SimpleAction,
+    CanonicalHttpDestination, Capabilities, DeadLetterConfig, EngineConfig, ErrorCategory,
+    ErrorPolicyConfig, FuelBudgets, HotSwapConfig, HttpHost, HttpScheme, MemoryLimits,
+    OutboundHttpDestination, OutboundHttpDestinationError, OverflowPolicy, RetryConfig,
+    SimpleAction, permitted_dns_ip, permitted_literal_ip,
 };
 pub use pipeline::{ApiConfig, MetricsConfig, PipelineConfig, RegistryConfig};
 pub use source_sink::{

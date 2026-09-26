@@ -251,7 +251,7 @@ pub async fn prepare_transform_swap_timed_with_fuel(
 
     let mut store = Store::new(
         engine.inner(),
-        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
+        WaferState::new_with_memory_limit(node_id, capabilities.clone(), memory_limit),
     );
     // Activate configured StoreLimits (A8): without this, `memory_size` is ignored
     // and the swapped-in instance can outgrow the launcher-enforced budget.

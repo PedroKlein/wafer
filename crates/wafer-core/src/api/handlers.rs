@@ -162,22 +162,26 @@ pub async fn hot_swap(
     let _replacement_guard =
         orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
 
+    let resolve_capabilities = |capabilities| {
+        capabilities_from_config(capabilities)
+            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
+    };
     let (kind, capabilities, memory_limit, transform_fuel) = match engine_config.nodes.get(&id) {
         Some(NodeDef::Transform(wasm)) => (
             SwapKind::Transform,
-            capabilities_from_config(&wasm.capabilities),
+            resolve_capabilities(&wasm.capabilities)?,
             wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
             wasm.fuel.or(engine_config.engine.fuel.transform),
         ),
         Some(NodeDef::Filter(wasm)) => (
             SwapKind::Filter,
-            capabilities_from_config(&wasm.capabilities),
+            resolve_capabilities(&wasm.capabilities)?,
             wasm.memory_limit.unwrap_or(engine_config.engine.memory.filter),
             None,
         ),
         Some(NodeDef::Router(wasm)) => (
             SwapKind::Router,
-            capabilities_from_config(&wasm.capabilities),
+            resolve_capabilities(&wasm.capabilities)?,
             wasm.memory_limit.unwrap_or(engine_config.engine.memory.router),
             None,
         ),

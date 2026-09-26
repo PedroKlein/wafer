@@ -1,7 +1,7 @@
 # ADR-0016: Default-Deny Outbound `wasi:http`
 
 - **Date**: 2026-09-26
-- **Status**: Accepted (implementation pending)
+- **Status**: Accepted
 - **Parent RFC**: [RFC-012](../rfcs/RFC-012-wasi-0.3-evaluation.md)
 
 ## Context
@@ -108,7 +108,7 @@ wasmtime-wasi-http = {
 }
 ```
 
-`default-send-request` stays disabled because its connector performs its own authority DNS lookup after the policy hook; WAFER requires one policy-controlled resolution and connection snapshot. P2-T2 may add only the direct HTTP/TLS dependencies needed by that connector.
+`default-send-request` stays disabled because its connector performs its own authority DNS lookup after the policy hook; WAFER requires one policy-controlled resolution and connection snapshot. The implementation uses the existing Hyper stack plus direct `rustls`, `tokio-rustls`, and `webpki-roots` dependencies for the policy-controlled TCP/TLS connection.
 
 `WaferState` will own `WasiHttpCtx` and a policy hook alongside its existing `WasiCtx` and shared `ResourceTable`, then implement `WasiHttpView`. Since WAFER already calls `wasmtime_wasi::p2::add_to_linker_async`, linker construction must add only the HTTP interfaces:
 

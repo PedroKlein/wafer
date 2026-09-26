@@ -30,6 +30,7 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_stdout_singleton(config, &mut errors);
     check_dead_letter_required_for_overflow(config, &mut errors);
     check_queue_capacities(config, &mut errors);
+    check_outbound_http(config, &mut errors);
     check_unsupported_allow_inference(config, &mut errors);
     check_orphan_nodes(config, &mut errors);
     check_no_cycles(config, &mut errors);
@@ -223,6 +224,38 @@ fn check_queue_capacities(config: &Config, errors: &mut Vec<ValidationError>) {
     }
 }
 
+fn check_outbound_http(config: &Config, errors: &mut Vec<ValidationError>) {
+    for (node_id, node) in &config.nodes {
+        let Some(wasm) = (match node {
+            NodeDef::Transform(wasm) | NodeDef::Filter(wasm) | NodeDef::Router(wasm) => Some(wasm),
+            NodeDef::Source(_) | NodeDef::Sink(_) => None,
+        }) else {
+            continue;
+        };
+        if wasm.plugin.is_native() && !wasm.capabilities.outbound_http.is_empty() {
+            errors.push(ValidationError::new(format!(
+                "nodes.{node_id}.capabilities.outbound_http is supported only for Wasm nodes"
+            )));
+            continue;
+        }
+        let mut destinations = std::collections::HashSet::new();
+        for (index, destination) in wasm.capabilities.outbound_http.iter().enumerate() {
+            match destination.canonicalize() {
+                Ok(destination) => {
+                    if !destinations.insert(destination) {
+                        errors.push(ValidationError::new(format!(
+                            "nodes.{node_id}.capabilities.outbound_http[{index}]: duplicate normalized destination"
+                        )));
+                    }
+                }
+                Err(error) => errors.push(ValidationError::new(format!(
+                    "nodes.{node_id}.capabilities.outbound_http[{index}]: {error}"
+                ))),
+            }
+        }
+    }
+}
+
 fn check_unsupported_allow_inference(config: &Config, errors: &mut Vec<ValidationError>) {
     if config.nodes.values().any(|node| match node {
         NodeDef::Transform(wasm) => wasm.capabilities.allow_inference && wasm.plugin.is_native(),
@@ -285,8 +318,9 @@ fn check_no_cycles(config: &Config, errors: &mut Vec<ValidationError>) {
 mod tests {
     use super::*;
     use wafer_types::config::{
-        Capabilities, Config, EdgeDef, NodeDef, OverflowPolicy, PluginSpec, PluginSpecStructured,
-        SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
+        Capabilities, Config, EdgeDef, HttpScheme, NodeDef, OutboundHttpDestination,
+        OverflowPolicy, PluginSpec, PluginSpecStructured, SinkDef, SourceDef, StdinSourceConfig,
+        StdoutSinkConfig, WasmNodeDef,
     };
 
     // -------------------------------------------------------------------------
@@ -435,11 +469,7 @@ mod tests {
                     "transform",
                     transform_with_capabilities(
                         "transform.wasm",
-                        Capabilities {
-                            inherit_stdio: false,
-                            inherit_env: false,
-                            allow_inference: true,
-                        },
+                        Capabilities { allow_inference: true, ..Default::default() },
                     ),
                 ),
                 ("out", stdout_sink()),
@@ -524,11 +554,7 @@ mod tests {
                     "transform",
                     transform_with_capabilities(
                         "transform.wasm",
-                        Capabilities {
-                            inherit_stdio: true,
-                            inherit_env: false,
-                            allow_inference: false,
-                        },
+                        Capabilities { inherit_stdio: true, ..Default::default() },
                     ),
                 ),
                 ("out", stdout_sink()),
@@ -536,6 +562,99 @@ mod tests {
             vec![edge("in", "transform"), edge("transform", "out")],
         );
         validate(&explicit_false).expect("allow_inference=false should remain valid");
+    }
+
+    #[test]
+    fn outbound_http_wildcard_is_rejected() {
+        let config: Config = toml::from_str(
+            r#"
+[nodes.transform]
+type = "transform"
+plugin = "transform.wasm"
+
+[nodes.transform.capabilities]
+outbound_http = [{ scheme = "https", host = "*.example.com" }]
+"#,
+        )
+        .expect("configuration must deserialize before semantic validation");
+
+        let errors = validate(&config).expect_err("wildcard destination must be rejected");
+        assert!(
+            errors.iter().any(|error| {
+                error.message.contains("nodes.transform.capabilities.outbound_http[0]")
+                    && error.message.contains("wildcard")
+            }),
+            "unexpected validation errors: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn omitted_and_empty_outbound_http_are_valid() {
+        let omitted = simple_config(vec![("transform", transform("transform.wasm"))], vec![]);
+        validate(&omitted).expect("omitted outbound HTTP grant must be valid");
+
+        let empty = simple_config(
+            vec![(
+                "transform",
+                transform_with_capabilities("transform.wasm", Capabilities::default()),
+            )],
+            vec![],
+        );
+        validate(&empty).expect("empty outbound HTTP grant must be valid");
+    }
+
+    #[test]
+    fn duplicate_normalized_outbound_http_destination_is_rejected() {
+        let capabilities = Capabilities {
+            outbound_http: vec![
+                OutboundHttpDestination {
+                    scheme: HttpScheme::Https,
+                    host: "API.EXAMPLE.COM".to_string(),
+                    port: None,
+                },
+                OutboundHttpDestination {
+                    scheme: HttpScheme::Https,
+                    host: "api.example.com".to_string(),
+                    port: Some(443),
+                },
+            ],
+            ..Default::default()
+        };
+        let config = simple_config(
+            vec![("transform", transform_with_capabilities("transform.wasm", capabilities))],
+            vec![],
+        );
+
+        let errors = validate(&config).expect_err("duplicate normalized destination must fail");
+        assert!(errors.iter().any(|error| error.message.contains("duplicate normalized")));
+    }
+
+    #[test]
+    fn native_node_cannot_receive_outbound_http() {
+        let capabilities = Capabilities {
+            outbound_http: vec![OutboundHttpDestination {
+                scheme: HttpScheme::Http,
+                host: "127.0.0.1".to_string(),
+                port: Some(8080),
+            }],
+            ..Default::default()
+        };
+        let config = simple_config(
+            vec![(
+                "transform",
+                NodeDef::Transform(WasmNodeDef {
+                    plugin: PluginSpec::Structured(PluginSpecStructured::Native {
+                        function: "passthrough".to_string(),
+                    }),
+                    capabilities,
+                    ..Default::default()
+                }),
+            )],
+            vec![],
+        );
+
+        let errors = validate(&config).expect_err("native node must not obtain outbound HTTP");
+        assert!(errors.iter().any(|error| error.message.contains("supported only for Wasm")));
     }
 
     #[test]

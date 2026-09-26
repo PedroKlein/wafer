@@ -207,11 +207,8 @@ async fn main() -> Result<()> {
         else {
             anyhow::bail!("--swap-node '{node_id}' must name a Transform");
         };
-        let capabilities = Capabilities {
-            inherit_stdio: wasm.capabilities.inherit_stdio,
-            inherit_env: wasm.capabilities.inherit_env,
-            allow_inference: wasm.capabilities.allow_inference,
-        };
+        let capabilities = Capabilities::try_from(&wasm.capabilities)
+            .context("invalid outbound HTTP capability")?;
         let memory_limit = wasm.memory_limit.unwrap_or(config.engine.memory.transform);
         let fuel_limit = wasm.fuel.or(config.engine.fuel.transform);
         let output_dir = args.swap_output_dir.clone();

@@ -176,6 +176,8 @@ impl WaferEngine {
         let mut linker = wasmtime::component::Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
+        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)
+            .map_err(|e| WaferError::PluginInit { message: e.to_string() })?;
         Ok(linker)
     }
 

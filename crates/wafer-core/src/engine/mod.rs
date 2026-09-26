@@ -4,6 +4,7 @@ pub mod bindings;
 mod buffer;
 mod cache;
 mod capabilities;
+mod http;
 mod loader;
 pub(crate) mod state;
 

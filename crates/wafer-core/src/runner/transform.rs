@@ -388,7 +388,7 @@ mod tests {
         let component = engine.load_component_from_bytes(MNIST_COMPONENT, "mnist")?;
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
         let capabilities = Capabilities::sandbox().inference(true);
-        let state = WaferState::new_with_memory_limit("mnist", capabilities, MNIST_MEMORY);
+        let state = WaferState::new_with_memory_limit("mnist", capabilities.clone(), MNIST_MEMORY);
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|state| state.limits_mut());
         store.set_fuel(MNIST_FUEL)?;

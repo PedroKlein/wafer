@@ -28,6 +28,7 @@ petgraph = { workspace = true }
 wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-nn = { workspace = true }
+wasmtime-wasi-http = { workspace = true }
 ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
 
 # Async runtime
@@ -75,6 +76,9 @@ hyper = { version = "1.0", features = ["server", "http1"] }
 hyper-util = { version = "0.1", features = ["tokio"] }
 http-body-util = "0.1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+rustls = { workspace = true }
+tokio-rustls = { workspace = true }
+webpki-roots = { workspace = true }
 
 [dev-dependencies]
 wafer-config = { path = "../wafer-config" }
