@@ -1,0 +1,13 @@
+1ad03475c9c975df7d33cd56554ef7f7f547b526b18409e692ee7b223c6f93a5  experiments/p3/wit/ownership-probes/owned-buffer-resource/probe.wit
+e2aa09995c4200e7e8c8a19834f3b08ff9d059842df69b7aafafd12dd2760f22  experiments/p3/wit/ownership-probes/separate-payload-stream/probe.wit
+1b5d0c37199f44637c220bd5701000b5b6ea662a0bbd413894da9d2f650b2d0e  experiments/p3/wit/probe.sh
+2ad3edfd6efe054253c5cd23d427f7c8065fed8184626bef6555c7fa24abcb70  experiments/p3/wit/probes/guest-bindings/Cargo.toml
+4c6c52d27af1a19ac1a99abecc0fea373095bfd9d6a9fe25625cc39542713046  experiments/p3/wit/probes/guest-bindings/src/lib.rs
+67e07d4a02e79d875745c25e092729f56a13b88cade9c5c0e789a13968c74420  experiments/p3/wit/probes/host-bindings/Cargo.toml
+2b6654af9ce0574b1abffce035e2e431cf5c29ff2556e64ef4928bc7cd35cf1e  experiments/p3/wit/probes/host-bindings/src/lib.rs
+c7a254767a34c6c3382347c1d2776d05b473dda45fbda413432440aec685d5e1  experiments/p3/wit/README.md
+d7a8f04494e5885da9668902c467aa37a6356a87c1a8692e39d1e96f0edc1d54  experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit
+c63b2bfa648545bee3c985b2f089b8a7453f3ddd8aa8c3e6e4fd250037c3954d  experiments/p3/wit/wafer-pipeline-0.2.0/types.wit
+c03c2a47fa138b08656beafa583e6ea9a0240812d6daecf151d0cf13e70adf70  experiments/p3/wit/wafer-pipeline-0.2.0/worlds.wit
+3c8e6e6338bc3b05404cfa5e86b7d78bfbe01bfc5b31d51d728b97ee471f32f8  experiments/p3/wit/probes/guest-bindings/Cargo.lock
+4f2bd1c643c4f081989499465272d17629e681c098f9b7a457fef03f9d79b546  experiments/p3/wit/probes/host-bindings/Cargo.lock

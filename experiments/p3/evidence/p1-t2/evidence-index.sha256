@@ -1,0 +1,31 @@
+P1-T2 evidence generated from source baseline ace19a0bd42c14fd1bf34c39daeacb91acf360db.
+
+bcdfb4b1fb41d79f41438e80ab946e8b00b9c87b3dbc4caabacf142b72de12bd  experiments/p3/evidence/p1-t2/acceptance-check.txt
+d90762fa6f19e8e444a1212f85951c890a0d1bd53eb4a3732abd4a3fbfe174ac  experiments/p3/evidence/p1-t2/baseline/source-state.txt
+bc6812a3035b729b2cbc8cc73af2df0e33c679773d26952400ea520e5ce4260b  experiments/p3/evidence/p1-t2/borrowed-buffer-parser-observation.txt
+23edba0e28783ea03375c9419996d3f54c406829b4a414e6c70b228149de2a18  experiments/p3/evidence/p1-t2/clippy-checks.txt
+aff316329e915c2d5c6efeb36d3d7baa492093512d5063eb0b910d1da45a5f09  experiments/p3/evidence/p1-t2/final-scope-check.txt
+9437abb4110ec3d73b27279ffc262349debc39009b098505f84162457e5dc75c  experiments/p3/evidence/p1-t2/host-guest-bindings.txt
+b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d  experiments/p3/evidence/p1-t2/inputs.sha256
+0f123e80a19ae1a553fdb11420134fd4c5ebfa2e8b3b3f1e7c38accb54b60f8b  experiments/p3/evidence/p1-t2/ownership-binding-shapes.txt
+c0f0b3193c2db5f3a2409fd69b299130354a8b639b886e2d6aa34a8e2b20abf3  experiments/p3/evidence/p1-t2/parsed-wit.txt
+e651cf351d8bd992f62c33699750bc29847a4960f2eec4896cc53a71da12d750  experiments/p3/evidence/p1-t2/production-isolation.txt
+eaf53e5e0f20526ed8c6de875fcfcda411f80f6125efc13265d6c37e3b987377  experiments/p3/evidence/p1-t2/red-missing-candidates.txt
+5cc463ab61787fa39321de45d42816f796c1cd81a126afb6b67bc3564fb9150a  experiments/p3/evidence/p1-t2/root-compatibility.txt
+c190065a1b44c26039514598862f13f87e035c5cfc25492055fe2e09cdf37c0e  experiments/p3/evidence/p1-t2/style-checks.txt
+c9ea2d7435f260a669708b2b2aef19a035a3d86edff6f56a87cc8fa1f0c2a696  experiments/p3/evidence/p1-t2/terminology-audit.txt
+9029b6f3478a3a3231a4071464112b35de464e9fe7ed70af6f63be4e9ef69257  experiments/p3/evidence/p1-t2/wit-parse-and-codegen.txt
+1ad03475c9c975df7d33cd56554ef7f7f547b526b18409e692ee7b223c6f93a5  experiments/p3/wit/ownership-probes/owned-buffer-resource/probe.wit
+e2aa09995c4200e7e8c8a19834f3b08ff9d059842df69b7aafafd12dd2760f22  experiments/p3/wit/ownership-probes/separate-payload-stream/probe.wit
+1b5d0c37199f44637c220bd5701000b5b6ea662a0bbd413894da9d2f650b2d0e  experiments/p3/wit/probe.sh
+3c8e6e6338bc3b05404cfa5e86b7d78bfbe01bfc5b31d51d728b97ee471f32f8  experiments/p3/wit/probes/guest-bindings/Cargo.lock
+2ad3edfd6efe054253c5cd23d427f7c8065fed8184626bef6555c7fa24abcb70  experiments/p3/wit/probes/guest-bindings/Cargo.toml
+4c6c52d27af1a19ac1a99abecc0fea373095bfd9d6a9fe25625cc39542713046  experiments/p3/wit/probes/guest-bindings/src/lib.rs
+4f2bd1c643c4f081989499465272d17629e681c098f9b7a457fef03f9d79b546  experiments/p3/wit/probes/host-bindings/Cargo.lock
+67e07d4a02e79d875745c25e092729f56a13b88cade9c5c0e789a13968c74420  experiments/p3/wit/probes/host-bindings/Cargo.toml
+2b6654af9ce0574b1abffce035e2e431cf5c29ff2556e64ef4928bc7cd35cf1e  experiments/p3/wit/probes/host-bindings/src/lib.rs
+c7a254767a34c6c3382347c1d2776d05b473dda45fbda413432440aec685d5e1  experiments/p3/wit/README.md
+d7a8f04494e5885da9668902c467aa37a6356a87c1a8692e39d1e96f0edc1d54  experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit
+c63b2bfa648545bee3c985b2f089b8a7453f3ddd8aa8c3e6e4fd250037c3954d  experiments/p3/wit/wafer-pipeline-0.2.0/types.wit
+c03c2a47fa138b08656beafa583e6ea9a0240812d6daecf151d0cf13e70adf70  experiments/p3/wit/wafer-pipeline-0.2.0/worlds.wit
+933124b440ed1f78046746be6abef1ddb2de5655ee65d04c2e6fe795a49dacf3  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/ownership-decision.md

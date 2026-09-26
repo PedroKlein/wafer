@@ -1,0 +1,149 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+=== selected ===
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit experiments/p3/wit/wafer-pipeline-0.2.0
+package wafer:pipeline@0.2.0;
+
+interface types {
+  record lineage {
+    parent-id: option<string>,
+    trace-id: option<string>,
+  }
+
+  record envelope {
+    id: string,
+    timestamp: u64,
+    source: string,
+    content-type: string,
+    metadata: list<tuple<string, string>>,
+    lineage: lineage,
+    retry-count: u32,
+    payload: list<u8>,
+  }
+
+  variant process-error {
+    bad-input(string),
+    dependency-failed(string),
+    processing-failed(string),
+    timed-out,
+    unrecoverable(string),
+  }
+}
+
+interface message-transform {
+  use types.{envelope, process-error};
+
+  /// Consumes one owned envelope and resolves to one owned envelope or typed error.
+  process: async func(input: envelope) -> result<envelope, process-error>;
+}
+
+interface stream-transform {
+  use types.{envelope, process-error};
+
+  /// Starts one finite session. Closing the input ends production; the future reports
+  /// terminal success or a session-level error after the output stream is drained.
+  process: func(input: stream<envelope>) -> tuple<stream<result<envelope, process-error>>, future<result<_, process-error>>>;
+}
+
+world transform-message-node {
+  import types;
+
+  export message-transform;
+}
+world transform-stream-node {
+  import types;
+
+  export stream-transform;
+}
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit --wasm -o {scratchDir}/p1-t2-wit-packages/selected.wasm experiments/p3/wit/wafer-pipeline-0.2.0
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools validate --features all {scratchDir}/p1-t2-wit-packages/selected.wasm
+6b9568ea685faab6a422096117f0018d25711d50499128917ca09b13b86d2854  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-wit-packages/selected.wasm
+=== owned-buffer ===
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit experiments/p3/wit/ownership-probes/owned-buffer-resource
+package wafer:ownership-buffer@0.0.0;
+
+interface buffers {
+  resource buffer {
+    constructor(contents: list<u8>);
+    size: func() -> u64;
+    read: func(offset: u64, len: u64) -> list<u8>;
+    read-all: func() -> list<u8>;
+  }
+}
+
+interface transform {
+  use buffers.{buffer};
+
+  record lineage {
+    parent-id: option<string>,
+    trace-id: option<string>,
+  }
+
+  record envelope {
+    id: string,
+    timestamp: u64,
+    source: string,
+    content-type: string,
+    metadata: list<tuple<string, string>>,
+    lineage: lineage,
+    retry-count: u32,
+    payload: buffer,
+  }
+
+  variant process-error {
+    bad-input(string),
+    dependency-failed(string),
+    processing-failed(string),
+    timed-out,
+    unrecoverable(string),
+  }
+
+  process: async func(input: envelope) -> result<envelope, process-error>;
+}
+
+world probe {
+  import buffers;
+
+  export transform;
+}
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit --wasm -o {scratchDir}/p1-t2-wit-packages/owned-buffer.wasm experiments/p3/wit/ownership-probes/owned-buffer-resource
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools validate --features all {scratchDir}/p1-t2-wit-packages/owned-buffer.wasm
+a95327d7926132925d4118a43d30f7ca87fdb22ea46773b4868b3b7df0389ad1  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-wit-packages/owned-buffer.wasm
+=== payload-stream ===
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit experiments/p3/wit/ownership-probes/separate-payload-stream
+package wafer:ownership-stream@0.0.0;
+
+interface transform {
+  record lineage {
+    parent-id: option<string>,
+    trace-id: option<string>,
+  }
+
+  record envelope-header {
+    id: string,
+    timestamp: u64,
+    source: string,
+    content-type: string,
+    metadata: list<tuple<string, string>>,
+    lineage: lineage,
+    retry-count: u32,
+  }
+
+  variant process-error {
+    bad-input(string),
+    dependency-failed(string),
+    processing-failed(string),
+    timed-out,
+    unrecoverable(string),
+  }
+
+  process: async func(header: envelope-header, payload: stream<u8>) -> result<tuple<envelope-header, stream<u8>>, process-error>;
+}
+
+world probe {
+  export transform;
+}
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools component wit --wasm -o {scratchDir}/p1-t2-wit-packages/payload-stream.wasm experiments/p3/wit/ownership-probes/separate-payload-stream
+$ /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/tools/bin/wasm-tools validate --features all {scratchDir}/p1-t2-wit-packages/payload-stream.wasm
+00d0b44f433a5a6fbe6a63634646a51010171977ca10cea989aa7c8a2bb005f3  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-wit-packages/payload-stream.wasm
+exit_status=0

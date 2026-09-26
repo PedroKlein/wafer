@@ -1,0 +1,157 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 clippy --manifest-path experiments/p3/wit/probes/host-bindings/Cargo.toml --locked -- -D warnings
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling unicode-ident v1.0.26
+   Compiling serde_core v1.0.229
+   Compiling libm v0.2.16
+   Compiling serde v1.0.229
+   Compiling foldhash v0.2.0
+   Compiling wasmtime-internal-core v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling libc v0.2.189
+   Compiling log v0.4.34
+   Compiling hashbrown v0.17.1
+   Compiling version_check v0.9.5
+   Compiling cranelift-srcgen v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling thiserror v2.0.21
+   Compiling generic-array v0.14.7
+   Compiling cranelift-assembler-x64-meta v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking cfg-if v1.0.5
+    Checking equivalent v1.0.2
+    Checking typenum v1.20.1
+   Compiling heck v0.5.0
+   Compiling target-lexicon v0.13.5
+   Compiling cranelift-isle v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking fnv v1.0.7
+   Compiling cranelift-codegen-shared v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking hashbrown v0.16.1
+   Compiling crc32fast v1.5.2
+   Compiling syn v3.0.6
+    Checking bitflags v2.13.2
+   Compiling semver v1.0.28
+    Checking crypto-common v0.1.7
+    Checking block-buffer v0.10.4
+   Compiling anyhow v1.0.104
+   Compiling cranelift-bitset v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking memchr v2.8.3
+   Compiling zmij v1.0.23
+    Checking allocator-api2 v0.2.21
+   Compiling indexmap v2.14.2
+    Checking digest v0.10.7
+   Compiling cranelift-assembler-x64 v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking bumpalo v3.20.3
+    Checking cpufeatures v0.2.17
+   Compiling shlex v2.0.1
+    Checking arbitrary v1.4.2
+    Checking rustc-hash v2.1.3
+   Compiling serde_json v1.0.151
+   Compiling find-msvc-tools v0.1.14
+   Compiling wasmparser v0.259.0
+   Compiling cc v1.5.1
+    Checking sha2 v0.10.9
+    Checking cranelift-control v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking gimli v0.33.0
+    Checking termcolor v1.4.1
+   Compiling itoa v1.0.18
+   Compiling leb128fmt v0.1.0
+   Compiling rustversion v1.0.23
+    Checking wasm-encoder v0.259.0
+    Checking object v0.40.0
+    Checking wasmtime-internal-component-util v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling id-arena v2.3.0
+    Checking futures-core v0.3.34
+   Compiling wasmtime-internal-unwinder v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking futures-sink v0.3.34
+   Compiling rustix v1.1.5
+    Checking futures-channel v0.3.34
+    Checking errno v0.3.14
+    Checking either v1.18.0
+   Compiling wasmtime-internal-cranelift v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking mach2 v0.6.0
+    Checking slab v0.4.12
+   Compiling encoding_rs v0.8.42
+    Checking futures-io v0.3.34
+    Checking futures-task v0.3.34
+   Compiling wasmtime-internal-component-macro v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking pin-project-lite v0.2.17
+    Checking itertools v0.14.0
+    Checking futures-util v0.3.34
+    Checking simdutf8 v0.1.5
+    Checking scopeguard v1.2.0
+   Compiling multiversion_no_op v1.0.0
+    Checking once_cell v1.21.4
+   Compiling serde_derive v1.0.229
+   Compiling pulley-macros v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling thiserror-impl v2.0.21
+   Compiling wasmtime-internal-versioned-export-macros v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling async-trait v0.1.92
+   Compiling pulley-interpreter v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-internal-fiber v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking cobs v0.3.0
+    Checking futures v0.3.34
+   Compiling cranelift-codegen-meta v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wit-parser v0.259.0
+    Checking smallvec v1.16.2
+    Checking postcard v1.1.3
+    Checking regalloc2 v0.15.2
+    Checking wasmtime-internal-jit-icache-coherence v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking cranelift-entity v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasm-metadata v0.259.0
+    Checking cranelift-bforest v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling cranelift-codegen v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wit-component v0.259.0
+   Compiling wasmtime-internal-wit-bindgen v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking wasmprinter v0.259.0
+    Checking wasmtime-environ v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking cranelift-native v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking cranelift-frontend v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+    Checking wafer-p3-wit-host-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/probes/host-bindings)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 23.93s
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 clippy --manifest-path experiments/p3/wit/probes/guest-bindings/Cargo.toml --target wasm32-wasip2 --no-default-features --features message --locked -- -D warnings
+   Compiling serde_core v1.0.229
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling foldhash v0.2.0
+   Compiling equivalent v1.0.2
+   Compiling bitflags v2.13.2
+   Compiling zmij v1.0.23
+   Compiling semver v1.0.28
+   Compiling anyhow v1.0.104
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling hashbrown v0.17.1
+   Compiling memchr v2.8.3
+   Compiling itoa v1.0.18
+   Compiling prettyplease v0.3.0
+   Compiling id-arena v2.3.0
+   Compiling leb128fmt v0.1.0
+   Compiling log v0.4.34
+   Compiling heck v0.5.0
+   Compiling wit-bindgen-rust v0.62.0
+   Compiling wit-bindgen-rust-macro v0.62.0
+   Compiling wit-bindgen v0.62.0
+   Compiling syn v3.0.6
+   Compiling indexmap v2.14.2
+   Compiling wasmparser v0.259.0
+   Compiling macro-string v0.3.0
+   Compiling serde_derive v1.0.229
+   Compiling wasm-encoder v0.259.0
+   Compiling wit-parser v0.259.0
+   Compiling wasm-metadata v0.259.0
+   Compiling wit-component v0.259.0
+   Compiling wit-bindgen-core v0.62.0
+    Checking wafer-p3-wit-guest-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/probes/guest-bindings)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 9.53s
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 clippy --manifest-path experiments/p3/wit/probes/guest-bindings/Cargo.toml --target wasm32-wasip2 --no-default-features --features stream --locked -- -D warnings
+    Checking wafer-p3-wit-guest-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/probes/guest-bindings)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 clippy --manifest-path experiments/p3/wit/probes/guest-bindings/Cargo.toml --target wasm32-wasip2 --no-default-features --features owned-buffer --locked -- -D warnings
+    Checking wafer-p3-wit-guest-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/probes/guest-bindings)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 clippy --manifest-path experiments/p3/wit/probes/guest-bindings/Cargo.toml --target wasm32-wasip2 --no-default-features --features payload-stream --locked -- -D warnings
+    Checking wafer-p3-wit-guest-probe v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/probes/guest-bindings)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.15s
+exit_status=0

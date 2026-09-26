@@ -1,0 +1,9 @@
+package wafer:pipeline@0.2.0;
+
+world transform-message-node {
+    export message-transform;
+}
+
+world transform-stream-node {
+    export stream-transform;
+}

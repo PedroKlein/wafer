@@ -1,0 +1,27 @@
+package wafer:pipeline@0.2.0;
+
+interface types {
+    record lineage {
+        parent-id: option<string>,
+        trace-id: option<string>,
+    }
+
+    record envelope {
+        id: string,
+        timestamp: u64,
+        source: string,
+        content-type: string,
+        metadata: list<tuple<string, string>>,
+        lineage: lineage,
+        retry-count: u32,
+        payload: list<u8>,
+    }
+
+    variant process-error {
+        bad-input(string),
+        dependency-failed(string),
+        processing-failed(string),
+        timed-out,
+        unrecoverable(string),
+    }
+}

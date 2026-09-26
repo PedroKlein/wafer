@@ -1,0 +1,9 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+$ shasum -a 256 experiments/p3/evidence/p1-t2/inputs.sha256
+b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d  experiments/p3/evidence/p1-t2/inputs.sha256
+$ WASM_TOOLS=<pinned> WIT_BINDGEN=<pinned> experiments/p3/wit/probe.sh {scratchDir}/p1-t2-generated
+Generating "/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-transform-message-node/transform_message_node.rs"
+Generating "/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-transform-stream-node/transform_stream_node.rs"
+Generating "/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-owned-buffer-resource/probe.rs"
+Generating "/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-separate-payload-stream/probe.rs"
+exit_status=0

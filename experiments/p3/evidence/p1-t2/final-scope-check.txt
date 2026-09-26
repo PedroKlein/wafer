@@ -1,0 +1,9 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+$ git diff --cached --check
+$ staged paths must remain within experiments/p3/wit or experiments/p3/evidence/p1-t2
+staged_scope_valid=true
+$ git diff --exit-code ace19a0bd42c14fd1bf34c39daeacb91acf360db -- Cargo.toml Cargo.lock rust-toolchain.toml wit crates
+production_diff_empty=true
+$ floating dependency audit
+floating_dependency_inputs_absent=true
+exit_status=0

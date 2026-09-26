@@ -1,0 +1,10 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+$ git status --short --branch
+## wasi-0.3-improvements
+?? experiments/p3/evidence/p1-t2/
+$ shasum -a 256 production WIT
+1dc7756d48db6d76eefcc19f089f29dc9da7f33f60eecd9706bce8e9e7698925  wit/pipeline-host.wit
+c7601c2ba76a276e4658ae8a4c6623b77254a534b6ef9790384f5054c45db16d  wit/pipeline-node.wit
+e71043d395e5fcab3c26845c77bbab95cea16eab7ebdf0fb0e0858f4cd53bff2  wit/pipeline-routing.wit
+4c30fd97c6d1ab1d4329ee795d3a8385fbf47212403ba630af31cbfcebb508ed  wit/pipeline-types.wit
+55ff628fbd26afbd869198c452c89b3958631ec978d6cc35d3c3bc89d4b207ac  wit/worlds.wit

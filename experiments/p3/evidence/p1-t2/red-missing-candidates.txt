@@ -1,0 +1,5 @@
+error: failed to read "/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/wit/wafer-pipeline-0.2.0"
+
+Caused by:
+    0: No such file or directory (os error 2)
+exit_status=1

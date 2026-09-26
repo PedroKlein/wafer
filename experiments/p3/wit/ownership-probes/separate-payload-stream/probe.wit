@@ -1,0 +1,35 @@
+package wafer:ownership-stream@0.0.0;
+
+interface transform {
+    record lineage {
+        parent-id: option<string>,
+        trace-id: option<string>,
+    }
+
+    record envelope-header {
+        id: string,
+        timestamp: u64,
+        source: string,
+        content-type: string,
+        metadata: list<tuple<string, string>>,
+        lineage: lineage,
+        retry-count: u32,
+    }
+
+    variant process-error {
+        bad-input(string),
+        dependency-failed(string),
+        processing-failed(string),
+        timed-out,
+        unrecoverable(string),
+    }
+
+    process: async func(
+        header: envelope-header,
+        payload: stream<u8>,
+    ) -> result<tuple<envelope-header, stream<u8>>, process-error>;
+}
+
+world probe {
+    export transform;
+}

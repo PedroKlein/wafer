@@ -1,0 +1,9 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+$ shellcheck experiments/p3/wit/probe.sh
+shellcheck_exit_status=0
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 fmt --manifest-path experiments/p3/wit/probes/host-bindings/Cargo.toml -- --check
+host_fmt_exit_status=0
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 fmt --manifest-path experiments/p3/wit/probes/guest-bindings/Cargo.toml -- --check
+guest_fmt_exit_status=0
+exit_status=0

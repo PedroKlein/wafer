@@ -1,0 +1,35 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+=== guest-transform-message-node/transform_message_node.rs ===
+d70a92d5ad08df1f4e0dadcbd9835d5311a367146fc64ef276a108d04da02c2a  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-transform-message-node/transform_message_node.rs
+8:    async fn process(
+44:            pub struct Envelope {
+533:                    async fn process(
+=== guest-transform-stream-node/transform_stream_node.rs ===
+610740c184dd22e3d5f4d1545c401451a30aefb599caa1b9a52d41e4406e83fe  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-transform-stream-node/transform_stream_node.rs
+9:    fn process(
+10:        input: wit_bindgen::rt::async_support::StreamReader<
+14:        wit_bindgen::rt::async_support::StreamReader<
+20:        wit_bindgen::rt::async_support::FutureReader<
+57:            pub struct Envelope {
+154:                                wit_bindgen::rt::async_support::StreamReader::new(
+171:                    fn process(
+172:                        input: wit_bindgen::rt::async_support::StreamReader<Envelope>,
+=== guest-owned-buffer-resource/probe.rs ===
+b0a61a99b82c0beecd5f8a7043fc235f44c73dfa178735fb3a2f580ae8716945  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-owned-buffer-resource/probe.rs
+7:    async fn process(
+28:            pub struct Buffer {
+68:                pub fn new(contents: &[u8]) -> Self {
+237:                pub struct Envelope {
+698:                    async fn process(
+=== guest-separate-payload-stream/probe.rs ===
+884115d450603813f71220cf4f5cadaf548d1d0a1764b36753224fe9ac548689  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t2-generated/guest-separate-payload-stream/probe.rs
+7:    async fn process(
+9:        payload: wit_bindgen::rt::async_support::StreamReader<u8>,
+13:            wit_bindgen::rt::async_support::StreamReader<u8>,
+48:                pub struct EnvelopeHeader {
+281:                                        wit_bindgen::rt::async_support::StreamReader::new(
+510:                    async fn process(
+512:                        payload: wit_bindgen::rt::async_support::StreamReader<u8>,
+516:                            wit_bindgen::rt::async_support::StreamReader<u8>,
+exit_status=0

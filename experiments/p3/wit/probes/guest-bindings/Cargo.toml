@@ -1,0 +1,20 @@
+[package]
+name = "wafer-p3-wit-guest-probe"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+message = []
+stream = []
+owned-buffer = []
+payload-stream = []
+
+[dependencies]
+wit-bindgen = { version = "=0.62.0", features = ["async"] }

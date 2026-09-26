@@ -1,0 +1,12 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+$ grep borrow handles in selected WIT
+selected_wit_borrow_free=true
+$ grep unsupported zero-copy claims in selected WIT and README
+unsupported_zero_copy_claims_absent=true
+$ grep selected WIT async/stream/future declarations
+experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit:7:    process: async func(input: envelope) -> result<envelope, process-error>;
+experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit:15:    process: func(input: stream<envelope>) -> tuple<
+experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit:16:        stream<result<envelope, process-error>>,
+experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit:17:        future<result<_, process-error>>,
+exit_status=0

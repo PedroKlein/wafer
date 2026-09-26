@@ -1,0 +1,45 @@
+package wafer:ownership-buffer@0.0.0;
+
+interface buffers {
+    resource buffer {
+        constructor(contents: list<u8>);
+        size: func() -> u64;
+        read: func(offset: u64, len: u64) -> list<u8>;
+        read-all: func() -> list<u8>;
+    }
+}
+
+interface transform {
+    use buffers.{buffer};
+
+    record lineage {
+        parent-id: option<string>,
+        trace-id: option<string>,
+    }
+
+    record envelope {
+        id: string,
+        timestamp: u64,
+        source: string,
+        content-type: string,
+        metadata: list<tuple<string, string>>,
+        lineage: lineage,
+        retry-count: u32,
+        payload: own<buffer>,
+    }
+
+    variant process-error {
+        bad-input(string),
+        dependency-failed(string),
+        processing-failed(string),
+        timed-out,
+        unrecoverable(string),
+    }
+
+    process: async func(input: envelope) -> result<envelope, process-error>;
+}
+
+world probe {
+    import buffers;
+    export transform;
+}

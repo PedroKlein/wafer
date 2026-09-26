@@ -1,0 +1,19 @@
+package wafer:pipeline@0.2.0;
+
+interface message-transform {
+    use types.{envelope, process-error};
+
+    /// Consumes one owned envelope and resolves to one owned envelope or typed error.
+    process: async func(input: envelope) -> result<envelope, process-error>;
+}
+
+interface stream-transform {
+    use types.{envelope, process-error};
+
+    /// Starts one finite session. Closing the input ends production; the future reports
+    /// terminal success or a session-level error after the output stream is drained.
+    process: func(input: stream<envelope>) -> tuple<
+        stream<result<envelope, process-error>>,
+        future<result<_, process-error>>,
+    >;
+}

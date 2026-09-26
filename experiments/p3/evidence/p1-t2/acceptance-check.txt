@@ -1,0 +1,13 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+$ verify selected package and world declarations
+selected_worlds_present=true
+$ verify envelope field set
+envelope_and_errors_complete=true
+$ verify one selected ownership verdict and two rejected verdicts
+ownership_decision_unambiguous=true
+$ verify compiled/validated evidence markers
+evidence_markers_complete=true
+$ shasum -a 256 ownership-decision.md
+933124b440ed1f78046746be6abef1ddb2de5655ee65d04c2e6fe795a49dacf3  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/ownership-decision.md
+exit_status=0

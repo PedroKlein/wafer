@@ -1,0 +1,33 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+inputs_manifest_sha256=b440c234e188ba6ac206bc7ac2a25699c1949eec465287d0139e3f8180e1236d
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo tree --workspace --locked -e features
+7e6423b6bc10d5386c22225195599141e5c5d5cbd136c0892576a31ed7941860  /var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/tmp.YESw73MFbY
+$ compare root feature tree with P1-T1 post-check tree body
+root_feature_tree_identical_to_p1_t1=true
+$ grep P3-only features in root feature tree
+root_p3_features_absent=true
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo check --workspace --locked
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.25s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p wafer-core --lib queue::envelope::tests --locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.27s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running unittests src/lib.rs (target/debug/deps/wafer_core-20eea955add24e2d)
+
+running 10 tests
+test queue::envelope::tests::unix_epoch_nanos_clamps_pre_epoch_and_saturates ... ok
+test queue::envelope::tests::new_timestamp_is_unix_epoch_nanoseconds ... ok
+test queue::envelope::tests::test_payload_as_string_works ... ok
+test queue::envelope::tests::test_clone_shares_payload_bytes ... ok
+test queue::envelope::tests::test_new_creates_valid_envelope ... ok
+test queue::envelope::tests::test_from_string_creates_utf8_payload ... ok
+test queue::envelope::tests::test_default_has_empty_lineage ... ok
+test queue::envelope::tests::test_clone_copies_lineage ... ok
+test queue::envelope::tests::test_with_metadata_adds_entry ... ok
+test queue::envelope::tests::test_clone_shares_header_via_arc ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 381 filtered out; finished in 0.00s
+
+exit_status=0

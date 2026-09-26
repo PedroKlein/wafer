@@ -1,0 +1,18 @@
+source_commit=ace19a0bd42c14fd1bf34c39daeacb91acf360db
+$ wasm-tools component wit {scratchDir}/p1-t2-borrow-negative
+package wafer:borrow-negative@0.0.0;
+
+interface transform {
+  resource buffer;
+
+  record envelope {
+    payload: borrow<buffer>,
+  }
+
+  process: async func(input: envelope);
+}
+
+world probe {
+  export transform;
+}
+exit_status=0
