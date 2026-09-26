@@ -16,7 +16,7 @@ Add an optional, per-Wasm-node outbound HTTP grant. The grant is default-deny, c
 
 ### Configuration interface
 
-The planned field is `outbound_http` in `[nodes.NAME.capabilities]`:
+The field is `outbound_http` in `[nodes.NAME.capabilities]`:
 
 ```toml
 [nodes.enrich.capabilities]
@@ -110,7 +110,7 @@ wasmtime-wasi-http = {
 
 `default-send-request` stays disabled because its connector performs its own authority DNS lookup after the policy hook; WAFER requires one policy-controlled resolution and connection snapshot. The implementation uses the existing Hyper stack plus direct `rustls`, `tokio-rustls`, and `webpki-roots` dependencies for the policy-controlled TCP/TLS connection.
 
-`WaferState` will own `WasiHttpCtx` and a policy hook alongside its existing `WasiCtx` and shared `ResourceTable`, then implement `WasiHttpView`. Since WAFER already calls `wasmtime_wasi::p2::add_to_linker_async`, linker construction must add only the HTTP interfaces:
+`WaferState` owns `WasiHttpCtx` and a policy hook alongside its existing `WasiCtx` and shared `ResourceTable`, and implements `WasiHttpView`. Since WAFER already calls `wasmtime_wasi::p2::add_to_linker_async`, linker construction adds only the HTTP interfaces:
 
 ```rust
 wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
@@ -125,7 +125,7 @@ Pinned source:
 - [`WasiHttpHooks::send_request`](https://github.com/bytecodealliance/wasmtime/blob/e9f1ea232fd245aea338ab3eb7d73487ae75cab1/crates/wasi-http/src/ctx.rs#L238-L306)
 - [`HttpRequestDenied` P2 mapping](https://github.com/bytecodealliance/wasmtime/blob/e9f1ea232fd245aea338ab3eb7d73487ae75cab1/crates/wasi-http/src/p2/error.rs#L318-L340)
 
-The compile probe in the P2-T1 evidence bundle proves this dependency feature set, `WasiHttpView`, custom hooks with default sending disabled, shared `ResourceTable`, existing async WASI linker, and HTTP-only async linker compile together.
+The P2-T1 compile probe established that this dependency feature set, `WasiHttpView`, custom hooks with default sending disabled, shared `ResourceTable`, existing async WASI linker, and HTTP-only async linker compile together. The P2-T2 implementation adopted that exact integration.
 
 ## Executable verification matrix
 
@@ -153,6 +153,8 @@ P2-T2 and P2-T3 must implement these tests against real P2 components and contro
 | H18 | Hot-swap to a component that requests an ungranted destination | Replacement may load, but request is denied under the original grant. |
 | H19 | Accepted hot-swap and process-time rollback | Replacement and rollback Stores both retain the exact original grant. |
 | H20 | Enable inference and outbound HTTP together | Both explicit grants survive recovery without enabling any unconfigured capability. |
+
+`eval/scripts/test-http-security.sh` builds and validates the mandatory P2 HTTP fixture, executes every row with hard outer timeouts, and writes a source-bound receipt. The gate fails on a missing fixture, missing row marker, skipped required test, invalid component, or non-zero command result.
 
 ## Native transport boundary
 

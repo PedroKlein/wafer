@@ -36,6 +36,14 @@ timestamp, source, content type, metadata, and payload; those fields survive
 lifting. Native ingress timestamps are checked Unix-epoch nanoseconds. Host
 lineage and retry count remain separate runtime fields.
 
+## Component Model host path and outbound HTTP
+
+Production keeps the `wafer:pipeline@0.1.0` WASI 0.2 ABI and uses Wasmtime's asynchronous P2 host linker, instantiation, lifecycle, and call APIs. Wasm runners execute as ordinary Tokio tasks; there is no production `spawn_blocking`, nested `block_on`, `block_in_place`, sync P2 fallback, or P3 linker path. Each node still owns one Store and runs one guest call at a time, outside cancellation races.
+
+Wasm Transform, Filter, and Router nodes may opt into outbound `wasi:http` for exact `(scheme, canonical-host, effective-port)` destinations. Omission is deny-all. Each request is checked at the send boundary, DNS is resolved once and filtered before direct connection, redirects are not followed, and `CONNECT` is denied. Grants are immutable until pipeline restart and are retained across recovery, reconfigure, hot-swap, and process-time rollback. Native Sources and Sinks remain the preferred transport and credential boundary.
+
+The async P2 path was selected by a 30-pair diagnostic macOS A/B experiment after correctness and strict-simplicity gates passed. The outbound HTTP H01–H20 matrix uses a test-only P2 Transform fixture and controlled loopback endpoints; it does not expand the production plugin inventory. These are implementation decisions, not canonical thesis, P3, zero-copy, release, or production-readiness evidence. A P3 streaming prototype remains separately planned and is absent from production code.
+
 ## Plugin inventory and language boundary
 
 The release verification builds and validates 16 Rust processing/evaluation
@@ -166,6 +174,7 @@ text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
 
 - Stable or production-ready CUDA teardown, inference performance, model
   accuracy evaluation, and accelerator energy claims.
+- WASI 0.3/P3 production support, streaming worlds, and same-Store concurrent guest calls.
 - Python plugin support.
 - Stateful joins, windowing, watermarks, and exactly-once semantics.
 - Native Source/Sink replacement or topology mutation.

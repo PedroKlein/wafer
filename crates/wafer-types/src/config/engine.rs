@@ -589,6 +589,28 @@ mod outbound_http_tests {
     }
 
     #[test]
+    fn prohibited_ip_literals_cannot_be_granted() {
+        for host in [
+            "0.0.0.0",
+            "255.255.255.255",
+            "224.0.0.1",
+            "169.254.1.1",
+            "::",
+            "ff02::1",
+            "fe80::1",
+            "::ffff:127.0.0.1",
+        ] {
+            let result = OutboundHttpDestination {
+                scheme: HttpScheme::Http,
+                host: host.to_string(),
+                port: Some(8080),
+            }
+            .canonicalize();
+            assert_eq!(result, Err(OutboundHttpDestinationError::ProhibitedIp), "{host}");
+        }
+    }
+
+    #[test]
     fn dns_policy_accepts_only_global_addresses() {
         assert!(permitted_dns_ip(Ipv4Addr::new(93, 184, 216, 34).into()));
         assert!(!permitted_dns_ip(Ipv4Addr::LOCALHOST.into()));

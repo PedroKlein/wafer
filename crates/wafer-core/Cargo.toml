@@ -88,6 +88,7 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 hyper = { version = "1.0", features = ["client"] }
+tracing-subscriber = { workspace = true }
 criterion = { version = "0.5", features = ["async_tokio"] }
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["mosquitto"] }

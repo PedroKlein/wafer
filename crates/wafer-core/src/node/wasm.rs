@@ -1286,9 +1286,15 @@ mod tests {
     }
 
     async fn mnist_node_with_engine(engine: &WaferEngine) -> anyhow::Result<WasmTransformNode> {
+        mnist_node_with_capabilities(engine, Capabilities::sandbox().inference(true)).await
+    }
+
+    async fn mnist_node_with_capabilities(
+        engine: &WaferEngine,
+        capabilities: Capabilities,
+    ) -> anyhow::Result<WasmTransformNode> {
         let component = engine.load_component(MNIST_COMPONENT)?;
         let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
-        let capabilities = Capabilities::sandbox().inference(true);
         let state = WaferState::new_with_memory_limit("mnist", capabilities.clone(), MNIST_MEMORY);
         let mut store = Store::new(engine.inner(), state);
         store.limiter(|state| state.limits_mut());
@@ -1478,6 +1484,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn accepted_hot_swap_preserves_outbound_http_grant() -> anyhow::Result<()> {
+        let original = Capabilities::sandbox().outbound_http(vec![loopback_http_destination(8080)]);
+        let mut node = trapping_node_with_capabilities(original.clone()).await?;
+        let mut store = recovery_store(
+            &node.store,
+            "trap",
+            original.clone(),
+            node.memory_limit,
+            node.epoch_deadline,
+            node.fuel_limit,
+        )?;
+        let TransformPre::Ordinary(pre) = &node.cached_pre else {
+            anyhow::bail!("trap fixture unexpectedly used inference bindings");
+        };
+        let bindings = pre.instantiate_async(&mut store).await?;
+        let replacement = PreparedTransformSwap::ordinary(store, bindings, Arc::clone(pre));
+
+        node.try_hot_swap(replacement).await?;
+
+        anyhow::ensure!(node.capabilities == original);
+        anyhow::ensure!(node.store.data().capabilities() == &original);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn hot_swap_rejects_outbound_http_expansion() -> anyhow::Result<()> {
         let original = Capabilities::sandbox().outbound_http(vec![loopback_http_destination(8080)]);
         let mut node = trapping_node_with_capabilities(original.clone()).await?;
@@ -1505,6 +1536,25 @@ mod tests {
         anyhow::ensure!(error.to_string().contains("cannot change the node's capabilities"));
         anyhow::ensure!(node.capabilities == original);
         anyhow::ensure!(node.store.data().capabilities() == &original);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn inference_and_outbound_http_survive_recovery_together() -> anyhow::Result<()> {
+        let engine = mnist_engine()?;
+        let capabilities = Capabilities::sandbox()
+            .inference(true)
+            .outbound_http(vec![loopback_http_destination(8080)]);
+        let mut node = mnist_node_with_capabilities(&engine, capabilities.clone()).await?;
+
+        let (initial_prediction, initial_payload) = mnist_prediction(&mut node).await?;
+        node.recover_from_cached_pre().await?;
+        let (recovered_prediction, recovered_payload) = mnist_prediction(&mut node).await?;
+
+        anyhow::ensure!(initial_prediction == 7 && recovered_prediction == 7);
+        anyhow::ensure!(recovered_payload == initial_payload, "recovery changed logits");
+        anyhow::ensure!(node.capabilities == capabilities);
+        anyhow::ensure!(node.store.data().capabilities() == &capabilities);
         Ok(())
     }
 

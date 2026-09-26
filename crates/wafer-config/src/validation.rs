@@ -589,6 +589,41 @@ outbound_http = [{ scheme = "https", host = "*.example.com" }]
     }
 
     #[test]
+    fn invalid_outbound_http_destinations_report_index_without_echoing_value() {
+        for (host, port) in [
+            (".example.com", None),
+            ("10.0.0.0/8", None),
+            ("api.example.com/path", None),
+            ("user@example.com", None),
+            ("café.example", None),
+            ("bad_label.example", None),
+            ("api.example.com", Some(0)),
+        ] {
+            let capabilities = Capabilities {
+                outbound_http: vec![OutboundHttpDestination {
+                    scheme: HttpScheme::Https,
+                    host: host.to_string(),
+                    port,
+                }],
+                ..Default::default()
+            };
+            let config = simple_config(
+                vec![("transform", transform_with_capabilities("transform.wasm", capabilities))],
+                vec![],
+            );
+
+            let errors = validate(&config).expect_err("invalid destination must be rejected");
+            assert!(
+                errors.iter().any(|error| {
+                    error.message.contains("nodes.transform.capabilities.outbound_http[0]")
+                        && !error.message.contains(host)
+                }),
+                "validation must identify index without echoing {host}: {errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn omitted_and_empty_outbound_http_are_valid() {
         let omitted = simple_config(vec![("transform", transform("transform.wasm"))], vec![]);
         validate(&omitted).expect("omitted outbound HTTP grant must be valid");

@@ -130,18 +130,7 @@ impl AuthorizedDestination {
                 let addresses = tokio::net::lookup_host((host.as_ref(), self.destination.port))
                     .await
                     .map_err(|_error| Error::DnsError { rcode: None, info_code: None })?;
-                let mut found = false;
-                for address in addresses {
-                    found = true;
-                    if permitted_dns_ip(address.ip()) {
-                        return Ok(address);
-                    }
-                }
-                if found {
-                    Err(Error::DestinationIpProhibited)
-                } else {
-                    Err(Error::DestinationNotFound)
-                }
+                select_permitted_address(addresses)
             }
         }
     }
@@ -153,6 +142,19 @@ impl AuthorizedDestination {
             HttpHost::Ip(ip) => Ok(rustls::pki_types::ServerName::IpAddress((*ip).into())),
         }
     }
+}
+
+fn select_permitted_address(
+    addresses: impl Iterator<Item = std::net::SocketAddr>,
+) -> Result<std::net::SocketAddr, Error> {
+    let mut found = false;
+    for address in addresses {
+        found = true;
+        if permitted_dns_ip(address.ip()) {
+            return Ok(address);
+        }
+    }
+    if found { Err(Error::DestinationIpProhibited) } else { Err(Error::DestinationNotFound) }
 }
 
 trait TokioStream: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static {
@@ -282,5 +284,27 @@ impl Body for IncomingResponseBody {
 
     fn size_hint(&self) -> hyper::body::SizeHint {
         self.incoming.size_hint()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddr};
+
+    #[test]
+    fn mixed_dns_answers_select_only_a_permitted_address() {
+        let private = SocketAddr::from((Ipv4Addr::new(10, 0, 0, 1), 443));
+        let public = SocketAddr::from((Ipv4Addr::new(93, 184, 216, 34), 443));
+
+        assert_eq!(select_permitted_address([private, public].into_iter()).unwrap(), public);
+        assert!(matches!(
+            select_permitted_address([private].into_iter()),
+            Err(Error::DestinationIpProhibited)
+        ));
+        assert!(matches!(
+            select_permitted_address(std::iter::empty()),
+            Err(Error::DestinationNotFound)
+        ));
     }
 }

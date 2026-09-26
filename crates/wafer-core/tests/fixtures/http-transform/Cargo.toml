@@ -1,0 +1,19 @@
+[package]
+name = "wafer-http-transform-fixture"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasi = "0.14.7"
+wit-bindgen = "0.53"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

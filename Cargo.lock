@@ -4602,6 +4602,7 @@ dependencies = [
  "tower",
  "tower-http",
  "tracing",
+ "tracing-subscriber",
  "uuid",
  "wafer-config",
  "wafer-types",
