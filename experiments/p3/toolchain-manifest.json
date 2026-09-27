@@ -100,7 +100,17 @@
     "probe_target": "wasm32-wasip2",
     "native_wasm32_wasip3_target_listed_by_rustc": true,
     "native_wasm32_wasip3_prebuilt_available_for_selected_toolchain": false,
-    "impact": "wit-bindgen 0.62.0 can compile and validate a native async WIT export, but Rust 1.98.1 cannot install a prebuilt wasm32-wasip3 standard library on this host; full P3 WASI imports require a separately pinned build-std/WASI SDK route in a later task"
+    "impact": "Rust 1.98.1 cannot install a prebuilt wasm32-wasip3 standard library on this host. P1-T3 therefore builds custom bindings and wasip3 0.9.0 against wasm32-unknown-unknown, then componentizes the core modules with pinned wasm-tools; this executes P3 interfaces without claiming native wasm32-wasip3 std support."
+  },
+  "p1_t3": {
+    "workspace_manifest": "experiments/p3/Cargo.toml",
+    "workspace_lock": "experiments/p3/Cargo.lock",
+    "guest_target": "wasm32-unknown-unknown",
+    "wasip3_version": "0.9.0+wasi-0.3.0",
+    "wasip3_crate_sha256": "f1d5749fdf69bb9400562eba50f8f25f5cd800ef4b74300038b6f99ae7409674",
+    "fixture_manifest": "experiments/p3/tests/fixture-manifest.json",
+    "smoke_log": "experiments/p3/evidence/p1-t3/clean-build-validate-execute.txt",
+    "scope": "isolated-experimental-only"
   },
   "evidence": {
     "host_probe_manifest": "experiments/p3/probes/Cargo.toml",

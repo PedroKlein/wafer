@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "source_commit": "a299e428d328bc34237c034d63d1888278d72c3d",
+  "wasmtime_revision": "11eac9de8693e1a69f86815d1a58918edd5c1785",
+  "rust_version": "1.98.1",
+  "wit_bindgen_version": "0.62.0",
+  "wasip3_version": "0.9.0+wasi-0.3.0",
+  "wasip3_crate_sha256": "f1d5749fdf69bb9400562eba50f8f25f5cd800ef4b74300038b6f99ae7409674",
+  "wasm_tools_version": "1.259.0",
+  "wit_sha256": {
+    "transforms.wit": "4182cb7cc7419b98e39801a16412a84cd3bb2ede42bb652fae52309138242570",
+    "types.wit": "c63b2bfa648545bee3c985b2f089b8a7453f3ddd8aa8c3e6e4fd250037c3954d",
+    "worlds.wit": "c03c2a47fa138b08656beafa583e6ea9a0240812d6daecf151d0cf13e70adf70"
+  },
+  "artifact_sha256": {
+    "message.wasm": "ffda1eeec60e2926cb81895f0bffacefe5cf7c032256c9c3167d7608ce12efe1",
+    "stream.wasm": "ac370c0df472ae75bd2b1e91f6c02c8b1203589626147ac5d4af408e2b6c8041",
+    "http.wasm": "ff62756fd06b076232bf82f04abe384a3b8eff5b129da91afbdc258ed364baf4",
+    "wafer-p3-host": "f9ddfb1ad86bf32d8e84045a6e1d12c7f1e5231ed78148882be9b3bdb01d70bf"
+  },
+  "build_target": "wasm32-unknown-unknown",
+  "commands": [
+    "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-guest-rust --target wasm32-unknown-unknown --no-default-features --features <message|stream> --locked",
+    "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-http-guest --target wasm32-unknown-unknown --locked",
+    "wasm-tools component new <core-module> -o <component>",
+    "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-host --locked",
+    "python3 experiments/p3/tests/smoke.py <host> <message> <stream> <http>"
+  ]
+}

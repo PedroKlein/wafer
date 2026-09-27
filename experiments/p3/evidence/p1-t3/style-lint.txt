@@ -1,0 +1,6 @@
+source_commit=a299e428d328bc34237c034d63d1888278d72c3d
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.57s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.53s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.28s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.23s
+exit_status=0

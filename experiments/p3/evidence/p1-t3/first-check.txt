@@ -1,0 +1,15 @@
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo +1.98.1 check --manifest-path experiments/p3/Cargo.toml
+    Updating crates.io index
+    Updating git repository `https://github.com/bytecodealliance/wasmtime`
+error: failed to select a version for `tokio`.
+    ... required by package `wasmtime-wasi v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)`
+    ... which satisfies git dependency `wasmtime-wasi` of package `wafer-p3-host v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-host)`
+versions that meet the requirements `^1.51.1` are: 1.53.1, 1.53.0, 1.52.4, 1.52.3, 1.52.2, 1.52.1, 1.52.0, 1.51.4, 1.51.3, 1.51.2, 1.51.1
+
+all possible versions conflict with previously selected packages
+
+  previously selected package `tokio v1.50.0`
+    ... which satisfies dependency `tokio = "=1.50.0"` of package `wafer-p3-host v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-host)`
+
+failed to select a version for `tokio` which could resolve this conflict
+exit_status=101

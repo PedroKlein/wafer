@@ -12,7 +12,7 @@ The vertical slice uses owned `list<u8>` payloads. An `envelope` carries:
 - `retry-count`; and
 - owned `payload: list<u8>`.
 
-`transform-message-node` exports one native `async func`. `transform-stream-node` starts one finite session and returns an output stream plus a completion future. Each output stream element is either one owned envelope or one typed `process-error`; the completion future carries session-level success or failure.
+Both worlds export native `async func` calls. `transform-stream-node` starts one finite session and returns an output stream plus a completion future. Each output stream element is either one owned envelope or one typed `process-error`; the completion future carries session-level success or failure. The stream constructor was changed from synchronous to async in P1-T3 after an outer-timeout execution probe showed that a guest-created producer cannot make progress before a synchronous export returns.
 
 This shape is not described as zero-copy. Canonical ABI lowering and lifting may copy payload bytes between host and guest memories. The measured PoC must count those copies rather than infer their absence from `stream<T>`.
 

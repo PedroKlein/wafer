@@ -1,0 +1,483 @@
+source_commit=a299e428d328bc34237c034d63d1888278d72c3d
+   Compiling serde_core v1.0.229
+   Compiling proc-macro2 v1.0.107
+   Compiling quote v1.0.47
+   Compiling foldhash v0.2.0
+   Compiling unicode-ident v1.0.26
+   Compiling equivalent v1.0.2
+   Compiling zmij v1.0.23
+   Compiling semver v1.0.28
+   Compiling bitflags v2.13.2
+   Compiling anyhow v1.0.104
+   Compiling serde_json v1.0.151
+   Compiling serde v1.0.229
+   Compiling hashbrown v0.17.1
+   Compiling itoa v1.0.18
+   Compiling prettyplease v0.3.0
+   Compiling memchr v2.8.3
+   Compiling id-arena v2.3.0
+   Compiling log v0.4.34
+   Compiling leb128fmt v0.1.0
+   Compiling futures-core v0.3.34
+   Compiling heck v0.5.0
+   Compiling futures-sink v0.3.34
+   Compiling wit-bindgen-rust v0.62.0
+   Compiling futures-task v0.3.34
+   Compiling pin-project-lite v0.2.17
+   Compiling wit-bindgen-rust-macro v0.62.0
+   Compiling slab v0.4.12
+   Compiling futures-channel v0.3.34
+   Compiling wit-bindgen v0.62.0
+   Compiling futures-io v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling syn v3.0.6
+   Compiling indexmap v2.14.2
+   Compiling wasmparser v0.259.0
+   Compiling futures v0.3.32
+   Compiling serde_derive v1.0.229
+   Compiling wasm-encoder v0.259.0
+   Compiling wit-parser v0.259.0
+   Compiling wasm-metadata v0.259.0
+   Compiling wit-component v0.259.0
+   Compiling wit-bindgen-core v0.62.0
+   Compiling wafer-p3-guest-rust v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-guest-rust)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 10.25s
+   Compiling serde_core v1.0.229
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling foldhash v0.2.0
+   Compiling quote v1.0.47
+   Compiling equivalent v1.0.2
+   Compiling anyhow v1.0.104
+   Compiling semver v1.0.28
+   Compiling bitflags v2.13.2
+   Compiling zmij v1.0.23
+   Compiling serde v1.0.229
+   Compiling serde_json v1.0.151
+   Compiling hashbrown v0.17.1
+   Compiling prettyplease v0.3.0
+   Compiling itoa v1.0.18
+   Compiling memchr v2.8.3
+   Compiling id-arena v2.3.0
+   Compiling log v0.4.34
+   Compiling leb128fmt v0.1.0
+   Compiling wit-bindgen-rust v0.62.0
+   Compiling heck v0.5.0
+   Compiling futures-sink v0.3.34
+   Compiling futures-core v0.3.34
+   Compiling slab v0.4.12
+   Compiling wit-bindgen-rust-macro v0.62.0
+   Compiling pin-project-lite v0.2.17
+   Compiling futures-task v0.3.34
+   Compiling futures-channel v0.3.34
+   Compiling futures-io v0.3.34
+   Compiling futures-util v0.3.34
+   Compiling wit-bindgen v0.62.0
+   Compiling syn v3.0.6
+   Compiling futures v0.3.32
+   Compiling indexmap v2.14.2
+   Compiling wasmparser v0.259.0
+   Compiling serde_derive v1.0.229
+   Compiling wit-parser v0.259.0
+   Compiling wasm-encoder v0.259.0
+   Compiling wasm-metadata v0.259.0
+   Compiling wit-component v0.259.0
+   Compiling wit-bindgen-core v0.62.0
+   Compiling wafer-p3-guest-rust v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-guest-rust)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.96s
+   Compiling wit-bindgen v0.62.0
+   Compiling bitflags v2.13.2
+   Compiling wasip3 v0.9.0+wasi-0.3.0
+   Compiling wafer-p3-http-guest v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-http-guest)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.86s
+   Compiling proc-macro2 v1.0.107
+   Compiling unicode-ident v1.0.26
+   Compiling quote v1.0.47
+   Compiling serde_core v1.0.229
+   Compiling foldhash v0.2.0
+   Compiling libc v0.2.189
+   Compiling serde v1.0.229
+   Compiling libm v0.2.16
+   Compiling equivalent v1.0.2
+   Compiling cfg-if v1.0.5
+   Compiling log v0.4.34
+   Compiling anyhow v1.0.104
+   Compiling hashbrown v0.17.1
+   Compiling wasmtime-internal-core v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling find-msvc-tools v0.1.14
+   Compiling shlex v2.0.1
+   Compiling cc v1.5.1
+   Compiling version_check v0.9.5
+   Compiling cranelift-srcgen v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling cranelift-assembler-x64-meta v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling thiserror v2.0.21
+   Compiling generic-array v0.14.7
+   Compiling stable_deref_trait v1.2.1
+   Compiling itoa v1.0.18
+   Compiling pin-project-lite v0.2.17
+   Compiling typenum v1.20.1
+   Compiling heck v0.5.0
+   Compiling fnv v1.0.7
+   Compiling leb128fmt v0.1.0
+   Compiling cranelift-isle v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling target-lexicon v0.13.5
+   Compiling hashbrown v0.16.1
+   Compiling syn v3.0.6
+   Compiling futures-core v0.3.34
+   Compiling cranelift-codegen-shared v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling memchr v2.8.3
+   Compiling bytes v1.12.1
+   Compiling bitflags v2.13.2
+   Compiling block-buffer v0.10.4
+   Compiling crypto-common v0.1.7
+   Compiling indexmap v2.14.2
+   Compiling once_cell v1.21.4
+   Compiling semver v1.0.28
+   Compiling futures-sink v0.3.34
+   Compiling zmij v1.0.23
+   Compiling crc32fast v1.5.2
+   Compiling allocator-api2 v0.2.21
+   Compiling cranelift-assembler-x64 v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmparser v0.259.0
+   Compiling digest v0.10.7
+   Compiling cpufeatures v0.2.17
+   Compiling gimli v0.33.0
+   Compiling rustc-hash v2.1.3
+   Compiling bumpalo v3.20.3
+   Compiling arbitrary v1.4.2
+   Compiling serde_json v1.0.151
+   Compiling sha2 v0.10.9
+   Compiling writeable v0.6.4
+   Compiling synstructure v0.14.0
+   Compiling wasmtime-internal-component-util v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling cranelift-bitset v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling litemap v0.8.3
+   Compiling slab v0.4.12
+   Compiling cranelift-control v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling rustversion v1.0.23
+   Compiling termcolor v1.4.1
+   Compiling object v0.40.0
+   Compiling futures-channel v0.3.34
+   Compiling wasm-encoder v0.259.0
+   Compiling utf8_iter v1.0.4
+   Compiling rustix v1.1.5
+   Compiling icu_normalizer_data v2.3.0
+   Compiling id-arena v2.3.0
+   Compiling icu_properties_data v2.3.0
+   Compiling serde_derive v1.0.229
+   Compiling zerofrom-derive v0.1.8
+   Compiling yoke-derive v0.8.3
+   Compiling pulley-macros v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling thiserror-impl v2.0.21
+   Compiling zerovec-derive v0.11.6
+   Compiling displaydoc v0.2.7
+   Compiling pulley-interpreter v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-internal-versioned-export-macros v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling zerofrom v0.1.8
+   Compiling tokio-macros v2.7.2
+   Compiling futures-macro v0.3.34
+   Compiling yoke v0.8.3
+   Compiling cobs v0.3.0
+   Compiling cranelift-codegen-meta v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling mio v1.2.3
+   Compiling socket2 v0.6.5
+   Compiling errno v0.3.14
+   Compiling ring v0.17.14
+   Compiling wasm-metadata v0.259.0
+   Compiling zerovec v0.11.8
+   Compiling zerotrie v0.2.5
+   Compiling wit-parser v0.259.0
+   Compiling syn v2.0.119
+   Compiling wasmtime-internal-unwinder v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling smallvec v1.16.2
+   Compiling postcard v1.1.3
+   Compiling regalloc2 v0.15.2
+   Compiling tinystr v0.8.4
+   Compiling cranelift-entity v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling potential_utf v0.1.6
+   Compiling futures-io v0.3.34
+   Compiling icu_locale_core v2.3.0
+   Compiling icu_collections v2.3.0
+   Compiling futures-task v0.3.34
+   Compiling cranelift-bforest v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling futures-util v0.3.34
+   Compiling wit-component v0.259.0
+   Compiling cranelift-codegen v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling tokio v1.51.1
+   Compiling icu_provider v2.3.1
+   Compiling encoding_rs v0.8.42
+   Compiling wasmtime-internal-fiber v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling tracing-core v0.1.36
+   Compiling tracing-attributes v0.1.31
+   Compiling wasmprinter v0.259.0
+   Compiling mach2 v0.6.0
+   Compiling wasmtime-internal-component-macro v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-internal-cranelift v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling zeroize v1.9.0
+   Compiling either v1.18.0
+   Compiling tracing v0.1.44
+   Compiling wasmtime-environ v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling rustls-pki-types v1.15.1
+   Compiling itertools v0.14.0
+   Compiling icu_properties v2.3.0
+   Compiling futures-executor v0.3.34
+   Compiling icu_normalizer v2.3.0
+   Compiling wasmtime-internal-wit-bindgen v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling http v1.5.0
+   Compiling getrandom v0.2.17
+   Compiling multiversion_no_op v1.0.0
+   Compiling simdutf8 v0.1.5
+   Compiling scopeguard v1.2.0
+   Compiling untrusted v0.9.0
+   Compiling getrandom v0.4.3
+   Compiling rand_core v0.10.1
+   Compiling idna_adapter v1.2.2
+   Compiling futures v0.3.32
+   Compiling wasmtime-internal-jit-icache-coherence v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling async-trait v0.1.92
+   Compiling percent-encoding v2.3.2
+   Compiling rustls v0.23.45
+   Compiling httparse v1.10.1
+   Compiling form_urlencoded v1.2.2
+   Compiling idna v1.1.0
+   Compiling http-body v1.1.0
+   Compiling chacha20 v0.10.2
+   Compiling tokio-util v0.7.19
+   Compiling try-lock v0.2.5
+   Compiling atomic-waker v1.1.2
+   Compiling subtle v2.6.1
+   Compiling rand v0.10.3
+   Compiling want v0.3.1
+   Compiling url v2.5.8
+   Compiling rustix-linux-procfs v0.1.1
+   Compiling httpdate v1.0.3
+   Compiling http-body-util v0.1.5
+   Compiling webpki-roots v1.0.9
+   Compiling h2 v0.4.19
+   Compiling rustls-webpki v0.103.15
+   Compiling hyper v1.11.1
+   Compiling tokio-rustls v0.26.5
+   Compiling cranelift-native v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling cranelift-frontend v0.137.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-wasi-io v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-wasi v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wasmtime-wasi-http v50.0.0-dev (https://github.com/bytecodealliance/wasmtime?rev=11eac9de8693e1a69f86815d1a58918edd5c1785#11eac9de)
+   Compiling wafer-p3-host v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 42.25s
+package root:component;
+
+world root {
+  import wafer:pipeline/types@0.2.0;
+
+  export wafer:pipeline/message-transform@0.2.0;
+}
+package wafer:pipeline@0.2.0 {
+  interface types {
+    record lineage {
+      parent-id: option<string>,
+      trace-id: option<string>,
+    }
+
+    record envelope {
+      id: string,
+      timestamp: u64,
+      source: string,
+      content-type: string,
+      metadata: list<tuple<string, string>>,
+      lineage: lineage,
+      retry-count: u32,
+      payload: list<u8>,
+    }
+
+    variant process-error {
+      bad-input(string),
+      dependency-failed(string),
+      processing-failed(string),
+      timed-out,
+      unrecoverable(string),
+    }
+  }
+  interface message-transform {
+    use types.{envelope, process-error};
+
+    process: async func(input: envelope) -> result<envelope, process-error>;
+  }
+}
+package root:component;
+
+world root {
+  import wafer:pipeline/types@0.2.0;
+
+  export wafer:pipeline/stream-transform@0.2.0;
+}
+package wafer:pipeline@0.2.0 {
+  interface types {
+    record lineage {
+      parent-id: option<string>,
+      trace-id: option<string>,
+    }
+
+    record envelope {
+      id: string,
+      timestamp: u64,
+      source: string,
+      content-type: string,
+      metadata: list<tuple<string, string>>,
+      lineage: lineage,
+      retry-count: u32,
+      payload: list<u8>,
+    }
+
+    variant process-error {
+      bad-input(string),
+      dependency-failed(string),
+      processing-failed(string),
+      timed-out,
+      unrecoverable(string),
+    }
+  }
+  interface stream-transform {
+    use types.{envelope, process-error};
+
+    process: async func(input: stream<envelope>) -> tuple<stream<result<envelope, process-error>>, future<result<_, process-error>>>;
+  }
+}
+package root:component;
+
+world root {
+  import wasi:cli/environment@0.3.0;
+  import wasi:http/types@0.3.0;
+  import wasi:http/client@0.3.0;
+
+  export wasi:cli/run@0.3.0;
+}
+package wasi:cli@0.3.0 {
+  interface environment {
+    get-environment: func() -> list<tuple<string, string>>;
+  }
+  interface run {
+    run: async func() -> result;
+  }
+}
+
+
+package wasi:http@0.3.0 {
+  interface types {
+    resource fields {
+      constructor();
+    }
+
+    type trailers = fields;
+
+    record DNS-error-payload {
+      rcode: option<string>,
+      info-code: option<u16>,
+    }
+
+    record TLS-alert-received-payload {
+      alert-id: option<u8>,
+      alert-message: option<string>,
+    }
+
+    record field-size-payload {
+      field-name: option<string>,
+      field-size: option<u32>,
+    }
+
+    variant error-code {
+      DNS-timeout,
+      DNS-error(DNS-error-payload),
+      destination-not-found,
+      destination-unavailable,
+      destination-IP-prohibited,
+      destination-IP-unroutable,
+      connection-refused,
+      connection-terminated,
+      connection-timeout,
+      connection-read-timeout,
+      connection-write-timeout,
+      connection-limit-reached,
+      TLS-protocol-error,
+      TLS-certificate-error,
+      TLS-alert-received(TLS-alert-received-payload),
+      HTTP-request-denied,
+      HTTP-request-length-required,
+      HTTP-request-body-size(option<u64>),
+      HTTP-request-method-invalid,
+      HTTP-request-URI-invalid,
+      HTTP-request-URI-too-long,
+      HTTP-request-header-section-size(option<u32>),
+      HTTP-request-header-size(option<field-size-payload>),
+      HTTP-request-trailer-section-size(option<u32>),
+      HTTP-request-trailer-size(field-size-payload),
+      HTTP-response-incomplete,
+      HTTP-response-header-section-size(option<u32>),
+      HTTP-response-header-size(field-size-payload),
+      HTTP-response-body-size(option<u64>),
+      HTTP-response-trailer-section-size(option<u32>),
+      HTTP-response-trailer-size(field-size-payload),
+      HTTP-response-transfer-coding(option<string>),
+      HTTP-response-content-coding(option<string>),
+      HTTP-response-timeout,
+      HTTP-upgrade-failed,
+      HTTP-protocol-error,
+      loop-detected,
+      configuration-error,
+      internal-error(option<string>),
+    }
+
+    resource request {
+      new: static func(headers: headers, contents: option<stream<u8>>, trailers: future<result<option<trailers>, error-code>>, options: option<request-options>) -> tuple<request, future<result<_, error-code>>>;
+      set-method: func(method: method) -> result;
+      set-path-with-query: func(path-with-query: option<string>) -> result;
+      set-scheme: func(scheme: option<scheme>) -> result;
+      set-authority: func(authority: option<string>) -> result;
+    }
+
+    variant scheme {
+      HTTP,
+      HTTPS,
+      other(string),
+    }
+
+    resource request-options {
+      constructor();
+    }
+
+    resource response {
+      get-status-code: func() -> status-code;
+    }
+
+    type status-code = u16;
+
+    type headers = fields;
+
+    variant method {
+      get,
+      head,
+      post,
+      put,
+      delete,
+      connect,
+      options,
+      trace,
+      patch,
+      other(string),
+    }
+  }
+  interface client {
+    use types.{request, response, error-code};
+
+    send: async func(request: request) -> result<response, error-code>;
+  }
+}
+ff62756fd06b076232bf82f04abe384a3b8eff5b129da91afbdc258ed364baf4  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t3-final/artifacts/http.wasm
+ffda1eeec60e2926cb81895f0bffacefe5cf7c032256c9c3167d7608ce12efe1  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t3-final/artifacts/message.wasm
+ac370c0df472ae75bd2b1e91f6c02c8b1203589626147ac5d4af408e2b6c8041  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t3-final/artifacts/stream.wasm
+f9ddfb1ad86bf32d8e84045a6e1d12c7f1e5231ed78148882be9b3bdb01d70bf  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p1-t3-final/host/debug/wafer-p3-host
+message_count=1
+stream_count=1
+denied_server_count=0
+allowed_server_count=1
+exit_status=0

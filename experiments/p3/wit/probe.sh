@@ -33,6 +33,7 @@ done
 
 grep -qF 'package wafer:pipeline@0.2.0;' "$root/wafer-pipeline-0.2.0/types.wit"
 grep -qF 'process: async func(input: envelope)' "$root/wafer-pipeline-0.2.0/transforms.wit"
+grep -qF 'process: async func(input: stream<envelope>)' "$root/wafer-pipeline-0.2.0/transforms.wit"
 grep -qF 'stream<result<envelope, process-error>>' "$root/wafer-pipeline-0.2.0/transforms.wit"
 grep -qF 'future<result<_, process-error>>' "$root/wafer-pipeline-0.2.0/transforms.wit"
 for field in id timestamp source content-type metadata lineage retry-count payload

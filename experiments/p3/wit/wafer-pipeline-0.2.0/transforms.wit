@@ -12,7 +12,7 @@ interface stream-transform {
 
     /// Starts one finite session. Closing the input ends production; the future reports
     /// terminal success or a session-level error after the output stream is drained.
-    process: func(input: stream<envelope>) -> tuple<
+    process: async func(input: stream<envelope>) -> tuple<
         stream<result<envelope, process-error>>,
         future<result<_, process-error>>,
     >;

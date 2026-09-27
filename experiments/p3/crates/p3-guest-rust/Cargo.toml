@@ -1,0 +1,16 @@
+[package]
+name = "wafer-p3-guest-rust"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+message = []
+stream = []
+
+[dependencies]
+wit-bindgen.workspace = true

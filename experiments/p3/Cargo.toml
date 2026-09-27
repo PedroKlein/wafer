@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = ["crates/p3-host", "crates/p3-guest-rust", "crates/p3-http-guest"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.98"
+publish = false
+
+[workspace.dependencies]
+anyhow = "=1.0.104"
+futures = "=0.3.32"
+http = "=1.5.0"
+http-body-util = "=0.1.5"
+tokio = { version = "=1.51.1", features = ["macros", "net", "rt-multi-thread", "time"] }
+wit-bindgen = { version = "=0.62.0", default-features = false, features = ["async", "async-spawn", "inter-task-wakeup", "macros", "realloc"] }
+wasip3 = "=0.9.0"
+wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["anyhow", "cranelift", "runtime", "component-model-async"] }
+wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["p3"] }
+wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["default-send-request", "p3"] }

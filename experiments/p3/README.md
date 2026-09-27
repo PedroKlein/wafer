@@ -100,6 +100,14 @@ The exact tool installation and `wit-bindgen`/`wasm-tools` commands are retained
 under [`evidence/`](evidence/). The complete assessment and acceptance-criterion
 mapping are in the plan scratch directory's `toolchain-report.md`.
 
+## P1-T3 executable smoke
+
+`experiments/p3/Cargo.toml` is a separate workspace. It builds two custom Rust guests and one WASI P3 HTTP command from `wasm32-unknown-unknown` core modules, then wraps them as components with pinned `wasm-tools`. The host invokes native async message and stream exports through `Store::run_concurrent` and links P3 WASI/HTTP only inside this workspace.
+
+`experiments/p3/tests/smoke.py` runs every host invocation in a process group with a 15-second timeout. Its HTTP checks prove that the real guest receives request-level denial without a grant and that an exact loopback grant reaches the server exactly once.
+
+The original synchronous stream-constructor declaration deadlocked under this execution probe. P1-T3 therefore corrected the experimental stream export to `async func`; production WIT remains unchanged.
+
 ## Hard boundary
 
 Nothing in this directory enables P3 in WAFER. P1-T1 does not change the root

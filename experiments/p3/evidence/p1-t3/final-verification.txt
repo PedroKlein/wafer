@@ -1,0 +1,4 @@
+source_commit=a299e428d328bc34237c034d63d1888278d72c3d
+fixture_manifest_valid=true
+production_diff_empty=true
+exit_status=0

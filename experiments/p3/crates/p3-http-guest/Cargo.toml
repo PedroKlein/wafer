@@ -1,0 +1,12 @@
+[package]
+name = "wafer-p3-http-guest"
+version = "0.0.0"
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasip3.workspace = true

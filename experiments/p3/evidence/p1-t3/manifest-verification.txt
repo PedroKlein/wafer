@@ -1,0 +1,1 @@
+fixture_manifest_valid=true

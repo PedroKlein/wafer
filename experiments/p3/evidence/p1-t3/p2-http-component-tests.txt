@@ -1,0 +1,19 @@
+source_commit=48d9cf352724e8c01d5ad0e34d867c88827ca79a
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p wafer-core --test wasi_http_capability --locked -- --ignored
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.46s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/wasi_http_capability.rs (target/debug/deps/wasi_http_capability-8139d2e3dafece54)
+
+running 7 tests
+test real_p2_component_redacts_request_data_from_host_logs ... ok
+test real_p2_component_rejects_authority_variations ... ok
+test real_p2_component_preserves_grant_through_recovery_and_reconfigure ... ok
+test real_p2_component_does_not_expand_redirect_authority ... ok
+test real_p2_component_rejects_dns_loopback_and_connect ... ok
+test real_p2_component_hot_swap_retains_original_grant ... ok
+test real_p2_component_default_denial_and_exact_allow ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 7 filtered out; finished in 1.12s
+
+exit_status=0
