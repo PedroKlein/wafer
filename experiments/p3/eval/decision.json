@@ -1,0 +1,386 @@
+{
+  "conditions": [
+    {
+      "admitted_triplets": 6,
+      "condition": "120b-depth1",
+      "message_vs_p2": {
+        "p95_delta_pct": -39.02087832973362,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -9617408,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 42.04599824181116
+      },
+      "p2": {
+        "compile_median_ns": 8115833.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 7187208.0,
+        "lost_messages": 0,
+        "p50_median_ns": 3937.5,
+        "p95_median_ns": 4167.0,
+        "p99_median_ns": 4896.0,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2949120,
+        "peak_rss_max_bytes": 33357824,
+        "throughput_median_messages_per_second": 191972.63728693937
+      },
+      "p3_message": {
+        "compile_median_ns": 25538520.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 146896.0,
+        "lost_messages": 0,
+        "p50_median_ns": 2416.0,
+        "p95_median_ns": 2541.0,
+        "p99_median_ns": 2916.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2949120,
+        "peak_rss_max_bytes": 23740416,
+        "throughput_median_messages_per_second": 272689.4489853644
+      },
+      "p3_stream": {
+        "compile_median_ns": 43929249.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 153645.5,
+        "lost_messages": 0,
+        "p50_median_ns": 53062.5,
+        "p95_median_ns": 56854.0,
+        "p99_median_ns": 58333.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2949120,
+        "peak_rss_max_bytes": 26099712,
+        "throughput_median_messages_per_second": 431279.31977932993
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 1264.3868490520758,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -7258112,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 124.656662467319
+      }
+    },
+    {
+      "admitted_triplets": 6,
+      "condition": "120b-depth5",
+      "message_vs_p2": {
+        "p95_delta_pct": -44.74775071835696,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -15417344,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 68.1785620681479
+      },
+      "p2": {
+        "compile_median_ns": 7152541.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 31521854.5,
+        "lost_messages": 0,
+        "p50_median_ns": 19854.0,
+        "p95_median_ns": 21229.0,
+        "p99_median_ns": 23729.5,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 14745600,
+        "peak_rss_max_bytes": 40337408,
+        "throughput_median_messages_per_second": 46782.467184638
+      },
+      "p3_message": {
+        "compile_median_ns": 25598333.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 251374.5,
+        "lost_messages": 0,
+        "p50_median_ns": 11395.5,
+        "p95_median_ns": 11729.5,
+        "p99_median_ns": 13521.0,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 14745600,
+        "peak_rss_max_bytes": 24920064,
+        "throughput_median_messages_per_second": 78678.08061112734
+      },
+      "p3_stream": {
+        "compile_median_ns": 44007542.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 268458.5,
+        "lost_messages": 0,
+        "p50_median_ns": 243187.5,
+        "p95_median_ns": 252104.0,
+        "p99_median_ns": 255979.5,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 14745600,
+        "peak_rss_max_bytes": 26640384,
+        "throughput_median_messages_per_second": 121021.12231915764
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 1087.5453389231711,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -13697024,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 158.68905511442856
+      }
+    },
+    {
+      "admitted_triplets": 6,
+      "condition": "1kb-depth1",
+      "message_vs_p2": {
+        "p95_delta_pct": -38.8325760223698,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -10190848,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 40.896460096077774
+      },
+      "p2": {
+        "compile_median_ns": 7765167.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 6589083.5,
+        "lost_messages": 0,
+        "p50_median_ns": 4000.0,
+        "p95_median_ns": 4291.5,
+        "p99_median_ns": 5041.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 25165824,
+        "peak_rss_max_bytes": 33931264,
+        "throughput_median_messages_per_second": 186014.4004074216
+      },
+      "p3_message": {
+        "compile_median_ns": 25493541.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 146249.5,
+        "lost_messages": 0,
+        "p50_median_ns": 2500.0,
+        "p95_median_ns": 2625.0,
+        "p99_median_ns": 3146.0,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 25165824,
+        "peak_rss_max_bytes": 23740416,
+        "throughput_median_messages_per_second": 262087.70544300112
+      },
+      "p3_stream": {
+        "compile_median_ns": 43967979.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 159583.5,
+        "lost_messages": 0,
+        "p50_median_ns": 55084.0,
+        "p95_median_ns": 57854.0,
+        "p99_median_ns": 60375.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 25165824,
+        "peak_rss_max_bytes": 26198016,
+        "throughput_median_messages_per_second": 417084.3418102651
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 1248.1067225911686,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -7733248,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 124.22153386874248
+      }
+    },
+    {
+      "admitted_triplets": 6,
+      "condition": "1kb-depth5",
+      "message_vs_p2": {
+        "p95_delta_pct": -44.04209440772512,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -15351808,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 68.29468411803724
+      },
+      "p2": {
+        "compile_median_ns": 7697750.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 30875917.0,
+        "lost_messages": 0,
+        "p50_median_ns": 20333.5,
+        "p95_median_ns": 21333.0,
+        "p99_median_ns": 24042.0,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 125829120,
+        "peak_rss_max_bytes": 40288256,
+        "throughput_median_messages_per_second": 45786.991512403125
+      },
+      "p3_message": {
+        "compile_median_ns": 25539583.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 253854.5,
+        "lost_messages": 0,
+        "p50_median_ns": 11583.5,
+        "p95_median_ns": 11937.5,
+        "p99_median_ns": 14083.5,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 125829120,
+        "peak_rss_max_bytes": 24936448,
+        "throughput_median_messages_per_second": 77057.07273295136
+      },
+      "p3_stream": {
+        "compile_median_ns": 44093479.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 266458.5,
+        "lost_messages": 0,
+        "p50_median_ns": 255854.0,
+        "p95_median_ns": 264604.0,
+        "p99_median_ns": 272604.0,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 125829120,
+        "peak_rss_max_bytes": 26738688,
+        "throughput_median_messages_per_second": 115083.11530647571
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 1140.3506304786013,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -13549568,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 151.34456644809504
+      }
+    },
+    {
+      "admitted_triplets": 6,
+      "condition": "100kb-depth1",
+      "message_vs_p2": {
+        "p95_delta_pct": -11.689040445461217,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -10665984,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 10.130746471473712
+      },
+      "p2": {
+        "compile_median_ns": 7015437.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 7097563.0,
+        "lost_messages": 0,
+        "p50_median_ns": 11187.5,
+        "p95_median_ns": 11583.5,
+        "p99_median_ns": 12895.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2516582400,
+        "peak_rss_max_bytes": 34504704,
+        "throughput_median_messages_per_second": 62079.654874890315
+      },
+      "p3_message": {
+        "compile_median_ns": 25372646.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 132062.5,
+        "lost_messages": 0,
+        "p50_median_ns": 9625.0,
+        "p95_median_ns": 10229.5,
+        "p99_median_ns": 10958.5,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2516582400,
+        "peak_rss_max_bytes": 23838720,
+        "throughput_median_messages_per_second": 68368.78732063132
+      },
+      "p3_stream": {
+        "compile_median_ns": 44044708.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 155250.0,
+        "lost_messages": 0,
+        "p50_median_ns": 236583.0,
+        "p95_median_ns": 267145.5,
+        "p99_median_ns": 385417.0,
+        "payload_allocations": 24576,
+        "payload_copy_bytes": 2516582400,
+        "peak_rss_max_bytes": 34734080,
+        "throughput_median_messages_per_second": 98433.44204812415
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 2206.2589027496006,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": 229376,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 58.55990540942592
+      }
+    },
+    {
+      "admitted_triplets": 6,
+      "condition": "100kb-depth5",
+      "message_vs_p2": {
+        "p95_delta_pct": -16.476000137831225,
+        "regression_budget_pass": true,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": -15089664,
+        "stream_benefit_pass": false,
+        "throughput_delta_pct": 18.068713505310072
+      },
+      "p2": {
+        "compile_median_ns": 6989499.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 29896958.5,
+        "lost_messages": 0,
+        "p50_median_ns": 54937.5,
+        "p95_median_ns": 58042.0,
+        "p99_median_ns": 63187.5,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 12582912000,
+        "peak_rss_max_bytes": 40517632,
+        "throughput_median_messages_per_second": 16616.435637164825
+      },
+      "p3_message": {
+        "compile_median_ns": 25517083.0,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 250979.0,
+        "lost_messages": 0,
+        "p50_median_ns": 45729.5,
+        "p95_median_ns": 48479.0,
+        "p99_median_ns": 50583.0,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 12582912000,
+        "peak_rss_max_bytes": 25427968,
+        "throughput_median_messages_per_second": 19618.81178723838
+      },
+      "p3_stream": {
+        "compile_median_ns": 44099354.5,
+        "duplicate_messages": 0,
+        "instantiate_median_ns": 272104.0,
+        "lost_messages": 0,
+        "p50_median_ns": 1362958.5,
+        "p95_median_ns": 1443416.5,
+        "p99_median_ns": 1596458.5,
+        "payload_allocations": 122880,
+        "payload_copy_bytes": 12582912000,
+        "peak_rss_max_bytes": 48398336,
+        "throughput_median_messages_per_second": 21929.5837615193
+      },
+      "stream_vs_p2": {
+        "p95_delta_pct": 2386.8483167361564,
+        "regression_budget_pass": false,
+        "rss_allowance_bytes": 2097152,
+        "rss_delta_bytes": 7880704,
+        "stream_benefit_pass": true,
+        "throughput_delta_pct": 31.975257753058234
+      }
+    }
+  ],
+  "decision": "defer-p3-toolchain",
+  "gates": {
+    "complete-matched-triplets": "pass",
+    "copy-allocation-reconciliation": "pass",
+    "go-p3-toolchain": "fail",
+    "lifecycle-conformance": "pass",
+    "lossless-ordering": "pass",
+    "p3-message-regression": "pass",
+    "p3-stream-benefit": "pass",
+    "p3-stream-regression": "fail",
+    "production-p2-compatibility": "pass",
+    "rust-p3-toolchain": "pass",
+    "source-and-artifact-provenance": "pass",
+    "wasmtime-p3-production-readiness": "fail"
+  },
+  "inputs": {
+    "admitted_leaf_sha256": "3f3ad660a99ddbb9d6497b14e786efe6116644bc21952fdc27aae432ce9f7263",
+    "contract_sha256": "e6a42cdefedb636e5b577daea204a360bfade9d19b97eb402d9d022240a7a3e6",
+    "schedule_sha256": "3e8694257cc15c0bf47d7afdccd11407d77c0dd12f966e68d1e32288098d1a27"
+  },
+  "revisit_trigger": "Re-run after Wasmtime P3 is production-ready and the maintained Go toolchain builds, validates, and executes wafer:pipeline@0.2.0 async message and stream worlds.",
+  "schema": "wafer-p3-poc-decision-v1",
+  "source": {
+    "evidence_class": "experimental-diagnostic",
+    "git_dirty": false,
+    "git_sha": "0bf602c300e561f8f3d2e0c129f3a1fda508f67f",
+    "thesis_evidence": false
+  }
+}

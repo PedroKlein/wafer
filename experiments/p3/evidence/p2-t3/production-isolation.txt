@@ -1,0 +1,50 @@
+source_baseline=0bf602c300e561f8f3d2e0c129f3a1fda508f67f
+$ cargo check --workspace --locked
+    Checking tokio v1.53.1
+    Checking url v2.5.8
+   Compiling regex-automata v0.4.14
+    Checking wasmtime-internal-cranelift v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking rayon v1.11.0
+    Checking futures v0.3.32
+   Compiling ort-sys v2.0.0-rc.10 (https://github.com/pykeio/ort?rev=d1ebde95d386513fea836593815e8f86f7b96a85#d1ebde95)
+    Checking num-integer v0.1.46
+    Checking num-complex v0.4.6
+    Checking wafer-types v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-types)
+    Checking ndarray v0.16.1
+    Checking wafer-config v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-config)
+   Compiling regex v1.12.3
+   Compiling env_filter v1.0.0
+   Compiling env_logger v0.11.9
+    Checking wasmtime v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling openvino-sys v0.11.0
+    Checking ort v2.0.0-rc.10 (https://github.com/pykeio/ort?rev=d1ebde95d386513fea836593815e8f86f7b96a85#d1ebde95)
+    Checking openvino v0.11.0
+    Checking tokio-util v0.7.18
+    Checking tokio-rustls v0.26.4
+    Checking tower v0.5.3
+    Checking tokio-stream v0.1.18
+    Checking tower-http v0.6.8
+    Checking h2 v0.4.15
+    Checking rumqttc v0.25.1
+    Checking hyper v1.11.1
+    Checking hyper-util v0.1.20
+    Checking hyper-rustls v0.27.7
+    Checking axum v0.8.8
+    Checking wiggle v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking wasmtime-wasi-io v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking reqwest v0.12.28
+    Checking reqwest v0.13.2
+    Checking wasmtime-wasi-nn v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking wafer-loadgen v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-loadgen)
+    Checking waferctl v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/waferctl)
+    Checking oci-client v0.16.0
+    Checking wasmtime-wasi v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking wasmtime-wasi-http v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+    Checking wafer-core v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-core)
+    Checking wafer-runtime v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-runtime)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 22.07s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+production_source_wit_and_plugins_diff_empty=true
+production_p3_features_absent=true
+exit_status=0

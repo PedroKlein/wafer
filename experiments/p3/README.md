@@ -116,6 +116,14 @@ The P3 host imports the public production `RuntimeEnvelope` and `BoundedQueue` t
 
 The executable checks are `tests/conformance.py`, `tests/smoke.py`, and `tests/verify_manifest.py`. All are hard-bounded subprocess tests; `conformance.py` runs each host mode in a fresh process group with a 60-second limit.
 
+## Final PoC decision
+
+The frozen three-arm diagnostic admitted 108 clean-source leaves: six matched counterbalanced triplets for each combination of 120 B, 1 KiB, and 100 KiB payloads at depths one and five. All arms preserved the checked envelope fields with zero loss or duplication and reconciled logical boundary-copy counts.
+
+P3 message passed the frozen throughput, p95, and RSS budgets in every condition. P3 stream improved throughput in every condition and cleared the high-pressure throughput-benefit threshold, but its finite-batch completion latency failed the p95 regression budget in every condition. Independently, the maintained Go path is blocked and the selected Wasmtime P3 implementation is not production-ready.
+
+The fail-closed result is [`defer-p3-toolchain`](eval/decision.json). These measurements are experimental macOS diagnostics, not canonical or thesis evidence. Production remains on P2.
+
 ## Hard boundary
 
 Nothing in this directory enables P3 in WAFER. P1-T1 does not change the root

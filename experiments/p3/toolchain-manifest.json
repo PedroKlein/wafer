@@ -131,6 +131,16 @@
     "session_capacity_elements": 32,
     "scope": "isolated-experimental-only"
   },
+  "p2_t3": {
+    "measurement_source_commit": "0bf602c300e561f8f3d2e0c129f3a1fda508f67f",
+    "evidence_class": "experimental-diagnostic",
+    "thesis_evidence": false,
+    "admitted_leaves": 108,
+    "admitted_triplets_per_condition": 6,
+    "decision": "defer-p3-toolchain",
+    "decision_artifact": "experiments/p3/eval/decision.json",
+    "raw_evidence": "/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/comparison"
+  },
   "evidence": {
     "host_probe_manifest": "experiments/p3/probes/Cargo.toml",
     "host_probe_lock": "experiments/p3/probes/Cargo.lock",

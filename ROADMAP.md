@@ -10,8 +10,9 @@ decisions that these items would build on are captured in
 The TG2 pre-campaign runtime and evaluation-contract remediation is verified on
 a clean candidate. The restored MNIST inference path is also verified locally
 and on Jetson. The async P2 host path and bounded outbound HTTP capability are
-implemented and reviewed with no changes requested. Cross-repository parity and
-the P3 adoption decision remain before any release, pilot, or final campaign.
+implemented and reviewed with no changes requested. The isolated P3 PoC chose
+`defer-p3-toolchain`, so the verified P2 contract remains the first-release ABI.
+Cross-repository parity remains before any release, pilot, or final campaign.
 The Jetson receipt confirms CUDA provider execution but not stable CUDA teardown
 or inference performance.
 The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
@@ -32,9 +33,9 @@ Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 
 Remaining work for thesis-grade numbers:
 
-- Complete the isolated P3 PoC and decide whether the first release migrates to
-  a new WIT package version or retains the verified P2 contract. Any migration
-  happens before canonical runs; P2 evidence is not relabeled as P3 evidence.
+- Retain the verified P2 contract for the first release. Revisit P3 only after
+  Wasmtime's P3 embedder is production-ready and the maintained Go path builds,
+  validates, and executes both versioned async message and stream worlds.
 - Pi 5 hardware setup (`isolcpus=1-3`, CPU 0 for OS/Mosquitto/loadgen,
   CPUs 1–3 for the active SUT, performance governor).
 - Native eKuiper 2.1.0 comparator setup and Pi smoke validation.
@@ -67,8 +68,8 @@ Historical open follow-ups (all closed):
 Items flagged in RFCs and ADRs as "future work", not required for the
 thesis but on the credible-next-step list. [RFC-012](docs/rfcs/RFC-012-wasi-0.3-evaluation.md)
 records the Component Model boundary: async P2 and bounded outbound HTTP are
-implemented, while P3 remains an isolated pre-release PoC with explicit
-adoption gates.
+implemented, while the completed experimental P3 PoC remains isolated and its
+production migration is deferred.
 
 - **Host state store** — a small key-value store exposed via a WIT
   host interface for plugins that need cross-message state between
@@ -86,10 +87,10 @@ adoption gates.
   current MNIST architecture check. CPU inference and actual CUDA-provider
   execution are implemented; performance, energy, and production-readiness
   claims remain out of scope.
-- **P3 production migration, conditional on the PoC** — adopt a new versioned
-  WIT package only if Rust and Go toolchains, payload ownership, cancellation,
-  hot-swap, per-message semantics, and matched performance all pass. Otherwise
-  ship the verified P2 contract first.
+- **P3 production migration, deferred** — reconsider only when Wasmtime P3 is
+  production-ready and the maintained Go toolchain executes both candidate
+  worlds; rerun ownership, cancellation, hot-swap, per-message, and matched
+  performance gates before any versioned WIT migration.
 - **OTLP tracing exporter** — replace the stdout `tracing`
   subscriber with a Jaeger / OTLP exporter for distributed
   observability integration.

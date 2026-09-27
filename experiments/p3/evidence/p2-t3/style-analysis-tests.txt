@@ -1,0 +1,22 @@
+measurement_source=0bf602c300e561f8f3d2e0c129f3a1fda508f67f
+$ cargo +1.98.1 fmt --manifest-path experiments/p3/Cargo.toml --all -- --check
+$ cargo +1.98.1 clippy --manifest-path experiments/p3/Cargo.toml -p wafer-p3-host --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.55s
+$ python3 -m unittest experiments/p3/eval/test_analysis.py -v
+test_decision_is_fail_closed_and_exclusive (experiments.p3.eval.test_analysis.AnalysisTests.test_decision_is_fail_closed_and_exclusive) ... ok
+test_regression_boundaries_are_inclusive (experiments.p3.eval.test_analysis.AnalysisTests.test_regression_boundaries_are_inclusive) ... ok
+test_stream_benefit_uses_predeclared_or_rule (experiments.p3.eval.test_analysis.AnalysisTests.test_stream_benefit_uses_predeclared_or_rule) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.000s
+
+OK
+$ python3 experiments/p3/tests/validate_contract.py
+conditions=6
+triplets=36
+leaves=108
+balanced_positions=true
+lifecycle_tests=14
+experiment_tests=4
+decision_outcomes=3-exclusive
+exit_status=0

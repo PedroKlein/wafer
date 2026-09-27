@@ -1,6 +1,6 @@
 # RFC-012: WASI 0.3 and Component Model Evolution
 
-- **Status:** Async P2 and bounded outbound HTTP implemented; P3 PoC approved
+- **Status:** Async P2 and bounded outbound HTTP implemented; P3 migration deferred
 - **Assessment dates:** 2026-09-25 to 2026-09-26
 - **Amends:** —
 - **Amended by:** [ADR-0016](../adr/0016-outbound-wasi-http-capability.md)
@@ -18,8 +18,9 @@ WIT or plugin bytes, and processing nodes may receive a default-deny outbound
 `wasi:http` grant for exact destinations.
 
 Before WAFER's first release and canonical campaign, a separate Preview 3 PoC
-will test native async functions and streams against the retained P2 path. The
-PoC may lead to a versioned WIT migration; it is not production P3 support.
+tested native async functions and streams against the retained P2 path. The
+PoC selected `defer-p3-toolchain`; it is not production P3 support and does not
+change the production ABI.
 
 ## Current implementation
 
@@ -334,6 +335,32 @@ duplication, startup, shutdown, trap recovery, and hot-swap. This measurement is
 mandatory because current Component Model async task infrastructure can add
 substantial overhead to otherwise synchronous calls; P3 is not presumed faster.
 
+### D3.1: PoC result
+
+The isolated PoC completed 108 experimental diagnostic leaves: six matched,
+counterbalanced triplets for each combination of 120 B, 1 KiB, and 100 KiB
+payloads at depths one and five. Every leaf preserved order and envelope fields,
+reported zero loss and duplication, and reconciled the declared payload copy
+and allocation counts.
+
+P3 message-at-a-time passed the frozen throughput, p95, and RSS regression
+budgets in all six conditions. P3 streaming increased throughput in all six
+conditions and met the predeclared high-pressure throughput-benefit threshold,
+but failed the p95 regression budget in every condition because its latency is
+measured at finite-batch completion. These macOS results are diagnostic only;
+they are not canonical or thesis evidence.
+
+The fail-closed decision is `defer-p3-toolchain`. The maintained Go path cannot
+build and execute the P3 contract, and the selected Wasmtime P3 implementation
+still describes itself as experimental and not production-ready. The stream
+latency gate also failed. Revisit only after Wasmtime P3 is production-ready and
+the maintained Go toolchain builds, validates, and executes both versioned
+async message and stream worlds, then rerun all semantic and matched gates.
+
+The compact result is
+[`experiments/p3/eval/decision.json`](../../experiments/p3/eval/decision.json);
+raw leaves remain outside canonical evidence in the plan scratch directory.
+
 ### D4: Add capabilities independently of P3
 
 Outbound `wasi:http` is implemented independently of P3 under
@@ -400,12 +427,12 @@ This PoC does not:
 
 1. **Complete:** adopt asynchronous P2 host bindings after matched correctness, simplicity, and performance gates.
 2. **Complete:** implement and adversarially verify bounded outbound P2 `wasi:http`.
-3. **Next:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
-4. **Next if the smoke passes:** build one P3 streaming pass-through slice.
-5. Compare P2, P3 message-at-a-time, and P3 streaming behavior under fixed conditions.
-6. Before release, decide whether to migrate to a new WIT package version or ship P2 as the initial contract.
+3. **Complete:** build the isolated P3 Rust/HTTP/Go toolchain smoke test.
+4. **Complete:** define and execute the bounded P3 streaming pass-through slice.
+5. **Complete:** compare P2, P3 message-at-a-time, and P3 streaming behavior under fixed conditions.
+6. **Decision:** defer P3 migration and retain the verified P2 contract for the first release.
 
-The P3 work requires its own plan and frozen acceptance criteria.
+Future reconsideration requires the explicit revisit trigger in D3.1 rather than automatic adoption.
 
 ## Alternatives considered
 

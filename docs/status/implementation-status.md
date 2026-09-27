@@ -42,7 +42,9 @@ Production keeps the `wafer:pipeline@0.1.0` WASI 0.2 ABI and uses Wasmtime's asy
 
 Wasm Transform, Filter, and Router nodes may opt into outbound `wasi:http` for exact `(scheme, canonical-host, effective-port)` destinations. Omission is deny-all. Each request is checked at the send boundary, DNS is resolved once and filtered before direct connection, redirects are not followed, and `CONNECT` is denied. Grants are immutable until pipeline restart and are retained across recovery, reconfigure, hot-swap, and process-time rollback. Native Sources and Sinks remain the preferred transport and credential boundary.
 
-The async P2 path was selected by a 30-pair diagnostic macOS A/B experiment after correctness and strict-simplicity gates passed. The outbound HTTP H01–H20 matrix uses a test-only P2 Transform fixture and controlled loopback endpoints; it does not expand the production plugin inventory. These are implementation decisions, not canonical thesis, P3, zero-copy, release, or production-readiness evidence. A P3 streaming prototype remains separately planned and is absent from production code.
+The async P2 path was selected by a 30-pair diagnostic macOS A/B experiment after correctness and strict-simplicity gates passed. The outbound HTTP H01–H20 matrix uses a test-only P2 Transform fixture and controlled loopback endpoints; it does not expand the production plugin inventory. These are implementation decisions, not canonical thesis, P3, zero-copy, release, or production-readiness evidence.
+
+The isolated P3 PoC is complete and selected `defer-p3-toolchain`. Rust message, finite-stream, and default-deny HTTP paths execute under the experimental workspace, but the maintained Go P3 path is blocked, the selected Wasmtime P3 embedder is explicitly not production-ready, and the finite-stream arm missed the frozen p95 budget. The 108 matched macOS leaves are diagnostic only. Production remains on `wafer:pipeline@0.1.0` and contains no P3 linker or default feature.
 
 ## Plugin inventory and language boundary
 
@@ -174,7 +176,7 @@ text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
 
 - Stable or production-ready CUDA teardown, inference performance, model
   accuracy evaluation, and accelerator energy claims.
-- WASI 0.3/P3 production support, streaming worlds, and same-Store concurrent guest calls.
+- WASI 0.3/P3 production support, production streaming worlds, and same-Store concurrent guest calls; the completed PoC remains isolated under `experiments/p3/`.
 - Python plugin support.
 - Stateful joins, windowing, watermarks, and exactly-once semantics.
 - Native Source/Sink replacement or topology mutation.

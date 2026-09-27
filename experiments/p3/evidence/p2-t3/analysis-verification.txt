@@ -1,0 +1,13 @@
+measurement_source=0bf602c300e561f8f3d2e0c129f3a1fda508f67f
+independent_recomputation=match
+admitted_leaves=108
+decision=defer-p3-toolchain
+leaves=108
+conditions=6
+independent_recomputation=match
+decision=defer-p3-toolchain
+eval/decision.json=schema-valid
+812026f465691f30e9f2f767296d83380832aa2642f9a1d1a9f1507a974cc1dc  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/comparison/batch.json
+3f3ad660a99ddbb9d6497b14e786efe6116644bc21952fdc27aae432ce9f7263  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/comparison/admitted-leaves.sha256
+2c8454c98b2911adcdfd6c5b6b90037058ffc29d7a6d84e6271068fcdfa9fbc9  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/comparison/decision.json
+exit_status=0
