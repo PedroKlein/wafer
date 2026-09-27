@@ -122,7 +122,9 @@ docker-compose.override.yml
 /.tasks
 /.a5c
 /.cache-dir
-/.claude
+/.claude/*
+!/.claude/settings.json
+!/.claude/skills
 /.cursor
 /.aider*
 .plan-verify/

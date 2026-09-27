@@ -111,5 +111,5 @@ Legacy files are removed; git history preserves them if needed.
   and RQ definitions.
 - `github.com/PedroKlein/obsidian-personal` — literature notes under
   `TCC/`.
-- `.agents/AGENTS.md` — how humans and agents collaborate in this
+- `AGENTS.md` — how humans and agents collaborate in this
   repository.
