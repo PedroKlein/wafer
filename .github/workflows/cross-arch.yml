@@ -1,21 +1,15 @@
 name: cross-arch
 
-# T10 (thesis-hardening plan, 2026-08-02): CI job that runs
-# `mise run cross-build-pi` on every push to main and every PR. Guards
-# the aarch64-unknown-linux-gnu recipe from silent regressions before
-# canonical Pi runs land. See docs/eval/cross-compile.md.
+# Builds wafer, wafer-loadgen and waferctl for aarch64-unknown-linux-gnu on
+# every push to main and every PR that touches Rust code, so the Raspberry Pi
+# build cannot regress silently. See docs/eval/cross-compile.md.
 #
-# Non-gating policy: this workflow is NOT listed as a required check on
-# `main` (per canonical-runs.md constraints — "don't gate main on this
-# until canonical-runs C1 lands"). Once canonical Pi runs are shipped,
-# add this job to the required-check set via GitHub branch protection.
+# Runs on a native arm64 runner (`ubuntu-24.04-arm`) with a cached cargo
+# target. The local `mise run cross-build-pi` task keeps the Docker recipe for
+# hosts without an arm64 toolchain; CI no longer emulates arm64 with QEMU,
+# which made a cold release build take most of the 45-minute budget.
 #
-# Runner choice: uses `ubuntu-latest` (linux/amd64) + docker buildx for
-# `--platform linux/arm64` qemu emulation. On GitHub-hosted runners
-# emulation adds ~2-3x wall-clock vs native aarch64, so the job is set
-# up with a generous `timeout-minutes: 45`. Move to
-# `ubuntu-24.04-arm` runners (native) when they become GA on all
-# GitHub-hosted plans.
+# Non-gating: not a required check on `main`.
 
 on:
   push:
@@ -45,59 +39,28 @@ concurrency:
 jobs:
   cross-build-pi:
     name: cross-build-pi (aarch64-unknown-linux-gnu)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up QEMU (linux/arm64 emulation for docker)
-        # mise run cross-build-pi executes `docker run --platform linux/arm64`.
-        # On GitHub-hosted linux/amd64 runners we need QEMU registered so the
-        # linux/arm64 image can execute at all.
-        uses: docker/setup-qemu-action@v3
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          platforms: arm64
+          cache-shared-key: cross-arch-aarch64
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install mise
-        uses: jdx/mise-action@v2
-        with:
-          # Skip installing mise-managed dev tooling — cross-build-pi only
-          # needs docker + bash. Faster CI setup.
-          install: false
-
-      - name: Verify mise.toml exposes cross-build-pi
-        run: |
-          # T10 AC1: a synthetic breakage of the target triple in
-          # Cargo.toml / mise.toml must fail CI. This step confirms the
-          # task exists in the first place; the subsequent `mise run`
-          # step exercises the actual build.
-          if ! mise tasks ls 2>&1 | grep -q '^cross-build-pi\b'; then
-            echo "FAIL: mise task 'cross-build-pi' is missing from mise.toml" >&2
-            mise tasks ls >&2
-            exit 1
-          fi
-          echo "OK: cross-build-pi task discovered"
-
-      - name: Cross-build wafer, wafer-loadgen, waferctl (aarch64-linux)
-        run: mise run cross-build-pi
+      - name: Build wafer, wafer-loadgen, waferctl (aarch64-linux)
+        run: cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl
 
       - name: Verify outputs are ARM aarch64 ELF binaries
-        run: mise run cross-build-pi-check
-
-      - name: Print binary sizes
         run: |
-          echo "## Binary sizes (aarch64-linux)"
           for b in wafer wafer-loadgen waferctl; do
-            f=target/docker-aarch64-linux/release/$b
-            if [ -x "$f" ]; then
-              size=$(du -h "$f" | cut -f1)
-              echo "  $b: $size"
-            fi
+            f=target/release/$b
+            file "$f"
+            file "$f" | grep -q "ARM aarch64"
+            echo "  $b: $(du -h "$f" | cut -f1)"
           done
 
       - name: Upload aarch64-linux binaries as artifacts
@@ -105,8 +68,8 @@ jobs:
         with:
           name: wafer-aarch64-linux-${{ github.sha }}
           path: |
-            target/docker-aarch64-linux/release/wafer
-            target/docker-aarch64-linux/release/wafer-loadgen
-            target/docker-aarch64-linux/release/waferctl
+            target/release/wafer
+            target/release/wafer-loadgen
+            target/release/waferctl
           if-no-files-found: error
           retention-days: 14

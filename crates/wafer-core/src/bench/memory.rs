@@ -2,7 +2,9 @@
 //!
 //! Samples resident set size at 1Hz for memory scaling measurements (E-Perf-3/6).
 //! Uses the `memory-stats` crate for uniform cross-platform behavior (macOS +
-//! Linux) without subprocess overhead.
+//! Linux) without subprocess overhead. On Linux it reads `/proc/self/statm`
+//! (the `always_use_statm` feature), which costs the same however many
+//! mappings the process holds.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
 
