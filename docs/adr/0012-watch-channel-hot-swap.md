@@ -34,7 +34,7 @@ The hot-swap sequence becomes:
 
 2. **SIGNAL** — The orchestrator sends `Some(payload)` via the `watch::Sender`. This is a single atomic pointer swap inside the watch channel; it does not block.
 
-3. **FLIP** — At the top of the next loop iteration (between messages), the runner checks `swap_rx.has_changed()`. If the watch value is `Some(payload)`, the runner flushes its retry buffer to the DLQ with reason `hot_swap_drain`, applies the payload (replacing its Store, bindings, and cached `InstancePre`), records a swap metric, and continues receiving messages on the same input channel with the new instance.
+3. **FLIP** — At the top of the next loop iteration (between messages), the runner checks `swap_rx.has_changed()`. The input wait also selects on `swap_rx.changed()`, so an idle runner wakes for the swap instead of waiting for its next message, and a message dequeued after the signal is held for the replacement. If the watch value is `Some(payload)`, the runner flushes its retry buffer to the DLQ with reason `hot_swap_drain`, applies the payload (replacing its Store, bindings, and cached `InstancePre`), records a swap metric, and continues receiving messages on the same input channel with the new instance.
 
 4. **RETIRE** — The old `Store` and bindings are dropped via normal Rust RAII when the replacement overwrites them. No explicit close call is required.
 

@@ -15,8 +15,9 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
-    DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, TransformCanaryState,
-    continue_after_policy_action, recv_next_or_retry, send_downstream,
+    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, TrackedReceiver,
+    TransformCanaryState, continue_after_policy_action, next_input, send_downstream,
+    take_pending_swap,
 };
 use wafer_types::config::HotSwapConfig;
 
@@ -110,6 +111,7 @@ pub async fn run_transform_loop_with_config(
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut canary: Option<TransformCanaryState> = None;
     let mut rollback_retry = None;
+    let mut held = None;
     loop {
         // 0. Check if canary window has expired (drop snapshot to free memory)
         if let Some(ref c) = canary
@@ -124,69 +126,67 @@ pub async fn run_transform_loop_with_config(
         }
 
         // 1. Hot-swap check (non-blocking, between messages)
-        if rollback_retry.is_none() && swap_rx.has_changed().unwrap_or(false) {
-            let swap_value = swap_rx.borrow_and_update().clone();
-            if let Some(payload) = swap_value {
-                policy.flush_to_dlq("hot_swap_drain");
-                let progress = payload.progress();
+        if rollback_retry.is_none()
+            && let Some(payload) = take_pending_swap(&mut swap_rx)
+        {
+            policy.flush_to_dlq("hot_swap_drain");
+            let progress = payload.progress();
 
-                // Retain v1 InstancePre BEFORE applying swap (for rollback)
-                let v1_pre = transform.as_wasm_mut().map(|w| w.cached_pre().clone());
-                let is_reconfigure = matches!(payload, SwapPayload::Reconfigure { .. });
+            // Retain v1 InstancePre BEFORE applying swap (for rollback)
+            let v1_pre = transform.as_wasm_mut().map(|w| w.cached_pre().clone());
+            let is_reconfigure = matches!(payload, SwapPayload::Reconfigure { .. });
 
-                let result = match payload {
-                    SwapPayload::Reconfigure { ref new_config_json, .. } => {
-                        transform.try_reconfigure(new_config_json).await
-                    }
-                    SwapPayload::Transform { .. } => {
-                        payload.try_apply_transform(&mut transform).await
-                    }
-                    _ => Err(crate::error::WaferError::Runtime(
-                        "transform node received non-transform swap payload".to_string(),
-                    )),
-                };
-                match result {
-                    Ok(()) => {
-                        progress.mark_replacement_adopted();
-                        pending_swap_progress = Some(progress);
-                        metrics.record_swap();
-                        // Install canary snapshot for process-time rollback (A17).
-                        //
-                        // Only arm canary for full Transform swaps. Reconfigure
-                        // reuses the same InstancePre and mutates `config_json`
-                        // in place inside `try_reconfigure`, so canary rollback
-                        // (which re-runs `validate_and_init(&self.config_json)`)
-                        // would re-apply the reconfigure, not restore v1 config.
-                        // Reconfigure has its own atomic rollback inside
-                        // `try_reconfigure` for the init-failure case.
-                        //
-                        // Drop any previous canary (new swap supersedes).
-                        if is_reconfigure {
-                            canary = None;
-                        } else if let Some(pre) = v1_pre {
-                            canary = Some(TransformCanaryState::new(pre, hot_swap_config.clone()));
-                        }
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            node = transform.node_id(),
-                            %err,
-                            "hot-swap init failed; keeping v1"
-                        );
-                        progress.report_init_failed(err.to_string());
+            let result = match payload {
+                SwapPayload::Reconfigure { ref new_config_json, .. } => {
+                    transform.try_reconfigure(new_config_json).await
+                }
+                SwapPayload::Transform { .. } => payload.try_apply_transform(&mut transform).await,
+                _ => Err(crate::error::WaferError::Runtime(
+                    "transform node received non-transform swap payload".to_string(),
+                )),
+            };
+            match result {
+                Ok(()) => {
+                    progress.mark_replacement_adopted();
+                    pending_swap_progress = Some(progress);
+                    metrics.record_swap();
+                    // Install canary snapshot for process-time rollback (A17).
+                    //
+                    // Only arm canary for full Transform swaps. Reconfigure
+                    // reuses the same InstancePre and mutates `config_json`
+                    // in place inside `try_reconfigure`, so canary rollback
+                    // (which re-runs `validate_and_init(&self.config_json)`)
+                    // would re-apply the reconfigure, not restore v1 config.
+                    // Reconfigure has its own atomic rollback inside
+                    // `try_reconfigure` for the init-failure case.
+                    //
+                    // Drop any previous canary (new swap supersedes).
+                    if is_reconfigure {
+                        canary = None;
+                    } else if let Some(pre) = v1_pre {
+                        canary = Some(TransformCanaryState::new(pre, hot_swap_config.clone()));
                     }
                 }
-                continue;
+                Err(err) => {
+                    tracing::error!(
+                        node = transform.node_id(),
+                        %err,
+                        "hot-swap init failed; keeping v1"
+                    );
+                    progress.report_init_failed(err.to_string());
+                }
             }
+            continue;
         }
 
         // 2. Retry buffer priority — retries before fresh messages
         let envelope = if let Some(retry) = rollback_retry.take() {
             retry
         } else {
-            match recv_next_or_retry(&mut receiver, &mut policy, &cancel).await {
-                Some(envelope) => envelope,
-                None => break,
+            match next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await {
+                NextInput::Envelope(envelope) => envelope,
+                NextInput::Swap => continue,
+                NextInput::Closed => break,
             }
         };
 

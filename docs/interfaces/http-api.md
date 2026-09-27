@@ -127,7 +127,15 @@ Other errors are plain-text bodies:
 - 404: unknown node or node is not replacement-eligible;
 - 409: mutation already in progress or replacement initialization failed;
 - 500: preparation failed or the runner exited before reporting adoption;
-- 504: no local post-replacement outcome arrived within five seconds.
+- 504: the runner did not take the replacement within five seconds. The
+  request is withdrawn before the response is sent, so it never applies later
+  and the node keeps its current plugin.
+
+If the runner adopted the replacement but no message has reached the node
+within five seconds, the endpoint answers 202 with `replacement_adopted: true`
+and a null `first_post_replacement_local_outcome`; hot-swap also records the
+new plugin hash. A 202 with `replacement_adopted: false` means the runner took
+the replacement and is still running its `validate()`/`init()`.
 
 ## `POST /api/v1/nodes/{id}/reconfigure`
 

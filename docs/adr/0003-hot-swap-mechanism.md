@@ -48,8 +48,9 @@ We use a **tokio::sync::watch channel** per Wasm node for hot-swap signaling.
 The orchestrator holds the `watch::Sender<Option<SwapPayload>>` for each node;
 the node runner loop holds the corresponding `watch::Receiver`. The swap is
 checked **between messages** — after the current Wasm invocation returns and
-before the next `recv()` on the input queue — so no explicit drain phase is
-required. The previous 4-phase drain-and-flip model is superseded.
+before the next `recv()` on the input queue — and the swap signal is also a
+wake-up source of that wait, so an idle node adopts it without new input. No
+explicit drain phase is required. The previous 4-phase drain-and-flip model is superseded.
 
 Swap flow — five observable phases (measured by `SwapTimeline`):
 
@@ -89,7 +90,9 @@ bundle's `swap_rx` field.
 - **Zero drain window.** Because the watch is checked between messages and Wasm
   calls are never in-flight at check time, "drain time" is structurally zero.
   Effective swap latency equals the time to finish the current message plus
-  signal propagation — typically < 1 ms at 1000 msg/s throughput.
+  signal propagation and the replacement's `init()`; it does not depend on the
+  input rate, because the runner's input wait also wakes on the swap signal.
+  A message dequeued after the signal is held and processed by the replacement.
 
 - **Mutex-free hot path.** The node runner loop owns its instance directly.
   No shared `Mutex<HashMap<…>>` or double-lock patterns. The only

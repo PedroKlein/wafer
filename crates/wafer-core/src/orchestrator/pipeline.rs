@@ -23,7 +23,6 @@ use crate::engine::WaferEngine;
 use crate::error::{Result, WaferError};
 use crate::node::{NodeMetrics, NodeStateTracker};
 use crate::orchestrator::builder::{BuildOutput, NodeBundleKind, QueueProbe};
-use crate::runner::SwapPayload;
 use crate::runner::error_policy::DlqEnvelope;
 use crate::runner::filter::run_filter_loop;
 use crate::runner::router::run_router_loop;
@@ -31,6 +30,7 @@ use crate::runner::sink::run_sink_loop;
 use crate::runner::source::run_source_loop;
 use crate::runner::transform::run_transform_loop_with_config;
 use crate::runner::{DownstreamSender, TrackedReceiver, send_downstream};
+use crate::runner::{HotSwapProgress, SwapPayload};
 use wafer_types::NodeState;
 
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
@@ -291,6 +291,21 @@ impl PipelineHandle {
         })?;
 
         Ok(())
+    }
+
+    /// Clear a withdrawn swap payload from the node's watch slot so its
+    /// prepared Store is freed. Only clears the slot while it still holds the
+    /// payload tracked by `progress`, and does not wake the runner: the
+    /// withdrawal itself is carried by [`HotSwapProgress::try_withdraw`].
+    pub fn retract_swap(&self, node_id: &str, progress: &Arc<HotSwapProgress>) {
+        if let Some(sender) = self.watch_senders.get(node_id) {
+            sender.send_if_modified(|slot| {
+                if slot.as_ref().is_some_and(|payload| Arc::ptr_eq(&payload.progress(), progress)) {
+                    *slot = None;
+                }
+                false
+            });
+        }
     }
 
     /// Request shutdown without waiting (non-blocking).
