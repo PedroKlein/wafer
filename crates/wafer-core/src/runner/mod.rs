@@ -512,13 +512,15 @@ pub(crate) async fn recv_next_or_retry(
         }
 
         let deadline = policy.next_retry_deadline();
-        // `changed()` is cancel-safe. A closed swap channel only disables the
-        // branch; cancellation and input still end the wait.
+        // Input is polled before the swap signal so a ready message never
+        // registers a swap waker; `next_input` still holds a message that
+        // arrived with a pending swap for the replacement. `changed()` is
+        // cancel-safe, and a closed swap channel only disables its branch.
         let woke = tokio::select! {
             biased;
             () = cancel.cancelled() => return NextInput::Closed,
-            Ok(()) = swap_rx.changed() => None,
             message = receiver.recv() => Some(message),
+            Ok(()) = swap_rx.changed() => None,
             () = tokio::time::sleep_until(deadline.unwrap_or_else(tokio::time::Instant::now)),
                 if deadline.is_some() => continue,
         };
@@ -1465,8 +1467,8 @@ mod tests {
         drop(input_tx);
     }
 
-    // With a message and a swap both ready, the swap wins so the message is
-    // processed by the replacement.
+    // With a message and a swap both ready, the swap is adopted first and the
+    // message is held for the replacement.
     #[tokio::test]
     async fn swap_is_taken_before_queued_input() {
         let (input_tx, input_rx) = mpsc::channel(1);
@@ -1478,10 +1480,12 @@ mod tests {
         let mut receiver = TrackedReceiver::from(input_rx);
         let mut policy = idle_policy();
         let cancel = CancellationToken::new();
-        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        let mut held = None;
+        let next = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await;
         assert!(matches!(next, NextInput::Swap));
+        assert!(held.is_some(), "the dequeued message is held for the replacement");
         assert!(take_pending_swap(&mut swap_rx).is_some());
-        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        let next = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await;
         assert_eq!(expect_envelope(next).payload_as_string(), "queued");
     }
 
