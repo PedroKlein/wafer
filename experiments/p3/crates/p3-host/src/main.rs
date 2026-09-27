@@ -15,6 +15,7 @@ use wasmtime_wasi_http::{
     default_send_request,
 };
 
+mod bench;
 mod conformance;
 
 mod message {
@@ -108,11 +109,28 @@ fn engine() -> Result<Engine> {
     Ok(Engine::new(&config)?)
 }
 
-#[tokio::main]
+#[tokio::main(worker_threads = 2)]
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().context("missing mode")?;
     match mode.as_str() {
+        "bench" => {
+            let arm = args.next().context("missing benchmark arm")?;
+            let component = args.next().context("missing benchmark component path")?;
+            let payload_bytes = args.next().context("missing payload bytes")?.parse()?;
+            let depth = args.next().context("missing depth")?.parse()?;
+            let warmup = args.next().context("missing warmup count")?.parse()?;
+            let measured = args.next().context("missing measured count")?.parse()?;
+            bench::run_benchmark(
+                &arm,
+                Path::new(&component),
+                payload_bytes,
+                depth,
+                warmup,
+                measured,
+            )
+            .await
+        }
         "conformance" => {
             let message = args.next().context("missing message component path")?;
             let stream = args.next().context("missing stream component path")?;

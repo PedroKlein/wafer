@@ -7,9 +7,13 @@ publish.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+bytes.workspace = true
 futures.workspace = true
 http.workspace = true
 http-body-util.workspace = true
+memory-stats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 wafer-core.workspace = true
 wasmtime.workspace = true
