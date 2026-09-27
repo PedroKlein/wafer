@@ -844,7 +844,7 @@ to = "sink"
     }
 
     /// Every bench/MQTT/HTTP adapter block in the evaluation configs must pass
-    /// the `validate()` that launch now runs, so no campaign config starts
+    /// the `validate()` that launch now runs, so no evaluation config starts
     /// failing at launch. (File adapters are skipped: their paths are
     /// resolved at run time relative to the harness working directory.)
     #[test]
