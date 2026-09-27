@@ -18,6 +18,9 @@ use super::Source;
 pub struct HttpSource {
     id: String,
     bind_addr: SocketAddr,
+    /// The configured bind string when it is not a socket address; rejected
+    /// by `validate()` instead of silently binding the fallback.
+    invalid_bind: Option<String>,
     path: String,
     buffer_size: usize,
     message_rx: Option<mpsc::Receiver<RuntimeEnvelope>>,
@@ -41,11 +44,15 @@ impl HttpSource {
         path: impl Into<String>,
     ) -> Self {
         let bind_str = bind_addr.into();
-        let bind_addr = bind_str.parse().unwrap_or_else(|_| "127.0.0.1:8081".parse().unwrap());
+        let (bind_addr, invalid_bind) = bind_str.parse().map_or_else(
+            |_| ("127.0.0.1:8081".parse().unwrap(), Some(bind_str.clone())),
+            |addr| (addr, None),
+        );
 
         Self {
             id: id.into(),
             bind_addr,
+            invalid_bind,
             path: path.into(),
             buffer_size: 1000,
             message_rx: None,
@@ -81,6 +88,11 @@ impl Lifecycle for HttpSource {
     }
 
     fn validate(&self) -> Result<()> {
+        if let Some(bind) = &self.invalid_bind {
+            return Err(WaferError::Config(ConfigError::Message(format!(
+                "HTTP source bind '{bind}' is not a socket address (expected host:port)"
+            ))));
+        }
         if self.path.is_empty() {
             return Err(WaferError::Config(ConfigError::Message(
                 "HTTP path cannot be empty".into(),
@@ -99,12 +111,18 @@ impl Lifecycle for HttpSource {
             let (tx, rx) = mpsc::channel(self.buffer_size);
             let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
 
-            let bind_addr = self.bind_addr;
+            // Bind here, not in the server task, so a taken or forbidden port
+            // fails init() (and the run) instead of yielding an empty run.
+            let listener = tokio::net::TcpListener::bind(self.bind_addr).await.map_err(|e| {
+                WaferError::PluginInit {
+                    message: format!("HTTP source failed to bind {}: {e}", self.bind_addr),
+                }
+            })?;
             let path = self.path.clone();
             let source_id = self.id.clone();
 
             let handle = tokio::spawn(async move {
-                run_http_server(bind_addr, path, source_id, tx, shutdown_rx).await;
+                run_http_server(listener, path, source_id, tx, shutdown_rx).await;
             });
 
             self.message_rx = Some(rx);
@@ -160,7 +178,7 @@ impl Source for HttpSource {
 }
 
 async fn run_http_server(
-    bind_addr: SocketAddr,
+    listener: tokio::net::TcpListener,
     path: String,
     source_id: String,
     tx: mpsc::Sender<RuntimeEnvelope>,
@@ -171,14 +189,6 @@ async fn run_http_server(
     use hyper::server::conn::http1;
     use hyper::service::service_fn;
     use hyper_util::rt::TokioIo;
-
-    let listener = match tokio::net::TcpListener::bind(bind_addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to bind HTTP source server");
-            return;
-        }
-    };
 
     let path = Arc::new(path);
     let source_id = Arc::new(source_id);
@@ -309,6 +319,21 @@ mod tests {
     fn test_http_source_validate_success() {
         let source = HttpSource::new("test-http", "127.0.0.1:8081", "/ingest");
         source.validate().unwrap();
+    }
+
+    #[test]
+    fn test_http_source_validate_rejects_unparseable_bind() {
+        let source = HttpSource::new("test-http", "0.0.0.0:80800", "/ingest");
+        let err = source.validate().expect_err("typo in bind must not fall back silently");
+        assert!(err.to_string().contains("0.0.0.0:80800"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn test_http_source_init_fails_when_port_taken() {
+        let taken = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = taken.local_addr().expect("addr").to_string();
+        let mut source = HttpSource::new("test-http", addr, "/ingest");
+        source.init().await.expect_err("bind failure must surface from init()");
     }
 
     #[tokio::test]

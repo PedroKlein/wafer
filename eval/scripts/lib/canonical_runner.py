@@ -4069,6 +4069,8 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 runtime.terminate()
                 runtime_exit = runtime.wait(timeout=10)
             runtime = None
+        # Non-zero means the run failed (2 = invalid config, 3 = node panic or
+        # I/O init failure, see RESULT-CONTRACT "Runtime exit status").
         if runtime_exit != 0:
             raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
         if (
@@ -5514,6 +5516,8 @@ def run_rate_sweep_item(
                 runtime.kill()
                 runtime_exit = runtime.wait(timeout=5)
             runtime = None
+            # A drained SIGTERM exits 0; any failure during the run is non-zero
+            # (see RESULT-CONTRACT "Runtime exit status").
             if runtime_exit != 0:
                 raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
         if ekuiper_active:
