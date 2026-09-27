@@ -1,8 +1,8 @@
 //! Process RSS memory sampling for evaluation experiments.
 //!
 //! Samples resident set size at 1Hz for memory scaling measurements (E-Perf-3/6).
-//! Uses the `memory-stats` crate for uniform cross-platform behavior (macOS +
-//! Linux) without subprocess overhead.
+//! On Linux it reads `/proc/self/smaps_rollup`; elsewhere, or if that file is
+//! missing, it uses the `memory-stats` crate. Neither spawns a subprocess.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D14.
 
@@ -114,7 +114,31 @@ impl Default for MemoryRecorder {
 /// Cross-platform (macOS + Linux) without subprocess overhead. Returns
 /// `None` only when the underlying OS API is unavailable (e.g., WASI).
 pub fn read_rss_bytes() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    if let Some(rss) = read_smaps_rollup_rss_bytes() {
+        return Some(rss);
+    }
     memory_stats::memory_stats().map(|s| crate::util::usize_as_u64(s.physical_mem))
+}
+
+/// Resident set size from `/proc/self/smaps_rollup` (Linux 4.14+).
+///
+/// `memory-stats` sums the `Rss:` lines of `/proc/self/smaps`, which formats
+/// every mapping and gets slower as the process maps more memory (each Wasm
+/// instance adds several). The rollup file carries the same `Rss:` total,
+/// summed by the kernel, in a few hundred bytes.
+#[cfg(target_os = "linux")]
+fn read_smaps_rollup_rss_bytes() -> Option<u64> {
+    let rollup = std::fs::read_to_string("/proc/self/smaps_rollup").ok()?;
+    let kib = rollup
+        .lines()
+        .find_map(|line| line.strip_prefix("Rss:"))?
+        .trim()
+        .strip_suffix("kB")?
+        .trim()
+        .parse::<u64>()
+        .ok()?;
+    kib.checked_mul(1024)
 }
 
 #[cfg(test)]
@@ -137,6 +161,21 @@ mod tests {
         let rss = read_rss_bytes();
         assert!(rss.is_some(), "should be able to read RSS on this platform");
         assert!(rss.unwrap() > 0, "RSS should be non-zero for a running process");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn smaps_rollup_matches_memory_stats() {
+        let rollup = read_smaps_rollup_rss_bytes().expect("smaps_rollup should be readable");
+        let summed = memory_stats::memory_stats()
+            .map(|s| crate::util::usize_as_u64(s.physical_mem))
+            .expect("memory-stats should read smaps");
+        // Both report the same kernel figure; allow for pages touched between
+        // the two reads.
+        assert!(
+            rollup.abs_diff(summed) <= summed / 20,
+            "smaps_rollup RSS {rollup} differs from summed smaps RSS {summed} by more than 5%"
+        );
     }
 
     #[test]
