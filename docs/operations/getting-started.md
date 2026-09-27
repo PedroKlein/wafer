@@ -130,6 +130,14 @@ Or press `Ctrl-C`. Cleanup is cooperative and bounded: sources close,
 processing loops flush retries, sinks drain their current receiver buffers,
 and remaining tasks may be aborted after the shutdown deadline.
 
+The process exit code says whether the run succeeded: `0` when every node
+exited cleanly, `2` for an invalid configuration (nothing is started), `3`
+when the pipeline failed after starting (a node panicked, a source or sink
+failed to initialise, or the DLQ sink failed; the log names the node), and
+`1` for any other startup failure. Under a supervisor such as systemd,
+`Restart=on-failure` therefore restarts only failed runs. The full table is
+in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status).
+
 ## What to read next
 
 - [`configuration.md`](configuration.md) — every section of the TOML
