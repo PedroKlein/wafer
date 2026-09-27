@@ -108,10 +108,12 @@ Why we ship this over `cross`:
 
 ## CI integration (T10, thesis-hardening)
 
-`.github/workflows/cross-arch.yml` runs `mise run cross-build-pi` on
-every push to `main` and on pull requests. See the workflow file's
-header for the runner selection rationale and the non-gating policy
-(canonical-runs T10 depends on this recipe existing).
+`.github/workflows/cross-arch.yml` builds the same three binaries with
+`cargo build --release` on a native `ubuntu-24.04-arm` runner, with a
+cached cargo target, on every push to `main` and on pull requests that
+touch Rust code. It does not use the Docker recipe: emulating arm64 with
+QEMU made a cold build take most of the job's time budget. The job is not
+a required check.
 
 ## Known non-issues
 

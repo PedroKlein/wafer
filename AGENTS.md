@@ -185,7 +185,7 @@ mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch6
 mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
 ```
 
-See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job runs `cross-build-pi` on push + PR to guard the recipe.
+See `docs/eval/cross-compile.md` for the design rationale (why docker over the `cross` crate) and the docker `--platform` compatibility path on M-series hosts. The `.github/workflows/cross-arch.yml` job builds the same binaries natively on an arm64 runner on push + PR; `.github/workflows/ci.yml` runs fmt, clippy and the test suite.
 
 ### Analysis Notebooks
 
