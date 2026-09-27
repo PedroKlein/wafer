@@ -1,0 +1,441 @@
+{
+  "schema": "wafer-p3-poc-dry-run-schedule-v1",
+  "source_baseline": "a7b3cea837ff6efa79f63c0f3c9352b5f5f33cb3",
+  "experiment_contract": "experiments/p3/experiment-contract.json",
+  "triplet_count": 36,
+  "run_count": 108,
+  "triplets": [
+    {
+      "triplet_index_global": 1,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 2,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 3,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 4,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 5,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 6,
+      "condition": "120b-depth1",
+      "payload_bytes": 120,
+      "depth": 1,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 7,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 8,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 9,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 10,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 11,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 12,
+      "condition": "120b-depth5",
+      "payload_bytes": 120,
+      "depth": 5,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 13,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 14,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 15,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 16,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 17,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 18,
+      "condition": "1kb-depth1",
+      "payload_bytes": 1024,
+      "depth": 1,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 19,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 20,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 21,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 22,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 23,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 24,
+      "condition": "1kb-depth5",
+      "payload_bytes": 1024,
+      "depth": 5,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 25,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 26,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 27,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 28,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 29,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 30,
+      "condition": "100kb-depth1",
+      "payload_bytes": 102400,
+      "depth": 1,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 31,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 1,
+      "arm_order": [
+        "p2",
+        "p3-message",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 32,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 2,
+      "arm_order": [
+        "p3-message",
+        "p3-stream",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 33,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 3,
+      "arm_order": [
+        "p3-stream",
+        "p2",
+        "p3-message"
+      ]
+    },
+    {
+      "triplet_index_global": 34,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 4,
+      "arm_order": [
+        "p3-stream",
+        "p3-message",
+        "p2"
+      ]
+    },
+    {
+      "triplet_index_global": 35,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 5,
+      "arm_order": [
+        "p3-message",
+        "p2",
+        "p3-stream"
+      ]
+    },
+    {
+      "triplet_index_global": 36,
+      "condition": "100kb-depth5",
+      "payload_bytes": 102400,
+      "depth": 5,
+      "replicate": 6,
+      "arm_order": [
+        "p2",
+        "p3-stream",
+        "p3-message"
+      ]
+    }
+  ]
+}

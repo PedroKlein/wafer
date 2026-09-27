@@ -1,0 +1,12 @@
+source_baseline=a7b3cea837ff6efa79f63c0f3c9352b5f5f33cb3
+status=provisional-until-task-commit
+conditions=6
+triplets=36
+leaves=108
+balanced_positions=true
+lifecycle_tests=14
+experiment_tests=4
+decision_outcomes=3-exclusive
+raw-leaf-schema.json=valid-draft-2020-12
+decision-schema.json=valid-draft-2020-12
+exit_status=0

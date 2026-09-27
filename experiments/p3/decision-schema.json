@@ -1,0 +1,61 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wafer.invalid/schemas/p3-poc-decision-v1.json",
+  "title": "WAFER experimental P3 pre-release decision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "inputs", "gates", "conditions", "decision", "revisit_trigger"],
+  "properties": {
+    "schema": {"const": "wafer-p3-poc-decision-v1"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_sha", "git_dirty", "evidence_class", "thesis_evidence"],
+      "properties": {
+        "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "git_dirty": {"const": false},
+        "evidence_class": {"const": "experimental-diagnostic"},
+        "thesis_evidence": {"const": false}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "required": ["contract_sha256", "schedule_sha256", "admitted_leaf_sha256"]
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": {"enum": ["pass", "fail"]},
+      "required": ["source-and-artifact-provenance", "production-p2-compatibility", "rust-p3-toolchain", "go-p3-toolchain", "wasmtime-p3-production-readiness", "lifecycle-conformance", "lossless-ordering", "copy-allocation-reconciliation", "complete-matched-triplets"]
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 6,
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "required": ["condition", "admitted_triplets", "p2", "p3_message", "p3_stream", "message_vs_p2", "stream_vs_p2"],
+        "properties": {
+          "condition": {"enum": ["120b-depth1", "120b-depth5", "1kb-depth1", "1kb-depth5", "100kb-depth1", "100kb-depth5"]},
+          "admitted_triplets": {"const": 6},
+          "p2": {"$ref": "#/$defs/aggregate"},
+          "p3_message": {"$ref": "#/$defs/aggregate"},
+          "p3_stream": {"$ref": "#/$defs/aggregate"},
+          "message_vs_p2": {"$ref": "#/$defs/delta"},
+          "stream_vs_p2": {"$ref": "#/$defs/delta"}
+        }
+      }
+    },
+    "decision": {"enum": ["migrate-wit-before-release", "retain-p2-for-v1", "defer-p3-toolchain"]},
+    "revisit_trigger": {"type": ["string", "null"]}
+  },
+  "$defs": {
+    "aggregate": {
+      "type": "object",
+      "required": ["throughput_median_messages_per_second", "p50_median_ns", "p95_median_ns", "p99_median_ns", "peak_rss_max_bytes", "compile_median_ns", "instantiate_median_ns", "lost_messages", "duplicate_messages", "payload_copy_bytes", "payload_allocations"]
+    },
+    "delta": {
+      "type": "object",
+      "required": ["throughput_delta_pct", "p95_delta_pct", "rss_delta_bytes", "rss_allowance_bytes", "regression_budget_pass", "stream_benefit_pass"]
+    }
+  }
+}

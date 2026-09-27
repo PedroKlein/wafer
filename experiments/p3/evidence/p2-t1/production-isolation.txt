@@ -1,0 +1,13 @@
+source_baseline=a7b3cea837ff6efa79f63c0f3c9352b5f5f33cb3
+1dc7756d48db6d76eefcc19f089f29dc9da7f33f60eecd9706bce8e9e7698925  wit/pipeline-host.wit
+c7601c2ba76a276e4658ae8a4c6623b77254a534b6ef9790384f5054c45db16d  wit/pipeline-node.wit
+e71043d395e5fcab3c26845c77bbab95cea16eab7ebdf0fb0e0858f4cd53bff2  wit/pipeline-routing.wit
+4c30fd97c6d1ab1d4329ee795d3a8385fbf47212403ba630af31cbfcebb508ed  wit/pipeline-types.wit
+55ff628fbd26afbd869198c452c89b3958631ec978d6cc35d3c3bc89d4b207ac  wit/worlds.wit
+--- candidate WIT ---
+4182cb7cc7419b98e39801a16412a84cd3bb2ede42bb652fae52309138242570  experiments/p3/wit/wafer-pipeline-0.2.0/transforms.wit
+c63b2bfa648545bee3c985b2f089b8a7453f3ddd8aa8c3e6e4fd250037c3954d  experiments/p3/wit/wafer-pipeline-0.2.0/types.wit
+c03c2a47fa138b08656beafa583e6ea9a0240812d6daecf151d0cf13e70adf70  experiments/p3/wit/wafer-pipeline-0.2.0/worlds.wit
+--- production diff ---
+production_runtime_and_wit_unchanged=true
+exit_status=0

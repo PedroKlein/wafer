@@ -108,6 +108,7 @@ bd query "label=decision AND status=open"
 | 0014 | Guest SDK Design (thread_local + macros)           | Accepted                                 | 2026-07-12 | [RFC-006](../rfcs/RFC-006-plugin-sdk.md) |
 | 0015 | Command Runner: mise                               | Accepted                                 | 2026-07-19 | — |
 | 0016 | Default-Deny Outbound `wasi:http`                  | Accepted                                 | 2026-09-26 | [RFC-012](../rfcs/RFC-012-wasi-0.3-evaluation.md) |
+| 0017 | Experimental WASI P3 Finite-Stream Lifecycle       | Experimental                             | —          | [RFC-012](../rfcs/RFC-012-wasi-0.3-evaluation.md) |
 
 ### Notes on recent changes (2026-07-18 doc-refactor)
 

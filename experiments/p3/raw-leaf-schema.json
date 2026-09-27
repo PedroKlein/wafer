@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://wafer.invalid/schemas/p3-poc-raw-leaf-v1.json",
+  "title": "WAFER experimental P3 comparison raw leaf",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema", "source", "arm", "condition", "triplet_index", "position",
+    "controlled_factors", "hashes", "toolchain", "setup", "steady_state",
+    "correctness", "copy_accounting", "status"
+  ],
+  "properties": {
+    "schema": {"const": "wafer-p3-poc-raw-leaf-v1"},
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_sha", "git_dirty", "evidence_class"],
+      "properties": {
+        "git_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "git_dirty": {"const": false},
+        "evidence_class": {"const": "experimental-diagnostic"}
+      }
+    },
+    "arm": {"enum": ["p2", "p3-message", "p3-stream"]},
+    "condition": {"enum": ["120b-depth1", "120b-depth5", "1kb-depth1", "1kb-depth5", "100kb-depth1", "100kb-depth5"]},
+    "triplet_index": {"type": "integer", "minimum": 1, "maximum": 6},
+    "position": {"type": "integer", "minimum": 1, "maximum": 3},
+    "controlled_factors": {
+      "type": "object",
+      "required": ["payload_bytes", "depth", "queue_capacity_elements", "stream_session_capacity_elements", "worker_threads", "warmup_messages", "measured_messages", "release", "locked", "metering_mode", "outer_timeout_seconds"]
+    },
+    "hashes": {
+      "type": "object",
+      "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+      "required": ["executable", "component", "wit_tree", "experiment_contract"]
+    },
+    "toolchain": {
+      "type": "object",
+      "required": ["rustc", "cargo", "wasm_tools", "wasmtime_revision"]
+    },
+    "setup": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compile_ns", "instantiate_ns"],
+      "properties": {
+        "compile_ns": {"type": "integer", "minimum": 0},
+        "instantiate_ns": {"type": "integer", "minimum": 0}
+      }
+    },
+    "steady_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["duration_ns", "throughput_messages_per_second", "latency_p50_ns", "latency_p95_ns", "latency_p99_ns", "peak_rss_bytes", "lost_messages", "duplicate_messages"],
+      "properties": {
+        "duration_ns": {"type": "integer", "minimum": 1},
+        "throughput_messages_per_second": {"type": "number", "exclusiveMinimum": 0},
+        "latency_p50_ns": {"type": "integer", "minimum": 0},
+        "latency_p95_ns": {"type": "integer", "minimum": 0},
+        "latency_p99_ns": {"type": "integer", "minimum": 0},
+        "peak_rss_bytes": {"type": "integer", "minimum": 1},
+        "lost_messages": {"type": "integer", "minimum": 0},
+        "duplicate_messages": {"type": "integer", "minimum": 0}
+      }
+    },
+    "correctness": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["input_messages", "output_messages", "ordered", "field_exact", "session_completed"],
+      "properties": {
+        "input_messages": {"type": "integer", "minimum": 1},
+        "output_messages": {"type": "integer", "minimum": 0},
+        "ordered": {"type": "boolean"},
+        "field_exact": {"type": "boolean"},
+        "session_completed": {"type": "boolean"}
+      }
+    },
+    "copy_accounting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload_copy_bytes", "payload_allocations", "reconciled"],
+      "properties": {
+        "payload_copy_bytes": {"type": "integer", "minimum": 0},
+        "payload_allocations": {"type": "integer", "minimum": 0},
+        "reconciled": {"type": "boolean"}
+      }
+    },
+    "status": {"enum": ["passed", "failed"]},
+    "failure": {"type": ["string", "null"]}
+  }
+}

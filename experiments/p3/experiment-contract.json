@@ -1,0 +1,109 @@
+{
+  "schema": "wafer-p3-poc-experiment-v1",
+  "evidence_class": "experimental-diagnostic",
+  "thesis_evidence": false,
+  "source_baseline": "a7b3cea837ff6efa79f63c0f3c9352b5f5f33cb3",
+  "arms": ["p2", "p3-message", "p3-stream"],
+  "payloads": [
+    {"id": "120b", "bytes": 120, "pattern": "repeated-byte-0x42"},
+    {"id": "1kb", "bytes": 1024, "pattern": "repeated-byte-0x42"},
+    {"id": "100kb", "bytes": 102400, "pattern": "repeated-byte-0x42"}
+  ],
+  "depths": [1, 5],
+  "primary_conditions": [
+    "120b-depth1", "120b-depth5",
+    "1kb-depth1", "1kb-depth5",
+    "100kb-depth1", "100kb-depth5"
+  ],
+  "high_pressure_conditions": ["100kb-depth5"],
+  "triplets_per_condition": 6,
+  "triplet_orders": [
+    ["p2", "p3-message", "p3-stream"],
+    ["p3-message", "p3-stream", "p2"],
+    ["p3-stream", "p2", "p3-message"],
+    ["p3-stream", "p3-message", "p2"],
+    ["p3-message", "p2", "p3-stream"],
+    ["p2", "p3-stream", "p3-message"]
+  ],
+  "controlled_factors": {
+    "queue_capacity_elements": 32,
+    "stream_session_capacity_elements": 32,
+    "worker_threads": 2,
+    "warmup_messages": 256,
+    "measured_messages": 2048,
+    "payload_pattern": "repeated-byte-0x42",
+    "release": true,
+    "locked": true,
+    "metering_mode": "neither",
+    "fuel": null,
+    "epoch_deadline_ticks": null,
+    "http_grant": "none",
+    "outer_timeout_seconds": 60
+  },
+  "setup_metrics": [
+    {"name": "compile_ns", "unit": "ns"},
+    {"name": "instantiate_ns", "unit": "ns"}
+  ],
+  "steady_state_metrics": [
+    {"name": "throughput_messages_per_second", "unit": "messages/s"},
+    {"name": "latency_p50_ns", "unit": "ns"},
+    {"name": "latency_p95_ns", "unit": "ns"},
+    {"name": "latency_p99_ns", "unit": "ns"},
+    {"name": "peak_rss_bytes", "unit": "bytes"},
+    {"name": "lost_messages", "unit": "messages"},
+    {"name": "duplicate_messages", "unit": "messages"},
+    {"name": "payload_copy_bytes", "unit": "bytes"},
+    {"name": "payload_allocations", "unit": "allocations"}
+  ],
+  "aggregation": {
+    "throughput": "median of six run values per arm and condition",
+    "latency": "median of six run percentiles per arm and condition",
+    "rss": "maximum of six run-level peaks per arm and condition",
+    "setup": "reported separately and excluded from steady-state metrics"
+  },
+  "gates": {
+    "mandatory": [
+      "source-and-artifact-provenance",
+      "production-p2-compatibility",
+      "rust-p3-toolchain",
+      "go-p3-toolchain",
+      "wasmtime-p3-production-readiness",
+      "lifecycle-conformance",
+      "lossless-ordering",
+      "copy-allocation-reconciliation",
+      "complete-matched-triplets"
+    ],
+    "p3_message_vs_p2": {
+      "minimum_throughput_delta_pct": -5.0,
+      "maximum_p95_delta_pct": 5.0,
+      "rss_allowance": "max(0.05 * p2_peak_rss_bytes, 2097152)",
+      "scope": "every primary condition"
+    },
+    "p3_stream_vs_p2": {
+      "minimum_throughput_delta_pct": -5.0,
+      "maximum_p95_delta_pct": 5.0,
+      "rss_allowance": "max(0.05 * p2_peak_rss_bytes, 2097152)",
+      "scope": "every primary condition",
+      "benefit": {
+        "condition": "100kb-depth5",
+        "minimum_throughput_improvement_pct": 10.0,
+        "minimum_p95_improvement_pct": 10.0,
+        "operator": "or"
+      }
+    }
+  },
+  "decision_precedence": [
+    {
+      "outcome": "defer-p3-toolchain",
+      "when": "any mandatory host, guest, language, or embedder production-readiness toolchain gate fails"
+    },
+    {
+      "outcome": "migrate-wit-before-release",
+      "when": "all mandatory gates and all message, stream regression, and stream-benefit thresholds pass"
+    },
+    {
+      "outcome": "retain-p2-for-v1",
+      "when": "toolchain gates pass but any semantic, evidence, regression, or benefit gate fails"
+    }
+  ]
+}

@@ -50,6 +50,11 @@ Prospective v10 runs pass an explicit results root. The approved volume layout i
 └── reports/
 ```
 
+The isolated WASI P3 PoC is not part of this result tree. Its non-canonical,
+experimental-only contract lives at
+[`experiments/p3/RESULT-CONTRACT.md`](../experiments/p3/RESULT-CONTRACT.md); P2,
+P3 message, and P3 stream evidence must not be relabeled as canonical evidence.
+
 The runner accepts `--results-root PATH` or `WAFER_RESULTS_ROOT`; a CLI value wins.
 No platform path is inferred. `/mnt/wafer-results` on Pi/Jetson and
 `/Volumes/WAF_RESULTS` on macOS are documented operator mount paths. An explicit
