@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
-use futures::StreamExt;
+use futures::{Sink, StreamExt};
 use std::path::Path;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::task::{Context as TaskContext, Poll};
 use wasmtime::component::{
     Component, FutureConsumer, Linker, ResourceTable, Source, StreamConsumer, StreamReader,
@@ -13,6 +14,8 @@ use wasmtime_wasi_http::{
     Error, RequestOptions, WasiBody, WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView,
     default_send_request,
 };
+
+mod conformance;
 
 mod message {
     wasmtime::component::bindgen!({
@@ -30,7 +33,10 @@ mod stream {
     });
 }
 
+static NEXT_STORE_ID: AtomicU64 = AtomicU64::new(1);
+
 struct State {
+    id: u64,
     wasi: WasiCtx,
     http: WasiHttpCtx,
     table: ResourceTable,
@@ -40,6 +46,7 @@ struct State {
 impl State {
     fn new() -> Self {
         Self {
+            id: NEXT_STORE_ID.fetch_add(1, Ordering::Relaxed),
             wasi: WasiCtxBuilder::new().inherit_env().build(),
             http: WasiHttpCtx::new(),
             table: ResourceTable::new(),
@@ -105,12 +112,39 @@ fn engine() -> Result<Engine> {
 async fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     let mode = args.next().context("missing mode")?;
-    let path = args.next().context("missing component path")?;
     match mode.as_str() {
-        "message" => run_message(Path::new(&path)).await,
-        "stream" => run_stream(Path::new(&path)).await,
-        "http-deny" => run_http(Path::new(&path), false).await,
-        "http-allow" => run_http(Path::new(&path), true).await,
+        "conformance" => {
+            let message = args.next().context("missing message component path")?;
+            let stream = args.next().context("missing stream component path")?;
+            conformance::run_conformance(Path::new(&message), Path::new(&stream)).await
+        }
+        "lifecycle" => {
+            let message = args.next().context("missing message component path")?;
+            let stream = args.next().context("missing stream component path")?;
+            let stream_v2 = args.next().context("missing stream v2 component path")?;
+            conformance::run_lifecycle(
+                Path::new(&message),
+                Path::new(&stream),
+                Path::new(&stream_v2),
+            )
+            .await
+        }
+        "message" => {
+            let path = args.next().context("missing component path")?;
+            run_message(Path::new(&path)).await
+        }
+        "stream" => {
+            let path = args.next().context("missing component path")?;
+            run_stream(Path::new(&path)).await
+        }
+        "http-deny" => {
+            let path = args.next().context("missing component path")?;
+            run_http(Path::new(&path), false).await
+        }
+        "http-allow" => {
+            let path = args.next().context("missing component path")?;
+            run_http(Path::new(&path), true).await
+        }
         _ => bail!("unknown mode {mode}"),
     }
 }
@@ -149,7 +183,7 @@ async fn run_message(path: &Path) -> Result<()> {
 }
 
 struct OutputConsumer(
-    futures::channel::mpsc::UnboundedSender<
+    futures::channel::mpsc::Sender<
         Result<
             stream::wafer::pipeline::types::Envelope,
             stream::wafer::pipeline::types::ProcessError,
@@ -164,8 +198,8 @@ impl StreamConsumer<State> for OutputConsumer {
     >;
 
     fn poll_consume(
-        self: Pin<&mut Self>,
-        _: &mut TaskContext<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
         store: wasmtime::StoreContextMut<'_, State>,
         mut source: Source<Self::Item>,
         finish: bool,
@@ -173,12 +207,13 @@ impl StreamConsumer<State> for OutputConsumer {
         if finish {
             return Poll::Ready(Ok(StreamResult::Cancelled));
         }
+        std::task::ready!(Pin::new(&mut self.0).poll_ready(cx))
+            .map_err(|_| wasmtime::Error::msg("output receiver dropped"))?;
         let mut value = None;
         source.read(store, &mut value)?;
         if let Some(value) = value {
-            self.get_mut()
-                .0
-                .unbounded_send(value)
+            Pin::new(&mut self.0)
+                .start_send(value)
                 .map_err(|_| wasmtime::Error::msg("output receiver dropped"))?;
         }
         Poll::Ready(Ok(StreamResult::Completed))
@@ -230,7 +265,7 @@ async fn run_stream(path: &Path) -> Result<()> {
         retry_count: 2,
         payload: b"stream-p3".to_vec(),
     };
-    let (output_tx, mut output_rx) = futures::channel::mpsc::unbounded();
+    let (output_tx, mut output_rx) = futures::channel::mpsc::channel(1);
     let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
     let output = store
         .run_concurrent(async move |accessor| {

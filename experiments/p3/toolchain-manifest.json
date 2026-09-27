@@ -122,6 +122,15 @@
     "componentize_go_required_go_version": "1.27.1-patched",
     "verdict": "experiments/p3/go/verdict.json"
   },
+  "p2_t2": {
+    "source_baseline": "53e49150804eab997c6887ba85406ae44df71804",
+    "fixture_manifest": "experiments/p3/tests/fixture-manifest.json",
+    "conformance_log": "experiments/p3/evidence/p2-t2/conformance-lifecycle.txt",
+    "http_log": "experiments/p3/evidence/p2-t2/http-smoke.txt",
+    "production_compatibility_log": "experiments/p3/evidence/p2-t2/production-compatibility.txt",
+    "session_capacity_elements": 32,
+    "scope": "isolated-experimental-only"
+  },
   "evidence": {
     "host_probe_manifest": "experiments/p3/probes/Cargo.toml",
     "host_probe_lock": "experiments/p3/probes/Cargo.lock",

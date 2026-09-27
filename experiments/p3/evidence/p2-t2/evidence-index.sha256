@@ -1,0 +1,16 @@
+source_baseline=53e49150804eab997c6887ba85406ae44df71804
+bcd38573163934ba6737eedca840c51f0c493820599d956788645f3d2b0ead5a  experiments/p3/evidence/p2-t2/conformance-lifecycle.txt
+59c91777949a937a79a99469ee0decf2b89c2e357fc1b1b5e96134e70d8cd0fa  experiments/p3/evidence/p2-t2/fixture-validation.txt
+8e00149e8c20027e42f07789d2f75b24f5fb72e546a5a16aa8679e6aa5b6335e  experiments/p3/evidence/p2-t2/http-smoke.txt
+87b6c8a4258bf82881cbf28e8cf7ca33bbf102f49c49127fd4ae0aaa994ec7a4  experiments/p3/evidence/p2-t2/production-compatibility.txt
+be565c0eb3fbcfcf4058b0e9a7fc4c3c0fb943d5c51e4beeabb67d434f0a7ab1  experiments/p3/evidence/p2-t2/red-first-test.txt
+fca6a489ba8e0233627e6368b552838debad6b515eaaef040585578c53cd6ed8  experiments/p3/evidence/p2-t2/style-lint.txt
+d963b44f8ec85774d603953eacbe28ba8aa0ad26bd0871cdb0d506943ae60c55  experiments/p3/Cargo.toml
+368de9b531f892539dfc587e95109c609ac87d8c00f04207164a965f0afe4330  experiments/p3/Cargo.lock
+3340dfc4de2a14ff6d4fb20043566274f775454b368cbe175043bb66c2306a09  experiments/p3/crates/p3-host/src/main.rs
+df5edeaccd7999951d1cf78ffb3526dfd09062ba1b67b00c7af20bd590feaa76  experiments/p3/crates/p3-host/src/conformance.rs
+3fef69230eaf471089883e8d8eaa4e6e3076c766a792e50313f6d90c6a54d5c5  experiments/p3/crates/p3-guest-rust/src/lib.rs
+d52958867f50e706c7da7cf3c63bdc06eeb99aa46021a485b6096824042565ff  experiments/p3/tests/conformance.py
+3fdd25ded1a2909fbad990f39ef1ba62ce5f603296dbad981720cd793c1fb604  experiments/p3/tests/fixture-manifest.json
+b784cf6076d9ea11c8a71292db55e8228930094561900ec19782ff9708c2b027  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/p2-t2-report.md
+exit_status=0

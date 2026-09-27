@@ -1,0 +1,4 @@
+source_baseline=53e49150804eab997c6887ba85406ae44df71804
+fixture_manifest_valid=true
+component_validation=4/4
+exit_status=0

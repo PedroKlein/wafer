@@ -12,9 +12,13 @@ anyhow = "=1.0.104"
 futures = "=0.3.32"
 http = "=1.5.0"
 http-body-util = "=0.1.5"
-tokio = { version = "=1.51.1", features = ["macros", "net", "rt-multi-thread", "time"] }
+tokio = { version = "=1.51.1", features = ["macros", "net", "rt-multi-thread", "sync", "time"] }
+wafer-core = { path = "../../crates/wafer-core", default-features = false }
 wit-bindgen = { version = "=0.62.0", default-features = false, features = ["async", "async-spawn", "inter-task-wakeup", "macros", "realloc"] }
 wasip3 = "=0.9.0"
 wasmtime = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["anyhow", "cranelift", "runtime", "component-model-async"] }
 wasmtime-wasi = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["p3"] }
 wasmtime-wasi-http = { git = "https://github.com/bytecodealliance/wasmtime", rev = "11eac9de8693e1a69f86815d1a58918edd5c1785", default-features = false, features = ["default-send-request", "p3"] }
+
+[patch.crates-io]
+ort = { git = "https://github.com/pykeio/ort", rev = "d1ebde95d386513fea836593815e8f86f7b96a85" }

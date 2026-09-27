@@ -1,7 +1,8 @@
 {
-  "schema_version": 1,
-  "source_commit": "a299e428d328bc34237c034d63d1888278d72c3d",
+  "schema_version": 2,
+  "source_commit": "53e49150804eab997c6887ba85406ae44df71804",
   "wasmtime_revision": "11eac9de8693e1a69f86815d1a58918edd5c1785",
+  "production_wasmtime_revision": "e9f1ea232fd245aea338ab3eb7d73487ae75cab1",
   "rust_version": "1.98.1",
   "wit_bindgen_version": "0.62.0",
   "wasip3_version": "0.9.0+wasi-0.3.0",
@@ -13,17 +14,19 @@
     "worlds.wit": "c03c2a47fa138b08656beafa583e6ea9a0240812d6daecf151d0cf13e70adf70"
   },
   "artifact_sha256": {
-    "message.wasm": "ffda1eeec60e2926cb81895f0bffacefe5cf7c032256c9c3167d7608ce12efe1",
-    "stream.wasm": "ac370c0df472ae75bd2b1e91f6c02c8b1203589626147ac5d4af408e2b6c8041",
+    "message.wasm": "70bc946ac69a1fff6d6537c2cb9f1f072d8189ba41b2dd88c08b9ec2dd98b10c",
+    "stream.wasm": "8e36298edc00682e786d7ac0889971feb366cc4ab7ca85f6326b2dc8f3e822eb",
+    "stream-version-v2.wasm": "884dbd87df9e7ce50d0864acc68d16d59afb1efd251c9872869056d34831df4d",
     "http.wasm": "ff62756fd06b076232bf82f04abe384a3b8eff5b129da91afbdc258ed364baf4",
-    "wafer-p3-host": "f9ddfb1ad86bf32d8e84045a6e1d12c7f1e5231ed78148882be9b3bdb01d70bf"
+    "wafer-p3-host": "392e6fe187ceb3b96aabde8c4d1affb863c49f31cff11dc30487e9e0417b9e5c"
   },
   "build_target": "wasm32-unknown-unknown",
   "commands": [
-    "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-guest-rust --target wasm32-unknown-unknown --no-default-features --features <message|stream> --locked",
+    "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-guest-rust --target wasm32-unknown-unknown --no-default-features --features <message|stream|stream,version-v2> --locked",
     "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-http-guest --target wasm32-unknown-unknown --locked",
-    "wasm-tools component new <core-module> -o <component>",
+    "wasm-tools 1.259.0 component new <core-module> -o <component>",
     "cargo +1.98.1 build --manifest-path experiments/p3/Cargo.toml -p wafer-p3-host --locked",
+    "python3 experiments/p3/tests/conformance.py <host> <message> <stream> <stream-v2>",
     "python3 experiments/p3/tests/smoke.py <host> <message> <stream> <http>"
   ]
 }

@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/tests/conformance.py", line 30, in <module>
+    conformance = run("conformance", message, stream)
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/tests/conformance.py", line 24, in run
+    assert process.returncode == 0, (
+           ^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: conformance exited 1
+stdout:
+
+stderr:
+Error: unknown mode conformance
+
+exit_status=1

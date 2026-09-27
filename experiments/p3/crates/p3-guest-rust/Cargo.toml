@@ -11,6 +11,7 @@ crate-type = ["cdylib"]
 [features]
 message = []
 stream = []
+version-v2 = []
 
 [dependencies]
 wit-bindgen.workspace = true

@@ -1,0 +1,11 @@
+source_baseline=53e49150804eab997c6887ba85406ae44df71804
+    Checking wafer-p3-host v0.0.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/experiments/p3/crates/p3-host)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 8.02s
+guest_features=message
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.78s
+guest_features=stream
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.50s
+guest_features=stream,version-v2
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.48s
+unbounded_occurrences=0
+exit_status=0

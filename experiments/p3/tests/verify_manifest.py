@@ -11,6 +11,7 @@ required = {
     "schema_version",
     "source_commit",
     "wasmtime_revision",
+    "production_wasmtime_revision",
     "rust_version",
     "wit_bindgen_version",
     "wasip3_version",
@@ -22,9 +23,10 @@ required = {
     "commands",
 }
 assert set(manifest) == required
-assert manifest["schema_version"] == 1
+assert manifest["schema_version"] == 2
 assert len(manifest["source_commit"]) == 40
 assert len(manifest["wasmtime_revision"]) == 40
+assert len(manifest["production_wasmtime_revision"]) == 40
 assert manifest["commands"]
 
 for name, expected in manifest["artifact_sha256"].items():

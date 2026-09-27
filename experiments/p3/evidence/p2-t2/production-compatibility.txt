@@ -1,0 +1,294 @@
+source_baseline=53e49150804eab997c6887ba85406ae44df71804
+$ cargo fmt --all -- --check
+$ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.56s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+$ cargo test --workspace --locked --quiet
+
+running 33 tests
+.................................
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 7 tests
+.......
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+
+running 411 tests
+....................................................................................... 87/411
+....................................................................................... 174/411
+....................................................................................... 261/411
+....................................................................................... 348/411
+.............................................i.................
+test result: ok. 410 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 4.78s
+
+
+running 10 tests
+i.........
+test result: ok. 9 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.36s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.10s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.83s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.52s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+
+running 4 tests
+....
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.56s
+
+
+running 4 tests
+i
+running 1 test
+.test active_wasi_calls_finish_before_small_runtime_shutdown_child ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 3 filtered out; finished in 1.37s
+
+..
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.48s
+
+
+running 14 tests
+iiiiiii.......
+test result: ok. 7 passed; 0 failed; 7 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+
+running 46 tests
+..............................................
+test result: ok. 46 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.78s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.96s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+
+running 3 tests
+...
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.21s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.95s
+
+
+running 2 tests
+..
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+
+
+running 1 test
+[2m2026-09-27T03:00:18.434991Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m WAFER Runtime starting...
+[2m2026-09-27T03:00:18.435052Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Loading configuration [3mconfig[0m[2m=[0m/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-runtime/../../eval/configs/e-perf-9/pipeline-tier-small.toml
+[2m2026-09-27T03:00:18.443631Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Configuration loaded [3mpipeline[0m[2m=[0me-perf-9-tier-small
+[2m2026-09-27T03:00:18.554013Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Pipeline running [3mtasks[0m[2m=[0m3 [3mwasm_nodes[0m[2m=[0m1
+[2m2026-09-27T03:00:18.569467Z[0m [32m INFO[0m [2mwafer_core::node::sink::bench[0m[2m:[0m BenchSink exported results to "/var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/.tmpp1eWyb" (latency.hdr + throughput.csv)
+[2m2026-09-27T03:00:25.525340Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Runtime provenance written [3mpath[0m[2m=[0m/var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/.tmpp1eWyb/runtime-provenance.json
+[2m2026-09-27T03:00:25.525447Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Pipeline completed
+[2m2026-09-27T03:00:25.526056Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m Startup phases written [3mpath[0m[2m=[0m/var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/.tmpp1eWyb/startup.json
+[2m2026-09-27T03:00:25.526614Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m memory.csv written [3mpath[0m[2m=[0m/var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/.tmpp1eWyb/memory.csv [3msamples[0m[2m=[0m1
+[2m2026-09-27T03:00:25.527985Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m per_node_metrics.csv written [3mpath[0m[2m=[0m/var/folders/zb/ldfcynj56c19ksgfsnzchcc80000gn/T/.tmpp1eWyb/per_node_metrics.csv
+[2m2026-09-27T03:00:25.527995Z[0m [32m INFO[0m [2mwafer[0m[2m:[0m WAFER Runtime stopped
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.14s
+
+
+running 42 tests
+..........................................
+test result: ok. 42 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 33 tests
+.................................
+test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+i
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+all doctests ran in 1.03s; merged doctests compilation took 0.79s
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+$ cargo test --locked -p wafer-core --test polyglot_go_uppercase
+   Compiling wafer-core v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.35s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/polyglot_go_uppercase.rs (target/debug/deps/polyglot_go_uppercase-197fa8386bfac7a4)
+
+running 5 tests
+test go_uppercase_double_drop_diagnostic_is_recognizable ... ok
+test go_uppercase_instantiates_through_host_bindings ... ok
+test go_uppercase_actually_uppercases_a_message ... ok
+test go_uppercase_preserves_guest_fields_and_host_lineage ... ok
+test go_uppercase_handles_multiple_messages_in_one_store ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+$ cargo test --locked -p wafer-core --test inference_lifecycle
+   Compiling wafer-core v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-core)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.97s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/inference_lifecycle.rs (target/debug/deps/inference_lifecycle-7b896d691d8b2d20)
+
+running 2 tests
+test ungranted_inference_hot_swap_fails_during_preparation ... ok
+test granted_inference_hot_swap_prepares_real_component ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+$ cargo test --locked -p wafer-runtime --test inference_validation --test mnist_inference
+   Compiling tokio v1.53.1
+   Compiling either v1.15.0
+   Compiling regex-automata v0.4.14
+   Compiling ureq-proto v0.5.3
+   Compiling xattr v1.6.1
+   Compiling futures v0.3.32
+   Compiling url v2.5.8
+   Compiling num-integer v0.1.46
+   Compiling num-complex v0.4.6
+   Compiling itertools v0.14.0
+   Compiling rayon v1.11.0
+   Compiling tar v0.4.44
+   Compiling ndarray v0.16.1
+   Compiling ureq v3.2.0
+   Compiling wasmtime-internal-cranelift v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling regex v1.12.3
+   Compiling ort-sys v2.0.0-rc.10 (https://github.com/pykeio/ort?rev=d1ebde95d386513fea836593815e8f86f7b96a85#d1ebde95)
+   Compiling env_filter v1.0.0
+   Compiling env_logger v0.11.9
+   Compiling openvino-sys v0.11.0
+   Compiling openvino v0.11.0
+   Compiling wasmtime v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling tokio-util v0.7.18
+   Compiling tower v0.5.3
+   Compiling tokio-rustls v0.26.4
+   Compiling tokio-stream v0.1.18
+   Compiling h2 v0.4.15
+   Compiling rumqttc v0.25.1
+   Compiling tower-http v0.6.8
+   Compiling ort v2.0.0-rc.10 (https://github.com/pykeio/ort?rev=d1ebde95d386513fea836593815e8f86f7b96a85#d1ebde95)
+   Compiling hyper v1.11.1
+   Compiling hyper-util v0.1.20
+   Compiling hyper-rustls v0.27.7
+   Compiling axum v0.8.8
+   Compiling reqwest v0.13.2
+   Compiling reqwest v0.12.28
+   Compiling oci-client v0.16.0
+   Compiling wiggle v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling wasmtime-wasi-io v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling wasmtime-wasi-nn v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling wasmtime-wasi v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling wasmtime-wasi-http v48.0.2 (https://github.com/bytecodealliance/wasmtime?rev=e9f1ea232fd245aea338ab3eb7d73487ae75cab1#e9f1ea23)
+   Compiling wafer-core v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-core)
+   Compiling wafer-runtime v0.1.0 (/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements/crates/wafer-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 34.15s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/inference_validation.rs (target/debug/deps/inference_validation-8bbed70f1193e7be)
+
+running 3 tests
+test native_transform_cannot_obtain_inference ... ok
+test granted_wasm_transform_instantiates_and_initializes ... ok
+test ungranted_inference_component_fails_closed_during_preparation ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.86s
+
+     Running tests/mnist_inference.rs (target/debug/deps/mnist_inference-41db30c12f2958cb)
+
+running 2 tests
+test lifecycle_rejects_unknown_execution_target ... ok
+test known_digit_runs_through_real_cpu_pipeline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s
+
+attack_receipt_sha256=fc9d2753e81cd0976f12c1850bc4e9b47cb1320ca82f20785c109ac554fa145e
+http_security_receipt_sha256=2547fc83c5733ae8d12b2cdf12508ae6eda81ff66321696e7ff26fee290b669f
+mandatory_attack_scenarios=6/6
+mandatory_http_rows=20/20
+production_source_diff_empty=true
+exit_status=0

@@ -108,6 +108,14 @@ mapping are in the plan scratch directory's `toolchain-report.md`.
 
 The original synchronous stream-constructor declaration deadlocked under this execution probe. P1-T3 therefore corrected the experimental stream export to `async func`; production WIT remains unchanged.
 
+## P2-T2 conformance slice
+
+The host now exposes `conformance` and `lifecycle` probes backed by the real P3 components. They preserve complete envelope sequences, use only capacity-32 queues and stream consumers, reconcile conservative boundary-copy counters, and exercise typed errors, retry exhaustion, traps, early close, stalled output consumption, graceful shutdown, cancellation-drop recovery, and quiescent stream replacement. Store IDs prove that trap, protocol-failure, cancellation, and replacement paths do not reuse the old Store.
+
+The P3 host imports the public production `RuntimeEnvelope` and `BoundedQueue` through an isolated path dependency. This resolves both Wasmtime 48 and the exact P3 Wasmtime 50 revision in `experiments/p3/Cargo.lock`; it does not change the root workspace lockfile or features. The isolated workspace repeats the root `ort` revision patch because the production `wafer-core` dependency otherwise resolves an incompatible newer prerelease under the nested lockfile.
+
+The executable checks are `tests/conformance.py`, `tests/smoke.py`, and `tests/verify_manifest.py`. All are hard-bounded subprocess tests; `conformance.py` runs each host mode in a fresh process group with a 60-second limit.
+
 ## Hard boundary
 
 Nothing in this directory enables P3 in WAFER. P1-T1 does not change the root
