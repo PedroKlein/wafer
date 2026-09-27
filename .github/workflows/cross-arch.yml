@@ -76,7 +76,7 @@ jobs:
           # Cargo.toml / mise.toml must fail CI. This step confirms the
           # task exists in the first place; the subsequent `mise run`
           # step exercises the actual build.
-          if ! mise tasks ls 2>&1 | grep -q '^cross-build-pi\b'; then
+          if ! mise tasks ls 2>&1 | grep -Eq '^(//:)?cross-build-pi\b'; then
             echo "FAIL: mise task 'cross-build-pi' is missing from mise.toml" >&2
             mise tasks ls >&2
             exit 1
