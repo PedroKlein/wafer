@@ -1,0 +1,11 @@
+source_commit=55aafb75f83a801f1685f179cf75297ee76ab825
+componentize_go_version=componentize-go 0.4.3
+componentize_go_binary_sha256=70d894c414e63f42427edf4bd8d89ff8a961c95dcb9c0cac5e698782db3474ba
+componentize_go_revision=148dba505f8c6c64ad84db777cfde5e34e25098b
+$ componentize-go 0.4.3 build generated message stub
+Note: /Users/i572543/.local/share/mise/installs/go/1.24.13/bin/go does not support async operation; will use downloaded version.
+See https://github.com/golang/go/pull/76775 for details.
+Downloading patched Go from https://github.com/dicej/go/releases/download/go1.27.1-wasi-on-idle/go-darwin-arm64-bootstrap.tbz.
+Extracting patched Go to /Users/i572543/Library/Caches/componentize-go/v2.
+Error: downloaded Go does not support async
+compile_exit_status=1

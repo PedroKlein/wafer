@@ -1,0 +1,4 @@
+source_commit=55aafb75f83a801f1685f179cf75297ee76ab825
+p2_go_source_unchanged=true
+56a4e5f49a65720830cd0c037fd906d4f4d8ada66fbaf7d66c99431957ff6e01  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/toolchain-report.md
+exit_status=0

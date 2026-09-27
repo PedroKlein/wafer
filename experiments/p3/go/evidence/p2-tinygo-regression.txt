@@ -1,0 +1,28 @@
+source_commit=55aafb75f83a801f1685f179cf75297ee76ab825
+$ tinygo version
+tinygo version 0.41.1 darwin/arm64 (using go version go1.24.13 and LLVM version 20.1.1)
+$ go version
+go version go1.24.13 darwin/arm64
+$ mise run //plugins:build-plugin-go
+[//plugins:build-plugin-go] $ GO_ROOT=$(mise where go)
+Built: wafer-uppercase-go.wasm (98381 bytes)
+$ wasm-tools validate P2 Go artifact
+$ DEVELOPER_DIR=/Library/Developer/CommandLineTools cargo test -p wafer-core --test polyglot_go_uppercase --locked
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.38s
+warning: the following packages contain code that will be rejected by a future version of Rust: proc-macro-error2 v2.0.1
+note: to see what the problems were, use the option `--future-incompat-report`, or run `cargo report future-incompatibilities --id 1`
+     Running tests/polyglot_go_uppercase.rs (target/debug/deps/polyglot_go_uppercase-197fa8386bfac7a4)
+
+running 5 tests
+test go_uppercase_double_drop_diagnostic_is_recognizable ... ok
+test go_uppercase_instantiates_through_host_bindings ... ok
+test go_uppercase_actually_uppercases_a_message ... ok
+test go_uppercase_preserves_guest_fields_and_host_lineage ... ok
+test go_uppercase_handles_multiple_messages_in_one_store ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.53s
+
+460fb31020b01dbb4012fbbe71e4db12541e7a65016e5742395a0d616fb919fd  plugins/go/uppercase/wafer-uppercase-go.wasm
+02c9fe136fd964e20f498ef3ec42ad90b214e0ac4157053dea40f52ab14a110c  plugins/go/uppercase/go.mod
+0b52ea0d9b8e592724568228096d0ffe4431433f2f58a7bde60f3680954350fa  plugins/go/uppercase/go.sum
+exit_status=0

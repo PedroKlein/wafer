@@ -1,0 +1,13 @@
+source_commit=55aafb75f83a801f1685f179cf75297ee76ab825
+$ tinygo version
+tinygo version 0.41.1 darwin/arm64 (using go version go1.24.13 and LLVM version 20.1.1)
+$ tinygo build -target=wasip2 -no-debug -wit-package ../../../experiments/p3/wit/wafer-pipeline-0.2.0 -wit-world transform-message-node -o ../../../experiments/p3/go/tinygo/message.wasm .
+error: failed to encode a component from module
+
+Caused by:
+    0: failed to decode world from module
+    1: module was not valid
+    2: failed to resolve import `wasi:cli/environment@0.2.0::get-environment`
+    3: module requires an import interface named `wasi:cli/environment@0.2.0`
+`wasm-tools component new` failed: exit status 1
+parse_codegen_compile_exit_status=1

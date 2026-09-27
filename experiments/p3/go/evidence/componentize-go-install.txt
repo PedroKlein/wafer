@@ -1,0 +1,195 @@
+source_commit=55aafb75f83a801f1685f179cf75297ee76ab825
+$ cargo +1.98.1 install componentize-go exact v0.4.3
+    Updating git repository `https://github.com/bytecodealliance/componentize-go`
+  Installing componentize-go v0.4.3 (https://github.com/bytecodealliance/componentize-go?tag=v0.4.3#148dba50)
+    Updating git repository `https://github.com/bytecodealliance/wit-bindgen`
+    Updating git submodule `https://github.com/bytecodealliance/go-pkg`
+    Updating git submodule `https://github.com/WebAssembly/wasi-cli`
+    Updating git submodule `https://github.com/WebAssembly/wasi-clocks`
+    Updating git submodule `https://github.com/WebAssembly/wasi-filesystem`
+    Updating git submodule `https://github.com/WebAssembly/wasi-http`
+    Updating git submodule `https://github.com/WebAssembly/wasi-io`
+    Updating crates.io index
+warning: package `chacha20 v0.10.1` in Cargo.lock is yanked in registry `crates-io`
+  |
+  = help: consider running without --locked
+ Downloading crates ...
+  Downloaded bzip2 v0.6.1
+  Downloaded cc v1.2.58
+  Downloaded aws-lc-rs v1.16.2
+  Downloaded libbz2-rs-sys v0.2.2
+  Downloaded iri-string v0.7.12
+  Downloaded aws-lc-sys v0.39.1
+  Downloaded regex v1.12.4
+  Downloaded rustls-webpki v0.103.10
+  Downloaded rustls v0.23.37
+  Downloaded tar v0.4.46
+  Downloaded which v8.0.4
+  Downloaded winnow v1.0.1
+  Downloaded wit-parser v0.258.0
+  Downloaded wit-component v0.258.0
+   Compiling libc v0.2.186
+   Compiling proc-macro2 v1.0.106
+   Compiling quote v1.0.45
+   Compiling unicode-ident v1.0.24
+   Compiling serde_core v1.0.228
+   Compiling bitflags v2.11.0
+   Compiling stable_deref_trait v1.2.1
+   Compiling itoa v1.0.18
+   Compiling shlex v1.3.0
+   Compiling find-msvc-tools v0.1.9
+   Compiling memchr v2.8.0
+   Compiling foldhash v0.2.0
+   Compiling hashbrown v0.17.1
+   Compiling pin-project-lite v0.2.17
+   Compiling equivalent v1.0.2
+   Compiling bytes v1.11.1
+   Compiling fs_extra v1.3.0
+   Compiling dunce v1.0.5
+   Compiling futures-core v0.3.32
+   Compiling core-foundation-sys v0.8.7
+   Compiling futures-sink v0.3.32
+   Compiling once_cell v1.21.4
+   Compiling aws-lc-rs v1.16.2
+   Compiling slab v0.4.12
+   Compiling writeable v0.6.2
+   Compiling http v1.4.0
+   Compiling zeroize v1.8.2
+   Compiling smallvec v1.15.1
+   Compiling litemap v0.8.2
+   Compiling semver v1.0.27
+   Compiling utf8_iter v1.0.4
+   Compiling icu_properties_data v2.2.0
+   Compiling icu_normalizer_data v2.2.0
+   Compiling mio v1.2.0
+   Compiling jobserver v0.1.34
+   Compiling socket2 v0.6.3
+   Compiling anyhow v1.0.103
+   Compiling zmij v1.0.21
+   Compiling rustls-pki-types v1.14.0
+   Compiling cc v1.2.58
+   Compiling tokio v1.52.3
+   Compiling syn v2.0.117
+   Compiling http-body v1.0.1
+   Compiling tracing-core v0.1.36
+   Compiling futures-io v0.3.32
+   Compiling indexmap v2.14.0
+   Compiling cmake v0.1.58
+   Compiling system-configuration-sys v0.6.0
+   Compiling rustls v0.23.37
+   Compiling futures-task v0.3.32
+   Compiling httparse v1.10.1
+   Compiling log v0.4.29
+   Compiling serde v1.0.228
+   Compiling serde_json v1.0.149
+   Compiling untrusted v0.9.0
+   Compiling aws-lc-sys v0.39.1
+   Compiling futures-util v0.3.32
+   Compiling tracing v0.1.44
+   Compiling wasmparser v0.258.0
+   Compiling percent-encoding v2.3.2
+   Compiling fnv v1.0.7
+   Compiling tower-service v0.3.3
+   Compiling subtle v2.6.1
+   Compiling try-lock v0.2.5
+   Compiling atomic-waker v1.1.2
+   Compiling want v0.3.1
+   Compiling core-foundation v0.9.4
+   Compiling futures-channel v0.3.32
+   Compiling id-arena v2.3.0
+   Compiling synstructure v0.13.2
+   Compiling cfg-if v1.0.4
+   Compiling rustix v1.1.4
+   Compiling leb128fmt v0.1.0
+   Compiling utf8parse v0.2.2
+   Compiling anstyle-parse v1.0.0
+   Compiling system-configuration v0.7.0
+   Compiling core-foundation v0.10.1
+   Compiling tokio-util v0.7.18
+   Compiling security-framework-sys v2.17.0
+   Compiling errno v0.3.14
+   Compiling sync_wrapper v1.0.2
+   Compiling anstyle v1.0.14
+   Compiling anstyle-query v1.1.5
+   Compiling base64 v0.22.1
+   Compiling colorchoice v1.0.5
+   Compiling ipnet v2.12.0
+   Compiling zerofrom-derive v0.1.7
+   Compiling yoke-derive v0.8.2
+   Compiling zerovec-derive v0.11.3
+   Compiling displaydoc v0.2.5
+   Compiling serde_derive v1.0.228
+   Compiling h2 v0.4.13
+   Compiling tower-layer v0.3.3
+   Compiling is_terminal_polyfill v1.70.2
+   Compiling anstream v1.0.0
+   Compiling security-framework v3.7.0
+   Compiling form_urlencoded v1.2.2
+   Compiling zerofrom v0.1.7
+   Compiling aho-corasick v1.1.4
+   Compiling regex-syntax v0.8.11
+   Compiling yoke v0.8.2
+   Compiling clap_lex v1.1.0
+   Compiling zerovec v0.11.6
+   Compiling zerotrie v0.2.4
+   Compiling tower v0.5.3
+   Compiling tinystr v0.8.3
+   Compiling potential_utf v0.1.5
+   Compiling hyper v1.9.0
+   Compiling icu_locale_core v2.2.0
+   Compiling icu_collections v2.2.0
+   Compiling wasm-encoder v0.258.0
+   Compiling strsim v0.11.1
+   Compiling icu_provider v2.2.0
+   Compiling wit-parser v0.258.0
+   Compiling hyper-util v0.1.20
+   Compiling icu_normalizer v2.2.0
+   Compiling icu_properties v2.2.0
+   Compiling winnow v1.0.1
+   Compiling iri-string v0.7.12
+   Compiling idna_adapter v1.2.1
+   Compiling wasm-metadata v0.258.0
+   Compiling idna v1.1.0
+   Compiling heck v0.5.0
+   Compiling option-ext v0.2.0
+   Compiling clap_derive v4.6.1
+   Compiling dirs-sys v0.5.0
+   Compiling tower-http v0.6.8
+   Compiling url v2.5.8
+   Compiling wit-component v0.258.0
+   Compiling wit-bindgen-core v0.61.1 (https://github.com/bytecodealliance/wit-bindgen?rev=4f9a02d74cec9257c14ba9b160fa787a3523fd0b#4f9a02d7)
+   Compiling toml_parser v1.1.2+spec-1.1.0
+   Compiling clap_builder v4.6.0
+   Compiling regex-automata v0.4.14
+   Compiling xattr v1.6.1
+   Compiling encoding_rs v0.8.35
+   Compiling filetime v0.2.27
+   Compiling serde_spanned v1.1.1
+   Compiling toml_datetime v1.1.1+spec-1.1.0
+   Compiling http-body-util v0.1.3
+   Compiling libbz2-rs-sys v0.2.2
+   Compiling mime v0.3.17
+   Compiling toml_writer v1.1.1+spec-1.1.0
+   Compiling tar v0.4.46
+   Compiling bzip2 v0.6.1
+   Compiling clap v4.6.1
+   Compiling toml v1.1.2+spec-1.1.0
+   Compiling wit-bindgen-go v0.61.1 (https://github.com/bytecodealliance/wit-bindgen?rev=4f9a02d74cec9257c14ba9b160fa787a3523fd0b#4f9a02d7)
+   Compiling dirs v6.0.0
+   Compiling which v8.0.4
+   Compiling regex v1.12.4
+   Compiling rustls-webpki v0.103.10
+   Compiling tokio-rustls v0.26.4
+   Compiling rustls-platform-verifier v0.6.2
+   Compiling hyper-rustls v0.27.7
+   Compiling reqwest v0.13.4
+   Compiling componentize-go v0.4.3 (/Users/i572543/.cargo/git/checkouts/componentize-go-cc1a1bf98b6b75be/148dba5)
+    Finished `release` profile [optimized] target(s) in 1m 07s
+  Installing /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/go-tools-v043/bin/componentize-go
+   Installed package `componentize-go v0.4.3 (https://github.com/bytecodealliance/componentize-go?tag=v0.4.3#148dba50)` (executable `componentize-go`)
+warning: be sure to add `/Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/go-tools-v043/bin` to your PATH to be able to run the installed binaries
+componentize-go 0.4.3
+go version go1.27.1 darwin/arm64
+70d894c414e63f42427edf4bd8d89ff8a961c95dcb9c0cac5e698782db3474ba  /Users/i572543/.pi/plans/experimental-wasi-p3-poc/scratch/go-tools-v043/bin/componentize-go
+revision=148dba505f8c6c64ad84db777cfde5e34e25098b
+exit_status=0

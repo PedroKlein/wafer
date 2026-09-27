@@ -112,6 +112,16 @@
     "smoke_log": "experiments/p3/evidence/p1-t3/clean-build-validate-execute.txt",
     "scope": "isolated-experimental-only"
   },
+  "p1_t4": {
+    "adoption_consequence": "go-p3-blocked",
+    "tinygo_version": "0.41.1",
+    "tinygo_go_version": "1.24.13",
+    "componentize_go_version": "0.4.3",
+    "componentize_go_revision": "148dba505f8c6c64ad84db777cfde5e34e25098b",
+    "componentize_go_binary_sha256": "70d894c414e63f42427edf4bd8d89ff8a961c95dcb9c0cac5e698782db3474ba",
+    "componentize_go_required_go_version": "1.27.1-patched",
+    "verdict": "experiments/p3/go/verdict.json"
+  },
   "evidence": {
     "host_probe_manifest": "experiments/p3/probes/Cargo.toml",
     "host_probe_lock": "experiments/p3/probes/Cargo.lock",

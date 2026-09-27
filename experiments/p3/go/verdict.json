@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "source_commit": "55aafb75f83a801f1685f179cf75297ee76ab825",
+  "adoption_consequence": "go-p3-blocked",
+  "tinygo": {
+    "version": "0.41.1",
+    "go_version": "1.24.13",
+    "world": "wafer:pipeline@0.2.0/transform-message-node",
+    "parse_codegen": "pass",
+    "compile": "pass-wasi-p2-module",
+    "component_validation": "blocked",
+    "p3_host_execution": "blocked",
+    "first_blocker": "the generated module imports wasi:cli/environment@0.2.0, which cannot be componentized against the P3 candidate world"
+  },
+  "componentize_go": {
+    "version": "0.4.3",
+    "revision": "148dba505f8c6c64ad84db777cfde5e34e25098b",
+    "source_url": "https://github.com/bytecodealliance/componentize-go/tree/148dba505f8c6c64ad84db777cfde5e34e25098b",
+    "binary_sha256": "70d894c414e63f42427edf4bd8d89ff8a961c95dcb9c0cac5e698782db3474ba",
+    "generated_wit_bindgen_go_version": "0.61.1",
+    "generated_go_module_dependency": "go.bytecodealliance.org/pkg v0.2.3",
+    "world": "wafer:pipeline@0.2.0/transform-message-node",
+    "parse_codegen": "pass",
+    "compile": "fail",
+    "component_validation": "blocked",
+    "p3_host_execution": "blocked",
+    "first_blocker": "componentize-go downloaded its pinned patched Go 1.27.1 toolchain, then rejected it as not supporting async"
+  },
+  "production_p2": {
+    "tinygo_version": "0.41.1",
+    "artifact_sha256": "460fb31020b01dbb4012fbbe71e4db12541e7a65016e5742395a0d616fb919fd",
+    "validation": "pass",
+    "host_boundary_tests": "5-pass"
+  }
+}
