@@ -1,0 +1,91 @@
+name: ci
+
+# Formatting, lints and the workspace test suite on every push to main and
+# every pull request. No path filter, so this can be a required check.
+#
+# The commands mirror the mise tasks (`fmt`, `clippy`, `test`,
+# `//plugins:build-plugins`) but call cargo directly, because `mise install`
+# would compile every helper tool from source on each run.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch: {}
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  # Debug info makes target/ several times larger and the runners have
+  # limited disk. Backtraces still carry function names without it.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
+jobs:
+  lint:
+    name: fmt + clippy
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ci-lint
+          # clippy below denies warnings itself; keep RUSTFLAGS empty so the
+          # cache is shared with plain builds.
+          rustflags: ""
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: ci-test
+          rustflags: ""
+
+      - name: Cache plugin builds
+        # Plugins are separate cargo projects with their own target/ dirs.
+        uses: actions/cache@v4
+        with:
+          path: |
+            plugins/*/target
+            plugins/attacks/*/target
+          key: plugins-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', 'wit/**', 'crates/wafer-plugin/**', 'plugins/**/Cargo.lock', 'plugins/**/Cargo.toml', 'plugins/**/*.rs', 'plugins/**/*.wit') }}
+          restore-keys: plugins-${{ runner.os }}-
+
+      - name: Build Wasm plugins
+        run: |
+          set -euo pipefail
+          cd plugins
+          for plugin in */Cargo.toml attacks/*/Cargo.toml; do
+            echo "::group::${plugin%/Cargo.toml}"
+            cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
+            echo "::endgroup::"
+          done
+
+      - name: Build release wafer-loadgen
+        # wasi_async_runner reads HDR summaries through the release binary.
+        run: cargo build --locked --release -p wafer-loadgen
+
+      - name: cargo test
+        run: cargo test --locked --workspace

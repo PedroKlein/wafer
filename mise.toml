@@ -187,6 +187,7 @@ run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/da
 
 [tasks.cross-build-pi]
 description = "Cross-build wafer, wafer-loadgen, waferctl for aarch64-linux (Docker)"
+shell = "bash -c"
 run = '''
 set -euo pipefail
 if ! command -v docker >/dev/null 2>&1; then
@@ -219,6 +220,7 @@ done
 
 [tasks.cross-build-pi-check]
 description = "Verify cross-build outputs are ARM aarch64 ELF binaries"
+shell = "bash -c"
 run = '''
 set -euo pipefail
 missing=0
