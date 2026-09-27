@@ -268,3 +268,16 @@ When an architectural decision is needed:
 3. **Follow** the templates and index entries in `docs/rfcs/README.md` and `docs/adr/README.md`
 4. **Present** to the user for review — user accepts or rejects
 5. **On acceptance**, update status to **Accepted** / **Implemented** and create implementation tasks. When an RFC introduces a distinct decision worth surfacing separately, also add a Nygard ADR that links back.
+
+## Commits and branches
+
+- Commit messages follow Conventional Commits: `type: short imperative summary`,
+  lower case, no trailing period, subject line only unless a body is genuinely
+  needed. Types: `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`,
+  `ci`, `chore`.
+- Branch names follow `type/short-kebab-summary` with the same types (for
+  example `docs/chapter-3-revision`, `feat/bounded-outbound-http`). Do not
+  push work to auto-generated agent branches such as `claude/<random-name>`;
+  create a branch that follows this pattern instead.
+- Commits and pull requests carry no AI attribution: no `Co-Authored-By`,
+  `Claude-Session`, or "Generated with" lines.

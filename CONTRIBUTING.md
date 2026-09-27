@@ -53,7 +53,7 @@ that plugin and confirm the produced `.wasm` still loads.
 ## Agent-assisted contributions
 
 Agent-assisted PRs are fine when they follow the same checklist as
-human PRs. `.agents/AGENTS.md` describes the conventions this
+human PRs. `AGENTS.md` describes the conventions this
 repository uses when agents run against it. Please strip
 `Co-authored-by:` trailers for AI agents before submitting; keep them
 only for human co-authors.
