@@ -4,7 +4,7 @@
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
 )]
-//! C1-01 — hot-swap adoption with and without traffic.
+//! Hot-swap adoption with and without traffic.
 //!
 //! - Idle: the source emits one message and then stays quiet for 2.5 s. A swap
 //!   sent in that gap must be adopted within milliseconds, and no message may
@@ -68,7 +68,7 @@ fn idle_config() -> Config {
     let toml = format!(
         r#"
 [pipeline]
-name = "c1-01-idle-swap"
+name = "idle-swap"
 
 [nodes.source]
 type = "source"
@@ -156,7 +156,7 @@ fn traffic_config() -> Config {
     let toml = format!(
         r#"
 [pipeline]
-name = "c1-01-traffic-swap"
+name = "traffic-swap"
 
 [nodes.source]
 type = "source"

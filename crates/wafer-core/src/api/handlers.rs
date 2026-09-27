@@ -741,7 +741,7 @@ allow_inference = {allow_inference}
         assert_eq!(response.status(), StatusCode::OK);
     }
 
-    // C8-06: a timed-out request the runner never took is withdrawn, so it
+    // A timed-out request the runner never took is withdrawn, so it
     // cannot apply after the caller was told it failed.
     #[tokio::test(start_paused = true)]
     async fn unadopted_reconfigure_times_out_and_is_withdrawn() {
@@ -766,7 +766,7 @@ allow_inference = {allow_inference}
         assert!(!progress.try_claim(), "runner could still apply a withdrawn payload");
     }
 
-    // C8-06: when the runner adopted the replacement but no message has
+    // When the runner adopted the replacement but no message has
     // arrived yet, the API reports the adoption (202) and records the new
     // plugin hash instead of returning 504.
     #[tokio::test(start_paused = true)]

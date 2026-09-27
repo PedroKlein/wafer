@@ -1435,7 +1435,7 @@ mod tests {
         (payload, progress)
     }
 
-    // C1-01: a swap published while the input queue is empty must wake the
+    // A swap published while the input queue is empty must wake the
     // runner instead of waiting for the next message.
     #[tokio::test(start_paused = true)]
     async fn swap_wakes_runner_while_input_is_idle() {
@@ -1485,7 +1485,7 @@ mod tests {
         assert_eq!(expect_envelope(next).payload_as_string(), "queued");
     }
 
-    // C8-06: once the API withdraws a payload the runner must never apply it,
+    // Once the API withdraws a payload the runner must never apply it,
     // and once the runner claims it the API can no longer withdraw it.
     #[test]
     fn withdrawn_swap_is_never_taken() {
