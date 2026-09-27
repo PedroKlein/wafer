@@ -898,6 +898,19 @@ Current production startup reports `mode = "disabled"`, `hit = false`, and null
 artifact/identity because initial component loading does not use the dormant
 serialized-component cache.
 
+The phases start at `process_started`, the first statement of the async boot
+sequence, after the tokio runtime is built. `process_entry` records the earlier
+point: `unix_epoch_ns` is taken as the first statement of `main`, before the
+runtime exists, for alignment with the harness's pre-exec `runtime_started_ns`;
+`to_process_started_ns` is the monotonic gap from entry to `process_started`.
+Neither value is part of `phases_ns` or `total_wall_duration_ns`, and exec,
+dynamic loading and static constructors before `main` remain outside both.
+
+The runtime performs no provenance work between `launch_completed` and the
+first sink collection: during the probe `runtime-provenance.json` is written
+only at shutdown, and the runtime-binary hash is computed on the blocking pool
+after the run.
+
 ## `metadata.json` schema
 
 `metadata.json` merges two sources: **run-experiment.sh** stamps run
@@ -991,13 +1004,17 @@ The preflight rejects a host that does not meet these conditions. Smoke runs may
 
 | Field | Producer | Rationale |
 | --- | --- | --- |
-| `wasmtime_version` | `wafer-runtime` build.rs, parsed from workspace `Cargo.lock` | The resolved dep version differs from the Cargo.toml declaration when wasmtime is pulled from git; this captures what actually ran. |
+| `provenance_written_at` | `wafer-runtime` | `launch`, `swap` or `shutdown`: which write the sidecar holds. A completed run holds `shutdown`. |
+| `wasmtime_version`, `wasmtime_source` | `wafer-runtime` build.rs, parsed from workspace `Cargo.lock` | The resolved dep version differs from the Cargo.toml declaration when wasmtime is pulled from git; the `source` line carries the git rev, which the version alone does not identify. |
+| `ort_sys_version`, `ort_sys_source`, `ort_link` | `wafer-runtime` build.rs: `Cargo.lock` and `ORT_LIB_LOCATION` | Which ONNX Runtime binding was built and whether the library came from `ort-sys` `download-binaries` or a local `ORT_LIB_LOCATION`. |
+| `runtime_build` | `wafer-runtime` build.rs: `PROFILE`, `OPT_LEVEL`, `TARGET`, `CARGO_ENCODED_RUSTFLAGS`, `CARGO_FEATURE_*`, `git rev-parse HEAD`, `git status` | Explains two different `wafer_runtime_sha256` values and ties the binary to the commit it was built from (a stale binary cannot inherit the harness's run-time `git_sha`). `git_dirty` reflects the tree when the build script last ran. Values are strings; `unknown` when git is unavailable. |
 | `rustc_version` | `wafer-runtime` build.rs, `rustc --version` at compile time | Cross-compilation drops the host rustc; build-time capture keeps provenance intact. |
 | `wafer_runtime_version` | `env!("CARGO_PKG_VERSION")` | Semver of the binary that ran, not the workspace. |
-| `wafer_runtime_sha256` | `std::env::current_exe()` + SHA256 | Exact binary bytes so a canonical-run number can be tied to the exact build artefact. |
-| `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch AND after every hot-swap by `PipelineHandle::record_plugin_hash`; the P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). |
+| `wafer_runtime_sha256` | `std::env::current_exe()` + SHA256, on the blocking pool after the run | Exact binary bytes so a canonical-run number can be tied to the exact build artefact. `null` in `launch` and `swap` writes. |
+| `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch AND after every adopted hot-swap (API or timed `--swap-after-secs`) by `PipelineHandle::record_plugin_hash`; the P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). The shutdown write therefore names the live replacement. |
 | `config_sha256` | Runtime `Sha256` of the effective config file at load time | Notebook cross-references use this as the provenance root. |
-| `kernel` | `uname -r` via subprocess from the runtime | Kept in both the runtime provenance and the shell metadata; the runtime version wins on merge. |
+| `kernel` | `/proc/sys/kernel/osrelease` (`uname -r` subprocess only where procfs is absent) | Kept in both the runtime provenance and the shell metadata; the runtime version wins on merge. |
+| `tokio_worker_threads`, `available_parallelism`, `cpus_allowed_list` | tokio runtime metrics, `std::thread::available_parallelism`, `/proc/self/status` | Effective scheduler width and CPU affinity (`WAFER_RUNTIME_CPUSET` / `taskset`) the run actually had. |
 | `engine_fuel_budgets` | Parsed effective engine config | Per-category fuel budgets; absent limits are JSON `null`. Node overrides remain represented by the config digest. |
 | `epoch_deadline`, `epoch_tick_ms` | Parsed effective engine config | Effective epoch deadline and tick; an omitted deadline is JSON `null`. |
 | `effective_metering_mode` | Derived from parsed fuel and epoch options | Stable value: `neither`, `fuel-only`, `epoch-only`, or `fuel-and-epoch`. |
@@ -1005,11 +1022,16 @@ The preflight rejects a host that does not meet these conditions. Smoke runs may
 ### Sidecar file
 
 - Path: `runtime-provenance.json` inside the result directory.
-- Written by `wafer-runtime` on successful launch when either
-  `WAFER_METADATA_OUTPUT` (explicit path) or `WAFER_BENCH_OUTPUT_DIR`
-  (existing convention) is set. `run-experiment.sh` sets the latter.
-- The runtime emits the sidecar even if the run subsequently traps, so
-  post-mortem analysis retains provenance.
+- Written by `wafer-runtime` when either `WAFER_METADATA_OUTPUT` (explicit
+  path) or `WAFER_BENCH_OUTPUT_DIR` (existing convention) is set.
+  `run-experiment.sh` sets the latter.
+- Each write replaces the file atomically. The runtime writes it at launch
+  (skipped for the E-Perf-9 probe, whose launch write would fall inside
+  `first_process`), again after each adopted timed hot-swap, and finally at
+  shutdown after the run and result export. A runtime that dies mid-run
+  leaves the launch or swap write, with `wafer_runtime_sha256 = null`.
+- A write failure is logged and the run continues; the harness then records
+  `null` provenance and the canonical verifier rejects the leaf.
 
 Fields are omitted when not applicable:
 

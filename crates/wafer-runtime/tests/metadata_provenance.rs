@@ -170,4 +170,80 @@ async fn metadata_provenance_complete() {
     assert_eq!(json["effective_metering_mode"], "neither");
     assert_eq!(json["config_sha256"].as_str().unwrap().len(), 64);
     assert_eq!(json["wafer_runtime_sha256"].as_str().unwrap().len(), 64);
+
+    assert_shutdown_build_provenance(&json, exe);
+}
+
+/// The file the harness merges is the shutdown write, the only
+/// one that hashes the binary, and it carries the build determinants.
+fn assert_shutdown_build_provenance(json: &serde_json::Value, exe: &str) {
+    for key in [
+        "ort_sys_source",
+        "ort_link",
+        "runtime_build",
+        "available_parallelism",
+        "cpus_allowed_list",
+    ] {
+        assert!(json.get(key).is_some(), "provenance missing key: {key}");
+    }
+    assert_eq!(json["provenance_written_at"], "shutdown");
+    let exe_hash = hex::encode(Sha256::digest(std::fs::read(exe).expect("read runtime binary")));
+    assert_eq!(json["wafer_runtime_sha256"], exe_hash.as_str());
+    assert!(json["wasmtime_source"].as_str().unwrap().contains("rev="));
+    assert!(json["ort_sys_version"].as_str().is_some_and(|v| v != "unknown"));
+    for key in ["git_sha", "git_dirty", "profile", "opt_level", "target", "rustflags", "features"] {
+        assert!(json["runtime_build"][key].is_string(), "runtime_build.{key} must be a string");
+    }
+    assert!(json["tokio_worker_threads"].as_u64().is_some_and(|n| n > 0));
+}
+
+/// A timed hot-swap run's final provenance names the replacement
+/// binary, not the one loaded at launch.
+#[test]
+fn swap_run_provenance_records_replacement_hash() {
+    let config_path = repo_path("eval/configs/pipeline-shakedown.toml");
+    let plugin_path =
+        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+    if !config_path.exists() || !plugin_path.exists() {
+        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+        return;
+    }
+    let v1 = std::fs::read(&plugin_path).expect("read pass-through plugin");
+    // Same component with a trailing custom section: identical behaviour,
+    // different bytes, so the recorded hash tells v1 and v2 apart.
+    let mut v2 = v1.clone();
+    let name = b"wafer-provenance-test";
+    let payload = b"v2";
+    v2.push(0);
+    v2.push(u8::try_from(1 + name.len() + payload.len()).unwrap());
+    v2.push(u8::try_from(name.len()).unwrap());
+    v2.extend_from_slice(name);
+    v2.extend_from_slice(payload);
+    let v1_hash = hex::encode(Sha256::digest(&v1));
+    let v2_hash = hex::encode(Sha256::digest(&v2));
+
+    let tmp = tempfile::tempdir().unwrap();
+    let v2_path = tmp.path().join("pass-through-v2.wasm");
+    std::fs::write(&v2_path, &v2).unwrap();
+    let provenance_path = tmp.path().join("provenance.json");
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_wafer"))
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--no-api")
+        .args(["--swap-after-secs", "1", "--swap-node", "transform", "--swap-plugin"])
+        .arg(&v2_path)
+        .env("WAFER_METADATA_OUTPUT", &provenance_path)
+        .env("WAFER_BENCH_OUTPUT_DIR", tmp.path())
+        .output()
+        .expect("run wafer binary");
+    assert!(output.status.success(), "runtime failed: {}", String::from_utf8_lossy(&output.stderr));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Hot-swap dispatched"), "swap never dispatched:\n{stdout}");
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&provenance_path).expect("read provenance"))
+            .expect("parse provenance JSON");
+    assert_eq!(json["provenance_written_at"], "shutdown");
+    assert_ne!(v1_hash, v2_hash);
+    assert_eq!(json["wafer_plugin_hashes"]["transform"], v2_hash.as_str());
 }
