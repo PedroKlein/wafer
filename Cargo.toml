@@ -86,7 +86,10 @@ prometheus-client = "0.23"
 
 # System metrics
 sysinfo = "0.34"
-memory-stats = "1"
+# statm reads kernel counters in constant time. The default sums
+# /proc/self/smaps, whose cost grows with the number of mappings and pushed the
+# 1 Hz sampler past its overhead budget once many Wasm instances were loaded.
+memory-stats = { version = "1", features = ["always_use_statm"] }
 
 # CLI output
 tabled = "0.18"
