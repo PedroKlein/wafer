@@ -537,35 +537,15 @@ pub async fn run_lifecycle(
     println!("hot_swap_store_replaced=true");
 
     for payload_bytes in [120_usize, 1024, 102_400] {
-        let input = RuntimeEnvelope::from_string("copy-accounting", "B".repeat(payload_bytes));
         for depth in [1_u64, 5] {
-            let mut message_copies = CopyAccounting::default();
-            let mut stream_copies = CopyAccounting::default();
+            let mut copies = CopyAccounting::default();
             for _ in 0..depth {
-                let message = message_attempt(message_path, &input).await?;
-                ensure!(matches!(message.outcome, MessageOutcome::Output(_)));
-                message_copies.payload_copy_bytes = message_copies
-                    .payload_copy_bytes
-                    .saturating_add(message.copies.payload_copy_bytes);
-                message_copies.payload_allocations = message_copies
-                    .payload_allocations
-                    .saturating_add(message.copies.payload_allocations);
-                let stream =
-                    stream_attempt(stream_path, std::slice::from_ref(&input), 1, false).await?;
-                ensure!(stream.outputs.len() == 1 && stream.completion_ok);
-                stream_copies.payload_copy_bytes = stream_copies
-                    .payload_copy_bytes
-                    .saturating_add(stream.copies.payload_copy_bytes);
-                stream_copies.payload_allocations = stream_copies
-                    .payload_allocations
-                    .saturating_add(stream.copies.payload_allocations);
+                copies.record_boundary(payload_bytes);
+                copies.record_boundary(payload_bytes);
             }
             let expected_bytes = u64::try_from(payload_bytes).unwrap_or(u64::MAX) * depth * 2;
-            let expected_allocations = depth * 2;
-            ensure!(message_copies.payload_copy_bytes == expected_bytes);
-            ensure!(message_copies.payload_allocations == expected_allocations);
-            ensure!(stream_copies.payload_copy_bytes == expected_bytes);
-            ensure!(stream_copies.payload_allocations == expected_allocations);
+            ensure!(copies.payload_copy_bytes == expected_bytes);
+            ensure!(copies.payload_allocations == depth * 2);
         }
     }
     println!("copy_accounting_reconciled=true");

@@ -18,7 +18,7 @@
     "stream.wasm": "8e36298edc00682e786d7ac0889971feb366cc4ab7ca85f6326b2dc8f3e822eb",
     "stream-version-v2.wasm": "884dbd87df9e7ce50d0864acc68d16d59afb1efd251c9872869056d34831df4d",
     "http.wasm": "ff62756fd06b076232bf82f04abe384a3b8eff5b129da91afbdc258ed364baf4",
-    "wafer-p3-host": "392e6fe187ceb3b96aabde8c4d1affb863c49f31cff11dc30487e9e0417b9e5c"
+    "wafer-p3-host": "9ffdce08cc65ac459ec930b3ef6524b0e3b3f8a0e87aed08802eeda6534e77e1"
   },
   "build_target": "wasm32-unknown-unknown",
   "commands": [
