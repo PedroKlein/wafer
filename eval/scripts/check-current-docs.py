@@ -12,10 +12,16 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 CURRENT_DOCS = (
+    "README.md",
+    "docs/architecture/00-vision.md",
+    "docs/architecture/02-solution-strategy.md",
+    "docs/architecture/03-building-blocks.md",
     "docs/rfcs/RFC-008-evaluation-harness.md",
     "docs/adr/0009-filter-as-first-class-node.md",
     "docs/adr/0013-aot-cache-and-metering.md",
+    "docs/interfaces/README.md",
     "docs/interfaces/config-schema.md",
+    "docs/interfaces/plugin-sdk.md",
     "docs/requirements/non-functional.md",
     "docs/architecture/01-goals-and-constraints.md",
     "docs/architecture/05-deployment.md",
@@ -75,6 +81,22 @@ FORBIDDEN = (
             re.IGNORECASE,
         ),
         "evaluation budget described as runtime default",
+    ),
+    (
+        re.compile(r"network interfaces are not exposed to processing guests", re.IGNORECASE),
+        "processing guests described as having no possible network interface",
+    ),
+    (
+        re.compile(r"Capabilities` is a three-field struct", re.IGNORECASE),
+        "Capabilities described without outbound_http",
+    ),
+    (
+        re.compile(r"Tokio-safe synchronous guest calls", re.IGNORECASE),
+        "production runtime described as using the removed synchronous host bridge",
+    ),
+    (
+        re.compile(r"Wasm\s+plugins are pure transforms", re.IGNORECASE),
+        "processing guests described as pure transforms despite bounded outbound HTTP",
     ),
 )
 REQUIRED = (

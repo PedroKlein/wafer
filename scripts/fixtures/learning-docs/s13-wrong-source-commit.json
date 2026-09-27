@@ -1,6 +1,6 @@
 {
   "page": "stateless-hot-swap.md",
-  "find": "This walkthrough follows the V1-verified candidate `92d86b0a511047988de5fbf6551b18b8a09ec455`.",
+  "find": "This walkthrough follows source at commit `f173151a8951736b4d82e10ce2b1c4417b02cf99`.",
   "replace": "This walkthrough follows source at commit `0000000000000000000000000000000000000000`.",
   "expected_error": "stateless-hot-swap.md: source commit is not pinned"
 }

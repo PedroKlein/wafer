@@ -111,7 +111,7 @@ The largest crate. Contains all runtime logic grouped into modules:
 
 | Module | Responsibility |
 |--------|---------------|
-| `engine` | Wasmtime lifecycle: component loading, AOT cache (blake3-keyed), `InstancePre` pooling, `WaferBuffer` resource, WASI capability scoping, `StoreLimits`, WIT bindgen glue, host function impls (`wafer:pipeline/logging`). |
+| `engine` | Wasmtime lifecycle: component loading, AOT cache (blake3-keyed), `InstancePre` pooling, asynchronous P2 bindings, `WaferBuffer` resources, WASI capability scoping, exact-destination outbound HTTP enforcement, `StoreLimits`, and host logging. |
 | `orchestrator` | Pipeline lifecycle: `Pipeline` handle, receiver-keyed mpsc wiring, loaded-Wasm replacement eligibility, per-node mutation guards, JoinSet startup, and replacement preparation. |
 | `runner` | Per-category async loops — one each for source, sink, transform, filter, router. Each loop owns its `Store`, receives from mpsc, sends to downstream mpsc, and integrates with the error policy executor. |
 | `dag` | Petgraph wrapper: `DagGraph`, topological sort, cycle rejection. |
@@ -135,8 +135,7 @@ binary. Provides:
 - Five error constructors matching `pipeline:types.process-error` variants.
 - Thread-local state helpers (`RefCell`-based) for stateful plugins.
 
-No proc macros, no networking, no filesystem. Plugins declare it as a
-workspace path dependency in their `Cargo.toml`.
+The SDK provides no proc macros, networking abstraction, or filesystem abstraction. Plugins declare it as a workspace path dependency in their `Cargo.toml`. A component may import P2 `wasi:http` directly when its node receives an explicit `outbound_http` grant; the SDK does not wrap that interface.
 
 ### `wafer-runtime`
 
@@ -232,7 +231,7 @@ flowchart LR
 | Observability | `metrics` module (counters), `api::metrics` (scrape), `tracing` spans emitted from every runner loop and host function. |
 | Error handling | Stratified: `thiserror` in library boundaries, five-category WIT `process-error` at the guest–host edge, `anyhow` only in binaries. |
 | Backpressure | Bounded `tokio::mpsc` channels on every edge; overflow policy configurable per-edge (slow / drop / dead-letter). |
-| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits`, optional fuel/epoch bounds, and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend. |
+| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits`, optional fuel/epoch bounds, and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend; Wasm processing nodes receive network authority only through exact-destination `outbound_http` grants. |
 | Hot-swap | Watch-channel signal from orchestrator → runner; between-messages replacement of `Store` + `Instance`. See [ADR-0012](../adr/0012-watch-channel-hot-swap.md). |
 
 ## Related documents

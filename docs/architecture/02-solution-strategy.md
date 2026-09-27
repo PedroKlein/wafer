@@ -16,7 +16,7 @@ WAFER embeds Wasmtime — the Bytecode Alliance reference implementation. The ch
 
 1. **Full Component Model support.** WAFER defines typed WIT interfaces for every plugin category. Wasmtime is the only runtime with production-grade Component Model support, including resource handles (`borrow<buffer>`), multiple worlds per component, and typed result returns.
 2. **Fuel and epoch metering.** Untrusted plugins run under configurable fuel budgets and epoch deadlines. Wasmtime exposes both mechanisms as first-class APIs integrated with async execution.
-3. **Tokio-safe synchronous guest calls.** Each node runner invokes generated synchronous bindings inside `tokio::task::block_in_place`; guest calls remain outside cancellation `select!` branches and run to completion. This accommodates the synchronous WASI bridge without blocking unrelated Tokio workers.
+3. **Asynchronous P2 host execution.** The guest WIT exports remain synchronous, but Wasmtime's generated asynchronous host bindings are awaited directly from ordinary Tokio node tasks. Instantiation, lifecycle, processing, recovery, reconfigure, and hot-swap use one async linker-to-call path without `spawn_blocking`, nested `block_on`, or `block_in_place`. Guest calls remain outside cancellation `select!` branches and run to completion.
 4. **ARM64 support.** WAFER's canonical target is Raspberry Pi 5 4 GB. Wasmtime's Cranelift backend produces native code for `aarch64` with no external LLVM dependency. The same restored inference candidate also completed diagnostic CPU and CUDA-provider execution on Jetson; that run does not establish comparative performance or CUDA operational stability.
 
 Alternatives considered and rejected: Wasmer (incomplete Component Model), WasmEdge (no fuel metering), wasm3 (interpreter-only, no Component Model).
@@ -29,11 +29,11 @@ Alternatives considered and rejected: Wasmer (incomplete Component Model), WasmE
 
 Sources and sinks remain native Rust code compiled directly into the runtime binary. Production Transform, Filter, and Router nodes use Wasm components; selected native implementations exist only as evaluation baselines on the same orchestration path. Replacement eligibility follows the loaded Wasm implementation, not merely the node category. The reasoning:
 
-- **I/O capability mismatch.** Sources need TCP sockets, TLS handshakes, MQTT event loops, and HTTP listeners. WASI Preview 2 networking is still maturing and would require proxying every protocol operation through host functions — complexity without benefit.
+- **I/O capability mismatch.** Sources need listeners, protocol lifecycle, managed credentials, retries, and delivery semantics. Processing guests may opt into exact-destination outbound `wasi:http`, but that bounded request/response capability is not a replacement for native MQTT or HTTP adapters.
 - **Performance sensitivity.** The MQTT source runs a `rumqttc` event loop that must poll continuously; inserting a Wasm boundary here would add latency to every received message before it even enters the pipeline.
 - **Isolation is irrelevant at the boundary.** Sources and sinks are trusted infrastructure code maintained by the runtime authors, not user-supplied plugins. The isolation guarantees that Wasm provides (memory sandboxing, fuel limits, capability scoping) address the risk of *untrusted user logic*, which lives exclusively in the processing tier.
 
-The result: a clear separation between the "plumbing" layer (native, trusted, I/O-capable) and the "processing" layer (Wasm, sandboxed, pure-computational).
+The result: a clear separation between the "plumbing" layer (native, trusted, transport-owning) and the "processing" layer (Wasm, sandboxed, and optionally granted bounded outbound HTTP for intrinsic request/response work).
 
 ---
 

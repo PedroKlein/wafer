@@ -1,6 +1,6 @@
 # Vision
 
-WAFER (**W**eb**A**ssembly **F**low **E**xecution **R**untime) is a single-process DAG pipeline runtime for edge IoT gateways. Untrusted processing stages are sandboxed WebAssembly components connected by bounded, policy-aware queues. Filesystem and network interfaces are not exposed to processing guests; stdio, environment, and inference imports are granted explicitly, with inference restricted to Wasm Transforms.
+WAFER (**W**eb**A**ssembly **F**low **E**xecution **R**untime) is a single-process DAG pipeline runtime for edge IoT gateways. Untrusted processing stages are sandboxed WebAssembly components connected by bounded, policy-aware queues. Filesystem access remains unavailable; stdio, environment, inference, and exact-destination outbound HTTP authority are granted explicitly. Inference is restricted to Wasm Transforms, while outbound HTTP is available to Wasm Transform, Filter, and Router nodes.
 
 ## Problem
 
@@ -37,6 +37,7 @@ The runtime architecture *is* the contribution. No single feature is elevated; t
 
 - [ADR-0001 — Wasmtime as the Wasm runtime](../adr/0001-wasmtime-runtime.md)
 - [ADR-0006 — Workspace architecture (7-crate layout)](../adr/0006-workspace-architecture.md)
+- [ADR-0016 — Default-deny outbound `wasi:http`](../adr/0016-outbound-wasi-http-capability.md)
 
 ## Next
 

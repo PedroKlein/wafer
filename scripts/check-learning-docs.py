@@ -237,7 +237,7 @@ EXPECTED_EVIDENCE = {
             "crates/wafer-core/src/runner/transform.rs",
             (
                 "pub async fn run_transform_loop_with_config",
-                "tokio::task::block_in_place(|| transform.process(envelope))",
+                "let result = transform.process(envelope).await",
             ),
         ),
         (
@@ -248,7 +248,7 @@ EXPECTED_EVIDENCE = {
         (
             "Source",
             "crates/wafer-core/src/node/wasm.rs",
-            ("fn build_wit_message", "pub fn process", "delete_buffer"),
+            ("fn build_wit_message", "pub async fn process", "delete_buffer"),
         ),
         (
             "Source",
@@ -292,7 +292,7 @@ EXPECTED_EVIDENCE = {
             "crates/wafer-core/src/runner/transform.rs",
             (
                 "pub async fn run_transform_loop_with_config",
-                "tokio::task::block_in_place(|| transform.process(envelope))",
+                "let result = transform.process(envelope).await",
                 "policy.flush_to_dlq(\"shutdown\")",
             ),
         ),
@@ -333,15 +333,17 @@ EXPECTED_EVIDENCE = {
         ("Source", "wit/worlds.wit", ("world transform-node", "world filter-node", "world router-node", "world inference-node")),
         ("Source", "plugins/pass-through/Cargo.toml", ("crate-type = [\"cdylib\"]", "wit-bindgen = \"0.53\"")),
         ("Source", "crates/wafer-core/src/engine/bindings.rs", ("pub mod transform_node", "pub mod filter_node", "pub(crate) mod router_node", "pub(crate) mod inference_node")),
-        ("Source", "crates/wafer-core/src/engine/loader.rs", ("fn build_linker", "pub fn pre_instantiate_transform", "pub(crate) fn pre_instantiate_inference", "pub fn pre_instantiate_filter", "pub fn pre_instantiate_router")),
+        ("Source", "crates/wafer-core/src/engine/loader.rs", ("fn build_linker", "add_to_linker_async", "add_only_http_to_linker_async", "pub fn pre_instantiate_transform", "pub(crate) fn pre_instantiate_inference", "pub fn pre_instantiate_filter", "pub fn pre_instantiate_router")),
         ("Source", "crates/wafer-core/src/orchestrator/launcher.rs", ("fn create_source", "fn create_sink", "async fn resolve_and_load_component")),
         ("Source", "plugins/pass-through/src/lib.rs", ("wit_bindgen::generate!", "impl exports::wafer::pipeline::transform::Guest", "export!(PassThrough)")),
         ("Source", "plugins/mnist-inference/src/lib.rs", ("world: \"inference-node\"", "graph::load", "GraphExecutionContext")),
         ("Source", "crates/wafer-plugin/src/lib.rs", ("macro_rules! payload_as_str", "$input.payload.read_all()")),
         ("Source", "plugins/content-router/src/lib.rs", ("world: \"router-node\"", "let bytes = input.payload.read_all()")),
         ("Source", "crates/wafer-core/src/registry/client.rs", ("pub async fn resolve", "fn resolve_local", "async fn resolve_oci")),
-        ("Source", "crates/wafer-core/src/node/wasm.rs", ("fn build_wit_message", "pub fn validate_and_init", "delete_buffer")),
+        ("Source", "crates/wafer-core/src/node/wasm.rs", ("fn build_wit_message", "pub async fn validate_and_init", "delete_buffer")),
+        ("Source", "crates/wafer-core/src/engine/http.rs", ("impl WasiHttpHooks for OutboundHttpHooks", "fn authorize", "async fn socket_addr")),
         ("Test", "crates/wafer-core/tests/wasi_async_runner.rs", ("async fn delay_injector_runs_without_wasi_runtime_panic()",)),
+        ("Test", "crates/wafer-core/tests/wasi_http_capability.rs", ("async fn omitted_outbound_http_denies_before_loopback_connect()", "async fn exact_loopback_destination_is_allowed()")),
         ("Test", "crates/wafer-core/tests/inference_inventory.rs", ("fn root_wit_defines_the_pinned_inference_world()", "fn host_bindings_include_inference_without_changing_ordinary_worlds()")),
         ("Test", "crates/wafer-core/src/node/wasm.rs", ("fn inference_recovery_and_reconfigure_keep_real_model_live()", "fn inference_hot_swap_adopts_real_component_between_calls()")),
     },
@@ -351,7 +353,7 @@ EXPECTED_EVIDENCE = {
         ("Source", "crates/wafer-core/src/orchestrator/pipeline.rs", ("pub fn send_swap", "pub fn record_hotswap_phase")),
         ("Source", "crates/wafer-core/src/runner/mod.rs", ("pub struct HotSwapProgress", "pub fn report_rolled_back", "pub enum SwapPayload")),
         ("Source", "crates/wafer-core/src/runner/transform.rs", ("swap_rx.has_changed()", "transform.recover_from_cached_pre()", "metrics.record_rollback()")),
-        ("Source", "crates/wafer-core/src/node/wasm.rs", ("pub fn try_hot_swap", "self.store = old_store", "pub fn recover_from_cached_pre")),
+        ("Source", "crates/wafer-core/src/node/wasm.rs", ("pub async fn try_hot_swap", "self.store = old_store", "pub async fn recover_from_cached_pre")),
         ("Source", "crates/wafer-core/src/node/metrics.rs", ("pub fn record_swap", "pub fn record_rollback", "pub fn record_recovery")),
         ("Source", "crates/wafer-core/src/api/handlers.rs", ("pub async fn hot_swap", "\"status\": \"rolled_back\"", "\"replacement_adopted\": true")),
         ("Test", "crates/wafer-core/tests/hotswap_process_time_rollback.rs", ("async fn hotswap_process_time_rollback()", "async fn hotswap_bounded_rollback_thrash()")),
@@ -382,7 +384,7 @@ S12_REQUIRED_TEXT = {
         "PipelineOrchestrator::from_build_output",
     ),
     "message-through-wasm.md": (
-        "tokio::task::block_in_place(|| transform.process(envelope))",
+        "transform.process(envelope).await",
         "sender.reserve().await",
         "borrow<buffer>",
         "list<u8>",
@@ -495,7 +497,7 @@ FIXTURE_CONTRACT = {
         "shutdown-and-failure.md: claims reverse-topological shutdown",
     ),
     "s12-wasm-inside-select.json": (
-        "e003a84ab913b91495990dc382a0513be5af5ac97d109f149ede30a8dc6a1913",
+        "03dae0247925f54fde518c244d56fdf854dc82b93988744295e377233b8c15f5",
         "message-through-wasm.md: places the Wasm call inside cancellation select",
     ),
     "s12-zero-copy-boundary.json": (
@@ -515,7 +517,7 @@ FIXTURE_CONTRACT = {
         "README.md: invalid Diataxis type: Guide",
     ),
     "wrong-source-commit.json": (
-        "dad2c8d193aef5d59209381bf4ebd8b8e53b7d258a803777c7b8a9e2fe96c89f",
+        "c97d4e4801ab65551cfc8f514fa7eeb224675556b0273f7dfffcf9f89e1e714c",
         "README.md: source commit is not pinned",
     ),
     "s13-capacity-uncensored.json": (
@@ -567,7 +569,7 @@ FIXTURE_CONTRACT = {
         "evaluation-harness.md: expected Diataxis type Tutorial, found Reference",
     ),
     "s13-wrong-source-commit.json": (
-        "262c325234f1dc91b397fe88fd2775c321ba6243814a2cd98dc0e6bb0b93dfb0",
+        "f07c3ad436a68e7622646d12ac2d449781c3548037ca76c4c7cd09a84b0b2a25",
         "stateless-hot-swap.md: source commit is not pinned",
     ),
 }
@@ -781,7 +783,7 @@ def validate_s13_contract(pages: dict[str, str], errors: list[str]) -> None:
         for required in S13_REQUIRED_TEXT[name]:
             if required not in text:
                 errors.append(f"{name}: missing required implementation anchor: {required}")
-        if "92d86b0a511047988de5fbf6551b18b8a09ec455" not in text:
+        if "f173151a8951736b4d82e10ce2b1c4417b02cf99" not in text:
             errors.append(f"{name}: source commit is not pinned")
 
     for name, links in S13_NAV_LINKS.items():
@@ -839,7 +841,7 @@ def validate_pages(pages: dict[str, str]) -> list[str]:
             errors.append(f"{name}: state-preserving replacement claim is not allowed")
 
     readme = pages.get("README.md", "")
-    if "92d86b0a511047988de5fbf6551b18b8a09ec455" not in readme:
+    if "f173151a8951736b4d82e10ce2b1c4417b02cf99" not in readme:
         errors.append("README.md: source commit is not pinned")
     if "## Orientation" not in readme:
         errors.append("README.md: must remain an orientation page")
