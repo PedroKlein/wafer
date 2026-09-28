@@ -88,7 +88,8 @@ impl WasmProcessError {
 const MEMORY_LIMIT_MARKER: &str = "forcing trap when growing memory";
 
 /// Mechanism that aborted a guest call, as counted in node metrics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TrapKind {
     MemoryOutOfBounds,
     Unreachable,
@@ -159,11 +160,23 @@ impl fmt::Display for ErrorCategory {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DlqReason {
     BadInput,
-    RetriesExhausted { max_retries: u32 },
+    TimedOut,
+    RetriesExhausted {
+        max_retries: u32,
+    },
     RetryBufferFull,
     HotSwapDrain,
     Shutdown,
-    QueueFull { edge: Box<str> },
+    QueueFull {
+        edge: Box<str>,
+    },
+    /// The call trapped; the message never got a result.
+    Trapped {
+        kind: TrapKind,
+    },
+    /// The guest returned `unrecoverable` for this message.
+    Unrecoverable,
+    /// Pending retries lost because the node could not be re-instantiated.
     RecoveryFailed,
 }
 
@@ -171,6 +184,7 @@ impl fmt::Display for DlqReason {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BadInput => write!(f, "bad_input"),
+            Self::TimedOut => write!(f, "timed_out"),
             Self::RetriesExhausted { max_retries } => {
                 write!(f, "retries_exhausted(max={max_retries})")
             }
@@ -178,6 +192,8 @@ impl fmt::Display for DlqReason {
             Self::HotSwapDrain => write!(f, "hot_swap_drain"),
             Self::Shutdown => write!(f, "shutdown"),
             Self::QueueFull { edge } => write!(f, "queue_full(edge={edge})"),
+            Self::Trapped { kind } => write!(f, "trapped(kind={})", kind.as_str()),
+            Self::Unrecoverable => write!(f, "unrecoverable"),
             Self::RecoveryFailed => write!(f, "recovery_failed"),
         }
     }
@@ -375,7 +391,7 @@ impl ErrorPolicyExecutor {
                     ResolvedSimpleAction::Dlq => {
                         return self.send_to_dlq(
                             envelope,
-                            ErrorCategory::BadInput,
+                            Some(ErrorCategory::BadInput),
                             msg.clone(),
                             0,
                             DlqReason::BadInput,
@@ -407,10 +423,10 @@ impl ErrorPolicyExecutor {
             ResolvedSimpleAction::Skip => ErrorPolicyAction::Skipped,
             ResolvedSimpleAction::Dlq => self.send_to_dlq(
                 envelope,
-                ErrorCategory::TimedOut,
+                Some(ErrorCategory::TimedOut),
                 error_msg,
                 0,
-                DlqReason::RetriesExhausted { max_retries: 0 },
+                DlqReason::TimedOut,
             ),
             ResolvedSimpleAction::Teardown => ErrorPolicyAction::Teardown,
         }
@@ -425,25 +441,42 @@ impl ErrorPolicyExecutor {
         self.retry_buffer.next_deadline()
     }
 
-    /// Flush all pending retries to DLQ (called on shutdown or hot-swap drain).
-    pub fn flush_to_dlq(&mut self, reason: &str, metrics: &NodeMetrics) {
-        let dlq_reason = match reason {
-            "hot_swap_drain" => DlqReason::HotSwapDrain,
-            _ => DlqReason::Shutdown,
-        };
-
+    /// Flush all pending retries to the DLQ: the node is exiting, adopted a
+    /// replacement, or could not be re-instantiated.
+    pub fn flush_to_dlq(&mut self, reason: &DlqReason, metrics: &NodeMetrics) {
         let entries: Vec<_> = self.retry_buffer.drain_all().collect();
         for entry in entries {
             match self.send_to_dlq(
                 entry.envelope,
-                entry.category,
+                Some(entry.category),
                 String::new(),
                 entry.retry_count,
-                dlq_reason.clone(),
+                reason.clone(),
             ) {
                 ErrorPolicyAction::DlqSent => metrics.record_dlq_sent(),
                 _ => metrics.record_dlq_lost(),
             }
+        }
+    }
+
+    /// Record a message whose instance is being replaced: the call trapped or
+    /// the guest returned `unrecoverable`. With a DLQ the record is the
+    /// message's fate; without one it is dropped on recovery, as before.
+    pub(crate) fn record_condemned(
+        &self,
+        envelope: RuntimeEnvelope,
+        error: &WasmProcessError,
+        metrics: &NodeMetrics,
+    ) {
+        if self.dlq_sender.is_none() {
+            metrics.record_dropped_on_recovery();
+            return;
+        }
+        let reason =
+            error.trap_kind().map_or(DlqReason::Unrecoverable, |kind| DlqReason::Trapped { kind });
+        match self.send_to_dlq(envelope, error.guest_category(), error.to_string(), 0, reason) {
+            ErrorPolicyAction::DlqSent => metrics.record_dlq_sent(),
+            _ => metrics.record_dlq_lost(),
         }
     }
 
@@ -473,7 +506,7 @@ impl ErrorPolicyExecutor {
                 ResolvedSimpleAction::Skip => ErrorPolicyAction::ExhaustedSkip,
                 ResolvedSimpleAction::Dlq => self.send_to_dlq(
                     envelope,
-                    category,
+                    Some(category),
                     error_msg,
                     current,
                     DlqReason::RetriesExhausted { max_retries },
@@ -485,7 +518,7 @@ impl ErrorPolicyExecutor {
         if self.retry_buffer.is_full() {
             return self.send_to_dlq(
                 envelope,
-                category,
+                Some(category),
                 error_msg,
                 current,
                 DlqReason::RetryBufferFull,
@@ -527,7 +560,7 @@ impl ErrorPolicyExecutor {
     fn send_to_dlq(
         &self,
         envelope: RuntimeEnvelope,
-        category: ErrorCategory,
+        category: Option<ErrorCategory>,
         error_message: String,
         retry_count: u32,
         reason: DlqReason,
@@ -547,7 +580,7 @@ impl ErrorPolicyExecutor {
         let dlq_envelope = DlqEnvelope {
             timestamp,
             source_node: self.source_node.clone(),
-            error_category: Some(category),
+            error_category: category,
             error_message,
             retry_count,
             reason,
@@ -650,6 +683,104 @@ mod tests {
     }
 
     #[test]
+    fn timed_out_dlq_records_its_own_reason() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let config =
+            ResolvedErrorPolicy { timed_out: ResolvedSimpleAction::Dlq, ..test_policy(3, 100, 10) };
+        let mut executor = ErrorPolicyExecutor::new(config, Some(tx), "test-node");
+
+        let action = executor.handle(&WasmProcessError::TimedOut, test_envelope("slow"));
+
+        assert_eq!(action, ErrorPolicyAction::DlqSent);
+        let dlq = rx.try_recv().expect("timed-out message must reach the DLQ");
+        assert_eq!(dlq.reason, DlqReason::TimedOut);
+        assert_eq!(dlq.error_category, Some(ErrorCategory::TimedOut));
+        assert_eq!(dlq.retry_count, 0);
+    }
+
+    #[test]
+    fn trapped_message_is_recorded_with_its_trap_kind() {
+        let (mut executor, mut rx) = make_executor_with_dlq(100);
+        let metrics = NodeMetrics::new();
+        let error = WasmProcessError::Trapped {
+            code: Some(wasmtime::Trap::MemoryOutOfBounds),
+            message: "wasm trap: out of bounds memory access".into(),
+        };
+        assert_eq!(executor.handle(&error, test_envelope("oob")), ErrorPolicyAction::Teardown);
+
+        executor.record_condemned(test_envelope("oob"), &error, &metrics);
+
+        assert_eq!(metrics.dlq_sent(), 1);
+        assert_eq!(metrics.dropped_on_recovery(), 0);
+        let dlq = rx.try_recv().expect("trapped message must reach the DLQ");
+        assert_eq!(dlq.reason, DlqReason::Trapped { kind: TrapKind::MemoryOutOfBounds });
+        assert_eq!(dlq.error_category, None, "a trap has no guest category");
+        assert!(dlq.error_message.contains("out of bounds"), "{}", dlq.error_message);
+        let json: serde_json::Value =
+            serde_json::from_slice(&dlq.to_json_bytes().expect("json")).expect("value");
+        assert_eq!(json["reason"]["type"], "trapped");
+        assert_eq!(json["reason"]["kind"], "memory_out_of_bounds");
+    }
+
+    #[test]
+    fn guest_unrecoverable_is_recorded_with_its_category() {
+        let (executor, mut rx) = make_executor_with_dlq(100);
+        let metrics = NodeMetrics::new();
+
+        executor.record_condemned(
+            test_envelope("poison"),
+            &WasmProcessError::Unrecoverable("state corrupt".into()),
+            &metrics,
+        );
+
+        let dlq = rx.try_recv().expect("unrecoverable message must reach the DLQ");
+        assert_eq!(dlq.reason, DlqReason::Unrecoverable);
+        assert_eq!(dlq.error_category, Some(ErrorCategory::Unrecoverable));
+        assert_eq!(metrics.dlq_sent(), 1);
+    }
+
+    #[test]
+    fn condemned_message_without_a_sink_is_dropped_on_recovery() {
+        let executor = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "node");
+        let metrics = NodeMetrics::new();
+        let error = WasmProcessError::Trapped { code: None, message: "host failure".into() };
+
+        executor.record_condemned(test_envelope("x"), &error, &metrics);
+
+        assert_eq!(metrics.dropped_on_recovery(), 1);
+        assert_eq!(metrics.dlq_sent(), 0);
+        assert_eq!(metrics.dlq_lost(), 0);
+    }
+
+    #[test]
+    fn condemned_message_with_a_full_sink_is_counted_lost() {
+        let (tx, _rx) = mpsc::channel(1);
+        tx.try_send(DlqEnvelope {
+            timestamp: 0,
+            source_node: "node".into(),
+            error_category: None,
+            error_message: String::new(),
+            retry_count: 0,
+            reason: DlqReason::Shutdown,
+            original: test_envelope("existing"),
+            trace_id: None,
+            parent_id: None,
+        })
+        .expect("fill DLQ");
+        let executor = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), Some(tx), "node");
+        let metrics = NodeMetrics::new();
+
+        executor.record_condemned(
+            test_envelope("x"),
+            &WasmProcessError::Unrecoverable("bad".into()),
+            &metrics,
+        );
+
+        assert_eq!(metrics.dlq_lost(), 1);
+        assert_eq!(metrics.dropped_on_recovery(), 0);
+    }
+
+    #[test]
     fn test_timed_out_is_skipped() {
         let (mut executor, mut rx) = make_executor_with_dlq(100);
         let envelope = test_envelope("slow data");
@@ -749,7 +880,7 @@ mod tests {
         assert_eq!(executor.pending_retries(), 2);
 
         let metrics = NodeMetrics::new();
-        executor.flush_to_dlq("shutdown", &metrics);
+        executor.flush_to_dlq(&DlqReason::Shutdown, &metrics);
         assert_eq!(executor.pending_retries(), 0);
         assert_eq!(metrics.dlq_sent(), 2);
         assert_eq!(metrics.dlq_lost(), 0);
@@ -812,7 +943,7 @@ mod tests {
 
         executor.handle(&WasmProcessError::DependencyFailed("err".into()), test_envelope("msg"));
 
-        executor.flush_to_dlq("hot_swap_drain", &NodeMetrics::new());
+        executor.flush_to_dlq(&DlqReason::HotSwapDrain, &NodeMetrics::new());
 
         let dlq = rx.try_recv().expect("flushed entry");
         assert_eq!(dlq.reason, DlqReason::HotSwapDrain);

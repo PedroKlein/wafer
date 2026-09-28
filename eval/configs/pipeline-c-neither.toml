@@ -7,6 +7,10 @@ description = "Passthrough with no metering trap — reference for E-Perf-7"
 [engine]
 epoch_tick_ms = 10
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

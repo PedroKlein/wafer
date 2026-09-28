@@ -3121,6 +3121,7 @@ def derive_containment(output: Path, experiment: str, condition: str) -> dict:
         raise ValueError("per_node_metrics.csv contains no runtime metric rows")
     try:
         traps_total = sum(int(row["traps_total"]) for row in rows)
+        dlq_sent_total = sum(int(row["dlq_sent"]) for row in rows)
         healthy_messages = max(
             (int(row["messages_out"]) for row in rows if row["node_id"] not in {"attack", "branch_b"}),
             default=0,
@@ -3139,8 +3140,18 @@ def derive_containment(output: Path, experiment: str, condition: str) -> dict:
         "traps_total": traps_total,
         "healthy_messages_out": healthy_messages,
         "runtime_panic": runtime_panic,
+        "dlq_sent_total": dlq_sent_total,
+        "dlq_records": count_dlq_records(output / "dlq.jsonl"),
         "nodes": rows,
     }
+
+
+def count_dlq_records(path: Path) -> int | None:
+    """Lines in the runtime's dead-letter file, or None when no DLQ was written."""
+    if not path.is_file():
+        return None
+    with path.open(encoding="utf-8") as stream:
+        return sum(1 for line in stream if line.strip())
 
 
 def summarize_recovery(path: Path) -> dict:

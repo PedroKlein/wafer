@@ -499,7 +499,6 @@ impl WasmTransformNode {
                     Bytes::from(output.payload),
                 );
                 new_envelope.inherit_lineage_from(&envelope);
-                new_envelope.retry_count = envelope.retry_count;
                 Ok(new_envelope)
             }
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
@@ -1772,7 +1771,7 @@ mod tests {
         );
         anyhow::ensure!(output.parent_id() == Some("parent-7"), "parent lineage changed");
         anyhow::ensure!(output.trace_id() == Some(trace_id.as_str()), "trace lineage changed");
-        anyhow::ensure!(output.retry_count == 3, "retry count changed");
+        anyhow::ensure!(output.retry_count == 0, "retry budget must not leak downstream");
         anyhow::ensure!(output.payload.len() == 10 * size_of::<f32>(), "wrong output size");
         let logits = output
             .payload

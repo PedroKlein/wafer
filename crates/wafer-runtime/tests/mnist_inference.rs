@@ -93,12 +93,17 @@ to = "result-format"
 [[edges]]
 from = "result-format"
 to = "formatted-sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
             digit.display(),
             inference.display(),
             raw_path.display(),
             format.display(),
             formatted_path.display(),
+            dir.path().join("dlq.jsonl").display(),
         ),
     )?;
 
@@ -211,8 +216,13 @@ to = "mnist-inference"
 [[edges]]
 from = "mnist-inference"
 to = "stdout"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            inference.display()
+            inference.display(),
+            dir.path().join("dlq.jsonl").display()
         ),
     )?;
     let output = Command::new(env!("CARGO_BIN_EXE_wafer"))
