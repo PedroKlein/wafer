@@ -14,6 +14,19 @@ from pathlib import Path
 
 Runner = Callable[[list[str]], str | None]
 
+PLATFORM_KEYS = (
+    "hardware_model",
+    "cpu_model",
+    "physical_cores",
+    "online_cpus",
+    "smt",
+    "turbo",
+    "cpufreq_driver",
+    "os_release",
+    "glibc_version",
+    "power_mode",
+)
+
 
 def run_command(command: list[str]) -> str | None:
     try:
@@ -53,10 +66,12 @@ def _cpu_model(root: Path, processors: list[dict[str, str]]) -> str | None:
         for key in ("model name", "Model", "Hardware"):
             if processor.get(key):
                 return processor[key]
-    compatible = _read(root / "proc/device-tree/compatible")
-    if compatible:
-        return compatible.split("\x00")[0] or compatible
-    return None
+    try:
+        compatible = (root / "proc/device-tree/compatible").read_bytes()
+    except OSError:
+        return None
+    first = compatible.split(b"\x00", 1)[0].decode(errors="replace").strip()
+    return first or None
 
 
 def _count_cpus(spec: str | None) -> int | None:
@@ -105,12 +120,11 @@ def _turbo(root: Path) -> str | None:
 
 
 def _pstate_driver(root: Path) -> str | None:
-    driver = _read(root / "sys/devices/system/cpu/cpu0/cpufreq/scaling_driver")
     for name in ("intel_pstate", "amd_pstate"):
         status = _read(root / "sys/devices/system/cpu" / name / "status")
-        if status:
+        if status and status != "off":
             return f"{name}:{status}"
-    return driver
+    return _read(root / "sys/devices/system/cpu/cpu0/cpufreq/scaling_driver")
 
 
 def _os_release(root: Path) -> str | None:
@@ -142,7 +156,7 @@ def _power_mode(run: Runner) -> str | None:
 def platform_facts(root: Path = Path("/"), run: Runner = run_command) -> dict:
     processors = _cpuinfo_fields(root)
     online = _read(root / "sys/devices/system/cpu/online")
-    return {
+    facts = {
         "hardware_model": _hardware_model(root),
         "cpu_model": _cpu_model(root, processors),
         "physical_cores": _physical_cores(processors, online),
@@ -154,3 +168,5 @@ def platform_facts(root: Path = Path("/"), run: Runner = run_command) -> dict:
         "glibc_version": _glibc_version(run),
         "power_mode": _power_mode(run),
     }
+    assert tuple(facts) == PLATFORM_KEYS
+    return facts
