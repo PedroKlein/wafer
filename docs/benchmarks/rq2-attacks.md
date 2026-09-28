@@ -97,6 +97,28 @@ any OS-level OOM could occur.
   `wasm32-wasip2` lowers to `unreachable`, which wasmtime treats as
   a trap.
 
+## Pipeline runs (E-Iso-1..8)
+
+The canonical runs load the same plugins into a full pipeline and judge
+containment from the attack node's row in `per_node_metrics.csv`
+(`eval/scripts/lib/containment.py`). The run passes only when the column
+below counted the attack and the node recorded nothing else: no other trap
+kind, no other guest error, and no message passed downstream.
+
+| Experiment / condition | Attack node | Counter that must stop it |
+|---|---|---|
+| E-Iso-1 `buffer-overflow`, E-Iso-2 `cross-read` | `attack` | `traps_memory_out_of_bounds` |
+| E-Iso-3 `fs-access` | `attack` | `guest_unrecoverable` (the plugin's denial report) |
+| E-Iso-4 `infinite-loop` | `attack` | `traps_interrupt` |
+| E-Iso-5 `memory-exhaust` | `attack` | `traps_memory_limit` |
+| E-Iso-6 `panic`, E-Iso-8 `panic-recovery` | `attack` | `traps_unreachable` |
+| E-Iso-7 `panic-attack` / `epoch-loop-attack` | `branch_b` | `traps_unreachable` / `traps_interrupt` |
+
+E-Iso-3 is the one scenario the host does not see: with no preopened
+directory, wasi-libc fails the open inside the guest, so the evidence is the
+guest's own `unrecoverable` report. The plugin reports a successful read
+as `processing_failed`, which fails the verdict.
+
 ## Reproduction
 
 ```bash

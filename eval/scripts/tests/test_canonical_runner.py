@@ -3816,15 +3816,18 @@ def test_swap3_final_artifact_sets_match_matrix_runner_verifier_and_analysis() -
 def test_isolation_derivations_use_raw_runtime_metrics() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        (root / "per_node_metrics.csv").write_text(
-            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count\n"
-            "source,12000,12000,0,0,0\n"
-            "attack,12000,0,12000,1.2,12000\n"
-            "sink,0,0,0,0,0\n"
-        )
+        write_node_metrics(root, attack={
+            "messages_in": 12_000,
+            "traps_total": 12_000,
+            "traps_unreachable": 12_000,
+            "attempts_failed": 12_000,
+            "dropped_on_recovery": 12_000,
+            "recovery_count": 12_000,
+        })
         (root / "stdout.log").write_text("expected guest traps only\n")
-        containment = derive_containment(root)
+        containment = derive_containment(root, "e-iso-6", "panic")
         assert containment["contained"] is True
+        assert containment["expected_mechanism"] == "traps_unreachable"
         assert containment["traps_total"] == 12_000
         assert containment["runtime_panic"] is False
 
@@ -4001,6 +4004,60 @@ def test_branch_isolation_batch_summary_contains_both_attack_rows() -> None:
     assert summary["sample_unit"] == "run"
 
 
+NODE_METRIC_COLUMNS = (
+    "node_id,messages_in,messages_out,filtered_out,traps_total,traps_memory_out_of_bounds,"
+    "traps_unreachable,traps_interrupt,traps_out_of_fuel,traps_memory_limit,traps_other,"
+    "guest_bad_input,guest_dependency_failed,guest_processing_failed,guest_timed_out,"
+    "guest_unrecoverable,attempts_failed,retries,dlq_sent,dlq_lost,skipped,"
+    "retry_exhausted_skips,dropped_on_recovery,error_state_seconds,recovery_count"
+).split(",")
+
+
+def write_node_metrics(root: Path, attack: dict[str, int]) -> None:
+    def row(node_id: str, values: dict[str, int]) -> str:
+        return ",".join([node_id] + [str(values.get(column, 0)) for column in NODE_METRIC_COLUMNS[1:]])
+
+    (root / "per_node_metrics.csv").write_text("\n".join([
+        ",".join(NODE_METRIC_COLUMNS),
+        row("source", {"messages_out": 12_000}),
+        row("attack", attack),
+        row("sink", {}),
+    ]) + "\n")
+
+
+@pytest.mark.parametrize(
+    ("experiment", "condition", "attack", "contained"),
+    [
+        ("e-iso-3", "fs-access", {"messages_in": 10, "guest_unrecoverable": 10, "attempts_failed": 10}, True),
+        ("e-iso-3", "fs-access", {"messages_in": 10, "guest_processing_failed": 10, "attempts_failed": 10}, False),
+        ("e-iso-6", "panic", {"messages_in": 10, "guest_bad_input": 10, "attempts_failed": 10}, False),
+        ("e-iso-4", "infinite-loop", {"messages_in": 10, "traps_total": 10, "traps_out_of_fuel": 10, "attempts_failed": 10}, False),
+        ("e-iso-1", "buffer-overflow", {"messages_in": 10, "messages_out": 1, "traps_total": 9, "traps_memory_out_of_bounds": 9, "attempts_failed": 9}, False),
+        ("e-iso-7", "control", {}, None),
+    ],
+)
+def test_containment_requires_the_expected_mechanism_alone(
+    experiment: str, condition: str, attack: dict[str, int], contained: bool | None
+) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_node_metrics(root, attack)
+        (root / "stdout.log").write_text("")
+        assert derive_containment(root, experiment, condition)["contained"] is contained
+
+
+def test_containment_rejects_metrics_without_split_counters() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "per_node_metrics.csv").write_text(
+            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count\n"
+            "attack,12000,0,12000,1.2,12000\n"
+        )
+        (root / "stdout.log").write_text("")
+        with pytest.raises(ValueError, match="invalid runtime metrics"):
+            derive_containment(root, "e-iso-6", "panic")
+
+
 def test_containment_derivation_rejects_placeholder_metrics() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -4010,7 +4067,7 @@ def test_containment_derivation_rejects_placeholder_metrics() -> None:
         )
         (root / "stdout.log").write_text("runtime required SIGKILL\n")
         with pytest.raises(ValueError, match="no runtime metric rows"):
-            derive_containment(root)
+            derive_containment(root, "e-iso-6", "panic")
 
 
 def test_canonical_configs_match_frozen_windows() -> None:

@@ -37,7 +37,7 @@ async fn dispatch_filter_outcome(
             }
         }
         FilterOutcome::Drop => {
-            metrics.record_processed(duration_ns);
+            metrics.record_filtered_out(duration_ns);
             if let Some(progress) = pending_swap_progress.take() {
                 progress.mark_first_post_replacement_local_outcome(
                     crate::runner::FirstPostReplacementLocalOutcome::FilterDropped,
@@ -55,7 +55,7 @@ async fn recover_after_timeout(
     error: &WasmProcessError,
     envelope: RuntimeEnvelope,
 ) -> bool {
-    metrics.record_failed();
+    metrics.record_error(error);
     if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return false;
     }
@@ -111,7 +111,7 @@ pub async fn run_filter_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
-            policy.flush_to_dlq("hot_swap_drain");
+            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
             let result = match payload {
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
@@ -183,7 +183,8 @@ pub async fn run_filter_loop(
             Err(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
-                metrics.record_failed();
+                metrics.record_error(error);
+                metrics.record_dropped_on_recovery();
                 let msg = error.to_string();
                 tracing::error!(
                     node = filter.node_id(),
@@ -205,7 +206,7 @@ pub async fn run_filter_loop(
                 }
             }
             Err(e) => {
-                metrics.record_failed();
+                metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, envelope), &metrics) {
                     break;
                 }
@@ -213,7 +214,7 @@ pub async fn run_filter_loop(
         }
     }
 
-    policy.flush_to_dlq("shutdown");
+    policy.flush_to_dlq("shutdown", &metrics);
 }
 
 #[cfg(test)]
@@ -264,6 +265,6 @@ mod tests {
         // Verify the loop infrastructure is valid
         assert!(!state.is_processing());
         assert_eq!(metrics.processed(), 0);
-        assert_eq!(metrics.failed(), 0);
+        assert_eq!(metrics.attempts_failed(), 0);
     }
 }
