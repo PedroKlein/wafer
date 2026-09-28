@@ -38,13 +38,22 @@ else
   done
 fi
 
+# Hash only the components this run produced, so stale files left in a
+# plugin's target/ never reach ARTIFACTS.sha256.
+artifacts=()
 for plugin in "${plugins[@]}"; do
   echo "Building plugin: $plugin"
-  cargo build --release --locked --manifest-path "$plugin/Cargo.toml" --target wasm32-wasip2
+  while IFS= read -r wasm; do
+    artifacts+=("${wasm#"$PWD/"}")
+  done < <(
+    cargo build --release --locked --manifest-path "$plugin/Cargo.toml" --target wasm32-wasip2 \
+      --message-format=json-render-diagnostics |
+      grep -o '"[^"]*\.wasm"' | tr -d '"'
+  )
 done
 
 hash_artifacts() {
-  sha256 */target/wasm32-wasip2/release/*.wasm attacks/*/target/wasm32-wasip2/release/*.wasm
+  sha256 "${artifacts[@]}"
 }
 
 case $mode in

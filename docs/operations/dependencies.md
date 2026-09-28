@@ -111,8 +111,10 @@ ORT_LIB_LOCATION=/opt/onnxruntime cargo build --locked --offline --release \
   -p wafer-runtime --no-default-features --features http-api
 ```
 
-`metadata.json` records which of the two was used (`ort_link`), along with
-the `ort-sys` version and source.
+`metadata.json` records where the library came from in `ort_link`
+(`download-binaries`, `ORT_LIB_LOCATION=<path>`, or `system` when neither
+applies and ort-sys found ONNX Runtime on its own), along with the `ort-sys`
+version and source.
 
 ## Build profiles
 

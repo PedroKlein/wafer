@@ -28,10 +28,10 @@ fn main() -> std::io::Result<()> {
         );
     }
     let ort_lib_location = std::env::var("ORT_LIB_LOCATION").unwrap_or_default();
-    let ort_link = if ort_lib_location.is_empty() {
-        "download-binaries".to_string()
-    } else {
-        format!("ORT_LIB_LOCATION={ort_lib_location}")
+    let ort_link = match (ort_lib_location.is_empty(), std::env::var_os("CARGO_FEATURE_ORT_DOWNLOAD")) {
+        (false, _) => format!("ORT_LIB_LOCATION={ort_lib_location}"),
+        (true, Some(_)) => "download-binaries".to_string(),
+        (true, None) => "system".to_string(),
     };
     println!("cargo:rustc-env=WAFER_ORT_LINK={ort_link}");
 
