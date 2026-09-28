@@ -25,4 +25,12 @@ if "$CHECK" "$REPO_ROOT/does-not-exist" >/dev/null 2>&1; then
     exit 1
 fi
 
+report="$("$CHECK" "$REPO_ROOT/mise.toml" "$BINARY" 2>&1 || true)"
+grep -q "^NO GLIBC SYMBOLS: $REPO_ROOT/mise.toml" <<<"$report" || { echo "non-ELF input was not reported" >&2; exit 1; }
+grep -q "^$BINARY: glibc 2\." <<<"$report" || { echo "binaries after a bad input were not reported" >&2; exit 1; }
+if "$CHECK" "$REPO_ROOT/mise.toml" "$BINARY" >/dev/null 2>&1; then
+    echo "a non-ELF input did not fail the check" >&2
+    exit 1
+fi
+
 printf 'glibc floor tests: PASS\n'
