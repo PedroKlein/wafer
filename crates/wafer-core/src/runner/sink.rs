@@ -146,7 +146,7 @@ mod tests {
             assert_eq!(env.payload_as_string(), format!("msg-{i}"));
         }
         assert_eq!(metrics.processed(), 10);
-        assert_eq!(metrics.failed(), 0);
+        assert_eq!(metrics.attempts_failed(), 0);
     }
 
     #[tokio::test]

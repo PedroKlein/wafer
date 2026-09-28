@@ -49,6 +49,7 @@ from rollback import validate_swap5_artifacts
 from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from containment import assess_containment
 from interval_metrics import validate_interval_metrics
 
 # The split contract (RESULT-CONTRACT.md source of truth).
@@ -1296,13 +1297,16 @@ def check_focused_leaf(
                 recoveries = sum(int(node.get("recovery_count", 0)) for node in nodes)
                 if sum(int(node.get("traps_total", 0)) for node in nodes) != traps:
                     raise ValueError
+                assessment = assess_containment(nodes, experiment, condition)
             except (TypeError, ValueError):
                 violations.append("containment.json contains invalid runtime metrics")
             else:
                 if result.get("condition") != condition:
                     violations.append("containment evidence expected condition differs from the leaf")
-                if result.get("contained") is not True or traps <= 0:
-                    violations.append("containment evidence did not record a contained trap")
+                if result.get("contained") is not True or assessment["contained_by_mechanism"] is not True:
+                    violations.append(
+                        f"containment evidence was not stopped by {assessment['expected_mechanism']} alone"
+                    )
                 if result.get("runtime_panic") is not False:
                     violations.append("containment evidence recorded a runtime panic")
                 if experiment == "e-iso-4" and recoveries != traps:
