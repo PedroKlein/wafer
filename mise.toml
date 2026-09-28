@@ -97,8 +97,17 @@ description = "Build the entire workspace in release mode"
 run = "cargo build --locked --workspace --release"
 
 [tasks.test]
-description = "Run all tests across the workspace"
-run = "cargo test --locked --workspace"
+description = "Build the Wasm plugins, then run the workspace tests with every plugin-backed test required"
+env = { WAFER_REQUIRE_PLUGINS = "1" }
+run = ["plugins/build-plugins.sh --no-record", "cargo test --locked --workspace"]
+
+[tasks.test-docker]
+description = "Run the tests that need a Docker daemon (MQTT broker containers)"
+run = [
+  "cargo test --locked -p wafer-core --lib -- --ignored configured_mqtt_dlq_delivers_serialized_record",
+  "cargo test --locked -p wafer-core --test mqtt_source_reconnect -- --ignored",
+  "cargo test --locked -p wafer-loadgen --test roundtrip -- --ignored",
+]
 
 [tasks.mandatory-attack-evidence]
 description = "Run the mandatory containment-attack evidence target"

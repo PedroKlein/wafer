@@ -2,7 +2,6 @@
     clippy::unwrap_used,
     clippy::expect_used,
     clippy::print_stdout,
-    clippy::print_stderr,
     clippy::as_conversions,
     clippy::arithmetic_side_effects,
     clippy::indexing_slicing,
@@ -37,7 +36,7 @@ use tokio::runtime::Runtime;
 use wafer_core::engine::{Capabilities, WaferEngine};
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed;
 use wafer_core::runner::HotSwapProgress;
-use wafer_core::testing::PluginTestHarness;
+use wafer_core::testing::{PluginTestHarness, artifact_available};
 
 /// Matches the launcher default for transform nodes (see `[engine.memory].transform`).
 const BENCH_MEMORY_LIMIT: usize = 64 * 1024 * 1024;
@@ -104,9 +103,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
     let passthrough = passthrough_wasm();
     let uppercase = uppercase_wasm();
 
-    if !passthrough.exists() || !uppercase.exists() {
-        eprintln!("Skipping wasm_loading: WASM plugins not built");
-        eprintln!("  Run: just build-plugins");
+    if !artifact_available(&passthrough) || !artifact_available(&uppercase) {
         return;
     }
 
@@ -189,8 +186,7 @@ fn bench_prepare_target(c: &mut Criterion) {
     assert_no_stub_backed_evidence();
     let rt = Runtime::new().unwrap();
     let uppercase = uppercase_wasm();
-    if !uppercase.exists() {
-        eprintln!("Skipping prepare_target: WASM plugins not built");
+    if !artifact_available(&uppercase) {
         return;
     }
 
@@ -283,8 +279,7 @@ fn bench_prepare_target(c: &mut Criterion) {
 fn bench_production_sanity(_c: &mut Criterion) {
     assert_no_stub_backed_evidence();
     let passthrough = passthrough_wasm();
-    if !passthrough.exists() {
-        eprintln!("Skipping production_sanity: pass-through plugin not built");
+    if !artifact_available(&passthrough) {
         return;
     }
 

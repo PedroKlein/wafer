@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::runner::HotSwapProgress;
+use wafer_core::testing::artifact_available;
 use wafer_types::config::Config;
 
 const PASS_THROUGH_WASM: &str = concat!(
@@ -100,8 +101,7 @@ to = "sink"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn idle_transform_adopts_swap_without_input() {
-    if !Path::new(PASS_THROUGH_WASM).exists() {
-        eprintln!("SKIP: pass-through.wasm not built at {PASS_THROUGH_WASM}");
+    if !artifact_available(PASS_THROUGH_WASM) {
         return;
     }
 
@@ -195,11 +195,8 @@ to = "sink"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn swap_under_traffic_flips_version_once_without_loss() {
-    for plugin in [PASS_THROUGH_V1_WASM, PASS_THROUGH_V2_WASM] {
-        if !Path::new(plugin).exists() {
-            eprintln!("SKIP: {plugin} not built");
-            return;
-        }
+    if !artifact_available(PASS_THROUGH_V1_WASM) || !artifact_available(PASS_THROUGH_V2_WASM) {
+        return;
     }
 
     let tmp = tempfile::tempdir().expect("tmp dir");

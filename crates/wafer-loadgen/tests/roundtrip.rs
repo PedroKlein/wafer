@@ -9,16 +9,8 @@
 //! - `AC3d`: `latency.hdr` starts with the [`HdrHistogram`] V2 cookie prefix (`1c 84 93`).
 //! - `AC3e`: `subscriber-metadata.json` deserialises and reports the expected counts.
 //!
-//! # Skipping
-//! Set `WAFER_SKIP_DOCKER_TESTS=1` to skip when Docker is unavailable (e.g. in
-//! constrained CI). Otherwise the test WILL fail if the daemon is unreachable —
-//! silently skipping tests is a lie by omission and defeats the purpose of the
-//! integration harness.
-//!
-//! # macOS note
-//! On this machine Docker is provided by colima; the test picks up `DOCKER_HOST`
-//! automatically via bollard. If you use Docker Desktop, no extra setup is
-//! needed.
+//! Needs a Docker daemon: `mise run test-docker`. With colima, export
+//! `DOCKER_HOST` first.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -32,51 +24,14 @@ use wafer_loadgen::{
 
 const TOTAL_MESSAGES: u64 = 10_000;
 
-fn should_skip() -> bool {
-    std::env::var("WAFER_SKIP_DOCKER_TESTS").is_ok()
-}
-
-/// Best-effort `DOCKER_HOST` auto-detection.
-///
-/// Bollard defaults to `/var/run/docker.sock` when `DOCKER_HOST` is unset. On
-/// macOS with colima that socket does not exist; the real one lives under
-/// `~/.colima/default/docker.sock`. Probe common locations and export
-/// `DOCKER_HOST` before any testcontainers call so the test works whether the
-/// user runs Docker Desktop, colima, or a rootless setup.
-fn ensure_docker_host() {
-    if std::env::var_os("DOCKER_HOST").is_some() {
-        return;
-    }
-    let candidates = [
-        "/var/run/docker.sock".to_owned(),
-        format!("{}/.colima/default/docker.sock", std::env::var("HOME").unwrap_or_default()),
-        format!("{}/.docker/run/docker.sock", std::env::var("HOME").unwrap_or_default()),
-    ];
-    for path in candidates {
-        if std::path::Path::new(&path).exists() {
-            // SAFETY: single-threaded before we spawn the runtime; nothing
-            // else in the process is reading DOCKER_HOST at this point.
-            // SAFETY: We are still inside `#[tokio::test]` setup on the main
-            // thread; no other test threads can observe this race.
-            unsafe { std::env::set_var("DOCKER_HOST", format!("unix://{path}")) };
-            return;
-        }
-    }
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "needs a Docker daemon: mise run test-docker"]
 #[expect(
     clippy::panic_in_result_fn,
     clippy::too_many_lines,
     reason = "integration test uses assert_eq! for AC3 verification; failing an assertion should terminate the test even though it returns Result"
 )]
 async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyhow::Result<()> {
-    if should_skip() {
-        // Deliberately silent: the workspace bans print_stderr; the skip is
-        // signalled via test-runner output when the caller sets the env var.
-        return Ok(());
-    }
-    ensure_docker_host();
     let _init = tracing_subscriber::fmt()
         .with_env_filter("info,rumqttc=warn,bollard=warn")
         .with_test_writer()

@@ -1,14 +1,11 @@
 #![cfg(test)]
-#![expect(
-    clippy::print_stderr,
-    reason = "test diagnostic output explains when the pre-built Wasm fixture is unavailable"
-)]
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use wafer_core::testing::artifact_available;
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(relative)
@@ -19,8 +16,7 @@ fn one_message_startup_records_non_overlapping_phases_and_plugin_identity() {
     let config = repo_path("eval/configs/e-perf-9/pipeline-tier-small.toml");
     let plugin =
         repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-    if !plugin.exists() {
-        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+    if !artifact_available(&plugin) {
         return;
     }
 

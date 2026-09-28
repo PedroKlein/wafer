@@ -18,9 +18,9 @@ cuda = ["wasmtime-wasi-nn/onnx-cuda"]
 # checked by ort-sys). ORT_LIB_LOCATION overrides it with a local build; turn
 # the feature off to guarantee the build never reaches the network.
 ort-download = ["ort/download-binaries"]
-# Legacy test support — enables old runner/orchestrator tests from Phase 2
-# Enables integration tests that require pre-built .wasm plugin artifacts
-integration-tests = []
+# Compile `wafer_core::testing` (channel source/sink, plugin harness) for
+# consumers outside this crate's own tests and benches.
+test-support = []
 
 [dependencies]
 wafer-types = { workspace = true }
@@ -87,6 +87,7 @@ tokio-rustls = { workspace = true }
 webpki-roots = { workspace = true }
 
 [dev-dependencies]
+wafer-core = { path = ".", features = ["test-support"] }
 wafer-config = { path = "../wafer-config" }
 tempfile = { workspace = true }
 serde_json = { workspace = true }

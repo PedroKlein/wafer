@@ -15,18 +15,18 @@ use std::sync::Arc;
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::testing::PluginTestHarness;
 
-/// Path to the pre-built `TinyGo` uppercase plugin.
-///
-/// Built by `mise run //plugins:build-plugin-go`. Skipped (not failed) when
-/// missing so `cargo test` still works in environments without `TinyGo`.
+/// Path to the `TinyGo` uppercase plugin, built by
+/// `mise run //plugins:build-plugin-go`. The tests are opt-in
+/// (`mise run //plugins:test-plugin-go`) because CI has no `TinyGo`.
 const UPPERCASE_GO_WASM: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/../../plugins/go/uppercase/wafer-uppercase-go.wasm");
 
-fn harness_if_built() -> anyhow::Result<Option<PluginTestHarness>> {
-    if !Path::new(UPPERCASE_GO_WASM).exists() {
-        return Ok(None);
-    }
-    PluginTestHarness::new().map(Some).map_err(Into::into)
+fn harness() -> anyhow::Result<PluginTestHarness> {
+    anyhow::ensure!(
+        Path::new(UPPERCASE_GO_WASM).is_file(),
+        "{UPPERCASE_GO_WASM} is not built (run `mise run //plugins:build-plugin-go`)"
+    );
+    PluginTestHarness::new().map_err(Into::into)
 }
 
 /// Lifecycle boundary: `init` accepts the 3-field `node-config`
@@ -36,10 +36,9 @@ fn harness_if_built() -> anyhow::Result<Option<PluginTestHarness>> {
 /// drifted (2-field node-config) — regenerating without patching would
 /// resurface the mismatch here.
 #[tokio::test]
+#[ignore = "needs the TinyGo plugin: mise run //plugins:test-plugin-go"]
 async fn go_uppercase_instantiates_through_host_bindings() -> anyhow::Result<()> {
-    let Some(harness) = harness_if_built()? else {
-        return Ok(());
-    };
+    let harness = harness()?;
     let _transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
     Ok(())
 }
@@ -48,10 +47,9 @@ async fn go_uppercase_instantiates_through_host_bindings() -> anyhow::Result<()>
 /// crosses the Component-Model call, borrows the host-managed buffer via
 /// `types.buffer.read-all`, returns owned bytes.
 #[tokio::test]
+#[ignore = "needs the TinyGo plugin: mise run //plugins:test-plugin-go"]
 async fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
-    let Some(harness) = harness_if_built()? else {
-        return Ok(());
-    };
+    let harness = harness()?;
     let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     let input = RuntimeEnvelope::from_string("integration-test", "hello world");
@@ -65,10 +63,9 @@ async fn go_uppercase_actually_uppercases_a_message() -> anyhow::Result<()> {
 /// Guest-owned output fields must survive the host lifting boundary, while
 /// lineage continues from the host-owned input envelope.
 #[tokio::test]
+#[ignore = "needs the TinyGo plugin: mise run //plugins:test-plugin-go"]
 async fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Result<()> {
-    let Some(harness) = harness_if_built()? else {
-        return Ok(());
-    };
+    let harness = harness()?;
     let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     let mut input = RuntimeEnvelope::from_string("host-source", "hello world");
@@ -114,10 +111,9 @@ async fn go_uppercase_preserves_guest_fields_and_host_lineage() -> anyhow::Resul
 /// borrow<buffer> resource lifecycle (host push → guest read → host drop)
 /// doesn't leak or corrupt state across calls.
 #[tokio::test]
+#[ignore = "needs the TinyGo plugin: mise run //plugins:test-plugin-go"]
 async fn go_uppercase_handles_multiple_messages_in_one_store() -> anyhow::Result<()> {
-    let Some(harness) = harness_if_built()? else {
-        return Ok(());
-    };
+    let harness = harness()?;
     let mut transform = harness.load_transform(UPPERCASE_GO_WASM).await?;
 
     for i in 0..10 {
@@ -130,37 +126,4 @@ async fn go_uppercase_handles_multiple_messages_in_one_store() -> anyhow::Result
         );
     }
     Ok(())
-}
-
-/// Sentinel: enforces the exact failure signal the double-drop safety net
-/// emits, so future contributors know what regression looks like.
-///
-/// If `plugins/go/uppercase/borrow_shim.go` is regenerated / removed
-/// incorrectly, one of the following will happen at `process()` time:
-///
-///   * Missing drop (shim needed but absent) →
-///     `WasmProcessError::Trapped { message: "...borrow handles still remain...", .. }`
-///   * Double drop (shim redundant, generator now emits its own release) →
-///     `WasmProcessError::Trapped { .. }` from a wasmtime trap on
-///     `ResourceTable::delete` failing because the resource is gone.
-///
-/// Either way the three preceding tests fail with a `Trapped` variant
-/// containing a clear diagnostic string. This test documents that contract:
-/// it constructs the error variant we expect the harness to surface so the
-/// diagnostic doesn't drift silently.
-#[test]
-fn go_uppercase_double_drop_diagnostic_is_recognizable() {
-    use wafer_core::runner::error_policy::WasmProcessError;
-    // Ensures the diagnostic string we surface for the borrow-handle regime
-    // is still the variant integration tests match against. If the enum
-    // shape changes, this fails to compile.
-    let sentinel = WasmProcessError::Trapped {
-        code: None,
-        message: "borrow handles still remain at the end of the call".to_string(),
-    };
-    assert!(matches!(
-        sentinel,
-        WasmProcessError::Trapped { ref message, .. }
-            if message.contains("borrow handles") || message.contains("resource")
-    ));
 }

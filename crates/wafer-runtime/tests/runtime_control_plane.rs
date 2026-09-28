@@ -113,7 +113,14 @@ async fn api_health_nodes_and_sigterm_shutdown() {
         .json()
         .await
         .expect("nodes json");
-    assert!(nodes.as_array().is_some(), "nodes response should be a JSON array: {nodes}");
+    let mut ids: Vec<&str> = nodes
+        .as_array()
+        .expect("nodes json array")
+        .iter()
+        .filter_map(|n| n["id"].as_str())
+        .collect();
+    ids.sort_unstable();
+    assert_eq!(ids, ["in", "out"], "nodes listing must name the configured nodes: {nodes}");
 
     let status = terminate(child);
     assert!(status.success(), "wafer should exit cleanly on SIGTERM: {status:?}");

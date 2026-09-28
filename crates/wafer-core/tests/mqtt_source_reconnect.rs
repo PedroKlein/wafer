@@ -3,7 +3,7 @@
 //! clean session the broker forgets the subscription on disconnect, so the
 //! source has to subscribe again on every new connection.
 //!
-//! Set `WAFER_SKIP_DOCKER_TESTS=1` to skip when Docker is unavailable.
+//! Needs a Docker daemon: `mise run test-docker`.
 
 use std::net::TcpListener;
 use std::time::Duration;
@@ -17,22 +17,6 @@ use tokio::task::JoinHandle;
 use wafer_core::node::{Lifecycle, MqttSource, Source};
 
 const TOPIC: &str = "wafer/reconnect";
-
-fn ensure_docker_host() {
-    if std::env::var_os("DOCKER_HOST").is_some() {
-        return;
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    let candidates = [
-        "/var/run/docker.sock".to_owned(),
-        format!("{home}/.colima/default/docker.sock"),
-        format!("{home}/.docker/run/docker.sock"),
-    ];
-    if let Some(path) = candidates.iter().find(|path| std::path::Path::new(path).exists()) {
-        // SAFETY: this runs before testcontainers creates its Docker client.
-        unsafe { std::env::set_var("DOCKER_HOST", format!("unix://{path}")) };
-    }
-}
 
 /// A restarted container keeps its host port only if the mapping is fixed.
 fn free_port() -> u16 {
@@ -74,15 +58,12 @@ async fn deliver(publisher: &AsyncClient, source: &mut MqttSource, payload: &str
 }
 
 async fn start_broker(port: u16) -> ContainerAsync<Mosquitto> {
-    ensure_docker_host();
     Mosquitto::default().with_mapped_port(port, 1883.tcp()).start().await.unwrap()
 }
 
 #[tokio::test]
+#[ignore = "needs a Docker daemon: mise run test-docker"]
 async fn mqtt_source_keeps_receiving_after_broker_restart() {
-    if std::env::var_os("WAFER_SKIP_DOCKER_TESTS").is_some() {
-        return;
-    }
     let port = free_port();
     let broker = start_broker(port).await;
 
