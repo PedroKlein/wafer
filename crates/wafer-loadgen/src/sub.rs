@@ -23,6 +23,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
+use crate::MAX_PACKET_BYTES;
 use crate::recorder::{
     ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
     RecordOutcome, SequenceReport, SubscriberMetadata, now_ns,
@@ -98,10 +99,6 @@ fn parse_broker(s: &str) -> (String, u16) {
     }
     (s.to_owned(), 1883)
 }
-
-/// Well above the largest evaluation payload (100 KiB); rumqttc's 10 KiB
-/// default drops the connection on any larger PUBLISH.
-const MAX_PACKET_BYTES: usize = 1024 * 1024;
 
 const fn qos_from_u8(q: u8) -> QoS {
     match q {

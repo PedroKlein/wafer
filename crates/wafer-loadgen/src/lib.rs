@@ -14,6 +14,10 @@ pub mod recorder;
 mod stop_signal;
 pub mod sub;
 
+/// MQTT packet limit for both clients. rumqttc's 10 KiB default drops the
+/// connection on any larger PUBLISH; the largest evaluation payload is 100 KiB.
+pub(crate) const MAX_PACKET_BYTES: usize = 1024 * 1024;
+
 pub use hdr_summary::{HdrSummaryArgs, run as run_hdr_summary};
 pub use payload::{CANONICAL_SEQ, CANONICAL_TS_NS, PayloadTemplate};
 pub use profile::{LoadShape, Scheduler};

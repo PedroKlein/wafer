@@ -41,7 +41,8 @@ use tokio::sync::watch;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
-use crate::payload::{CANONICAL_SEQ, CANONICAL_TS_NS, PayloadTemplate};
+use crate::MAX_PACKET_BYTES;
+use crate::payload::PayloadTemplate;
 use crate::profile::{LoadShape, Scheduler};
 use crate::recorder::{PublisherTimingReceipt, write_atomic};
 use crate::stop_signal::StopSignal;
@@ -581,15 +582,10 @@ async fn post_hotswap(
 /// How long the publisher waits for the broker's CONNACK before the run fails.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long the publisher waits at exit for the broker to acknowledge every
-/// enqueued message before disconnecting and reporting the rest as unacked.
+/// How long the publisher waits after a completed schedule for the broker to
+/// acknowledge every enqueued message before disconnecting and reporting the
+/// rest as unacked. A run stopped by a signal skips the wait.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// rumqttc's default packet limit, kept as the floor of the computed limit.
-const DEFAULT_MAX_PACKET_BYTES: usize = 10 * 1024;
-
-/// Fixed header, topic length prefix, packet id and slack above the payload.
-const PACKET_HEADROOM_BYTES: usize = 1024;
 
 /// What the event-loop task has seen from the broker so far.
 #[derive(Debug, Clone, Copy, Default)]
@@ -735,16 +731,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     );
 
     let payload_template = args.payload_template;
-    let payload_len = payload_template
-        .map_or(args.payload_size, |tpl| tpl.render(CANONICAL_TS_NS, CANONICAL_SEQ).len());
-    let max_packet_bytes = payload_len
-        .saturating_add(args.topic.len())
-        .saturating_add(PACKET_HEADROOM_BYTES)
-        .max(DEFAULT_MAX_PACKET_BYTES);
     let mut opts = MqttOptions::new(&args.client_id, &args.broker_host, args.broker_port);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_session(true);
-    opts.set_max_packet_size(max_packet_bytes, max_packet_bytes);
+    opts.set_max_packet_size(MAX_PACKET_BYTES, MAX_PACKET_BYTES);
     let (client, eventloop) = AsyncClient::new(opts, 1024);
     let (mut link, mut eventloop_task) = spawn_eventloop(eventloop);
 
@@ -828,6 +818,11 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             writeln!(trace, "{seq},{ts}")?;
         }
         if let Err(error) = enqueued {
+            if link.has_changed().is_err() {
+                error!("MQTT session is gone for good; stopping the schedule");
+                exit_reason = "broker-lost";
+                break;
+            }
             if !args.drop_when_full {
                 warn!("Publish error (seq={seq}): {error}");
             }
@@ -846,7 +841,16 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         trace.flush()?;
     }
     let enqueued = offered.saturating_sub(errors);
-    drop(tokio::time::timeout(DRAIN_TIMEOUT, link.wait_for(|stats| stats.acked >= enqueued)).await);
+    if exit_reason == "duration" {
+        tokio::select! {
+            biased;
+            reason = stop_signal.recv() => {
+                info!(signal = reason, "Stop signal received while draining; writing summary");
+                exit_reason = reason;
+            }
+            _ = tokio::time::timeout(DRAIN_TIMEOUT, link.wait_for(|stats| stats.acked >= enqueued)) => {}
+        }
+    }
     let stats = *link.borrow();
     let unacked_at_exit = enqueued.saturating_sub(stats.acked);
     if unacked_at_exit > 0 {
@@ -913,7 +917,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         unacked_at_exit,
         connects: stats.connects,
         connection_errors: stats.connection_errors,
-        measurement_duration_ns: args.duration_secs.saturating_mul(1_000_000_000),
+        measurement_duration_ns: duration_ns(schedule_duration),
         deadline_misses,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
@@ -957,7 +961,8 @@ pub struct PublisherReport {
     /// If profile = hotswap-trigger, the offset (secs) at which the swap was
     /// triggered. `None` for other profiles and when the swap request failed.
     pub hotswap_triggered_at_secs: Option<f64>,
-    /// `duration` when the schedule ran to its end, or the signal that stopped it.
+    /// `duration` when the schedule ran to its end, the signal that stopped
+    /// it, or `broker-lost` when the MQTT session ended for good mid-run.
     pub exit_reason: String,
     /// How late each message was handed to the MQTT client relative to its
     /// scheduled time. Latency is measured from the scheduled time, so a run
