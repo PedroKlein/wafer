@@ -12,6 +12,10 @@
 name = "pipeline-a-native"
 description = "Pipeline A native baseline: MQTT → threshold-filter (native) → MQTT"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

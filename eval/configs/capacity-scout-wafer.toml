@@ -9,6 +9,10 @@ epoch_tick_ms = 10
 [engine.fuel]
 filter = 500000
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

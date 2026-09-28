@@ -2,6 +2,10 @@
 name = "shakedown"
 description = "Short shakedown run for run-experiment.sh AC2"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

@@ -219,7 +219,7 @@ async fn repeated_success_and_guest_error_reset_per_call_state() {
         assert_eq!(output.header.metadata, vec![("host-key".into(), "host-value".into())]);
         assert_eq!(output.parent_id(), Some("host-parent"));
         assert_eq!(output.trace_id(), Some(trace_id.as_str()));
-        assert_eq!(output.retry_count, 3);
+        assert_eq!(output.retry_count, 0, "retry budget must not leak downstream");
         assert!(
             transform.node_mut().store_mut().data().table().is_empty(),
             "success must release the borrowed buffer"

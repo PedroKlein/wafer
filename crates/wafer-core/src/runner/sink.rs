@@ -40,6 +40,7 @@ pub async fn run_sink_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) -> Result<()> {
+    state.transition_to_running();
     let mut receiver = receiver.into();
     let batch_timeout = sink.batch_timeout();
 

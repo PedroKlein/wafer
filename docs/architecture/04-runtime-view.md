@@ -174,9 +174,9 @@ Retryable errors (`dependency-failed`, `processing-failed`) enter a bounded `Vec
 
 The configurable `teardown` action (for `bad_input`, `timed_out`, or a retry config's `exhausted`) counts the message as `dropped_on_teardown` and ends that node's runner loop. It does not enter `Recovering` and does not re-instantiate: the node stays stopped for the rest of the run, its input queue is no longer read, and upstream edges then see a closed destination. Its reported node state is not changed. Only the built-in `Unrecoverable` path below recovers.
 
-### DLQ actions without a `[dead_letter]` sink
+### DLQ actions require a `[dead_letter]` sink
 
-`bad_input`, `dependency_failed.exhausted`, and `processing_failed.exhausted` default to `dlq`. The validator requires a `[dead_letter]` section only when an edge uses `overflow = "dead-letter"`; it does not check error-policy `dlq` actions. When no DLQ sink is configured, a `dlq` action logs a warning, counts the message as `dlq_lost`, and drops it. Pipelines that must keep failed messages should configure `[dead_letter]` explicitly.
+`bad_input`, `dependency_failed.exhausted`, and `processing_failed.exhausted` default to `dlq`, and the validator rejects a config whose processing nodes have an effective `dlq` action without a `[dead_letter]` section. Trapped and `unrecoverable` messages are written to the DLQ before recovery when a sink exists (`dlq_sent`); without one, which requires every action to be `skip` or `teardown`, they are counted as `dropped_on_recovery`. `dlq_lost` is left for a full or closed DLQ.
 
 ### DLQ envelope
 
@@ -189,7 +189,7 @@ replay), and tracing correlation IDs (`trace_id`, `parent_id`).
 
 When a guest returns `unrecoverable` or the host traps the call (other than an epoch or fuel trap handled by the `timed_out` action), the runner drops the message, enters `Recovering`, creates a fresh Store from the cached `InstancePre`, reapplies limits, and runs lifecycle validation and initialization. Success returns to `Running`; failure ends that node loop. Transform may first attempt its process-time canary rollback (once per swap) when one is active. Guest state does not survive recovery.
 
-**Node state reporting.** Every `NodeStateTracker` starts in `Starting`. The Wasm Transform, Filter, and Router runner loops do not move a healthy node to `Running` after startup; only the recovery path above (and the native passthrough loop) does. A Wasm node that has never failed therefore reports `Starting` through `GET /api/v1/nodes` while it processes messages normally, and `Running` appears only after a recovery. Do not use `Running` as a startup-health signal in the current build.
+**Node state reporting.** Every `NodeStateTracker` starts in `Starting` and moves to `Running` when its runner loop starts, which for a Source or Sink is after its `init()` succeeded and for a Wasm node after launch validated and initialized its instance. A trap or `unrecoverable` error moves it to `Error`, then `Recovering`, then back to `Running`. A failed init, a panicked node task, or a failed recovery leaves it in `Error`. `GET /api/v1/nodes` reports these states as lowercase strings.
 
 ### Shutdown (cancel-all)
 

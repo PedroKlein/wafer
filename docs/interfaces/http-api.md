@@ -50,12 +50,17 @@ Returns an array of:
 ```json
 {
   "id": "parse",
-  "state": "Running",
+  "state": "running",
   "processed": 1234,
   "failed": 0,
   "replacement_eligible": true
 }
 ```
+
+Nodes are listed in id order. `state` is one of `starting`, `running`,
+`error` or `recovering`: a node reports `running` once its runner loop has
+started, `error` when its init failed, its task panicked or a recovery failed,
+and `recovering` while it re-instantiates after a trap.
 
 `replacement_eligible` is true only for a loaded Wasm Transform, Filter, or
 Router. Native processing baselines and native Source/Sink nodes are not

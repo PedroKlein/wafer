@@ -376,6 +376,8 @@ impl DownstreamSender {
 pub struct TrackedReceiver {
     receiver: mpsc::Receiver<RuntimeEnvelope>,
     queue_metrics: Option<Arc<QueueMetrics>>,
+    /// Every upstream sender is gone and the queue has been drained.
+    eof: bool,
 }
 
 impl TrackedReceiver {
@@ -383,15 +385,18 @@ impl TrackedReceiver {
         receiver: mpsc::Receiver<RuntimeEnvelope>,
         queue_metrics: Arc<QueueMetrics>,
     ) -> Self {
-        Self { receiver, queue_metrics: Some(queue_metrics) }
+        Self { receiver, queue_metrics: Some(queue_metrics), eof: false }
     }
 
     pub async fn recv(&mut self) -> Option<RuntimeEnvelope> {
         let envelope = self.receiver.recv().await;
-        if envelope.is_some()
-            && let Some(metrics) = &self.queue_metrics
-        {
-            metrics.record_dequeued();
+        match &envelope {
+            Some(_) => {
+                if let Some(metrics) = &self.queue_metrics {
+                    metrics.record_dequeued();
+                }
+            }
+            None => self.eof = true,
         }
         envelope
     }
@@ -407,7 +412,7 @@ impl TrackedReceiver {
 
 impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
     fn from(receiver: mpsc::Receiver<RuntimeEnvelope>) -> Self {
-        Self { receiver, queue_metrics: None }
+        Self { receiver, queue_metrics: None, eof: false }
     }
 }
 
@@ -512,6 +517,23 @@ pub(crate) async fn recv_next_or_retry(
             return NextInput::Envelope(retry);
         }
 
+        // Upstream is gone, but retries still in backoff get their attempt
+        // before the runner exits.
+        if receiver.eof {
+            let Some(deadline) = policy.next_retry_deadline() else {
+                return NextInput::Closed;
+            };
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return NextInput::Closed,
+                Ok(()) = swap_rx.changed() => {
+                    swap_rx.mark_changed();
+                    return NextInput::Swap;
+                }
+                () = tokio::time::sleep_until(deadline) => continue,
+            }
+        }
+
         // Input is polled before the swap signal so a ready message never
         // registers a swap waker; `next_input` still holds a message that
         // arrived with a pending swap for the replacement. `changed()` is
@@ -541,7 +563,8 @@ pub(crate) async fn recv_next_or_retry(
                 NextInput::Swap
             }
             Some(Some(envelope)) => NextInput::Envelope(envelope),
-            Some(None) => NextInput::Closed,
+            // EOF: the loop top decides whether retries keep the runner alive.
+            Some(None) => continue,
         };
     }
 }
@@ -1348,6 +1371,43 @@ mod tests {
         let envelope = expect_envelope(task.await.expect("retry task"));
         assert_eq!(envelope.payload_as_string(), "retry");
         drop(input_tx);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn eof_serves_retries_in_backoff_before_closing() {
+        let (tx, rx) = mpsc::channel(1);
+        let mut receiver = TrackedReceiver::from(rx);
+        let mut policy = ErrorPolicyExecutor::new(
+            error_policy::ResolvedErrorPolicy {
+                processing_failed: error_policy::ResolvedRetryConfig {
+                    retries: 1,
+                    backoff_ms: 500,
+                    exhausted: error_policy::ResolvedSimpleAction::Dlq,
+                },
+                ..error_policy::ResolvedErrorPolicy::default()
+            },
+            None,
+            "node",
+        );
+        let (_swap_tx, mut swap_rx) = watch::channel::<Option<SwapPayload>>(None);
+        let cancel = CancellationToken::new();
+        policy.handle(
+            &error_policy::WasmProcessError::ProcessingFailed("transient".into()),
+            RuntimeEnvelope::from_string("source", "retry"),
+        );
+        drop(tx);
+
+        let started = tokio::time::Instant::now();
+        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert_eq!(expect_envelope(next).payload_as_string(), "retry");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(500),
+            "retry must wait its backoff"
+        );
+        assert_eq!(policy.pending_retries(), 0);
+
+        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert!(matches!(next, NextInput::Closed), "empty buffer after EOF ends the runner");
     }
 
     fn expect_envelope(next: NextInput) -> RuntimeEnvelope {
