@@ -223,6 +223,98 @@ fn swap_run_provenance_records_replacement_hash() {
     assert_eq!(json["wafer_plugin_hashes"]["transform"], v2_hash.as_str());
 }
 
+/// A swap adopted by an idle node is the loaded plugin even though no
+/// message ever runs on it, so the provenance written at shutdown names the
+/// replacement. The stdin source stays open until the swap has been
+/// dispatched, then closes without sending anything more.
+#[test]
+fn swap_adopted_on_idle_node_records_replacement_hash() {
+    use std::io::{BufRead, Write};
+
+    let plugin_path = PathBuf::from(PASS_THROUGH_WASM);
+    if !artifact_available(&plugin_path) {
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let (v1_hash, v2_hash, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
+    let config_path = tmp.path().join("idle.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"[pipeline]
+name = "idle-swap"
+
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.transform]
+type = "transform"
+plugin = "{}"
+
+[nodes.sink]
+type = "sink"
+kind = "file"
+path = "{}"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
+"#,
+            plugin_path.display(),
+            tmp.path().join("out.jsonl").display(),
+            tmp.path().join("dlq.jsonl").display()
+        ),
+    )
+    .unwrap();
+    let provenance_path = tmp.path().join("provenance.json");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_wafer"))
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--no-api")
+        .args(["--swap-after-secs", "1", "--swap-node", "transform", "--swap-plugin"])
+        .arg(&v2_path)
+        .env("WAFER_METADATA_OUTPUT", &provenance_path)
+        .env_remove("WAFER_BENCH_OUTPUT_DIR")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("run wafer binary");
+    let mut stdin = child.stdin.take().expect("piped stdin");
+    let mut stdout = std::io::BufReader::new(child.stdout.take().expect("piped stdout"));
+    stdin.write_all(b"before the swap\n").unwrap();
+    stdin.flush().unwrap();
+
+    let mut log = String::new();
+    loop {
+        let mut line = String::new();
+        assert_ne!(stdout.read_line(&mut line).unwrap(), 0, "runtime exited early:\n{log}");
+        log.push_str(&line);
+        if line.contains("Hot-swap dispatched") {
+            break;
+        }
+    }
+    drop(stdin);
+
+    let output = child.wait_with_output().expect("wait for wafer");
+    assert!(output.status.success(), "runtime failed: {}", String::from_utf8_lossy(&output.stderr));
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&provenance_path).expect("read provenance"))
+            .expect("parse provenance JSON");
+    assert_eq!(json["provenance_written_at"], "shutdown");
+    assert_ne!(v1_hash, v2_hash);
+    assert_eq!(json["wafer_plugin_hashes"]["transform"], v2_hash.as_str());
+}
+
 /// Write a copy of the plugin with a trailing custom section: identical
 /// behaviour, different bytes, so the recorded hash tells v1 and v2 apart.
 /// Returns the v1 hash, the v2 hash and the v2 path.

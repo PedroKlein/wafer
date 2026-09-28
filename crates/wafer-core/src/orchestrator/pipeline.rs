@@ -45,14 +45,21 @@ const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 /// the whole run.
 type NodeTaskResult = Result<()>;
 
+/// A Wasm runner that fails has stopped processing mid-run, so the pipeline
+/// is cancelled at once instead of running on with a dead node until an
+/// open-ended source is stopped from outside.
 fn spawn_wasm_runner(
     tasks: &mut JoinSet<NodeTaskResult>,
-    runner: impl Future<Output = ()> + Send + 'static,
+    pipeline_cancel: CancellationToken,
+    runner: impl Future<Output = NodeTaskResult> + Send + 'static,
 ) -> TaskId {
     tasks
         .spawn(async move {
-            runner.await;
-            Ok(())
+            let exit = runner.await;
+            if exit.is_err() {
+                pipeline_cancel.cancel();
+            }
+            exit
         })
         .id()
 }
@@ -517,6 +524,7 @@ impl PipelineOrchestrator {
     )]
     fn spawn_bundles(&mut self, bundles: Vec<crate::orchestrator::builder::NodeBundle>) {
         let hot_swap_config = self.config.engine.hot_swap.clone();
+        let pipeline_cancel = self.cancel_token.clone();
         for bundle in bundles {
             let node_id = bundle.node_id.clone();
             let cancel = bundle.cancel;
@@ -527,12 +535,12 @@ impl PipelineOrchestrator {
                 NodeBundleKind::Transform { receiver, senders, swap_rx, policy, node } => {
                     if let Some(transform) = node {
                         let hs_cfg = hot_swap_config.clone();
-                        spawn_wasm_runner(&mut self.tasks, async move {
+                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_transform_loop_with_config(
                                 transform, receiver, senders, swap_rx, policy, cancel, state,
                                 metrics, hs_cfg,
                             )
-                            .await;
+                            .await
                         })
                     } else {
                         // No compiled Wasm node — run as identity passthrough.
@@ -548,11 +556,11 @@ impl PipelineOrchestrator {
                 }
                 NodeBundleKind::Filter { receiver, senders, swap_rx, policy, node } => {
                     if let Some(filter) = node {
-                        spawn_wasm_runner(&mut self.tasks, async move {
+                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_filter_loop(
                                 filter, receiver, senders, swap_rx, policy, cancel, state, metrics,
                             )
-                            .await;
+                            .await
                         })
                     } else {
                         // Native filter — forward all messages (no-op filter passes everything)
@@ -567,11 +575,11 @@ impl PipelineOrchestrator {
                 }
                 NodeBundleKind::Router { receiver, senders, swap_rx, policy, node } => {
                     if let Some(router) = node {
-                        spawn_wasm_runner(&mut self.tasks, async move {
+                        spawn_wasm_runner(&mut self.tasks, pipeline_cancel.clone(), async move {
                             run_router_loop(
                                 router, receiver, senders, swap_rx, policy, cancel, state, metrics,
                             )
-                            .await;
+                            .await
                         })
                     } else {
                         // Native router — broadcast to all downstreams
@@ -724,9 +732,10 @@ impl PipelineOrchestrator {
     /// sink tasks drain and exit → JoinSet empties → this method returns.
     ///
     /// Returns `Ok(())` if all tasks exited cleanly. Returns `Err` naming every
-    /// failed node if any node task panicked or failed (e.g. a source/sink
-    /// `init()` error) or the DLQ sink failed; the runtime binary turns that
-    /// into a non-zero exit code.
+    /// failed node if any node task panicked or failed (a source/sink `init()`
+    /// error, a Wasm node that could not recover or was torn down by its error
+    /// policy) or the DLQ sink failed; the runtime binary turns that into a
+    /// non-zero exit code.
     ///
     /// # Errors
     ///
@@ -1439,13 +1448,27 @@ mod tests {
     async fn wasm_runner_uses_tokio_executor() {
         let runtime_thread = std::thread::current().id();
         let mut tasks = JoinSet::new();
-        spawn_wasm_runner(&mut tasks, async move {
+        spawn_wasm_runner(&mut tasks, CancellationToken::new(), async move {
             assert_eq!(std::thread::current().id(), runtime_thread);
             tokio::task::yield_now().await;
             assert_eq!(std::thread::current().id(), runtime_thread);
+            Ok(())
         });
 
         tasks.join_next().await.expect("runner task").expect("runner result").expect("runner exit");
+    }
+
+    #[tokio::test]
+    async fn failed_wasm_runner_fails_and_cancels_the_pipeline() {
+        let mut tasks = JoinSet::new();
+        let pipeline_cancel = CancellationToken::new();
+        spawn_wasm_runner(&mut tasks, pipeline_cancel.clone(), async move {
+            Err(WaferError::Runtime("recovery failed".to_owned()))
+        });
+
+        let exit = tasks.join_next().await.expect("runner task").expect("runner result");
+        assert!(exit.is_err());
+        assert!(pipeline_cancel.is_cancelled());
     }
 
     #[tokio::test]

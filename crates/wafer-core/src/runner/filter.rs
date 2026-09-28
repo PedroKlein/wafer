@@ -9,12 +9,14 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::error::Result;
 use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
-    continue_after_policy_action, next_input, send_downstream, take_pending_swap,
+    continue_after_policy_action, next_input, policy_teardown, recovery_failed, send_downstream,
+    take_pending_swap,
 };
 
 async fn dispatch_filter_outcome(
@@ -52,10 +54,10 @@ async fn recover_after_timeout(
     policy: &mut ErrorPolicyExecutor,
     error: &WasmProcessError,
     envelope: RuntimeEnvelope,
-) -> bool {
+) -> Result<()> {
     metrics.record_error(error);
     if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
-        return false;
+        return Err(policy_teardown());
     }
     tracing::warn!(
         node = filter.node_id(),
@@ -69,13 +71,13 @@ async fn recover_after_timeout(
             if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                 metrics.record_recovery(duration_ns);
             }
-            true
+            Ok(())
         }
         Err(error) => {
             state.transition_to_error();
             tracing::error!(node = filter.node_id(), %error, "recovery failed");
             policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
-            false
+            Err(recovery_failed(&error))
         }
     }
 }
@@ -104,14 +106,14 @@ pub async fn run_filter_loop(
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
-) {
+) -> Result<()> {
     state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
     let cancelled = cancel.cancelled();
     tokio::pin!(cancelled);
-    loop {
+    let exit = loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
             let progress = payload.progress();
@@ -151,7 +153,7 @@ pub async fn run_filter_loop(
         {
             NextInput::Envelope(envelope) => envelope,
             NextInput::Swap => continue,
-            NextInput::Closed => break,
+            NextInput::Closed => break Ok(()),
         };
 
         // 2. Wasm call OUTSIDE select! — runs to completion, never cancelled.
@@ -169,7 +171,7 @@ pub async fn run_filter_loop(
                 .await;
             }
             Err(ref error) if error.is_budget_exhausted() => {
-                if !recover_after_timeout(
+                if let Err(error) = recover_after_timeout(
                     &mut filter,
                     &state,
                     &metrics,
@@ -179,7 +181,7 @@ pub async fn run_filter_loop(
                 )
                 .await
                 {
-                    break;
+                    break Err(error);
                 }
             }
             Err(
@@ -205,20 +207,21 @@ pub async fn run_filter_loop(
                         state.transition_to_error();
                         tracing::error!(node = filter.node_id(), %error, "recovery failed");
                         policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
-                        break;
+                        break Err(recovery_failed(&error));
                     }
                 }
             }
             Err(e) => {
                 metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, envelope), &metrics) {
-                    break;
+                    break Err(policy_teardown());
                 }
             }
         }
-    }
+    };
 
     policy.flush_to_dlq(&DlqReason::Shutdown, &metrics);
+    exit
 }
 
 #[cfg(test)]
