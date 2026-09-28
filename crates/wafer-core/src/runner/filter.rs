@@ -245,7 +245,8 @@ mod tests {
             report.first_post_replacement_local_outcome,
             crate::runner::FirstPostReplacementLocalOutcome::FilterDropped,
         );
-        assert_eq!(metrics.processed(), 1);
+        assert_eq!(metrics.processed(), 0);
+        assert_eq!(metrics.filtered_out(), 1);
         assert!(pending_swap_progress.is_none());
     }
 

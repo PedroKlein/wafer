@@ -686,8 +686,11 @@ mod tests {
             input_tx.send(envelope).await.expect("input");
         }
         drop(input_tx);
-        let retry_once =
-            ResolvedRetryConfig { retries: 1, backoff_ms: 1, exhausted: ResolvedSimpleAction::Dlq };
+        let retry_once = ResolvedRetryConfig {
+            retries: 1,
+            backoff_ms: 60_000,
+            exhausted: ResolvedSimpleAction::Dlq,
+        };
         let policy = ResolvedErrorPolicy {
             bad_input: ResolvedSimpleAction::Dlq,
             dependency_failed: retry_once,
@@ -726,6 +729,7 @@ mod tests {
                 + metrics.dlq_sent()
                 + metrics.dlq_lost()
                 + metrics.dropped_on_recovery()
+                + metrics.dropped_on_teardown()
         );
         assert!(output_rx.recv().await.is_some());
         assert!(dlq_rx.recv().await.is_some() && dlq_rx.recv().await.is_some());

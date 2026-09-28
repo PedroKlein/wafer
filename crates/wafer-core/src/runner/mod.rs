@@ -453,7 +453,10 @@ pub(crate) fn continue_after_policy_action(
         ErrorPolicyAction::Skipped => metrics.record_skipped(),
         ErrorPolicyAction::ExhaustedSkip => metrics.record_exhausted_skip(),
         ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => metrics.record_dlq_lost(),
-        ErrorPolicyAction::Teardown => return false,
+        ErrorPolicyAction::Teardown => {
+            metrics.record_dropped_on_teardown();
+            return false;
+        }
     }
     true
 }
@@ -1382,6 +1385,7 @@ mod tests {
         assert_eq!(metrics.skipped(), 1);
         assert_eq!(metrics.exhausted_skips(), 1);
         assert_eq!(metrics.dlq_lost(), 2);
+        assert_eq!(metrics.dropped_on_teardown(), 1);
     }
 
     #[tokio::test(start_paused = true)]

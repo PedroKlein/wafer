@@ -545,6 +545,7 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
                 ("skipped", m.skipped()),
                 ("retry_exhausted_skip", m.exhausted_skips()),
                 ("dropped_on_recovery", m.dropped_on_recovery()),
+                ("dropped_on_teardown", m.dropped_on_teardown()),
             ] {
                 writeln!(output, "wafer_node_{name}_total{{node=\"{node_id}\"}} {value}")
                     .expect("String write is infallible");

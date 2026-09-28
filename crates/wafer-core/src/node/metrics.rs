@@ -202,6 +202,9 @@ pub struct NodeMetrics {
     /// Messages whose call trapped (or returned `unrecoverable`) and were
     /// discarded while the instance was rebuilt.
     dropped_on_recovery: AtomicU64,
+    /// Messages whose error-policy action was `teardown`; the node stops
+    /// after each.
+    dropped_on_teardown: AtomicU64,
     /// Total hot-swap operations completed on this node.
     swaps: AtomicU64,
     /// P0.11 (A7 residual): cumulative Recovering → Running time in
@@ -240,6 +243,7 @@ impl NodeMetrics {
             skipped: AtomicU64::new(0),
             exhausted_skips: AtomicU64::new(0),
             dropped_on_recovery: AtomicU64::new(0),
+            dropped_on_teardown: AtomicU64::new(0),
             swaps: AtomicU64::new(0),
             recovery_ns_total: AtomicU64::new(0),
             recovery_count: AtomicU64::new(0),
@@ -310,6 +314,12 @@ impl NodeMetrics {
     #[inline]
     pub fn record_dropped_on_recovery(&self) {
         self.dropped_on_recovery.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Record a message whose error-policy action tore the node down.
+    #[inline]
+    pub fn record_dropped_on_teardown(&self) {
+        self.dropped_on_teardown.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Record a retry-exhausted message consumed by the skip action.
@@ -479,6 +489,12 @@ impl NodeMetrics {
     #[inline]
     pub fn dropped_on_recovery(&self) -> u64 {
         self.dropped_on_recovery.load(Ordering::Relaxed)
+    }
+
+    /// Messages whose error-policy action tore the node down.
+    #[inline]
+    pub fn dropped_on_teardown(&self) -> u64 {
+        self.dropped_on_teardown.load(Ordering::Relaxed)
     }
 
     /// Total retry-exhausted messages consumed by the skip action.
