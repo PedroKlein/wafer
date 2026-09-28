@@ -27,8 +27,11 @@ def test_throughput_uses_subscriber_measurement_window() -> None:
             )
         )
         write_throughput(metadata, output)
+        header = output.read_text().splitlines()[0]
         with output.open(newline="") as stream:
             row = next(csv.DictReader(stream))
+    schema = json.loads((ROOT / "eval/result-schema.json").read_text())
+    assert header == schema["producers"]["run-experiment.sh"]["throughput.csv"]["csv_header"]
     assert int(row["messages_received"]) == 9_000
     assert float(row["throughput_msg_s"]) == 900.0
     assert int(row["duration_ns"]) == 10_000_000_000

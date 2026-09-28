@@ -55,6 +55,27 @@ fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
+/// Checks what `path` holds against its `eval/result-schema.json` entry.
+fn assert_matches_schema(producer: &str, path: &Path) {
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eval/result-schema.json");
+    let schema = read_json(&schema_path);
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let expected = &schema["producers"][producer][name];
+    let bytes = std::fs::read(path).unwrap();
+    if let Some(header) = expected["csv_header"].as_str() {
+        assert_eq!(std::str::from_utf8(&bytes).unwrap().lines().next(), Some(header), "{name}");
+    } else if let Some(keys) = expected["json_keys"].as_array() {
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let mut actual: Vec<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+        actual.sort_unstable();
+        let expected: Vec<&str> = keys.iter().map(|key| key.as_str().unwrap()).collect();
+        assert_eq!(actual, expected, "{name}");
+    } else {
+        assert_eq!(expected["hdr_encoding"], "v2", "{producer} {name} is not in the schema");
+        assert_eq!(&bytes[..3], &[0x1c, 0x84, 0x93], "{name} is not a V2 histogram");
+    }
+}
+
 fn assert_subscriber_stops_with_artifacts(signal: &str, exit_reason: &str) {
     let dir = tempfile::tempdir().unwrap();
     let output_dir = dir.path().to_str().unwrap();
@@ -73,8 +94,11 @@ fn assert_subscriber_stops_with_artifacts(signal: &str, exit_reason: &str) {
     let status = wait_with_timeout(&mut child);
 
     assert!(status.success(), "subscriber exited with {status}");
-    for artifact in ["latency.hdr", "sequence.csv", "subscriber-metadata.json"] {
+    for artifact in
+        ["latency.hdr", "sequence.csv", "interval-latency.json", "subscriber-metadata.json"]
+    {
         assert!(dir.path().join(artifact).is_file(), "{artifact} missing after {signal}");
+        assert_matches_schema("wafer-loadgen subscribe", &dir.path().join(artifact));
     }
     let metadata = read_json(&dir.path().join("subscriber-metadata.json"));
     assert_eq!(metadata["exit_reason"], exit_reason);
@@ -114,6 +138,7 @@ fn sigterm_stops_publisher_with_summary() {
     let status = wait_with_timeout(&mut child);
 
     assert!(status.success(), "publisher exited with {status}");
+    assert_matches_schema("wafer-loadgen publish", &summary);
     let report = read_json(&summary);
     assert_eq!(report["exit_reason"], "sigterm");
     assert_eq!(
