@@ -293,6 +293,7 @@ mod tests {
             emit_ns: 1_234_567_890_456,
             warmup: false,
             measurement_start_seq: 10,
+            sequence_end: None,
             burst: None,
         };
         let input = RuntimeEnvelope::from_string("src", "hello").with_bench_stamps(stamps);

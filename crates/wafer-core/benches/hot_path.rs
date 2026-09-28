@@ -55,6 +55,7 @@ fn steady_stamps(seq: u64) -> BenchStamps {
         emit_ns: intended_ns + 10_000,
         warmup: false,
         measurement_start_seq: 0,
+        sequence_end: None,
         burst: None,
     }
 }

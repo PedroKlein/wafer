@@ -1322,6 +1322,7 @@ mod tests {
                 emit_ns: 2,
                 warmup: false,
                 measurement_start_seq: 0,
+                sequence_end: None,
                 burst: None,
             });
         let msg = build_wit_message(&mut store, &envelope).expect("should build message");

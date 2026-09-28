@@ -56,6 +56,9 @@ pub struct BenchStamps {
     pub emit_ns: u64,
     pub warmup: bool,
     pub measurement_start_seq: u64,
+    /// One past the last sequence number; `None` ends the population at the
+    /// highest number seen.
+    pub sequence_end: Option<u64>,
     pub burst: Option<BurstStamps>,
 }
 

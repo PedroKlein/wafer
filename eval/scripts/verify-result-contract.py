@@ -267,7 +267,7 @@ def check_subscriber_metadata(path: Path) -> list[str]:
         return violations
     required = {
         "started_at_ns", "ended_at_ns", "exit_reason", "git_sha", "host_tag",
-        "sequence_end_exclusive", "ignored_sequence_count", "unexpected_sequence_count",
+        "sequence_end_exclusive", "ignored_sequence_count",
         "total_recorded", "total_messages", "parse_errors", "negative_latency_count",
         "above_highest_latency_count", "clock_steps", "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
         "histogram_lowest_ns", "histogram_highest_ns", "histogram_sig_digits", "sequence",
@@ -282,7 +282,7 @@ def check_subscriber_metadata(path: Path) -> list[str]:
         reasons = "; ".join(str(reason) for reason in value.get("partial_reasons", []))
         violations.append(f"subscriber-metadata.json run is {value['status']}: {reasons}")
     sequence = value["sequence"]
-    sequence_fields = {"total_received", "total_gaps", "total_duplicates"}
+    sequence_fields = {"total_received", "total_gaps", "total_duplicates", "out_of_range"}
     if not isinstance(sequence, dict) or not sequence_fields <= sequence.keys():
         return violations + ["subscriber-metadata.json sequence summary is invalid"]
     try:
@@ -290,6 +290,8 @@ def check_subscriber_metadata(path: Path) -> list[str]:
             violations.append("subscriber-metadata.json measurement interval is invalid")
         if int(value["total_recorded"]) != int(sequence["total_received"]):
             violations.append("subscriber-metadata.json recorded count does not reconcile")
+        if int(sequence["out_of_range"]) != 0:
+            violations.append("subscriber-metadata.json sequence.out_of_range must be zero")
         if int(value["total_messages"]) != int(value["total_recorded"]):
             violations.append("subscriber-metadata.json message and HDR populations differ")
         if (
@@ -299,8 +301,7 @@ def check_subscriber_metadata(path: Path) -> list[str]:
         ):
             violations.append("subscriber-metadata.json histogram precision differs from the frozen recorder")
         for field in (
-            "unexpected_sequence_count", "parse_errors", "negative_latency_count",
-            "above_highest_latency_count", "clock_steps",
+            "parse_errors", "negative_latency_count", "above_highest_latency_count", "clock_steps",
         ):
             if int(value[field]) != 0:
                 violations.append(f"subscriber-metadata.json {field} must be zero")
@@ -339,7 +340,7 @@ def check_capacity_run_result(
     messages = value.get("messages", {})
     message_fields = {
         "intended", "rejected", "enqueued", "acked", "received_events", "received_unique",
-        "downstream_lost", "total_undelivered", "duplicates", "unexpected",
+        "downstream_lost", "total_undelivered", "duplicates",
     }
     if not isinstance(messages, dict):
         violations.append("capacity-run.json messages must be an object")
@@ -360,8 +361,6 @@ def check_capacity_run_result(
                     violations.append("capacity-run.json received counters do not reconcile")
                 if int(messages["total_undelivered"]) != int(messages["rejected"]) + int(messages["downstream_lost"]):
                     violations.append("capacity-run.json undelivered counters do not reconcile")
-                if int(messages["unexpected"]) != 0:
-                    violations.append("capacity-run.json contains unexpected sequences")
             except (TypeError, ValueError):
                 violations.append("capacity-run.json message counters must be integers")
     if value.get("experiment") != expected_experiment:
@@ -443,7 +442,6 @@ def check_capacity_artifact_reconciliation(leaf: Path) -> list[str]:
         "acked": publisher.get("acked"),
         "received_events": subscriber.get("total_recorded"),
         "duplicates": subscriber.get("sequence", {}).get("total_duplicates"),
-        "unexpected": subscriber.get("unexpected_sequence_count"),
         "ignored_warmup": subscriber.get("ignored_sequence_count"),
     }
     for field, value in expected.items():
@@ -1173,8 +1171,12 @@ def _sequence_violations(path: Path) -> list[str]:
         summary_fields = {
             "total_expected",
             "total_received",
+            "received_unique",
+            "gap_ranges",
             "gap_msgs",
             "duplicates_count",
+            "out_of_order",
+            "out_of_range",
         }
         event_fields = {"event_type", "seq_start", "seq_end", "count"}
         if summary_fields <= fields:
@@ -1184,6 +1186,11 @@ def _sequence_violations(path: Path) -> list[str]:
             received = int(rows[0]["total_received"])
             gaps = int(rows[0]["gap_msgs"])
             duplicates = int(rows[0]["duplicates_count"])
+            unique = int(rows[0]["received_unique"])
+            if int(rows[0]["out_of_range"]) != 0:
+                return ["sequence.csv counts messages outside the declared population"]
+            if expected != unique + gaps or received != unique + duplicates:
+                return ["sequence.csv counters do not reconcile"]
         elif event_fields <= fields:
             metadata = json.loads((path.parent / "subscriber-metadata.json").read_text())
             sequence = metadata["sequence"]

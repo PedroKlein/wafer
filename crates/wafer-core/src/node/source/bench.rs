@@ -414,6 +414,7 @@ impl Source for BenchSource {
                 emit_ns: monotonic_unix_ns(),
                 warmup: seq < self.config.warmup_messages,
                 measurement_start_seq: self.config.warmup_messages,
+                sequence_end: Some(self.config.total_messages),
                 burst,
             })))
         })
@@ -465,6 +466,7 @@ mod tests {
         assert!(msg.header.metadata.is_empty(), "metadata = {:?}", msg.header.metadata);
         let stamps = msg.header.bench.unwrap();
         assert!(stamps.emit_ns >= stamps.intended_ns);
+        assert_eq!(stamps.sequence_end, Some(1));
     }
 
     #[tokio::test]

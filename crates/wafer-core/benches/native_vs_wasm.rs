@@ -204,6 +204,7 @@ fn bench_bench_envelope(c: &mut Criterion) {
                         emit_ns: 1_000_000_000,
                         warmup: false,
                         measurement_start_seq: 0,
+                        sequence_end: None,
                         burst: None,
                     },
                 );

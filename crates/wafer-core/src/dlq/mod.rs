@@ -232,6 +232,7 @@ mod tests {
             emit_ns: 1_250,
             warmup: false,
             measurement_start_seq: 10,
+            sequence_end: None,
             burst: Some(BurstStamps {
                 phase: BurstPhase::Burst,
                 measurement_start_unix_ns: Some(900),
