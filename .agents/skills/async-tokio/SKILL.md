@@ -21,9 +21,9 @@ Before writing or reviewing async node code, verify:
 - [ ] No WASM call inside a `select!` branch (Store poisoning — not just data loss)
 - [ ] Every channel is bounded with documented capacity reasoning
 - [ ] Every `select!` branch: is it cancel-safe? (Oxide RFD-400 test: "if dropped mid-await, is state corrupted?")
-- [ ] Shutdown closes nodes in **reverse topo order** (sinks drain before sources stop)
-- [ ] Every drain poll is wrapped in `tokio::time::timeout`
-- [ ] Every `JoinHandle` is awaited — never dropped, never `.abort()`ed
+- [ ] Shutdown waits for node tasks under a hard timeout (the runtime uses 5 s, then aborts stragglers)
+- [ ] Every wait that can hang is wrapped in `tokio::time::timeout`
+- [ ] Every `JoinHandle` is awaited — never dropped, and only `.abort()`ed after the shutdown timeout expires
 
 ---
 
@@ -123,8 +123,8 @@ burst the channel absorbs before backpressure propagates upstream. (Meridian Spa
 
 Every channel capacity must be documented with WHY:
 ```rust
-let queue = BoundedQueue::new(32);  // 32: max burst from MQTT QoS 1 redelivery window
-let queue = BoundedQueue::new(1024); // 1024: file source reads in 4KB blocks × 256 batch
+let (tx, rx) = mpsc::channel(32);   // 32: max burst from MQTT QoS 1 redelivery window
+let (tx, rx) = mpsc::channel(1024); // 1024: file source reads in 4KB blocks × 256 batch
 ```
 
 Rules from production systems:
@@ -145,10 +145,13 @@ and the stages downstream of it can OOM while stages upstream think everything i
 ## Graceful Shutdown
 
 Shutdown in WAFER follows the structured concurrency principle:
-1. `cancel_token.cancel()` — signal all node tasks
-2. Node loops complete their current WASM call, then break
+1. `cancel_token.cancel()` — one token signals every node task at once (there is no
+   ordered, stage-by-stage shutdown)
+2. Node loops complete their current WASM call, then break; processing nodes flush retry
+   buffers to the DLQ, sinks drain what is already queued and call `flush()`/`close()`
 3. Wait on `JoinSet::join_next()` (NOT sequential handle.await — that serializes on slowest)
-4. Close nodes in reverse topo order (sinks flush → transforms drain → sources stop)
+   for up to 5 s, then abort any task still running and report it as a failure
+4. Wait up to 5 s more for the DLQ task
 
 ### JoinSet over Vec<JoinHandle>
 
@@ -275,26 +278,19 @@ and a `watch::Receiver<Option<SwapPayload>>`. When a swap arrives between messag
 the old instance drops and the pre-instantiated replacement takes over. Phases measured
 separately: prepare (load+instantiate), signal (watch publish), swap (drop old + start new).
 
-Cancel safety design:
-- If cancelled during drain: routing re-enables, old node continues (safe)
-- After flip: swap is complete regardless (idempotent)
-- `Drop` impl on coordinator releases the swap lock unconditionally
-
-```rust
-// Drain with hard timeout — swap ALWAYS proceeds (even on timeout)
-let timed_out = tokio::time::timeout(self.drain_timeout, async {
-    loop {
-        if tracker.is_drain_ready() { return; }
-        tokio::time::sleep(Duration::from_millis(1)).await;
-    }
-}).await.is_err();
-
-if timed_out {
-    // Proceeding is correct — a stuck node will never drain.
-    // Aborting would leave the pipeline permanently un-swappable.
-    tracing::warn!("Drain timed out, forcing swap");
-}
-```
+There is no drain phase and no drain timeout (the old drain-and-flip design is
+retired). What keeps the swap safe:
+- The swap payload is fully prepared (compile and link on the blocking pool,
+  pre-instantiate, new Store) before it is published on the watch channel.
+- The runner checks `take_pending_swap` at the top of each loop iteration, after the
+  previous Wasm call has returned, and its input wait also wakes on `swap_rx.changed()`,
+  so an idle node adopts a swap without waiting for a message. A message dequeued after
+  the signal is held and processed by the replacement.
+- On adoption the retry buffer is flushed to the DLQ (`hot_swap_drain`), the old Store is
+  dropped (the guest `close()` is not called), and `validate()`/`init()` run on the new
+  instance; if `init()` fails, the old instance stays.
+- Hot-swap and reconfigure share one per-node compare-and-swap guard, released by a
+  `Drop` guard, so concurrent requests cannot overwrite a pending payload.
 
 ---
 
@@ -314,5 +310,6 @@ if timed_out {
   num_cpus workers; on Raspberry Pi 4 that's all 4 cores, starving WASM and OS
 - **NEVER assume channel close = immediate task stop** — the task finishes its current
   WASM call before observing the closed channel on the next recv()
-- **NEVER abort a hot-swap because drain timed out** — a stuck node will never drain;
-  aborting leaves the pipeline permanently un-swappable
+- **NEVER cancel an in-flight Wasm call to speed up a hot-swap** — the swap waits for the
+  current call to return; a call that never returns is bounded by fuel or epoch
+  deadlines, not by the swap

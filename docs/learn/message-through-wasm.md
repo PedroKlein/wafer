@@ -45,7 +45,7 @@ The physical queue is destination-keyed. Fan-in edges share one receiver whose c
 
 ### 3. Receive outside the guest
 
-`run_transform_loop_with_config` first checks swap and retry state. When neither supplies a message, a biased `tokio::select!` waits for cancellation or `receiver.recv()`. After a message arrives, the runner clones it into `safety` for retry or DLQ handling.
+`run_transform_loop_with_config` first checks swap and retry state. When neither supplies a message, a biased `tokio::select!` waits for cancellation, `receiver.recv()`, a published swap (`swap_rx.changed()`), or the next retry deadline. A swap therefore wakes an idle node; a message that arrives while a swap is pending is held and processed by the replacement. After a message arrives, the runner clones it into `safety` for retry or DLQ handling.
 
 The runner awaits `transform.process(envelope).await` after the cancellation `select!`, not as one of its branches. Wasmtime's asynchronous P2 binding may yield while servicing host calls, but cancellation can stop only the next receive; it does not drop an active Wasm future and leave its `Store` inconsistent.
 

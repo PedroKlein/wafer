@@ -48,30 +48,37 @@ version so `mise install` gives the same tools on every machine:
 | Crate | Version pin | Purpose |
 |-------|------------|---------|
 | `wasmtime` | `48.0.2`, git revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1` | WebAssembly runtime and Component Model implementation. |
-| `wasmtime-wasi` | same exact revision | WASI Preview 2 capability injection. |
-| `wasmtime-wasi-nn` | same exact revision, `onnx` feature | Provides the capability-gated `wasi:nn@0.2.0-rc-2024-10-28` host implementation for `inference-node`; ordinary linkers do not register it. |
-| `ort` | git revision `d1ebde95d386513fea836593815e8f86f7b96a85` | Exact ONNX Runtime binding pin used by the wasi-nn CPU backend and optional CUDA build. `wafer-core` does not call it; it only selects features (ONNX Runtime logs go through `tracing`, optional download). See [ONNX Runtime](#onnx-runtime). |
-| `wit-bindgen` | latest compatible with the wasmtime commit | Code generation from WIT contracts. |
-| `tokio` | 1.x, features: `rt-multi-thread`, `macros`, `sync`, `time`, `signal`, `fs`, `io-util`, `net` | Async runtime. |
-| `axum` | 0.7 | HTTP control plane. |
-| `tower-http` | 0.5 | Middleware (`TraceLayer`). |
-| `serde` | 1.x, `derive` | Config types. |
-| `serde_json` | 1.x | JSON at the plugin-config boundary and API surface. |
-| `toml` | 0.8 | TOML config parsing. |
-| `bytes` | 1.x | Zero-copy payload buffer. |
-| `blake3` | 1.x | AOT cache keying. |
-| `foldhash` | 0.1 | Fast hasher for internal HashMaps. |
-| `petgraph` | 0.6 | DAG construction, topological sort, cycle detection. |
-| `thiserror` | 1.x | Structured error types. |
-| `anyhow` | 1.x | Error boundary for CLI / API. |
-| `tracing` + `tracing-subscriber` | 0.1 / 0.3 | Structured logs and spans. |
-| `prometheus-client` | 0.22 | Metrics registry and text exposition. |
-| `hdrhistogram` | 7.x | Latency histograms in the eval harness. |
-| `rumqttc` | 0.24 | MQTT source and sink. |
-| `reqwest` | 0.12 | HTTP sink (native rustls TLS). |
-| `hyper` | 1.x | HTTP source. |
-| `oci-client` | 0.13 | OCI plugin distribution. |
+| `wasmtime-wasi` | `48.0.2`, same git revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1` | WASI Preview 2 capability injection. |
+| `wasmtime-wasi-nn` | `48.0.2`, same git revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`, `onnx` feature | Provides the capability-gated `wasi:nn@0.2.0-rc-2024-10-28` host implementation for `inference-node`; ordinary linkers do not register it. |
+| `wasmtime-wasi-http` | `48.0.2`, same git revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`, `p2` feature | Outbound `wasi:http` for nodes granted an HTTP destination capability. |
+| `ort` | `2.0.0-rc.10`, git revision `d1ebde95d386513fea836593815e8f86f7b96a85` | Exact ONNX Runtime binding pin used by the wasi-nn CPU backend and optional CUDA build. `wafer-core` does not call it; it only selects features (ONNX Runtime logs go through `tracing`, optional download). See [ONNX Runtime](#onnx-runtime). |
+| `tokio` | `1`, features: `rt`, `rt-multi-thread`, `macros`, `io-std`, `io-util`, `net`, `sync`, `time`, `signal`, `fs` | Async runtime. |
+| `axum` | `0.8` | HTTP control plane. |
+| `tower-http` | `0.6` | Middleware (`TraceLayer`). |
+| `serde` | `1`, `derive` | Config types. |
+| `serde_json` | `1` | JSON at the plugin-config boundary and API surface. |
+| `toml` | `0.8` | TOML config parsing. |
+| `bytes` | `1` | Zero-copy payload buffer. |
+| `blake3` | `1` | AOT cache keying. |
+| `foldhash` | `0.1` | Fast hasher for internal HashMaps. |
+| `petgraph` | `0.8` | DAG construction, topological sort, cycle detection. |
+| `thiserror` | `2` | Structured error types. |
+| `anyhow` | `1` | Error boundary for CLI / API. |
+| `tracing` | `0.1` | Structured logs and spans. |
+| `tracing-subscriber` | `0.3` | Log formatting and `RUST_LOG` filtering. |
+| `prometheus-client` | `0.23` | Metrics registry and text exposition. |
+| `hdrhistogram` | `7` | Latency histograms in the benchmark sink and load generator. |
+| `rumqttc` | `0.25` | MQTT source and sink. |
+| `reqwest` | `0.12` | HTTP sink (rustls TLS). |
+| `hyper` | `1` | HTTP source. |
+| `oci-client` | `0.16` | OCI plugin distribution. |
+| `clap` | `4` | Command-line parsing for `wafer`, `waferctl` and `wafer-loadgen`. |
+| `wit-bindgen` (plugins) | `0.53` in each plugin's own `Cargo.toml` | Guest-side code generation from the WIT contracts. |
 | `wkg` (dev) | pinned by `mise.toml` | Component-Model registry CLI (installed via `mise run setup`, or `mise run //plugins:install-wkg` for only this tool). |
+
+Versions are the requirements written in `Cargo.toml`; `Cargo.lock` holds the
+exact resolved versions. `scripts/check-docs.sh` fails when this table no
+longer matches `Cargo.lock`.
 
 ## Feature flags
 

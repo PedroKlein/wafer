@@ -12,6 +12,14 @@
 > Transform and selects the inference linker/store path; native Transforms,
 > Filters, and Routers reject the grant before plugin loading.
 >
+> `plugin` also has a structured form. `plugin = "path"` is shorthand for
+> `plugin = { kind = "wasm", path = "path" }`, and
+> `plugin = { kind = "native", function = "threshold" }` selects a built-in
+> native Rust routine with no Wasm boundary, over the same envelopes and
+> channels. The native form is the evaluation baseline (RFC-008). All config
+> tables reject unknown keys; only a node's `config` table is passed to the
+> plugin unchecked.
+>
 > The remainder is the historical design record. Current field behavior is
 > defined by `wafer-types`, `wafer-config`, and the config reference.
 
@@ -84,7 +92,7 @@ All sections optional with sane defaults. Env var overrides supported via `WAFER
 
 Per-node capabilities live under `[nodes.X.capabilities]` as a nested table. Current implementation: 3 booleans (`inherit_stdio`, `inherit_env`, `allow_inference`). Designed to grow with fine-grained grants post-thesis.
 
-`pipeline:host/logging` is always available (not a configurable capability).
+`wafer:pipeline/logging` is always available (not a configurable capability).
 
 ### Decision 10: Validation Strategy — Two-Phase with Accumulated Errors
 
@@ -122,14 +130,14 @@ Per-node plugin configuration is a TOML table under `[nodes.X.config]`. At load 
 
 ## Related RFCs
 
-- **RFC-001** — provides the WIT contracts (4 packages, filter world) that this schema exposes via `type` dispatch and `plugin` field.
+- **RFC-001** — provides the WIT contracts (one `wafer:pipeline@0.1.0` package, filter world) that this schema exposes via `type` dispatch and `plugin` field.
 - **RFC-002** — defines the error policy engine (5 categories, retry with backoff, DLQ) that the `[error_policy]` and `[dead_letter]` sections configure.
 - **RFC-003** — removes Joiner (eliminating `to_port`), adds Filter to `NodeDef`, and confirms implicit merge topology (multi-producer mpsc).
 
 ## Implementation Notes
 
 - **`NodeDef` enum:** Code in `crates/wafer-types/src/config/mod.rs` matches Decision 1 exactly — `#[serde(tag = "type", rename_all = "kebab-case")]` with variants `Source`, `Sink`, `Transform`, `Filter`, `Router`.
-- **`WasmNodeDef`:** Single `plugin: String` field as per Decision 2. Also includes `fuel: Option<u64>`, `capabilities: Capabilities`, `config: Option<toml::Value>`, and `error_policy: Option<ErrorPolicyConfig>` — matching Decisions 5, 9, 14, and 4 respectively.
+- **`WasmNodeDef`:** Single `plugin: PluginSpec` field as per Decision 2; `PluginSpec` is either a bare path/OCI string or a structured `{ kind = "wasm", path }` / `{ kind = "native", function }` table. Also includes `fuel: Option<NonZeroU64>`, `memory_limit: Option<usize>`, `capabilities: Capabilities`, `config: Option<toml::Value>`, and `error_policy: Option<ErrorPolicyConfig>` — matching Decisions 5, 9, 14, and 4 respectively.
 - **`EdgeDef`:** Fields `from: String`, `to: String`, `port: Option<String>`, `capacity: Option<usize>`, `overflow: Option<OverflowPolicy>` — matches Decision 6 exactly.
 - **`Config`:** Single struct with all seven optional sections plus `nodes: HashMap<String, NodeDef>` and `edges: Vec<EdgeDef>`. `DagConfig` is gone, per Decision 7.
 - **`SimpleAction`:** The implementation adds a `Teardown` variant (Decision 4 states unrecoverable is "always teardown — not in config", but the code exposes it as a configurable action for flexibility).

@@ -102,7 +102,7 @@ Metrics, state trackers, the engine, and control-plane snapshots use `Arc` becau
 
 ### Bounded channels encode backpressure
 
-A Tokio `mpsc` capacity is finite. Downstream send code awaits a permit before sending, so a full queue slows its producer rather than allocating without bound.
+A Tokio `mpsc` capacity is finite. On a `slow` edge (the default), downstream send code awaits a permit before sending, so a full queue slows its producer rather than allocating without bound. `drop` and `dead-letter` edges use a non-blocking `try_send` instead and count or redirect the message when the queue is full.
 
 ## Design
 
@@ -119,9 +119,9 @@ This separation makes the core builder reusable in tests and keeps file I/O out 
 
 The configuration validator gives operators broad, accumulated diagnostics. The core graph constructor protects the execution library even when another caller supplies a `Config` without first invoking `wafer_config::validate`. The overlap is a defensive API boundary, not evidence that the two `DagGraph` types are interchangeable.
 
-### Queue-policy limit
+### Queue policy per edge
 
-**Known drift:** `EdgeSender` stores each configured overflow policy, but `QueueWiring::collect_downstream_senders` converts it to `DownstreamSender` without carrying that field. The current `send_one` path awaits capacity. Configured `Drop` and `DeadLetter` edge behavior is therefore not dispatched on that path.
+`EdgeSender` stores each configured overflow policy, and `QueueWiring::collect_downstream_senders` carries it into `DownstreamSender` together with the DLQ sender and queue metrics. `send_one` dispatches on that field: `slow` waits with `reserve().await`, while `drop` and `dead-letter` use `try_send`. See [Follow one message through Wasm](message-through-wasm.md) for the send path.
 
 ## Status boundaries
 
@@ -129,15 +129,15 @@ The configuration validator gives operators broad, accumulated diagnostics. The 
 
 **Intended design:** The duplicate structural check lets `wafer-core` defend its own public construction boundary even when it is called outside the runtime binary.
 
-**Known drift:** `wafer-config::DagGraph` remains a separate public graph implementation, while production orchestration uses the core graph. Edge overflow metadata is not carried into `DownstreamSender`, so current downstream sending applies bounded backpressure rather than configured drop or dead-letter dispatch.
+**Known drift:** `wafer-config::DagGraph` remains a separate public graph implementation, while production orchestration uses the core graph.
 
 ## Evidence
 
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `let config = load_config`, `validate(&config)`, `launch_pipeline_timed`
+- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `load_config(&args.config)`, `validate(&config)`, `launch_pipeline_timed`
 - **Source:** [`crates/wafer-config/src/loader.rs`](../../crates/wafer-config/src/loader.rs) | symbols: `pub fn load_config`, `toml::from_str`
 - **Source:** [`crates/wafer-config/src/validation.rs`](../../crates/wafer-config/src/validation.rs) | symbols: `pub fn validate`, `check_no_cycles`
 - **Source:** [`crates/wafer-core/src/dag/graph.rs`](../../crates/wafer-core/src/dag/graph.rs) | symbols: `pub struct DagGraph`, `pub fn from_config`, `pub fn topo_order`
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `use crate::dag::graph::DagGraph`, `fn wire_queues`, `mpsc::channel(capacity)`
+- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `use crate::dag::graph::DagGraph`, `fn wire_queues`, `mpsc::channel(capacity)`, `fn collect_downstream_senders`
 - **Source:** [`crates/wafer-core/Cargo.toml`](../../crates/wafer-core/Cargo.toml) | symbols: `[dev-dependencies]`, `wafer-config = { path = "../wafer-config" }`
 - **Source:** [`crates/wafer-core/src/orchestrator/launcher.rs`](../../crates/wafer-core/src/orchestrator/launcher.rs) | symbols: `pub async fn launch_pipeline_timed`, `build_pipeline_with_io`
 - **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub fn from_build_output`, `fn spawn_bundles`

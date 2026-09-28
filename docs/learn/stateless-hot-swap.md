@@ -10,7 +10,7 @@ Follow replacement preparation, watch-channel delivery, between-message applicat
 
 ## Prerequisites
 
-Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router support replacement and between-message application, but the Transform runner owns the canary rollback logic below. This walkthrough follows source at commit `f173151a8951736b4d82e10ce2b1c4417b02cf99`.
+Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router support replacement and between-message application, but the Transform runner owns the canary rollback logic below. This walkthrough follows source at commit `6ed111ea10035d60cfdb21a385265acf66348ac3`.
 
 ## Flow
 
@@ -38,10 +38,10 @@ sequenceDiagram
 
 1. During pipeline construction, each Transform, Filter, and Router bundle receives `watch::channel(None)`. Sources and sinks receive no swap channel.
 2. The API acquires a per-node swap guard, reads replacement bytes, and selects the preparation function for the node category. `prepare_transform_swap_timed` compiles through the engine cache, pre-instantiates the typed world, creates a new Store and bindings, and packages them in `SwapPayload::Transform` with `HotSwapProgress`.
-3. `PipelineHandle::send_swap` publishes the payload through the node's watch sender. The transform runner polls `swap_rx.has_changed()` before selecting another message, and its input wait also wakes on `swap_rx.changed()`, so an idle node swaps at once. Replacement happens between guest calls rather than by cancelling one.
+3. `PipelineHandle::send_swap` publishes the payload through the node's watch sender. At the top of each iteration the transform runner calls `take_pending_swap`, which checks `swap_rx.has_changed()` before another message is selected, and its input wait also wakes on `swap_rx.changed()`, so an idle node swaps at once. Replacement happens between guest calls rather than by cancelling one.
 4. `SwapPayload::try_apply_transform` takes ownership of the prepared Store and bindings. `WasmTransformNode::try_hot_swap` temporarily retains the old Store, bindings, and pre-instance, runs the replacement's `validate_and_init`, and keeps the old values only if that initialization fails.
-5. On success, the runner marks `replacement_adopted`, records a swap, and retains the prior `InstancePre` during a bounded canary window. The first forwarded/enqueued, filter-dropped, or router-no-route result completes `first_post_replacement_local_outcome`.
-6. If the new Transform traps while that canary is active, the runner restores the prior cached pre-instance and calls `transform.recover_from_cached_pre()`. This creates another fresh Store, re-instantiates prior code, runs lifecycle initialization, retries the trapped envelope, and records recovery and rollback metrics. It reports `rolled_back` only while the caller is waiting; a later rollback cannot rewrite an already completed local-outcome response.
+5. On success, the runner marks `replacement_adopted`, records a swap, and retains the prior `InstancePre` during a bounded canary window. The first forwarded/enqueued, filter-dropped, or router-dropped result completes `first_post_replacement_local_outcome`.
+6. If the new Transform traps while that canary is active (including an epoch or fuel trap), the runner restores the prior cached pre-instance and calls `transform.recover_from_cached_pre()`. This creates another fresh Store, re-instantiates prior code, runs lifecycle initialization, retries the trapped envelope, and records recovery and rollback metrics. The canary is consumed by the rollback, so each swap rolls back at most once; a later trap in the restored version takes the ordinary recovery path. It reports `rolled_back` only while the caller is waiting; a later rollback cannot rewrite an already completed local-outcome response.
 
 ## Rust
 
@@ -53,11 +53,11 @@ The live node is not shared behind a hot-path mutex. The runner owns it. `std::m
 
 ## Design
 
-Hot-swap is stateless replacement. Mutable guest state is lost whenever a new Store and instance replace the old ones. The prior `InstancePre` retained for process-time rollback contains reusable compiled and linked code, not a snapshot of guest memory, globals, handles, or thread-local plugin state.
+Hot-swap is stateless replacement. Mutable guest state is lost whenever a new Store and instance replace the old ones, and the replacement starts from its own `init`. The host never calls the outgoing guest's `close` export: the old Store is simply dropped, so a plugin cannot rely on `close` to flush or hand over state. The prior `InstancePre` retained for process-time rollback contains reusable compiled and linked code, not a snapshot of guest memory, globals, handles, or thread-local plugin state.
 
 There are two different failure behaviors. Failed `validate` or `init` restores the still-retained old Store and bindings inside `try_hot_swap`. A later transform `process` trap invokes configured canary recovery by instantiating the prior pre-instance into a fresh Store. Neither path retains mutable state from the discarded guest instance.
 
-The documented node-state tracker has Error, Recovering, and Running transitions during process-time recovery. There is no separate rollback node-state transition. Do not invent one from the `rolled_back` API status or rollback metric.
+The documented node-state tracker has Error, Recovering, and Running transitions during process-time recovery. There is no separate rollback node-state transition. Do not invent one from the `rolled_back` API status or rollback metric. The tracker also does not move a healthy Wasm node from `Starting` to `Running` after startup, so a node that has never recovered reports `Starting`; `Running` after a swap appears only if a recovery or rollback ran.
 
 ## Status boundaries
 
@@ -65,15 +65,15 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 **Intended design:** The API and metrics divide preparation, signal, replacement adoption, first runner-local outcome, rollback, and recovery so each claim has one owner. None is sink evidence; sink transition, sequence continuity, loss, throughput, and gap require evaluation artifacts.
 
-**Known drift:** Current builder comments call every configured processing category a Wasm node even though Transform and Filter can select native baseline functions. Those native variants reject a Wasm swap. Also, only the transform runner establishes process-time canary rollback; do not generalize it to Filter or Router. The integration tests are conditional on prebuilt component fixtures.
+**Known drift:** The guest `close` export is not called on replacement, recovery, or shutdown. Current builder comments call every configured processing category a Wasm node even though Transform and Filter can select native baseline functions. Those native variants reject a Wasm swap. Also, only the transform runner establishes process-time canary rollback; do not generalize it to Filter or Router. The integration tests are conditional on prebuilt component fixtures.
 
 ## Evidence
 
 - **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `watch::channel(None)`, `watch_senders.insert`
 - **Source:** [`crates/wafer-core/src/orchestrator/hotswap.rs`](../../crates/wafer-core/src/orchestrator/hotswap.rs) | symbols: `pub async fn prepare_transform_swap_timed`, `SwapPayload::Transform`
 - **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub fn send_swap`, `pub fn record_hotswap_phase`
-- **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `pub struct HotSwapProgress`, `pub fn report_rolled_back`, `pub enum SwapPayload`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `swap_rx.has_changed()`, `transform.recover_from_cached_pre()`, `metrics.record_rollback()`
+- **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `pub(crate) fn take_pending_swap`, `swap_rx.has_changed()`, `pub struct HotSwapProgress`, `pub fn report_rolled_back`, `pub enum SwapPayload`
+- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `take_pending_swap(&mut swap_rx)`, `transform.recover_from_cached_pre()`, `metrics.record_rollback()`
 - **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `pub async fn try_hot_swap`, `self.store = old_store`, `pub async fn recover_from_cached_pre`
 - **Source:** [`crates/wafer-core/src/node/metrics.rs`](../../crates/wafer-core/src/node/metrics.rs) | symbols: `pub fn record_swap`, `pub fn record_rollback`, `pub fn record_recovery`
 - **Source:** [`crates/wafer-core/src/api/handlers.rs`](../../crates/wafer-core/src/api/handlers.rs) | symbols: `pub async fn hot_swap`, `"status": "rolled_back"`, `"replacement_adopted": true`
@@ -81,4 +81,4 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 
 ## Checkpoint
 
-Locate the point where `swap_rx.has_changed()` is checked. List what a full replacement transfers, what survives only as reusable host-side code/configuration, and what mutable guest state disappears. Finally, explain why `rolled_back` is an API outcome rather than a new `NodeState` variant.
+Locate the point where `take_pending_swap` checks `swap_rx.has_changed()`. List what a full replacement transfers, what survives only as reusable host-side code/configuration, and what mutable guest state disappears. Finally, explain why `rolled_back` is an API outcome rather than a new `NodeState` variant.

@@ -14,18 +14,21 @@ for provenance.
 
 | RFC | Title | Status | Session date |
 |-----|-------|--------|--------------|
-| [RFC-001](RFC-001-wit-contracts.md) | WIT contracts & envelope design | Implemented (amended by RFC-002, RFC-003) | 2026-07-05 |
-| [RFC-002](RFC-002-host-runtime.md) | Host-side runtime architecture | Implemented (amended by RFC-003, RFC-005) | 2026-07-06 |
-| [RFC-003](RFC-003-node-types.md) | Node type architecture | Implemented (amends RFC-001, RFC-002) | 2026-07-06 |
-| [RFC-004](RFC-004-config-schema.md) | Config schema & pipeline UX | Implemented | 2026-07-06 |
-| [RFC-005](RFC-005-orchestrator.md) | Orchestrator & runtime simplification | Implemented (amends ADR-0003) | 2026-07-12 |
-| [RFC-006](RFC-006-plugin-sdk.md) | Plugin rewrite & guest SDK | Implemented for Rust, including MNIST inference; bounded Go proof; Python stub | 2026-07-12 |
-| [RFC-007](RFC-007-performance-optimizations.md) | Performance optimizations | Implemented (amends RFC-002, RFC-004, RFC-005) | 2026-07-12 |
-| [RFC-008](RFC-008-evaluation-harness.md) | Evaluation harness design | Accepted (implementation in progress) | 2026-07-12 |
-| [RFC-009](RFC-009-implementation-architecture.md) | Implementation architecture | Implemented | 2026-07-12 |
-| [RFC-010](RFC-010-io-integration.md) | Phase 4 — I/O integration (MQTT, HTTP, file) | Implemented | 2026-07-15 |
-| [RFC-011](RFC-011-doc-refactor.md) | Documentation refactor execution plan | Superseded (retrospective archive) | 2026-07-18 |
-| [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model evolution | Async P2 + bounded HTTP implemented; P3 PoC approved | 2026-09-25 |
+| [RFC-001](RFC-001-wit-contracts.md) | WIT Contracts & Envelope Design | Implemented | 2026-07-05 |
+| [RFC-002](RFC-002-host-runtime.md) | Host-Side Runtime Architecture | Implemented | 2026-07-06 |
+| [RFC-003](RFC-003-node-types.md) | Node Type Architecture | Implemented | 2026-07-06 |
+| [RFC-004](RFC-004-config-schema.md) | Config File Schema & Pipeline UX | Implemented in `wafer-types` + `wafer-config` and wired into the runtime binary | 2026-07-06 |
+| [RFC-005](RFC-005-orchestrator.md) | Orchestrator & Runtime Simplification | Implemented | 2026-07-12 |
+| [RFC-006](RFC-006-plugin-sdk.md) | Plugin Rewrite & Guest SDK | Implemented | 2026-07-12 |
+| [RFC-007](RFC-007-performance-optimizations.md) | Performance Optimizations | Partially implemented | 2026-07-12 |
+| [RFC-008](RFC-008-evaluation-harness.md) | Evaluation harness design | Implemented for final-campaign readiness | 2026-07-12 |
+| [RFC-009](RFC-009-implementation-architecture.md) | Implementation Architecture — Module Structure & Crate Boundaries | Implemented | 2026-07-12 |
+| [RFC-010](RFC-010-io-integration.md) | I/O Integration & First End-to-End Pipeline | Implemented | 2026-07-15 |
+| [RFC-011](RFC-011-doc-refactor.md) | Documentation Refactor Execution Plan | Superseded | 2026-07-18 |
+| [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model Evolution | Async P2 and bounded outbound HTTP implemented; P3 PoC approved | 2026-09-25 |
+
+Titles, statuses, and dates are copied from each RFC's own header; the RFC's
+Status line carries the detail. Amendment relations are listed below.
 
 ## Amendments summary
 

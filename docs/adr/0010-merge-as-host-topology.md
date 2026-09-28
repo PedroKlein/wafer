@@ -18,7 +18,7 @@ We remove the `joiner-node` WIT world and express merge as host-native DAG topol
 
 - **Positive — Zero runtime cost:** Merge adds no task, no Wasm call, no fuel consumption, no allocation beyond the channel wiring at pipeline startup. An N-way merge has identical per-message latency to a 1-to-1 edge.
 
-- **Positive — Reduced surface area:** One fewer WIT world to maintain, one fewer bindgen module, one fewer runner-loop variant. The WIT interface set shrinks from four worlds to three (`transform-node`, `filter-node`, `router-node`).
+- **Positive — Reduced surface area:** One fewer WIT world to maintain, one fewer bindgen module, one fewer runner-loop variant. At the time of this decision the WIT world set shrank from four worlds to three (`transform-node`, `filter-node`, `router-node`). A capability-gated `inference-node` world was added later (see ADR-0001), so `wit/worlds.wit` now declares four worlds, none of them a joiner.
 
 - **Positive — Simpler pipeline configuration:** Users do not declare or configure merge nodes. Multiple edges pointing at the same downstream node in the `[[edges]]` config table implicitly express a merge. Validation at build time confirms only Transform and Sink nodes may have multiple inputs (per RFC-004).
 

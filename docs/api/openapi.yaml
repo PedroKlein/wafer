@@ -89,6 +89,8 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/ReplacementResult"
                   - $ref: "#/components/schemas/RollbackResult"
+        "202":
+          $ref: "#/components/responses/Unconfirmed"
         "400":
           $ref: "#/components/responses/TextError"
         "404":
@@ -120,6 +122,8 @@ paths:
                 oneOf:
                   - $ref: "#/components/schemas/ReplacementResult"
                   - $ref: "#/components/schemas/RollbackResult"
+        "202":
+          $ref: "#/components/responses/Unconfirmed"
         "404":
           $ref: "#/components/responses/TextError"
         "409":
@@ -143,6 +147,16 @@ components:
       schema:
         type: string
   responses:
+    Unconfirmed:
+      description: >-
+        No runner-local outcome within five seconds. `replacement_adopted` is
+        true when the runner adopted the replacement but no message reached the
+        node yet, and false only when the replacement's validate/init ran past
+        a further 30 seconds.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/UnconfirmedResult"
     TextError:
       description: Plain-text error returned by the current handler.
       content:
@@ -195,13 +209,17 @@ components:
         config: {}
         expected_plugin_hash:
           type: string
+          description: >-
+            When non-empty, the SHA-256 (hex) the caller expects for the plugin
+            loaded on the node; a mismatch returns 409. The launcher records the
+            hash of every Wasm plugin it loads and each hot-swap updates it.
     LocalOutcome:
       type: object
       required: [disposition, after_adoption_ns]
       properties:
         disposition:
           type: string
-          enum: [forwarded-enqueued, filter-dropped, router-no-route]
+          enum: [forwarded/enqueued, filter-dropped, router-dropped]
         after_adoption_ns:
           type: integer
           format: uint64
@@ -209,7 +227,7 @@ components:
       type: string
       enum: [compiled, memory_hit, disk_hit]
       description: >-
-        Hot-swap only. Whether `compile_ns` covers a Cranelift compile or a
+        Hot-swap only; reconfigure responses do not carry it. Whether `compile_ns` covers a Cranelift compile or a
         reuse of a component already compiled by this process (including the
         one loaded at launch) or read from the on-disk cache.
     ReplacementTimeline:
@@ -249,6 +267,40 @@ components:
           $ref: "#/components/schemas/CompileCache"
         timeline:
           $ref: "#/components/schemas/ReplacementTimeline"
+    UnconfirmedResult:
+      type: object
+      required: [node_id, replacement_adopted, first_post_replacement_local_outcome, timeline]
+      properties:
+        node_id:
+          type: string
+        replacement_adopted:
+          type: boolean
+        first_post_replacement_local_outcome:
+          type: "null"
+        compile_cache:
+          $ref: "#/components/schemas/CompileCache"
+        timeline:
+          type: object
+          required: [compile_ns, instantiate_ns, signal_ns, replacement_adopted_ns, first_post_replacement_local_outcome_ns]
+          properties:
+            compile_ns:
+              type: [integer, "null"]
+              format: uint64
+              description: Null for reconfigure.
+            instantiate_ns:
+              type: [integer, "null"]
+              format: uint64
+              description: Null for reconfigure.
+            signal_ns:
+              type: [integer, "null"]
+              format: uint64
+              description: Null for reconfigure.
+            replacement_adopted_ns:
+              type: [integer, "null"]
+              format: uint64
+              description: Null when the replacement was not adopted.
+            first_post_replacement_local_outcome_ns:
+              type: "null"
     RollbackResult:
       type: object
       required: [node_id, status, reason, timeline]
@@ -264,6 +316,7 @@ components:
           $ref: "#/components/schemas/CompileCache"
         timeline:
           type: object
+          description: A reconfigure rollback carries only `rollback_ns`.
           required: [rollback_ns]
           properties:
             compile_ns:

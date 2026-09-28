@@ -16,11 +16,9 @@ docs {
   Returns OK if the pipeline is ready to process messages.
   Use this for Kubernetes readiness probes.
   
-  Returns 503 Service Unavailable when:
-  - Pipeline is starting up
-  - Pipeline is draining
-  - Pipeline has stopped
-  - Pipeline is in error state
+  Returns 503 Service Unavailable with {"ready": false, "reason": "not running"}
+  once the pipeline is no longer running (for example after shutdown was
+  signalled).
 }
 
 assert {

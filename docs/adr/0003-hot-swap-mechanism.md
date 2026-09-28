@@ -24,6 +24,15 @@
 > remain authoritative for external disruption. Process-time rollback is
 > Transform-only, and A20 rollback-count export remains deferred.
 >
+> **Guest lifecycle on replacement.** The runtime does not call the old
+> instance's guest `close()` when it is replaced (nor at shutdown). The
+> replacement runs in a new Store, so guest state starts fresh after every
+> swap; nothing carries over from v1. Compilation and linking for a swap run
+> on a blocking thread (`spawn_blocking`) through the shared compiled-component
+> cache, and the swap response reports which cache tier served it.
+> `NodeState` still carries `Draining` and `Retired` variants from the
+> drain-and-flip design; no runner enters them (see ADR-0012).
+>
 > The remainder is the historical design record; old ACK/convergence names are
 > preserved only as prior terminology.
 
@@ -75,7 +84,8 @@ fails (compile error, instantiation trap), the swap is aborted and v1
 continues unchanged.
 
 Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` provides
-`prepare_transform_swap`, `prepare_filter_swap`, and `prepare_router_swap`.
+`prepare_transform_swap_timed` (and `prepare_transform_swap_timed_with_fuel`),
+`prepare_filter_swap_timed`, and `prepare_router_swap_timed`.
 `crates/wafer-core/src/orchestrator/builder.rs` creates the
 `watch::Sender<Option<SwapPayload>>` per Wasm node (stored in
 `BuildOutput.watch_senders`) and threads `watch::Receiver` into each runner

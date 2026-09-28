@@ -27,7 +27,8 @@ See [`docs/interfaces/http-api.md`](../interfaces/http-api.md) for the authorita
 ## Default Ports
 
 - **API Server**: `localhost:9090`
-- **Metrics Server**: `localhost:9091` (when configured separately)
+- **Metrics Server**: none by default; `/metrics` shares the API listener unless
+  the runtime is started with `--metrics-bind <ADDR>`
 
 ## Using the Bruno Collection
 
@@ -43,13 +44,14 @@ See [`docs/interfaces/http-api.md`](../interfaces/http-api.md) for the authorita
 
 The collection includes a `local` environment with:
 - `baseUrl`: `http://localhost:9090` (API server)
-- `metricsUrl`: `http://localhost:9091` (Metrics server)
+- `metricsUrl`: `http://localhost:9091` (only used when the runtime runs with
+  `--metrics-bind 127.0.0.1:9091`)
 
 ### Running Requests
 
 1. Start a WAFER pipeline with the API config enabled:
    ```bash
-   wafer-runtime --config examples/dag-passthrough-with-api.toml
+   cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml
    ```
 
 2. Select a Bruno request, such as "Health Check".
@@ -107,7 +109,7 @@ path = "/metrics"
 
 Equivalent CLI override for the API bind address:
 ```bash
-wafer-runtime --config examples/dag-passthrough-with-api.toml --api-bind 127.0.0.1:9090
+cargo run -p wafer-runtime -- --config examples/dag-passthrough-with-api.toml --api-bind 127.0.0.1:9090
 ```
 
 For the current operator-facing schema, see

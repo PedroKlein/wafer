@@ -6,7 +6,8 @@
 
 > **Implementation notes.** The watch-channel primitive is live and
 > hot-swap works end-to-end (see
-> `crates/wafer-core/tests/pipeline_e2e.rs::test_hot_swap_uppercase_to_passthrough`).
+> `crates/wafer-core/tests/hotswap_success.rs`, which swaps an idle node and a
+> node under 1,000 msg/s).
 > Five-phase `SwapTimeline` (`compile` / `instantiate` / `signal` / `ack`
 > / `convergence`) is reported through the API (A3 + A3b). ACK-phase
 > `init()` is called on the new instance (A4). Production Wasm nodes
@@ -28,6 +29,16 @@
 > policy, and retries choose the earliest due deadline and honor typed
 > exhaustion actions.
 >
+> Differences from the decisions below: `Config.nodes` is a
+> `HashMap<String, NodeDef>` (RFC-004), so the builder's iteration order is
+> unspecified. The runtime never calls a guest's `close()`, neither when an
+> instance is replaced nor at shutdown; the old Store is dropped, and guest
+> state resets on every swap. Shutdown cancels one token shared by all node
+> tasks at once and then waits up to 5 s for them (and separately for the DLQ
+> task) before aborting stragglers; it is not the ordered stage-by-stage
+> sequence of Decision 11. Hot-swap compile and link run on tokio's blocking
+> pool, and an idle node adopts a swap without waiting for a new message.
+>
 > The remainder is the historical design record.
 
 <!-- historical-design-below -->
@@ -48,7 +59,7 @@ Key constraints from prior sessions that bound this design:
 - Merge = tokio mpsc multi-sender; no Joiner node (RFC-003 A1, D9)
 - Transform: strict 1:1, always produces output (RFC-003 A2)
 - Filter/Router: borrow-only, no DLQ pre-clone needed (RFC-003 D11)
-- Config is `BTreeMap<String, NodeDef>` with serde tag dispatch (RFC-004 D1)
+- Config is `HashMap<String, NodeDef>` with serde tag dispatch (RFC-004 D1)
 - Edge uses a single `port` field (source port only) (RFC-004 D6)
 - Fuel resolution: `engine.fuel.{type}` default, per-node `fuel` override (RFC-004 D5)
 
@@ -64,7 +75,7 @@ Architecture overhead on RPi 4: Tokio task wake-up ~100-200ns, mpsc send/recv ~5
 
 ### Decision 2: Builder Redesign — Receiver-Keyed Queue Wiring
 
-The builder iterates `BTreeMap<String, NodeDef>`, dispatches on the serde-tagged enum variant, and produces per-node bundles. Queue wiring uses a **receiver-keyed** map: one channel per destination node (each node has a single default input port), with sender clones for merge edges.
+The builder iterates `HashMap<String, NodeDef>` (in unspecified order), dispatches on the serde-tagged enum variant, and produces per-node bundles. Queue wiring uses a **receiver-keyed** map: one channel per destination node (each node has a single default input port), with sender clones for merge edges.
 
 Merge is automatic: two edges pointing to the same destination share one channel with sender clones. Capacity conflict on merge uses the maximum of all edges' capacities (most permissive).
 
@@ -153,14 +164,14 @@ Three native baselines: Layer 0 (single-flow, inline calls — floor), Layer 1 (
 - **RFC-001** — provides the WIT-typed boundaries that this RFC's runner loops call into.
 - **RFC-002** — defines the host runtime (InstancePre lifecycle, persistent Store, error policy categories) that this RFC orchestrates.
 - **RFC-003** — defines the three Wasm node types (Transform, Filter, Router) and eliminates the Joiner, producing the three loop variants in D3. Also defines merge as multi-producer mpsc (D9) that this RFC's builder wires.
-- **RFC-004** — defines the config schema (`BTreeMap<String, NodeDef>`, `port` field, fuel resolution) that this RFC's builder consumes.
+- **RFC-004** — defines the config schema (`HashMap<String, NodeDef>`, `port` field, fuel resolution) that this RFC's builder consumes.
 - **ADR-0003** — the original drain-and-flip hot-swap mechanism. **This RFC amends ADR-0003**: the 4-phase "stop routing → drain in-flight → flip → resume" is replaced by the watch-channel between-messages model (D6) which eliminates the drain phase entirely.
 
 ## Implementation Notes
 
-- The watch-channel hot-swap model (D6) is fully implemented in `crates/wafer-core/src/orchestrator/hotswap.rs`, which provides `prepare_transform_swap`, `prepare_filter_swap`, and `prepare_router_swap` functions that package a compiled component into a `SwapPayload` ready to send via the watch channel.
-- `crates/wafer-core/src/orchestrator/builder.rs` creates a `watch::Sender<Option<SwapPayload>>` per Wasm node (stored in `watch_senders: HashMap<Box<str>, watch::Sender<…>>`), and threads the corresponding `watch::Receiver` into each node's runner bundle (via the `swap_rx` field on `TransformBundle`, `FilterBundle`, and `RouterBundle`).
+- The watch-channel hot-swap model (D6) is fully implemented in `crates/wafer-core/src/orchestrator/hotswap.rs`, which provides `prepare_transform_swap_timed` (plus `prepare_transform_swap_timed_with_fuel`), `prepare_filter_swap_timed`, and `prepare_router_swap_timed` functions that package a compiled component into a `SwapPayload` ready to send via the watch channel.
+- `crates/wafer-core/src/orchestrator/builder.rs` creates a `watch::Sender<Option<SwapPayload>>` per Wasm node (stored in `watch_senders: HashMap<Box<str>, watch::Sender<…>>`), and threads the corresponding `watch::Receiver` into each node's runner bundle (via the `swap_rx` field of the `Transform`, `Filter`, and `Router` variants of `NodeBundleKind`).
 - The orchestrator retains `watch_senders` after spawn for signaling hot-swaps — matching D12's design.
 - The three per-type runner loops (D3) are implemented in `crates/wafer-core/src/runner/` with the shared `select!` + watch-check pattern described in D6.
 - ADR-0003's `RoutingController` is absent from the codebase; the watch-channel model fully replaces it.
-- Code matches decisions; no divergence found.
+- Beyond the differences listed in the banner at the top, code matches the decisions.

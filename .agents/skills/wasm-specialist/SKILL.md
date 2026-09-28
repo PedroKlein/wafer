@@ -76,13 +76,13 @@ Store `HashMap<ContentHash, Arc<InstancePre<WaferState>>>` keyed by component co
 
 **For hot-swap** (optimal sequence):
 ```rust
-// 1. Compile new Component (slow: 10-100ms on Pi4) — WHILE old node still runs
+// 1. Compile new Component on the blocking pool (slow: 10-100ms on Pi4) — WHILE old node still runs
 // 2. linker.instantiate_pre(new_component) → InstancePre (fast: μs)
-// 3. Signal drain on old node (wait for queue empty)
-// 4. Drop old Store (instant)
-// 5. new_store = Store::new(engine, state)
-// 6. instance_pre.instantiate_async(&mut new_store) (fast: μs with pooling)
-// 7. Resume queue processing
+// 3. new_store = Store::new(engine, state); instance_pre.instantiate_async(&mut new_store)
+// 4. Publish the payload on the node's watch channel
+// 5. Runner, between messages: drop old Store (guest close() is not called),
+//    adopt the new one, call validate()/init()
+// 6. Continue with the next message; no queue drain is needed
 ```
 
 ### Pre-Compilation (AOT Caching) — Validated: Flow-Like, Spin, Torvyn, Wassette
@@ -212,12 +212,14 @@ a fresh Store. WAFER's design of creating a NEW Store + Instance for replacement
 
 ## WIT Contract Design for WAFER
 
-### Package Structure (4 packages)
+### Package Structure (one package, five files)
 ```
-pipeline:types@0.1.0      — buffer resource, message/output-message, process-error, port-id, log-level
-pipeline:node@0.1.0       — lifecycle + transform + filter interfaces; worlds: transform-node, filter-node, inference-node
-pipeline:routing@0.1.0    — router interface (returns port names, not messages); world: router-node
-pipeline:host@0.1.0       — host-provided capabilities (logging)
+package wafer:pipeline@0.1.0, split over wit/:
+pipeline-types.wit    — interface types: buffer resource, message/output-message, process-error, port-id, log-level
+pipeline-node.wit     — interfaces lifecycle, transform, filter
+pipeline-routing.wit  — interface router (returns port names, not messages)
+pipeline-host.wit     — interface logging (host-provided)
+worlds.wit            — worlds transform-node, filter-node, router-node, inference-node
 ```
 
 **Key types**:
@@ -241,7 +243,10 @@ write to the same node's input channel.
   engine (retry, DLQ, skip, teardown). The plugin classifies; the host acts.
 - **Lifecycle is mandatory** — every world exports `lifecycle` (validate → init → close).
   Skipping `validate()` means discovering config errors at runtime instead of startup.
-- **Version your packages** — `@0.1.0` in each package name. Breaking changes = major bump.
+  The host calls `validate()` and `init()` at start, after a hot-swap, and after a
+  recovery; it never calls `close()` (the old Store is simply dropped), so guest state
+  resets on every replacement and nothing may depend on `close()` running.
+- **Version your packages** — the package is `wafer:pipeline@0.1.0`. Breaking changes = major bump.
 - **Router returns port names only** — routing is a pure decision (`list<port-id>`),
   not a transformation. Host handles cloning/forwarding (zero-copy).
 
@@ -256,13 +261,13 @@ wit_bindgen::generate!({
 struct MyTransform;
 export!(MyTransform);
 
-impl exports::pipeline::node::lifecycle::Guest for MyTransform {
+impl exports::wafer::pipeline::lifecycle::Guest for MyTransform {
     fn validate(_config: NodeConfig) -> Option<String> { None }
     fn init(_config: NodeConfig) -> Result<(), ProcessError> { Ok(()) }
     fn close() {}
 }
 
-impl exports::pipeline::node::transform::Guest for MyTransform {
+impl exports::wafer::pipeline::transform::Guest for MyTransform {
     fn process(input: Message) -> Result<OutputMessage, ProcessError> {
         let payload = input.payload.read_all();
         // Transform payload...
@@ -289,13 +294,13 @@ wit_bindgen::generate!({
 struct MyFilter;
 export!(MyFilter);
 
-impl exports::pipeline::node::lifecycle::Guest for MyFilter {
+impl exports::wafer::pipeline::lifecycle::Guest for MyFilter {
     fn validate(_config: NodeConfig) -> Option<String> { None }
     fn init(_config: NodeConfig) -> Result<(), ProcessError> { Ok(()) }
     fn close() {}
 }
 
-impl exports::pipeline::node::filter::Guest for MyFilter {
+impl exports::wafer::pipeline::filter::Guest for MyFilter {
     fn evaluate(input: Message) -> Result<bool, ProcessError> {
         // Inspect metadata only — zero-copy (never reads payload)
         Ok(input.metadata.iter().any(|(k, _)| k == "important"))

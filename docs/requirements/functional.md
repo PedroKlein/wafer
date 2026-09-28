@@ -13,16 +13,22 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-CFG-1 · Load a pipeline from TOML.**
   *Statement:* The runtime shall load a pipeline configuration from a
-  TOML file provided by `--config <path>` on the `wafer-runtime` CLI.
+  TOML file provided by `--config <path>` on the runtime CLI (the
+  `wafer` binary of the `wafer-runtime` crate).
   *Rationale:* Declarative configuration is the sole authoring
   surface; there is no imperative pipeline-construction API.
-  *Verify:* `wafer-runtime --config examples/dag-passthrough.toml`
-  starts and reaches `PipelineState::Ready`.
+  *Verify:* `echo "Hello World" | cargo run -p wafer-runtime -- --config
+  examples/dag-passthrough.toml` prints the message and exits 0; with
+  `examples/dag-passthrough-with-api.toml`, `GET /ready` returns 200
+  while the pipeline runs.
 
 - **FR-CFG-2 · Reject invalid topologies at load time.**
   *Statement:* The runtime shall reject configs whose graph contains a
   cycle, references an undefined node, uses an undefined router port,
-  or omits the required `plugin` field on a Wasm node.
+  omits the required `plugin` field on a Wasm node, or contains an
+  unknown key (outside a plugin's opaque `config` table). It shall also
+  reject duplicate edges, a `port` on a non-router edge, a processing
+  node without an input or an output, and `epoch_tick_ms = 0`.
   *Rationale:* Fail-fast on structural errors; a running pipeline
   cannot recover from a topology error.
   *Verify:* `wafer-config::validate` returns a `ValidationError`
@@ -30,11 +36,12 @@ hot-swap) live in `non-functional.md`.
   `crates/wafer-config/src/validation.rs`).
 
 - **FR-CFG-3 · Cascade error policy from pipeline to per-node.**
-  *Statement:* When both `[error_policy]` and `[nodes.NAME.error_policy]`
-  are present, the per-node table shall override the pipeline default
-  field-by-field.
-  *Verify:* Merge behaviour asserted in
-  `crates/wafer-core/src/runner/error_policy.rs` tests.
+  *Statement:* When `[nodes.NAME.error_policy]` is present, it shall
+  replace the pipeline `[error_policy]` table for that node as a whole.
+  Fields omitted from the node table take the built-in defaults, not the
+  pipeline values.
+  *Verify:* `resolve_error_policy` in
+  `crates/wafer-core/src/orchestrator/builder.rs`.
 
 ## Node types
 
@@ -47,14 +54,16 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-NODE-2 · Native sources.**
   *Statement:* Source nodes shall implement one of the native `kind`
-  variants: `stdin`, `file`, `mqtt`, `http`. Wasm sources are not
+  variants: `stdin`, `file`, `mqtt`, `http`, or the evaluation-only
+  `bench-source` (deterministic in-process load). Wasm sources are not
   supported.
   *Verify:* `SourceDef` enum in
   `crates/wafer-types/src/config/source_sink.rs`.
 
 - **FR-NODE-3 · Native sinks.**
   *Statement:* Sink nodes shall implement one of `stdout`, `file`,
-  `mqtt`, `http`.
+  `mqtt`, `http`, or the evaluation-only `bench-sink` (HdrHistogram
+  latency, sequence tracking, and artifact export on close).
   *Verify:* `SinkDef` enum in the same file.
 
 - **FR-NODE-4 · Processing implementations are explicit.**
@@ -105,13 +114,17 @@ hot-swap) live in `non-functional.md`.
 - **FR-ERR-1 · Five error categories.**
   *Statement:* Every guest error shall be classified into exactly one
   of `bad-input`, `dependency-failed`, `processing-failed`,
-  `timed-out`, `unrecoverable`. Wasmtime traps map to `timed-out`
-  (epoch interrupt, fuel exhaustion) or `unrecoverable` (other traps).
+  `timed-out`, `unrecoverable`. Wasmtime traps become
+  `WasmProcessError::Trapped` with their trap code: epoch interrupts and
+  fuel exhaustion follow the `timed_out` action, and all other traps
+  follow the `unrecoverable` path (drop the message, re-instantiate).
   *Verify:* `WasmProcessError` enum in
-  `crates/wafer-core/src/runner/error_policy.rs`; mapping tests.
+  `crates/wafer-core/src/runner/error_policy.rs`; mapping tests;
+  `fuel_exhaustion_follows_the_timed_out_policy` in
+  `crates/wafer-core/tests/attack_containment.rs`.
 
 - **FR-ERR-2 · Bounded retry.**
-  *Statement:* Retryable categories shall wait exactly `backoff_ms` before the first retry, double later delays to 30 000 ms, wake at the earliest due buffered deadline, and preserve retry count. Exhaustion shall perform the configured terminal action (`skip`, `dlq`, or `teardown`) without requeue; DLQ full and closed remain distinct.
+  *Statement:* Retryable categories shall wait exactly `backoff_ms` before the first retry, double later delays to 30 000 ms, wake at the earliest due buffered deadline, and preserve retry count. Exhaustion shall perform the configured terminal action (`skip`, `dlq`, or `teardown`) without requeue; DLQ full and closed remain distinct. `teardown` ends the node's runner loop without recovery. A `dlq` action with no `[dead_letter]` sink configured drops the message and counts it as `dlq_lost`; the validator does not require `[dead_letter]` for error-policy actions.
   *Verify:* paused-time and real-runner retry tests.
 
 - **FR-ERR-3 · DLQ envelope preservation.**
@@ -123,11 +136,15 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-SWAP-1 · Hot-swap a Wasm node between messages.**
   *Statement:* The runtime shall replace a running Wasm node's
-  component binary without stopping the pipeline. The swap shall
-  occur at the next message boundary via a `watch::Sender<Option<SwapPayload>>`.
+  component binary without stopping the pipeline. The swap shall be
+  delivered via a `watch::Sender<Option<SwapPayload>>` and applied
+  between guest calls; an idle node shall adopt it without waiting for
+  input. Guest state is not carried over.
   *Verify:* `crates/wafer-core/src/orchestrator/hotswap.rs` implements
-  `prepare_transform_swap_timed` + `send_swap`; integration test in
-  `tests/hot_swap.rs` exercises the full path.
+  `prepare_transform_swap_timed`; `PipelineHandle::send_swap` in
+  `crates/wafer-core/src/orchestrator/pipeline.rs` publishes it;
+  integration tests in `crates/wafer-core/tests/hotswap_success.rs`,
+  `hotswap_compile.rs`, and `hotswap_process_time_rollback.rs`.
 
 - **FR-SWAP-2 · Hot-swap only on Wasm nodes.**
   *Statement:* `POST /api/v1/nodes/{id}/hot-swap` shall reject
@@ -151,8 +168,9 @@ hot-swap) live in `non-functional.md`.
   *Verify:* API handler test.
 
 - **FR-CTL-2 · Readiness endpoint.**
-  *Statement:* `GET /ready` shall return 200 only when
-  `PipelineState == Ready`; otherwise 503.
+  *Statement:* `GET /ready` shall return 200 while the pipeline is
+  running (from launch until `run_until_complete` returns); otherwise
+  503 with `reason: "not running"`. `PipelineState` is not consulted.
   *Verify:* API handler test.
 
 - **FR-CTL-3 · Node inspection.**
@@ -163,16 +181,22 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-CTL-4 · Graceful shutdown endpoint.**
   *Statement:* `POST /api/v1/pipeline/shutdown` shall cancel the
-  orchestrator and cause an ordered shutdown (sources stop → drain →
-  retry flush → DLQ → close).
-  *Verify:* Shutdown-sequence integration test.
+  orchestrator. Cancellation reaches every node at once (no source-first
+  ordering): processing nodes flush retry buffers to the DLQ, sinks
+  drain their own queue and flush/close, and node tasks still running
+  after 5 s are aborted and fail the run.
+  *Verify:* `crates/wafer-runtime/tests/runtime_control_plane.rs` and
+  shutdown tests in `crates/wafer-core/src/orchestrator/pipeline.rs`.
 
 - **FR-CTL-5 · Prometheus metrics endpoint.**
   *Statement:* When `[metrics].enabled = true`, `GET /metrics` shall
   return Prometheus text exposition covering per-node counters
-  (messages in / out / errors / retries / hot-swaps).
-  *Verify:* Metrics snapshot test in
-  `crates/wafer-core/src/metrics/`.
+  (`wafer_node_processed_total`, failed attempts, retries, DLQ sent/lost,
+  skips, drops on recovery/teardown, `wafer_node_traps_total` by trap
+  kind, `wafer_node_guest_errors_total` by category), hot-swap phase
+  histograms, and recovery durations.
+  *Verify:* `metrics` handler tests in
+  `crates/wafer-core/src/api/handlers.rs`.
 
 ## Plugin sandboxing
 
@@ -187,7 +211,7 @@ hot-swap) live in `non-functional.md`.
   and denial, and lifecycle replacement tests.
 
 - **FR-PLG-2 · Fuel metering.**
-  *Statement:* When configured, each Wasm call shall be bounded by the per-node fuel budget, falling back to `[engine.fuel]` per category. Runtime defaults are unmetered; final evaluation configs enable protection explicitly. Exhaustion traps as `timed-out`.
+  *Statement:* When configured, each Wasm call shall be bounded by the per-node fuel budget, falling back to `[engine.fuel]` per category. Runtime defaults are unmetered; any role or node budget turns metering on, and Wasm nodes without a budget then run with `u64::MAX`. Final evaluation configs enable protection explicitly. Exhaustion traps with `OutOfFuel` and follows the `timed_out` action. Fuel bounds Wasm execution only, not time blocked in a host import.
   *Verify:* Fuel-metering integration test with the `infinite-loop`
   attack plugin.
 
@@ -200,7 +224,9 @@ hot-swap) live in `non-functional.md`.
 
 - **FR-PLG-4 · Per-node memory bound.**
   *Statement:* Each node's `Store` shall enforce a memory cap via
-  `StoreLimits` (Transform 64 MB, Filter/Router 16 MB by default).
+  `StoreLimits` (Transform 64 MB, Filter/Router 16 MB by default). The
+  cap covers guest linear memory and tables; host-side WASI resources are
+  not bounded in this build.
   *Verify:* `memory-exhaust` attack test.
 
 - **FR-PLG-5 · Plugin fetch from local path or OCI.**

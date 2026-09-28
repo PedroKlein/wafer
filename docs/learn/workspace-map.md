@@ -87,7 +87,7 @@ The remaining crates have one clear consumer boundary: guest authors use `wafer-
 - **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`
 - **Source:** [`crates/wafer-types/src/lib.rs`](../../crates/wafer-types/src/lib.rs) | symbols: `pub mod config`, `pub use control::*`
 - **Source:** [`crates/wafer-core/src/lib.rs`](../../crates/wafer-core/src/lib.rs) | symbols: `pub mod orchestrator`, `pub mod runner`
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `use wafer_config::{load_config, validate}`, `async fn main()`
+- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `use wafer_config::{load_config, validate}`, `fn main() -> ExitCode`
 - **Source:** [`crates/wafer-plugin/src/lib.rs`](../../crates/wafer-plugin/src/lib.rs) | symbol: `macro_rules! output_from`
 - **Source:** [`crates/wafer-loadgen/src/lib.rs`](../../crates/wafer-loadgen/src/lib.rs) | symbols: `pub mod publish`, `pub use publish::{PublishArgs, run_publisher}`
 - **Source:** [`crates/waferctl/src/main.rs`](../../crates/waferctl/src/main.rs) | symbol: `enum Commands`

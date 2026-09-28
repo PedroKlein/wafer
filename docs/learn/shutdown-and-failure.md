@@ -17,9 +17,10 @@ stateDiagram-v2
     Running --> RetryWaiting: dependency or processing failure
     RetryWaiting --> Running: retry becomes ready
     RetryWaiting --> DeadLettered: budget full or exhausted
-    Running --> Recovering: timeout or unrecoverable trap
+    Running --> Recovering: epoch/fuel trap or unrecoverable trap
     Recovering --> Running: store re-instantiated
     Recovering --> Stopping: recovery fails
+    Running --> Stopping: teardown action
     Stopping --> SourceClose: source loop exits
     Stopping --> RetryFlush: processing loop exits
     Stopping --> SinkDrain: sink loop exits
@@ -34,7 +35,7 @@ stateDiagram-v2
     Aborted --> [*]
 ```
 
-The diagram combines several node-local paths. It does not imply that every task visits every state or that cleanup occurs in the displayed vertical order.
+The diagram combines several node-local paths. It does not imply that every task visits every state or that cleanup occurs in the displayed vertical order. Its `Running` is a conceptual phase, not the reported `NodeState`: a Wasm Transform, Filter, or Router node's tracker starts in `Starting` and is not moved to `Running` after a successful startup, so a node that never failed reports `Starting` for the whole run. The tracker reaches `Running` only after a recovery (or in the native passthrough loop).
 
 ### Natural completion
 
@@ -53,7 +54,7 @@ The orchestrator joins whichever task completes next until the deadline; it does
 Cleanup differs by runner:
 
 - The source loop calls `source.close().await` after cancellation, EOF, or its exit path.
-- Transform, filter, and router loops call `policy.flush_to_dlq("shutdown")` when their loop exits, moving buffered retries to the DLQ path when a sender is available.
+- Transform, filter, and router loops call `policy.flush_to_dlq("shutdown", &metrics)` when their loop exits, moving buffered retries to the DLQ path when a sender is available.
 - The sink loop exits its receive phase, uses `receiver.try_recv()` to consume messages already buffered, then calls `sink.flush().await` and `sink.close().await` even if collection during the drain reported an error.
 - The DLQ task receives the same cancellation token and drains entries already buffered in its own channel before exiting.
 
@@ -65,10 +66,10 @@ WIT defines five process-error categories. `ErrorPolicyExecutor::handle` treats 
 
 | Category | Current executor behavior |
 |---|---|
-| `bad-input` | Apply the configured simple action: skip, DLQ, or return a teardown signal. |
+| `bad-input` | Apply the configured simple action: skip, DLQ, or teardown (stop the node's loop). |
 | `dependency-failed` | Add to the bounded retry buffer with capped exponential backoff, or apply its configured exhausted action. |
 | `processing-failed` | Use the same bounded retry and terminal-action path. |
-| `timed-out` | Apply the configured simple action. |
+| `timed-out` | Apply the configured `timed_out` simple action. |
 | `unrecoverable` | Return control to the runner's recovery path rather than queue a normal retry. |
 
 The runners give ready retries priority over fresh messages and wake at the earliest due deadline even when upstream is idle. Retry count survives requeue. Once exhausted, `skip`, `dlq`, or `teardown` is honored; DLQ-full and DLQ-closed remain distinct outcomes and the envelope is not requeued. Transform preserves a safety clone before calling Wasm. Pending retries are flushed to the DLQ on shutdown or before replacement.
@@ -77,9 +78,9 @@ Wasmtime traps and host failures during the call become `Trapped`, which keeps t
 
 ### Task and process results
 
-`run_until_complete` records task panics. After joining node tasks and waiting up to five seconds for the DLQ task, it returns an error if a node task panicked. The runtime logs that error and continues its final benchmark/control-plane cleanup before returning from `main`.
+`run_until_complete` records each node task that panicked, returned an error (for example a source or sink `init()` failure), or had to be aborted at the deadline, plus a failed or stuck DLQ task. After joining node tasks and waiting up to five seconds for the DLQ task, it returns one error naming every failure. The runtime logs that error, finishes its benchmark/control-plane cleanup so artifacts are written, and then exits with status 3.
 
-The separate `shutdown` method logs task panics during its join loop but currently returns `Ok(())` after cleanup. Callers should not infer identical error reporting from these two entry points.
+The `shutdown` method cancels the token and then calls `run_until_complete`, so both entry points report failures the same way.
 
 ## Rust
 
@@ -97,7 +98,7 @@ Queue receive and native source polling are cancellation points. The `biased` or
 
 ### `Result` does not imply propagation unless the caller uses it
 
-`ErrorPolicyExecutor::handle` returns a typed `ErrorPolicyAction`. The shared runner handler converts `ExhaustedSkip` into one counter increment, continues after successful/DLQ-failed non-teardown outcomes, and returns false for `Teardown` so each processing loop enters recovery.
+`ErrorPolicyExecutor::handle` returns a typed `ErrorPolicyAction`. The shared runner handler `continue_after_policy_action` turns each outcome into one counter increment (`retries`, `dlq_sent`, `skipped`, `retry_exhausted_skips`, `dlq_lost`, or `dropped_on_teardown`) and returns false only for `Teardown`. Every caller then `break`s out of its processing loop, which ends that node's task for the rest of the process. The configurable `teardown` action is therefore a one-way stop, not recovery: only the built-in trap and `unrecoverable` path calls `transition_to_error`, `transition_to_recovering`, and `recover_from_cached_pre`.
 
 ## Design
 
@@ -118,13 +119,13 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 **Intended design:** The combination of bounded retries, DLQ routing, store recovery, and cooperative cleanup aims to keep one bad message or guest instance from leaving the process indefinitely stuck.
 
-**Known drift:** Shutdown is not reverse-topological and does not prove completion of every in-flight message. A failed DLQ enqueue is observable but cannot recover the already-exhausted message.
+**Known drift:** Shutdown is cancel-all, not reverse-topological, and does not prove completion of every in-flight message; only sinks drain their own buffered queue. The guest `close()` export is never called. A failed DLQ enqueue, including a `dlq` action with no `[dead_letter]` sink configured, is counted as `dlq_lost` but cannot recover the message. The `teardown` action stops the node permanently and does not update its reported state. Healthy Wasm nodes report `Starting` rather than `Running`.
 
 ## Evidence
 
 - **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub async fn shutdown`, `pub async fn run_until_complete`, `self.tasks.shutdown().await`
 - **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `source.close().await`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq("shutdown")`
+- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq("shutdown", &metrics)`
 - **Source:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbols: `pub async fn run_sink_loop`, `receiver.try_recv()`, `sink.flush().await`, `sink.close().await`
 - **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub(crate) fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
 - **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_shutdown_completes_all_tasks()`, `async fn test_cancel_triggers_shutdown()`

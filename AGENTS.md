@@ -63,7 +63,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | `wafer-types` | Library | Shared types: config schema (`NodeDef`, `WasmNodeDef`, `EdgeDef`, `EngineConfig`, `ErrorPolicyConfig`), control messages, event types, metrics types |
 | `wafer-config` | Library | TOML loading, DAG construction, semantic validation on top of `wafer-types` |
 | `wafer-plugin` | Library | Guest-side SDK (macros, `thread_local!` state pattern, error helpers) that plugin crates depend on |
-| `wafer-loadgen` | Binary | Load generator used by the evaluation harness (open-loop, HdrHistogram) |
+| `wafer-loadgen` | Library + Binary | Load generator used by the evaluation harness (open-loop, HdrHistogram); the library exposes the publisher, subscriber, and recorder to tests |
 | `waferctl` | Binary | CLI tool for interacting with running pipelines (status, nodes, hot-swap, shutdown) |
 
 ### Key Directories
@@ -116,8 +116,8 @@ When you need deeper context on any aspect of the project, consult these files. 
 |----------|---------|
 | `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
 | `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
-| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and doc refactor. |
-| `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Fifteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
+| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Twelve RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, doc refactor, and WASI 0.3 / Component Model evolution. |
+| `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Eighteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
 | `specs/` | Feature specifications directory (OpenSpec workflow). See `specs/README.md`. |
 | `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
 
@@ -125,8 +125,8 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 | Document | Summary |
 |----------|---------|
-| `docs/interfaces/http-api.md` | HTTP control plane reference. Current endpoints: `/health`, `/ready`, `/metrics`, `/api/v1/nodes`, `/api/v1/nodes/{id}`, `/api/v1/nodes/{id}/hot-swap`, `/api/v1/pipeline/shutdown`. |
-| `docs/interfaces/wit-contracts.md` | Reference for the four WIT packages and their worlds. |
+| `docs/interfaces/http-api.md` | HTTP control plane reference. Current endpoints: `/health`, `/ready`, `/metrics`, `/api/v1/nodes`, `/api/v1/nodes/{id}`, `/api/v1/nodes/{id}/hot-swap`, `/api/v1/nodes/{id}/reconfigure`, `/api/v1/pipeline/shutdown`. |
+| `docs/interfaces/wit-contracts.md` | Reference for the single `wafer:pipeline@0.1.0` WIT package, its interfaces, and its four worlds. |
 | `docs/interfaces/config-schema.md` | TOML config reference. Nodes use a `[nodes.NAME]` map, each `WasmNodeDef` has a single `plugin` field (local path or OCI reference), and each `EdgeDef` has a single optional `port` field (only used for router outputs). |
 | `docs/interfaces/plugin-sdk.md` | Reference for the `wafer-plugin` guest SDK (macros, `thread_local!` + `RefCell` state pattern, error helpers). |
 | `docs/api/openapi.yaml` | OpenAPI 3.0 spec for the control plane (kept in sync with the axum handlers). |
@@ -172,8 +172,8 @@ mise run clippy         # Run clippy lints
 ```bash
 mise run build-runtime  # Build wafer-runtime only
 mise run build-ctl      # Build waferctl only
-mise run build-plugins  # Build all WASM plugins
-mise run build-plugin NAME  # Build a specific plugin (e.g., mise run build-plugin uppercase)
+mise run //plugins:build-plugins      # Build all WASM plugins
+mise run //plugins:build-plugin NAME  # Build a specific plugin (e.g., mise run //plugins:build-plugin uppercase)
 ```
 
 ### Cross-Compile (aarch64 Linux — Pi/Jetson target)
@@ -190,10 +190,10 @@ See `docs/eval/cross-compile.md` for the design rationale (why docker over the `
 ### Analysis Notebooks
 
 ```bash
-mise run notebooks                          # Open all 15 analysis notebooks in JupyterLab (browser)
-mise run notebooks-view 05-hotswap-timeline # Render one notebook to HTML + open in browser (read-only)
-mise run notebooks-execute                  # Re-execute all notebooks against current eval/results/ data
-mise run figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
+mise run //eval:notebooks                          # Open all 15 analysis notebooks in JupyterLab (browser)
+mise run //eval:notebooks-view 05-hotswap-timeline # Render one notebook to HTML + open in browser (read-only)
+mise run //eval:notebooks-execute                  # Re-execute all notebooks against current eval/results/ data
+mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
 Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) pins JupyterLab, matplotlib, pandas, HdrHistogram, statsmodels, scipy. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook ↔ experiment ↔ RQ mapping.

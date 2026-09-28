@@ -38,7 +38,7 @@ publicly soon.
 | Property | Current design |
 | --- | --- |
 | Typed plugins | One `wafer:pipeline@0.1.0` WIT package with Transform, Filter, Router, and capability-gated Inference worlds. |
-| Fault containment | One Store and linear memory per Wasm node, with configurable fuel, epoch, memory, and capability limits. |
+| Fault containment | One Store and linear memory per Wasm node, with configurable fuel, epoch, memory, and capability limits. Memory limits cover linear memory and tables; fuel and epochs bound Wasm execution time, not time blocked in a host call. |
 | Backpressure | One bounded receiver per destination; each incoming edge chooses `slow`, `drop`, or `dead-letter`. |
 | Live replacement | Loaded Wasm processing nodes switch to a prepared instance between messages. Guest state is not migrated. |
 | I/O boundary | Sources and sinks are native Rust adapters. Processing guests can receive exact-destination outbound `wasi:http` grants. |

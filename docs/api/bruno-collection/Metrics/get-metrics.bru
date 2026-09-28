@@ -11,17 +11,22 @@ get {
 }
 
 docs {
-  Returns metrics in Prometheus text format for scraping.
+  Returns metrics in Prometheus text format for scraping. Current families
+  (see docs/operations/observability.md for the full table):
+  - wafer_node_processed_total{node}
+  - wafer_node_failed_total{node}, wafer_node_filtered_out_total{node},
+    wafer_node_retries_total{node}, wafer_node_skipped_total{node},
+    wafer_node_retry_exhausted_skip_total{node}
+  - wafer_node_dlq_sent_total{node}, wafer_node_dlq_lost_total{node}
+  - wafer_node_dropped_on_recovery_total{node},
+    wafer_node_dropped_on_teardown_total{node}
+  - wafer_node_traps_total{node,kind}, wafer_node_guest_errors_total{node,category}
+  - hot_swap_phase_ns_{bucket,sum,count}{phase,node_id}
+  - wafer_node_recovery_duration_ms_*{node_id}
   
-  Metrics include:
-  - wafer_messages_total: Total messages processed (counter)
-  - wafer_messages_failed_total: Total failed messages (counter)
-  - wafer_process_time_us: Processing time histogram
-  - wafer_queue_depth: Current queue depth (gauge)
-  
-  **Note:** When metrics.bind is configured separately from api.bind,
-  this endpoint is served on the metrics server (default: localhost:9091).
-  When they share the same bind address, use baseUrl instead.
+  **Note:** By default /metrics is served on the API listener (baseUrl).
+  Only when the runtime is started with --metrics-bind <ADDR> is it served
+  on that separate listener; set metricsUrl to match that address.
 }
 
 assert {

@@ -20,7 +20,7 @@ We provide the `wafer-plugin` crate (`crates/wafer-plugin/`) as a pure `macro_ru
 
 4. **Config parsing** — `parse_config::<T>(json)` is the one regular function (uses only `&str` and `String`, no WIT types). Gated behind `features = ["serde"]`, it deserialises the JSON config string passed to `init()` and returns `Result<T, String>`. Simple plugins that avoid `serde` parse config manually to stay under 10 KB.
 
-Supporting utilities include `payload_bytes!(input)` (reads `borrow<buffer>` resource) and `payload_as_str!(input)` (reads + UTF-8 validates), plus `log_info!`, `log_warn!`, `log_error!` wrappers around the `pipeline:host/logging` import.
+Supporting utilities include `payload_bytes!(input)` (reads `borrow<buffer>` resource) and `payload_as_str!(input)` (reads + UTF-8 validates), plus `log_info!`, `log_warn!`, `log_error!` wrappers around the `wafer:pipeline/logging` import.
 
 ## Consequences
 

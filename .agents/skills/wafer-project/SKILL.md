@@ -88,17 +88,22 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 
 1. **Single-process** — all nodes in one OS process; no IPC, no containers, no K8s
 2. **DAG-only** — cycles rejected at build time (toposort = cycle detection)
-3. **Bounded mpsc queues** — every edge is a bounded tokio `mpsc` channel; fan-in is
-   implicit host topology (multiple producers → one consumer). No Joiner node type.
+3. **Bounded mpsc queues** — each destination node has one bounded tokio `mpsc`
+   receiver; every inbound edge holds a sender clone with its own overflow policy, so
+   fan-in is implicit host topology (multiple producers → one consumer). No Joiner node type.
 4. **All queues bounded** — no unbounded channels; backpressure propagates end-to-end
 5. **Sources/sinks are native Rust** — only Transform, Filter, and Router are WASM (ADR-0004)
-6. **WIT-typed boundaries** — all WASM calls go through the four `pipeline:*@0.1.0` packages
-   (`pipeline:types`, `pipeline:node`, `pipeline:routing`, `pipeline:host`)
+6. **WIT-typed boundaries** — all WASM calls go through the single `wafer:pipeline@0.1.0`
+   package, split over `wit/pipeline-types.wit`, `pipeline-node.wit`, `pipeline-routing.wit`,
+   `pipeline-host.wit` (interfaces `types`, `lifecycle`/`transform`/`filter`, `router`,
+   `logging`) and `worlds.wit` (four worlds)
 7. **Stateless transforms** — no host-managed state; state lives inside the WASM instance
    and is lost on every hot-swap
 8. **Watch-channel hot-swap** — swap happens *between* messages: the runner selects between
    the input queue and a `watch::Receiver<Option<SwapPayload>>`; when a swap arrives, the
-   old instance drops and the new pre-instantiated component takes over. No 4-phase drain.
+   old instance drops (its guest `close()` is not called) and the new pre-instantiated
+   component takes over after `validate()`/`init()`. An idle node adopts a swap without
+   waiting for input. No 4-phase drain.
 9. **Processing-time only** — no event-time, no watermarks, no windows
 10. **Fuel/epoch metering** — untrusted plugins bounded in computation (fuel) and wall-clock
     time (epoch ticker on a dedicated OS thread)
@@ -124,8 +129,8 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | WASM target | `wasm32-wasip2` (Component Model, WASI Preview 2) |
 | Rust edition | 2024 (stable channel, `rust-version = "1.85"`) |
 | Pipeline config | TOML only |
-| WIT packages | `pipeline:types@0.1.0`, `pipeline:node@0.1.0`, `pipeline:routing@0.1.0`, `pipeline:host@0.1.0` in `/wit/` |
-| WIT worlds | `transform-node`, `filter-node`, `inference-node` (in `pipeline:node`); `router-node` (in `pipeline:routing`) |
+| WIT package | One package, `wafer:pipeline@0.1.0`, in five files under `/wit/`: `pipeline-types.wit` (`types`), `pipeline-node.wit` (`lifecycle`, `transform`, `filter`), `pipeline-routing.wit` (`router`), `pipeline-host.wit` (`logging`), `worlds.wit` |
+| WIT worlds | `transform-node`, `filter-node`, `router-node`, and the capability-gated `inference-node`, all in `wit/worlds.wit` |
 | Envelope shape | `Arc<EnvelopeHeader>` (metadata) + `Bytes` payload + `Lineage` trail; buffer resource with `borrow<buffer>` for zero-copy input |
 | Plugin structure | `/plugins/{name}/src/lib.rs`, `crate-type = ["cdylib"]` |
 | Workspace crates | `wafer-core` (runtime lib), `wafer-runtime` (bin), `wafer-types` (shared types), `wafer-config` (loader + validation), `wafer-plugin` (guest SDK), `wafer-loadgen` (eval harness), `waferctl` (CLI) |
@@ -223,7 +228,7 @@ authoritative for *why*.
 | Config schema reference (post-migration) | `wafer/main/docs/interfaces/config-schema.md` |
 | RFC archive (design decisions) | `wafer/main/docs/rfcs/` |
 | Architecture Decision Records | `wafer/main/docs/adr/` |
-| Ground-truth WIT contracts | `wafer/main/wit/*.wit` (four packages) |
+| Ground-truth WIT contracts | `wafer/main/wit/*.wit` (one `wafer:pipeline@0.1.0` package) |
 | Current thesis statement & RQs | `tcc-doc/main/research/analysis/thesis-statement-v3.md` |
 | Evaluation plan (experiments, stats, threats) | `tcc-doc/main/research/analysis/evaluation-plan.md` |
 | Comparator positioning matrix | `tcc-doc/main/research/analysis/positioning-matrix.md` |

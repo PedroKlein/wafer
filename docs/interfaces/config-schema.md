@@ -48,7 +48,7 @@ Fuel and epoch values must be positive when present. Zero is rejected; omission 
 
 Fuel metering is engine-wide. It is off only when no `fuel.*` value and no node `fuel` is set. Once any is set, every Wasm node is refilled before each call with its own `fuel`, else its category's value, else `u64::MAX`, so an omitted category stays unlimited in practice while still paying the metering cost.
 
-If a replaced Transform traps while its rollback window is open, the runtime restores the previous component once and closes the window; a later trap is handled like any other failure of the restored component.
+If a replaced Transform traps (including a fuel or epoch budget trap) or returns `unrecoverable` while its rollback window is open, the runtime restores the previous component once and closes the window; a later trap is handled like any other failure of the restored component.
 
 Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults. E-Perf-7 disables a mechanism by omitting its field (its pipelines set no other fuel value):
 
@@ -109,19 +109,22 @@ The configured sink is active: the runtime drains DLQ records to the MQTT topic 
 cache_dir = "/var/cache/wafer/oci"   # optional; defaults to XDG cache
 ```
 
+`cache_dir` is the only key. Other registry settings such as `cache_ttl_hours`
+or `verify_cosign` are not config keys, so they fail the unknown-key check.
+
 ## `[api]`
 
 | Field | Type | Default |
 |-------|------|---------|
 | `enabled` | `bool` | `true` |
-| `bind` | `string` | `"127.0.0.1:9090"` |
+| `bind` | `string` | `"127.0.0.1:9090"` (the `--api-bind <ADDR>` option overrides it) |
 
 ## `[metrics]`
 
 | Field | Type | Default |
 |-------|------|---------|
 | `enabled` | `bool` | `true` |
-| `path` | `string` | `"/metrics"` (informational; the wired path is `/metrics`) |
+| `path` | `string` | `"/metrics"` (used only by the separate listener that `--metrics-bind <ADDR>` starts; on the API listener the path is always `/metrics`) |
 
 ## `[nodes.NAME]`
 
@@ -140,7 +143,8 @@ The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm c
 | Field | Type | Notes |
 |-------|------|-------|
 | `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
-| `fuel` | `Option<u64>` | Overrides the pipeline default for this node. Setting it turns fuel metering on for the engine. |
+| `fuel` | `Option<u64>` | Overrides the pipeline default for this node. Setting it turns fuel metering on for the engine. Zero is rejected. |
+| `memory_limit` | `Option<usize>` | Linear-memory limit in bytes for this node, used at launch, recovery, reconfigure and hot-swap. Omission uses `[engine.memory]` for the node's category. |
 | `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference, outbound_http}`. Booleans default to `false`; `outbound_http` defaults to an empty deny-all list. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
 | `error_policy` | `Option<ErrorPolicyConfig>` | Per-node table that replaces the pipeline-level table when present. |
@@ -200,14 +204,14 @@ Sinks (`SinkDef`): `mqtt | file | stdout | http | bench-sink`.
 
 | Kind | Config fields |
 |------|---------------|
-| `mqtt` (source) | `broker`, `port` (default 1883), `topic`, `qos: u8` (default 0), `client_id`, optional `tls`, optional `auth`. |
-| `mqtt` (sink) | Same as source + `retain: bool` (default `false`). |
+| `mqtt` (source) | `broker`, `port` (default 1883), `topic`, `qos: u8` (default 0), optional `client_id` (default `wafer-<node id>`), optional `tls`, optional `auth`. `tls` and `auth` are accepted but not applied: the connection is always plain TCP without credentials. |
+| `mqtt` (sink) | Same as source + `retain: bool` (default `false`). `retain` is accepted but not applied: every message is published with retain off. `tls` and `auth` are not applied either. |
 | `file` (source) | `path`. |
-| `file` (sink) | `path`, `append: bool` (default `true`). |
+| `file` (sink) | `path`, `append: bool` (default `true`). `append` is accepted but not applied: the sink truncates the file when it starts. |
 | `stdin` (source) | (no fields) |
 | `stdout` (sink) | (no fields) |
 | `http` (source) | `bind` (default `127.0.0.1:8081`), `path` (default `/webhook`). |
-| `http` (sink) | `url`, `method` (default `POST`). |
+| `http` (sink) | `url`, `method` (default `POST`). `method` is accepted but not applied: every request is a `POST`. |
 | `bench-source` | `rate`, `total_messages`, `warmup_messages` (default `0`), `payload_size` (default `128`), optional `burst`. |
 | `bench-sink` | `warmup_secs` (default `30`), `track_sequences` (default `true`), `track_hotswap` (default `false`), optional `output_dir`. |
 
@@ -216,13 +220,15 @@ A `bench-source.burst` table contains `rate`, `start_secs`, and `end_secs`. Fina
 `TlsConfig`: optional `ca`, `cert`, `key` file paths.
 `AuthConfig`: `username`, `password`.
 
+Only `[dead_letter] kind = "mqtt"` applies `tls` and `auth` to its broker connection.
+
 Example:
 
 ```toml
 [nodes.mqtt-in]
 type   = "source"
 kind   = "mqtt"
-broker = "mqtt://localhost"
+broker = "localhost"
 topic  = "sensors/#"
 qos    = 1
 ```
@@ -239,10 +245,7 @@ Struct `EdgeDef`:
 | `capacity` | `Option<usize>` | Requested destination queue capacity. One physical receiver is created per destination; its capacity is the maximum explicit incoming capacity, or `engine.default_queue_capacity` when none is specified. |
 | `overflow` | `Option<OverflowPolicy>` | Sender-side policy for this edge: `slow` (default; reserve/await), `drop` (non-blocking discard on full), or `dead-letter` (non-blocking DLQ attempt on full). |
 
-The validator also rejects:
-
-- the same `from`, `to` and `port` listed twice, which would deliver every message twice;
-- a transform, filter or router with inbound edges but no outbound edge, or the reverse.
+Edge rules are listed under [Validation](#validation).
 
 Example:
 
@@ -258,6 +261,28 @@ port     = "alert"        # router output port
 capacity = 4096
 overflow = "dead-letter"
 ```
+
+## Validation
+
+After parsing, the loader runs every check below and reports all failures
+together; the runtime exits with status 2 and starts nothing.
+
+- Every edge's `from` and `to` name a configured node.
+- Sources have no inbound edge; sinks have no outbound edge.
+- A filter or router has exactly one inbound edge.
+- Every edge from a router has a `port`, and no other edge has one.
+- The same `from`, `to` and `port` is not listed twice, which would deliver every message twice.
+- A transform, filter or router has at least one inbound and one outbound edge.
+- Every node is connected to an edge, and the graph has no cycle.
+- At most one `stdin` source and one `stdout` sink.
+- An edge with `overflow = "dead-letter"` requires a `[dead_letter]` section.
+- `engine.default_queue_capacity`, `[[edges]].capacity`, both `retry_buffer_capacity` levels, and `dead_letter.queue_capacity` are greater than zero; so is `engine.epoch_tick_ms`.
+- `outbound_http` appears only on Wasm nodes, and its destinations are valid and not duplicated after normalization.
+- `allow_inference = true` appears only on a Wasm Transform.
+
+Zero for `epoch_deadline` or any fuel value is rejected while parsing.
+`[dead_letter]` is not required when an error-policy action is `dlq`: without
+it, those messages are counted in `wafer_node_dlq_lost_total` and discarded.
 
 ## Minimal example
 

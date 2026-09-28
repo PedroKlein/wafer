@@ -185,17 +185,20 @@ automatically when a node has multiple inbound edges.
 
 ## Queue Wiring from Graph
 
-Queues are created per-edge at build time. The graph-level invariant:
-**Every edge is a bounded channel** — no unbounded channels anywhere in the graph builder.
+Queues are created per destination node at build time (`wire_queues` in
+`orchestrator/builder.rs`). The graph-level invariant: **every edge sends into a bounded
+channel** — no unbounded channels anywhere in the graph builder.
 
 ```rust
-for edge in &config.edges {
-    let capacity = edge.queue_capacity.unwrap_or(DEFAULT_QUEUE_CAPACITY);
-    let (tx, rx) = BoundedQueue::new(capacity).split();
-    senders.insert((from_key, to_key), tx);
-    receivers.insert((from_key, to_key), rx);
-}
+// One receiver per destination; each inbound edge gets a sender clone.
+let capacity =
+    edges_to_dest.iter().filter_map(|e| e.capacity).max().unwrap_or(default_capacity);
+let (sender, receiver) = mpsc::channel(capacity);
 ```
+
+Each sender keeps its edge's overflow policy (`slow`, `drop`, `dead-letter`). The
+`BoundedQueue` wrapper in `queue/bounded.rs` is not used for edges (only by the
+throughput benchmark).
 
 **After spawning all tasks, drop remaining senders** — this ensures downstream receivers
 see channel close when upstream tasks finish, propagating clean shutdown through the DAG.

@@ -126,3 +126,5 @@ See Also: [RFC-003 — Node Type Architecture](../rfcs/RFC-003-node-types.md).
 [ADR-0016](0016-outbound-wasi-http-capability.md) permits an opt-in processing node to make outbound `wasi:http` requests to an immutable set of exact destinations. This does not introduce Wasm Source or Sink categories and does not change this ADR's transport boundary.
 
 Native Sources and Sinks remain the default modules for HTTP or MQTT at a pipeline boundary and remain the owners of managed credentials, TLS client identity, retries, long-lived connections, backpressure, and delivery semantics. The guest capability is appropriate only when a bounded request/response operation is intrinsic to Transform, Filter, or Router processing.
+
+In the current release some native adapter settings are accepted by the config parser but not applied: MQTT `tls` and `auth` (connections are plain TCP without credentials), the MQTT sink's `retain` (messages are published with retain off), the HTTP sink's `method` (requests are always `POST`), and the file sink's `append` (the file is truncated when the sink starts). Deployments that need TLS or broker credentials cannot configure them yet.

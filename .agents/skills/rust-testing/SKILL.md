@@ -29,7 +29,7 @@ Ask yourself:
 | Graph topology validity | Pure `#[test]`, no async, no WASM |
 | Full pipeline execution | `crates/wafer-runtime/tests/integration.rs` + multi_thread flavor |
 | WASM overhead vs native | Criterion bench with paired native baseline |
-| Hot-swap / drain timeout | Unit test + `tokio::time::pause()` |
+| Timeouts / retry backoff | Unit test + `tokio::time::pause()` |
 | Broker-dependent MQTT | Integration test + env-var guard |
 | Input space invariants | proptest property test (no WASM) |
 
@@ -68,20 +68,17 @@ Build once in CI or via `mise run build-plugins`, then run tests against the art
 
 ```rust
 #[tokio::test]
-async fn test_drain_timeout_fires() {
+async fn test_timeout_fires_on_stuck_future() {
     tokio::time::pause();  // All time is manual — sleep/timeout resolve on advance()
-    
-    let tracker = NodeStateTracker::running();
-    tracker.set_processing(true);  // Simulate stuck node
-    
+
     let result = tokio::time::timeout(
         Duration::from_millis(100),
-        drain_until_ready(&tracker)
+        std::future::pending::<()>(),  // Simulate a stuck operation
     ).await;
-    
+
     // Without pause(): this test takes 100ms real time and is flaky under CI load
     // With pause(): completes instantly and deterministically
-    assert!(result.is_err(), "Should timeout on stuck node");
+    assert!(result.is_err(), "Should time out on a stuck future");
 }
 ```
 
@@ -272,8 +269,8 @@ benches/                   # Criterion benchmarks
   a shared runtime; runtime creation (~1ms) dominates sub-ms measurements
 - **NEVER use `PerIteration` batch size unless setup has side effects** — orders of
   magnitude more measurement overhead; prefer SmallInput/LargeInput
-- **NEVER test hot-swap timing without `tokio::time::pause()`** — drain timeouts create
-  CI flakiness; paused time is deterministic regardless of machine load
+- **NEVER test timeout or backoff logic without `tokio::time::pause()`** — real-time
+  waits create CI flakiness; paused time is deterministic regardless of machine load
 - **NEVER measure WASM compilation in steady-state benchmarks** — first call may trigger
   JIT; pre-instantiate in setup closure to measure only per-message processing cost
 - **NEVER forget `harness = false` in bench target** — cargo links libtest's main()

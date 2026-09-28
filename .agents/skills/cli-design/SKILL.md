@@ -235,8 +235,8 @@ Commands::HotSwap { node_id } => {
     if cli.json {
         println!("{}", serde_json::to_string_pretty(&metrics)?);  // stdout = data
     } else {
-        eprintln!("✓ Complete in {}ms (drain: {}ms, flip: {}ms)",
-            metrics.total_ms, metrics.drain_ms, metrics.flip_ms);
+        eprintln!("✓ Complete in {}ms (compile: {}ms, instantiate: {}ms)",
+            metrics.total_ms, metrics.compile_ms, metrics.instantiate_ms);
     }
 }
 ```

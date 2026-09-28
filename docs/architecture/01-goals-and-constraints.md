@@ -89,7 +89,7 @@ Every destination has one bounded `tokio::mpsc` receiver. Edge-shaped configurat
 
 ### C4: Wasm Component Model sandbox
 
-Every processing stage (transform, filter, router) runs in its own `wasmtime::Store` with independent linear memory and WASI capability scoping. Fuel and epoch interruption are available but optional at runtime. Final evaluation configs enable both explicitly except for declared ablations and attack stimuli. Stages cannot access each other's memory. Pipeline messages travel through host-mediated bounded queues; a Wasm processing node may separately receive exact-destination outbound `wasi:http` authority through static configuration.
+Every processing stage (transform, filter, router) runs in its own `wasmtime::Store` with independent linear memory and WASI capability scoping. Fuel and epoch interruption are available but optional at runtime. Final evaluation configs enable both explicitly except for declared ablations and attack stimuli. Stages cannot access each other's memory. Per-store OOM containment covers linear memory and tables; host-side WASI resources a guest creates are not bounded in this build. Time isolation bounds Wasm CPU time via epochs and fuel; a guest blocked in a host import is not bounded. Pipeline messages travel through host-mediated bounded queues; a Wasm processing node may separately receive exact-destination outbound `wasi:http` authority through static configuration.
 
 ### C5: Edge hardware target
 
@@ -97,7 +97,7 @@ The primary deployment target is a Linux-capable device with at least 4 GB RAM (
 
 ### C6: Stateless node replacement
 
-Hot-swap replaces a node's Wasm instance between messages. It does not preserve guest-side state across versions. This is a deliberate scope limitation matching edge workloads where pipeline stages are stateless transforms. Stateful operators (windowing, aggregation) require the plugin to persist state externally.
+Hot-swap replaces a node's Wasm instance between messages. It does not preserve guest-side state across versions: the replacement starts from its own `init`, and the outgoing instance's `close` export is not called. This is a deliberate scope limitation matching edge workloads where pipeline stages are stateless transforms. Stateful operators (windowing, aggregation) require the plugin to persist state externally.
 
 ### C7: WIT as the contract boundary
 

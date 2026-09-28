@@ -12,6 +12,19 @@
 > and is not support evidence. `mnist-inference` targets the capability-gated
 > `inference-node` world and executes through the real wasi-nn host path.
 >
+> The inventory below predates four Rust plugins that drive the hot-swap and
+> methodology experiments: `pass-through-v1` and `pass-through-v2` (swap
+> source and target for E-Swap-1..6; each stamps its version into the
+> message), `pass-through-v2-panics` (traps on its first `process()` call, for
+> E-Swap-5 rollback verification only), and `delay-injector` (fixed-delay
+> transform for E-Val-1 and the delayed backpressure configurations).
+>
+> Guest state lives in the instance and is not carried across a replacement:
+> a hot-swap or a recovery starts the guest in a new Store, and only
+> `validate()` and `init()` run on it. The runtime never calls the guest
+> `close()` export, neither on replacement nor at shutdown, so plugins must
+> not rely on it to flush state.
+>
 > The remainder is the historical SDK and inventory decision record.
 
 <!-- historical-design-below -->
@@ -159,7 +172,7 @@ Simple plugins avoid serde (manual JSON parsing, ~5–10KB). Complex plugins use
 
 ## Related RFCs
 
-- **RFC-001** — defines the WIT contracts and 4-package structure that plugins implement.
+- **RFC-001** — defines the WIT contracts that plugins implement (now one `wafer:pipeline@0.1.0` package in five files under `wit/`).
 - **RFC-003** — removes Joiner world (motivating deletion of `merge-joiner` plugin) and establishes the three active worlds (transform-node, filter-node, router-node) plus inference-node.
 - **RFC-002** — defines the host-side `RuntimeEnvelope` and `borrow<buffer>` resource that `payload_bytes!` reads from.
 - **RFC-005** — defines the orchestrator and hot-swap model that determines state loss semantics (new Store = fresh memory).
@@ -168,9 +181,9 @@ Simple plugins avoid serde (manual JSON parsing, ~5–10KB). Complex plugins use
 ## Implementation Notes
 
 - The `wafer-plugin` crate is at `crates/wafer-plugin/`. It exports the macros described in D3 (`output_from!`, `output_with_type!`, `payload_bytes!`, `payload_as_str!`, error constructors, state macros, logging macros).
-- Plugins live under `plugins/` with a top-level `Makefile` for building all plugins. Each plugin's `Cargo.toml` uses `crate-type = ["cdylib"]` and depends on `wafer-plugin` via path.
-- The workspace structure slightly differs from the original decision: plugins are not in a separate Cargo workspace with their own `Cargo.toml` workspace root — instead they are listed as workspace members in the root `Cargo.toml` (pending verification). The build target is set via `.cargo/config.toml` or `mise.toml` tasks (`mise run build-plugins`).
-- All evaluation plugins are implemented: pass-through, json-parse, uppercase, threshold-filter, content-router, tensor-prep, result-format, mnist-inference, cayenne-decoder, anomaly-detector, vibration-features, quality-rules.
+- Plugins live under `plugins/`. Each plugin is a standalone crate with its own committed `Cargo.lock`; its `Cargo.toml` uses `crate-type = ["cdylib"]` and depends on `wafer-plugin` via path.
+- The workspace structure differs from the original decision: there is no shared plugin workspace root. The root `Cargo.toml` excludes `plugins/*` from the host workspace, and `plugins/build-plugins.sh` builds each plugin with `cargo build --release --locked --target wasm32-wasip2`. It is invoked through the `plugins/mise.toml` tasks (`mise run //plugins:build-plugins`, `mise run //plugins:build-plugin NAME`).
+- All evaluation plugins are implemented: pass-through, json-parse, uppercase, threshold-filter, content-router, tensor-prep, result-format, mnist-inference, cayenne-decoder, anomaly-detector, vibration-features, quality-rules. The experiment-support plugins pass-through-v1, pass-through-v2, pass-through-v2-panics, and delay-injector were added later.
 - Attack plugins exist under `plugins/attacks/`.
 - Polyglot plugins exist under `plugins/go/` and `plugins/python/`.
 - `PluginTestHarness` and `TestPipeline` implementations are in `crates/wafer-core/` (test infrastructure).

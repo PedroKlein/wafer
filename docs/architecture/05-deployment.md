@@ -30,7 +30,7 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
   gap, throughput, and sequence evidence. The < 100 ms p95 pause budget is
   evaluated from sink-owned artifacts on this hardware.
 
-**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are isolated and assigned to exactly one active SUT. Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache module has a disk location, but current E-Perf-9 startup runs disable that cache and measure Linux filesystem page-cache state.
+**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are isolated and assigned to exactly one active SUT. Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache supports a disk directory, but the runtime binary uses only its in-memory layer, seeded at launch so a later hot-swap of an already loaded binary is a memory hit. E-Perf-9 startup runs therefore measure Linux filesystem page-cache state, not a persisted compile cache.
 
 ### Jetson Orin: diagnostic inference target
 
@@ -88,6 +88,8 @@ Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the na
 - **Hot-swap:** `POST /api/v1/nodes/{id}/hot-swap` with a
   `{wasm_path: "..."}` body. See `docs/operations/getting-started.md`
   for a worked example.
-- **Shutdown:** `POST /api/v1/pipeline/shutdown` or SIGINT: both run
-  the ordered graceful shutdown (sources stop -> drain -> retry buffers
-  flush to DLQ -> sinks close).
+- **Shutdown:** `POST /api/v1/pipeline/shutdown`, SIGINT, or SIGTERM
+  cancel every node at once (no source-first ordering): processing
+  nodes flush retry buffers to the DLQ, sinks drain their own queue and
+  close, and tasks still running after 5 s are aborted. A second
+  SIGINT/SIGTERM exits immediately with 130/143.

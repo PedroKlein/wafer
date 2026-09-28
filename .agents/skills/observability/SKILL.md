@@ -129,6 +129,14 @@ Diagnostic for RQ1 (boundary overhead measurement with CopyLedger).
 
 ## Metrics: The Dual-Registry Pattern
 
+> **What the runtime does today** ([ADR-0018](../../../docs/adr/0018-metrics-hot-path-cost.md)):
+> runners increment per-node `NodeMetrics` and per-edge `QueueMetrics` atomics
+> (`crates/wafer-core/src/node/metrics.rs`), and `GET /metrics` is rendered by
+> `api::handlers::metrics` straight from those atomics at scrape time. The
+> prometheus-client `MetricsRegistry` in `crates/wafer-core/src/metrics/` is not wired
+> into the runtime. The pattern below is the guidance for adding metrics, not a
+> description of a second live registry.
+
 WAFER uses two complementary approaches:
 
 ### 1. Atomic Counters for Hot Path (zero-cost on write)
@@ -193,7 +201,7 @@ Variable data goes in structured log events, not metric labels.
 wafer_messages_processed_total{node_id="transform-1", node_type="transform"}
 wafer_process_duration_seconds{node_id="transform-1"}
 wafer_queue_utilization_ratio{edge="source:default->transform:default"}
-wafer_hotswap_duration_seconds{phase="drain"}
+wafer_hotswap_duration_seconds{phase="compile"}
 ```
 
 Rules: `wafer_` prefix, `_total` for counters, `_seconds` for durations (not ms!),

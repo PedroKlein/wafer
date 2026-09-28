@@ -20,6 +20,8 @@ sudo systemctl enable --now ssh mosquitto
 sudo reboot
 ```
 
+Mosquitto runs with the packaged `/etc/mosquitto/mosquitto.conf` unchanged; no WAFER file is deployed to `/etc/mosquitto/`. That file defines no listener, so Mosquitto 2.x starts in local-only mode: it listens on loopback port 1883 and accepts anonymous clients. The evaluation configs rely on exactly that (they connect to `localhost:1883` without credentials). The repository's `mosquitto.conf` files (root, and `eval/ekuiper/mosquitto.conf`) are for the Docker development and eKuiper Compose setups and are not used on the Pi. `preflight-pi5.sh` checks that the service is active, not that an anonymous publish succeeds; if a later package adds a listener or disables anonymous access, the MQTT experiments fail at connect time.
+
 Freeze this package state for one complete canonical batch. If the OS, kernel, firmware, WAFER binary, plugin, or eKuiper package changes, begin a new batch rather than combining results.
 
 ## 3. Configure SSH
@@ -115,6 +117,13 @@ mise run cross-build-pi
 mise run cross-build-pi-check
 mise run //plugins:build-plugins
 ```
+
+`cross-build-pi` needs network access: the container installs packages with
+`apt-get`, and the default `ort-download` feature downloads the pinned ONNX
+Runtime archive on the first build. The task does not pass `ORT_LIB_LOCATION`
+into the container. For an offline build, build natively on an aarch64 host
+with `ORT_LIB_LOCATION` pointing at a local ONNX Runtime; see
+[ONNX Runtime](../operations/dependencies.md#onnx-runtime).
 
 `build-plugins` records the plugin hashes in `plugins/ARTIFACTS.sha256`. Before
 a later deployment from the same machine, `mise run //plugins:verify-plugins`

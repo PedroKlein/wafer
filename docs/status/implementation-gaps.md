@@ -124,7 +124,7 @@ and architecture claims assume the rewire happened; it did not.
 - **Closed by:** runtime-migration plan A3 + A3b — API `/api/v1/nodes/{id}/hot-swap` now returns runner-reported `compile_ns`, `instantiate_ns`, `signal_ns`, `ack_ns`, `convergence_ns`; ACK and first-v2 convergence are marked by transform/filter/router runner loops via `HotSwapProgress` and delivered to the API through a `tokio::sync::oneshot`. Real-runtime smoke returned `{"status":"swap_converged","timeline":{"ack_ns":600541,"compile_ns":116346250,"convergence_ns":68042,"instantiate_ns":822542,"signal_ns":1208}}`.
 
   **P0.10 residual closure (evaluation-infrastructure plan):**
-  - `hot_swap_phase_ns{phase,node_id}` Prometheus histogram is now exposed by the `/metrics` handler for the six phases `{compile, instantiate, signal, ack, first_v2, convergence}`. Buckets tuned for laptop-shakedown hot-swap latencies (100 µs → 5 s). Emission is unit-tested via `orchestrator::pipeline::tests::phase_histogram_records_six_phases`.
+  - `hot_swap_phase_ns{phase,node_id}` Prometheus histogram is now exposed by the `/metrics` handler for the six phases `{compile, instantiate, signal, ack, first_v2, convergence}` (current labels: `compile`, `instantiate`, `signal`, `replacement_adopted`, `first_post_replacement_local_outcome`, `rollback`). Buckets tuned for laptop-shakedown hot-swap latencies (100 µs → 5 s). Emission is unit-tested via `orchestrator::pipeline::tests::phase_histogram_records_six_phases`.
   - Overlapping-swap race is now a hard 409 CONFLICT: `PipelineHandle::try_begin_swap(node_id)` performs a per-node `AtomicBool::compare_exchange` before any preparation; the RAII `SwapGuard` releases the slot on drop. Unit-tested via `orchestrator::pipeline::tests::swap_guard_prevents_overlapping_swap` and `swap_guard_reports_unknown_node` (which distinguishes 404-vs-409 for the handler).
   - Runners still overwrite `pending_swap_progress` internally (`crates/wafer-core/src/runner/{transform,filter,router}.rs:56`) but the guard prevents any second API request from reaching that state in the first place. The narrower internal race between mark_first_v2() and reset is left in place because it is unreachable through the public API surface.
 
@@ -752,25 +752,17 @@ counter is never emitted on the `/metrics` endpoint. External
 Prom/Grafana dashboards cannot alert on rollback rate without
 teaching them a bespoke endpoint.
 
-**Root cause.** The runner (`transform.rs`) owns an
-`Arc<NodeMetrics>` but not the `Arc<MetricsRegistry>` that drives
-`/metrics`. Wiring rollback totals through the registry needs
-threading the registry (or a small "HotSwapMetrics" handle) into
-the runner spawn path in `orchestrator/launcher.rs`.
+**Root cause.** `/metrics` is rendered by `api::handlers::metrics`
+(`crates/wafer-core/src/api/handlers.rs`) directly from each node's
+`Arc<NodeMetrics>` and the orchestrator's `HotSwapMetrics` histograms. The
+handler has no line for `NodeMetrics::rollbacks()`. (An earlier version of
+this entry blamed a missing `MetricsRegistry` handle; that registry is not
+wired into the runtime and does not drive `/metrics`.)
 
-**Proposed fix (NOT applied).**
-
-1. Extend `HotSwapMetrics` (in `metrics/types.rs`) with
-   `rollbacks_total: AtomicU64` and a `record_rollback(node_id)`
-   method.
-2. Thread an `Arc<HotSwapMetrics>` handle from the orchestrator into
-   `run_transform_loop_with_config` (alongside the existing
-   `Arc<NodeMetrics>`).
-3. In the rollback branches of `runner/transform.rs`, call
-   `hotswap_metrics.record_rollback(node_id)` after the local
-   `metrics.record_rollback()`.
-4. Extend `snapshot_builder::add_hotswap_metrics` to render
-   `wafer_hot_swap_rollbacks_total{node_id=...}`.
+**Proposed fix (NOT applied).** Emit
+`wafer_hot_swap_rollbacks_total{node_id=...}` from `NodeMetrics::rollbacks()`
+in `api::handlers::metrics`, next to the other per-node series, and flip the
+handler test that asserts the series is absent.
 
 Estimated cost: ~1 hour + smoke test.
 

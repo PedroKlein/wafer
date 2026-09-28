@@ -105,6 +105,9 @@ close:    func();
 `plugin-version` is an operator-supplied opaque value and defaults to an empty
 string. `validate` runs before `init`; production Transform, Filter, and Router
 instances execute both before their first message and after replacement.
+The host does not call `close` today: an instance being replaced, recovered or
+shut down is dropped without it, and guest state is not carried over to the
+new instance.
 
 ## Processing interfaces
 

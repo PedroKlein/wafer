@@ -49,7 +49,7 @@ For every paired WAFER/eKuiper run:
 2. Assign the active SUT to CPUs 1–3. Run only one SUT at a time.
 3. Seed eKuiper before its run and verify `pipeline_a` reports `running`.
 4. Use the same `wafer-loadgen` profile, payload, topics, warmup, and measurement window for WAFER and eKuiper.
-5. Use the common subscriber to write `latency.hdr`, `throughput.csv`, and sequence accounting.
+5. Use the common subscriber to write `latency.hdr` and sequence accounting; the harness derives the E2E `throughput.csv` from the subscriber's metadata.
 6. Record the eKuiper package version and SHA256 in run metadata.
 7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, MQTT source configuration, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check.
 

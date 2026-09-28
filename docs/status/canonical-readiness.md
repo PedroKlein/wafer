@@ -40,6 +40,8 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 
 The remainder of this file preserves the pre-final shakedown readiness log. Its values and old experiment descriptions are historical diagnostics. They do not define the final method and are not thesis evidence.
 
+The numbers below are pre-fix diagnostic data. They were recorded before latency was measured from each message's scheduled send time (open loop, with `service.hdr` and `source-lag.hdr` alongside `latency.hdr`), before the shared 1 µs to 1 h histogram range, before `throughput.csv` used a fixed one-second grid, before traps were classified by trap code, and before the release profile was pinned (thin LTO, one codegen unit). They are not comparable with runs of the current build.
+
 <!-- historical-diagnostic-below -->
 
 # Canonical-run readiness matrix
@@ -84,7 +86,7 @@ Legend:
 | E-Perf-3 | RQ1 | 🟢 | `e-perf-3/shakedown-macos-2026-07-22T18-29-39Z/` | 60 s runs for statistical power | Localhost MQTT faster than cross-device |
 | E-Perf-4 | RQ1 | 🟢 | `e-perf-4/shakedown-macos-2026-07-21T20-08-17Z/` | Prime run, shuffle order, 60 s | Mach kernel scheduling noise at p999 |
 | E-Perf-5 | RQ1 | ⚪ | — | Needs Pi + x86_64 Linux cross-run — filed as `docs/history/plans/canonical-runs.md` **F5** (depends on F4 sweep passing) | N/A (inherently multi-platform) |
-| E-Perf-6 | RQ1 | 🟢 | `e-perf-6/shakedown-macos-2026-07-22T17-49-56Z/` | `/proc/pid/smaps_rollup` on Linux | macOS RSS includes shared libs |
+| E-Perf-6 | RQ1 | 🟢 | `e-perf-6/shakedown-macos-2026-07-22T17-49-56Z/` | Linux RSS from `/proc/self/statm` (runtime sampler) | macOS RSS includes shared libs |
 | E-Perf-7 | RQ1 | 🟢 | `e-perf-7/shakedown-macos-2026-07-22T18-01-09Z/` | Instruction-heavy plugin, true disable | M-series branch prediction hides cost |
 | E-Perf-8 | RQ1 | 🟢 | `e-perf-8/shakedown-macos-2026-07-22T17-49-56Z/` | 60 s, 30 s warmup | M-series ~10–30× faster than Pi |
 | E-Perf-9 | RQ1 | 🟢 | `e-perf-9/shakedown-macos-2026-07-22T18-56-42Z/` | `drop_caches` on Linux for true cold | macOS page cache not purgeable w/o sudo |
@@ -215,7 +217,8 @@ microseconds, macOS M-series):
 - `per_node_metrics.csv` is best-effort (Prometheus scrape from
   shutdown-time state). Not needed for E-Perf-4 statistics but the
   canonical-runs plan should decide whether to wire the mid-run scrape
-  or accept the current shape.
+  or accept the current shape. (Superseded: the runtime now writes this
+  file itself at shutdown; see `eval/RESULT-CONTRACT.md`.)
 - `memory.csv` sampler is not exercised by the P2.1 shakedown runner
   (skipped for speed). Canonical Pi runs use `run-experiment.sh`
   which does sample; verify the sampler works on Linux `ps` before
@@ -317,8 +320,9 @@ pinning the tails should narrow further.
 | WAFER full-restart | 27.2 | ~2.7% loss during kill+restart |
 | eKuiper rule-restart | 2.0 | Minimal loss, fast restart |
 
-**What this proves.** WAFER's drain-and-flip hot-swap is provably
-lossless (0 gaps across all 5 runs), matching E-Swap-2's invariant.
+**What this proves.** WAFER's watch-channel hot-swap (replacement between
+messages, no queue drain) lost no messages in these runs (0 gaps across
+all 5 runs), matching E-Swap-2's invariant.
 Full restart loses ~27 messages (~2.7s downtime at 10 msg/s effective
 rate accounting for restart latency). eKuiper's rule restart is fast
 (~2 messages lost ≈ 2ms interrupt).
@@ -388,14 +392,15 @@ Shakedown numbers (median steady-state RSS, macOS M-series):
 - **Slope**: ~1116 KB/hop (~1.09 MB/hop), R² = 0.94.
 - **Intercept**: ~35 MB (runtime fixed cost: wasmtime engine + tokio + channels).
 
-**macOS vs Linux RSS.** macOS `ps` RSS includes shared libraries that would
-be counted once on Linux (via `/proc/pid/smaps_rollup`). Pi canonical numbers
-will show a lower absolute baseline but the per-hop delta should be similar
-(it's dominated by Wasm linear memory + Store overhead, not shared mappings).
+**macOS vs Linux RSS.** macOS `ps` RSS includes shared libraries. The
+runtime sampler reads total RSS from `/proc/self/statm` on Linux, which also
+counts resident shared-library pages; it does not split private from shared
+memory. The per-hop delta should still be comparable (it's dominated by Wasm
+linear memory + Store overhead, not shared mappings).
 
 **Gaps before Pi.**
 
-- Pi sampler should use `/proc/<pid>/smaps_rollup` for private RSS.
+- Pi sampler reads `/proc/self/statm` (total RSS), replacing the `ps` loop.
 - Longer runs (60 s) will give more samples for a tighter steady-state window.
 - 5 samples per run is borderline — canonical runs at 60 s will have ~60 samples.
 
@@ -521,7 +526,8 @@ catches this at CI time.
   100 msg/s (5× over capacity) and reported 4.7 s p99; corrected to
   10 msg/s. Same rule applies at every rate/delay ratio.
 - `EngineConfig.epoch_deadline` default (200 × 20 ms = 4 s per call)
-  has plenty of headroom for a 50 ms sleep. Canonical Pi can drop to
+  has plenty of headroom for a 50 ms sleep. (Historical default; the
+  runtime default is now unmetered, with a 10 ms tick.) Canonical Pi can drop to
   `100 × 20 ms = 2 s` if we want tighter tail bounds.
 - macOS p99 range was 0.36 ms wide; expect Pi with CPU pinning to
   narrow further (target: ~100 µs). If Pi widens the range, suspect
@@ -588,6 +594,12 @@ of the 51 hot-swap events.
 | Swap-induced gaps | 0 |
 | Sequence duplicates | 0 |
 | Post-warmup received | 114,999 |
+
+The sink gap count is the loss check, and it covers error-policy losses too.
+The current swap pipeline (`eval/configs/e-swap/pipeline-hotswap.toml`) has no
+`[dead_letter]` section, so a message the error policy sends to the DLQ is
+dropped and counted as `dlq_lost`; inside the measurement window it shows up
+as a gap.
 
 ### E-Swap-4 — swap under 2× burst (P5.5)
 
@@ -676,6 +688,11 @@ after source EOF propagates.
   runtime because wasmtime's error Display doesn't surface "epoch" in the
   message. The harness-level test `attack_containment.rs` accepts both
   classifications — the containment property holds regardless.
+  (Since fixed: traps are classified by trap code, and epoch interruption
+  and fuel exhaustion both follow the `timed_out` policy. Containment is now
+  judged by each attack's expected mechanism, and the filesystem attack is
+  stopped by a denied read, not a trap; see
+  `docs/benchmarks/rq2-attacks.md`.)
 - Pi canonical numbers (latency-to-recover, throughput under sustained
   attack) require the canonical-runs plan.
 - Source throughput % is 100% by construction (buffer >> messages) — the
@@ -746,9 +763,14 @@ so bursts are absorbed without queueing. On Pi 4 with higher per-hop
 latency, the channel buffer will show utilization during bursts — but the
 bounded guarantee ensures no overflow regardless.
 
-**macOS vs Linux.** On Pi, the 2× burst may cause brief queue growth
-(observable via `wafer_queue_depth` Prometheus gauge). The key invariant
-is zero `wafer_queue_overflow_total` — confirmed here.
+**macOS vs Linux.** On Pi, the 2× burst may cause brief queue growth.
+`/metrics` has no queue-depth or overflow series (`wafer_queue_depth` and
+`wafer_queue_overflow_total` were never served), so the "Queue overflow" row
+above does not come from a runtime counter. The edges in this config use the
+default `slow` policy, which waits instead of dropping; zero sequence gaps is
+the loss evidence. Queue depth and the per-edge overflow counters are recorded
+by `QueueDepthRecorder` in `queue-depth.csv` (10 ms samples, E-Backpressure
+runs with `WAFER_QUEUE_DEPTH_OUTPUT` set).
 
 ### E-Perf-9 — AOT cold vs warm startup (P3.6)
 

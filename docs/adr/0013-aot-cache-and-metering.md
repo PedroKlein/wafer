@@ -29,6 +29,8 @@ The runtime contains a content-addressed compiled-component cache module. Curren
 
 Omitting a fuel value or `epoch_deadline` produces `None`; the runtime skips the corresponding Wasmtime mechanism. A positive integer produces `Some(NonZeroU64)`. Zero is rejected. No sentinel value represents disabled metering.
 
+Fuel metering is engine-wide. It is on when any `[engine.fuel]` budget or any Wasm node's own `fuel` is set. In a metered engine every Wasm node gets a budget before each call: its own `fuel`, else its role's budget, else `u64::MAX` (a Store without fuel would trap on its first instruction). Fuel exhaustion and epoch interrupts are handled as timeouts by the node's `timed_out` error-policy action (ADR-0008).
+
 ### Final evaluation policy
 
 Runtime defaults and evaluation policy are separate. Ordinary final WAFER leaves explicitly configure:
@@ -66,6 +68,8 @@ The epoch ticker runs on a named OS thread. It holds a weak engine reference and
 ### Compiled-component cache
 
 `crates/wafer-core/src/engine/cache.rs` implements an in-memory and disk content-addressed cache for compiled components. Its identity includes component bytes, platform, and Wasmtime version. Deserialization of a serialized component is unsafe and is restricted to artifacts written by WAFER in its cache directory.
+
+The runtime builds the cache memory-only. Launch compiles every plugin through it, and hot-swap preparation compiles and links on tokio's blocking pool through the same cache, so a swap back to a binary already loaded is a memory hit; the swap response reports `compile_cache` as `memory_hit`, `disk_hit`, or `compiled`. The disk tier is never used by the runtime.
 
 The presence of this module is an implementation fact, not evidence that a particular evaluation used it. Run metadata must state cache mode, hit state, artifact, and identity. Current E-Perf-9 records `mode="disabled"`, `hit=false`, and null artifact/identity.
 

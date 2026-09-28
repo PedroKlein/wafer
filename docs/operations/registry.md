@@ -23,9 +23,10 @@ type   = "transform"
 plugin = "ghcr.io/pedroklein/wafer-uppercase:1.0.0"
 ```
 
-The loader treats a string beginning with `.` or `/` as a filesystem
-path; anything else that contains a `/` and a `:` (or `@sha256:...`)
-is parsed as an OCI reference.
+A value of the form `<registry>/<repository>:<tag>` (a non-empty part
+before the first `/`, and a non-empty part after the last `:`) is an OCI
+reference; anything else is a filesystem path. A local path therefore
+must not contain a `:` after a `/`.
 
 ## Prerequisite tooling
 
@@ -44,8 +45,9 @@ mise run //plugins:registry-login <username> <ghcr-pat-with-packages-scope>
 mise run //plugins:registry-status         # confirm the docker credential is stored
 ```
 
-`GITHUB_TOKEN` in your shell environment is also honoured by the OCI
-client for anonymous vs authenticated pulls.
+The runtime reads registry credentials from the Docker credential store
+(`~/.docker/config.json` and its credential helpers) and falls back to
+anonymous pulls when none is stored. It does not read `GITHUB_TOKEN`.
 
 ## Publish a plugin
 
@@ -83,8 +85,10 @@ mise run //plugins:pull-plugin uppercase 1.0.0
 mise run //plugins:pull-plugin-auth "$GITHUB_USER" "$GITHUB_TOKEN" uppercase 1.0.0
 ```
 
-The pulled `.wasm` blob is stored in the local cache (see below) and
-verified against its digest.
+These tasks call `wkg oci pull` and write the component to
+`downloads/<name>-<version>.wasm` at the repository root (hyphens in
+`<name>` become underscores). This is separate from the runtime cache
+below.
 
 ## Reference plugins from a pipeline config
 
@@ -100,27 +104,32 @@ plugin = "ghcr.io/pedroklein/wafer-json_parse@sha256:abc123..."
 ```
 
 Local and remote plugins mix freely in the same pipeline — every node
-resolves independently. If the same OCI reference appears more than
-once, the layer is fetched once and cached.
+resolves independently. The runtime pulls the first layer of the
+referenced image and records the SHA-256 of the bytes it loads in
+`metadata.json` (`wafer_plugin_hashes`).
 
 ## Cache management
 
-Downloaded artifacts are cached at `~/.cache/wafer/packages` (or the
-directory set by `[registry].cache_dir` in the pipeline config, or
-the `WAFER_REGISTRY_CACHE_DIR` environment variable). Entries are
-keyed by full OCI digest, so cache hits are content-addressable and
-survive tag re-pushes.
+The runtime caches pulled components under `wafer/plugins` in the user
+cache directory (`~/.cache/wafer/plugins` on Linux), or under
+`[registry].cache_dir` when the pipeline config sets it. Entries are
+stored as `<registry>/<repository>/<tag>.wasm` and are reused for 24
+hours, judged by the file's modification time. They are keyed by the
+reference as written, not by content digest, so a tag re-pushed within
+24 hours keeps serving the cached bytes. The 24-hour lifetime is fixed:
+there is no config key for it.
 
 ```bash
-# Force re-download (bypass cache) for one run
-cargo run -p wafer-runtime -- --config pipeline.toml --no-cache
-
-# Wipe the cache
-rm -rf ~/.cache/wafer/packages
+# Wipe the cache (forces a fresh pull on the next run)
+rm -rf ~/.cache/wafer/plugins
 ```
 
-`mise run run-remote` / `mise run run-remote-nocache` are convenience recipes
-that run `examples/dag-remote.toml` with and without the cache.
+The runtime accepts a `--no-cache` flag, but it currently has no effect:
+the launcher builds the registry settings from `[registry]` alone and
+never passes the flag through. `mise run run-remote-nocache` therefore
+behaves exactly like `mise run run-remote` (both run
+`examples/dag-remote.toml`). To bypass the cache today, delete the cached
+entry or point `[registry].cache_dir` at an empty directory.
 
 ## Registry-command reference
 
@@ -139,15 +148,16 @@ that run `examples/dag-remote.toml` with and without the cache.
 | `mise run //plugins:pull-plugin-auth <user> <token> <name> <version>` | Pull with inline credentials. |
 | `mise run run-local` | Run the sample pipeline with only local plugins. |
 | `mise run run-remote` | Run the sample pipeline with OCI-hosted plugins. |
-| `mise run run-remote-nocache` | Same, bypassing the local cache. |
+| `mise run run-remote-nocache` | Same with `--no-cache`, which has no effect yet (see [Cache management](#cache-management)). |
 
 ## Environment variables
 
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `WAFER_REGISTRY` | Registry namespace used by the `//plugins:publish-*` and `//plugins:pull-*` tasks. | `ghcr.io/pedroklein` |
-| `WAFER_REGISTRY_CACHE_DIR` | Override the local cache directory. | `~/.cache/wafer/packages` |
-| `GITHUB_TOKEN` | Anonymous fallback / CI authentication for `ghcr.io`. | (unset) |
+
+The runtime itself reads no registry environment variable; the cache
+directory comes from `[registry].cache_dir`.
 
 ## Hot-swap to a new plugin version
 
@@ -155,9 +165,8 @@ Hot-swap accepts a local filesystem path today. To swap a running
 Wasm node to a newer OCI-hosted version:
 
 1. Publish the new version to your registry.
-2. `mise run //plugins:pull-plugin uppercase 1.1.0` — populate the local cache and
-   discover the resulting `.wasm` path in
-   `~/.cache/wafer/packages/…/wafer_uppercase.wasm`.
+2. `mise run //plugins:pull-plugin uppercase 1.1.0` — writes
+   `downloads/uppercase-1.1.0.wasm` at the repository root.
 3. `POST /api/v1/nodes/<id>/hot-swap` with
    `{"wasm_path": "<that path>"}` — see
    [`../interfaces/http-api.md`](../interfaces/http-api.md).
@@ -168,18 +177,19 @@ Native Source and Sink nodes are not swappable.
 ## Troubleshooting
 
 - **"Package not found"** — verify authentication (`mise run
-  registry-status`), verify the OCI namespace (`WAFER_REGISTRY`),
+  //plugins:registry-status`), verify the OCI namespace (`WAFER_REGISTRY`),
   and note that hyphens in plugin names become underscores in the
   OCI name.
 - **"Version not found"** — list tags via your registry UI or GitHub
   Packages page; pin to an exact tag or digest.
 - **Stale content served after a re-push to the same tag** — clear
-  the cache (`rm -rf ~/.cache/wafer/packages`) or pin to a digest
-  (`plugin = "…@sha256:…"`).
+  the cache (`rm -rf ~/.cache/wafer/plugins`) or pin to a digest
+  (`plugin = "…@sha256:…"`). Cached entries expire after 24 hours.
 
 ## Supply-chain notes
 
-Signed images (cosign) can be verified before load if `cosign` is on
-`PATH` and the pipeline config sets a `[registry].verify_cosign = true`
-flag. This is planned; see `ROADMAP.md`. Today the runtime verifies
-content-addressable digests but does not enforce signature policy.
+Signature verification (cosign) is not implemented. `[registry]` accepts
+only `cache_dir`, so a `verify_cosign` key is rejected as an unknown key
+when the config loads. Planned work is tracked in `ROADMAP.md`. Today the
+runtime enforces no signature policy; pin plugins by digest and compare
+the hashes recorded in `metadata.json` when provenance matters.

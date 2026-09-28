@@ -4,6 +4,27 @@
 - **Status**: Accepted
 - **SPEC Reference**: Section 12 (Observability), Section 9 (Dynamic Topology)
 
+> **Current amendment.** The workspace-with-crates decision stands, but the
+> shape below is the 2026-02-28 layout. The root `Cargo.toml` now has seven
+> members: `wafer-types`, `wafer-config` (TOML loading, semantic validation,
+> standalone DAG construction), `wafer-core`, `wafer-runtime`, `wafer-plugin`
+> (guest SDK), `wafer-loadgen` (library and binary for evaluation traffic),
+> and `waferctl`. Plugins under `plugins/` are excluded from the workspace.
+> [`docs/learn/workspace-map.md`](../learn/workspace-map.md) is the current
+> map of crate boundaries.
+>
+> The orchestrator design in "Internal Mutability for Arc Sharing" no longer
+> exists: there is no `DagOrchestrator`, `PipelineControl` trait, or
+> `Mutex<Option<RunState>>`. `PipelineOrchestrator`
+> (`crates/wafer-core/src/orchestrator/pipeline.rs`) spawns one task per node
+> into a `JoinSet`, and the API server holds a cloneable `PipelineHandle` that
+> reads per-node state and metrics through atomics and signals hot-swap over
+> per-node watch channels. See [ADR-0003](0003-hot-swap-mechanism.md),
+> [ADR-0012](0012-watch-channel-hot-swap.md), and
+> [RFC-005](../rfcs/RFC-005-orchestrator.md) for that task-per-node model. The
+> commands now run through mise ([ADR-0015](0015-command-runner-mise.md)), not
+> a justfile.
+
 ## Context
 
 The WAFER runtime started as a single crate (`wafer`) containing all functionality. As we implemented the control plane features (HTTP API, CLI management tool, shared types), it became clear that the monolithic structure had limitations:

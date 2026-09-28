@@ -124,7 +124,10 @@ a required check.
   is pinned and hash-checked (see
   [ONNX Runtime](../operations/dependencies.md#onnx-runtime)) and linked
   statically into `wafer`. The cache lives inside the Docker container and
-  does not pollute the host cache.
+  does not pollute the host cache. The download (and the container's
+  `apt-get`) need network access; `mise run cross-build-pi` does not forward
+  `ORT_LIB_LOCATION` into the container, so offline builds use a native
+  aarch64 build with `ORT_LIB_LOCATION` set instead (same section).
 - **First build is slow (~11 minutes).** Subsequent builds reuse
   `target/docker-aarch64-linux/` and complete in under a minute for
   code-only changes.

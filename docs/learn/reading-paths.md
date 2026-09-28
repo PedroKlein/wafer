@@ -12,7 +12,7 @@ Use this route to change or debug the running system.
 
 1. Read the root `Cargo.toml` and `crates/wafer-types/src/config/mod.rs` to identify workspace members and the typed `Config` model.
 2. Read `crates/wafer-config/src/loader.rs::load_config`, then `validation.rs::validate`, then `dag.rs::DagGraph::from_config`. This separates deserialization, semantic validation, and structural graph construction.
-3. Read `crates/wafer-runtime/src/main.rs::main` until `launch_pipeline_timed`. This shows the process boundary that composes configuration and execution.
+3. Read `crates/wafer-runtime/src/main.rs::run` (called from `main`) until `launch_pipeline_timed`. This shows the process boundary that composes configuration and execution.
 4. Read `crates/wafer-core/src/orchestrator/builder.rs::build_pipeline_with_io`, `wire_queues`, and `crates/wafer-core/src/orchestrator/pipeline.rs::spawn_bundles` to see ownership move into tasks.
 5. Read `crates/wafer-core/src/queue/envelope.rs::RuntimeEnvelope` and the source, transform, and sink loops under `crates/wafer-core/src/runner/` to follow one message.
 6. Read [Cross the plugin boundary](plugin-boundary.md) before changing Component Model calls.
@@ -59,6 +59,6 @@ Rust checkpoints: [crate](rust-in-context.md#crate), [Arc](rust-in-context.md#ar
 
 ## Evidence
 
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `async fn main()`, `launch_pipeline_timed`
+- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `fn main() -> ExitCode`, `async fn run`, `launch_pipeline_timed`
 - **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `pub fn build_pipeline_with_io`, `fn wire_queues`
 - **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_spawn_creates_tasks()`, `async fn test_source_sink_real_loops_process_messages()`

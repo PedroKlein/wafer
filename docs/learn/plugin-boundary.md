@@ -10,7 +10,7 @@ Trace one processing plugin from its WIT world through generated guest and host 
 
 ## Prerequisites
 
-Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows source at commit `f173151a8951736b4d82e10ce2b1c4417b02cf99`, which includes the asynchronous P2 host path and bounded outbound HTTP implementation.
+Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows source at commit `6ed111ea10035d60cfdb21a385265acf66348ac3`, which includes the asynchronous P2 host path and bounded outbound HTTP implementation.
 
 ## Flow
 
@@ -48,7 +48,7 @@ The WIT input is `borrow<buffer>`, so the host retains payload ownership while t
 
 The WIT surface contains processing semantics, not transport protocols. Native source and sink traits own external I/O. The current launcher also has native baseline dispatch for Transform and Filter, while Router loading is Wasm-only. That baseline support does not create source-node or sink-node WIT worlds.
 
-The Engine is shared, but each node gets a Store and instance. This keeps mutable guest memory local to one node task. The host awaits one guest call at a time. Capabilities, memory limits, fuel, epoch interruption, resource cleanup, outbound HTTP policy, and guest log forwarding remain host responsibilities.
+The Engine is shared, but each node gets a Store and instance. This keeps mutable guest memory local to one node task. The host awaits one guest call at a time. Capabilities, memory limits, fuel, epoch interruption, resource cleanup, outbound HTTP policy, and guest log forwarding remain host responsibilities. The memory limit covers guest linear memory and tables; host-side WASI resources a guest creates are not bounded by it. Fuel and epochs bound Wasm execution time, not time spent blocked inside a host import.
 
 Do not duplicate signatures here. When the WIT and this walkthrough disagree, the WIT and generated-call sites are authoritative.
 

@@ -44,7 +44,7 @@ The runtime contains a content-addressed compiled-component cache module. A cach
 
 <!-- historical-diagnostic-below -->
 
-Earlier local and Raspberry Pi 4 microbenchmarks exercised versions of the prepare path and reported millisecond-scale compile/instantiate timings. Earlier macOS hot-swap shakedowns also reported sub-100 ms gaps. These measurements were useful for harness development, but they differ in hardware, source revision, cache path, load shape, or sample unit from the final method.
+Earlier local and Raspberry Pi 4 microbenchmarks exercised versions of the prepare path and reported millisecond-scale compile/instantiate timings. Earlier macOS hot-swap shakedowns also reported sub-100 ms gaps. These measurements were useful for harness development, but they differ in hardware, source revision, build profile (the release profile is now pinned to thin LTO and one codegen unit), cache path, load shape, or sample unit from the final method.
 
 In particular, the earlier E-Swap-4 pilot held the source at 2,000 msg/s and executed many swaps in one process. It is not evidence for the final 1,000/2,000/1,000 transient burst and is not pooled with the 30-run result.
 
