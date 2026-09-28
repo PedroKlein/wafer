@@ -197,6 +197,13 @@ def test_measurement_window_with_clamped_latency_is_rejected(tmp_path: Path) -> 
         "measurement-window.json latency_clamps.latency.above_highest is 2, must be zero"
     ]
 
+    window["latency_clamps"]["latency"] = clean
+    window["wall_clock_step_ns"] = -400_000_000
+    path.write_text(json.dumps(window))
+    assert CONTRACT.check_measurement_window(path) == [
+        "measurement-window.json wall clock stepped -400000000 ns during the run"
+    ]
+
 
 def test_invalid_composed_interval_is_rejected(tmp_path: Path) -> None:
     leaf = tmp_path / "e-perf-1/run-01"

@@ -51,6 +51,7 @@ from results_layout import resolve_alias_receipt, validate_alias_mapping
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from containment import assess_containment
 from interval_metrics import validate_interval_metrics
+from latency_evidence import latency_evidence_violations
 
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
@@ -240,12 +241,7 @@ def check_measurement_window(path: Path) -> list[str]:
         violations = []
         if int(window["finished_ns"]) <= int(window["started_ns"]):
             violations.append("canonical measurement window is empty or reversed")
-        violations.extend(
-            f"measurement-window.json latency_clamps.{name}.{kind} is {count}, must be zero"
-            for name, clamps in window.get("latency_clamps", {}).items()
-            for kind, count in clamps.items()
-            if int(count) != 0
-        )
+        violations.extend(latency_evidence_violations(window))
         return violations
     except (AttributeError, KeyError, OSError, TypeError, ValueError):
         return ["canonical measurement window is invalid"]

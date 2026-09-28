@@ -187,6 +187,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit);
     recorder.enable_intervals(measurement_start_unix_epoch_ns, args.measurement_secs)?;
+    recorder.anchor_clock(measurement_start_unix_epoch_ns);
     let mut event_buckets = match &args.publisher_timing_receipt {
         Some(path) => {
             let deadline = tokio::time::Instant::now()
@@ -358,7 +359,7 @@ fn record_message(
     sequence_end_exclusive: Option<u64>,
 ) -> std::io::Result<()> {
     let outcome = recorder.record_json_at(payload, receive_ns, elapsed_ns, sequence_end_exclusive);
-    let RecordOutcome::Recorded { intended_ns, latency_ns, seq } = outcome else { return Ok(()) };
+    let RecordOutcome::Recorded { intended_ns, seq, .. } = outcome else { return Ok(()) };
     if let Some(buckets) = event_buckets
         && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
     {
@@ -366,7 +367,8 @@ fn record_message(
         recorder.mark_partial(format!("throughput-buckets.json: {error}"));
     }
     if let Some(trace) = trace {
-        writeln!(trace, "{seq},{intended_ns},{receive_ns},{latency_ns}")?;
+        let raw_latency_ns = receive_ns.saturating_sub(intended_ns);
+        writeln!(trace, "{seq},{intended_ns},{receive_ns},{raw_latency_ns}")?;
     }
     Ok(())
 }

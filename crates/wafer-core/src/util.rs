@@ -23,14 +23,23 @@ pub fn duration_ns_saturating(d: Duration) -> u64 {
 /// monotonic elapsed time to it, so benchmark timestamps taken in this process
 /// can be subtracted from each other even if the wall clock steps mid-run.
 pub(crate) fn monotonic_unix_ns() -> u64 {
-    static ANCHOR: LazyLock<(Instant, u64)> = LazyLock::new(|| {
-        let unix_ns =
-            SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, duration_ns_saturating);
-        (Instant::now(), unix_ns)
-    });
-    let (origin, origin_unix_ns) = *ANCHOR;
+    let (origin, origin_unix_ns) = *MONOTONIC_ANCHOR;
     origin_unix_ns.saturating_add(duration_ns_saturating(origin.elapsed()))
 }
+
+/// How far the wall clock has stepped away from [`monotonic_unix_ns`] since
+/// its anchor was taken. NTP rate corrections move both clocks together, so
+/// anything beyond a few microseconds is a step.
+pub(crate) fn wall_clock_step_ns() -> i64 {
+    let wall_ns = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, duration_ns_saturating);
+    let step_ns = i128::from(wall_ns).saturating_sub(i128::from(monotonic_unix_ns()));
+    i64::try_from(step_ns).unwrap_or(i64::MAX)
+}
+
+static MONOTONIC_ANCHOR: LazyLock<(Instant, u64)> = LazyLock::new(|| {
+    let unix_ns = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, duration_ns_saturating);
+    (Instant::now(), unix_ns)
+});
 
 /// Convert a [`Duration`] to milliseconds, saturating at `u64::MAX`.
 #[inline]
