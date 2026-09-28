@@ -575,7 +575,11 @@ mod tests {
             Err(crate::runner::HotSwapError::RolledBack { .. })
         ));
         assert_eq!(metrics.rollbacks(), 1, "only the v2 trap rolls back");
-        assert_eq!(metrics.failed(), 2, "v2 trap, then the replayed message trapping on v1");
+        assert_eq!(
+            metrics.attempts_failed(),
+            2,
+            "v2 trap, then the replayed message trapping on v1"
+        );
         assert_eq!(metrics.recovery_count(), 2);
     }
 

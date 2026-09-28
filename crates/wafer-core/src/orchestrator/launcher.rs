@@ -1085,7 +1085,11 @@ to = "sink"
             .expect("no node fails");
 
         let filter = handle.node_metrics("filter").expect("filter metrics");
-        assert_eq!(filter.processed() + filter.failed(), 10_000, "every message reached the guest");
+        assert_eq!(
+            filter.processed() + filter.attempts_failed(),
+            10_000,
+            "every message reached the guest"
+        );
         assert_eq!(filter.recovery_count(), 0);
     }
 
