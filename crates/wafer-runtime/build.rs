@@ -64,13 +64,28 @@ fn main() -> std::io::Result<()> {
 fn capture_git() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
     let dir = Path::new(&manifest_dir);
+    // Cargo reruns the script on every build when a watched path is missing,
+    // so only existing files are watched. Branch refs live in the common dir
+    // (shared by worktrees) and move to `packed-refs` after `git gc`.
     let git_dir = command_output("git", &["rev-parse", "--absolute-git-dir"], Some(dir));
     if git_dir != "unknown" {
-        println!("cargo:rerun-if-changed={git_dir}/HEAD");
-        println!("cargo:rerun-if-changed={git_dir}/index");
+        let common_dir = command_output(
+            "git",
+            &["rev-parse", "--path-format=absolute", "--git-common-dir"],
+            Some(dir),
+        );
+        let common_dir = if common_dir == "unknown" { git_dir.clone() } else { common_dir };
         let head_ref = command_output("git", &["symbolic-ref", "-q", "HEAD"], Some(dir));
+        let mut watched = vec![
+            format!("{git_dir}/HEAD"),
+            format!("{git_dir}/index"),
+            format!("{common_dir}/packed-refs"),
+        ];
         if head_ref != "unknown" {
-            println!("cargo:rerun-if-changed={git_dir}/{head_ref}");
+            watched.push(format!("{common_dir}/{head_ref}"));
+        }
+        for path in watched.iter().filter(|path| Path::new(path).exists()) {
+            println!("cargo:rerun-if-changed={path}");
         }
     }
     let sha = command_output("git", &["rev-parse", "HEAD"], Some(dir));

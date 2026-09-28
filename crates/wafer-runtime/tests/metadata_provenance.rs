@@ -208,23 +208,8 @@ fn swap_run_provenance_records_replacement_hash() {
         eprintln!("skipping — build plugins first with `mise run build-plugins`");
         return;
     }
-    let v1 = std::fs::read(&plugin_path).expect("read pass-through plugin");
-    // Same component with a trailing custom section: identical behaviour,
-    // different bytes, so the recorded hash tells v1 and v2 apart.
-    let mut v2 = v1.clone();
-    let name = b"wafer-provenance-test";
-    let payload = b"v2";
-    v2.push(0);
-    v2.push(u8::try_from(1 + name.len() + payload.len()).unwrap());
-    v2.push(u8::try_from(name.len()).unwrap());
-    v2.extend_from_slice(name);
-    v2.extend_from_slice(payload);
-    let v1_hash = hex::encode(Sha256::digest(&v1));
-    let v2_hash = hex::encode(Sha256::digest(&v2));
-
     let tmp = tempfile::tempdir().unwrap();
-    let v2_path = tmp.path().join("pass-through-v2.wasm");
-    std::fs::write(&v2_path, &v2).unwrap();
+    let (v1_hash, v2_hash, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
     let provenance_path = tmp.path().join("provenance.json");
     let output = std::process::Command::new(env!("CARGO_BIN_EXE_wafer"))
         .arg("--config")
@@ -246,4 +231,120 @@ fn swap_run_provenance_records_replacement_hash() {
     assert_eq!(json["provenance_written_at"], "shutdown");
     assert_ne!(v1_hash, v2_hash);
     assert_eq!(json["wafer_plugin_hashes"]["transform"], v2_hash.as_str());
+}
+
+/// Write a copy of the plugin with a trailing custom section: identical
+/// behaviour, different bytes, so the recorded hash tells v1 and v2 apart.
+/// Returns the v1 hash, the v2 hash and the v2 path.
+fn write_replacement_plugin(
+    plugin_path: &std::path::Path,
+    dir: &std::path::Path,
+) -> (String, String, PathBuf) {
+    let v1 = std::fs::read(plugin_path).expect("read pass-through plugin");
+    let mut v2 = v1.clone();
+    let name = b"wafer-provenance-test";
+    let payload = b"v2";
+    v2.push(0);
+    v2.push(u8::try_from([1, name.len(), payload.len()].iter().sum::<usize>()).unwrap());
+    v2.push(u8::try_from(name.len()).unwrap());
+    v2.extend_from_slice(name);
+    v2.extend_from_slice(payload);
+    let v2_path = dir.join("pass-through-v2.wasm");
+    std::fs::write(&v2_path, &v2).unwrap();
+    (hex::encode(Sha256::digest(&v1)), hex::encode(Sha256::digest(&v2)), v2_path)
+}
+
+/// A run stopped after the swap is adopted but before the replacement
+/// processes a message must still shut down and write provenance. The
+/// runner never reports completion in that case, and the swap payload keeps
+/// the report channel open, so shutdown must not wait on it.
+#[cfg(unix)]
+#[test]
+fn swap_run_shuts_down_when_swap_never_completes() {
+    let plugin_path =
+        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+    if !plugin_path.exists() {
+        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let (v1_hash, _, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
+    // One message every 4 s: the first goes out at launch, the swap is ready
+    // by 1 s and adopted right after the second message, and the third would
+    // only arrive at 8 s. Interrupting at 6 s lands between adoption and the
+    // first message on the replacement.
+    let config_path = tmp.path().join("slow.toml");
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"[pipeline]
+name = "slow-swap"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 0.25
+total_messages = 100
+warmup_messages = 0
+payload_size = 16
+
+[nodes.transform]
+type = "transform"
+plugin = "{}"
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+"#,
+            plugin_path.display()
+        ),
+    )
+    .unwrap();
+    let provenance_path = tmp.path().join("provenance.json");
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_wafer"))
+        .arg("--config")
+        .arg(&config_path)
+        .arg("--no-api")
+        .args(["--swap-after-secs", "1", "--swap-node", "transform", "--swap-plugin"])
+        .arg(&v2_path)
+        .env("WAFER_METADATA_OUTPUT", &provenance_path)
+        .env("WAFER_BENCH_OUTPUT_DIR", tmp.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("run wafer binary");
+    std::thread::sleep(std::time::Duration::from_secs(6));
+    let status = std::process::Command::new("kill")
+        .args(["-INT", &child.id().to_string()])
+        .status()
+        .expect("send SIGINT");
+    assert!(status.success());
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let exit = loop {
+        if let Some(exit) = child.try_wait().expect("poll wafer") {
+            break exit;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill();
+            panic!("runtime did not shut down within 30 s of SIGINT");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+    assert!(exit.success(), "runtime exited with {exit}");
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&provenance_path).expect("read provenance"))
+            .expect("parse provenance JSON");
+    assert_eq!(json["provenance_written_at"], "shutdown");
+    assert_eq!(json["wafer_plugin_hashes"]["transform"], v1_hash.as_str());
 }

@@ -441,6 +441,7 @@ async fn run_with_swap(
     let cancel = orchestrator.cancel_token().clone();
 
     let mut adoption = None;
+    let run_done = tokio_util::sync::CancellationToken::new();
     tokio::select! {
         biased;
         () = cancel.cancelled() => return,
@@ -452,7 +453,12 @@ async fn run_with_swap(
                         info!(node = %node_id, "Hot-swap dispatched");
                         let handle = orchestrator.handle();
                         adoption = Some(tokio::spawn(record_adopted_swap(
-                            handle, node_id, wasm_bytes, completion, provenance,
+                            handle,
+                            node_id,
+                            wasm_bytes,
+                            completion,
+                            provenance,
+                            run_done.clone(),
                         )));
                     }
                     Err(e) => error!(error = %e, "Hot-swap dispatch failed"),
@@ -466,8 +472,11 @@ async fn run_with_swap(
         Err(e) => error!(error = %e, "Pipeline exited with error"),
     }
 
-    // The runner has exited, so the completion sender is gone and this
-    // resolves; awaiting keeps the swap write ahead of the shutdown write.
+    // The runners have exited, so any outcome they will ever report is already
+    // in the channel. The swap payload (and with it the sender) stays alive in
+    // the orchestrator, so tell the task to stop waiting instead of relying on
+    // the channel closing. Awaiting keeps the swap write ahead of shutdown's.
+    run_done.cancel();
     if let Some(task) = adoption
         && let Err(error) = task.await
     {
@@ -481,16 +490,25 @@ async fn record_adopted_swap(
     wasm_bytes: Vec<u8>,
     completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
     provenance: Option<ProvenanceSink>,
+    run_done: tokio_util::sync::CancellationToken,
 ) {
-    match completion.await {
-        Ok(Ok(_report)) => {
+    let mut completion = completion;
+    let outcome = tokio::select! {
+        biased;
+        outcome = &mut completion => outcome.ok(),
+        () = run_done.cancelled() => completion.try_recv().ok(),
+    };
+    match outcome {
+        Some(Ok(_report)) => {
             handle.record_plugin_hash(&node_id, wafer_core::registry::compute_hash(&wasm_bytes));
             if let Some(sink) = &provenance {
                 sink.write(&handle, metadata::WrittenAt::Swap, None);
             }
         }
-        Ok(Err(e)) => warn!(node = %node_id, error = %e, "Hot-swap not adopted; v1 hash kept"),
-        Err(_) => warn!(node = %node_id, "Hot-swap runner exited before reporting adoption"),
+        Some(Err(e)) => warn!(node = %node_id, error = %e, "Hot-swap not adopted; v1 hash kept"),
+        None => {
+            warn!(node = %node_id, "Hot-swap not reported complete before shutdown; v1 hash kept");
+        }
     }
 }
 
