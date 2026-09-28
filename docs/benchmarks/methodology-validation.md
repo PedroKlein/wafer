@@ -38,8 +38,8 @@ into three sources:
    + recv; ~10-50 µs each on macOS.
 3. **BenchSink measurement point.** Latency reference is
    `bench.intended_ns` (source's scheduled publish time). If the source's
-   actual publish lags its intended time (bench-source uses a token-bucket
-   scheduler), that lag rolls into the observed latency.
+   actual publish lags its scheduled time, that lag rolls into the observed
+   latency. The sink records the lag on its own in `source-lag.hdr`.
 
 The 2.2 ms overhead is **stable across runs** (range: 52.10 – 52.26 ms p50,
 0.16 ms wide) — this is the honesty invariant working: whatever the rig

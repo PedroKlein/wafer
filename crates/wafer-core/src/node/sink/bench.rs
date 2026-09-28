@@ -780,14 +780,18 @@ impl BurstObservation {
 
 /// Evaluation-grade measurement sink.
 ///
-/// Records end-to-end latency into HdrHistogram (3 significant digits,
-/// 1µs–10s range). Optionally tracks sequence gaps and hot-swap transitions.
+/// Records end-to-end latency (arrival minus the scheduled send time) into
+/// HdrHistogram (3 significant digits, 1µs–10s range). When the source also
+/// stamps when each message actually left it, the sink splits that latency
+/// into service time (arrival minus emit) and source lag (emit minus
+/// scheduled). Optionally tracks sequence gaps and hot-swap transitions.
 /// Supports periodic throughput sampling (1s buckets) and export to HDR/CSV.
 pub struct BenchSink {
     id: String,
     config: BenchSinkConfig,
-    /// 3 significant digits, range 1_000ns (1µs) to 10_000_000_000ns (10s).
     histogram: Histogram<u64>,
+    service_histogram: Histogram<u64>,
+    source_lag_histogram: Histogram<u64>,
     warmup_until: Option<Instant>,
     sequence_tracker: Option<SequenceTracker>,
     hotswap_recorder: Option<HotSwapRecorder>,
@@ -836,14 +840,16 @@ impl BenchSink {
         let hotswap_recorder =
             if config.track_hotswap { Some(HotSwapRecorder::new()) } else { None };
 
-        // Range: 1µs (1000ns) to 10s (10_000_000_000ns), 3 significant digits
-        let histogram =
-            Histogram::new_with_bounds(1_000, 10_000_000_000, 3).expect("valid histogram bounds");
+        let histogram = || {
+            Histogram::new_with_bounds(1_000, 10_000_000_000, 3).expect("valid histogram bounds")
+        };
 
         Self {
             id: "bench-sink".to_owned(),
             config,
-            histogram,
+            histogram: histogram(),
+            service_histogram: histogram(),
+            source_lag_histogram: histogram(),
             warmup_until: None,
             sequence_tracker,
             hotswap_recorder,
@@ -954,11 +960,19 @@ impl BenchSink {
     /// # Panics
     ///
     /// Panics if in-memory histogram serialization fails (unreachable: buffers are always valid).
+    pub fn to_hdr_log(&self) -> String {
+        self.hdr_log(
+            &self.histogram,
+            "WAFER BenchSink latency histogram (nanoseconds)",
+            "latency_ns",
+        )
+    }
+
     #[expect(
         clippy::expect_used,
         reason = "HdrHistogram writer/serialization operates on in-memory buffers; UTF-8 guaranteed from ASCII content"
     )]
-    pub fn to_hdr_log(&self) -> String {
+    fn hdr_log(&self, histogram: &Histogram<u64>, title: &str, tag: &str) -> String {
         let mut buf = Vec::new();
         let mut serializer = V2Serializer::new();
 
@@ -968,9 +982,9 @@ impl BenchSink {
         writer_builder
             .with_start_time(start_time)
             .with_base_time(start_time)
-            .add_comment("WAFER BenchSink latency histogram (nanoseconds)")
+            .add_comment(title)
             .add_comment(&format!("Total messages: {}", self.message_count))
-            .add_comment(&format!("Recorded values: {}", self.histogram.len()))
+            .add_comment(&format!("Recorded values: {}", histogram.len()))
             .add_comment(&format!("Warmup: {}s", self.config.warmup_secs));
 
         let mut log_writer =
@@ -981,10 +995,10 @@ impl BenchSink {
 
         log_writer
             .write_histogram(
-                &self.histogram,
+                histogram,
                 Duration::ZERO,
                 duration,
-                hdrhistogram::serialization::interval_log::Tag::new("latency_ns"),
+                hdrhistogram::serialization::interval_log::Tag::new(tag),
             )
             .expect("write histogram");
 
@@ -1100,6 +1114,26 @@ impl BenchSink {
             ("swap_timeline.json", self.write_swap_timeline(dir)),
             ("latency.hdr", write_atomic(&dir.join("latency.hdr"), self.to_hdr_log().as_bytes())),
             (
+                "service.hdr",
+                self.write_component_hdr(
+                    dir,
+                    "service.hdr",
+                    &self.service_histogram,
+                    "WAFER BenchSink service time histogram: arrival minus source emit (nanoseconds)",
+                    "service_ns",
+                ),
+            ),
+            (
+                "source-lag.hdr",
+                self.write_component_hdr(
+                    dir,
+                    "source-lag.hdr",
+                    &self.source_lag_histogram,
+                    "WAFER BenchSink source lag histogram: source emit minus scheduled send (nanoseconds)",
+                    "source_lag_ns",
+                ),
+            ),
+            (
                 "throughput.csv",
                 write_atomic(&dir.join("throughput.csv"), self.throughput_csv().as_bytes()),
             ),
@@ -1140,6 +1174,20 @@ impl BenchSink {
             summary.push(format!("export-errors.json: {error}"));
         }
         Err(std::io::Error::other(format!("bench export incomplete: {}", summary.join("; "))))
+    }
+
+    fn write_component_hdr(
+        &self,
+        dir: &Path,
+        name: &str,
+        histogram: &Histogram<u64>,
+        title: &str,
+        tag: &str,
+    ) -> std::io::Result<()> {
+        if histogram.is_empty() {
+            return Ok(());
+        }
+        write_atomic(&dir.join(name), self.hdr_log(histogram, title, tag).as_bytes())
     }
 
     fn write_sequence(&self, dir: &Path) -> std::io::Result<()> {
@@ -1353,10 +1401,6 @@ impl Lifecycle for BenchSink {
     }
 }
 
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling"
-)]
 impl Sink for BenchSink {
     fn collect(
         &mut self,
@@ -1392,12 +1436,8 @@ impl Sink for BenchSink {
             return Box::pin(async { Ok(()) });
         }
 
-        let intended_ns = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.intended_ns")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
+        let intended_ns = metadata_u64(&envelope, "bench.intended_ns");
+        let emit_ns = metadata_u64(&envelope, "bench.emit_ns");
         let source_origin_ns = envelope
             .header
             .metadata
@@ -1431,10 +1471,13 @@ impl Sink for BenchSink {
         self.bucket_bytes = self.bucket_bytes.saturating_add(payload_len);
         self.flush_bucket_if_needed(now);
 
-        let latency_ns =
-            intended_ns.map(|intended| arrival_unix_ns.saturating_sub(intended).max(1_000));
-        if let Some(latency_ns) = latency_ns {
-            let _ = self.histogram.record(latency_ns);
+        let latency_ns = intended_ns
+            .map(|intended| record_elapsed(&mut self.histogram, intended, arrival_unix_ns));
+        if let Some(emit) = emit_ns {
+            record_elapsed(&mut self.service_histogram, emit, arrival_unix_ns);
+            if let Some(intended) = intended_ns {
+                record_elapsed(&mut self.source_lag_histogram, intended, emit);
+            }
         }
         if let (Some(start), Some(intervals)) =
             (self.measurement_start, &mut self.interval_recorder)
@@ -1457,6 +1500,27 @@ impl Sink for BenchSink {
     }
 }
 
+fn metadata_u64(envelope: &RuntimeEnvelope, key: &str) -> Option<u64> {
+    envelope
+        .header
+        .metadata
+        .iter()
+        .find(|(k, _)| k.as_ref() == key)
+        .and_then(|(_, value)| value.parse::<u64>().ok())
+}
+
+/// Records `to - from`, floored at the histogram's 1 µs lower bound, and
+/// returns the recorded value. Values above the upper bound are dropped.
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling"
+)]
+fn record_elapsed(histogram: &mut Histogram<u64>, from: u64, to: u64) -> u64 {
+    let value = to.saturating_sub(from).max(1_000);
+    let _ = histogram.record(value);
+    value
+}
+
 #[cfg(test)]
 #[expect(
     clippy::let_underscore_must_use,
@@ -1473,6 +1537,38 @@ mod tests {
         RuntimeEnvelope::from_string("bench-source", "payload")
             .with_metadata("bench.sequence", seq.to_string())
             .with_metadata("bench.intended_ns", intended_ns.to_string())
+    }
+
+    #[tokio::test]
+    async fn stall_downstream_of_the_source_shows_up_as_latency() {
+        use crate::node::{BenchSource, BenchSourceConfig, Source as _};
+
+        let mut source = BenchSource::new(BenchSourceConfig::new(100.0, 100));
+        let mut sink = BenchSink::new(BenchSinkConfig::for_test());
+        source.init().await.unwrap();
+        while let Some(message) = source.poll().await.unwrap() {
+            if message
+                .header
+                .metadata
+                .iter()
+                .any(|(k, v)| k.as_ref() == "bench.sequence" && v.as_ref() == "50")
+            {
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+            sink.collect(message).await.unwrap();
+        }
+
+        assert!(sink.max_ns() >= 490_000_000, "max latency {} ns hides the stall", sink.max_ns());
+        assert!(sink.p99_ns() >= 400_000_000, "p99 latency {} ns hides the stall", sink.p99_ns());
+        assert!(sink.source_lag_histogram.max() >= 400_000_000);
+        assert!(
+            sink.service_histogram.max() >= 490_000_000,
+            "the stalled message itself waits in service"
+        );
+        assert!(
+            sink.service_histogram.value_at_quantile(0.9) < 50_000_000,
+            "messages released after the stall wait only for their own delivery"
+        );
     }
 
     #[test]

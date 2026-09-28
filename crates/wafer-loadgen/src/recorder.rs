@@ -1,7 +1,7 @@
 //! Measurement recorder: [`HdrHistogram`] + sequence tracker + artifact writer.
 //!
 //! Records end-to-end latency for MQTT messages emitted by `wafer-loadgen publish`
-//! (the JSON payload embeds `ts` = intended-publish-time in nanoseconds, `seq` =
+//! (the JSON payload embeds `ts` = scheduled publish time in nanoseconds, `seq` =
 //! monotonic sequence). The subscriber (`sub.rs`) drives this recorder for every
 //! received message and flushes aggregate artifacts plus an optional bounded interval fragment on graceful exit:
 //!
@@ -15,9 +15,9 @@
 //!
 //! The latency reference is the payload's `ts` field, NOT the subscriber's receive
 //! time. This is deliberate: sampling receive-time-vs-receive-time would erase
-//! coordinated omission (Gil Tene 2012). If the pipeline pauses, the publisher's
-//! `ts` continues to advance at wall-clock rate; the recorded latency reflects
-//! the true queueing delay.
+//! coordinated omission (Gil Tene 2012). If the pipeline or the publisher
+//! pauses, `ts` keeps following the schedule, so the recorded latency includes
+//! the time messages waited to be sent.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4 / D9.
 

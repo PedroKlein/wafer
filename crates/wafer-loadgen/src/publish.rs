@@ -10,7 +10,15 @@
 //!
 //! The scheduling model is open-loop (Tene 2012): message N's target publish
 //! offset is `sum(1/rate(t_k)) for k in 0..N`, independent of whether previous
-//! publishes were on time. If we fall behind, we do not sprint to catch up.
+//! publishes were on time. Each payload's `ts` is that target time, not the
+//! time it was sent, so when the publisher falls behind (a full client queue,
+//! a slow broker) the delay counts as latency and the overdue messages go out
+//! back to back. How late each message actually left is reported separately
+//! as `source_lag_ns` in the publisher summary.
+//!
+//! Target times are paced by a dedicated OS thread: the Tokio timer rounds
+//! every deadline up to the next millisecond, which would add up to 1 ms of
+//! lag to every message and release high rates in per-millisecond bursts.
 //!
 //! # Compat
 //! Publisher CLI flags from the pre-refactor binary are preserved. The
@@ -20,6 +28,8 @@
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use hdrhistogram::Histogram;
 
 use clap::Args;
 use rumqttc::{AsyncClient, MqttOptions, QoS};
@@ -610,6 +620,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             actual_rate: 0.0,
             hotswap_triggered_at_secs: None,
             exit_reason: "dry-run".into(),
+            source_lag_ns: LagSummary::default(),
         });
     }
 
@@ -650,7 +661,6 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     if let Some(path) = &args.timing_receipt {
         write_timing_receipt(path, measurement_started_ns)?;
     }
-    let deadline = start.checked_add(Duration::from_secs(args.duration_secs)).unwrap_or(start);
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. }
             if *swap_at_secs < Duration::from_secs(args.duration_secs).as_secs_f64() =>
@@ -669,7 +679,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     if let Some(trace) = &mut trace {
         writeln!(trace, "seq,ts_ns")?;
     }
-    let mut scheduler = Scheduler::new(shape);
+    let mut due =
+        pace(Scheduler::new(shape), start.into_std(), Duration::from_secs(args.duration_secs))?;
+    let mut source_lag = lag_histogram();
     let mut seq = args.sequence_start;
     let mut offered: u64 = 0;
     let mut errors: u64 = 0;
@@ -677,25 +689,20 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let mut exit_reason = "duration";
 
     loop {
-        // Fetch next publish offset and sleep until then. Open-loop: even if
-        // we're already past this deadline, we just publish immediately and
-        // let the next offset extend from the (now-late) present.
-        let offset = scheduler.next_offset();
-        let target = start.checked_add(offset).unwrap_or(start);
-        if target >= deadline {
-            break;
-        }
-        tokio::select! {
+        let (offset, next_offset) = tokio::select! {
             biased;
             reason = stop_signal.recv() => {
                 info!(signal = reason, "Stop signal received; writing summary");
                 exit_reason = reason;
                 break;
             }
-            () = tokio::time::sleep_until(target) => {}
-        }
+            tick = due.recv() => match tick {
+                Some(tick) => tick,
+                None => break,
+            },
+        };
 
-        let ts = now_ns();
+        let ts = measurement_started_ns.saturating_add(duration_ns(offset));
         let payload_vec: Vec<u8> = payload_template.map_or_else(
             || format!(
                 r#"{{"ts":{ts},"seq":{seq},"device_id":"bench","temperature":72.5,"pad":"{padding}"}}"#
@@ -703,6 +710,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             .into_bytes(),
             |tpl| tpl.render(ts, seq),
         );
+        record_lag(&mut source_lag, duration_ns(start.elapsed().saturating_sub(offset)));
         let enqueued = tokio::select! {
             biased;
             reason = stop_signal.recv() => {
@@ -721,13 +729,14 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             }
             errors = errors.saturating_add(1);
         }
-        if start.elapsed() >= scheduler.peek() {
+        if start.elapsed() >= next_offset {
             deadline_misses = deadline_misses.saturating_add(1);
         }
 
         seq = seq.saturating_add(1);
         offered = offered.saturating_add(1);
     }
+    drop(due);
 
     if let Some(trace) = &mut trace {
         trace.flush()?;
@@ -787,6 +796,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         actual_rate,
         hotswap_triggered_at_secs: hotswap_target.filter(|_| hotswap_failure.is_none()),
         exit_reason: exit_reason.to_owned(),
+        source_lag_ns: LagSummary::from(&source_lag),
     };
     if let Some(path) = args.summary_file {
         write_atomic(&path, format!("{}\n", serde_json::to_string_pretty(&report)?).as_bytes())?;
@@ -815,6 +825,85 @@ pub struct PublisherReport {
     pub hotswap_triggered_at_secs: Option<f64>,
     /// `duration` when the schedule ran to its end, or the signal that stopped it.
     pub exit_reason: String,
+    /// How late each message was handed to the MQTT client relative to its
+    /// scheduled time. Latency is measured from the scheduled time, so a run
+    /// whose lag approaches its latency is limited by the publisher.
+    pub source_lag_ns: LagSummary,
+}
+
+/// Percentiles of a nanosecond histogram. All zero when nothing was recorded.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct LagSummary {
+    pub count: u64,
+    pub p50: u64,
+    pub p99: u64,
+    pub p999: u64,
+    pub max: u64,
+}
+
+impl From<&Histogram<u64>> for LagSummary {
+    fn from(histogram: &Histogram<u64>) -> Self {
+        Self {
+            count: histogram.len(),
+            p50: histogram.value_at_quantile(0.50),
+            p99: histogram.value_at_quantile(0.99),
+            p999: histogram.value_at_quantile(0.999),
+            max: histogram.max(),
+        }
+    }
+}
+
+/// How far the pacer may run ahead of a publisher blocked on the client queue.
+/// Any value works: target times come from the schedule, not from when the
+/// publisher picks the tick up.
+const PACER_AHEAD: usize = 64;
+
+/// Sends `(offset, next_offset)` for every scheduled publish before `duration`,
+/// each at its offset from `origin`, then closes the channel.
+fn pace(
+    mut scheduler: Scheduler,
+    origin: std::time::Instant,
+    duration: Duration,
+) -> std::io::Result<tokio::sync::mpsc::Receiver<(Duration, Duration)>> {
+    let (tx, rx) = tokio::sync::mpsc::channel(PACER_AHEAD);
+    std::thread::Builder::new().name("loadgen-pacer".to_owned()).spawn(move || {
+        loop {
+            let offset = scheduler.next_offset();
+            if offset >= duration {
+                return;
+            }
+            if let Some(wait) = origin
+                .checked_add(offset)
+                .and_then(|due| due.checked_duration_since(std::time::Instant::now()))
+            {
+                std::thread::sleep(wait);
+            }
+            if tx.blocking_send((offset, scheduler.peek())).is_err() {
+                return;
+            }
+        }
+    })?;
+    Ok(rx)
+}
+
+#[expect(
+    clippy::expect_used,
+    reason = "constant bounds (1 ns to 1 h, 3 significant digits) are valid"
+)]
+fn lag_histogram() -> Histogram<u64> {
+    Histogram::new_with_bounds(1, 3_600_000_000_000, 3).expect("valid histogram bounds")
+}
+
+#[expect(
+    clippy::let_underscore_must_use,
+    reason = "a lag above the 1 h upper bound is not a plausible run and is dropped"
+)]
+fn record_lag(histogram: &mut Histogram<u64>, lag_ns: u64) {
+    let _ = histogram.record(lag_ns.max(1));
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 #[cfg(test)]
@@ -823,7 +912,29 @@ mod tests {
 
     use rumqttc::{AsyncClient, MqttOptions};
 
-    use super::{PublishArgs, enqueue_publish};
+    use super::{PublishArgs, enqueue_publish, pace};
+    use crate::profile::{LoadShape, Scheduler};
+
+    #[tokio::test]
+    async fn pacer_keeps_scheduled_offsets_when_the_publisher_falls_behind() {
+        let origin = std::time::Instant::now();
+        let mut due = pace(
+            Scheduler::new(LoadShape::Steady { rate: 100 }),
+            origin,
+            Duration::from_millis(50),
+        )
+        .unwrap();
+
+        let (first, next) = due.recv().await.unwrap();
+        assert_eq!((first, next), (Duration::ZERO, Duration::from_millis(10)));
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let mut late = Vec::new();
+        while let Some((offset, _)) = due.recv().await {
+            late.push(offset);
+        }
+
+        assert_eq!(late, [10, 20, 30, 40].map(Duration::from_millis));
+    }
 
     fn hotswap_args(api_url: String, result_path: std::path::PathBuf) -> PublishArgs {
         PublishArgs {

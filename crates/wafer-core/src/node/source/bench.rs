@@ -1,15 +1,19 @@
 //! Rate-controlled benchmark source for evaluation experiments.
 //!
-//! `BenchSource` emits messages at a constant arrival rate with intended-publish-time
-//! stamps to prevent coordinated omission (Tene 2012). Each message carries a monotonic
-//! sequence number for gap/duplicate detection at the sink.
+//! `BenchSource` emits messages on an open-loop schedule fixed when the first
+//! message is requested. Each message carries its scheduled time
+//! (`bench.intended_ns`) and the time it actually left the source
+//! (`bench.emit_ns`), so a stalled pipeline shows up as latency instead of
+//! silently delaying the schedule (coordinated omission, Tene 2012). Each
+//! message also carries a monotonic sequence number for gap/duplicate
+//! detection at the sink.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3A.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 
@@ -47,6 +51,59 @@ impl BenchBurstSchedule {
 }
 
 impl BenchSourceConfig {
+    fn burst_phase_counts(&self) -> Option<[u64; 3]> {
+        let burst = self.burst?;
+        let before = messages_for(self.rate_per_sec, burst.start_secs)?;
+        let during =
+            messages_for(burst.rate_per_sec, burst.end_secs.saturating_sub(burst.start_secs))?;
+        let measured = self.total_messages.checked_sub(self.warmup_messages)?;
+        let after = measured.checked_sub(before.saturating_add(during))?;
+        Some([before, during, after])
+    }
+
+    fn measurement_offset_ns(&self, sequence: u64) -> Option<u64> {
+        let burst = self.burst?;
+        let measurement_index = sequence.checked_sub(self.warmup_messages)?;
+        let [before, during, _] = self.burst_phase_counts()?;
+        let base_interval = interval_ns(self.rate_per_sec)?;
+        let burst_interval = interval_ns(burst.rate_per_sec)?;
+        if measurement_index < before {
+            Some(measurement_index.saturating_mul(base_interval))
+        } else if measurement_index < before.saturating_add(during) {
+            Some(burst.start_secs.saturating_mul(1_000_000_000).saturating_add(
+                measurement_index.saturating_sub(before).saturating_mul(burst_interval),
+            ))
+        } else {
+            Some(
+                burst.end_secs.saturating_mul(1_000_000_000).saturating_add(
+                    measurement_index
+                        .saturating_sub(before.saturating_add(during))
+                        .saturating_mul(base_interval),
+                ),
+            )
+        }
+    }
+
+    fn schedule_offset_ns(&self, sequence: u64) -> u64 {
+        let base_interval = interval_ns(self.rate_per_sec).unwrap_or(0);
+        self.measurement_offset_ns(sequence).map_or_else(
+            || sequence.saturating_mul(base_interval),
+            |offset| self.warmup_messages.saturating_mul(base_interval).saturating_add(offset),
+        )
+    }
+
+    fn burst_phase(&self, sequence: u64) -> Option<usize> {
+        let measurement_index = sequence.checked_sub(self.warmup_messages)?;
+        let [before, during, _] = self.burst_phase_counts()?;
+        Some(if measurement_index < before {
+            0
+        } else if measurement_index < before.saturating_add(during) {
+            1
+        } else {
+            2
+        })
+    }
+
     /// Create a new config with required parameters.
     #[must_use]
     pub const fn new(rate_per_sec: f64, total_messages: u64) -> Self {
@@ -89,16 +146,19 @@ impl BenchSourceConfig {
 
 /// Rate-controlled source that emits sequenced, timestamped messages.
 ///
-/// Designed for open-loop benchmarking: the intended publish time is computed
-/// from `sequence * interval` rather than actual emission time. This ensures
-/// that if the system falls behind, the measured latency correctly includes
-/// the queuing delay (preventing coordinated omission).
+/// Open-loop: message `n` is due at `origin + offset(n)`, where the origin is
+/// taken once, on the first poll. A message that leaves late still carries its
+/// due time, so time the source spent blocked on a full queue counts as
+/// latency.
+///
+/// Due times are paced by a dedicated OS thread rather than the Tokio timer,
+/// which rounds every deadline up to the next millisecond and would add up to
+/// 1 ms of source-side lag to each message.
 pub struct BenchSource {
     id: String,
     config: BenchSourceConfig,
     sequence: u64,
-    interval: Option<tokio::time::Interval>,
-    measurement_start: Option<tokio::time::Instant>,
+    pacer: Option<Pacer>,
     measurement_start_unix_ns: Option<u64>,
     measurement_completed_offset_ns: Option<u64>,
     payload: Bytes,
@@ -114,8 +174,7 @@ impl BenchSource {
             id: "bench-source".to_owned(),
             config,
             sequence: 0,
-            interval: None,
-            measurement_start: None,
+            pacer: None,
             measurement_start_unix_ns: None,
             measurement_completed_offset_ns: None,
             payload,
@@ -130,80 +189,28 @@ impl BenchSource {
         self
     }
 
-    fn burst_phase_counts(&self) -> Option<[u64; 3]> {
-        let burst = self.config.burst?;
-        let before = messages_for(self.config.rate_per_sec, burst.start_secs)?;
-        let during =
-            messages_for(burst.rate_per_sec, burst.end_secs.saturating_sub(burst.start_secs))?;
-        let measured = self.config.total_messages.checked_sub(self.config.warmup_messages)?;
-        let after = measured.checked_sub(before.saturating_add(during))?;
-        Some([before, during, after])
+    fn start_pacer(&mut self) -> Result<Pacer> {
+        let pacer = Pacer::start(self.config.clone())?;
+        if self.config.burst.is_some() {
+            let measurement_start_unix_ns = pacer
+                .origin_unix_ns
+                .saturating_add(self.config.schedule_offset_ns(self.config.warmup_messages));
+            self.measurement_start_unix_ns = Some(measurement_start_unix_ns);
+            self.write_burst_timing(measurement_start_unix_ns)?;
+        }
+        Ok(pacer)
     }
 
-    fn measurement_offset_ns(&self, sequence: u64) -> Option<u64> {
-        let burst = self.config.burst?;
-        let measurement_index = sequence.checked_sub(self.config.warmup_messages)?;
-        let [before, during, _] = self.burst_phase_counts()?;
-        let base_interval = interval_ns(self.config.rate_per_sec)?;
-        let burst_interval = interval_ns(burst.rate_per_sec)?;
-        if measurement_index < before {
-            Some(measurement_index.saturating_mul(base_interval))
-        } else if measurement_index < before.saturating_add(during) {
-            Some(burst.start_secs.saturating_mul(1_000_000_000).saturating_add(
-                measurement_index.saturating_sub(before).saturating_mul(burst_interval),
-            ))
-        } else {
-            Some(
-                burst.end_secs.saturating_mul(1_000_000_000).saturating_add(
-                    measurement_index
-                        .saturating_sub(before.saturating_add(during))
-                        .saturating_mul(base_interval),
-                ),
-            )
+    async fn next_due(&mut self) -> Result<(u64, u64)> {
+        if self.pacer.is_none() {
+            self.pacer = Some(self.start_pacer()?);
         }
-    }
-
-    fn burst_phase(&self, sequence: u64) -> Option<usize> {
-        let measurement_index = sequence.checked_sub(self.config.warmup_messages)?;
-        let [before, during, _] = self.burst_phase_counts()?;
-        Some(if measurement_index < before {
-            0
-        } else if measurement_index < before.saturating_add(during) {
-            1
-        } else {
-            2
-        })
-    }
-
-    async fn schedule(&mut self, sequence: u64) -> Result<(u64, Option<usize>)> {
-        if self.config.burst.is_some() && sequence >= self.config.warmup_messages {
-            if self.measurement_start.is_none() {
-                let measurement_start = tokio::time::Instant::now();
-                let measurement_start_unix_ns = current_time_ns();
-                self.measurement_start = Some(measurement_start);
-                self.measurement_start_unix_ns = Some(measurement_start_unix_ns);
-                self.write_burst_timing(measurement_start_unix_ns)?;
-            }
-            if let (Some(start), Some(offset), Some(start_unix_ns)) = (
-                self.measurement_start,
-                self.measurement_offset_ns(sequence),
-                self.measurement_start_unix_ns,
-            ) {
-                let deadline = start.checked_add(Duration::from_nanos(offset)).unwrap_or(start);
-                tokio::time::sleep_until(deadline).await;
-                return Ok((start_unix_ns.saturating_add(offset), self.burst_phase(sequence)));
-            }
-        }
-        if self.interval.is_none() {
-            let duration = Duration::from_secs_f64(1.0 / self.config.rate_per_sec);
-            let mut interval = tokio::time::interval(duration);
-            interval.tick().await;
-            self.interval = Some(interval);
-        }
-        if let Some(ref mut interval) = self.interval {
-            interval.tick().await;
-        }
-        Ok((current_time_ns(), None))
+        let stopped = || std::io::Error::other("bench source pacer stopped early");
+        let pacer = self.pacer.as_mut().ok_or_else(stopped)?;
+        let sequence = pacer.due.recv().await.ok_or_else(stopped)?;
+        let intended_ns =
+            pacer.origin_unix_ns.saturating_add(self.config.schedule_offset_ns(sequence));
+        Ok((sequence, intended_ns))
     }
 
     fn write_burst_timing(&self, measurement_start_ns: u64) -> std::io::Result<()> {
@@ -227,7 +234,7 @@ impl BenchSource {
     fn write_burst_summary(&self) -> std::io::Result<()> {
         let Some(dir) = &self.config.evidence_dir else { return Ok(()) };
         let Some(burst) = self.config.burst else { return Ok(()) };
-        let Some(intended) = self.burst_phase_counts() else { return Ok(()) };
+        let Some(intended) = self.config.burst_phase_counts() else { return Ok(()) };
         let measurement_start_ns = self.measurement_start_unix_ns.unwrap_or(0);
         let value = serde_json::json!({
             "schema_version": 1,
@@ -244,6 +251,38 @@ impl BenchSource {
             "total_emitted_messages": self.sequence,
         });
         write_json_atomic(&dir.join("burst-source-summary.json"), &value)
+    }
+}
+
+/// How far the pacer may run ahead of a source that is blocked downstream.
+/// Any value works: due times come from the sequence number, not from when
+/// the source picks the tick up.
+const PACER_AHEAD: usize = 64;
+
+struct Pacer {
+    origin: Instant,
+    origin_unix_ns: u64,
+    due: tokio::sync::mpsc::Receiver<u64>,
+}
+
+impl Pacer {
+    fn start(config: BenchSourceConfig) -> std::io::Result<Self> {
+        let (tx, due) = tokio::sync::mpsc::channel(PACER_AHEAD);
+        let origin = Instant::now();
+        let origin_unix_ns = current_time_ns();
+        std::thread::Builder::new().name("bench-pacer".to_owned()).spawn(move || {
+            for sequence in 0..config.total_messages {
+                let offset = Duration::from_nanos(config.schedule_offset_ns(sequence));
+                let due_at = origin.checked_add(offset).unwrap_or(origin);
+                if let Some(wait) = due_at.checked_duration_since(Instant::now()) {
+                    std::thread::sleep(wait);
+                }
+                if tx.blocking_send(sequence).is_err() {
+                    return;
+                }
+            }
+        })?;
+        Ok(Self { origin, origin_unix_ns, due })
     }
 }
 
@@ -316,7 +355,7 @@ impl Lifecycle for BenchSource {
         if let Some(burst) = self.config.burst
             && (interval_ns(burst.rate_per_sec).is_none()
                 || burst.start_secs >= burst.end_secs
-                || self.burst_phase_counts().is_none())
+                || self.config.burst_phase_counts().is_none())
         {
             return Err(crate::error::ConfigError::Message(
                 "bench source burst schedule is invalid for the configured population".to_owned(),
@@ -346,17 +385,21 @@ impl Source for BenchSource {
             // Check completion
             if self.sequence >= self.config.total_messages {
                 if self.measurement_completed_offset_ns.is_none()
-                    && let Some(start) = self.measurement_start
+                    && self.config.burst.is_some()
+                    && let Some(pacer) = &self.pacer
                 {
-                    self.measurement_completed_offset_ns =
-                        Some(crate::util::duration_ns_saturating(start.elapsed()));
+                    self.measurement_completed_offset_ns = Some(
+                        crate::util::duration_ns_saturating(pacer.origin.elapsed()).saturating_sub(
+                            self.config.schedule_offset_ns(self.config.warmup_messages),
+                        ),
+                    );
                 }
                 return Ok(None);
             }
 
-            let seq = self.sequence;
-            let (intended_ns, burst_phase) = self.schedule(seq).await?;
-            self.sequence = self.sequence.saturating_add(1);
+            let (seq, intended_ns) = self.next_due().await?;
+            let burst_phase = self.config.burst_phase(seq);
+            self.sequence = seq.saturating_add(1);
             if let Some(count) =
                 burst_phase.and_then(|phase| self.emitted_phase_counts.get_mut(phase))
             {
@@ -378,7 +421,7 @@ impl Source for BenchSource {
                     .with_metadata("bench.phase", *name)
                     .with_metadata(
                         "bench.measurement_offset_ns",
-                        self.measurement_offset_ns(seq).unwrap_or(0).to_string(),
+                        self.config.measurement_offset_ns(seq).unwrap_or(0).to_string(),
                     )
                     .with_metadata(
                         "bench.measurement_start_unix_ns",
@@ -386,7 +429,7 @@ impl Source for BenchSource {
                     );
             }
 
-            Ok(Some(envelope))
+            Ok(Some(envelope.with_metadata("bench.emit_ns", current_time_ns().to_string())))
         })
     }
 }
@@ -443,6 +486,7 @@ mod tests {
         let keys: Vec<&str> = msg.header.metadata.iter().map(|(k, _)| k.as_ref()).collect();
         assert!(keys.contains(&"bench.sequence"));
         assert!(keys.contains(&"bench.intended_ns"));
+        assert!(keys.contains(&"bench.emit_ns"));
         assert!(keys.contains(&"bench.warmup"));
         assert!(keys.contains(&"bench.measurement_start_seq"));
     }
@@ -574,6 +618,34 @@ mod tests {
         assert_eq!(config.payload_size, 512);
     }
 
+    fn metadata_u64(message: &RuntimeEnvelope, key: &str) -> u64 {
+        message
+            .header
+            .metadata
+            .iter()
+            .find(|(k, _)| k.as_ref() == key)
+            .and_then(|(_, value)| value.parse().ok())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn late_poll_keeps_the_scheduled_time_and_reports_the_lag() {
+        let mut source = BenchSource::new(BenchSourceConfig::new(10.0, 3));
+        source.init().await.unwrap();
+
+        let first = source.poll().await.unwrap().unwrap();
+        tokio::time::sleep(Duration::from_millis(350)).await;
+        let second = source.poll().await.unwrap().unwrap();
+        let third = source.poll().await.unwrap().unwrap();
+
+        let origin = metadata_u64(&first, "bench.intended_ns");
+        assert_eq!(metadata_u64(&second, "bench.intended_ns"), origin + 100_000_000);
+        assert_eq!(metadata_u64(&third, "bench.intended_ns"), origin + 200_000_000);
+        let lag =
+            metadata_u64(&second, "bench.emit_ns") - metadata_u64(&second, "bench.intended_ns");
+        assert!(lag >= 200_000_000, "second message left {lag} ns after its slot");
+    }
+
     #[test]
     fn burst_schedule_emits_exact_phase_counts_and_offsets() {
         let config = BenchSourceConfig::new(1_000.0, 160_000)
@@ -581,12 +653,12 @@ mod tests {
             .with_burst(BenchBurstSchedule::new(2_000.0, 55, 65));
         let source = BenchSource::new(config);
 
-        assert_eq!(source.burst_phase_counts(), Some([55_000, 20_000, 55_000]));
-        assert_eq!(source.measurement_offset_ns(30_000), Some(0));
-        assert_eq!(source.measurement_offset_ns(84_999), Some(54_999_000_000));
-        assert_eq!(source.measurement_offset_ns(85_000), Some(55_000_000_000));
-        assert_eq!(source.measurement_offset_ns(104_999), Some(64_999_500_000));
-        assert_eq!(source.measurement_offset_ns(105_000), Some(65_000_000_000));
-        assert_eq!(source.measurement_offset_ns(159_999), Some(119_999_000_000));
+        assert_eq!(source.config.burst_phase_counts(), Some([55_000, 20_000, 55_000]));
+        assert_eq!(source.config.measurement_offset_ns(30_000), Some(0));
+        assert_eq!(source.config.measurement_offset_ns(84_999), Some(54_999_000_000));
+        assert_eq!(source.config.measurement_offset_ns(85_000), Some(55_000_000_000));
+        assert_eq!(source.config.measurement_offset_ns(104_999), Some(64_999_500_000));
+        assert_eq!(source.config.measurement_offset_ns(105_000), Some(65_000_000_000));
+        assert_eq!(source.config.measurement_offset_ns(159_999), Some(119_999_000_000));
     }
 }
