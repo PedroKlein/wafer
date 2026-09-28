@@ -207,8 +207,8 @@ def check_publisher_summary(path: Path) -> list[str]:
     if value is None:
         return violations
     required = {
-        "schema_version", "intended", "rejected", "enqueued",
-        "measurement_duration_ns", "deadline_misses",
+        "schema_version", "intended", "rejected", "enqueued", "acked",
+        "unacked_at_exit", "connects", "measurement_duration_ns", "deadline_misses",
     }
     violations.extend(
         f"publisher-summary.json missing field: {field}"
@@ -218,7 +218,10 @@ def check_publisher_summary(path: Path) -> list[str]:
         try:
             counters = [
                 int(value[field])
-                for field in ("intended", "rejected", "enqueued", "deadline_misses")
+                for field in (
+                    "intended", "rejected", "enqueued", "acked", "unacked_at_exit",
+                    "connects", "deadline_misses",
+                )
             ]
             if any(counter < 0 for counter in counters):
                 violations.append("publisher-summary.json counters must be non-negative")
@@ -226,6 +229,16 @@ def check_publisher_summary(path: Path) -> list[str]:
                 violations.append("publisher-summary.json measurement duration must be positive")
             if int(value["intended"]) != int(value["rejected"]) + int(value["enqueued"]):
                 violations.append("publisher-summary.json counters do not reconcile")
+            if int(value["enqueued"]) != int(value["acked"]) + int(value["unacked_at_exit"]):
+                violations.append("publisher-summary.json acknowledged counters do not reconcile")
+            if int(value["connects"]) != 1:
+                violations.append(
+                    f"publisher-summary.json publisher connected {value['connects']} times"
+                )
+            if int(value["unacked_at_exit"]) != 0:
+                violations.append(
+                    f"publisher-summary.json {value['unacked_at_exit']} messages were never acknowledged"
+                )
             if value.get("exit_reason", "duration") != "duration":
                 violations.append(
                     f"publisher-summary.json run stopped early: {value['exit_reason']}"
@@ -325,7 +338,7 @@ def check_capacity_run_result(
     )
     messages = value.get("messages", {})
     message_fields = {
-        "intended", "rejected", "enqueued", "received_events", "received_unique",
+        "intended", "rejected", "enqueued", "acked", "received_events", "received_unique",
         "downstream_lost", "total_undelivered", "duplicates", "unexpected",
     }
     if not isinstance(messages, dict):
@@ -339,8 +352,10 @@ def check_capacity_run_result(
             try:
                 if int(messages["intended"]) != int(messages["rejected"]) + int(messages["enqueued"]):
                     violations.append("capacity-run.json intended counters do not reconcile")
-                if int(messages["enqueued"]) != int(messages["received_unique"]) + int(messages["downstream_lost"]):
-                    violations.append("capacity-run.json enqueued counters do not reconcile")
+                if int(messages["enqueued"]) != int(messages["acked"]):
+                    violations.append("capacity-run.json enqueued and acknowledged counters differ")
+                if int(messages["acked"]) != int(messages["received_unique"]) + int(messages["downstream_lost"]):
+                    violations.append("capacity-run.json acknowledged counters do not reconcile")
                 if int(messages["received_events"]) != int(messages["received_unique"]) + int(messages["duplicates"]):
                     violations.append("capacity-run.json received counters do not reconcile")
                 if int(messages["total_undelivered"]) != int(messages["rejected"]) + int(messages["downstream_lost"]):
@@ -425,6 +440,7 @@ def check_capacity_artifact_reconciliation(leaf: Path) -> list[str]:
         "intended": publisher.get("intended"),
         "rejected": publisher.get("rejected"),
         "enqueued": publisher.get("enqueued"),
+        "acked": publisher.get("acked"),
         "received_events": subscriber.get("total_recorded"),
         "duplicates": subscriber.get("sequence", {}).get("total_duplicates"),
         "unexpected": subscriber.get("unexpected_sequence_count"),
@@ -881,10 +897,11 @@ def check_swap3_reconciliation(leaf: Path, metadata: dict) -> list[str]:
         intended = int(publisher["intended"])
         rejected = int(publisher["rejected"])
         enqueued = int(publisher["enqueued"])
+        acked = int(publisher["acked"])
         received_events = int(subscriber["total_recorded"])
         duplicates = int(subscriber["sequence"]["total_duplicates"])
         received_unique = received_events - duplicates
-        if intended != rejected + enqueued or received_unique > enqueued:
+        if intended != rejected + enqueued or acked > enqueued or received_unique > acked:
             violations.append("E-Swap-3 publisher/subscriber totals do not reconcile")
         if int(subscriber["sequence"]["total_received"]) != received_events:
             violations.append("E-Swap-3 subscriber sequence totals do not reconcile")

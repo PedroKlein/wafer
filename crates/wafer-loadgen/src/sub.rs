@@ -21,7 +21,7 @@ use clap::Args;
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::recorder::{
     ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
@@ -99,6 +99,10 @@ fn parse_broker(s: &str) -> (String, u16) {
     (s.to_owned(), 1883)
 }
 
+/// Well above the largest evaluation payload (100 KiB); rumqttc's 10 KiB
+/// default drops the connection on any larger PUBLISH.
+const MAX_PACKET_BYTES: usize = 1024 * 1024;
+
 const fn qos_from_u8(q: u8) -> QoS {
     match q {
         0 => QoS::AtMostOnce,
@@ -138,6 +142,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     let mut opts = MqttOptions::new(&args.client_id, &host, port);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_session(true);
+    opts.set_max_packet_size(MAX_PACKET_BYTES, MAX_PACKET_BYTES);
     let (client, mut eventloop) = AsyncClient::new(opts, 1024);
 
     // Bounded channel from eventloop task → recording loop. Bounded so an
@@ -178,7 +183,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                 Err(e) => {
                     // rumqttc auto-reconnects on the next poll(); sleep to
                     // avoid tight error loops burning CPU.
-                    debug!("mqtt eventloop error (auto-recovering): {e}");
+                    warn!("mqtt eventloop error (auto-recovering): {e}");
                     tokio::time::sleep(Duration::from_millis(200)).await;
                 }
             }

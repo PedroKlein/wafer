@@ -171,7 +171,10 @@
     "wafer-loadgen publish": {
       "publisher-summary.json": {
         "json_keys": [
+          "acked",
           "actual_rate",
+          "connection_errors",
+          "connects",
           "deadline_misses",
           "elapsed_ms",
           "enqueued",
@@ -183,7 +186,8 @@
           "published",
           "rejected",
           "schema_version",
-          "source_lag_ns"
+          "source_lag_ns",
+          "unacked_at_exit"
         ]
       }
     },
