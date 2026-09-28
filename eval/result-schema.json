@@ -71,7 +71,7 @@
         "csv_header": "elapsed_secs,msg_count,bytes"
       },
       "sequence.csv": {
-        "csv_header": "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count"
+        "csv_header": "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count,out_of_order,out_of_range"
       },
       "measurement-window.json": {
         "json_keys": [
@@ -150,8 +150,7 @@
           "status",
           "topic",
           "total_messages",
-          "total_recorded",
-          "unexpected_sequence_count"
+          "total_recorded"
         ]
       }
     },

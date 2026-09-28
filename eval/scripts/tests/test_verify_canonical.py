@@ -156,7 +156,6 @@ def test_partial_subscriber_run_is_rejected(tmp_path: Path) -> None:
                 "host_tag": "rpi5",
                 "sequence_end_exclusive": None,
                 "ignored_sequence_count": 0,
-                "unexpected_sequence_count": 0,
                 "total_recorded": 3,
                 "total_messages": 3,
                 "parse_errors": 0,
@@ -167,7 +166,7 @@ def test_partial_subscriber_run_is_rejected(tmp_path: Path) -> None:
                 "histogram_lowest_ns": 1_000,
                 "histogram_highest_ns": 3_600_000_000_000,
                 "histogram_sig_digits": 3,
-                "sequence": {"total_received": 3, "total_gaps": 0, "total_duplicates": 0},
+                "sequence": {"total_received": 3, "total_gaps": 0, "total_duplicates": 0, "out_of_range": 0},
             }
         )
     )
@@ -402,14 +401,16 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
                     "total_received": 120_000,
                     "total_gaps": 0,
                     "total_duplicates": 0,
+                    "out_of_range": 0,
                     "gap_ranges": [],
                     "duplicate_seqs": [],
                 },
             }))
         else:
             (result / "sequence.csv").write_text(
-                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
-                "1000,1000,0,0,0\n"
+                "total_expected,total_received,received_unique,gap_ranges,gap_msgs,"
+                "duplicates_count,out_of_order,out_of_range\n"
+                "1000,1000,1000,0,0,0,0,0\n"
             )
     if experiment == "e-perf-10":
         sweep = {
@@ -669,8 +670,9 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
             path = result / filename
             if mutate is None:
                 path.write_text(
-                    "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
-                    "1000,999,1,1,0\n"
+                    "total_expected,total_received,received_unique,gap_ranges,gap_msgs,"
+                    "duplicates_count,out_of_order,out_of_range\n"
+                    "1000,999,999,1,1,0,0,0\n"
                 )
             else:
                 value = json.loads(path.read_text())
@@ -1037,7 +1039,6 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "host_tag": "rpi5",
         "sequence_end_exclusive": 120_000,
         "ignored_sequence_count": 0,
-        "unexpected_sequence_count": 0,
         "total_recorded": 120_000,
         "total_messages": 120_000,
         "parse_errors": 0,
@@ -1052,6 +1053,7 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
             "total_received": 120_000,
             "total_gaps": 0,
             "total_duplicates": 0,
+            "out_of_range": 0,
         },
     }
     (leaf / "sequence.csv").write_text("event_type,seq_start,seq_end,count\n")
@@ -1110,7 +1112,6 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "host_tag": "rpi5",
             "sequence_end_exclusive": 60_000,
             "ignored_sequence_count": 0,
-            "unexpected_sequence_count": 0,
             "total_recorded": 60_000,
             "total_messages": 60_000,
             "parse_errors": 0,
@@ -1121,17 +1122,11 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "histogram_lowest_ns": 1_000,
             "histogram_highest_ns": 3_600_000_000_000,
             "histogram_sig_digits": 3,
-            "sequence": {"total_received": 60_000, "total_gaps": 0, "total_duplicates": 0},
+            "sequence": {"total_received": 60_000, "total_gaps": 0, "total_duplicates": 0, "out_of_range": 0},
         }
         path = Path(tmp) / "subscriber-metadata.json"
         path.write_text(json.dumps(subscriber))
         assert CONTRACT.check_subscriber_metadata(path) == []
-        subscriber["unexpected_sequence_count"] = 1
-        path.write_text(json.dumps(subscriber))
-        assert "unexpected_sequence_count must be zero" in " ".join(
-            CONTRACT.check_subscriber_metadata(path)
-        )
-        subscriber["unexpected_sequence_count"] = 0
         for field in ("above_highest_latency_count", "clock_steps"):
             path.write_text(json.dumps({**subscriber, field: 1}))
             assert f"{field} must be zero" in " ".join(CONTRACT.check_subscriber_metadata(path))
@@ -1158,7 +1153,6 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
                 "downstream_lost": 0,
                 "total_undelivered": 0,
                 "duplicates": 0,
-                "unexpected": 0,
             },
             "rates_msg_s": {"intended": 1000.0, "achieved": 1000.0},
             "loss_percent": 0.0,
@@ -1250,7 +1244,6 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
 
         publisher["rejected"] = 0
         publisher["enqueued"] = 60_000
-        subscriber["unexpected_sequence_count"] = 0
         capacity["messages"]["received_unique"] = 60_000
         capacity["messages"]["ignored_warmup"] = 0
         leaf = Path(tmp)
@@ -2290,8 +2283,30 @@ def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path
     (tmp_path / "swap-actual-t0.json").write_text(json.dumps(receipt))
     assert "swap-actual-t0.json" in " ".join(CONTRACT.check_swap4_reconciliation(tmp_path))
 
+def test_bench_sink_sequence_summary_rejects_out_of_range_messages() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "sequence.csv"
+        header = (
+            "total_expected,total_received,received_unique,gap_ranges,gap_msgs,"
+            "duplicates_count,out_of_order,out_of_range\n"
+        )
+        path.write_text(header + "1000,1000,1000,0,0,0,3,0\n")
+        assert CONTRACT._sequence_violations(path) == []
+        path.write_text(header + "1000,1001,1000,0,0,0,0,1\n")
+        assert CONTRACT._sequence_violations(path) == [
+            "sequence.csv counts messages outside the declared population"
+        ]
+        path.write_text(header + "1000,1000,990,0,0,0,0,0\n")
+        assert CONTRACT._sequence_violations(path) == ["sequence.csv counters do not reconcile"]
+        path.write_text(header + "1000,998,998,1,2,0,0,0\n")
+        assert CONTRACT._sequence_violations(path) == [
+            "sequence.csv is not lossless: expected=1000, received=998, gaps=2, duplicates=0"
+        ]
+
+
 if __name__ == "__main__":
     test_canonical_result_accepts_complete_leaf()
     test_canonical_ekuiper_result_does_not_require_wasmtime_provenance()
     test_canonical_result_rejects_dirty_untagged_and_missing_output()
+    test_bench_sink_sequence_summary_rejects_out_of_range_messages()
     print("canonical result verifier tests: PASS")

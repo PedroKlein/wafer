@@ -185,7 +185,8 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         }
     });
 
-    let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit);
+    let mut recorder = LatencyRecorder::with_sequence_example_limit(args.sequence_example_limit)
+        .with_sequence_end(args.sequence_end_exclusive);
     recorder.enable_intervals(measurement_start_unix_epoch_ns, args.measurement_secs)?;
     recorder.anchor_clock(measurement_start_unix_epoch_ns);
     let mut event_buckets = match &args.publisher_timing_receipt {
@@ -233,7 +234,6 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                             &mut event_buckets,
                             trace.as_mut(),
                             (receive_ns, elapsed_ns, &payload),
-                            args.sequence_end_exclusive,
                         )?;
                         if args.total_messages > 0 && recorder.total_messages() >= args.total_messages {
                             exit_reason = "total-messages";
@@ -263,7 +263,6 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
             &mut event_buckets,
             trace.as_mut(),
             (receive_ns, elapsed_ns, &payload),
-            args.sequence_end_exclusive,
         )?;
     }
     eventloop_task.await?;
@@ -287,7 +286,6 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         host_tag: args.host_tag.clone(),
         sequence_end_exclusive: args.sequence_end_exclusive,
         ignored_sequence_count: 0,
-        unexpected_sequence_count: 0,
         total_recorded: 0,
         total_messages: 0,
         parse_errors: 0,
@@ -304,14 +302,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         histogram_lowest_ns: 0,
         histogram_highest_ns: 0,
         histogram_sig_digits: 0,
-        sequence: SequenceReport {
-            total_received: 0,
-            total_gaps: 0,
-            total_duplicates: 0,
-            gap_ranges: vec![],
-            duplicate_seqs: vec![],
-            examples_truncated: false,
-        },
+        sequence: SequenceReport::default(),
     };
 
     recorder.finalize_intervals(measurement_elapsed_ns);
@@ -331,8 +322,8 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         total_recorded: recorder.total_recorded(),
         parse_errors: recorder.parse_errors(),
         ignored_sequences: recorder.ignored_sequences(),
-        total_gaps: recorder.sequence().total_gaps(),
-        total_duplicates: recorder.sequence().total_duplicates(),
+        total_gaps: recorder.sequence().missing(),
+        total_duplicates: recorder.sequence().duplicates(),
         p50_ns: recorder.p50_ns(),
         p99_ns: recorder.p99_ns(),
         exit_reason: exit_reason.to_owned(),
@@ -356,9 +347,8 @@ fn record_message(
     event_buckets: &mut Option<Box<EventBucketRecorder>>,
     trace: Option<&mut BufWriter<std::fs::File>>,
     (receive_ns, elapsed_ns, payload): (u64, u64, &[u8]),
-    sequence_end_exclusive: Option<u64>,
 ) -> std::io::Result<()> {
-    let outcome = recorder.record_json_at(payload, receive_ns, elapsed_ns, sequence_end_exclusive);
+    let outcome = recorder.record_json_at(payload, receive_ns, elapsed_ns);
     let RecordOutcome::Recorded { intended_ns, seq, .. } = outcome else { return Ok(()) };
     if let Some(buckets) = event_buckets
         && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
