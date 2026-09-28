@@ -108,6 +108,10 @@ run = "mise run //plugins:attack-evidence"
 description = "Check code without building"
 run = "cargo check --locked --workspace"
 
+[tasks.check-docs]
+description = "Check docs/ dependency versions and crates/ paths against the tree"
+run = "scripts/check-docs.sh"
+
 [tasks.clean]
 description = "Clean workspace and plugin build artifacts"
 run = '''
