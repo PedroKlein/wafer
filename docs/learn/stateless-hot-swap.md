@@ -57,7 +57,7 @@ Hot-swap is stateless replacement. Mutable guest state is lost whenever a new St
 
 There are two different failure behaviors. Failed `validate` or `init` restores the still-retained old Store and bindings inside `try_hot_swap`. A later transform `process` trap invokes configured canary recovery by instantiating the prior pre-instance into a fresh Store. Neither path retains mutable state from the discarded guest instance.
 
-The documented node-state tracker has Error, Recovering, and Running transitions during process-time recovery. There is no separate rollback node-state transition. Do not invent one from the `rolled_back` API status or rollback metric. The tracker also does not move a healthy Wasm node from `Starting` to `Running` after startup, so a node that has never recovered reports `Starting`; `Running` after a swap appears only if a recovery or rollback ran.
+The documented node-state tracker has Error, Recovering, and Running transitions during process-time recovery. There is no separate rollback node-state transition. Do not invent one from the `rolled_back` API status or rollback metric.
 
 ## Status boundaries
 

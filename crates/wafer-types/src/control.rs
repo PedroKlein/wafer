@@ -60,8 +60,7 @@ pub struct PipelineStatus {
 ///          ↘ Error → Recovering → Running  (after a trap or unrecoverable error)
 /// ```
 ///
-/// `Draining` and `Retired` belong to an earlier hot-swap design; no runner
-/// enters them.
+/// A node whose init fails or whose task panics stays in `Error`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeState {
@@ -70,10 +69,6 @@ pub enum NodeState {
     /// Node is running normally
     #[default]
     Running,
-    /// Node is draining (finishing in-flight messages before swap)
-    Draining,
-    /// Node has been retired after hot-swap
-    Retired,
     /// Node encountered an error
     Error,
     /// Node is re-instantiating after an unrecoverable error via `InstancePre`.
@@ -88,25 +83,9 @@ impl std::fmt::Display for NodeState {
         match self {
             Self::Starting => write!(f, "starting"),
             Self::Running => write!(f, "running"),
-            Self::Draining => write!(f, "draining"),
-            Self::Retired => write!(f, "retired"),
             Self::Error => write!(f, "error"),
             Self::Recovering => write!(f, "recovering"),
         }
-    }
-}
-
-impl NodeState {
-    /// Returns true if the node is in a state that accepts new messages.
-    #[must_use]
-    pub const fn accepts_messages(&self) -> bool {
-        matches!(self, Self::Running)
-    }
-
-    /// Returns true if the node has finished its lifecycle.
-    #[must_use]
-    pub const fn is_terminal(&self) -> bool {
-        matches!(self, Self::Retired | Self::Error)
     }
 }
 
@@ -415,40 +394,14 @@ mod tests {
 
     #[test]
     fn test_all_node_states_roundtrip() {
-        let states = vec![
-            NodeState::Starting,
-            NodeState::Running,
-            NodeState::Draining,
-            NodeState::Retired,
-            NodeState::Error,
-            NodeState::Recovering,
-        ];
+        let states =
+            vec![NodeState::Starting, NodeState::Running, NodeState::Error, NodeState::Recovering];
 
         for state in states {
             let json = serde_json::to_string(&state).unwrap();
             let parsed: NodeState = serde_json::from_str(&json).unwrap();
             assert_eq!(parsed, state);
         }
-    }
-
-    #[test]
-    fn test_node_state_accepts_messages() {
-        assert!(!NodeState::Starting.accepts_messages());
-        assert!(NodeState::Running.accepts_messages());
-        assert!(!NodeState::Draining.accepts_messages());
-        assert!(!NodeState::Retired.accepts_messages());
-        assert!(!NodeState::Error.accepts_messages());
-        assert!(!NodeState::Recovering.accepts_messages());
-    }
-
-    #[test]
-    fn test_node_state_is_terminal() {
-        assert!(!NodeState::Starting.is_terminal());
-        assert!(!NodeState::Running.is_terminal());
-        assert!(!NodeState::Draining.is_terminal());
-        assert!(NodeState::Retired.is_terminal());
-        assert!(NodeState::Error.is_terminal());
-        assert!(!NodeState::Recovering.is_terminal());
     }
 
     #[test]
