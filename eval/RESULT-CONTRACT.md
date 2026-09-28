@@ -668,8 +668,11 @@ path for five independent host runs with 50 successful rollback events per run
 over a 300-second measurement window. Rollback candidate evidence reconciles
 `swap_requests.json`, `rollback.json`, and `sequence.csv`; it does not require a
 sink-transition timeline because failed swaps produce no successful plugin-version
-transition. Event 0 in each run is labeled
-`first-use-aot`; events 1–49 are labeled `cached`. Event-level rows stay nested
+transition. Each event's label comes from the `compile_cache` value the runtime
+returns in its swap response: `compiled` is labeled `first-use-aot`, and
+`memory_hit` or `disk_hit` is labeled `cached`. Event 0 in each run must be
+`first-use-aot` and events 1–49 must be `cached`; any other outcome fails the
+run. Event-level rows stay nested
 within their run, while comparisons use one per-run aggregate for each event
 class. Sequence evidence must remain lossless, failed attempts remain immutable,
 and neither candidate may reference an E-Swap-1/2/5/6 alias as its measurement
