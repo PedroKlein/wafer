@@ -9,8 +9,6 @@ dependencies = [
     "matplotlib>=3.9",
     "seaborn>=0.13",
     "pandas>=2.2",
-    "hdrhistogram>=0.10",
-    "statsmodels>=0.14",
     "jupyter>=1.0",
     "ipykernel>=6.0",
 ]
