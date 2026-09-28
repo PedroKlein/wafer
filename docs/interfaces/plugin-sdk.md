@@ -54,8 +54,10 @@ Every category has a matching macro; the plugin never writes the
 | `timed_out!()` | `ProcessError::TimedOut` |
 | `unrecoverable!("reason")` | `ProcessError::Unrecoverable(...)` |
 
-`timed_out!` is included for completeness but is normally produced by
-the host (fuel / epoch), not the plugin.
+`timed_out!` is for a plugin that gives up on a deadline of its own. The
+host applies the node's `timed_out` action and keeps the instance. Fuel
+exhaustion and epoch interruption get the same action, but the host also
+replaces the trapped instance.
 
 ## State pattern
 

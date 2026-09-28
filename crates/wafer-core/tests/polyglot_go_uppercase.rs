@@ -139,12 +139,12 @@ async fn go_uppercase_handles_multiple_messages_in_one_store() -> anyhow::Result
 /// incorrectly, one of the following will happen at `process()` time:
 ///
 ///   * Missing drop (shim needed but absent) →
-///     `WasmProcessError::Unrecoverable("...borrow handles still remain...")`
+///     `WasmProcessError::Trapped { message: "...borrow handles still remain...", .. }`
 ///   * Double drop (shim redundant, generator now emits its own release) →
-///     `WasmProcessError::Unrecoverable("...")` from a wasmtime trap on
+///     `WasmProcessError::Trapped { .. }` from a wasmtime trap on
 ///     `ResourceTable::delete` failing because the resource is gone.
 ///
-/// Either way the three preceding tests fail with an `Unrecoverable` variant
+/// Either way the three preceding tests fail with a `Trapped` variant
 /// containing a clear diagnostic string. This test documents that contract:
 /// it constructs the error variant we expect the harness to surface so the
 /// diagnostic doesn't drift silently.
@@ -154,12 +154,13 @@ fn go_uppercase_double_drop_diagnostic_is_recognizable() {
     // Ensures the diagnostic string we surface for the borrow-handle regime
     // is still the variant integration tests match against. If the enum
     // shape changes, this fails to compile.
-    let sentinel = WasmProcessError::Unrecoverable(
-        "borrow handles still remain at the end of the call".to_string(),
-    );
+    let sentinel = WasmProcessError::Trapped {
+        code: None,
+        message: "borrow handles still remain at the end of the call".to_string(),
+    };
     assert!(matches!(
         sentinel,
-        WasmProcessError::Unrecoverable(ref message)
+        WasmProcessError::Trapped { ref message, .. }
             if message.contains("borrow handles") || message.contains("resource")
     ));
 }

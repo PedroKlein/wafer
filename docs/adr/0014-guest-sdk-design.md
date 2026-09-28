@@ -16,7 +16,7 @@ We provide the `wafer-plugin` crate (`crates/wafer-plugin/`) as a pure `macro_ru
 
 2. **Output construction** — `output_from!(&input, payload)` builds an `OutputMessage` preserving the input's `id`, `timestamp`, `source`, `content_type`, and `metadata`. `output_with_type!(&input, payload, content_type)` overrides the content type. Both eliminate envelope-header boilerplate — plugin authors focus on payload transformation.
 
-3. **Error helpers** — Five constructor macros map one-to-one with the host's `ProcessError` variants: `bad_input!(reason)` (DLQ, no retry), `dependency_failed!(reason)` (retry with exponential backoff), `processing_failed!(reason)` (retry N times), `timed_out!()` (host-generated epoch interrupt — rarely called by plugin code), and `unrecoverable!(reason)` (teardown and re-instantiate). Each is a single-line expansion returning the correct enum variant.
+3. **Error helpers** — Five constructor macros map one-to-one with the host's `ProcessError` variants: `bad_input!(reason)` (DLQ, no retry), `dependency_failed!(reason)` (retry with exponential backoff), `processing_failed!(reason)` (retry N times), `timed_out!()` (plugin gave up on its own deadline; epoch and fuel traps get the same policy), and `unrecoverable!(reason)` (teardown and re-instantiate). Each is a single-line expansion returning the correct enum variant.
 
 4. **Config parsing** — `parse_config::<T>(json)` is the one regular function (uses only `&str` and `String`, no WIT types). Gated behind `features = ["serde"]`, it deserialises the JSON config string passed to `init()` and returns `Result<T, String>`. Simple plugins that avoid `serde` parse config manually to stay under 10 KB.
 

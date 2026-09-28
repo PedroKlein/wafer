@@ -76,10 +76,13 @@ interface types {
         // Internal plugin logic failed. Retryable up to configured limit.
         processing-failed(string),
 
-        // Plugin exceeded its epoch/fuel budget. Host skips and logs.
+        // Plugin gave up on a deadline of its own. The host applies its timed-out
+        // action and keeps the instance. Epoch interruption and fuel exhaustion get
+        // the same action, but the host also replaces the trapped instance.
         timed-out,
 
-        // Unrecoverable fault (panic, capability violation). Host tears down node.
+        // Plugin state is beyond repair. The host re-instantiates the node, as it
+        // does after a trap (panic, out-of-bounds access).
         unrecoverable(string),
     }
 

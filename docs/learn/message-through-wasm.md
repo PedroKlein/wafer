@@ -70,7 +70,7 @@ The transform interface returns either an `output-message` or one of five `proce
 
 Input payload access uses `borrow<buffer>`, but Transform output is a WIT `list<u8>` that becomes new host `Bytes`; the whole boundary is not zero-copy. Guest-provided timestamps remain message data and never replace host-owned benchmark clocks.
 
-The borrowed input resource remains host-owned. `process` captures its resource representation before the guest call and calls `delete_buffer` afterward even if Wasmtime returned a trap. Cleanup failure becomes `WasmProcessError::Unrecoverable`.
+The borrowed input resource remains host-owned. `process` captures its resource representation before the guest call and calls `delete_buffer` afterward even if Wasmtime returned a trap. Cleanup failure after a completed call becomes `WasmProcessError::Trapped` without a trap code; after a trap, the trap's own code is kept.
 
 ### 6. Return to bounded queues
 
