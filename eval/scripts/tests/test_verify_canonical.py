@@ -160,12 +160,12 @@ def test_partial_subscriber_run_is_rejected(tmp_path: Path) -> None:
                 "total_recorded": 3,
                 "total_messages": 3,
                 "parse_errors": 0,
-                "negative_latency_count": 0,
+                "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
                 "latency_p50_ns": 1,
                 "latency_p95_ns": 2,
                 "latency_p99_ns": 3,
                 "histogram_lowest_ns": 1_000,
-                "histogram_highest_ns": 10_000_000_000,
+                "histogram_highest_ns": 3_600_000_000_000,
                 "histogram_sig_digits": 3,
                 "sequence": {"total_received": 3, "total_gaps": 0, "total_duplicates": 0},
             }
@@ -177,6 +177,24 @@ def test_partial_subscriber_run_is_rejected(tmp_path: Path) -> None:
     assert violations == [
         "subscriber-metadata.json run is partial: "
         "interval-latency.json: interval row limit exceeded (3)"
+    ]
+
+
+def test_measurement_window_with_clamped_latency_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "measurement-window.json"
+    clean = {"negative": 0, "above_highest": 0}
+    window = {
+        "started_ns": 1,
+        "finished_ns": 2,
+        "latency_clamps": {"latency": clean, "service": clean, "source_lag": clean},
+    }
+    path.write_text(json.dumps(window))
+    assert CONTRACT.check_measurement_window(path) == []
+
+    window["latency_clamps"]["latency"] = {"negative": 0, "above_highest": 2}
+    path.write_text(json.dumps(window))
+    assert CONTRACT.check_measurement_window(path) == [
+        "measurement-window.json latency_clamps.latency.above_highest is 2, must be zero"
     ]
 
 
@@ -1016,12 +1034,12 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "total_recorded": 120_000,
         "total_messages": 120_000,
         "parse_errors": 0,
-        "negative_latency_count": 0,
+        "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
         "latency_p50_ns": 1,
         "latency_p95_ns": 2,
         "latency_p99_ns": 3,
         "histogram_lowest_ns": 1_000,
-        "histogram_highest_ns": 10_000_000_000,
+        "histogram_highest_ns": 3_600_000_000_000,
         "histogram_sig_digits": 3,
         "sequence": {
             "total_received": 120_000,
@@ -1089,12 +1107,12 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             "total_recorded": 60_000,
             "total_messages": 60_000,
             "parse_errors": 0,
-            "negative_latency_count": 0,
+            "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
             "latency_p50_ns": 1,
             "latency_p95_ns": 2,
             "latency_p99_ns": 3,
             "histogram_lowest_ns": 1_000,
-            "histogram_highest_ns": 10_000_000_000,
+            "histogram_highest_ns": 3_600_000_000_000,
             "histogram_sig_digits": 3,
             "sequence": {"total_received": 60_000, "total_gaps": 0, "total_duplicates": 0},
         }
@@ -1104,6 +1122,14 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         subscriber["unexpected_sequence_count"] = 1
         path.write_text(json.dumps(subscriber))
         assert "unexpected_sequence_count must be zero" in " ".join(
+            CONTRACT.check_subscriber_metadata(path)
+        )
+        subscriber["unexpected_sequence_count"] = 0
+        for field in ("above_highest_latency_count", "clock_steps"):
+            path.write_text(json.dumps({**subscriber, field: 1}))
+            assert f"{field} must be zero" in " ".join(CONTRACT.check_subscriber_metadata(path))
+        path.write_text(json.dumps({**subscriber, "histogram_highest_ns": 10_000_000_000}))
+        assert "histogram precision differs" in " ".join(
             CONTRACT.check_subscriber_metadata(path)
         )
 
@@ -1135,7 +1161,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
                 "sha256": "3" * 64,
                 "samples": 60_000,
                 "lowest_ns": 1_000,
-                "highest_ns": 10_000_000_000,
+                "highest_ns": 3_600_000_000_000,
                 "significant_digits": 3,
             },
             "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},

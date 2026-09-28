@@ -13,13 +13,14 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use bytes::Bytes;
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Source};
 use crate::queue::RuntimeEnvelope;
+use crate::util::monotonic_unix_ns;
 
 /// Configuration for a benchmark source node.
 #[derive(Debug, Clone)]
@@ -238,7 +239,7 @@ impl BenchSource {
         let value = serde_json::json!({
             "schema_version": 1,
             "measurement_start_ns": measurement_start_ns,
-            "measurement_end_ns": current_time_ns(),
+            "measurement_end_ns": monotonic_unix_ns(),
             "source_completion_offset_ns": self.measurement_completed_offset_ns.unwrap_or(u64::MAX),
             "rates_msg_s": [self.config.rate_per_sec, burst.rate_per_sec, self.config.rate_per_sec],
             "phase_offsets_ns": [0, burst.start_secs.saturating_mul(1_000_000_000), burst.end_secs.saturating_mul(1_000_000_000), 120_000_000_000_u64],
@@ -269,7 +270,7 @@ impl Pacer {
     fn start(config: BenchSourceConfig) -> std::io::Result<Self> {
         let (tx, due) = tokio::sync::mpsc::channel(PACER_AHEAD);
         let origin = Instant::now();
-        let origin_unix_ns = current_time_ns();
+        let origin_unix_ns = monotonic_unix_ns();
         std::thread::Builder::new().name("bench-pacer".to_owned()).spawn(move || {
             for sequence in 0..config.total_messages {
                 let offset_ns = config.schedule_offset_ns(sequence);
@@ -317,10 +318,6 @@ fn messages_for(rate_per_sec: f64, seconds: u64) -> Option<u64> {
         reason = "validated integral benchmark populations are bounded by configured u64 totals"
     )]
     Some(messages as u64)
-}
-
-fn current_time_ns() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating)
 }
 
 fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
@@ -429,7 +426,7 @@ impl Source for BenchSource {
                     );
             }
 
-            Ok(Some(envelope.with_metadata("bench.emit_ns", current_time_ns().to_string())))
+            Ok(Some(envelope.with_metadata("bench.emit_ns", monotonic_unix_ns().to_string())))
         })
     }
 }

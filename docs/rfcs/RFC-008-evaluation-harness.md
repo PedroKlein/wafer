@@ -224,7 +224,7 @@ Load profiles supported: steady (500/1000/2000 msg/s), burst (2× for 10s every 
 
 ### Decision 4: HdrHistogram Integration — Sink-Side Recording
 
-One HdrHistogram instance per experiment run, recorded at the pipeline's terminal point (`BenchSink`). Per-node timing goes into unconditional AtomicU64 (aggregated post-hoc). Range: 1µs to 10s, 3 significant digits. A `SequenceTracker` detects gaps (lost messages) and duplicates — directly validates E-Swap-2 (zero loss, zero duplication).
+One HdrHistogram instance per experiment run, recorded at the pipeline's terminal point (`BenchSink`). Per-node timing goes into unconditional AtomicU64 (aggregated post-hoc). Range: 1µs to 1h, 3 significant digits; samples outside it are recorded at the bound and counted. A `SequenceTracker` detects gaps (lost messages) and duplicates — directly validates E-Swap-2 (zero loss, zero duplication).
 
 ### Decision 5: Native Rust Baseline — Same Crate, Trait-Based Swap
 

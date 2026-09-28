@@ -291,6 +291,8 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         total_messages: 0,
         parse_errors: 0,
         negative_latency_count: 0,
+        above_highest_latency_count: 0,
+        clock_steps: 0,
         latency_min_ns: 0,
         latency_max_ns: 0,
         latency_mean_ns: 0.0,
@@ -356,7 +358,7 @@ fn record_message(
     sequence_end_exclusive: Option<u64>,
 ) -> std::io::Result<()> {
     let outcome = recorder.record_json_at(payload, receive_ns, elapsed_ns, sequence_end_exclusive);
-    let RecordOutcome::Recorded { latency_ns, seq } = outcome else { return Ok(()) };
+    let RecordOutcome::Recorded { intended_ns, latency_ns, seq } = outcome else { return Ok(()) };
     if let Some(buckets) = event_buckets
         && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
     {
@@ -364,8 +366,7 @@ fn record_message(
         recorder.mark_partial(format!("throughput-buckets.json: {error}"));
     }
     if let Some(trace) = trace {
-        let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
-        writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
+        writeln!(trace, "{seq},{intended_ns},{receive_ns},{latency_ns}")?;
     }
     Ok(())
 }
@@ -413,11 +414,11 @@ pub struct SubscriberReport {
 /// Convert nanoseconds to milliseconds as an `f64`.
 ///
 /// Precision loss above ~2^53 ns (~104 days) is acceptable — the histogram is
-/// bounded to 10 s so this can never approach that range.
+/// bounded to 1 h (3.6 * 10^12 ns) so this can never approach that range.
 #[expect(
     clippy::cast_precision_loss,
     clippy::as_conversions,
-    reason = "latency values are bounded to 10 s = 10^10 ns, well below f64 mantissa capacity"
+    reason = "latency values are bounded to 1 h = 3.6 * 10^12 ns, well below f64 mantissa capacity"
 )]
 fn ms_from_ns(ns: u64) -> f64 {
     ns as f64 / 1_000_000.0

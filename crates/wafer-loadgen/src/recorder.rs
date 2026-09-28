@@ -30,6 +30,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hdrhistogram::Histogram;
 use hdrhistogram::serialization::{Serializer, V2Serializer};
 use serde::{Deserialize, Serialize};
+use wafer_types::latency::{
+    LATENCY_HIGHEST_NS, LATENCY_LOWEST_NS, LATENCY_SIG_DIGITS, LatencyClamps,
+};
 
 pub(crate) const EVENT_BUCKET_WIDTH_NS: u64 = 100_000_000;
 pub(crate) const EVENT_BUCKET_COUNT: usize = 200;
@@ -83,11 +86,8 @@ impl IntervalRecorder {
             .unwrap_or(usize::MAX)
             .checked_add(2)
             .ok_or_else(|| anyhow::anyhow!("interval maximum row count overflow"))?;
-        let histogram = Histogram::new_with_bounds(
-            LatencyRecorder::LOWEST_NS,
-            LatencyRecorder::HIGHEST_NS,
-            LatencyRecorder::SIG_DIGITS,
-        )?;
+        let histogram =
+            Histogram::new_with_bounds(LATENCY_LOWEST_NS, LATENCY_HIGHEST_NS, LATENCY_SIG_DIGITS)?;
         Ok(Self {
             measurement_start_unix_epoch_ns,
             declared_measurement_duration_ns: measurement_secs.saturating_mul(INTERVAL_WIDTH_NS),
@@ -115,8 +115,7 @@ impl IntervalRecorder {
         while self.current_bucket < bucket {
             self.finish_current(INTERVAL_WIDTH_NS)?;
         }
-        let recorded = latency_ns.clamp(LatencyRecorder::LOWEST_NS, LatencyRecorder::HIGHEST_NS);
-        self.current_histogram.record(recorded)?;
+        self.current_histogram.record(latency_ns)?;
         self.current_events = self.current_events.saturating_add(1);
         if duplicate {
             self.current_duplicates = self.current_duplicates.saturating_add(1);
@@ -520,12 +519,11 @@ fn signed_offset(timestamp_ns: u64, reference_ns: u64) -> i64 {
 /// Result of a single `LatencyRecorder::record_json` call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RecordOutcome {
-    /// Message parsed and its latency+sequence were recorded.
-    Recorded { latency_ns: u64, seq: u64 },
+    /// Message parsed and its latency+sequence were recorded. `latency_ns` is
+    /// the value the histogram received, within the shared latency bounds.
+    Recorded { intended_ns: u64, latency_ns: u64, seq: u64 },
     /// Payload could not be parsed as JSON with `ts` and `seq` fields.
     ParseError,
-    /// `ts` is in the future (clock skew or non-monotonic publisher). Not recorded.
-    NegativeLatency,
     /// Message belongs to an excluded sequence range, such as warmup traffic.
     IgnoredSequence { seq: u64 },
 }
@@ -689,7 +687,14 @@ pub struct SubscriberMetadata {
     pub total_recorded: u64,
     pub total_messages: u64,
     pub parse_errors: u64,
+    /// Latencies below zero, recorded at the lower histogram bound.
     pub negative_latency_count: u64,
+    /// Latencies above the upper histogram bound, recorded at that bound.
+    #[serde(default)]
+    pub above_highest_latency_count: u64,
+    /// Wall-clock steps seen while receiving (see [`ClockSteps`]).
+    #[serde(default)]
+    pub clock_steps: u64,
     pub latency_min_ns: u64,
     pub latency_max_ns: u64,
     pub latency_mean_ns: f64,
@@ -711,8 +716,8 @@ fn complete_status() -> String {
 
 /// End-to-end latency recorder for the `wafer-loadgen subscribe` command.
 ///
-/// Bounded `1_000` ns (1 µs) → `10_000_000_000` ns (10 s) at 3 significant digits.
-/// This is the same envelope as `BenchSink` for cross-experiment comparability.
+/// Uses the shared latency bounds (1 µs to 1 h, 3 significant digits), the
+/// same as `BenchSink`, and counts every sample it has to clamp.
 pub struct LatencyRecorder {
     histogram: Histogram<u64>,
     intervals: Option<IntervalRecorder>,
@@ -720,18 +725,14 @@ pub struct LatencyRecorder {
     sequence: SequenceTracker,
     total_messages: u64,
     parse_errors: u64,
-    negative_latency: u64,
+    clamps: LatencyClamps,
+    clock_steps: ClockSteps,
     ignored_sequences: u64,
     last_record_duplicate: bool,
     partial_reasons: Vec<String>,
 }
 
 impl LatencyRecorder {
-    /// Range: 1 µs to 10 s, 3 significant digits.
-    pub const LOWEST_NS: u64 = 1_000;
-    pub const HIGHEST_NS: u64 = 10_000_000_000;
-    pub const SIG_DIGITS: u8 = 3;
-
     #[must_use]
     pub fn new() -> Self {
         Self::with_sequence_example_limit(None)
@@ -745,9 +746,12 @@ impl LatencyRecorder {
         reason = "HdrHistogram bounds are compile-time constants proven valid by unit tests"
     )]
     pub(crate) fn with_sequence_example_limit(max_examples: Option<usize>) -> Self {
-        let histogram =
-            Histogram::<u64>::new_with_bounds(Self::LOWEST_NS, Self::HIGHEST_NS, Self::SIG_DIGITS)
-                .expect("HdrHistogram bounds are compile-time constants and known valid");
+        let histogram = Histogram::<u64>::new_with_bounds(
+            LATENCY_LOWEST_NS,
+            LATENCY_HIGHEST_NS,
+            LATENCY_SIG_DIGITS,
+        )
+        .expect("HdrHistogram bounds are compile-time constants and known valid");
         Self {
             histogram,
             intervals: None,
@@ -756,7 +760,8 @@ impl LatencyRecorder {
                 .map_or_else(SequenceTracker::new, SequenceTracker::with_max_examples),
             total_messages: 0,
             parse_errors: 0,
-            negative_latency: 0,
+            clamps: LatencyClamps::default(),
+            clock_steps: ClockSteps::default(),
             ignored_sequences: 0,
             last_record_duplicate: false,
             partial_reasons: Vec::new(),
@@ -789,6 +794,7 @@ impl LatencyRecorder {
         elapsed_ns: u64,
         sequence_end_exclusive: Option<u64>,
     ) -> RecordOutcome {
+        self.clock_steps.observe(receive_ns, elapsed_ns);
         let outcome =
             self.record_json_with_sequence_end(payload, receive_ns, sequence_end_exclusive);
         if let RecordOutcome::Recorded { latency_ns, .. } = outcome
@@ -856,25 +862,10 @@ impl LatencyRecorder {
     /// Record directly from timestamps. Public so tests can inject deterministic
     /// latencies without JSON round-tripping.
     pub fn record(&mut self, intended_publish_ns: u64, receive_ns: u64, seq: u64) -> RecordOutcome {
-        if receive_ns < intended_publish_ns {
-            self.negative_latency = self.negative_latency.saturating_add(1);
-            return RecordOutcome::NegativeLatency;
-        }
-        // receive_ns >= intended_publish_ns checked above
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "subtraction safe: receive_ns >= intended_publish_ns guarded by the if-check above"
-        )]
-        let latency_ns = receive_ns - intended_publish_ns;
-        // Clamp below-histogram-floor values to the floor rather than dropping.
-        // Sub-microsecond latencies are physically impossible over MQTT, but a
-        // clock-skew payload could show one. Clamping preserves the count.
-        let recorded = latency_ns.clamp(Self::LOWEST_NS, Self::HIGHEST_NS);
-        // hdrhistogram returns Err only if the value is above the ceiling; we
-        // already clamped so this can only fail on internal invariants.
-        let _r = self.histogram.record(recorded);
+        let latency_ns = self.clamps.bound(intended_publish_ns, receive_ns);
+        self.histogram.saturating_record(latency_ns);
         self.last_record_duplicate = self.sequence.record(seq);
-        RecordOutcome::Recorded { latency_ns, seq }
+        RecordOutcome::Recorded { intended_ns: intended_publish_ns, latency_ns, seq }
     }
 
     #[must_use]
@@ -902,8 +893,13 @@ impl LatencyRecorder {
     }
 
     #[must_use]
-    pub const fn negative_latency(&self) -> u64 {
-        self.negative_latency
+    pub const fn clamps(&self) -> LatencyClamps {
+        self.clamps
+    }
+
+    #[must_use]
+    pub const fn clock_steps(&self) -> u64 {
+        self.clock_steps.steps
     }
 
     #[must_use]
@@ -1041,7 +1037,9 @@ impl LatencyRecorder {
         metadata.total_recorded = self.total_recorded();
         metadata.total_messages = self.total_messages;
         metadata.parse_errors = self.parse_errors;
-        metadata.negative_latency_count = self.negative_latency;
+        metadata.negative_latency_count = self.clamps.negative;
+        metadata.above_highest_latency_count = self.clamps.above_highest;
+        metadata.clock_steps = self.clock_steps.steps;
         metadata.ignored_sequence_count = self.ignored_sequences;
         metadata.latency_min_ns = self.min_ns();
         metadata.latency_max_ns = self.max_ns();
@@ -1050,9 +1048,9 @@ impl LatencyRecorder {
         metadata.latency_p95_ns = self.p95_ns();
         metadata.latency_p99_ns = self.p99_ns();
         metadata.latency_p999_ns = self.p999_ns();
-        metadata.histogram_lowest_ns = Self::LOWEST_NS;
-        metadata.histogram_highest_ns = Self::HIGHEST_NS;
-        metadata.histogram_sig_digits = Self::SIG_DIGITS;
+        metadata.histogram_lowest_ns = LATENCY_LOWEST_NS;
+        metadata.histogram_highest_ns = LATENCY_HIGHEST_NS;
+        metadata.histogram_sig_digits = LATENCY_SIG_DIGITS;
         metadata.sequence = SequenceReport::from(&self.sequence);
         metadata.partial_reasons.clone_from(&self.partial_reasons);
         let status = if self.partial_reasons.is_empty() { "complete" } else { "partial" };
@@ -1083,6 +1081,31 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         drop(fs::remove_file(&temporary));
     }
     result
+}
+
+/// Counts steps of the wall clock between received messages.
+///
+/// Latency subtracts the publisher's wall-clock schedule from this process's
+/// wall-clock receive time, so a clock step during the run shifts every later
+/// sample by the size of the step. NTP rate corrections move the wall and
+/// monotonic clocks together; only a step changes the gap between them.
+#[derive(Debug, Default)]
+struct ClockSteps {
+    wall_minus_monotonic_ns: Option<i128>,
+    steps: u64,
+}
+
+impl ClockSteps {
+    const TOLERANCE_NS: u128 = 1_000_000;
+
+    fn observe(&mut self, wall_ns: u64, monotonic_elapsed_ns: u64) {
+        let gap = i128::from(wall_ns).saturating_sub(i128::from(monotonic_elapsed_ns));
+        if let Some(previous) = self.wall_minus_monotonic_ns.replace(gap)
+            && gap.abs_diff(previous) > Self::TOLERANCE_NS
+        {
+            self.steps = self.steps.saturating_add(1);
+        }
+    }
 }
 
 impl Default for LatencyRecorder {
@@ -1140,7 +1163,10 @@ mod tests {
         );
         let mut rec = LatencyRecorder::new();
         let outcome = rec.record_json(payload.as_bytes(), receive);
-        assert_eq!(outcome, RecordOutcome::Recorded { latency_ns: 250_000, seq: 7 });
+        assert_eq!(
+            outcome,
+            RecordOutcome::Recorded { intended_ns: intended, latency_ns: 250_000, seq: 7 }
+        );
         assert_eq!(rec.total_recorded(), 1);
         assert_eq!(rec.parse_errors(), 0);
     }
@@ -1159,7 +1185,7 @@ mod tests {
         );
         assert_eq!(
             rec.record_json_before(measured.as_bytes(), receive, 60_000),
-            RecordOutcome::Recorded { latency_ns: 250_000, seq: 0 }
+            RecordOutcome::Recorded { intended_ns: intended, latency_ns: 250_000, seq: 0 }
         );
         assert_eq!(rec.ignored_sequences(), 1);
         assert_eq!(rec.total_messages(), 1);
@@ -1178,23 +1204,62 @@ mod tests {
     }
 
     #[test]
-    fn record_negative_latency_is_flagged_not_recorded() {
+    fn out_of_range_latencies_are_recorded_at_a_bound_and_counted() {
+        let dir = tempfile::tempdir().unwrap();
         let mut rec = LatencyRecorder::new();
-        let outcome = rec.record(2_000, 1_000, 0);
-        assert_eq!(outcome, RecordOutcome::NegativeLatency);
-        assert_eq!(rec.total_recorded(), 0);
-        assert_eq!(rec.negative_latency(), 1);
+        rec.enable_intervals(0, 4).unwrap();
+        let receive_origin = 2 * LATENCY_HIGHEST_NS;
+        // (scheduled time relative to receive, value the histograms must get)
+        let cases = [
+            (1_000_i128, LATENCY_LOWEST_NS),
+            (-500, LATENCY_LOWEST_NS),
+            (-20_000_000_000, 20_000_000_000),
+            (-i128::from(LATENCY_HIGHEST_NS) - 1, LATENCY_HIGHEST_NS),
+        ];
+        for (seq, (ts_offset, expected)) in (0_u64..).zip(cases) {
+            let elapsed = seq * 1_000_000_000;
+            let receive = receive_origin + elapsed;
+            let ts = u64::try_from(i128::from(receive) + ts_offset).unwrap();
+            let payload = format!(r#"{{"ts":{ts},"seq":{seq}}}"#);
+            let outcome = rec.record_json_at(payload.as_bytes(), receive, elapsed, None);
+            assert_eq!(
+                outcome,
+                RecordOutcome::Recorded { intended_ns: ts, latency_ns: expected, seq }
+            );
+        }
+        rec.finalize_intervals(4_000_000_000);
+        rec.write_measurements(dir.path()).unwrap();
+
+        assert_eq!(rec.total_recorded(), 4);
+        assert_eq!(rec.histogram.count_at(LATENCY_LOWEST_NS), 2);
+        assert_eq!(rec.histogram.count_at(20_000_000_000), 1);
+        assert_eq!(rec.histogram.count_at(LATENCY_HIGHEST_NS), 1);
+        assert_eq!(rec.clamps(), LatencyClamps { negative: 1, above_highest: 1 });
+        assert_eq!(rec.clock_steps(), 0);
+        let intervals: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("interval-latency.json")).unwrap())
+                .unwrap();
+        for (row, (_, expected)) in intervals["rows"].as_array().unwrap().iter().zip(cases) {
+            assert_eq!(row["latency_count"], 1);
+            let interval_value = row["latency_p50_ns"].as_u64().unwrap();
+            assert!(
+                rec.histogram.equivalent(interval_value, expected),
+                "interval recorded {interval_value}, aggregate {expected}"
+            );
+        }
     }
 
     #[test]
-    fn record_clamps_sub_microsecond_to_floor() {
+    fn a_wall_clock_step_between_messages_is_counted() {
         let mut rec = LatencyRecorder::new();
-        let outcome = rec.record(1_000_000_000, 1_000_000_500, 0); // 500 ns
-        // Outcome reports the RAW latency (500 ns) — clamping is a storage
-        // detail. Both facts matter: caller sees truth, histogram stays bounded.
-        assert!(matches!(outcome, RecordOutcome::Recorded { latency_ns: 500, .. }));
-        assert_eq!(rec.total_recorded(), 1, "sub-microsecond values must not be dropped");
-        assert_eq!(rec.negative_latency(), 0);
+        let payload = |seq: u64| format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
+
+        rec.record_json_at(payload(0).as_bytes(), 2_000_000_000, 0, None);
+        rec.record_json_at(payload(1).as_bytes(), 2_100_000_000, 100_000_000, None);
+        assert_eq!(rec.clock_steps(), 0);
+
+        rec.record_json_at(payload(2).as_bytes(), 1_900_000_000, 200_000_000, None);
+        assert_eq!(rec.clock_steps(), 1);
     }
 
     #[test]
@@ -1566,6 +1631,8 @@ mod tests {
             total_messages: 0,
             parse_errors: 0,
             negative_latency_count: 0,
+            above_highest_latency_count: 0,
+            clock_steps: 0,
             latency_min_ns: 0,
             latency_max_ns: 0,
             latency_mean_ns: 0.0,
@@ -1687,8 +1754,9 @@ mod tests {
         interval.enable_intervals(1_000_000_000, 1).unwrap();
         for seq in 0..3 {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
-            baseline.record_json(payload.as_bytes(), 1_000_010_000);
-            interval.record_json_at(payload.as_bytes(), 1_000_010_000, seq * 100_000_000, None);
+            let elapsed = seq * 100_000_000;
+            baseline.record_json(payload.as_bytes(), 1_000_010_000 + elapsed);
+            interval.record_json_at(payload.as_bytes(), 1_000_010_000 + elapsed, elapsed, None);
         }
         let metadata = SubscriberMetadata {
             broker: "localhost:1883".into(),
@@ -1707,6 +1775,8 @@ mod tests {
             total_messages: 0,
             parse_errors: 0,
             negative_latency_count: 0,
+            above_highest_latency_count: 0,
+            clock_steps: 0,
             latency_min_ns: 0,
             latency_max_ns: 0,
             latency_mean_ns: 0.0,
@@ -1763,6 +1833,8 @@ mod tests {
             total_messages: 0,
             parse_errors: 0,
             negative_latency_count: 0,
+            above_highest_latency_count: 0,
+            clock_steps: 0,
             latency_min_ns: 0,
             latency_max_ns: 0,
             latency_mean_ns: 0.0,

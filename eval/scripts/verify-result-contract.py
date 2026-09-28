@@ -61,6 +61,7 @@ CANONICAL_PI_FILES = {
     "power-boundary.json",
 }
 CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
+LATENCY_HIGHEST_NS = 3_600_000_000_000
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
 CANDIDATE_SCALING_EXPERIMENTS = {
@@ -233,6 +234,23 @@ def check_publisher_summary(path: Path) -> list[str]:
     return violations
 
 
+def check_measurement_window(path: Path) -> list[str]:
+    try:
+        window = json.loads(path.read_text())
+        violations = []
+        if int(window["finished_ns"]) <= int(window["started_ns"]):
+            violations.append("canonical measurement window is empty or reversed")
+        violations.extend(
+            f"measurement-window.json latency_clamps.{name}.{kind} is {count}, must be zero"
+            for name, clamps in window.get("latency_clamps", {}).items()
+            for kind, count in clamps.items()
+            if int(count) != 0
+        )
+        return violations
+    except (AttributeError, KeyError, OSError, TypeError, ValueError):
+        return ["canonical measurement window is invalid"]
+
+
 def check_subscriber_metadata(path: Path) -> list[str]:
     violations: list[str] = []
     value = _load_json(path, "subscriber-metadata.json", violations)
@@ -242,7 +260,7 @@ def check_subscriber_metadata(path: Path) -> list[str]:
         "started_at_ns", "ended_at_ns", "exit_reason", "git_sha", "host_tag",
         "sequence_end_exclusive", "ignored_sequence_count", "unexpected_sequence_count",
         "total_recorded", "total_messages", "parse_errors", "negative_latency_count",
-        "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
+        "above_highest_latency_count", "clock_steps", "latency_p50_ns", "latency_p95_ns", "latency_p99_ns",
         "histogram_lowest_ns", "histogram_highest_ns", "histogram_sig_digits", "sequence",
     }
     violations.extend(
@@ -267,11 +285,14 @@ def check_subscriber_metadata(path: Path) -> list[str]:
             violations.append("subscriber-metadata.json message and HDR populations differ")
         if (
             int(value["histogram_lowest_ns"]) != 1_000
-            or int(value["histogram_highest_ns"]) != 10_000_000_000
+            or int(value["histogram_highest_ns"]) != LATENCY_HIGHEST_NS
             or int(value["histogram_sig_digits"]) != 3
         ):
             violations.append("subscriber-metadata.json histogram precision differs from the frozen recorder")
-        for field in ("unexpected_sequence_count", "parse_errors", "negative_latency_count"):
+        for field in (
+            "unexpected_sequence_count", "parse_errors", "negative_latency_count",
+            "above_highest_latency_count", "clock_steps",
+        ):
             if int(value[field]) != 0:
                 violations.append(f"subscriber-metadata.json {field} must be zero")
     except (TypeError, ValueError):
@@ -390,7 +411,7 @@ def check_capacity_run_result(
     elif (
         histogram["samples"] != messages.get("received_events")
         or histogram["lowest_ns"] != 1_000
-        or histogram["highest_ns"] != 10_000_000_000
+        or histogram["highest_ns"] != LATENCY_HIGHEST_NS
         or histogram["significant_digits"] != 3
     ):
         violations.append("capacity-run.json latency_hdr does not match received events or precision")
@@ -2074,12 +2095,7 @@ def check_leaf(
                 violations.append(f"missing canonical Pi telemetry artefact: {required}")
         window_path = leaf / "measurement-window.json"
         if window_path.is_file():
-            try:
-                window = json.loads(window_path.read_text())
-                if int(window["finished_ns"]) <= int(window["started_ns"]):
-                    violations.append("canonical measurement window is empty or reversed")
-            except (KeyError, OSError, TypeError, ValueError):
-                violations.append("canonical measurement window is invalid")
+            violations.extend(check_measurement_window(window_path))
 
     if canonical and canonical_matrix is not None:
         experiment_contract = (

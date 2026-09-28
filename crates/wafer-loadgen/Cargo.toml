@@ -30,6 +30,7 @@ tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 base64 = "0.22.1"
 hdrhistogram = "7"
+wafer-types = { workspace = true }
 blake3 = { workspace = true }
 hex = { workspace = true }
 
