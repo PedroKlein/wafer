@@ -360,6 +360,20 @@ impl PublishArgs {
                 let wasm_path = self.hotswap_wasm_path.clone().ok_or_else(|| {
                     anyhow::anyhow!("--hotswap-wasm-path required for hotswap-trigger profile")
                 })?;
+                if !(self.hotswap_swap_at_secs.is_finite() && self.hotswap_swap_at_secs >= 0.0) {
+                    anyhow::bail!(
+                        "--hotswap-swap-at-secs must be a finite, non-negative number of seconds"
+                    );
+                }
+                // A swap scheduled at or after the end of the run never fires.
+                let duration = Duration::from_secs(self.duration_secs).as_secs_f64();
+                if self.hotswap_swap_at_secs >= duration {
+                    anyhow::bail!(
+                        "--hotswap-swap-at-secs ({}) must be less than --duration-secs ({})",
+                        self.hotswap_swap_at_secs,
+                        self.duration_secs
+                    );
+                }
                 Ok(LoadShape::HotswapTrigger {
                     base_rate: self.rate.max(1),
                     swap_at_secs: self.hotswap_swap_at_secs,
@@ -463,8 +477,14 @@ fn write_timing_receipt(path: &std::path::Path, measurement_started_ns: u64) -> 
 /// Spawn the hot-swap trigger task if the shape asks for it.
 ///
 /// Returns the [`JoinHandle`] so the caller can `.abort()` on shutdown. The task
-/// sleeps `swap_at_secs` from `start`, then POSTs the wasm path to
-/// `{api_url}/api/v1/nodes/{target_node}/hot-swap`.
+/// builds its HTTP client, sleeps `swap_at_secs` from `start`, then POSTs the
+/// wasm path to `{api_url}/api/v1/nodes/{target_node}/hot-swap`.
+///
+/// When `result_path` is set the artifact is written whether the request
+/// succeeded or not (a failed request records `error` and, if a response
+/// arrived, its `http_status`). The task returns `Err` on a transport error
+/// or a non-2xx response so the publisher exits non-zero: an E-Swap run in
+/// which no swap happened must not look like a valid run.
 ///
 /// [`JoinHandle`]: tokio::task::JoinHandle
 fn spawn_hotswap_trigger(
@@ -481,7 +501,12 @@ fn spawn_hotswap_trigger(
     let wasm_path = wasm_path.clone();
     let api_url = api_url.clone();
     Some(tokio::spawn(async move {
-        let target = start.checked_add(Duration::from_secs_f64(swap_at)).unwrap_or(start);
+        // Built before the wait so its construction cost does not delay the POST.
+        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
+        let target = Duration::try_from_secs_f64(swap_at)
+            .ok()
+            .and_then(|offset| start.checked_add(offset))
+            .unwrap_or(start);
         tokio::time::sleep_until(target).await;
         let url = format!("{api_url}/api/v1/nodes/{target_node}/hot-swap");
         let body = serde_json::json!({ "wasm_path": wasm_path });
@@ -489,22 +514,26 @@ fn spawn_hotswap_trigger(
             "Firing hot-swap POST to {url} (target elapsed = {swap_at:.3}s; actual delta = {:.3}s)",
             start.elapsed().as_secs_f64()
         );
-        let client = reqwest::Client::builder().timeout(Duration::from_secs(30)).build()?;
         let request_started_ns = now_ns();
         let request_started_monotonic = Instant::now();
-        let response = client.post(&url).json(&body).send().await?;
-        let status = response.status();
-        let response_body = response.text().await?;
+        let outcome = post_hotswap(&client, &url, &body).await;
         let request_duration_ns =
             u64::try_from(request_started_monotonic.elapsed().as_nanos()).unwrap_or(u64::MAX);
         let request_finished_ns = now_ns();
-        info!("hot-swap POST {} => HTTP {}", url, status);
-        if !status.is_success() {
-            anyhow::bail!("hot-swap POST returned HTTP {status}: {response_body}");
-        }
+        let (http_status, response_body, failure) = match outcome {
+            Ok((status, response_body)) => {
+                info!("hot-swap POST {} => HTTP {}", url, status);
+                let failure = (!status.is_success())
+                    .then(|| format!("hot-swap POST returned HTTP {status}: {response_body}"));
+                (Some(status.as_u16()), Some(response_body), failure)
+            }
+            Err(e) => (None, None, Some(format!("hot-swap POST to {url} failed: {e:#}"))),
+        };
         if let Some(path) = result_path {
-            let body = serde_json::from_str(&response_body)
-                .unwrap_or_else(|_| serde_json::Value::String(response_body.clone()));
+            let body = response_body.as_ref().map(|text| {
+                serde_json::from_str(text)
+                    .unwrap_or_else(|_| serde_json::Value::String(text.clone()))
+            });
             let artifact = serde_json::json!({
                 "requests": [{
                     "event_index": 0,
@@ -514,15 +543,26 @@ fn spawn_hotswap_trigger(
                     "request_timestamp_clock": "unix-epoch",
                     "request_duration_ns": request_duration_ns,
                     "request_duration_clock": "monotonic",
-                    "http_status": status.as_u16(),
+                    "http_status": http_status,
                     "body": body,
+                    "error": failure,
                 }]
             });
             tokio::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))
                 .await?;
         }
-        Ok(())
+        failure.map_or(Ok(()), |message| Err(anyhow::anyhow!(message)))
     }))
+}
+
+async fn post_hotswap(
+    client: &reqwest::Client,
+    url: &str,
+    body: &serde_json::Value,
+) -> anyhow::Result<(reqwest::StatusCode, String)> {
+    let response = client.post(url).json(body).send().await?;
+    let status = response.status();
+    Ok((status, response.text().await?))
 }
 
 async fn enqueue_publish(
@@ -542,7 +582,8 @@ async fn enqueue_publish(
 ///
 /// # Errors
 /// - MQTT connection setup failure.
-/// - The `reqwest` client build (hot-swap trigger).
+/// - The hot-swap trigger failed (client build, transport error, non-2xx
+///   response, or task panic). The summary file is still written first.
 ///
 /// Note: MQTT publishes queued to rumqttc's internal channel succeed even if
 /// the broker is unreachable; the eventloop task logs the connection failure
@@ -611,7 +652,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let deadline = start.checked_add(Duration::from_secs(args.duration_secs)).unwrap_or(start);
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. }
-            if Duration::from_secs_f64(*swap_at_secs) < Duration::from_secs(args.duration_secs) =>
+            if *swap_at_secs < Duration::from_secs(args.duration_secs).as_secs_f64() =>
         {
             Some(*swap_at_secs)
         }
@@ -678,11 +719,18 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     tokio::time::sleep(Duration::from_millis(200)).await;
     let _disc = client.disconnect().await;
     eventloop_task.abort();
-    if let Some(t) = hotswap_task {
-        // Await the trigger task; log but do not fail the run if it errored.
-        if let Ok(Err(e)) = t.await {
-            warn!("hotswap trigger task errored: {e}");
-        }
+    // A failed swap fails the run, but only after the summary is written so
+    // the evidence of what was offered survives.
+    let hotswap_failure = match hotswap_task {
+        Some(t) => match t.await {
+            Ok(Ok(())) => None,
+            Ok(Err(e)) => Some(e),
+            Err(join) => Some(anyhow::anyhow!("hot-swap trigger task panicked: {join}")),
+        },
+        None => None,
+    };
+    if let Some(e) = &hotswap_failure {
+        error!("hot-swap trigger failed: {e:#}");
     }
 
     let elapsed = start.elapsed();
@@ -717,10 +765,13 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         deadline_misses,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
-        hotswap_triggered_at_secs: hotswap_target,
+        hotswap_triggered_at_secs: hotswap_target.filter(|_| hotswap_failure.is_none()),
     };
     if let Some(path) = args.summary_file {
         std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&report)?))?;
+    }
+    if let Some(e) = hotswap_failure {
+        return Err(e.context("hot-swap trigger failed; the run did not swap"));
     }
     Ok(report)
 }
@@ -738,8 +789,8 @@ pub struct PublisherReport {
     pub deadline_misses: u64,
     pub elapsed_ms: u64,
     pub actual_rate: f64,
-    /// If profile = hotswap-trigger, the offset (secs) at which the trigger
-    /// task was scheduled to fire. `None` for other profiles.
+    /// If profile = hotswap-trigger, the offset (secs) at which the swap was
+    /// triggered. `None` for other profiles and when the swap request failed.
     pub hotswap_triggered_at_secs: Option<f64>,
 }
 
@@ -750,6 +801,71 @@ mod tests {
     use rumqttc::{AsyncClient, MqttOptions};
 
     use super::{PublishArgs, enqueue_publish};
+
+    fn hotswap_args(api_url: String, result_path: std::path::PathBuf) -> PublishArgs {
+        PublishArgs {
+            broker_host: "127.0.0.1".into(),
+            broker_port: 1,
+            topic: "test/topic".into(),
+            rate: 10,
+            duration_secs: 1,
+            payload_size: 128,
+            payload_template: None,
+            profile: "hotswap-trigger".into(),
+            client_id: "hotswap-test".into(),
+            profile_file: None,
+            dry_run: false,
+            burst_multiplier: 2,
+            burst_on_secs: 1,
+            burst_cycle_secs: 2,
+            ramp_start_rate: 1,
+            ramp_step_rate: 1,
+            ramp_step_interval_secs: 1,
+            ramp_max_rate: 2,
+            hotswap_target_node: Some("t1".into()),
+            hotswap_wasm_path: Some("plugins/v2.wasm".into()),
+            hotswap_swap_at_secs: 0.1,
+            hotswap_api_url: api_url,
+            trace_file: None,
+            summary_file: None,
+            sequence_start: 0,
+            drop_when_full: true,
+            hotswap_result_path: Some(result_path),
+            timing_receipt: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_hotswap_request_fails_the_run_and_records_the_error() {
+        // Reserve a port, then close it so the POST is refused.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let api_url = format!("http://{}", closed.local_addr().expect("addr"));
+        drop(closed);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let result_path = dir.path().join("swap_timeline.json");
+
+        let err = super::run_publisher(hotswap_args(api_url, result_path.clone()))
+            .await
+            .expect_err("a swap that never happened must fail the publisher");
+
+        assert!(format!("{err:#}").contains("hot-swap"), "{err:#}");
+        let artifact: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&result_path).expect("artifact written"))
+                .expect("parse artifact");
+        let request = &artifact["requests"][0];
+        assert!(request["http_status"].is_null());
+        assert!(request["error"].as_str().is_some_and(|e| e.contains("failed")), "{artifact}");
+    }
+
+    #[test]
+    fn rejects_negative_or_non_finite_swap_offsets() {
+        // hotswap_args runs for 1 s, so 1.0 and later would never fire.
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 1.0, 45.0] {
+            let mut args = hotswap_args("http://localhost".into(), "unused.json".into());
+            args.hotswap_swap_at_secs = bad;
+            assert!(args.resolve_shape().is_err(), "{bad} must be rejected");
+        }
+    }
 
     #[test]
     fn rejects_zero_rate() {

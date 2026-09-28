@@ -62,18 +62,24 @@ impl Source for StdinSource {
             })?;
 
             let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => Ok(None),
-                Ok(_) => {
-                    let payload =
-                        line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
-                    Ok(Some(
-                        RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
-                            .with_metadata("source_route", "stdin"),
-                    ))
+            loop {
+                match reader.read_line(&mut line) {
+                    Ok(0) => return Ok(None),
+                    Ok(_) => break,
+                    // A non-UTF-8 line is bad data, not a broken source: it has
+                    // been consumed, so skip it rather than fail the poll.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                        tracing::warn!(source = %self.id, error = %e, "skipping non-UTF-8 line");
+                        line.clear();
+                    }
+                    Err(e) => return Err(WaferError::Io(e)),
                 }
-                Err(e) => Err(WaferError::Io(e)),
             }
+            let payload = line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
+            Ok(Some(
+                RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
+                    .with_metadata("source_route", "stdin"),
+            ))
         })
     }
 }

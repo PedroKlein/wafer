@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::error::{Result, WaferError};
 use crate::node::Sink;
 use crate::node::{NodeMetrics, NodeStateTracker};
 use crate::runner::TrackedReceiver;
@@ -24,13 +25,19 @@ use crate::runner::TrackedReceiver;
 /// 4. Call `close()` (cleanup resources)
 ///
 /// Steps 3–4 run unconditionally, even if drain encounters errors.
+///
+/// # Errors
+///
+/// Returns `Err` if the final `flush()` or `close()` fails: the sink's output
+/// may be incomplete, so the run must not count as clean. Per-message
+/// `collect()` errors are only counted in `metrics`.
 pub async fn run_sink_loop(
     mut sink: Box<dyn Sink + Send>,
     receiver: impl Into<TrackedReceiver>,
     cancel: CancellationToken,
-    _state: Arc<NodeStateTracker>,
+    state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
-) {
+) -> Result<()> {
     let mut receiver = receiver.into();
     let batch_timeout = sink.batch_timeout();
 
@@ -82,12 +89,16 @@ pub async fn run_sink_loop(
     }
 
     // Always flush + close, even if drain had errors
-    if let Err(e) = sink.flush().await {
-        tracing::warn!(sink = sink.id(), error = %e, "sink final flush error");
-    }
-    if let Err(e) = sink.close().await {
-        tracing::warn!(sink = sink.id(), error = %e, "sink close error");
-    }
+    let flushed = sink.flush().await;
+    let closed = sink.close().await;
+    let failure = match (flushed, closed) {
+        (Ok(()), Ok(())) => return Ok(()),
+        (Err(e), _) => format!("final flush failed: {e}"),
+        (Ok(()), Err(e)) => format!("close failed: {e}"),
+    };
+    tracing::error!(sink = sink.id(), error = %failure, "sink did not finish cleanly");
+    state.transition_to_error();
+    Err(WaferError::Runtime(format!("sink '{}' {failure}", sink.id())))
 }
 
 #[cfg(test)]
@@ -122,7 +133,7 @@ mod tests {
         drop(tx);
 
         // Wait for loop to finish
-        handle.await.unwrap();
+        handle.await.unwrap().unwrap();
 
         // Collect all received messages
         let mut collected = Vec::new();
@@ -214,5 +225,59 @@ mod tests {
         // the "after-delay" message should also be drained
         assert!(collected.len() >= 3);
         assert!(collected.len() <= 4);
+    }
+
+    struct CloseFailSink;
+
+    impl crate::node::Lifecycle for CloseFailSink {
+        fn id(&self) -> &'static str {
+            "close-fail"
+        }
+
+        fn node_type(&self) -> &'static str {
+            "close-fail-sink"
+        }
+
+        fn validate(&self) -> Result<()> {
+            Ok(())
+        }
+
+        fn init(&mut self) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn close(&mut self) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Err(WaferError::Runtime("disk full".into())) })
+        }
+    }
+
+    impl Sink for CloseFailSink {
+        fn collect(
+            &mut self,
+            _envelope: RuntimeEnvelope,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[tokio::test]
+    async fn close_failure_fails_the_sink_task() {
+        let (tx, receiver) = mpsc::channel(4);
+        let state = Arc::new(NodeStateTracker::running());
+        drop(tx);
+
+        let result = run_sink_loop(
+            Box::new(CloseFailSink),
+            receiver,
+            CancellationToken::new(),
+            Arc::clone(&state),
+            Arc::new(NodeMetrics::new()),
+        )
+        .await;
+
+        let error = result.expect_err("a failed close must fail the sink task").to_string();
+        assert!(error.contains("sink 'close-fail' close failed: "), "{error}");
+        assert!(error.contains("disk full"), "{error}");
+        assert_eq!(state.state(), wafer_types::NodeState::Error);
     }
 }

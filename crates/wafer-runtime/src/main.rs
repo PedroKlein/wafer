@@ -2,9 +2,24 @@
 //!
 //! Loads pipeline config, launches all nodes, runs until completion or signal.
 //! Supports timed hot-swap triggers for benchmark evaluation (RQ3).
+//!
+//! # Exit status
+//!
+//! The evaluation harness treats any non-zero exit as a failed run, so the
+//! code must never claim success for a run that failed:
+//!
+//! - `0`: the pipeline ran and every node task exited cleanly.
+//! - `1`: startup failed for any other reason (engine, plugin load, control
+//!   plane bind, output files).
+//! - `2`: the configuration is invalid (also clap's code for bad arguments).
+//! - `3`: the pipeline started but failed while running: a node task panicked,
+//!   a source/sink `init()` failed, a source exhausted its poll-error budget,
+//!   the DLQ sink failed, or the timed hot-swap could not be prepared or
+//!   dispatched. Bench artifacts are still flushed first.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -20,6 +35,7 @@ use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, Metr
 use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
 use wafer_core::config::NodeDef;
 use wafer_core::engine::Capabilities;
+use wafer_core::error::WaferError;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel;
 use wafer_core::orchestrator::launch_pipeline_timed;
 use wafer_core::orchestrator::{PipelineHandle, PipelineOrchestrator};
@@ -34,6 +50,34 @@ static BENCH_RECORDER: std::sync::OnceLock<Arc<tokio::sync::Mutex<MemoryRecorder
     std::sync::OnceLock::new();
 static QUEUE_DEPTH_RECORDER: std::sync::OnceLock<Arc<tokio::sync::Mutex<QueueDepthRecorder>>> =
     std::sync::OnceLock::new();
+
+/// Exit code for startup failures other than an invalid configuration.
+const EXIT_STARTUP_FAILED: u8 = 1;
+/// Exit code for an invalid configuration (matches clap's usage-error code).
+const EXIT_CONFIG_INVALID: u8 = 2;
+/// Exit code for a pipeline that started but failed while running.
+const EXIT_PIPELINE_FAILED: u8 = 3;
+
+/// Error context marking a failure as an invalid configuration.
+#[derive(Debug)]
+struct ConfigInvalid;
+
+impl std::fmt::Display for ConfigInvalid {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("invalid configuration")
+    }
+}
+
+/// Map a startup error to its exit code: configuration errors (from loading,
+/// semantic validation, or source/sink `validate()` at launch) get
+/// [`EXIT_CONFIG_INVALID`], everything else [`EXIT_STARTUP_FAILED`].
+fn startup_exit_code(error: &anyhow::Error) -> u8 {
+    let config_invalid = error.downcast_ref::<ConfigInvalid>().is_some()
+        || error
+            .chain()
+            .any(|cause| matches!(cause.downcast_ref::<WaferError>(), Some(WaferError::Config(_))));
+    if config_invalid { EXIT_CONFIG_INVALID } else { EXIT_STARTUP_FAILED }
+}
 
 /// Log output format.
 #[derive(Debug, Clone, Copy, Default, ValueEnum)]
@@ -93,15 +137,31 @@ struct Args {
 
 /// Stamps process entry before the tokio runtime exists, then runs the async
 /// boot sequence on the same multi-thread runtime `#[tokio::main]` builds.
-fn main() -> Result<()> {
+#[expect(
+    clippy::print_stderr,
+    reason = "keeps the `Error: {e:?}` stderr report that returning `Err` from main used to print"
+)]
+fn main() -> ExitCode {
     let process_entry = startup::ProcessEntry::capture();
-    tokio::runtime::Builder::new_multi_thread()
+    let result = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .context("Failed to build tokio runtime")?
-        .block_on(Box::pin(run(process_entry)))
+        .context("Failed to build tokio runtime")
+        .and_then(|runtime| runtime.block_on(Box::pin(run(process_entry))));
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            error!(error = format!("{e:#}"), "WAFER Runtime failed to start");
+            eprintln!("Error: {e:?}");
+            ExitCode::from(startup_exit_code(&e))
+        }
+    }
 }
 
+/// Boot the runtime, run the pipeline, and return the process exit code.
+///
+/// `Err` is a startup failure; a failure after the pipeline is running is
+/// reported as `Ok(EXIT_PIPELINE_FAILED)` so artifacts are flushed first.
 #[expect(
     clippy::too_many_lines,
     reason = "main() is the linear boot sequence: arg parsing, tracing init, config validation, orchestrator wiring, control-plane launch, shutdown handlers. Splitting into helpers obscures the boot order without adding testability."
@@ -114,7 +174,7 @@ fn main() -> Result<()> {
     clippy::large_futures,
     reason = "main() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
 )]
-async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
+async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let process_started = Instant::now();
     let args = Args::parse();
 
@@ -132,11 +192,14 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
     info!("WAFER Runtime starting...");
     info!(config = %args.config.display(), "Loading configuration");
 
-    let config = load_config(&args.config).context("Failed to load configuration")?;
-    validate(&config).map_err(|errors| {
-        let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
-        anyhow::anyhow!("configuration validation failed: {messages}")
-    })?;
+    let config =
+        load_config(&args.config).context("Failed to load configuration").context(ConfigInvalid)?;
+    validate(&config)
+        .map_err(|errors| {
+            let messages = errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ");
+            anyhow::anyhow!("configuration validation failed: {messages}")
+        })
+        .context(ConfigInvalid)?;
 
     let pipeline_name = config
         .pipeline
@@ -144,6 +207,13 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
         .and_then(|pipeline| pipeline.name.as_deref())
         .unwrap_or("wafer-pipeline");
     info!(pipeline = %pipeline_name, "Configuration loaded");
+
+    // Check the timed-swap arguments before any node starts.
+    let swap_plan = args
+        .swap_after_secs
+        .map(|delay_secs| SwapPlan::from_args(&args, &config, delay_secs))
+        .transpose()
+        .context(ConfigInvalid)?;
 
     // Resolved before launch so none of this runs inside `first_process`.
     let provenance = metadata::resolve_output_path().map(|path| ProvenanceSink {
@@ -208,31 +278,31 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
     let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
 
     // Spawn timed swap trigger if configured (RQ3 benchmark mode)
-    if let Some(delay_secs) = args.swap_after_secs {
-        let node_id =
-            args.swap_node.clone().context("--swap-after-secs requires --swap-node <ID>")?;
-        let plugin_path =
-            args.swap_plugin.clone().context("--swap-after-secs requires --swap-plugin <PATH>")?;
-
+    if let Some(SwapPlan {
+        delay_secs,
+        node_id,
+        plugin_path,
+        capabilities,
+        memory_limit,
+        fuel_limit,
+    }) = swap_plan
+    {
         if !orchestrator.swappable_nodes().contains(&node_id.as_str()) {
-            anyhow::bail!("--swap-node '{node_id}' is not a swappable Wasm node");
+            // Nodes are already running: stop them cleanly before reporting.
+            if let Err(e) = orchestrator.shutdown().await {
+                warn!(error = %e, "pipeline shutdown after a rejected --swap-node failed");
+            }
+            wait_control_plane(control_plane_tasks).await;
+            return Err(anyhow::anyhow!("--swap-node '{node_id}' is not a swappable Wasm node")
+                .context(ConfigInvalid));
         }
 
-        let NodeDef::Transform(wasm) =
-            config.nodes.get(&node_id).context("--swap-node must name a Transform")?
-        else {
-            anyhow::bail!("--swap-node '{node_id}' must name a Transform");
-        };
-        let capabilities = Capabilities::try_from(&wasm.capabilities)
-            .context("invalid outbound HTTP capability")?;
-        let memory_limit = wasm.memory_limit.unwrap_or(config.engine.memory.transform);
-        let fuel_limit = wasm.fuel.or(config.engine.fuel.transform);
         let output_dir = args.swap_output_dir.clone();
         let engine = Arc::clone(orchestrator.engine());
         let cancel = orchestrator.cancel_token().clone();
 
         // Use a oneshot to pass the prepared swap payload back to main
-        let (tx, rx) = tokio::sync::oneshot::channel::<PreparedSwap>();
+        let (tx, rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
             tokio::select! {
@@ -247,6 +317,10 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
                 Ok(b) => b,
                 Err(e) => {
                     error!(path = %plugin_path.display(), error = %e, "Failed to read swap plugin");
+                    let _ = tx.send(Err(format!(
+                        "failed to read swap plugin {}: {e}",
+                        plugin_path.display()
+                    )));
                     return;
                 }
             };
@@ -282,14 +356,17 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
                         }
                     }
 
-                    let _ = tx.send(PreparedSwap {
+                    let _ = tx.send(Ok(PreparedSwap {
                         node_id,
                         payload: timed.payload,
                         wasm_bytes,
                         completion,
-                    });
+                    }));
                 }
-                Err(e) => error!(error = %e, "Swap preparation failed"),
+                Err(e) => {
+                    error!(error = %e, "Swap preparation failed");
+                    let _ = tx.send(Err(format!("swap preparation for '{node_id}' failed: {e}")));
+                }
             }
         });
 
@@ -302,7 +379,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
         });
 
         // Custom run loop that also handles swap delivery
-        run_with_swap(&mut orchestrator, rx, provenance.clone()).await;
+        let run_result = run_with_swap(&mut orchestrator, rx, provenance.clone()).await;
         let binary_hash = spawn_binary_hash(provenance.as_ref());
         flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
         write_shutdown_provenance(&orchestrator, provenance.as_ref(), binary_hash).await;
@@ -310,7 +387,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
         wait_control_plane(control_plane_tasks).await;
 
         info!("WAFER Runtime stopped");
-        return Ok(());
+        return Ok(pipeline_exit_code(&run_result));
     }
 
     // Standard mode: no swap trigger
@@ -321,12 +398,10 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
         cancel.cancel();
     });
 
-    match orchestrator.run_until_complete().await {
-        Ok(()) => info!("Pipeline completed"),
-        Err(e) => error!(error = %e, "Pipeline exited with error"),
-    }
+    let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
+    log_run_result(&run_result);
 
-    if let Some(path) = startup_output {
+    let startup_written = startup_output.map_or(Ok(()), |path| {
         startup::write_startup(
             &path,
             &orchestrator,
@@ -335,9 +410,9 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
             launch_started,
             launch_completed,
             launch_timings,
-        )?;
-        info!(path = %path.display(), "Startup phases written");
-    }
+        )
+        .inspect(|()| info!(path = %path.display(), "Startup phases written"))
+    });
 
     let binary_hash = spawn_binary_hash(provenance.as_ref());
     flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
@@ -346,7 +421,64 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<()> {
     wait_control_plane(control_plane_tasks).await;
 
     info!("WAFER Runtime stopped");
-    Ok(())
+    // A failed run outranks a failed startup.json write: report it as 3.
+    if run_result.is_ok() {
+        startup_written?;
+    } else if let Err(e) = startup_written {
+        error!(error = format!("{e:#}"), "startup phases write failed");
+    }
+    Ok(pipeline_exit_code(&run_result))
+}
+
+/// Timed hot-swap requested with `--swap-after-secs`, checked before launch.
+struct SwapPlan {
+    delay_secs: u64,
+    node_id: String,
+    plugin_path: PathBuf,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
+}
+
+impl SwapPlan {
+    fn from_args(
+        args: &Args,
+        config: &wafer_types::config::Config,
+        delay_secs: u64,
+    ) -> Result<Self> {
+        let node_id =
+            args.swap_node.clone().context("--swap-after-secs requires --swap-node <ID>")?;
+        let plugin_path =
+            args.swap_plugin.clone().context("--swap-after-secs requires --swap-plugin <PATH>")?;
+        let Some(NodeDef::Transform(wasm)) = config.nodes.get(&node_id) else {
+            anyhow::bail!("--swap-node '{node_id}' must name a Transform");
+        };
+        let capabilities = Capabilities::try_from(&wasm.capabilities)
+            .context("invalid outbound HTTP capability")?;
+        Ok(Self {
+            delay_secs,
+            memory_limit: wasm.memory_limit.unwrap_or(config.engine.memory.transform),
+            fuel_limit: wasm.fuel.or(config.engine.fuel.transform),
+            node_id,
+            plugin_path,
+            capabilities,
+        })
+    }
+}
+
+fn log_run_result(run_result: &Result<()>) {
+    match run_result {
+        Ok(()) => info!("Pipeline completed"),
+        Err(e) => error!(error = format!("{e:#}"), "Pipeline exited with error"),
+    }
+}
+
+/// Exit code for a pipeline that got past startup.
+fn pipeline_exit_code(run_result: &Result<()>) -> ExitCode {
+    match run_result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(_) => ExitCode::from(EXIT_PIPELINE_FAILED),
+    }
 }
 
 /// Where and from what the runtime writes `runtime-provenance.json`.
@@ -428,32 +560,33 @@ async fn write_shutdown_provenance(
 /// This integrates the timed swap trigger into the pipeline run loop.
 /// When the swap payload arrives, it's dispatched to the target node
 /// via `send_swap()`, then we continue waiting for pipeline completion.
+/// A swap that could not be prepared or dispatched fails the run: a
+/// swap benchmark in which no swap happened is not a valid sample.
 /// Once the runner reports the replacement adopted, the v2 plugin hash is
 /// recorded and provenance re-written, so a swap run names the live binary.
 async fn run_with_swap(
     orchestrator: &mut PipelineOrchestrator,
-    rx: tokio::sync::oneshot::Receiver<PreparedSwap>,
+    rx: tokio::sync::oneshot::Receiver<std::result::Result<PreparedSwap, String>>,
     provenance: Option<ProvenanceSink>,
-) {
-    // Race the cancel signal against the swap oneshot; if cancelled first, we
-    // skip the run-to-completion phase. If the swap arrives (or errors), we
-    // dispatch it and then fall through to run_until_complete.
+) -> Result<()> {
+    // Race the cancel signal against the swap oneshot. Either way we fall
+    // through to run_until_complete, which drains on cancellation and reports
+    // any node failure.
     let cancel = orchestrator.cancel_token().clone();
-
+    let mut swap_failure = None;
     let mut adoption = None;
     let run_done = tokio_util::sync::CancellationToken::new();
+
     tokio::select! {
         biased;
-        () = cancel.cancelled() => return,
-        result = rx => {
-            if let Ok(prepared) = result {
-                let PreparedSwap { node_id, payload, wasm_bytes, completion } = prepared;
+        () = cancel.cancelled() => {}
+        result = rx => match result {
+            Ok(Ok(PreparedSwap { node_id, payload, wasm_bytes, completion })) => {
                 match orchestrator.send_swap(&node_id, payload) {
                     Ok(()) => {
                         info!(node = %node_id, "Hot-swap dispatched");
-                        let handle = orchestrator.handle();
                         adoption = Some(tokio::spawn(record_adopted_swap(
-                            handle,
+                            orchestrator.handle(),
                             node_id,
                             wasm_bytes,
                             completion,
@@ -461,16 +594,26 @@ async fn run_with_swap(
                             run_done.clone(),
                         )));
                     }
-                    Err(e) => error!(error = %e, "Hot-swap dispatch failed"),
+                    Err(e) => {
+                        error!(error = %e, "Hot-swap dispatch failed");
+                        swap_failure =
+                            Some(format!("hot-swap dispatch to '{node_id}' failed: {e}"));
+                    }
                 }
+            }
+            Ok(Err(e)) => swap_failure = Some(e),
+            // The trigger task ended without a result. On cancel that is
+            // expected; otherwise it panicked and no swap happened.
+            Err(_) if cancel.is_cancelled() => {}
+            Err(_) => {
+                error!("Hot-swap trigger task ended without a result");
+                swap_failure = Some("hot-swap trigger task ended without a result".to_owned());
             }
         }
     }
 
-    match orchestrator.run_until_complete().await {
-        Ok(()) => info!("Pipeline completed"),
-        Err(e) => error!(error = %e, "Pipeline exited with error"),
-    }
+    let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
+    log_run_result(&run_result);
 
     // The runners have exited, so any outcome they will ever report is already
     // in the channel. The swap payload (and with it the sender) stays alive in
@@ -481,6 +624,12 @@ async fn run_with_swap(
         && let Err(error) = task.await
     {
         warn!(%error, "swap provenance task failed");
+    }
+
+    match (swap_failure, run_result) {
+        (None, run_result) => run_result,
+        (Some(swap), Ok(())) => Err(anyhow::anyhow!(swap)),
+        (Some(swap), Err(run)) => Err(run.context(swap)),
     }
 }
 
