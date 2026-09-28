@@ -1307,6 +1307,7 @@ def derive_hotswap_evidence(
             {
                 "event_index": int(request.get("event_index", index)),
                 "plugin": request.get("plugin"),
+                "compile_cache": request.get("body", {}).get("compile_cache"),
                 **{field: timeline[field] for field in HOTSWAP_PHASE_FIELDS},
                 "http_total_ns": http_total_ns,
                 "http_total_clock": request.get(
@@ -1361,7 +1362,15 @@ def stamp_candidate_swap_evidence(evidence: dict, item: RunItem, sequence: dict)
         raise ValueError(f"{item.experiment} event indices must be exactly 0 through 49")
     for event in events:
         event_index = event["event_index"]
-        event["event_class"] = candidate_swap_event_class(event_index)
+        compile_cache = event.get("compile_cache")
+        event["event_class"] = (
+            COMPILE_CACHE_EVENT_CLASSES.get(compile_cache) if isinstance(compile_cache, str) else None
+        )
+        if event["event_class"] != candidate_swap_event_class(event_index):
+            raise ValueError(
+                f"{item.experiment} event {event_index} reported compile_cache "
+                f"{compile_cache!r}, expected a {candidate_swap_event_class(event_index)} event"
+            )
         expected_plugin = (
             "wafer_pass_through_v2_panics.wasm"
             if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT
@@ -1407,6 +1416,7 @@ def build_candidate_rollback_evidence(
         event = {
             "event_index": int(request.get("event_index", index)),
             "plugin": request.get("plugin"),
+            "compile_cache": request.get("body", {}).get("compile_cache"),
             "compile_ns": timeline.get("compile_ns"),
             "instantiate_ns": timeline.get("instantiate_ns"),
             "signal_ns": timeline.get("signal_ns"),
@@ -2246,6 +2256,13 @@ def validate_candidate_scaling_definition(experiment: str, definition: dict) -> 
 
 def candidate_swap_event_class(event_index: int) -> str:
     return "first-use-aot" if event_index == 0 else "cached"
+
+
+COMPILE_CACHE_EVENT_CLASSES = {
+    "compiled": "first-use-aot",
+    "memory_hit": "cached",
+    "disk_hit": "cached",
+}
 
 
 def validate_candidate_swap_definition(experiment: str, definition: dict) -> None:
