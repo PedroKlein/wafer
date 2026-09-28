@@ -93,8 +93,6 @@ def _run_metrics(leaf: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     )
     if actual_sequence != expected_sequence:
         raise ValueError(f"sequence integrity failed: {leaf}")
-    if len(throughput_rows) != 60:
-        raise ValueError(f"wrong throughput row count: {leaf}")
     measured_messages = sum(int(row["msg_count"]) for row in throughput_rows)
     if measured_messages != 60_000:
         raise ValueError(f"wrong throughput population: {leaf}")

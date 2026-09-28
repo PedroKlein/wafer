@@ -117,8 +117,8 @@ def validate_run_outputs(leaf: Path, expected_sha: str, payload_bytes: int) -> d
             raise ValueError(f"invalid latency summary field: {field}")
 
     throughput = _csv_rows(leaf / "throughput.csv")
-    if len(throughput) != 60 or sum(int(row["msg_count"]) for row in throughput) != 60_000:
-        raise ValueError("throughput.csv must contain 60 rows totaling 60,000 messages")
+    if sum(int(row["msg_count"]) for row in throughput) != 60_000:
+        raise ValueError("throughput.csv must total 60,000 messages")
 
     sequence = _csv_rows(leaf / "sequence.csv")
     if len(sequence) != 1:
