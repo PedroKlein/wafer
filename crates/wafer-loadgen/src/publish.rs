@@ -141,7 +141,7 @@ pub struct PublishArgs {
     #[arg(long, default_value = "http://localhost:9090")]
     pub hotswap_api_url: String,
 
-    /// Write every offered sequence and wall-clock timestamp as CSV.
+    /// Write every offered sequence and its payload `ts` (scheduled time) as CSV.
     /// Intended for diagnostics; omit during canonical measurements.
     #[arg(long)]
     pub trace_file: Option<PathBuf>,
@@ -710,7 +710,6 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             .into_bytes(),
             |tpl| tpl.render(ts, seq),
         );
-        record_lag(&mut source_lag, duration_ns(start.elapsed().saturating_sub(offset)));
         let enqueued = tokio::select! {
             biased;
             reason = stop_signal.recv() => {
@@ -720,6 +719,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             }
             result = enqueue_publish(&client, &args.topic, payload_vec, args.drop_when_full) => result,
         };
+        if enqueued.is_ok() {
+            record_lag(&mut source_lag, duration_ns(start.elapsed().saturating_sub(offset)));
+        }
         if let Some(trace) = &mut trace {
             writeln!(trace, "{seq},{ts}")?;
         }
