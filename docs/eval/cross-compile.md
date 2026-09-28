@@ -35,6 +35,46 @@ Binary outputs land at:
 - `target/docker-aarch64-linux/release/wafer-loadgen` (~8.4 MB)
 - `target/docker-aarch64-linux/release/waferctl`      (~6.7 MB)
 
+## Which glibc a binary needs
+
+Every release binary links `libc.so.6` dynamically, and the linker records
+the newest glibc symbol version it used. That version is set by the glibc of
+the build environment, not by the target: a binary from the bookworm
+container needs glibc 2.36, one from the `ubuntu-24.04-arm` CI runner needs
+2.39. It fails to start with `version GLIBC_2.xx not found` on any host
+whose glibc is older.
+
+| Host | OS | glibc |
+|------|----|-------|
+| Raspberry Pi 5 | Raspberry Pi OS (Debian 13) | 2.41 |
+| Jetson Orin Nano | L4T R36 (Ubuntu 22.04) | 2.35 |
+| x86_64 workstation | Ubuntu 22.04 / 24.04 | 2.35 / 2.39 |
+
+`scripts/glibc-floor.sh` prints the version each binary requires and, with
+`--max`, fails when a binary needs a newer glibc than the host has:
+
+```bash
+mise run glibc-floor -- target/docker-aarch64-linux/release/wafer
+mise run glibc-floor -- --max 2.35 target/docker-aarch64-linux/release/wafer
+```
+
+`cross-build-pi` and both CI jobs print the report after every build. For a
+Jetson, build natively on the device (install Rust with rustup; the
+toolchain comes from `rust-toolchain.toml`) so the binaries link against the
+device's own glibc 2.35.
+
+## x86_64 Linux
+
+```bash
+mise run build-release-x86    # native build on an x86_64 Linux host
+```
+
+The task runs `cargo build --locked --release` for the same three binaries,
+checks that `file` reports `x86-64`, and prints the glibc report. Outputs land
+under `target/release/`. CI builds the same set on `ubuntu-latest` in the
+`build-x86` job of `cross-arch.yml` and uploads them as
+`wafer-x86_64-linux-<sha>`.
+
 ## Reproducing on a fresh clone
 
 ```bash
@@ -108,12 +148,12 @@ Why we ship this over `cross`:
   `ubuntu-latest` runners via `docker buildx` (linux/amd64 → linux/arm64
   emulated) or `ubuntu-24.04-arm` runners (native).
 
-## CI integration (T10, thesis-hardening)
+## CI integration
 
 `.github/workflows/cross-arch.yml` builds the same three binaries with
-`cargo build --locked --release` on a native `ubuntu-24.04-arm` runner, with a
-cached cargo target, on every push to `main` and on pull requests that
-touch Rust code. It does not use the Docker recipe: emulating arm64 with
+`cargo build --locked --release` on a native `ubuntu-24.04-arm` runner and on
+`ubuntu-latest` (x86_64), each with a cached cargo target, on every push to
+`main` and on pull requests that touch Rust code. It does not use the Docker recipe: emulating arm64 with
 QEMU made a cold build take most of the job's time budget. The job is not
 a required check.
 
@@ -137,6 +177,8 @@ a required check.
 
 ## Files
 
-- `mise.toml` — `[tasks.cross-build-pi]` + `[tasks.cross-build-pi-check]`
+- `mise.toml` — `[tasks.cross-build-pi]`, `[tasks.cross-build-pi-check]`,
+  `[tasks.build-release-x86]`, `[tasks.glibc-floor]`
+- `scripts/glibc-floor.sh` — glibc requirement report and floor check
 - `.github/workflows/cross-arch.yml` — CI integration
 - `target/docker-aarch64-linux/` — build output directory (gitignored)
