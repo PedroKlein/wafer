@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "description": "Header or top-level keys of each file the runtime, load generator and harness write into a result directory. RESULT-CONTRACT.md documents every entry; tests fail when a writer, this table or the contract drifts apart.",
+  "producers": {
+    "wafer-runtime": {
+      "per_node_metrics.csv": {
+        "csv_header": "node_id,messages_in,messages_out,filtered_out,traps_total,traps_memory_out_of_bounds,traps_unreachable,traps_interrupt,traps_out_of_fuel,traps_memory_limit,traps_other,guest_bad_input,guest_dependency_failed,guest_processing_failed,guest_timed_out,guest_unrecoverable,attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,dropped_on_teardown,error_state_seconds,recovery_count"
+      },
+      "recovery.csv": {
+        "csv_header": "node_id,sample_index,duration_ns"
+      },
+      "memory.csv": {
+        "csv_header": "elapsed_ms,rss_bytes"
+      },
+      "memory-clock.json": {
+        "json_keys": [
+          "alignment_clock",
+          "alignment_clock_purpose",
+          "elapsed_clock",
+          "schema_version",
+          "start_unix_epoch_ns"
+        ]
+      },
+      "queue-depth.csv": {
+        "csv_header": "elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed"
+      },
+      "queue-depth-clock.json": {
+        "json_keys": [
+          "alignment_clock",
+          "alignment_clock_purpose",
+          "elapsed_clock",
+          "schema_version",
+          "start_unix_epoch_ns"
+        ]
+      },
+      "runtime-provenance.json": {
+        "json_keys": [
+          "available_parallelism",
+          "config_path",
+          "config_sha256",
+          "cpus_allowed_list",
+          "effective_metering_mode",
+          "engine_fuel_budgets",
+          "epoch_deadline",
+          "epoch_tick_ms",
+          "kernel",
+          "ort_link",
+          "ort_sys_source",
+          "ort_sys_version",
+          "provenance_written_at",
+          "runtime_build",
+          "rustc_version",
+          "tokio_worker_threads",
+          "wafer_plugin_hashes",
+          "wafer_runtime_sha256",
+          "wafer_runtime_version",
+          "wasmtime_source",
+          "wasmtime_version"
+        ]
+      },
+      "latency.hdr": {
+        "hdr_encoding": "interval-log"
+      },
+      "service.hdr": {
+        "hdr_encoding": "interval-log"
+      },
+      "source-lag.hdr": {
+        "hdr_encoding": "interval-log"
+      },
+      "throughput.csv": {
+        "csv_header": "elapsed_secs,msg_count,bytes"
+      },
+      "sequence.csv": {
+        "csv_header": "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count"
+      },
+      "measurement-window.json": {
+        "json_keys": [
+          "finished_ns",
+          "latency_clamps",
+          "started_ns",
+          "wall_clock_step_ns"
+        ]
+      },
+      "interval-latency.json": {
+        "json_keys": [
+          "aggregate_latency_count",
+          "alignment_clock",
+          "alignment_clock_purpose",
+          "bucket_width_ns",
+          "declared_measurement_duration_ns",
+          "interval_clock",
+          "late_arrivals",
+          "maximum_rows",
+          "measurement_start_unix_epoch_ns",
+          "row_count",
+          "rows",
+          "schema_version"
+        ]
+      }
+    },
+    "wafer-loadgen subscribe": {
+      "latency.hdr": {
+        "hdr_encoding": "v2"
+      },
+      "sequence.csv": {
+        "csv_header": "event_type,seq_start,seq_end,count"
+      },
+      "interval-latency.json": {
+        "json_keys": [
+          "aggregate_latency_count",
+          "alignment_clock",
+          "alignment_clock_purpose",
+          "bucket_width_ns",
+          "declared_measurement_duration_ns",
+          "interval_clock",
+          "late_arrivals",
+          "maximum_rows",
+          "measurement_start_unix_epoch_ns",
+          "row_count",
+          "rows",
+          "schema_version"
+        ]
+      },
+      "subscriber-metadata.json": {
+        "json_keys": [
+          "above_highest_latency_count",
+          "broker",
+          "clock_steps",
+          "ended_at_ns",
+          "exit_reason",
+          "git_sha",
+          "histogram_highest_ns",
+          "histogram_lowest_ns",
+          "histogram_sig_digits",
+          "host_tag",
+          "ignored_sequence_count",
+          "latency_max_ns",
+          "latency_mean_ns",
+          "latency_min_ns",
+          "latency_p50_ns",
+          "latency_p95_ns",
+          "latency_p999_ns",
+          "latency_p99_ns",
+          "negative_latency_count",
+          "parse_errors",
+          "partial_reasons",
+          "sequence",
+          "sequence_end_exclusive",
+          "started_at_ns",
+          "status",
+          "topic",
+          "total_messages",
+          "total_recorded",
+          "unexpected_sequence_count"
+        ]
+      }
+    },
+    "wafer-loadgen publish": {
+      "publisher-summary.json": {
+        "json_keys": [
+          "actual_rate",
+          "deadline_misses",
+          "elapsed_ms",
+          "enqueued",
+          "errors",
+          "exit_reason",
+          "hotswap_triggered_at_secs",
+          "intended",
+          "measurement_duration_ns",
+          "published",
+          "rejected",
+          "schema_version",
+          "source_lag_ns"
+        ]
+      }
+    },
+    "run-experiment.sh": {
+      "throughput.csv": {
+        "csv_header": "timestamp_ns,messages_received,throughput_msg_s,duration_ns"
+      }
+    }
+  }
+}
