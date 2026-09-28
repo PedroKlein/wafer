@@ -4,6 +4,8 @@ Reference for the TOML pipeline configuration consumed by `wafer-runtime --confi
 
 Every top-level section is optional. Defaults describe runtime behavior, not the final evaluation policy. Final WAFER configs set metering explicitly and are checked against `eval/canonical-matrix.json`.
 
+Unknown keys are rejected at load time in every section, node and edge, so a misspelled key fails startup instead of silently falling back to its default. The only free-form table is a processing node's `config`, which is passed to the plugin unchanged.
+
 ## Top-level sections
 
 | Section | Struct | Purpose |
@@ -31,7 +33,7 @@ description = "MQTT -> filter -> alert"  # optional
 | Field | Type | Runtime default | Notes |
 |-------|------|-----------------|-------|
 | `epoch_deadline` | `Option<NonZeroU64>` | `None` | Epoch ticks per Wasm call. Omission disables epoch interruption. |
-| `epoch_tick_ms` | `u64` | `10` | Wall-clock milliseconds per epoch tick. A ticker alone does not impose a deadline. |
+| `epoch_tick_ms` | `u64` | `10` | Wall-clock milliseconds per epoch tick. Must be greater than zero. A ticker alone does not impose a deadline. |
 | `default_queue_capacity` | `usize` | `1024` | Fallback capacity when no incoming edge for a destination declares one. |
 | `fuel.transform` | `Option<NonZeroU64>` | `None` | Fuel per Transform call. Omission disables fuel for this category. |
 | `fuel.filter` | `Option<NonZeroU64>` | `None` | Fuel per Filter call. |
@@ -227,9 +229,14 @@ Struct `EdgeDef`:
 |-------|------|-------|
 | `from` | `string` (required) | Node id. |
 | `to` | `string` (required) | Node id. |
-| `port` | `Option<string>` | Router output port name. Only required when `from` is a router. **Single `port` field: no `from_port` / `to_port` split.** |
+| `port` | `Option<string>` | Router output port name. Required when `from` is a router and rejected otherwise. **Single `port` field: no `from_port` / `to_port` split.** |
 | `capacity` | `Option<usize>` | Requested destination queue capacity. One physical receiver is created per destination; its capacity is the maximum explicit incoming capacity, or `engine.default_queue_capacity` when none is specified. |
 | `overflow` | `Option<OverflowPolicy>` | Sender-side policy for this edge: `slow` (default; reserve/await), `drop` (non-blocking discard on full), or `dead-letter` (non-blocking DLQ attempt on full). |
+
+The validator also rejects:
+
+- the same `from`, `to` and `port` listed twice, which would deliver every message twice;
+- a transform, filter or router with inbound edges but no outbound edge, or the reverse.
 
 Example:
 
