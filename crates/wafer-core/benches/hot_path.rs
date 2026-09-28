@@ -173,16 +173,21 @@ async fn run_hop(count: u64, transform: bool, cancel: CancellationToken) -> Dura
 
     if transform {
         let (mid_tx, mid_rx) = mpsc::channel(QUEUE_CAPACITY);
-        tasks.push(tokio::spawn(run_transform_loop(
-            TransformNode::Native(NativeTransform::passthrough("pass")),
-            input_rx,
-            vec![downstream(mid_tx, "pass")],
-            swap_rx,
-            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "pass"),
-            cancel.clone(),
-            Arc::new(NodeStateTracker::running()),
-            Arc::new(NodeMetrics::new()),
-        )));
+        let transform_cancel = cancel.clone();
+        tasks.push(tokio::spawn(async move {
+            run_transform_loop(
+                TransformNode::Native(NativeTransform::passthrough("pass")),
+                input_rx,
+                vec![downstream(mid_tx, "pass")],
+                swap_rx,
+                ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "pass"),
+                transform_cancel,
+                Arc::new(NodeStateTracker::running()),
+                Arc::new(NodeMetrics::new()),
+            )
+            .await
+            .unwrap();
+        }));
         tasks.push(tokio::spawn(async move {
             run_sink_loop(
                 sink,

@@ -11,14 +11,15 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
+use crate::error::Result;
 use crate::node::TransformNode;
 use crate::node::{NodeMetrics, NodeStateTracker};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
-    TransformCanaryState, continue_after_policy_action, next_input, send_downstream,
-    take_pending_swap,
+    TransformCanaryState, continue_after_policy_action, next_input, policy_teardown,
+    recovery_failed, send_downstream, take_pending_swap,
 };
 use wafer_types::config::HotSwapConfig;
 
@@ -29,9 +30,9 @@ async fn recover_after_timeout(
     policy: &mut ErrorPolicyExecutor,
     error: &WasmProcessError,
     envelope: RuntimeEnvelope,
-) -> bool {
+) -> Result<()> {
     if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
-        return false;
+        return Err(policy_teardown());
     }
     tracing::warn!(
         node = transform.node_id(),
@@ -45,13 +46,13 @@ async fn recover_after_timeout(
             if let Some(duration_ns) = state.transition_recovering_to_running_timed() {
                 metrics.record_recovery(duration_ns);
             }
-            true
+            Ok(())
         }
         Err(error) => {
             state.transition_to_error();
             tracing::error!(node = transform.node_id(), %error, "recovery failed");
             policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
-            false
+            Err(recovery_failed(&error))
         }
     }
 }
@@ -76,7 +77,7 @@ pub async fn run_transform_loop(
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
-) {
+) -> Result<()> {
     run_transform_loop_with_config(
         transform,
         receiver,
@@ -88,7 +89,7 @@ pub async fn run_transform_loop(
         metrics,
         HotSwapConfig::default(),
     )
-    .await;
+    .await
 }
 
 /// Inner transform loop with explicit hot-swap config (testable).
@@ -110,7 +111,7 @@ pub async fn run_transform_loop_with_config(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
     hot_swap_config: HotSwapConfig,
-) {
+) -> Result<()> {
     state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
@@ -119,7 +120,7 @@ pub async fn run_transform_loop_with_config(
     let mut held = None;
     let cancelled = cancel.cancelled();
     tokio::pin!(cancelled);
-    loop {
+    let exit = loop {
         // 0. Check if canary window has expired (drop snapshot to free memory)
         if let Some(ref c) = canary
             && c.window_expired()
@@ -200,7 +201,7 @@ pub async fn run_transform_loop_with_config(
             {
                 NextInput::Envelope(envelope) => envelope,
                 NextInput::Swap => continue,
-                NextInput::Closed => break,
+                NextInput::Closed => break Ok(()),
             }
         };
 
@@ -227,7 +228,7 @@ pub async fn run_transform_loop_with_config(
             }
             Err(ref error) if error.is_budget_exhausted() && canary.is_none() => {
                 metrics.record_error(error);
-                if !recover_after_timeout(
+                if let Err(error) = recover_after_timeout(
                     &mut transform,
                     &state,
                     &metrics,
@@ -237,7 +238,7 @@ pub async fn run_transform_loop_with_config(
                 )
                 .await
                 {
-                    break;
+                    break Err(error);
                 }
             }
             Err(
@@ -325,21 +326,22 @@ pub async fn run_transform_loop_with_config(
                         state.transition_to_error();
                         tracing::error!(node = transform.node_id(), %error, "recovery failed");
                         policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
-                        break;
+                        break Err(recovery_failed(&error));
                     }
                 }
             }
             Err(e) => {
                 metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, safety), &metrics) {
-                    break;
+                    break Err(policy_teardown());
                 }
             }
         }
-    }
+    };
 
     // Flush remaining retries to DLQ on exit
     policy.flush_to_dlq(&DlqReason::Shutdown, &metrics);
+    exit
 }
 
 #[cfg(test)]
@@ -473,7 +475,7 @@ mod tests {
         assert!(outputs.iter().all(|output| prediction(output) == Some(7)));
 
         drop(input_tx);
-        runner.await.expect("runner task");
+        runner.await.expect("runner task").expect("runner exit");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -524,7 +526,8 @@ mod tests {
             Arc::clone(&metrics),
             HotSwapConfig::default(),
         )
-        .await;
+        .await
+        .expect("runner exit");
 
         let outcome = completion.await.expect("rollback outcome");
         assert!(matches!(outcome, Err(crate::runner::HotSwapError::RolledBack { .. })));
@@ -580,7 +583,8 @@ mod tests {
             Arc::clone(&metrics),
             HotSwapConfig::default(),
         )
-        .await;
+        .await
+        .expect("runner exit");
 
         assert!(matches!(
             completion.await.expect("rollback outcome"),
@@ -593,6 +597,53 @@ mod tests {
             "v2 trap, then the replayed message trapping on v1"
         );
         assert_eq!(metrics.recovery_count(), 2);
+    }
+
+    /// A node that traps and then cannot be re-instantiated has stopped
+    /// processing mid-run. The loop reports that as a failure instead of
+    /// exiting the way a closed input does.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_recovery_fails_the_runner() {
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let component = engine.load_component_from_bytes(TRAP_COMPONENT, "trap").expect("trap");
+        let pre = Arc::new(engine.pre_instantiate_transform(&component).expect("pre"));
+        let mut store =
+            Store::new(engine.inner(), WaferState::new("trap", Capabilities::sandbox()));
+        store.limiter(|state| state.limits_mut());
+        let bindings = pre.instantiate_async(&mut store).await.expect("instantiate v1");
+        let mut node = WasmTransformNode::new(store, bindings, pre, None);
+        node.validate_and_init("{}").await.expect("v1 init");
+        // The recovery Store is built from the configured limit, and one byte
+        // cannot hold the guest's linear memory, so re-instantiation fails.
+        node.configure_runtime(Capabilities::sandbox(), 1, None, "{}".into());
+
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (output_tx, _output_rx) = mpsc::channel(1);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        let state = Arc::new(NodeStateTracker::running());
+        let metrics = Arc::new(NodeMetrics::new());
+        input_tx.send(RuntimeEnvelope::from_string("source", "poison")).await.expect("input");
+
+        let exit = run_transform_loop_with_config(
+            node.into(),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "trap"),
+            CancellationToken::new(),
+            Arc::clone(&state),
+            Arc::clone(&metrics),
+            HotSwapConfig::default(),
+        )
+        .await;
+
+        // The sender is still open: the runner left because recovery failed,
+        // not because its input closed.
+        drop(input_tx);
+        let error = exit.expect_err("a node that cannot recover fails the run");
+        assert!(error.to_string().contains("recovery failed"), "{error}");
+        assert_eq!(state.state(), wafer_types::NodeState::Error);
+        assert_eq!(metrics.recovery_count(), 0);
     }
 
     /// Creates test infrastructure for the transform loop.
@@ -723,7 +774,8 @@ mod tests {
             Arc::new(NodeStateTracker::running()),
             Arc::clone(&metrics),
         )
-        .await;
+        .await
+        .expect("runner exit");
 
         assert_eq!(queue.dequeued(), 4);
         assert_eq!(metrics.processed(), 1);
@@ -811,7 +863,7 @@ mod tests {
         assert!(dlq_rx.try_recv().is_err(), "a failed swap must not flush the retry buffer");
 
         cancel.cancel();
-        runner.await.expect("runner task");
+        runner.await.expect("runner task").expect("runner exit");
         let record = dlq_rx.try_recv().expect("the retry is flushed when the runner exits");
         assert_eq!(record.reason, DlqReason::Shutdown);
         assert_eq!(record.retry_count, 1);
@@ -847,7 +899,7 @@ mod tests {
             Arc::clone(&metrics),
         ));
 
-        handle.await.expect("runner task");
+        handle.await.expect("runner task").expect("runner exit");
         assert_eq!(
             output_rx.recv().await.expect("forwarded successor").payload_as_string(),
             r#"{"temperature":1}"#
@@ -880,7 +932,8 @@ mod tests {
             Arc::new(NodeStateTracker::running()),
             Arc::new(NodeMetrics::new()),
         )
-        .await;
+        .await
+        .expect("runner exit");
 
         let record = dlq_rx.recv().await.expect("one exhausted DLQ record");
         assert_eq!(record.retry_count, 0);
@@ -922,7 +975,7 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "teardown must stop the runner");
+        assert!(result.expect("teardown must stop the runner").is_err(), "teardown fails the node");
         assert!(output_rx.try_recv().is_err(), "teardown must not process the successor");
     }
 
@@ -970,7 +1023,10 @@ mod tests {
         )
         .await;
 
-        assert!(result.is_ok(), "teardown must terminate the runner");
+        assert!(
+            result.expect("teardown must terminate the runner").is_err(),
+            "teardown fails the node"
+        );
         assert!(output_rx.try_recv().is_err(), "bad input must not be forwarded");
     }
 
@@ -997,21 +1053,19 @@ mod tests {
         let metrics = NodeMetrics::new();
         let mut executor = ErrorPolicyExecutor::new(policy, None, "node");
 
-        assert!(
-            !recover_after_timeout(
-                &mut transform,
-                &state,
-                &metrics,
-                &mut executor,
-                &WasmProcessError::Trapped {
-                    code: Some(wasmtime::Trap::Interrupt),
-                    message: "wasm trap: interrupt".into(),
-                },
-                RuntimeEnvelope::from_string("source", "payload"),
-            )
-            .await,
-            "timed-out teardown must stop before recovery"
-        );
+        let exit = recover_after_timeout(
+            &mut transform,
+            &state,
+            &metrics,
+            &mut executor,
+            &WasmProcessError::Trapped {
+                code: Some(wasmtime::Trap::Interrupt),
+                message: "wasm trap: interrupt".into(),
+            },
+            RuntimeEnvelope::from_string("source", "payload"),
+        )
+        .await;
+        assert!(exit.is_err(), "timed-out teardown must stop before recovery");
         assert_eq!(metrics.recovery_count(), 0);
     }
 }

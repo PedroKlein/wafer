@@ -14,8 +14,9 @@
 //! - `2`: the configuration is invalid (also clap's code for bad arguments).
 //! - `3`: the pipeline started but failed while running: a node task panicked,
 //!   a source/sink `init()` failed, a source exhausted its poll-error budget,
-//!   the DLQ sink failed, or the timed hot-swap could not be prepared or
-//!   dispatched. Bench artifacts are still flushed first.
+//!   a Wasm node could not recover from a trap or was torn down by its error
+//!   policy, the DLQ sink failed, or the timed hot-swap could not be prepared
+//!   or dispatched. Bench artifacts are still flushed first.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -586,6 +587,7 @@ async fn run_with_swap(
         result = rx => match result {
             Ok(Ok(PreparedSwap { node_id, payload, wasm_bytes, completion })) => {
                 let handle = orchestrator.handle();
+                let progress = payload.progress();
                 let dispatched = handle
                     .try_begin_swap(&node_id)
                     .and_then(|guard| handle.send_swap(&node_id, payload).map(|()| guard));
@@ -596,6 +598,7 @@ async fn run_with_swap(
                             handle,
                             node_id,
                             wasm_bytes,
+                            progress,
                             completion,
                             provenance,
                             run_done.clone(),
@@ -644,10 +647,17 @@ async fn run_with_swap(
     }
 }
 
+/// Record the replacement's hash once the runner has adopted it.
+///
+/// Adoption is what changes the loaded plugin. The outcome report only
+/// arrives after the first message processed on the replacement, so a node
+/// that stays idle until shutdown never sends one, and the provenance would
+/// otherwise keep naming the plugin the swap replaced.
 async fn record_adopted_swap(
     handle: PipelineHandle,
     node_id: String,
     wasm_bytes: Vec<u8>,
+    progress: Arc<wafer_core::runner::HotSwapProgress>,
     completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
     provenance: Option<ProvenanceSink>,
     run_done: tokio_util::sync::CancellationToken,
@@ -658,16 +668,24 @@ async fn record_adopted_swap(
         outcome = &mut completion => outcome.ok(),
         () = run_done.cancelled() => completion.try_recv().ok(),
     };
-    match outcome {
-        Some(Ok(_report)) => {
-            handle.record_plugin_hash(&node_id, wafer_core::registry::compute_hash(&wasm_bytes));
-            if let Some(sink) = &provenance {
-                sink.write(&handle, metadata::WrittenAt::Swap, None);
-            }
+    let adopted = match outcome {
+        Some(Ok(_report)) => true,
+        Some(Err(e)) => {
+            warn!(node = %node_id, error = %e, "Hot-swap failed or rolled back; v1 hash kept");
+            false
         }
-        Some(Err(e)) => warn!(node = %node_id, error = %e, "Hot-swap not adopted; v1 hash kept"),
         None => {
-            warn!(node = %node_id, "Hot-swap not reported complete before shutdown; v1 hash kept");
+            let adopted = progress.replacement_adopted_at().is_some();
+            if !adopted {
+                warn!(node = %node_id, "Hot-swap not adopted before shutdown; v1 hash kept");
+            }
+            adopted
+        }
+    };
+    if adopted {
+        handle.record_plugin_hash(&node_id, wafer_core::registry::compute_hash(&wasm_bytes));
+        if let Some(sink) = &provenance {
+            sink.write(&handle, metadata::WrittenAt::Swap, None);
         }
     }
 }

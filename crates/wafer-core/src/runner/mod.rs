@@ -20,6 +20,7 @@ use wasmtime::Store;
 use crate::engine::bindings::filter_node::{FilterNode, FilterNodePre};
 use crate::engine::bindings::router_node::{RouterNode, RouterNodePre};
 use crate::engine::state::WaferState;
+use crate::error::WaferError;
 use crate::node::wasm::{PreparedTransformSwap, TransformPre, WasmRouterNode};
 use crate::node::{NodeMetrics, QueueMetrics};
 use crate::queue::RuntimeEnvelope;
@@ -415,6 +416,17 @@ impl From<mpsc::Receiver<RuntimeEnvelope>> for TrackedReceiver {
     fn from(receiver: mpsc::Receiver<RuntimeEnvelope>) -> Self {
         Self { receiver, queue_metrics: None, eof: false }
     }
+}
+
+/// A runner loop that stops for any reason other than input EOF or
+/// cancellation has lost its node, so the exit is reported as a failure and
+/// `run_until_complete` fails the run.
+pub(crate) fn policy_teardown() -> WaferError {
+    WaferError::Runtime("torn down by error policy".to_owned())
+}
+
+pub(crate) fn recovery_failed(error: &WaferError) -> WaferError {
+    WaferError::Runtime(format!("recovery failed: {error}"))
 }
 
 pub(crate) fn continue_after_policy_action(
