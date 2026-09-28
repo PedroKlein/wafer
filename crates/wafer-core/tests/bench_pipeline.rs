@@ -8,6 +8,7 @@ use wafer_core::node::{
     BenchBurstSchedule, BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, Lifecycle,
     NativeTransform, ProcessResult, Sink, Source, Transform,
 };
+use wafer_core::queue::BurstPhase;
 
 /// Full bench pipeline: `BenchSource` → NativeTransform(uppercase) → `BenchSink`.
 /// Validates end-to-end measurement infrastructure.
@@ -114,22 +115,13 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     source.init().await.unwrap();
     sink.init().await.unwrap();
 
-    let mut offsets: std::collections::HashMap<String, Vec<u64>> = std::collections::HashMap::new();
+    let mut scheduled: std::collections::HashMap<BurstPhase, Vec<u64>> =
+        std::collections::HashMap::new();
     while let Some(envelope) = source.poll().await.unwrap() {
-        let phase = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.phase")
-            .map(|(_, value)| value.to_string());
-        let offset = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.measurement_offset_ns")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-        if let (Some(phase), Some(offset)) = (phase, offset) {
-            offsets.entry(phase).or_default().push(offset);
+        if let Some(stamps) = envelope.header.bench
+            && let Some(burst) = stamps.burst
+        {
+            scheduled.entry(burst.phase).or_default().push(stamps.intended_ns);
         }
         sink.collect(envelope).await.unwrap();
     }
@@ -147,9 +139,9 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     assert_eq!(source_summary["intended_phase_messages"], serde_json::json!([10, 20, 10]));
     assert_eq!(source_summary["emitted_phase_messages"], serde_json::json!([10, 20, 10]));
     assert!(source_summary["source_completion_offset_ns"].as_u64().unwrap() < 4_000_000_000);
-    assert_eq!(offsets["before"][1] - offsets["before"][0], 100_000_000);
-    assert_eq!(offsets["burst"][1] - offsets["burst"][0], 50_000_000);
-    assert_eq!(offsets["after"][1] - offsets["after"][0], 100_000_000);
+    assert_eq!(scheduled[&BurstPhase::Before][1] - scheduled[&BurstPhase::Before][0], 100_000_000);
+    assert_eq!(scheduled[&BurstPhase::Burst][1] - scheduled[&BurstPhase::Burst][0], 50_000_000);
+    assert_eq!(scheduled[&BurstPhase::After][1] - scheduled[&BurstPhase::After][0], 100_000_000);
     let sink_buckets: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join("throughput-buckets.json")).unwrap(),
     )

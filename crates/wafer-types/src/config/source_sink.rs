@@ -166,9 +166,8 @@ pub struct BenchSourceConfigToml {
     /// Total number of messages to emit. When reached, the source signals EOF.
     pub total_messages: u64,
 
-    /// Number of leading messages tagged as warm-up (`bench.warmup=true` in
-    /// envelope metadata). Defaults to zero — use for [`BenchSink`] warmup
-    /// exclusion.
+    /// Number of leading messages whose bench stamps mark them as warm-up.
+    /// Defaults to zero — use for [`BenchSink`] warmup exclusion.
     #[serde(default)]
     pub warmup_messages: u64,
 

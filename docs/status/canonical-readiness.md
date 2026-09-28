@@ -508,7 +508,7 @@ measurement rig can correctly recover a known 50 ms delay from a Wasm
 plugin, it can be trusted to report tail latency honestly for less
 contrived experiments. A regression in this gate (say a rewrite of
 `BenchSink` that started using arrival timestamps instead of
-`bench.intended_ns`) would silently poison all thesis numbers; the
+the scheduled-time stamp `intended_ns`) would silently poison all thesis numbers; the
 integration test `crates/wafer-core/tests/wasi_async_runner.rs`
 catches this at CI time.
 

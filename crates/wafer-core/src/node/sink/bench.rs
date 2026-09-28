@@ -22,7 +22,7 @@ use wafer_types::latency::{
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
-use crate::queue::RuntimeEnvelope;
+use crate::queue::{BenchStamps, RuntimeEnvelope};
 use crate::util::{monotonic_unix_ns, write_atomic};
 pub use wafer_types::sequence::SequenceTracker;
 
@@ -1004,7 +1004,7 @@ impl BenchSink {
     ///   transition has been observed)
     /// - `latency.hdr` — HdrHistogram interval log
     /// - `service.hdr`, `source-lag.hdr` — the service-time and source-lag
-    ///   parts of that latency, when messages carried `bench.emit_ns`
+    ///   parts of that latency, when messages carried bench stamps
     /// - `throughput.csv` — periodic throughput samples
     /// - `throughput-buckets.json`, `throughput-buckets-10ms.json` and
     ///   `interval-latency.json` — derived evidence, when configured
@@ -1164,85 +1164,38 @@ impl BenchSink {
         write_atomic(&dir.join("swap_timeline.json"), json.as_bytes())
     }
 
-    fn record_sequence(&mut self, stamps: &BenchStamps<'_>) -> bool {
+    fn record_sequence(&mut self, stamps: Option<BenchStamps>) -> bool {
         let Some(tracker) = &mut self.sequence_tracker else { return false };
-        let Some(seq) = stamps.sequence else { return false };
+        let Some(stamps) = stamps else { return false };
         // BenchSource stamps the measured population on every message; the
-        // first one is enough. A source that does not is measured from the
-        // first number seen to the highest.
+        // first one is enough.
         if !self.sequence_population_read {
             self.sequence_population_read = true;
-            if let Some(start) = stamps.measurement_start_seq {
-                tracker.anchor_start(start);
-            }
+            tracker.anchor_start(stamps.measurement_start_seq);
             if let Some(end) = stamps.sequence_end {
                 tracker.anchor_end(end);
             }
         }
-        tracker.record(seq).is_duplicate()
+        tracker.record(stamps.sequence).is_duplicate()
     }
 
     fn record_burst_bucket(
         &mut self,
-        stamps: &BenchStamps<'_>,
+        stamps: Option<BenchStamps>,
         arrival_unix_ns: u64,
         duplicate: bool,
     ) {
-        let Some(phase) = stamps.phase else { return };
-        if let Some(source_origin_ns) = stamps.measurement_start_unix_ns {
+        let Some(burst) = stamps.and_then(|stamps| stamps.burst) else { return };
+        if let Some(source_origin_ns) = burst.measurement_start_unix_ns {
             self.burst_observation
                 .get_or_insert_with(|| Box::new(BurstObservation::new(source_origin_ns)))
                 .record(source_origin_ns, arrival_unix_ns, duplicate);
         } else {
             self.burst_missing_origin_events = self.burst_missing_origin_events.saturating_add(1);
         }
-        if let Some(count) = ["before", "burst", "after"]
-            .iter()
-            .position(|candidate| *candidate == phase)
-            .and_then(|index| self.burst_phase_received.get_mut(index))
-        {
+        if let Some(count) = self.burst_phase_received.get_mut(burst.phase.index()) {
             *count = count.saturating_add(1);
         }
-    }
-}
-
-/// The `bench.*` and `plugin.version` metadata of one envelope, read in a
-/// single pass over the header.
-#[derive(Default)]
-struct BenchStamps<'a> {
-    sequence: Option<u64>,
-    intended_ns: Option<u64>,
-    emit_ns: Option<u64>,
-    warmup: Option<bool>,
-    measurement_start_seq: Option<u64>,
-    sequence_end: Option<u64>,
-    measurement_start_unix_ns: Option<u64>,
-    phase: Option<&'a str>,
-    plugin_version: Option<&'a str>,
-}
-
-impl<'a> BenchStamps<'a> {
-    fn parse(metadata: &'a [(Box<str>, Box<str>)]) -> Self {
-        let mut stamps = Self::default();
-        for (key, value) in metadata {
-            match key.as_ref() {
-                "bench.sequence" => stamps.sequence = value.parse().ok(),
-                "bench.intended_ns" => stamps.intended_ns = value.parse().ok(),
-                "bench.emit_ns" => stamps.emit_ns = value.parse().ok(),
-                "bench.warmup" => stamps.warmup = value.parse().ok(),
-                "bench.measurement_start_seq" => {
-                    stamps.measurement_start_seq = value.parse().ok();
-                }
-                "bench.sequence_end" => stamps.sequence_end = value.parse().ok(),
-                "bench.measurement_start_unix_ns" => {
-                    stamps.measurement_start_unix_ns = value.parse().ok();
-                }
-                "bench.phase" => stamps.phase = Some(value.as_ref()),
-                "plugin.version" => stamps.plugin_version = Some(value.as_ref()),
-                _ => {}
-            }
-        }
-        stamps
     }
 }
 
@@ -1354,19 +1307,23 @@ impl Sink for BenchSink {
 
         self.message_count = self.message_count.saturating_add(1);
 
-        let stamps = BenchStamps::parse(&envelope.header.metadata);
+        let stamps = envelope.header.bench;
 
         // BenchSource marks the exact warmup population. Other sources retain
         // the wall-clock fallback because they do not know the benchmark phase.
-        let in_warmup =
-            stamps.warmup.unwrap_or_else(|| self.warmup_until.is_some_and(|until| now < until));
+        let in_warmup = stamps.map_or_else(
+            || self.warmup_until.is_some_and(|until| now < until),
+            |stamps| stamps.warmup,
+        );
         if in_warmup {
             return done();
         }
 
-        let intended_ns = stamps.intended_ns;
-        let emit_ns = stamps.emit_ns;
-        let source_origin_ns = stamps.measurement_start_unix_ns.filter(|value| *value > 0);
+        let intended_ns = stamps.map(|stamps| stamps.intended_ns);
+        let emit_ns = stamps.map(|stamps| stamps.emit_ns);
+        let source_origin_ns = stamps
+            .and_then(|stamps| stamps.burst)
+            .and_then(|burst| burst.measurement_start_unix_ns);
 
         if self.measurement_start.is_none() {
             self.measurement_start = Some(now);
@@ -1381,8 +1338,8 @@ impl Sink for BenchSink {
             self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
 
-        let duplicate = self.record_sequence(&stamps);
-        self.record_burst_bucket(&stamps, arrival_unix_ns, duplicate);
+        let duplicate = self.record_sequence(stamps);
+        self.record_burst_bucket(stamps, arrival_unix_ns, duplicate);
 
         let since_start = self
             .measurement_start
@@ -1418,9 +1375,10 @@ impl Sink for BenchSink {
         }
 
         if let Some(ref mut recorder) = self.hotswap_recorder
-            && let Some(version) = stamps.plugin_version
+            && let Some((_, version)) =
+                envelope.header.metadata.iter().find(|(key, _)| key.as_ref() == "plugin.version")
         {
-            recorder.record(version, arrival_unix_ns);
+            recorder.record(version.as_ref(), arrival_unix_ns);
         }
 
         done()
@@ -1453,15 +1411,28 @@ fn latency_histogram() -> Histogram<u64> {
 )]
 mod tests {
     use super::*;
-    use crate::queue::RuntimeEnvelope;
+    use crate::queue::{BenchStamps, BurstPhase, BurstStamps, RuntimeEnvelope};
+
+    fn stamps(sequence: u64) -> BenchStamps {
+        // Scheduled 5 µs ago so latency is measurable.
+        let intended_ns = monotonic_unix_ns().saturating_sub(5_000);
+        BenchStamps {
+            sequence,
+            intended_ns,
+            emit_ns: intended_ns.saturating_add(2_000),
+            warmup: false,
+            measurement_start_seq: 0,
+            sequence_end: None,
+            burst: None,
+        }
+    }
+
+    fn envelope_with(stamps: BenchStamps) -> RuntimeEnvelope {
+        RuntimeEnvelope::from_string("bench-source", "payload").with_bench_stamps(stamps)
+    }
 
     fn make_bench_envelope(seq: u64) -> RuntimeEnvelope {
-        let now_ns = monotonic_unix_ns();
-        // Subtract a known amount so latency is measurable
-        let intended_ns = now_ns.saturating_sub(5_000); // 5µs ago
-        RuntimeEnvelope::from_string("bench-source", "payload")
-            .with_metadata("bench.sequence", seq.to_string())
-            .with_metadata("bench.intended_ns", intended_ns.to_string())
+        envelope_with(stamps(seq))
     }
 
     #[tokio::test]
@@ -1472,12 +1443,7 @@ mod tests {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         source.init().await.unwrap();
         while let Some(message) = source.poll().await.unwrap() {
-            if message
-                .header
-                .metadata
-                .iter()
-                .any(|(k, v)| k.as_ref() == "bench.sequence" && v.as_ref() == "50")
-            {
+            if message.header.bench.is_some_and(|stamps| stamps.sequence == 50) {
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
             sink.collect(message).await.unwrap();
@@ -1675,10 +1641,13 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
         let source_origin_beyond_interval_bound = monotonic_unix_ns() - 400_000_000_000;
-        let envelope = make_bench_envelope(0).with_metadata(
-            "bench.measurement_start_unix_ns",
-            source_origin_beyond_interval_bound.to_string(),
-        );
+        let envelope = envelope_with(BenchStamps {
+            burst: Some(BurstStamps {
+                phase: BurstPhase::Before,
+                measurement_start_unix_ns: Some(source_origin_beyond_interval_bound),
+            }),
+            ..stamps(0)
+        });
         sink.collect(envelope).await.unwrap();
 
         let error = sink.close().await.unwrap_err();
@@ -1726,9 +1695,11 @@ mod tests {
         let scheduled =
             [now - 20_000_000_000, now + 60_000_000_000, now - LATENCY_HIGHEST_NS - 1_000_000_000];
         for (seq, intended) in (0_u64..).zip(scheduled) {
-            let envelope = RuntimeEnvelope::from_string("bench-source", "payload")
-                .with_metadata("bench.sequence", seq.to_string())
-                .with_metadata("bench.intended_ns", intended.to_string());
+            let envelope = envelope_with(BenchStamps {
+                intended_ns: intended,
+                emit_ns: intended,
+                ..stamps(seq)
+            });
             sink.collect(envelope).await.unwrap();
         }
         sink.close().await.unwrap();
@@ -1766,11 +1737,9 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
 
-        // Send message during warmup
-        let env = make_bench_envelope(0);
-        sink.collect(env).await.unwrap();
+        // Without a source warmup marker, the sink's own 1 s warmup applies.
+        sink.collect(RuntimeEnvelope::from_string("source", "payload")).await.unwrap();
 
-        // With 1s warmup, this message should not be recorded
         assert_eq!(sink.recorded_count(), 0);
         assert_eq!(sink.message_count(), 1);
         let tracker = sink.sequence_tracker().unwrap();
@@ -1785,7 +1754,9 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(1_010)).await;
         let before_measurement_ns = wall_clock_ns();
-        sink.collect(make_bench_envelope(1)).await.unwrap();
+        sink.collect(envelope_with(BenchStamps { measurement_start_seq: 1, ..stamps(1) }))
+            .await
+            .unwrap();
         let tracker = sink.sequence_tracker().unwrap();
         assert_eq!(tracker.expected(), 1);
         assert_eq!(tracker.received(), 1);
@@ -1814,15 +1785,10 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
 
-        sink.collect(make_bench_envelope(29_999).with_metadata("bench.warmup", "true"))
-            .await
-            .unwrap();
-        sink.collect(make_bench_envelope(30_000).with_metadata("bench.warmup", "false"))
-            .await
-            .unwrap();
-        sink.collect(make_bench_envelope(30_001).with_metadata("bench.warmup", "false"))
-            .await
-            .unwrap();
+        for (sequence, warmup) in [(29_999, true), (30_000, false), (30_001, false)] {
+            let stamps = BenchStamps { warmup, measurement_start_seq: 30_000, ..stamps(sequence) };
+            sink.collect(envelope_with(stamps)).await.unwrap();
+        }
 
         let tracker = sink.sequence_tracker().unwrap();
         assert_eq!(tracker.expected(), 2);
@@ -1842,11 +1808,10 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
 
-        sink.collect(
-            make_bench_envelope(30_001)
-                .with_metadata("bench.warmup", "false")
-                .with_metadata("bench.measurement_start_seq", "30000"),
-        )
+        sink.collect(envelope_with(BenchStamps {
+            measurement_start_seq: 30_000,
+            ..stamps(30_001)
+        }))
         .await
         .unwrap();
 
@@ -1862,12 +1827,11 @@ mod tests {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
         for seq in 30_000..30_010_u64 {
-            sink.collect(
-                make_bench_envelope(seq)
-                    .with_metadata("bench.warmup", "false")
-                    .with_metadata("bench.measurement_start_seq", "30000")
-                    .with_metadata("bench.sequence_end", "30010"),
-            )
+            sink.collect(envelope_with(BenchStamps {
+                measurement_start_seq: 30_000,
+                sequence_end: Some(30_010),
+                ..stamps(seq)
+            }))
             .await
             .unwrap();
         }
@@ -1881,13 +1845,9 @@ mod tests {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
         for seq in [0_u64, 1, 3, 2, 3, 4] {
-            sink.collect(
-                make_bench_envelope(seq)
-                    .with_metadata("bench.measurement_start_seq", "0")
-                    .with_metadata("bench.sequence_end", "8"),
-            )
-            .await
-            .unwrap();
+            sink.collect(envelope_with(BenchStamps { sequence_end: Some(8), ..stamps(seq) }))
+                .await
+                .unwrap();
         }
         let dir = std::env::temp_dir().join(format!("wafer-sequence-csv-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1947,8 +1907,6 @@ mod tests {
     /// `last_v1_ns()` are accessible and ordered.
     #[tokio::test]
     async fn swap_boundary_detection() {
-        use crate::queue::RuntimeEnvelope;
-
         let config = BenchSinkConfig {
             warmup_secs: 0,
             track_sequences: false,
@@ -1962,18 +1920,14 @@ mod tests {
         // envelope metadata `plugin.version`, exactly what pass-through-v1
         // and pass-through-v2 emit at runtime.
         for seq in 0..20 {
-            let env = RuntimeEnvelope::from_string("bench-source", "payload")
-                .with_metadata("bench.sequence", seq.to_string())
-                .with_metadata("plugin.version", "1.0.0");
+            let env = make_bench_envelope(seq).with_metadata("plugin.version", "1.0.0");
             sink.collect(env).await.unwrap();
         }
         // Give the recorder a monotonic gap between phases so first_v2_ns
         // is strictly greater than last_v1_ns even at sub-ns clock resolution.
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
         for seq in 20..40 {
-            let env = RuntimeEnvelope::from_string("bench-source", "payload")
-                .with_metadata("bench.sequence", seq.to_string())
-                .with_metadata("plugin.version", "2.0.0");
+            let env = make_bench_envelope(seq).with_metadata("plugin.version", "2.0.0");
             sink.collect(env).await.unwrap();
         }
 
@@ -2067,11 +2021,13 @@ mod tests {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
         let source_origin = monotonic_unix_ns().saturating_sub(offset_ns);
-        let envelope = make_bench_envelope(0)
-            .with_metadata("bench.measurement_start_seq", "0")
-            .with_metadata("bench.measurement_start_unix_ns", source_origin.to_string())
-            .with_metadata("bench.warmup", "false")
-            .with_metadata("bench.phase", "after");
+        let envelope = envelope_with(BenchStamps {
+            burst: Some(BurstStamps {
+                phase: BurstPhase::After,
+                measurement_start_unix_ns: Some(source_origin),
+            }),
+            ..stamps(0)
+        });
         sink.collect(envelope).await.unwrap();
 
         let dir = std::env::temp_dir()
@@ -2129,12 +2085,13 @@ mod tests {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
         let source_origin = monotonic_unix_ns();
-        for (sequence, phase) in [(0, "before"), (1, "burst"), (2, "after")] {
-            let envelope = make_bench_envelope(sequence)
-                .with_metadata("bench.measurement_start_seq", "0")
-                .with_metadata("bench.measurement_start_unix_ns", source_origin.to_string())
-                .with_metadata("bench.warmup", "false")
-                .with_metadata("bench.phase", phase);
+        for (sequence, phase) in
+            (0..).zip([BurstPhase::Before, BurstPhase::Burst, BurstPhase::After])
+        {
+            let envelope = envelope_with(BenchStamps {
+                burst: Some(BurstStamps { phase, measurement_start_unix_ns: Some(source_origin) }),
+                ..stamps(sequence)
+            });
             sink.collect(envelope).await.unwrap();
         }
 

@@ -22,7 +22,7 @@ pub struct RuntimeEnvelope {
 }
 ```
 
-`EnvelopeHeader` holds immutable identity metadata (`id`, `timestamp`, `source`, `content_type`, `metadata` key-value pairs) behind an `Arc`. `payload` is a `bytes::Bytes` handle — refcounted and zero-copy from MQTT/network ingestion through the entire pipeline. `Lineage` is the only field that is deep-copied on clone; it contains two `Option<Box<str>>` fields (~32 bytes worst-case).
+`EnvelopeHeader` holds immutable identity metadata (`id`, `timestamp`, `source`, `content_type`, `metadata` key-value pairs) behind an `Arc`, plus `bench`, the `BenchSource` sequence and timing stamps. `bench` is host-only: it is never lowered into a Wasm guest, and a Wasm transform copies it from input to output, so harness bookkeeping adds no per-hop marshalling. `payload` is a `bytes::Bytes` handle — refcounted and zero-copy from MQTT/network ingestion through the entire pipeline. `Lineage` is the only field that is deep-copied on clone; it contains two `Option<Box<str>>` fields (~32 bytes worst-case).
 
 Clone cost: one `Arc` increment (~5 ns) + one `Bytes` increment (~5 ns) + `Lineage` copy (~32 bytes shallow) ≈ **~10 ns total**, down from ~300–400 ns with full-clone semantics.
 

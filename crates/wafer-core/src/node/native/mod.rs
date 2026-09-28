@@ -101,7 +101,7 @@ impl Transform for NativeTransform {
         Box::pin(async move {
             match result {
                 Ok(output_bytes) => {
-                    // Preserve header (including bench metadata) but replace payload
+                    // Preserve header (including bench stamps) but replace payload
                     let output = RuntimeEnvelope {
                         header: input.header.clone(),
                         payload: Bytes::from(output_bytes),

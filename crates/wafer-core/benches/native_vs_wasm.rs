@@ -20,7 +20,7 @@ use tokio::runtime::Runtime;
 
 use wafer_core::node::native::{NativeFilter, NativeRouter, NativeTransform};
 use wafer_core::node::{Filter, Router, Transform};
-use wafer_core::queue::RuntimeEnvelope;
+use wafer_core::queue::{BenchStamps, RuntimeEnvelope};
 
 use bytes::Bytes;
 
@@ -184,7 +184,7 @@ fn bench_native_router(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark: Envelope creation + metadata overhead (for `BenchSource` evaluation).
+/// Benchmark: envelope creation with the stamps `BenchSource` attaches.
 fn bench_bench_envelope(c: &mut Criterion) {
     let mut group = c.benchmark_group("bench_envelope");
     group.measurement_time(Duration::from_secs(5));
@@ -194,12 +194,20 @@ fn bench_bench_envelope(c: &mut Criterion) {
     for size in sizes {
         group.throughput(Throughput::Elements(1));
 
-        group.bench_with_input(BenchmarkId::new("with_metadata", size), &size, |b, &size| {
+        group.bench_with_input(BenchmarkId::new("with_bench_stamps", size), &size, |b, &size| {
             let payload = Bytes::from(vec![0x42u8; size]);
             b.iter(|| {
-                let env = RuntimeEnvelope::new("bench-source", payload.clone())
-                    .with_metadata("bench.sequence", "12345")
-                    .with_metadata("bench.intended_ns", "1000000000");
+                let env = RuntimeEnvelope::new("bench-source", payload.clone()).with_bench_stamps(
+                    BenchStamps {
+                        sequence: 12_345,
+                        intended_ns: 1_000_000_000,
+                        emit_ns: 1_000_000_000,
+                        warmup: false,
+                        measurement_start_seq: 0,
+                        sequence_end: None,
+                        burst: None,
+                    },
+                );
                 black_box(env)
             });
         });

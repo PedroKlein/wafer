@@ -32,7 +32,7 @@ WAFER uses the Wasm threshold-filter component, Native uses the equivalent Rust 
 
 ### In-process path
 
-`BenchSource` and `BenchSink` support boundary, depth, memory, containment, and hot-swap experiments. `BenchSource` paces an open-loop schedule from an OS thread and stamps each message with its scheduled time (`bench.intended_ns`) and actual emit time (`bench.emit_ns`). `BenchSink` records latency (arrival minus scheduled), service time, source lag, throughput, sequence continuity, and version transitions without replacing the production orchestrator. [ADR-0017](../adr/0017-loadgen-measurement-design.md) records the measurement design for both recording paths.
+`BenchSource` and `BenchSink` support boundary, depth, memory, containment, and hot-swap experiments. `BenchSource` paces an open-loop schedule from an OS thread and stamps each message with its scheduled time (`intended_ns`) and actual emit time (`emit_ns`). The stamps travel in the envelope's host-only `BenchStamps`, so Wasm guests neither copy nor can change them. `BenchSink` records latency (arrival minus scheduled), service time, source lag, throughput, sequence continuity, and version transitions without replacing the production orchestrator. [ADR-0017](../adr/0017-loadgen-measurement-design.md) records the measurement design for both recording paths.
 
 E-Swap-4 adds one deterministic source schedule after a 30-second warmup:
 
@@ -113,7 +113,7 @@ The restart comparators are measured rather than assigned a synthetic 100 percen
 
 ### E-Swap-4 true burst
 
-E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 source-origin 100 ms primary buckets over `[0,120s)`, a separate 100-bucket drain series over `[120s,130s)`, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. The source carries `bench.measurement_start_unix_ns`; sink offsets use the explicitly labeled `unix-epoch-source-sink-alignment` clock while scheduling and source-completion duration remain monotonic. Full-run counts reconcile the primary, drain, and O(1) after-drain counters. Any receive at or after 130 seconds, right-censored drain, loss, or duplication rejects the run. Reconciled drain arrivals remain separate completion evidence and do not enter the t=60 disruption estimator. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
+E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run records source and sink phase populations, 1,200 source-origin 100 ms primary buckets over `[0,120s)`, a separate 100-bucket drain series over `[120s,130s)`, the scheduled and actual swap boundary, sequence integrity, internal phases, and one sink-observed gap. Each burst-phase message carries the source's `measurement_start_unix_ns` stamp; sink offsets use the explicitly labeled `unix-epoch-source-sink-alignment` clock while scheduling and source-completion duration remain monotonic. Full-run counts reconcile the primary, drain, and O(1) after-drain counters. Any receive at or after 130 seconds, right-censored drain, loss, or duplication rejects the run. Reconciled drain arrivals remain separate completion evidence and do not enter the t=60 disruption estimator. The previous constant-2,000 msg/s repeated-swap pilot is diagnostic only.
 
 ### E-Swap-5 failed replacement
 

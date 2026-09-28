@@ -42,7 +42,7 @@ into three sources:
    transform → sink channel → BenchSink. Each hop is bounded MPSC send
    + recv; ~10-50 µs each on macOS.
 3. **BenchSink measurement point.** Latency reference is
-   `bench.intended_ns` (source's scheduled publish time). If the source's
+   the `intended_ns` stamp (source's scheduled publish time). If the source's
    actual publish lags its scheduled time, that lag rolls into the observed
    latency. The sink records the lag on its own in `source-lag.hdr`.
 
