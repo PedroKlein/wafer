@@ -11,6 +11,10 @@
 name = "e-perf-4-100kb"
 description = "per-hop overhead — payload 100kb"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

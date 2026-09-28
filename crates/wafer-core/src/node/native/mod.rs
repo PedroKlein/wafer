@@ -106,7 +106,7 @@ impl Transform for NativeTransform {
                         header: input.header.clone(),
                         payload: Bytes::from(output_bytes),
                         lineage: input.lineage,
-                        retry_count: input.retry_count,
+                        retry_count: 0,
                     };
                     Ok(ProcessResult::Emit(output))
                 }
@@ -498,6 +498,17 @@ pub mod functions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn native_output_starts_with_a_fresh_retry_budget() {
+        let mut node = NativeTransform::passthrough("native");
+        let mut input = RuntimeEnvelope::from_string("source", "payload");
+        input.retry_count = 2;
+
+        let result = Transform::process(&mut node, input).await.expect("passthrough");
+        let ProcessResult::Emit(output) = result else { panic!("expected Emit, got {result:?}") };
+        assert_eq!(output.retry_count, 0, "retries are spent per node, not per message");
+    }
 
     #[tokio::test]
     async fn native_transform_uppercase() {

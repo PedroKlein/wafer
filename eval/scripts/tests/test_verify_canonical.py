@@ -508,8 +508,12 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
                 }[experiment]},
                 "attempts_failed": "2",
                 "recovery_count": "2",
+                "dlq_sent": "2",
             }],
+            "dlq_sent_total": 2,
+            "dlq_records": 2,
         }))
+        (result / "dlq.jsonl").write_text('{"reason":{"type":"trapped"}}\n' * 2)
     if experiment == "e-iso-7":
         (result / "branch-isolation.json").write_text(json.dumps({
             "condition": condition,
@@ -644,6 +648,7 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(condition="panic"), "expected condition"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(traps_total="bogus"), "invalid runtime metrics"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(recovery_count="1"), "epoch recovery count"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(dlq_sent="1"), "dlq.jsonl holds 2 records but nodes sent 1"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(target_shortfall_messages=1, offered_messages=999, received_messages=999, throughput={"total_messages": 999}, latency_ns={"sample_count": 999}), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(gap_messages=1), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_b"].update(source_node="source_a"), "independent source populations"),
@@ -1016,6 +1021,7 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
             "intended": 120_000,
             "rejected": 0,
             "enqueued": 120_000,
+            "acked": 120_000,
             "received_events": 120_000,
             "received_unique": 120_000,
         },
@@ -1026,6 +1032,9 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "intended": 120_000,
         "rejected": 0,
         "enqueued": 120_000,
+        "acked": 120_000,
+        "unacked_at_exit": 0,
+        "connects": 1,
         "measurement_duration_ns": 120_000_000_000,
         "deadline_misses": 0,
     }
@@ -1085,6 +1094,9 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         "intended": 60_000,
         "rejected": 100,
         "enqueued": 59_900,
+        "acked": 59_900,
+        "unacked_at_exit": 0,
+        "connects": 1,
         "measurement_duration_ns": 60_000_000_000,
         "deadline_misses": 0,
     }
@@ -1096,6 +1108,18 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         path.write_text(json.dumps(publisher))
         assert "counters do not reconcile" in " ".join(CONTRACT.check_publisher_summary(path))
         publisher["enqueued"] -= 1
+        publisher["unacked_at_exit"] = 1
+        publisher["acked"] -= 1
+        path.write_text(json.dumps(publisher))
+        assert "1 messages were never acknowledged" in " ".join(
+            CONTRACT.check_publisher_summary(path)
+        )
+        publisher["unacked_at_exit"] = 0
+        publisher["acked"] += 1
+        publisher["connects"] = 2
+        path.write_text(json.dumps(publisher))
+        assert "connected 2 times" in " ".join(CONTRACT.check_publisher_summary(path))
+        publisher["connects"] = 1
         publisher["exit_reason"] = "sigterm"
         path.write_text(json.dumps(publisher))
         assert CONTRACT.check_publisher_summary(path) == [
@@ -1153,6 +1177,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
                 "intended": 60_000,
                 "rejected": 0,
                 "enqueued": 60_000,
+                "acked": 60_000,
                 "received_events": 60_000,
                 "received_unique": 60_000,
                 "downstream_lost": 0,
@@ -1197,6 +1222,7 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
             intended=540_000,
             rejected=0,
             enqueued=540_000,
+            acked=540_000,
             received_events=540_000,
             received_unique=540_000,
             downstream_lost=0,
@@ -1244,12 +1270,13 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         capacity["measurement_duration_ns"] = 60_000_000_000
         capacity["messages"]["received_unique"] -= 1
         path.write_text(json.dumps(capacity))
-        assert "enqueued counters do not reconcile" in " ".join(
+        assert "acknowledged counters do not reconcile" in " ".join(
             CONTRACT.check_capacity_run_result(path)
         )
 
         publisher["rejected"] = 0
         publisher["enqueued"] = 60_000
+        publisher["acked"] = 60_000
         subscriber["unexpected_sequence_count"] = 0
         capacity["messages"]["received_unique"] = 60_000
         capacity["messages"]["ignored_warmup"] = 0

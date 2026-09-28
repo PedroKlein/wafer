@@ -17,11 +17,8 @@
 > adopts a swap without waiting for a new input message, because the input
 > wait also wakes on the watch channel.
 >
-> The `NodeState` type in `wafer-types` still has `Draining` and `Retired`
-> variants (and `NodeStateTracker` still has transitions into them) from the
-> drain-and-flip design. No runner calls those transitions, so the control
-> plane never reports either state for a node under the watch-channel
-> mechanism.
+> `NodeState` has no drain-and-flip states: a node is `Starting`, `Running`,
+> `Error` or `Recovering`, and a swap does not change it.
 >
 > The remainder is the historical mechanism record; ACK/convergence names below
 > are superseded by the current response vocabulary.

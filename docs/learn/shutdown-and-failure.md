@@ -35,7 +35,7 @@ stateDiagram-v2
     Aborted --> [*]
 ```
 
-The diagram combines several node-local paths. It does not imply that every task visits every state or that cleanup occurs in the displayed vertical order. Its `Running` is a conceptual phase, not the reported `NodeState`: a Wasm Transform, Filter, or Router node's tracker starts in `Starting` and is not moved to `Running` after a successful startup, so a node that never failed reports `Starting` for the whole run. The tracker reaches `Running` only after a recovery (or in the native passthrough loop).
+The diagram combines several node-local paths. It does not imply that every task visits every state or that cleanup occurs in the displayed vertical order.
 
 ### Natural completion
 
@@ -119,7 +119,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 **Intended design:** The combination of bounded retries, DLQ routing, store recovery, and cooperative cleanup aims to keep one bad message or guest instance from leaving the process indefinitely stuck.
 
-**Known drift:** Shutdown is cancel-all, not reverse-topological, and does not prove completion of every in-flight message; only sinks drain their own buffered queue. The guest `close()` export is never called. A failed DLQ enqueue, including a `dlq` action with no `[dead_letter]` sink configured, is counted as `dlq_lost` but cannot recover the message. The `teardown` action stops the node permanently and does not update its reported state. Healthy Wasm nodes report `Starting` rather than `Running`.
+**Known drift:** Shutdown is cancel-all, not reverse-topological, and does not prove completion of every in-flight message; only sinks drain their own buffered queue. The guest `close()` export is never called. A failed DLQ enqueue (full or closed sink) is counted as `dlq_lost` but cannot recover the message; the validator rejects a `dlq` action with no `[dead_letter]` sink. The `teardown` action stops the node permanently and does not update its reported state.
 
 ## Evidence
 

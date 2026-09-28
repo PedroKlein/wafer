@@ -9,9 +9,9 @@ use std::sync::Arc;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
+use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker};
 use crate::queue::RuntimeEnvelope;
-use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
+use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     continue_after_policy_action, next_input, send_downstream, take_pending_swap,
@@ -72,7 +72,9 @@ async fn recover_after_timeout(
             true
         }
         Err(error) => {
+            state.transition_to_error();
             tracing::error!(node = filter.node_id(), %error, "recovery failed");
+            policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
             false
         }
     }
@@ -103,6 +105,7 @@ pub async fn run_filter_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
@@ -111,7 +114,6 @@ pub async fn run_filter_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
-            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
             let result = match payload {
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
@@ -121,6 +123,7 @@ pub async fn run_filter_loop(
             };
             match result {
                 Ok(()) => {
+                    policy.flush_to_dlq(&DlqReason::HotSwapDrain, &metrics);
                     progress.mark_replacement_adopted();
                     pending_swap_progress = Some(progress);
                     metrics.record_swap();
@@ -152,9 +155,7 @@ pub async fn run_filter_loop(
         };
 
         // 2. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        let guard = ProcessingGuard::enter(&state);
         let result = filter.evaluate(&envelope).await;
-        drop(guard);
 
         match result {
             Ok(outcome) => {
@@ -185,7 +186,7 @@ pub async fn run_filter_loop(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
                 metrics.record_error(error);
-                metrics.record_dropped_on_recovery();
+                policy.record_condemned(envelope, error, &metrics);
                 let msg = error.to_string();
                 tracing::error!(
                     node = filter.node_id(),
@@ -201,7 +202,9 @@ pub async fn run_filter_loop(
                         }
                     }
                     Err(error) => {
+                        state.transition_to_error();
                         tracing::error!(node = filter.node_id(), %error, "recovery failed");
+                        policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
                         break;
                     }
                 }
@@ -215,7 +218,7 @@ pub async fn run_filter_loop(
         }
     }
 
-    policy.flush_to_dlq("shutdown", &metrics);
+    policy.flush_to_dlq(&DlqReason::Shutdown, &metrics);
 }
 
 #[cfg(test)]
@@ -258,13 +261,11 @@ mod tests {
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-filter");
         let cancel = CancellationToken::new();
-        let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
 
         cancel.cancel();
 
         // Verify the loop infrastructure is valid
-        assert!(!state.is_processing());
         assert_eq!(metrics.processed(), 0);
         assert_eq!(metrics.attempts_failed(), 0);
     }

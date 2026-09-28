@@ -18,6 +18,10 @@ transform = 10000000
 filter = 500000
 router = 500000
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

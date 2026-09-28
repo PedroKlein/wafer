@@ -18,6 +18,10 @@ epoch_tick_ms = 10
 [engine.fuel]
 transform = 10000000
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

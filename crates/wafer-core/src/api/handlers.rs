@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::orchestrator::PipelineHandle;
 use crate::runner::error_policy::{ErrorCategory, TrapKind};
+use wafer_types::NodeState;
 
 /// Shared state type for axum handlers.
 pub type AppState = Arc<PipelineHandle>;
@@ -35,7 +36,7 @@ struct ReadyResponse {
 #[derive(Serialize)]
 pub struct NodeInfoResponse {
     pub id: String,
-    pub state: String,
+    pub state: NodeState,
     pub processed: u64,
     pub failed: u64,
     pub replacement_eligible: bool,
@@ -80,22 +81,21 @@ pub async fn ready(State(orch): State<AppState>) -> impl IntoResponse {
 /// GET /api/v1/nodes — list all nodes with state and metrics
 pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoResponse>> {
     let swappable = orch.swappable_nodes();
-    let nodes: Vec<NodeInfoResponse> = orch
-        .config()
-        .nodes
-        .keys()
-        .map(|id| {
-            let state =
-                orch.node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
+    let mut ids: Vec<&String> = orch.config().nodes.keys().collect();
+    ids.sort_unstable();
+    let nodes: Vec<NodeInfoResponse> = ids
+        .into_iter()
+        .filter_map(|id| {
+            let state = orch.node_state(id)?;
             let (processed, failed) =
                 orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
-            NodeInfoResponse {
+            Some(NodeInfoResponse {
                 id: id.clone(),
                 state,
                 processed,
                 failed,
                 replacement_eligible: swappable.contains(&id.as_str()),
-            }
+            })
         })
         .collect();
     Json(nodes)
@@ -111,13 +111,7 @@ pub async fn get_node(
         orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
-    Ok(Json(NodeInfoResponse {
-        id,
-        state: format!("{state:?}"),
-        processed,
-        failed,
-        replacement_eligible: swappable,
-    }))
+    Ok(Json(NodeInfoResponse { id, state, processed, failed, replacement_eligible: swappable }))
 }
 
 fn replacement_guard_error(error: &crate::error::WaferError) -> (StatusCode, String) {
