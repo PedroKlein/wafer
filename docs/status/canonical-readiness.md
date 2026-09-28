@@ -17,7 +17,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.
 - Final campaign: not approved and not started (`campaign_started=false`).
 
-No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, and targeted-pilot results are diagnostic and are not pooled with the final N=30 batch.
+No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, and targeted-pilot results are diagnostic and are not pooled with the final N=30 batch. The laptop shakedown scripts (`run-e-*-shakedown.sh`, `run-e-iso-7-8.sh`) and the Docker eKuiper stack named in the per-experiment history below no longer exist; every experiment runs through `eval/scripts/run-rpi5-canonical.sh`.
 
 ## Remaining admission path
 

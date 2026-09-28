@@ -29,7 +29,7 @@ JSON
 before="$(count_result_dirs)"
 plan="$(
   "$ROOT/eval/scripts/run-experiment.sh" \
-    --config "$ROOT/eval/configs/e-perf-4/pipeline-c-passthrough-120b.toml" \
+    --config "$ROOT/eval/configs/canonical/e-perf-4-120b.toml" \
     --experiment e-perf-4 \
     --host rpi5 \
     --canonical \
@@ -112,7 +112,7 @@ cat >"$tmp/dirty.json" <<'JSON'
 }
 JSON
 if "$ROOT/eval/scripts/run-experiment.sh" \
-    --config "$ROOT/eval/configs/e-perf-4/pipeline-c-passthrough-120b.toml" \
+    --config "$ROOT/eval/configs/canonical/e-perf-4-120b.toml" \
     --experiment e-perf-4 \
     --host rpi5 \
     --canonical \
