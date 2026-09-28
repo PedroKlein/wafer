@@ -11,6 +11,7 @@ use crate::engine::Capabilities;
 use crate::engine::WaferEngine;
 use crate::engine::state::WaferState;
 use crate::error::{Result, WaferError};
+use crate::node::NodeKind;
 use crate::node::wasm::PreparedTransformSwap;
 use crate::runner::{HotSwapProgress, SwapPayload};
 
@@ -228,7 +229,7 @@ pub async fn prepare_transform_swap_timed(
         node_id,
         capabilities,
         memory_limit,
-        engine.fuel_limit(),
+        engine.fuel_budget(NodeKind::Transform, None),
         progress,
     )
     .await
@@ -299,6 +300,7 @@ pub async fn prepare_filter_swap_timed(
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
@@ -315,7 +317,7 @@ pub async fn prepare_filter_swap_timed(
     );
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
@@ -348,6 +350,7 @@ pub async fn prepare_router_swap_timed(
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let mut timeline = SwapTimeline::start();
@@ -364,7 +367,7 @@ pub async fn prepare_router_swap_timed(
     );
     store.limiter(|s| s.limits_mut());
     // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;

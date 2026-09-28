@@ -143,6 +143,7 @@ pub async fn hot_swap(
     Json(body): Json<HotSwapRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     use crate::config::NodeDef;
+    use crate::node::NodeKind;
     use crate::orchestrator::hotswap::{
         prepare_filter_swap_timed, prepare_router_swap_timed,
         prepare_transform_swap_timed_with_fuel,
@@ -163,34 +164,25 @@ pub async fn hot_swap(
     let _replacement_guard =
         orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
 
-    let resolve_capabilities = |capabilities| {
-        capabilities_from_config(capabilities)
-            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
-    };
-    let (kind, capabilities, memory_limit, transform_fuel) = match engine_config.nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => (
-            SwapKind::Transform,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
-            wasm.fuel.or(engine_config.engine.fuel.transform),
-        ),
-        Some(NodeDef::Filter(wasm)) => (
-            SwapKind::Filter,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.filter),
-            None,
-        ),
-        Some(NodeDef::Router(wasm)) => (
-            SwapKind::Router,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.router),
-            None,
-        ),
+    let (kind, node_kind, wasm, memory_limit) = match engine_config.nodes.get(&id) {
+        Some(NodeDef::Transform(wasm)) => {
+            (SwapKind::Transform, NodeKind::Transform, wasm, engine_config.engine.memory.transform)
+        }
+        Some(NodeDef::Filter(wasm)) => {
+            (SwapKind::Filter, NodeKind::Filter, wasm, engine_config.engine.memory.filter)
+        }
+        Some(NodeDef::Router(wasm)) => {
+            (SwapKind::Router, NodeKind::Router, wasm, engine_config.engine.memory.router)
+        }
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
         }
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     };
+    let capabilities = capabilities_from_config(&wasm.capabilities)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    let memory_limit = wasm.memory_limit.unwrap_or(memory_limit);
+    let fuel_limit = engine.fuel_budget(node_kind, wasm.fuel);
 
     let wasm_bytes = tokio::fs::read(&body.wasm_path)
         .await
@@ -205,7 +197,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
-                transform_fuel,
+                fuel_limit,
                 progress,
             )
             .await
@@ -217,6 +209,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
+                fuel_limit,
                 progress,
             )
             .await
@@ -228,6 +221,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
+                fuel_limit,
                 progress,
             )
             .await

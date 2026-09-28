@@ -1,10 +1,6 @@
 #![cfg(test)]
 #![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
 #![expect(
-    clippy::let_underscore_must_use,
-    reason = "test: fire-and-forget channel sends during setup/teardown"
-)]
-#![expect(
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
 )]
@@ -98,7 +94,6 @@ epoch_deadline = 100
 [engine.hot_swap]
 canary_success_count = 32
 canary_window_ms = 10000
-max_rollback_retries = 3
 
 [nodes.source]
 type = "source"
@@ -214,9 +209,8 @@ async fn hotswap_process_time_rollback() {
         other => panic!("B1: expected RolledBack outcome, got {other:?}"),
     }
 
-    // Additionally verify the metric fired (existing behavior).
-    let rollback_detected = handle.node_metrics("transform").is_some_and(|m| m.rollbacks() > 0);
-    assert!(rollback_detected, "NodeMetrics::rollbacks() must be > 0");
+    let rollbacks = handle.node_metrics("transform").map_or(0, |m| m.rollbacks());
+    assert_eq!(rollbacks, 1, "one trapping replacement rolls back once");
 
     // After rollback, v1 should continue processing messages
     let post_rollback_processed = handle.node_metrics("transform").map_or(0, |m| m.processed());
@@ -302,143 +296,4 @@ async fn hotswap_budget_trap_in_canary_window_rolls_back() {
         .await
         .expect("pipeline should complete after rollback")
         .expect("pipeline should shut down cleanly");
-}
-
-/// Test: bounded rollback retries — canary retains `trap_count` across rollbacks.
-///
-/// With `max_rollback_retries` = 1 and a v2 that traps on the first `process()`:
-///   - First trap → `record_trap` increments to 1 (within budget), rollback fires.
-///   - Rollback succeeds; canary is retained (B2 fix) with `trap_count` = 1.
-///   - No subsequent v2 traps because v1 is now live and doesn't trap.
-///
-/// This test verifies the happy-path with a single trap. Budget EXHAUSTION
-/// itself is not reachable through this integration test because a swap to
-/// `v2-panics` after rollback creates a fresh canary (`trap_count` resets)
-/// and v1 (`pass-through`) never traps. Instead the exhaustion boundary is
-/// exercised directly on the production `CanaryCounters` state machine in
-/// the unit tests:
-///
-///   - `canary_counters_bounds_trap_count`
-///   - `canary_counters_record_trap_matches_spec_across_budgets`
-///   - `canary_counters_record_success_and_window_expiry`
-///
-/// (see `crates/wafer-core/src/runner/mod.rs`). Post-BL-4, those tests
-/// invoke the production `CanaryCounters::record_trap` directly rather
-/// than modelling it, so a refactor breaking the state machine will
-/// surface immediately.
-///
-/// See B2 in the T1 verify review notes:
-/// docs/decisions/hotswap-canary-budget.md
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn hotswap_bounded_rollback_thrash() {
-    if !Path::new(PASS_THROUGH_WASM).exists() {
-        eprintln!("SKIP: pass-through.wasm not built at {PASS_THROUGH_WASM}");
-        return;
-    }
-    if !Path::new(PASS_THROUGH_V2_PANICS_WASM).exists() {
-        eprintln!("SKIP: pass-through-v2-panics.wasm not built at {PASS_THROUGH_V2_PANICS_WASM}");
-        return;
-    }
-
-    let tmp = tempfile::tempdir().expect("tmp dir");
-    let bench_dir = tmp.path().to_path_buf();
-    let _env_guard = BenchDirEnv::set(&bench_dir);
-
-    // Use max_rollback_retries = 1 to test exhaustion
-    let toml = format!(
-        r#"
-[pipeline]
-name = "a17-thrash-test"
-
-[engine]
-epoch_deadline = 100
-
-[engine.hot_swap]
-canary_success_count = 32
-canary_window_ms = 10000
-max_rollback_retries = 1
-
-[nodes.source]
-type = "source"
-kind = "bench-source"
-rate = 1000.0
-total_messages = 5000
-warmup_messages = 0
-payload_size = 64
-
-[nodes.transform]
-type = "transform"
-plugin = {PASS_THROUGH_WASM:?}
-plugin_version = "1.0.0"
-
-[nodes.sink]
-type = "sink"
-kind = "bench-sink"
-warmup_secs = 0
-track_sequences = true
-track_hotswap = true
-
-[[edges]]
-from = "source"
-to = "transform"
-
-[[edges]]
-from = "transform"
-to = "sink"
-"#,
-    );
-    let config: Config = toml::from_str(&toml).expect("parse");
-    let mut orchestrator = launch_pipeline(config, None).await.expect("launch_pipeline");
-
-    let handle = orchestrator.handle();
-
-    // Let v1 process some messages
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    // Hot-swap to v2-panics
-    let engine = handle.engine();
-    let v2_bytes = std::fs::read(PASS_THROUGH_V2_PANICS_WASM).expect("read v2 wasm");
-    let (progress, _rx) = HotSwapProgress::channel();
-    let v2_result = wafer_core::orchestrator::hotswap::prepare_transform_swap_timed(
-        engine,
-        &v2_bytes,
-        "transform",
-        wafer_core::engine::Capabilities::sandbox(),
-        64 * 1024 * 1024,
-        progress,
-    )
-    .await;
-    let timed_swap = v2_result.expect("prepare v2 swap");
-
-    handle.send_swap("transform", timed_swap.payload).expect("send_swap");
-
-    // Wait for rollback and recovery
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // With max_rollback_retries = 1:
-    // - First trap triggers rollback (success, back to v1)
-    // - After rollback, v1 should be running fine
-    let metrics = handle.node_metrics("transform").expect("transform metrics");
-
-    // Rollback should have fired exactly once (max_rollback_retries = 1 means
-    // the first trap triggers rollback; subsequent traps would exhaust the
-    // budget, but since rollback succeeds and v1 works, there are no more traps)
-    assert!(metrics.rollbacks() >= 1, "Expected at least 1 rollback, got {}", metrics.rollbacks());
-
-    // Recovery count should be >= 1 (rollback includes recovery transition)
-    assert!(
-        metrics.recovery_count() >= 1,
-        "Expected recovery_count >= 1, got {}",
-        metrics.recovery_count()
-    );
-
-    // Pipeline should still be processing (v1 is restored)
-    let processed_after = metrics.processed();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    let processed_final = handle.node_metrics("transform").map_or(0, |m| m.processed());
-    assert!(processed_final > processed_after, "v1 should continue processing after rollback");
-
-    // Clean shutdown
-    orchestrator.cancel();
-    let _ = tokio::time::timeout(Duration::from_secs(5), orchestrator.run_until_complete()).await;
 }

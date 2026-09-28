@@ -77,7 +77,7 @@ The documented node-state tracker has Error, Recovering, and Running transitions
 - **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `pub async fn try_hot_swap`, `self.store = old_store`, `pub async fn recover_from_cached_pre`
 - **Source:** [`crates/wafer-core/src/node/metrics.rs`](../../crates/wafer-core/src/node/metrics.rs) | symbols: `pub fn record_swap`, `pub fn record_rollback`, `pub fn record_recovery`
 - **Source:** [`crates/wafer-core/src/api/handlers.rs`](../../crates/wafer-core/src/api/handlers.rs) | symbols: `pub async fn hot_swap`, `"status": "rolled_back"`, `"replacement_adopted": true`
-- **Test:** [`crates/wafer-core/tests/hotswap_process_time_rollback.rs`](../../crates/wafer-core/tests/hotswap_process_time_rollback.rs) | symbols: `async fn hotswap_process_time_rollback()`, `async fn hotswap_bounded_rollback_thrash()`
+- **Test:** [`crates/wafer-core/tests/hotswap_process_time_rollback.rs`](../../crates/wafer-core/tests/hotswap_process_time_rollback.rs) | symbols: `async fn hotswap_process_time_rollback()`, `async fn hotswap_budget_trap_in_canary_window_rolls_back()`
 
 ## Checkpoint
 
