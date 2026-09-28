@@ -11,6 +11,9 @@ import sys
 import tomllib
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
+from host_facts import platform_facts  # noqa: E402
+
 ROOT = Path(__file__).resolve().parents[2]
 
 EXPECTED_EXPERIMENTS = {
@@ -165,10 +168,12 @@ def collect_host_facts(root: Path) -> dict:
     )
     version_match = re.search(r"\b(\d+\.\d+\.\d+)\b", ekuiper_version)
 
+    platform = platform_facts()
     return {
+        **platform,
         "host_tag": "rpi5",
         "arch": command_output(["uname", "-m"]),
-        "hardware_model": read_text(Path("/proc/device-tree/model")),
+        "hardware_model": platform["hardware_model"] or "unknown",
         "git_sha": sha,
         "git_dirty": dirty,
         "git_tags": tags,
