@@ -24,7 +24,7 @@ use crate::node::{
 };
 use crate::orchestrator::builder::{NodeBundleKind, build_pipeline_with_io};
 use crate::orchestrator::pipeline::PipelineOrchestrator;
-use crate::registry::{OciReference, PluginSource, RegistryConfig, WaferRegistry};
+use crate::registry::{OciReference, PluginSource, RegistryConfig, ResolvedPlugin, WaferRegistry};
 
 /// Aggregate monotonic durations for one pipeline launch.
 #[derive(Debug, Clone, Copy, Default)]
@@ -741,19 +741,12 @@ async fn resolve_and_load_component(
 
     let resolved = registry.resolve(&source).await.map_err(WaferError::Registry)?;
 
-    // Always read bytes so we can hash once and reuse for both metering the
-    // guest and building metadata.json provenance. Doubling I/O for local
-    // plugins is negligible (< 1 MB) and keeps a single load path.
-    let (bytes, source_tag) = match &resolved.source {
+    // `resolve` already read and hashed the bytes; reuse both so the
+    // `component_load_compile` phase pays for one read and one SHA-256.
+    let source_tag = match &resolved.source {
         PluginSource::Local(path) => {
             tracing::debug!(node = %node_id, path = %path.display(), "loading local plugin");
-            let bytes = std::fs::read(path).map_err(|e| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "failed to read local plugin for '{node_id}' at {}: {e}",
-                    path.display()
-                )))
-            })?;
-            (bytes, path.display().to_string())
+            path.display().to_string()
         }
         PluginSource::Oci(oci_ref) => {
             tracing::info!(
@@ -762,19 +755,10 @@ async fn resolve_and_load_component(
                 cache_path = %resolved.wasm_path.display(),
                 "loading OCI plugin"
             );
-            let bytes = std::fs::read(&resolved.wasm_path).map_err(|e| {
-                WaferError::Config(ConfigError::Message(format!(
-                    "failed to read cached plugin for '{node_id}': {e}"
-                )))
-            })?;
-            (bytes, oci_ref.to_string())
+            oci_ref.to_string()
         }
     };
-
-    let plugin_hash = {
-        use sha2::Digest;
-        hex::encode(sha2::Sha256::digest(&bytes))
-    };
+    let ResolvedPlugin { content: bytes, content_hash: plugin_hash, .. } = resolved;
     let component = engine.load_component_from_bytes(&bytes, &source_tag)?;
     Ok((component, plugin_hash))
 }

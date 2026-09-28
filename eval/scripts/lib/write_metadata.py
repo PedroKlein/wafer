@@ -4,7 +4,8 @@
 Extracted from `eval/scripts/run-experiment.sh::_write_metadata` so both the
 production shell path and integration tests exercise the same code. Runtime
 provenance keys (wasmtime_version, rustc_version, wafer_runtime_sha256,
-wafer_plugin_hashes, kernel, config_sha256) are authoritative when the
+wafer_plugin_hashes, kernel, config_sha256, build and scheduling fields)
+are authoritative when the
 sidecar exists — they observed the actual bytes loaded — and fall back to
 harness-collected values otherwise.
 
@@ -158,8 +159,14 @@ def merge_metadata(
     if provenance != "null":
         p = json.loads(provenance)
         for key in (
+            "provenance_written_at",
             "wasmtime_version",
+            "wasmtime_source",
+            "ort_sys_version",
+            "ort_sys_source",
+            "ort_link",
             "rustc_version",
+            "runtime_build",
             "wafer_runtime_version",
             "wafer_runtime_sha256",
             "wafer_plugin_hashes",
@@ -168,6 +175,9 @@ def merge_metadata(
             "epoch_tick_ms",
             "effective_metering_mode",
             "kernel",
+            "tokio_worker_threads",
+            "available_parallelism",
+            "cpus_allowed_list",
             "config_sha256",
         ):
             if key in p:

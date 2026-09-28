@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
@@ -11,6 +11,25 @@ pub const CACHE_STATE_ENV: &str = "WAFER_STARTUP_CACHE_STATE";
 pub const CACHE_PREPARATION_ENV: &str = "WAFER_STARTUP_CACHE_PREPARATION";
 const HARNESS_OVERHEAD_TOLERANCE_NS: u64 = 5_000_000;
 
+/// Process entry, taken as the first statement of `main` before the tokio
+/// runtime is built. `process_started` (the start of every E-Perf-9 phase)
+/// stays at the top of the async body; the gap between the two is reported
+/// separately so the phase definitions do not move. The Unix-epoch stamp lets
+/// the harness relate entry to its own pre-exec `runtime_started_ns`.
+#[derive(Debug, Clone, Copy)]
+pub struct ProcessEntry {
+    instant: Instant,
+    unix_epoch_ns: u64,
+}
+
+impl ProcessEntry {
+    pub fn capture() -> Self {
+        let instant = Instant::now();
+        let unix_epoch_ns = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, duration_ns);
+        Self { instant, unix_epoch_ns }
+    }
+}
+
 pub fn resolve_output_path() -> Option<PathBuf> {
     std::env::var(STARTUP_OUTPUT_ENV).ok().filter(|value| !value.is_empty()).map(PathBuf::from)
 }
@@ -18,6 +37,7 @@ pub fn resolve_output_path() -> Option<PathBuf> {
 pub fn write_startup(
     path: &Path,
     orchestrator: &PipelineOrchestrator,
+    process_entry: ProcessEntry,
     process_started: Instant,
     launch_started: Instant,
     launch_completed: Instant,
@@ -112,6 +132,11 @@ pub fn write_startup(
             "first_process": first_process_ns,
         },
         "total_wall_duration_ns": total_wall_duration_ns,
+        "process_entry": {
+            "unix_epoch_ns": process_entry.unix_epoch_ns,
+            "to_process_started_ns":
+                duration_ns(process_started.saturating_duration_since(process_entry.instant)),
+        },
         "harness_overhead_tolerance_ns": HARNESS_OVERHEAD_TOLERANCE_NS,
     });
 
