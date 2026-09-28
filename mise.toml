@@ -27,20 +27,21 @@ config_roots = ["plugins", "eval"]
 [tools]
 # Non-Rust language/tooling surface. Inherited by every sub-config_root.
 python = "3.11"
-uv = "latest"
-go = "1.24"
+uv = "0.12.19"
+go = "1.24.13"
 
 # WebAssembly Component Model and OCI plugin tooling.
-"cargo:wasm-tools" = "latest"
-"cargo:wkg" = "latest"
-tinygo = "latest"
-"pipx:componentize-py" = "latest"
+"cargo:wasm-tools" = "1.259.0"
+"cargo:wkg" = "0.16.1"
+# TinyGo 0.42 dropped Go 1.24; move both together.
+tinygo = "0.41.1"
+"pipx:componentize-py" = "0.25.1"
 
 # Local quality/security helpers.
-"cargo:cargo-deny" = "latest"
-"cargo:cargo-audit" = "latest"
-"cargo:taplo-cli" = "latest"
-"cargo:typos-cli" = "latest"
+"cargo:cargo-deny" = "0.20.2"
+"cargo:cargo-audit" = "0.22.2"
+"cargo:taplo-cli" = "0.10.0"
+"cargo:typos-cli" = "1.50.3"
 
 [tasks.setup]
 description = "Verify Rust prerequisite, then install mise-managed helper tools"
@@ -89,15 +90,15 @@ run = "mise tasks ls --all"
 
 [tasks.build]
 description = "Build the entire workspace"
-run = "cargo build --workspace"
+run = "cargo build --locked --workspace"
 
 [tasks.build-release]
 description = "Build the entire workspace in release mode"
-run = "cargo build --workspace --release"
+run = "cargo build --locked --workspace --release"
 
 [tasks.test]
 description = "Run all tests across the workspace"
-run = "cargo test --workspace"
+run = "cargo test --locked --workspace"
 
 [tasks.mandatory-attack-evidence]
 description = "Run the mandatory containment-attack evidence target"
@@ -105,7 +106,7 @@ run = "mise run //plugins:attack-evidence"
 
 [tasks.check]
 description = "Check code without building"
-run = "cargo check --workspace"
+run = "cargo check --locked --workspace"
 
 [tasks.clean]
 description = "Clean workspace and plugin build artifacts"
@@ -122,7 +123,7 @@ run = "cargo fmt --all"
 
 [tasks.clippy]
 description = "Run clippy lints"
-run = "cargo clippy --workspace --all-targets --all-features"
+run = "cargo clippy --locked --workspace --all-targets --all-features"
 
 # =============================================================================
 # Binary-specific Commands
@@ -130,11 +131,11 @@ run = "cargo clippy --workspace --all-targets --all-features"
 
 [tasks.build-runtime]
 description = "Build wafer-runtime only"
-run = "cargo build -p wafer-runtime"
+run = "cargo build --locked -p wafer-runtime"
 
 [tasks.build-ctl]
 description = "Build waferctl only"
-run = "cargo build -p waferctl"
+run = "cargo build --locked -p waferctl"
 
 [tasks.run]
 description = "Run wafer-runtime with an optional config path"
@@ -194,16 +195,18 @@ if ! command -v docker >/dev/null 2>&1; then
   echo "error: docker is required for cross-build-pi" >&2
   exit 1
 fi
+# Use the image for the exact toolchain in rust-toolchain.toml.
+toolchain=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
 mkdir -p target/docker-aarch64-linux
 docker run --rm --platform linux/arm64 \
   -v "$PWD:/work" \
   -v "$PWD/target/docker-aarch64-linux:/work/target" \
   -w /work \
-  rust:1-slim-bookworm \
+  "rust:${toolchain}-slim-bookworm" \
   bash -c '
     apt-get update -q >/dev/null
     apt-get install -y -q pkg-config libssl-dev g++ >/dev/null
-    cargo build --release -p wafer-runtime -p wafer-loadgen -p waferctl
+    cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl
   '
 echo
 echo "Cross-build outputs:"

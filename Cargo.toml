@@ -17,12 +17,12 @@ edition = "2024"
 authors = ["Pedro Klein <pedroklein1@hotmail.com>"]
 repository = "https://github.com/PedroKlein/wafer"
 license = "MIT"
-rust-version = "1.95"
+rust-version = "1.98"
 
 [workspace.dependencies]
 # Internal crates
 wafer-config = { path = "crates/wafer-config" }
-wafer-core = { path = "crates/wafer-core" }
+wafer-core = { path = "crates/wafer-core", default-features = false }
 wafer-types = { path = "crates/wafer-types" }
 
 # Graph
@@ -186,6 +186,18 @@ print_stderr = "deny"
 # === Documentation ===
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
+
+# The evidence binaries (wafer, wafer-loadgen) are measured, so every release
+# setting is written out instead of relying on Cargo's defaults.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false
+strip = "debuginfo"
+# Node failures are contained with catch_unwind and JoinSet panic handling;
+# `abort` would turn any panic into a process exit.
+panic = "unwind"
 
 [patch.crates-io]
 # ort must match the release candidate required by wasmtime-wasi-nn 48.0.2.

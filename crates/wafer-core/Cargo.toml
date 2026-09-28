@@ -9,11 +9,15 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["ort-download"]
 http-api = ["axum", "tower-http", "prometheus-client", "sysinfo"]
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wasmtime-wasi-nn/onnx-cuda"]
+# Download the prebuilt ONNX Runtime pinned by the `ort` revision (hash
+# checked by ort-sys). ORT_LIB_LOCATION overrides it with a local build; turn
+# the feature off to guarantee the build never reaches the network.
+ort-download = ["ort/download-binaries"]
 # Legacy test support — enables old runner/orchestrator tests from Phase 2
 # Enables integration tests that require pre-built .wasm plugin artifacts
 integration-tests = []
@@ -29,7 +33,9 @@ wasmtime = { workspace = true }
 wasmtime-wasi = { workspace = true }
 wasmtime-wasi-nn = { workspace = true }
 wasmtime-wasi-http = { workspace = true }
-ort = { version = "2.0.0-rc.10", features = ["download-binaries"] }
+# Not used directly: wasmtime-wasi-nn links ort, and this routes ONNX Runtime's
+# own log messages through tracing instead of its default stderr logger.
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["std", "tracing"] }
 
 # Async runtime
 tokio = { workspace = true }

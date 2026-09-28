@@ -65,7 +65,7 @@ _log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 
 if [ "$skip_build" -eq 0 ]; then
     _log "building wafer-runtime + wafer-loadgen (release)"
-    cargo build --release -p wafer-runtime -p wafer-loadgen >&2
+    cargo build --locked --release -p wafer-runtime -p wafer-loadgen >&2
 fi
 
 WAFER_BIN="target/release/wafer"
