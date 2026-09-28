@@ -3943,22 +3943,38 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     return receipt
 
 
-def start_pi_telemetry(root: Path, output: Path) -> subprocess.Popen:
-    return subprocess.Popen(
-        [sys.executable, str(root / "eval/scripts/lib/pi_telemetry.py"), str(output)],
-        cwd=root,
-    )
+def start_pi_telemetry(root: Path, output: Path, item: RunItem) -> list[subprocess.Popen]:
+    """Start the Pi power sidecar and the host /proc sidecar for one leaf."""
+    return [
+        subprocess.Popen(
+            [sys.executable, str(root / "eval/scripts/lib/pi_telemetry.py"), str(output)],
+            cwd=root,
+        ),
+        subprocess.Popen(
+            [
+                sys.executable,
+                str(root / "eval/scripts/lib/proc_telemetry.py"),
+                str(output),
+                "--pin-cpus",
+                item.support_cpus,
+                "--sut-cpus",
+                item.runtime_cpus,
+            ],
+            cwd=root,
+        ),
+    ]
 
 
-def stop_pi_telemetry(process: subprocess.Popen | None) -> None:
-    if process is None or process.poll() is not None:
-        return
-    process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait(timeout=5)
+def stop_pi_telemetry(processes: list[subprocess.Popen] | None) -> None:
+    for process in processes or []:
+        if process.poll() is not None:
+            continue
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
 
 
 def wait_for_api(url: str, timeout_secs: float = 10.0) -> None:
@@ -4019,7 +4035,7 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
     started_ns = time.time_ns()
     started_at = utc_now()
     runtime: subprocess.Popen | None = None
-    telemetry = start_pi_telemetry(root, output)
+    telemetry = start_pi_telemetry(root, output, item)
     try:
         set_ekuiper_active(root, False)
         subprocess.run(
@@ -4307,7 +4323,7 @@ def run_restart_item(
     runtime_exit = 0
     ekuiper_audit: Path | None = None
     is_ekuiper = item.system == "ekuiper"
-    telemetry = start_pi_telemetry(root, output)
+    telemetry = start_pi_telemetry(root, output, item)
     try:
         set_ekuiper_active(root, is_ekuiper)
         facts_path = output / "host-facts.json"
@@ -4745,7 +4761,7 @@ def run_ekuiper_item(
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     started_ns = time.time_ns()
     started_at = utc_now()
-    telemetry = start_pi_telemetry(root, output)
+    telemetry = start_pi_telemetry(root, output, item)
     process_sampler: ProcessResourceSampler | None = None
     profile_context: dict | None = None
     try:
@@ -5443,7 +5459,7 @@ def run_rate_sweep_item(
     publisher: subprocess.Popen | None = None
     subscriber: subprocess.Popen | None = None
     sampler: ProcessResourceSampler | None = None
-    telemetry = start_pi_telemetry(root, output)
+    telemetry = start_pi_telemetry(root, output, item)
     ekuiper_active = False
     runtime_exit = 0
     ekuiper_audit: Path | None = None
@@ -5702,14 +5718,14 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
     output = selection.path
     output.mkdir(parents=True, exist_ok=True)
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
-    telemetry: subprocess.Popen | None = None
+    telemetry: list[subprocess.Popen] | None = None
     started_ns = time.monotonic_ns()
     started_at = utc_now()
     try:
         (output / "config.toml").write_text(
             '[static]\nproducer = "eval/scripts/collect-binary-sizes.sh"\n'
         )
-        telemetry = start_pi_telemetry(root, output)
+        telemetry = start_pi_telemetry(root, output, item)
         with (output / "stdout.log").open("wb") as log:
             subprocess.run(
                 [str(root / "eval/scripts/collect-binary-sizes.sh"), str(output)],

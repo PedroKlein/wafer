@@ -1627,7 +1627,7 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
         return path
 
     ekuiper_states: list[bool] = []
-    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination: object())
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
     monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
     monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
@@ -1691,7 +1691,7 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
         observed_timeouts.append(timeout)
         return subscriber.returncode
 
-    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination: object())
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
     monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
     monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
