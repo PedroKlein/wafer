@@ -1,5 +1,6 @@
 //! Attack scenario S1: Buffer overflow attempt.
-//! Expected runtime behavior: Trap (out-of-bounds memory access).
+//! Writes one byte just past the end of linear memory.
+//! Expected runtime behavior: out-of-bounds memory access trap.
 
 wit_bindgen::generate!({
     path: "../../../wit",
@@ -19,14 +20,11 @@ impl exports::wafer::pipeline::transform::Guest for AttackPlugin {
     fn process(
         _input: exports::wafer::pipeline::transform::Message,
     ) -> Result<exports::wafer::pipeline::transform::OutputMessage, exports::wafer::pipeline::transform::ProcessError> {
-        // Attempt to write past allocation using unsafe pointer arithmetic
-        let v: Vec<u8> = Vec::with_capacity(16);
-        let ptr = v.as_ptr() as *mut u8;
-        unsafe {
-            // Write far beyond the allocated capacity into unmapped linear memory
-            core::ptr::write(ptr.add(1_000_000), 0xFF);
-        }
-        unreachable!()
+        let end = core::arch::wasm32::memory_size(0) * 65_536;
+        unsafe { core::ptr::write_volatile(core::ptr::without_provenance_mut::<u8>(end), 0xFF) };
+        Err(exports::wafer::pipeline::transform::ProcessError::ProcessingFailed(format!(
+            "NOT CONTAINED: wrote past the end of linear memory at {end:#x}"
+        )))
     }
 }
 
