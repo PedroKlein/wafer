@@ -469,7 +469,21 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
             "traps_total": 2,
             "runtime_panic": False,
             "healthy_messages_out": 2,
-            "nodes": [{"node_id": "attack", "traps_total": "2", "recovery_count": "2"}],
+            "nodes": [{
+                "node_id": "attack",
+                "messages_out": "0",
+                "traps_total": "2",
+                **{column: "2" for column in {
+                    "e-iso-1": ["traps_memory_out_of_bounds"],
+                    "e-iso-2": ["traps_memory_out_of_bounds"],
+                    "e-iso-3": ["guest_unrecoverable"],
+                    "e-iso-4": ["traps_interrupt"],
+                    "e-iso-5": ["traps_memory_limit"],
+                    "e-iso-6": ["traps_unreachable"],
+                }[experiment]},
+                "attempts_failed": "2",
+                "recovery_count": "2",
+            }],
         }))
     if experiment == "e-iso-7":
         (result / "branch-isolation.json").write_text(json.dumps({
@@ -599,8 +613,8 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
         ("e-backpressure", "slow", "wafer", "backpressure.json", lambda value: value.update(classification="not-saturated"), "did not cross"),
         ("e-backpressure", "drop", "wafer", "backpressure.json", lambda value: value["counts"].update(dropped=299), "drop policy accounting"),
         ("e-backpressure", "dead-letter", "wafer", "backpressure.json", lambda value: value["accounting"].update(dlq_failures={"full": 0, "closed": 0, "total": 0}), "DLQ failure accounting"),
-        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(contained=False), "contained trap"),
-        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: (value.update(traps_total=0), value["nodes"][0].update(traps_total="0")), "contained trap"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(contained=False), "not stopped by traps_interrupt"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(traps_interrupt="0", traps_out_of_fuel="2"), "not stopped by traps_interrupt"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(runtime_panic=True), "runtime panic"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(condition="panic"), "expected condition"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(traps_total="bogus"), "invalid runtime metrics"),

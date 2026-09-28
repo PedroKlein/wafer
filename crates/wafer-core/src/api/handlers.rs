@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::orchestrator::PipelineHandle;
+use crate::runner::error_policy::{ErrorCategory, TrapKind};
 
 /// Shared state type for axum handlers.
 pub type AppState = Arc<PipelineHandle>;
@@ -87,7 +88,7 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
             let state =
                 orch.node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
             let (processed, failed) =
-                orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.failed()));
+                orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
             NodeInfoResponse {
                 id: id.clone(),
                 state,
@@ -107,7 +108,7 @@ pub async fn get_node(
 ) -> Result<Json<NodeInfoResponse>, StatusCode> {
     let state = orch.node_state(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (processed, failed) =
-        orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.failed()));
+        orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
     Ok(Json(NodeInfoResponse {
@@ -540,14 +541,37 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         if let Some(m) = orch.node_metrics(node_id) {
             writeln!(output, "wafer_node_processed_total{{node=\"{node_id}\"}} {}", m.processed())
                 .expect("String write is infallible");
-            writeln!(output, "wafer_node_failed_total{{node=\"{node_id}\"}} {}", m.failed())
+            for (name, value) in [
+                ("failed", m.attempts_failed()),
+                ("filtered_out", m.filtered_out()),
+                ("retries", m.retries()),
+                ("dlq_sent", m.dlq_sent()),
+                ("dlq_lost", m.dlq_lost()),
+                ("skipped", m.skipped()),
+                ("retry_exhausted_skip", m.exhausted_skips()),
+                ("dropped_on_recovery", m.dropped_on_recovery()),
+                ("dropped_on_teardown", m.dropped_on_teardown()),
+            ] {
+                writeln!(output, "wafer_node_{name}_total{{node=\"{node_id}\"}} {value}")
+                    .expect("String write is infallible");
+            }
+            for kind in TrapKind::ALL {
+                writeln!(
+                    output,
+                    "wafer_node_traps_total{{node=\"{node_id}\",kind=\"{}\"}} {}",
+                    kind.as_str(),
+                    m.traps(kind)
+                )
                 .expect("String write is infallible");
-            writeln!(
-                output,
-                "wafer_node_retry_exhausted_skip_total{{node=\"{node_id}\"}} {}",
-                m.exhausted_skips()
-            )
-            .expect("String write is infallible");
+            }
+            for category in ErrorCategory::ALL {
+                writeln!(
+                    output,
+                    "wafer_node_guest_errors_total{{node=\"{node_id}\",category=\"{category}\"}} {}",
+                    m.guest_errors(category)
+                )
+                .expect("String write is infallible");
+            }
         }
     }
 

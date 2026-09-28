@@ -130,7 +130,7 @@ pub async fn run_transform_loop_with_config(
         if rollback_retry.is_none()
             && let Some(payload) = take_pending_swap(&mut swap_rx)
         {
-            policy.flush_to_dlq("hot_swap_drain");
+            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
 
             // Retain v1 InstancePre BEFORE applying swap (for rollback)
@@ -217,7 +217,7 @@ pub async fn run_transform_loop_with_config(
                 }
             }
             Err(ref error) if error.is_budget_exhausted() && canary.is_none() => {
-                metrics.record_failed();
+                metrics.record_error(error);
                 if !recover_after_timeout(
                     &mut transform,
                     &state,
@@ -234,7 +234,7 @@ pub async fn run_transform_loop_with_config(
             Err(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
-                metrics.record_failed();
+                metrics.record_error(error);
                 let msg = error.to_string();
 
                 // A17: Process-time rollback if canary window is active
@@ -340,6 +340,7 @@ pub async fn run_transform_loop_with_config(
                 }
 
                 // Standard recovery path (existing A7 behavior)
+                metrics.record_dropped_on_recovery();
                 tracing::error!(
                     node = transform.node_id(),
                     error = %msg,
@@ -360,7 +361,7 @@ pub async fn run_transform_loop_with_config(
                 }
             }
             Err(e) => {
-                metrics.record_failed();
+                metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, safety), &metrics) {
                     break;
                 }
@@ -369,7 +370,7 @@ pub async fn run_transform_loop_with_config(
     }
 
     // Flush remaining retries to DLQ on exit
-    policy.flush_to_dlq("shutdown");
+    policy.flush_to_dlq("shutdown", &metrics);
 }
 
 #[cfg(test)]
@@ -641,7 +642,7 @@ mod tests {
         metrics.record_failed();
 
         assert_eq!(metrics.processed(), 2);
-        assert_eq!(metrics.failed(), 1);
+        assert_eq!(metrics.attempts_failed(), 1);
         assert_eq!(metrics.process_ns(), 3000);
     }
 
@@ -663,6 +664,75 @@ mod tests {
             timed_out: crate::runner::error_policy::ResolvedSimpleAction::Skip,
             retry_buffer_capacity: 1,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_dequeued_message_has_exactly_one_fate() {
+        use crate::node::QueueMetrics;
+        use crate::runner::error_policy::{
+            ErrorCategory, ResolvedRetryConfig, ResolvedSimpleAction,
+        };
+
+        let (input_tx, input_rx) = mpsc::channel(4);
+        let (output_tx, mut output_rx) = mpsc::channel(4);
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(2);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        let queue = Arc::new(QueueMetrics::default());
+        let metrics = Arc::new(NodeMetrics::new());
+        let non_utf8: &'static [u8] = b"\xff";
+        for payload in [br#"{"temperature":1}"#.as_slice(), non_utf8, b"{}", non_utf8] {
+            let mut envelope = RuntimeEnvelope::from_string("source", "");
+            envelope.payload = bytes::Bytes::from_static(payload);
+            input_tx.send(envelope).await.expect("input");
+        }
+        drop(input_tx);
+        let retry_once = ResolvedRetryConfig {
+            retries: 1,
+            backoff_ms: 60_000,
+            exhausted: ResolvedSimpleAction::Dlq,
+        };
+        let policy = ResolvedErrorPolicy {
+            bad_input: ResolvedSimpleAction::Dlq,
+            dependency_failed: retry_once,
+            processing_failed: retry_once,
+            timed_out: ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 4,
+        };
+
+        run_transform_loop(
+            TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+            TrackedReceiver::new(input_rx, Arc::clone(&queue)),
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(policy, Some(dlq_tx), "node"),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+        )
+        .await;
+
+        assert_eq!(queue.dequeued(), 4);
+        assert_eq!(metrics.processed(), 1);
+        assert_eq!(metrics.retries(), 1, "the missing-field message is queued for a retry");
+        assert_eq!(metrics.dlq_sent(), 2, "the DLQ holds two records");
+        assert_eq!(metrics.dlq_lost(), 1, "the retry flushed at shutdown finds the DLQ full");
+        assert_eq!(metrics.attempts_failed(), 3);
+        assert_eq!(metrics.guest_errors(ErrorCategory::BadInput), 2);
+        assert_eq!(metrics.guest_errors(ErrorCategory::ProcessingFailed), 1);
+        assert_eq!(metrics.traps_total(), 0, "guest-returned errors are not traps");
+        assert_eq!(
+            queue.dequeued(),
+            metrics.processed()
+                + metrics.filtered_out()
+                + metrics.skipped()
+                + metrics.exhausted_skips()
+                + metrics.dlq_sent()
+                + metrics.dlq_lost()
+                + metrics.dropped_on_recovery()
+                + metrics.dropped_on_teardown()
+        );
+        assert!(output_rx.recv().await.is_some());
+        assert!(dlq_rx.recv().await.is_some() && dlq_rx.recv().await.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -109,7 +109,7 @@ pub async fn run_router_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
-            policy.flush_to_dlq("hot_swap_drain");
+            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
             let result = match payload {
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
@@ -157,8 +157,8 @@ pub async fn run_router_loop(
         match result {
             Ok(RouteOutcome::Error(e)) => {
                 // Router returned a logical routing error (not a Wasm trap)
-                metrics.record_failed();
                 let wasm_err = WasmProcessError::ProcessingFailed(e.message);
+                metrics.record_error(&wasm_err);
                 if !continue_after_policy_action(policy.handle(&wasm_err, envelope), &metrics) {
                     break;
                 }
@@ -175,7 +175,7 @@ pub async fn run_router_loop(
                 .await;
             }
             Err(ref error) if error.is_budget_exhausted() => {
-                metrics.record_failed();
+                metrics.record_error(error);
                 if !recover_after_timeout(
                     &mut router,
                     &state,
@@ -192,7 +192,8 @@ pub async fn run_router_loop(
             Err(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
-                metrics.record_failed();
+                metrics.record_error(error);
+                metrics.record_dropped_on_recovery();
                 let msg = error.to_string();
                 tracing::error!(
                     node = router.node_id(),
@@ -214,7 +215,7 @@ pub async fn run_router_loop(
                 }
             }
             Err(e) => {
-                metrics.record_failed();
+                metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, envelope), &metrics) {
                     break;
                 }
@@ -222,7 +223,7 @@ pub async fn run_router_loop(
         }
     }
 
-    policy.flush_to_dlq("shutdown");
+    policy.flush_to_dlq("shutdown", &metrics);
 }
 
 #[cfg(test)]

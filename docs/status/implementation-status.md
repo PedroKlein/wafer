@@ -120,9 +120,14 @@ stored on the envelope, the first retry waits exactly the configured backoff,
 later waits double to 30 seconds, and the bounded buffer selects the earliest
 due entry even while upstream is idle.
 
-Exhaustion honors the configured `skip`, `dlq`, or `teardown` action. Exhausted
-skip, DLQ full, and DLQ closed remain observable and exhausted messages are not
-requeued. Unrecoverable errors re-instantiate from cached `InstancePre`.
+Exhaustion honors the configured `skip`, `dlq`, or `teardown` action and
+exhausted messages are not requeued. Unrecoverable errors re-instantiate from
+cached `InstancePre`.
+
+Every error-policy outcome has its own per-node counter (retried, DLQ sent, DLQ
+lost, skipped, exhausted skip), traps are counted by kind apart from errors the
+guest returned, and filter drops are not counted as processed. At shutdown each
+node's dequeued messages equal the sum of their fates.
 
 ## Replacement and reconfiguration
 

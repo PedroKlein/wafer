@@ -41,6 +41,7 @@ from results_layout import (
     atomic_write_json,
     validate_alias_mapping,
 )
+from containment import assess_containment
 from interval_metrics import compose_interval_metrics
 from write_metadata import merge_metadata
 
@@ -3065,7 +3066,7 @@ def compare_branch_conditions(runs: dict[str, list[dict]]) -> dict[str, dict]:
     }
 
 
-def derive_containment(output: Path) -> dict:
+def derive_containment(output: Path, experiment: str, condition: str) -> dict:
     with (output / "per_node_metrics.csv").open(newline="") as stream:
         rows = [
             row
@@ -3080,12 +3081,17 @@ def derive_containment(output: Path) -> dict:
             (int(row["messages_out"]) for row in rows if row["node_id"] not in {"attack", "branch_b"}),
             default=0,
         )
+        assessment = assess_containment(rows, experiment, condition)
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("per_node_metrics.csv contains invalid runtime metrics") from error
     log = (output / "stdout.log").read_text(errors="replace")
     runtime_panic = bool(re.search(r"thread .* panicked|panicked at", log))
+    stopped = assessment["contained_by_mechanism"]
     return {
-        "contained": traps_total > 0 and not runtime_panic,
+        "experiment": experiment,
+        "condition": condition,
+        "contained": None if stopped is None else stopped and not runtime_panic,
+        **assessment,
         "traps_total": traps_total,
         "healthy_messages_out": healthy_messages,
         "runtime_panic": runtime_panic,
@@ -6098,9 +6104,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         validate_backpressure_result(summary, policy)
 
     if item.experiment.startswith("e-iso-"):
-        containment = derive_containment(output)
-        containment["experiment"] = item.experiment
-        containment["condition"] = item.condition
+        containment = derive_containment(output, item.experiment, item.condition)
         (output / "containment.json").write_text(json.dumps(containment, indent=2) + "\n")
         if item.experiment == "e-iso-8":
             recovery = summarize_recovery(output / "recovery.csv")
