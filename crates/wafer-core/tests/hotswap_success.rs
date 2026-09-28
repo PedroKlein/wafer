@@ -127,6 +127,11 @@ async fn idle_transform_adopts_swap_without_input() {
     )
     .await
     .expect("prepare v2 swap");
+    assert_eq!(
+        prepared.timeline.compile_cache,
+        Some(wafer_core::engine::CacheOutcome::MemoryHit),
+        "swapping in the binary loaded at launch must reuse its compiled component"
+    );
 
     let before_signal = processed();
     let signal_at = Instant::now();
@@ -221,6 +226,7 @@ async fn swap_under_traffic_flips_version_once_without_loss() {
     )
     .await
     .expect("prepare v2 swap");
+    assert_eq!(prepared.timeline.compile_cache, Some(wafer_core::engine::CacheOutcome::Compiled));
     handle.send_swap("transform", prepared.payload).expect("send_swap");
 
     tokio::time::timeout(Duration::from_secs(5), completion)

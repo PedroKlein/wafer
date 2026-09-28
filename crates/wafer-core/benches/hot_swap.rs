@@ -124,7 +124,7 @@ fn bench_wasm_loading(c: &mut Criterion) {
             for _ in 0..iters {
                 let elapsed = rt.block_on(async {
                     let start = Instant::now();
-                    let engine = WaferEngine::new().expect("engine");
+                    let engine = Arc::new(WaferEngine::new().expect("engine"));
                     engine.ensure_epoch_ticker();
                     let (progress, _rx) = HotSwapProgress::channel();
                     let _timed = prepare_transform_swap_timed(

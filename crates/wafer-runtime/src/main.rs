@@ -346,6 +346,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
                         node = %node_id,
                         compile_ns = ?timed.timeline.compile_duration_ns(),
                         instantiate_ns = ?timed.timeline.instantiate_duration_ns(),
+                        compile_cache = ?timed.timeline.compile_cache,
                         "Swap prepared"
                     );
 

@@ -205,19 +205,29 @@ components:
         after_adoption_ns:
           type: integer
           format: uint64
+    CompileCache:
+      type: string
+      enum: [compiled, memory_hit, disk_hit]
+      description: >-
+        Hot-swap only. Whether `compile_ns` covers a Cranelift compile or a
+        reuse of a component already compiled by this process (including the
+        one loaded at launch) or read from the on-disk cache.
     ReplacementTimeline:
       type: object
       required: [compile_ns, instantiate_ns, signal_ns, replacement_adopted_ns, first_post_replacement_local_outcome_ns]
       properties:
         compile_ns:
-          type: integer
+          type: [integer, "null"]
           format: uint64
+          description: Null for reconfigure, which reuses the loaded component.
         instantiate_ns:
-          type: integer
+          type: [integer, "null"]
           format: uint64
+          description: Null for reconfigure.
         signal_ns:
-          type: integer
+          type: [integer, "null"]
           format: uint64
+          description: Null for reconfigure.
         replacement_adopted_ns:
           type: integer
           format: uint64
@@ -235,6 +245,8 @@ components:
           const: true
         first_post_replacement_local_outcome:
           $ref: "#/components/schemas/LocalOutcome"
+        compile_cache:
+          $ref: "#/components/schemas/CompileCache"
         timeline:
           $ref: "#/components/schemas/ReplacementTimeline"
     RollbackResult:
@@ -248,6 +260,8 @@ components:
           const: rolled_back
         reason:
           type: string
+        compile_cache:
+          $ref: "#/components/schemas/CompileCache"
         timeline:
           type: object
           required: [rollback_ns]

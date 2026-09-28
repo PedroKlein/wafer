@@ -405,7 +405,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
@@ -470,7 +470,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
@@ -528,7 +528,7 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn trap_after_rollback_is_handled_as_a_v1_failure() {
-        let engine = WaferEngine::new().expect("engine");
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
         let component = engine.load_component_from_bytes(TRAP_COMPONENT, "trap").expect("trap");
         let pre = Arc::new(engine.pre_instantiate_transform(&component).expect("pre"));
         let mut store =

@@ -635,7 +635,7 @@ async fn real_p2_component_hot_swap_retains_original_grant() -> Result<()> {
     let capabilities = capability(allowed_port)?;
     let node = load_http_transform(capabilities.clone()).await?;
     let mut node = TransformNode::from(node);
-    let engine = WaferEngine::new()?;
+    let engine = Arc::new(WaferEngine::new()?);
     let (progress, _completion) = HotSwapProgress::channel();
     let replacement = prepare_transform_swap_timed(
         &engine,
