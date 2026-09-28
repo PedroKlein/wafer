@@ -10,14 +10,13 @@
 //! 1. A healthy transform (pass-through) processes a message
 //!    successfully *before* the attack.
 //! 2. Loading and invoking the attack plugin yields a `WasmProcessError`
-//!    from the same `PluginTestHarness`. We do NOT assert on the exact
-//!    trap text (varies with wasmtime version) but we DO assert the
-//!    error kind is one of the expected containment variants:
-//!    - `Trapped`        — trap (unreachable, OOB memory, etc.)
-//!    - `Trapped` with an interrupt or out-of-fuel code — budget exhausted
-//!
-//!    Both variants map into `NodeStateTracker::transition_to_error`
-//!    at the runner layer (see `crates/wafer-core/src/runner/*.rs`).
+//!    from the same `PluginTestHarness`, and the error names the
+//!    mechanism the scenario expects: the exact wasmtime trap code
+//!    (out-of-bounds access, epoch interrupt, `unreachable`) or, for
+//!    the filesystem attack, the guest's own report that WASI refused
+//!    the read. Every attack plugin returns a "NOT CONTAINED" error if
+//!    its access goes through, so a sandbox that let the access happen
+//!    fails the test instead of passing on a later panic.
 //! 3. The healthy transform still processes a *subsequent* message
 //!    successfully. Isolation invariant: an attack in one Store MUST
 //!    NOT poison a co-resident, independently loaded Store belonging
@@ -27,8 +26,8 @@
 //! - No capability grant is relaxed. `WaferState::sandbox()` is used
 //!   through the default `PluginTestHarness` path.
 //! - Attack .wasm artefacts are pre-built (`plugins/attacks/*/target/
-//!   wasm32-wasip2/release/*.wasm`). Missing artefacts SKIP with an
-//!   `eprintln!` — matches the pattern used elsewhere in the crate.
+//!   wasm32-wasip2/release/*.wasm`). A missing artefact fails the test:
+//!   a skipped containment check would read as a passing one.
 //!
 //! Epoch-interrupt dependency (S3 — infinite loop):
 //! `PluginTestHarness::new()` enables epoch interruption with a 100-tick
@@ -55,8 +54,6 @@ use wafer_core::testing::PluginTestHarness;
 use wafer_types::config::Config;
 
 /// Pass-through plugin acts as the co-resident "healthy" transform.
-/// If this is missing we cannot prove the isolation invariant, so we
-/// skip the whole test — same pattern as harness.rs.
 const PASS_THROUGH_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
@@ -97,60 +94,71 @@ const ATK_PANIC: &str = concat!(
 /// artificially-tight cap.
 const MEMORY_EXHAUST_LIMIT: usize = 4 * 1024 * 1024; // 4 MiB
 
-/// Classification of a `WasmProcessError` kind for readable assertions.
-#[derive(Debug, PartialEq, Eq)]
-enum ContainedAs {
-    /// Trap-like: buffer overflow, cross-read, panic, `StoreLimits` cap.
-    /// The fs-access plugin's guest-returned `Unrecoverable` also lands here.
-    Trap,
-    /// Epoch interruption or fuel exhaustion — infinite loop.
-    TimedOut,
+/// How the sandbox stopped an attack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Containment {
+    /// wasmtime trapped the call with this code.
+    Trap(wasmtime::Trap),
+    /// `StoreLimits` refused a `memory.grow` and trapped the call.
+    MemoryLimit,
+    /// The guest reported that WASI refused the filesystem read.
+    FsDenied,
 }
 
-fn classify(err: &WasmProcessError) -> ContainedAs {
+impl Containment {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Trap(_) => "trap",
+            Self::MemoryLimit => "memory_limit",
+            Self::FsDenied => "fs_denied",
+        }
+    }
+}
+
+const FS_DENIED_MARKER: &str = "fs access denied as expected";
+/// Error text of wasmtime's `StoreLimits` when `trap_on_grow_failure` is set.
+const MEMORY_LIMIT_MARKER: &str = "forcing trap when growing memory";
+
+/// Anything other than a coded trap or the guest's own denial report means
+/// the sandbox did not stop the attack, including the attack plugins'
+/// "NOT CONTAINED" error returned after an access that went through.
+fn classify(err: &WasmProcessError) -> Containment {
     match err {
-        WasmProcessError::Trapped { .. } if err.is_budget_exhausted() => ContainedAs::TimedOut,
-        WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_) => ContainedAs::Trap,
-        WasmProcessError::TimedOut => ContainedAs::TimedOut,
-        // Any other variant means the sandbox did NOT actually stop
-        // the exploit — the attack was allowed to return control
-        // through a normal error channel, which is not containment.
-        other => {
-            panic!("attack was NOT contained; got an in-band error instead of a trap: {other:?}")
+        WasmProcessError::Trapped { code: Some(code), .. } => Containment::Trap(*code),
+        WasmProcessError::Trapped { code: None, message }
+            if message.contains(MEMORY_LIMIT_MARKER) =>
+        {
+            Containment::MemoryLimit
         }
+        WasmProcessError::Unrecoverable(message) if message.contains(FS_DENIED_MARKER) => {
+            Containment::FsDenied
+        }
+        other => panic!("attack was NOT contained: {other:?}"),
     }
 }
 
-/// Skip the test with a friendly SKIP line when the required .wasm
-/// artefacts are not on disk. Returns `false` so callers can
-/// `if !check_prereqs(&[...]) { return; }`.
-fn check_prereqs(paths: &[&str]) -> bool {
+fn require_plugins(paths: &[&str]) {
     for p in paths {
-        if !Path::new(p).exists() {
-            eprintln!("SKIP: required plugin not built: {p}");
-            return false;
-        }
+        assert!(
+            Path::new(p).is_file(),
+            "required plugin not built: {p} (run `mise run //plugins:build-plugins`)"
+        );
     }
-    true
 }
 
 /// Core isolation invariant used by every attack test. Loads the
 /// healthy pass-through and the attack plugin in the same harness,
 /// runs a pre-attack message through healthy, invokes the attack,
-/// asserts containment, then runs a post-attack message through the
-/// SAME healthy Store to prove the attack did not corrupt it.
-///
-/// `allowed` lists the acceptable containment classifications for the
-/// attack; more than one is allowed because some attacks may hit
-/// either the epoch deadline or the fuel budget depending on host
-/// speed and wasmtime version. Every acceptable outcome MUST still be
-/// a genuine sandbox interception, not an in-band error return.
-async fn run_containment(
+/// asserts it was stopped by `expected`, then runs a post-attack
+/// message through the SAME healthy Store to prove the attack did not
+/// corrupt it. Returns the attack's error for the receipt.
+async fn assert_contained(
     attack_path: &str,
     label: &str,
-    allowed: &[ContainedAs],
+    expected: Containment,
     memory_limit: Option<usize>,
-) -> (ContainedAs, String) {
+) -> WasmProcessError {
+    require_plugins(&[PASS_THROUGH_WASM, attack_path]);
     let harness = PluginTestHarness::new().expect("engine must construct");
 
     // (1) Healthy transform succeeds BEFORE the attack.
@@ -166,7 +174,7 @@ async fn run_containment(
         "healthy plugin must echo before the attack runs"
     );
 
-    // (2) Attack traps.
+    // (2) Attack is stopped by the expected mechanism.
     let mut attacker = match memory_limit {
         Some(limit) => harness
             .load_transform_with_memory_limit(attack_path, limit)
@@ -177,13 +185,9 @@ async fn run_containment(
     let err = attacker
         .process(RuntimeEnvelope::from_string("attacker", "trigger"))
         .await
-        .expect_err(&format!("attack {label} did NOT trap — sandbox failed to contain it"));
+        .expect_err(&format!("attack {label} returned Ok: sandbox failed to contain it"));
     let got = classify(&err);
-    assert!(
-        allowed.contains(&got),
-        "attack {label} produced {got:?} but allowed={allowed:?}; err={err:?}"
-    );
-    let raw = format!("{err:?}");
+    assert_eq!(got, expected, "attack {label} was stopped by the wrong mechanism; err={err:?}");
     // Record what we saw so `-- --nocapture` runs are self-describing.
     eprintln!("[attack_containment] {label}: contained as {got:?}  ({err:?})");
 
@@ -199,27 +203,7 @@ async fn run_containment(
         "post-attack",
         "healthy plugin must still echo after the attack"
     );
-    (got, raw)
-}
-
-async fn assert_contained(
-    attack_path: &str,
-    label: &str,
-    allowed: &[ContainedAs],
-    memory_limit: Option<usize>,
-) {
-    let _ = run_containment(attack_path, label, allowed, memory_limit).await;
-}
-
-fn fs_access_error_proves_denial(raw: &str) {
-    assert!(
-        raw.contains("fs access denied as expected"),
-        "filesystem containment must prove the denied branch, got: {raw}"
-    );
-    assert!(
-        !raw.contains("fs access unexpectedly succeeded"),
-        "a successful read followed by panic must fail containment, got: {raw}"
-    );
+    err
 }
 
 #[derive(Clone, Copy)]
@@ -227,7 +211,7 @@ struct MandatoryScenario {
     scenario_id: &'static str,
     label: &'static str,
     attack_path: &'static str,
-    allowed: &'static [ContainedAs],
+    expected: Containment,
     memory_limit: Option<usize>,
     outcome: &'static str,
 }
@@ -238,7 +222,7 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
             scenario_id: "S1",
             label: "S1 buffer-overflow",
             attack_path: ATK_BUFFER_OVERFLOW,
-            allowed: &[ContainedAs::Trap],
+            expected: Containment::Trap(wasmtime::Trap::MemoryOutOfBounds),
             memory_limit: None,
             outcome: "buffer-overflow-trap",
         },
@@ -246,7 +230,7 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
             scenario_id: "S2",
             label: "S2 cross-read",
             attack_path: ATK_CROSS_READ,
-            allowed: &[ContainedAs::Trap],
+            expected: Containment::Trap(wasmtime::Trap::MemoryOutOfBounds),
             memory_limit: None,
             outcome: "cross-read-trap",
         },
@@ -254,7 +238,7 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
             scenario_id: "S3",
             label: "S3 infinite-loop",
             attack_path: ATK_INFINITE_LOOP,
-            allowed: &[ContainedAs::TimedOut, ContainedAs::Trap],
+            expected: Containment::Trap(wasmtime::Trap::Interrupt),
             memory_limit: None,
             outcome: "epoch-timeout",
         },
@@ -262,7 +246,7 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
             scenario_id: "S4",
             label: "S4 memory-exhaust",
             attack_path: ATK_MEMORY_EXHAUST,
-            allowed: &[ContainedAs::Trap],
+            expected: Containment::MemoryLimit,
             memory_limit: Some(MEMORY_EXHAUST_LIMIT),
             outcome: "memory-limit-trap",
         },
@@ -270,19 +254,31 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
             scenario_id: "S5",
             label: "S5 fs-access",
             attack_path: ATK_FS_ACCESS,
-            allowed: &[ContainedAs::Trap],
+            expected: Containment::FsDenied,
             memory_limit: None,
-            outcome: "fs-read-denied-trap",
+            outcome: "fs-read-denied",
         },
         MandatoryScenario {
             scenario_id: "S6",
             label: "S6 panic",
             attack_path: ATK_PANIC,
-            allowed: &[ContainedAs::Trap],
+            expected: Containment::Trap(wasmtime::Trap::UnreachableCodeReached),
             memory_limit: None,
             outcome: "guest-panic-trap",
         },
     ]
+}
+
+fn scenario(scenario_id: &str) -> MandatoryScenario {
+    mandatory_scenarios()
+        .into_iter()
+        .find(|scenario| scenario.scenario_id == scenario_id)
+        .expect("scenario is defined")
+}
+
+async fn run_scenario(scenario_id: &str) -> WasmProcessError {
+    let s = scenario(scenario_id);
+    assert_contained(s.attack_path, s.label, s.expected, s.memory_limit).await
 }
 
 #[tokio::test]
@@ -290,41 +286,28 @@ fn mandatory_scenarios() -> [MandatoryScenario; 6] {
 async fn mandatory_attack_evidence_receipt() {
     let output = std::env::var("WAFER_ATTACK_EVIDENCE_OUTPUT")
         .expect("mandatory attack evidence output path must be provided");
-    for path in [
-        PASS_THROUGH_WASM,
-        ATK_BUFFER_OVERFLOW,
-        ATK_CROSS_READ,
-        ATK_INFINITE_LOOP,
-        ATK_MEMORY_EXHAUST,
-        ATK_FS_ACCESS,
-        ATK_PANIC,
-    ] {
-        assert!(Path::new(path).is_file(), "mandatory attack evidence missing artifact: {path}");
-    }
-
     let mut scenarios = Vec::new();
     for scenario in mandatory_scenarios() {
-        let (contained_as, raw) = run_containment(
+        let err = assert_contained(
             scenario.attack_path,
             scenario.label,
-            scenario.allowed,
+            scenario.expected,
             scenario.memory_limit,
         )
         .await;
-        if scenario.scenario_id == "S5" {
-            fs_access_error_proves_denial(&raw);
-        }
+        let trap_code = match scenario.expected {
+            Containment::Trap(code) => Some(format!("{code:?}")),
+            Containment::MemoryLimit | Containment::FsDenied => None,
+        };
         scenarios.push(json!({
             "scenario_id": scenario.scenario_id,
             "executed": true,
             "healthy_before": true,
             "healthy_after": true,
             "outcome": scenario.outcome,
-            "contained_as": match contained_as {
-                ContainedAs::Trap => "trap",
-                ContainedAs::TimedOut => "timed_out",
-            },
-            "error": raw,
+            "contained_as": scenario.expected.label(),
+            "trap_code": trap_code,
+            "error": format!("{err:?}"),
         }));
     }
 
@@ -352,49 +335,30 @@ async fn mandatory_attack_evidence_receipt() {
 // The six scenarios (RFC-008 §D8).
 // ---------------------------------------------------------------------------
 
-/// S1: buffer-overflow — writes 1M bytes past a 16-byte Vec via
-/// raw pointer arithmetic. Expected: linear-memory OOB → trap.
+/// S1: buffer-overflow — writes one byte just past the end of linear
+/// memory. Expected: out-of-bounds trap.
 #[tokio::test]
 async fn buffer_overflow_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_BUFFER_OVERFLOW]) {
-        return;
-    }
-    assert_contained(ATK_BUFFER_OVERFLOW, "S1 buffer-overflow", &[ContainedAs::Trap], None).await;
+    run_scenario("S1").await;
 }
 
-/// S2: cross-read — dereferences a fabricated absolute host address
-/// (`0xDEAD_BEEF as *const u8`). Linear-memory bounds must catch it.
+/// S2: cross-read — reads a fabricated absolute host address
+/// (`0xDEAD_BEEF`). Linear-memory bounds must catch it.
 #[tokio::test]
 async fn cross_read_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_CROSS_READ]) {
-        return;
-    }
-    assert_contained(ATK_CROSS_READ, "S2 cross-read", &[ContainedAs::Trap], None).await;
+    run_scenario("S2").await;
 }
 
-/// S3: infinite-loop — `loop {}`. Expected: epoch interruption
-/// (`TimedOut`) once the deadline (~100 ticks × 10 ms = 1 s) fires.
-/// Fuel exhaustion is also acceptable if it lands first — both are
-/// legitimate sandbox interventions.
+/// S3: infinite-loop — `loop {}`. Expected: epoch interruption once the
+/// harness deadline (~100 ticks × 10 ms = 1 s) fires.
 #[tokio::test]
 async fn infinite_loop_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_INFINITE_LOOP]) {
-        return;
-    }
-    assert_contained(
-        ATK_INFINITE_LOOP,
-        "S3 infinite-loop",
-        &[ContainedAs::TimedOut, ContainedAs::Trap],
-        None,
-    )
-    .await;
+    run_scenario("S3").await;
 }
 
 #[tokio::test]
 async fn epoch_recovery_uses_a_fresh_store() {
-    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
-        return;
-    }
+    require_plugins(&[ATK_INFINITE_LOOP]);
     let harness = PluginTestHarness::new().expect("engine must construct");
     let mut attacker =
         harness.load_transform(ATK_INFINITE_LOOP).await.expect("attack plugin must load");
@@ -424,9 +388,7 @@ async fn epoch_recovery_uses_a_fresh_store() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn consecutive_epoch_interruptions_each_recover_before_the_next_message() {
-    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
-        return;
-    }
+    require_plugins(&[ATK_INFINITE_LOOP]);
     let config: Config = toml::from_str(&format!(
         r#"
 [pipeline]
@@ -484,9 +446,7 @@ to = "sink"
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn fuel_exhaustion_follows_the_timed_out_policy() {
-    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
-        return;
-    }
+    require_plugins(&[ATK_INFINITE_LOOP]);
     let dir = tempfile::tempdir().expect("tempdir");
     let dlq_path = dir.path().join("dlq.jsonl");
     let config: Config = toml::from_str(&format!(
@@ -560,84 +520,19 @@ to = "sink"
 }
 
 /// S4: memory-exhaust — allocates 1 MiB chunks in a loop. `StoreLimits`
-/// with a 4 MiB cap must fire before the OS OOMs the test harness.
-///
-/// This test also carries AC2's explicit assertion: the trap message
-/// must reference the memory cap. Because wasmtime's exact wording
-/// changes between versions we accept any of the substrings the
-/// upstream `StoreLimits::memory_growing` implementation has used in
-/// recent releases.
+/// with a 4 MiB cap must refuse the growth and trap the call before the
+/// OS OOMs the test harness.
 #[tokio::test]
 async fn memory_exhaust_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_MEMORY_EXHAUST]) {
-        return;
-    }
-
-    // Full assert-and-log flow first.
-    assert_contained(
-        ATK_MEMORY_EXHAUST,
-        "S4 memory-exhaust",
-        &[ContainedAs::Trap],
-        Some(MEMORY_EXHAUST_LIMIT),
-    )
-    .await;
-
-    // AC2: re-run just the attack to inspect the message payload.
-    let harness = PluginTestHarness::new().unwrap();
-    let mut attacker = harness
-        .load_transform_with_memory_limit(ATK_MEMORY_EXHAUST, MEMORY_EXHAUST_LIMIT)
-        .await
-        .unwrap();
-    let err = attacker
-        .process(RuntimeEnvelope::from_string("attacker", "grow"))
-        .await
-        .expect_err("memory-exhaust must trap");
-    // Evidence that StoreLimits fired: the trap must land inside
-    // memory-growth machinery. When wasmtime's ResourceLimiter
-    // returns false from memory_growing, the guest's `memory.grow`
-    // call returns -1 to `sbrk`, which then traps inside `dlmalloc`.
-    // The 4 MiB cap ensures this happens after only ~4 iterations of
-    // the 1 MiB allocation loop — no chance of an OS-level OOM.
-    let raw = format!("{err:?}");
-    let smoking_gun = ["sbrk", "dlmalloc", "malloc", "memory.grow", "memory grow"]
-        .iter()
-        .any(|s| raw.contains(s));
-    assert!(
-        smoking_gun,
-        "memory-exhaust trap must land in memory-growth machinery \
-         (sbrk/dlmalloc/malloc); got: {err:?}"
-    );
-    eprintln!("[attack_containment] memory-exhaust trap message: {err:?}");
+    run_scenario("S4").await;
 }
 
-/// S5: fs-access — calls `std::fs::read_to_string(\"/etc/passwd\")`.
-/// Under `WaferState::sandbox()` no WASI preopen is granted, so the
-/// call must fail. The plugin emits distinct panic markers for the
-/// denied and succeeded branches; containment must prove the denied
-/// branch happened, not merely that a later panic occurred.
+/// S5: fs-access — calls `std::fs::read_to_string("/etc/passwd")`.
+/// Under `WaferState::sandbox()` no WASI preopen is granted, so the call
+/// must fail and the guest must report the denial.
 #[tokio::test]
 async fn fs_access_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_FS_ACCESS]) {
-        return;
-    }
-    assert_contained(ATK_FS_ACCESS, "S5 fs-access", &[ContainedAs::Trap], None).await;
-}
-
-#[tokio::test]
-async fn fs_access_containment_proves_read_denial() {
-    if !check_prereqs(&[ATK_FS_ACCESS]) {
-        return;
-    }
-
-    let harness = PluginTestHarness::new().expect("engine must construct");
-    let mut attacker =
-        harness.load_transform(ATK_FS_ACCESS).await.expect("attack plugin must load");
-    let err = attacker
-        .process(RuntimeEnvelope::from_string("attacker", "trigger"))
-        .await
-        .expect_err("fs-access must trap when the sandbox denies filesystem reads");
-    let raw = format!("{err:?}");
-    fs_access_error_proves_denial(&raw);
+    run_scenario("S5").await;
 }
 
 /// S6: panic — `panic!("malicious payload triggers panic")`. Under
@@ -645,8 +540,5 @@ async fn fs_access_containment_proves_read_denial() {
 /// which the runtime maps to a trap.
 #[tokio::test]
 async fn panic_contained() {
-    if !check_prereqs(&[PASS_THROUGH_WASM, ATK_PANIC]) {
-        return;
-    }
-    assert_contained(ATK_PANIC, "S6 panic", &[ContainedAs::Trap], None).await;
+    run_scenario("S6").await;
 }
