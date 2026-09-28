@@ -281,15 +281,51 @@ impl BenchSinkConfig {
 // ThroughputSample
 // =============================================================================
 
-/// A single throughput measurement for one time bucket (1s resolution).
+/// Arrivals in one 1 s bucket of the post-warmup measurement.
 #[derive(Debug, Clone)]
 pub struct ThroughputSample {
-    /// Seconds since measurement start (after warmup).
+    /// End of the bucket, in whole seconds since the measurement start.
     pub elapsed_secs: f64,
     /// Messages received in this bucket.
     pub msg_count: u64,
     /// Bytes received in this bucket.
     pub bytes: u64,
+}
+
+/// Fixed 1 s buckets counted from the measurement start. A second with no
+/// arrivals between two that have some is written as a zero row, so a stall
+/// shows up as the gap it is instead of widening the next bucket.
+#[derive(Debug, Default)]
+struct ThroughputGrid {
+    samples: Vec<ThroughputSample>,
+    bucket: u64,
+    msg_count: u64,
+    bytes: u64,
+}
+
+impl ThroughputGrid {
+    fn record(&mut self, since_start: Duration, bytes: u64) {
+        while self.bucket < since_start.as_secs() {
+            self.close_bucket();
+        }
+        self.msg_count = self.msg_count.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(bytes);
+    }
+
+    fn finish(&mut self) {
+        if self.msg_count > 0 {
+            self.close_bucket();
+        }
+    }
+
+    fn close_bucket(&mut self) {
+        self.bucket = self.bucket.saturating_add(1);
+        self.samples.push(ThroughputSample {
+            elapsed_secs: Duration::from_secs(self.bucket).as_secs_f64(),
+            msg_count: std::mem::take(&mut self.msg_count),
+            bytes: std::mem::take(&mut self.bytes),
+        });
+    }
 }
 
 const INTERVAL_WIDTH_NS: u64 = 1_000_000_000;
@@ -802,14 +838,7 @@ pub struct BenchSink {
     start_wall_time: Option<SystemTime>,
     /// Throughput tracking: time measurement started (after warmup).
     measurement_start: Option<Instant>,
-    /// Current bucket start time.
-    current_bucket_start: Option<Instant>,
-    /// Messages in current bucket.
-    bucket_msg_count: u64,
-    /// Bytes in current bucket.
-    bucket_bytes: u64,
-    /// Completed throughput samples.
-    throughput_samples: Vec<ThroughputSample>,
+    throughput: ThroughputGrid,
     interval_recorder: Option<IntervalRecorder>,
     interval_uses_source_origin: bool,
     burst_observation: Option<Box<BurstObservation>>,
@@ -853,10 +882,7 @@ impl BenchSink {
             started: false,
             start_wall_time: None,
             measurement_start: None,
-            current_bucket_start: None,
-            bucket_msg_count: 0,
-            bucket_bytes: 0,
-            throughput_samples: Vec::new(),
+            throughput: ThroughputGrid::default(),
             interval_recorder: None,
             interval_uses_source_origin: false,
             burst_observation: None,
@@ -937,7 +963,7 @@ impl BenchSink {
     /// Access throughput samples collected during measurement.
     #[must_use]
     pub fn throughput_samples(&self) -> &[ThroughputSample] {
-        &self.throughput_samples
+        &self.throughput.samples
     }
 
     /// Access the raw histogram.
@@ -1003,8 +1029,8 @@ impl BenchSink {
 
     /// Generate throughput CSV content.
     ///
-    /// Format: `elapsed_secs,msg_count,bytes`
-    /// One row per 1-second bucket.
+    /// Format: `elapsed_secs,msg_count,bytes`, one row per fixed 1 s bucket
+    /// from the measurement start up to the last arrival.
     #[expect(
         clippy::expect_used,
         reason = "std::fmt::Write for String is infallible — cannot panic"
@@ -1012,7 +1038,7 @@ impl BenchSink {
     pub fn throughput_csv(&self) -> String {
         use std::fmt::Write as _;
         let mut csv = String::from("elapsed_secs,msg_count,bytes\n");
-        for sample in &self.throughput_samples {
+        for sample in &self.throughput.samples {
             writeln!(csv, "{:.3},{},{}", sample.elapsed_secs, sample.msg_count, sample.bytes)
                 .expect("String write is infallible");
         }
@@ -1298,28 +1324,6 @@ impl BenchSink {
             *count = count.saturating_add(1);
         }
     }
-
-    /// Flush current throughput bucket if ≥1s has elapsed.
-    fn flush_bucket_if_needed(&mut self, now: Instant) {
-        let Some(bucket_start) = self.current_bucket_start else { return };
-        let elapsed = now.duration_since(bucket_start);
-
-        if elapsed >= Duration::from_secs(1) {
-            let elapsed_since_measurement =
-                self.measurement_start.map_or(0.0, |s| now.duration_since(s).as_secs_f64());
-
-            self.throughput_samples.push(ThroughputSample {
-                elapsed_secs: elapsed_since_measurement,
-                msg_count: self.bucket_msg_count,
-                bytes: self.bucket_bytes,
-            });
-
-            // Reset bucket
-            self.current_bucket_start = Some(now);
-            self.bucket_msg_count = 0;
-            self.bucket_bytes = 0;
-        }
-    }
 }
 
 /// Wall-clock nanoseconds since the Unix epoch, for the measurement window
@@ -1359,20 +1363,7 @@ impl Lifecycle for BenchSink {
     }
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-        // Flush final throughput bucket
-        if self.bucket_msg_count > 0
-            && let Some(measurement_start) = self.measurement_start
-        {
-            let now = Instant::now();
-            let elapsed_since_measurement = now.duration_since(measurement_start).as_secs_f64();
-            self.throughput_samples.push(ThroughputSample {
-                elapsed_secs: elapsed_since_measurement,
-                msg_count: self.bucket_msg_count,
-                bytes: self.bucket_bytes,
-            });
-            self.bucket_msg_count = 0;
-            self.bucket_bytes = 0;
-        }
+        self.throughput.finish();
 
         if let Some(intervals) = &mut self.interval_recorder {
             let elapsed_ns = if self.interval_uses_source_origin || self.measurement_start.is_none()
@@ -1445,7 +1436,6 @@ impl Sink for BenchSink {
         let now = Instant::now();
         if self.measurement_start.is_none() {
             self.measurement_start = Some(now);
-            self.current_bucket_start = Some(now);
             let start_wall_time = SystemTime::now();
             self.start_wall_time = Some(start_wall_time);
             let local_start_unix_ns = start_wall_time
@@ -1461,11 +1451,10 @@ impl Sink for BenchSink {
         let duplicate = self.record_sequence(&envelope);
         self.record_burst_bucket(&envelope, arrival_unix_ns, duplicate);
 
-        // Throughput tracking
-        let payload_len = crate::util::usize_as_u64(envelope.payload.len());
-        self.bucket_msg_count = self.bucket_msg_count.saturating_add(1);
-        self.bucket_bytes = self.bucket_bytes.saturating_add(payload_len);
-        self.flush_bucket_if_needed(now);
+        let since_start = self
+            .measurement_start
+            .map_or(Duration::ZERO, |start| now.saturating_duration_since(start));
+        self.throughput.record(since_start, crate::util::usize_as_u64(envelope.payload.len()));
 
         let latency_ns = intended_ns.map(|intended| {
             record_elapsed(&mut self.histogram, &mut self.latency_clamps, intended, arrival_unix_ns)
@@ -2370,6 +2359,19 @@ mod tests {
         assert!(hdr.contains("Recorded values: 15"));
 
         let _ = std::fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn throughput_uses_fixed_one_second_buckets_with_zero_rows_for_a_stall() {
+        let mut grid = ThroughputGrid::default();
+        for millis in [200, 500, 3_100, 3_900] {
+            grid.record(Duration::from_millis(millis), 10);
+        }
+        grid.finish();
+
+        let rows: Vec<_> =
+            grid.samples.iter().map(|s| (s.elapsed_secs, s.msg_count, s.bytes)).collect();
+        assert_eq!(rows, [(1.0, 2, 20), (2.0, 0, 0), (3.0, 0, 0), (4.0, 2, 20)]);
     }
 
     #[tokio::test]
