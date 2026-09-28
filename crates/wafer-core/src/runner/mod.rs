@@ -420,15 +420,17 @@ pub(crate) fn continue_after_policy_action(
     metrics: &NodeMetrics,
 ) -> bool {
     match action {
-        ErrorPolicyAction::ExhaustedSkip => {
-            metrics.record_exhausted_skip();
-            true
-        }
-        ErrorPolicyAction::Teardown => false,
-        ErrorPolicyAction::Continue | ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => {
-            true
+        ErrorPolicyAction::Retried => metrics.record_retry(),
+        ErrorPolicyAction::DlqSent => metrics.record_dlq_sent(),
+        ErrorPolicyAction::Skipped => metrics.record_skipped(),
+        ErrorPolicyAction::ExhaustedSkip => metrics.record_exhausted_skip(),
+        ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => metrics.record_dlq_lost(),
+        ErrorPolicyAction::Teardown => {
+            metrics.record_dropped_on_teardown();
+            return false;
         }
     }
+    true
 }
 
 /// Receiving end of a node's hot-swap watch channel.
@@ -1249,17 +1251,26 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_skip_action_records_once_without_counting_other_actions() {
+    fn every_policy_action_is_counted_once() {
         let metrics = NodeMetrics::new();
-        assert!(continue_after_policy_action(ErrorPolicyAction::Continue, &metrics));
-        assert!(continue_after_policy_action(ErrorPolicyAction::DlqFull, &metrics));
-        assert!(continue_after_policy_action(ErrorPolicyAction::DlqClosed, &metrics));
-        assert_eq!(metrics.exhausted_skips(), 0);
-
-        assert!(continue_after_policy_action(ErrorPolicyAction::ExhaustedSkip, &metrics));
-        assert_eq!(metrics.exhausted_skips(), 1);
+        for action in [
+            ErrorPolicyAction::Retried,
+            ErrorPolicyAction::DlqSent,
+            ErrorPolicyAction::Skipped,
+            ErrorPolicyAction::ExhaustedSkip,
+            ErrorPolicyAction::DlqFull,
+            ErrorPolicyAction::DlqClosed,
+        ] {
+            assert!(continue_after_policy_action(action, &metrics), "{action:?} continues");
+        }
         assert!(!continue_after_policy_action(ErrorPolicyAction::Teardown, &metrics));
+
+        assert_eq!(metrics.retries(), 1);
+        assert_eq!(metrics.dlq_sent(), 1);
+        assert_eq!(metrics.skipped(), 1);
         assert_eq!(metrics.exhausted_skips(), 1);
+        assert_eq!(metrics.dlq_lost(), 2);
+        assert_eq!(metrics.dropped_on_teardown(), 1);
     }
 
     #[tokio::test(start_paused = true)]

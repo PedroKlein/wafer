@@ -49,7 +49,7 @@ use std::time::Duration;
 use serde_json::json;
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::queue::RuntimeEnvelope;
-use wafer_core::runner::error_policy::WasmProcessError;
+use wafer_core::runner::error_policy::{TrapKind, WasmProcessError};
 use wafer_core::testing::PluginTestHarness;
 use wafer_types::config::Config;
 
@@ -436,7 +436,8 @@ to = "sink"
         .expect("pipeline must shut down cleanly");
 
     let metrics = handle.node_metrics("attack").expect("attack metrics");
-    assert_eq!(metrics.failed(), 2, "both infinite-loop calls must trap");
+    assert_eq!(metrics.traps(TrapKind::Interrupt), 2, "both infinite-loop calls must trap");
+    assert_eq!(metrics.traps_total(), 2, "no other trap kind may appear");
     assert_eq!(
         metrics.recovery_count(),
         2,
@@ -503,7 +504,12 @@ to = "sink"
         .expect("pipeline must shut down cleanly");
 
     let metrics = handle.node_metrics("attack").expect("attack metrics");
-    assert_eq!(metrics.failed(), 2, "both infinite-loop calls must run out of fuel");
+    assert_eq!(
+        metrics.traps(TrapKind::OutOfFuel),
+        2,
+        "both infinite-loop calls must run out of fuel"
+    );
+    assert_eq!(metrics.dlq_sent(), 2, "timed_out = dlq must dead-letter both messages");
     assert_eq!(metrics.recovery_count(), 2, "each fuel trap must replace its Store");
 
     let records = std::fs::read_to_string(&dlq_path).expect("timed_out = dlq must write records");
@@ -541,4 +547,108 @@ async fn fs_access_contained() {
 #[tokio::test]
 async fn panic_contained() {
     run_scenario("S6").await;
+}
+
+/// Runs two messages through `source → attack → sink` and returns the
+/// attack node's `per_node_metrics.csv` row keyed by column name.
+/// `attack_settings` are extra TOML lines for the attack node.
+async fn exported_attack_metrics(
+    plugin: &str,
+    attack_settings: &str,
+) -> std::collections::HashMap<String, String> {
+    require_plugins(&[plugin]);
+    let config: Config = toml::from_str(&format!(
+        r#"
+[pipeline]
+name = "attack-accounting"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 2
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = {plugin:?}
+{attack_settings}
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"
+"#,
+    ))
+    .expect("inline config must parse");
+
+    let mut orchestrator =
+        Box::pin(launch_pipeline(config, None)).await.expect("pipeline must launch");
+    tokio::time::timeout(Duration::from_secs(10), orchestrator.run_until_complete())
+        .await
+        .expect("two attack messages must complete within ten seconds")
+        .expect("pipeline must shut down cleanly");
+    let dir = tempfile::tempdir().expect("tempdir");
+    orchestrator.export_per_node_metrics(dir.path()).expect("export metrics");
+
+    let csv = std::fs::read_to_string(dir.path().join("per_node_metrics.csv")).expect("csv");
+    let mut lines = csv.lines();
+    let header = lines.next().expect("header").split(',');
+    let row = lines.find(|line| line.starts_with("attack,")).expect("attack row").split(',');
+    header.map(str::to_owned).zip(row.map(str::to_owned)).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn trapped_messages_are_exported_as_traps_of_their_kind() {
+    let row = exported_attack_metrics(ATK_PANIC, "").await;
+    for (column, expected) in [
+        ("messages_in", "2"),
+        ("messages_out", "0"),
+        ("traps_total", "2"),
+        ("traps_unreachable", "2"),
+        ("guest_unrecoverable", "0"),
+        ("dropped_on_recovery", "2"),
+        ("recovery_count", "2"),
+    ] {
+        assert_eq!(row[column], expected, "{column} in {row:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn guest_reported_denial_is_not_exported_as_a_trap() {
+    let row = exported_attack_metrics(ATK_FS_ACCESS, "").await;
+    for (column, expected) in [
+        ("messages_in", "2"),
+        ("traps_total", "0"),
+        ("guest_unrecoverable", "2"),
+        ("guest_processing_failed", "0"),
+        ("dropped_on_recovery", "2"),
+    ] {
+        assert_eq!(row[column], expected, "{column} in {row:?}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn memory_limit_trap_is_exported_under_its_own_kind() {
+    let row = exported_attack_metrics(
+        ATK_MEMORY_EXHAUST,
+        &format!("memory_limit = {MEMORY_EXHAUST_LIMIT}"),
+    )
+    .await;
+    for (column, expected) in
+        [("traps_total", "2"), ("traps_memory_limit", "2"), ("dropped_on_recovery", "2")]
+    {
+        assert_eq!(row[column], expected, "{column} in {row:?}");
+    }
 }
