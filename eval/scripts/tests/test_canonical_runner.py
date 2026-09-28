@@ -2292,7 +2292,6 @@ def capacity_scout_fixture() -> dict:
             "downstream_lost": 10,
             "total_undelivered": 20,
             "duplicates": 5,
-            "unexpected": 0,
             "ignored_warmup": 0,
         },
         "rates_msg_s": {"intended": 4000.0, "achieved": 3980.0},
@@ -2327,7 +2326,6 @@ def test_capacity_scout_summary_reconciles_without_per_message_traces() -> None:
         "parse_errors": 0,
         "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
         "ignored_sequence_count": 0,
-        "unexpected_sequence_count": 0,
         "latency_p50_ns": 100,
         "latency_p95_ns": 200,
         "latency_p99_ns": 300,
@@ -2348,7 +2346,6 @@ def test_capacity_scout_result_is_emitted_from_bounded_artifacts() -> None:
             "parse_errors": 0,
             "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
             "ignored_sequence_count": 0,
-            "unexpected_sequence_count": 0,
             "latency_p50_ns": 100,
             "latency_p95_ns": 200,
             "latency_p99_ns": 300,
@@ -2417,7 +2414,6 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
                     "parse_errors": 0,
                     "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
                     "ignored_sequence_count": 0,
-                    "unexpected_sequence_count": 0,
                     "latency_p50_ns": 100,
                     "latency_p95_ns": 200,
                     "latency_p99_ns": 300,
@@ -2466,7 +2462,6 @@ def test_final_capacity_result_reuses_scout_capture_with_final_semantics() -> No
             "downstream_lost": 10,
             "total_undelivered": 20,
             "duplicates": 5,
-            "unexpected": 0,
             "ignored_warmup": 0,
         }
         assert result["rates_msg_s"]["achieved_ratio"] == pytest.approx(0.9999166667)
@@ -2522,10 +2517,6 @@ def test_capacity_scout_validator_rejects_counter_drift_and_evidence_promotion()
     traced["traces"] = True
     with pytest.raises(ValueError, match="must not contain per-message traces"):
         validate_capacity_scout_result(traced)
-    unexpected = json.loads(json.dumps(result))
-    unexpected["messages"]["unexpected"] = 1
-    with pytest.raises(ValueError, match="unexpected"):
-        validate_capacity_scout_result(unexpected)
 
 
 def test_capacity_scout_probe_requires_three_good_runs() -> None:
@@ -2564,7 +2555,6 @@ def scout_result(system: str, rate: int, classification: str = "good") -> dict:
         "downstream_lost": 0,
         "total_undelivered": rejected,
         "duplicates": 0,
-        "unexpected": 0,
         "ignored_warmup": 0,
     })
     result["rates_msg_s"] = {"intended": float(intended), "achieved": float(enqueued)}
@@ -3130,7 +3120,6 @@ def capacity_run_fixture(
                 "downstream_lost": downstream_lost,
                 "total_undelivered": total_undelivered,
                 "duplicates": 0,
-                "unexpected": 0,
                 "ignored_warmup": 0,
             },
             "rates_msg_s": {
@@ -3207,7 +3196,6 @@ def candidate_capacity_run_fixture(
             "downstream_lost": 0,
             "total_undelivered": total_undelivered,
             "duplicates": duplicates,
-            "unexpected": 0,
             "ignored_warmup": 0,
         },
         rates_msg_s={

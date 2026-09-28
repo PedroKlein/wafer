@@ -43,8 +43,9 @@ left:
   queue, a slow broker), overdue messages go out back to back and their
   delay counts as latency.
 - `BenchSource` fixes its schedule origin on the first poll and stamps
-  `bench.intended_ns` (scheduled time) and `bench.emit_ns` (when the message
-  actually left the source).
+  `intended_ns` (scheduled time) and `emit_ns` (when the message actually
+  left the source) into the envelope's host-only `BenchStamps`, which Wasm
+  guests never see.
 
 Latency is always arrival time minus scheduled time.
 
@@ -153,7 +154,7 @@ does not depend on the Python HDR library.
 
 ### Neutral
 
-- The payload `ts` field and `bench.intended_ns` mean "scheduled time";
+- The payload `ts` field and the `intended_ns` bench stamp mean "scheduled time";
   readers of older traces must not interpret them as actual send times.
 
 ## Alternatives Considered

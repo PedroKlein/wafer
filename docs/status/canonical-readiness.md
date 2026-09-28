@@ -508,7 +508,7 @@ measurement rig can correctly recover a known 50 ms delay from a Wasm
 plugin, it can be trusted to report tail latency honestly for less
 contrived experiments. A regression in this gate (say a rewrite of
 `BenchSink` that started using arrival timestamps instead of
-`bench.intended_ns`) would silently poison all thesis numbers; the
+the scheduled-time stamp `intended_ns`) would silently poison all thesis numbers; the
 integration test `crates/wafer-core/tests/wasi_async_runner.rs`
 catches this at CI time.
 
@@ -587,7 +587,11 @@ remains achievable given the phase decomposition shows no phase >2 ms.
 BenchSink's SequenceTracker counts sequence numbers across the
 measurement window (post-warmup). The initial 5001 "gaps" correspond
 exactly to the warmup-excluded region — no messages lost during any
-of the 51 hot-swap events.
+of the 51 hot-swap events. The tracker now marks each number of the
+population `BenchSource` declares (`bench.measurement_start_seq` to
+`bench.sequence_end`), so a rerun reports no warmup "gaps", counts a
+late arrival as `out_of_order` rather than a gap plus a duplicate, and
+counts messages missing at the tail.
 
 | Metric | Value |
 | ------ | ----- |

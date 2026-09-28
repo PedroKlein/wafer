@@ -334,10 +334,8 @@ e_swap_1_root = Path(str(e_swap_6_dir).replace("e-swap-6", "e-swap-1"))
 json.dump(e_swap_1, open(e_swap_1_root / "shakedown.json", "w"), indent=2)
 
 # --- E-Swap-2: zero-loss zero-dup ---
-# The SequenceTracker reports gaps including the warmup-excluded range.
-# Warmup messages (first ~warmup_secs * rate) are never passed to collect()
-# so the tracker sees a single initial gap [0, warmup_count). This is NOT
-# a swap-induced loss. Swap-induced loss = total_gap_msgs - warmup_gap.
+# The SequenceTracker counts the population BenchSource declares (warmup
+# excluded), so every gap it reports is post-warmup loss.
 seq_path = out_dir / "sequence.csv"
 seq_gaps = -1
 seq_dups = -1
@@ -355,26 +353,18 @@ if seq_path.exists():
             total_received = int(row.get("total_received", 0))
             gap_ranges = int(row.get("gap_ranges", 0))
 
-# Warmup gap: source warmup_messages=5000 + BenchSink warmup_secs=5 at rate=1000
-# means the tracker's first observation is around seq 5000-5001.
-warmup_gap = total_expected - total_received if total_expected > total_received else 0
-# Swap-induced gaps = total gaps minus the single warmup-region gap
-swap_induced_gaps = max(0, seq_gaps - warmup_gap) if seq_gaps >= 0 else -1
-# If only 1 gap range and it equals warmup_gap, all post-warmup msgs delivered
-swap_induced_gap_ranges = max(0, gap_ranges - 1) if gap_ranges >= 1 and seq_gaps == warmup_gap else gap_ranges
 
 e_swap_2 = {
     "experiment": "e-swap-2",
     "host": "shakedown-macos",
     "generated_at_utc": ts,
     "total_swaps": swap_count,
-    "sequence_gaps_raw": seq_gaps,
-    "warmup_excluded_msgs": warmup_gap,
-    "swap_induced_gaps": swap_induced_gaps,
+    "swap_induced_gaps": seq_gaps,
+    "swap_induced_gap_ranges": gap_ranges,
     "sequence_duplicates": seq_dups,
     "total_expected": total_expected,
     "total_received": total_received,
-    "zero_loss": swap_induced_gaps == 0,
+    "zero_loss": seq_gaps == 0,
     "zero_dup": seq_dups == 0,
     "git_sha": git_sha,
 }
@@ -395,7 +385,7 @@ json.dump(metadata, open(out_dir / "metadata.json", "w"), indent=2)
 
 print(f"E-Swap-6: {len(successful)} successful swaps, dominant={e_swap_6['dominant_phase']}")
 print(f"E-Swap-1: p95 pause={e_swap_1['pause_duration_p95_ms']:.2f} ms (target <100 ms)")
-print(f"E-Swap-2: swap_induced_gaps={swap_induced_gaps}, dups={seq_dups}, warmup_excluded={warmup_gap}")
+print(f"E-Swap-2: swap_induced_gaps={seq_gaps}, gap_ranges={gap_ranges}, dups={seq_dups}")
 PY
 
     local unified_ok="true"

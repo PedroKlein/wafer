@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 /// Host-side message envelope flowing through pipeline queues.
@@ -40,6 +41,53 @@ pub struct EnvelopeHeader {
     pub source: Box<str>,
     pub content_type: Box<str>,
     pub metadata: Vec<(Box<str>, Box<str>)>,
+    /// Benchmark bookkeeping. Host-only: never lowered into a Wasm guest,
+    /// and carried from input to output across every node.
+    pub bench: Option<BenchStamps>,
+}
+
+/// Sequence and timing data `BenchSource` attaches for `BenchSink`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BenchStamps {
+    pub sequence: u64,
+    /// Scheduled emission time, Unix epoch nanoseconds.
+    pub intended_ns: u64,
+    /// Time the message actually left the source, Unix epoch nanoseconds.
+    pub emit_ns: u64,
+    pub warmup: bool,
+    pub measurement_start_seq: u64,
+    /// One past the last sequence number; `None` ends the population at the
+    /// highest number seen.
+    pub sequence_end: Option<u64>,
+    pub burst: Option<BurstStamps>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BurstStamps {
+    pub phase: BurstPhase,
+    /// Wall-clock start of the source's measurement window, Unix epoch
+    /// nanoseconds; the origin burst buckets are aligned to.
+    pub measurement_start_unix_ns: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BurstPhase {
+    Before,
+    Burst,
+    After,
+}
+
+impl BurstPhase {
+    /// Position in `[before, burst, after]` per-phase counters.
+    #[must_use]
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Before => 0,
+            Self::Burst => 1,
+            Self::After => 2,
+        }
+    }
 }
 
 /// Internal lineage tracking for distributed tracing.
@@ -61,13 +109,17 @@ impl RuntimeEnvelope {
             source: source.into(),
             content_type: "application/octet-stream".into(),
             metadata: Vec::new(),
+            bench: None,
         };
 
         Self { header: Arc::new(header), payload, lineage: Lineage::default(), retry_count: 0 }
     }
 
-    /// Create an envelope from fields supplied by a transform guest.
-    pub(crate) fn from_output_fields(
+    /// Create the output of a transform guest for `input`. The guest supplies
+    /// the header strings and payload; lineage and bench stamps come from
+    /// `input`. Retries are spent per node, so the count starts at zero.
+    pub(crate) fn from_guest_output(
+        input: Self,
         id: Box<str>,
         timestamp: u64,
         source: Box<str>,
@@ -76,9 +128,16 @@ impl RuntimeEnvelope {
         payload: Bytes,
     ) -> Self {
         Self {
-            header: Arc::new(EnvelopeHeader { id, timestamp, source, content_type, metadata }),
+            header: Arc::new(EnvelopeHeader {
+                id,
+                timestamp,
+                source,
+                content_type,
+                metadata,
+                bench: input.header.bench,
+            }),
             payload,
-            lineage: Lineage::default(),
+            lineage: input.lineage,
             retry_count: 0,
         }
     }
@@ -96,16 +155,18 @@ impl RuntimeEnvelope {
         self
     }
 
+    /// Attach benchmark stamps (builder pattern).
+    #[must_use]
+    pub fn with_bench_stamps(mut self, stamps: BenchStamps) -> Self {
+        Arc::make_mut(&mut self.header).bench = Some(stamps);
+        self
+    }
+
     /// Ensure this envelope has a trace ID, assigning one if absent.
     pub fn ensure_trace_id(&mut self) {
         if self.lineage.trace_id.is_none() {
             self.lineage.trace_id = Some(Uuid::new_v4().to_string().into_boxed_str());
         }
-    }
-
-    /// Copy lineage from another envelope.
-    pub fn inherit_lineage_from(&mut self, parent: &Self) {
-        self.lineage = parent.lineage.clone();
     }
 
     /// Set this envelope's parent ID.

@@ -29,7 +29,7 @@ use wafer_core::node::{
     BenchSink, BenchSinkConfig, Lifecycle, NativeTransform, NodeMetrics, NodeStateTracker, Sink,
     TransformNode,
 };
-use wafer_core::queue::RuntimeEnvelope;
+use wafer_core::queue::{BenchStamps, BurstPhase, BurstStamps, RuntimeEnvelope};
 use wafer_core::runner::DownstreamSender;
 use wafer_core::runner::error_policy::{ErrorPolicyExecutor, ResolvedErrorPolicy};
 use wafer_core::runner::sink::run_sink_loop;
@@ -46,23 +46,30 @@ fn unix_ns() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos() as u64
 }
 
-/// The metadata `BenchSource` attaches in steady state.
-fn steady_envelope(seq: u64) -> RuntimeEnvelope {
+/// The stamps `BenchSource` attaches in steady state.
+fn steady_stamps(seq: u64) -> BenchStamps {
     let intended_ns = unix_ns() - 50_000;
-    RuntimeEnvelope::new("bench-source", payload())
-        .with_metadata("bench.sequence", seq.to_string())
-        .with_metadata("bench.intended_ns", intended_ns.to_string())
-        .with_metadata("bench.warmup", "false")
-        .with_metadata("bench.measurement_start_seq", "0")
-        .with_metadata("bench.emit_ns", (intended_ns + 10_000).to_string())
+    BenchStamps {
+        sequence: seq,
+        intended_ns,
+        emit_ns: intended_ns + 10_000,
+        warmup: false,
+        measurement_start_seq: 0,
+        sequence_end: None,
+        burst: None,
+    }
 }
 
-/// The metadata `BenchSource` attaches during a burst schedule.
+fn steady_envelope(seq: u64) -> RuntimeEnvelope {
+    RuntimeEnvelope::new("bench-source", payload()).with_bench_stamps(steady_stamps(seq))
+}
+
+/// The stamps `BenchSource` attaches during a burst schedule.
 fn burst_envelope(seq: u64, origin_ns: u64) -> RuntimeEnvelope {
-    steady_envelope(seq)
-        .with_metadata("bench.phase", "burst")
-        .with_metadata("bench.measurement_offset_ns", "1000000")
-        .with_metadata("bench.measurement_start_unix_ns", origin_ns.to_string())
+    let burst =
+        BurstStamps { phase: BurstPhase::Burst, measurement_start_unix_ns: Some(origin_ns) };
+    RuntimeEnvelope::new("bench-source", payload())
+        .with_bench_stamps(BenchStamps { burst: Some(burst), ..steady_stamps(seq) })
 }
 
 fn poll_ready<F: Future>(future: F) -> F::Output {

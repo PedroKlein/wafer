@@ -247,7 +247,7 @@ def config_errors() -> list[str]:
     if "epoch_deadline: None" not in engine_source:
         errors.append("EngineConfig source no longer defaults epoch_deadline to None")
     fuel_default = re.search(
-        r"derive\([^)]*Default[^)]*\)\]\s*pub struct FuelBudgets", engine_source
+        r"derive\([^)]*Default[^)]*\)\](?:\s*#\[[^\]]*\])*\s*pub struct FuelBudgets", engine_source
     )
     if fuel_default is None or any(
         f"pub {category}: Option<NonZeroU64>" not in engine_source

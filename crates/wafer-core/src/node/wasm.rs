@@ -485,22 +485,19 @@ impl WasmTransformNode {
         }
 
         match result {
-            Ok(Ok(output)) => {
-                let mut new_envelope = RuntimeEnvelope::from_output_fields(
-                    output.id.into_boxed_str(),
-                    output.timestamp,
-                    output.source.into_boxed_str(),
-                    output.content_type.into_boxed_str(),
-                    output
-                        .metadata
-                        .into_iter()
-                        .map(|(key, value)| (key.into_boxed_str(), value.into_boxed_str()))
-                        .collect(),
-                    Bytes::from(output.payload),
-                );
-                new_envelope.inherit_lineage_from(&envelope);
-                Ok(new_envelope)
-            }
+            Ok(Ok(output)) => Ok(RuntimeEnvelope::from_guest_output(
+                envelope,
+                output.id.into_boxed_str(),
+                output.timestamp,
+                output.source.into_boxed_str(),
+                output.content_type.into_boxed_str(),
+                output
+                    .metadata
+                    .into_iter()
+                    .map(|(key, value)| (key.into_boxed_str(), value.into_boxed_str()))
+                    .collect(),
+                Bytes::from(output.payload),
+            )),
             Ok(Err(wit_err)) => Err(map_process_error(wit_err)),
             Err(trap) => Err(map_trap(&trap)),
         }
@@ -1308,6 +1305,29 @@ mod tests {
         assert_eq!(msg.timestamp, envelope.header.timestamp);
         assert_eq!(msg.content_type, "application/octet-stream");
         assert!(!msg.payload.owned(), "borrow<buffer> must use a borrowed host handle");
+    }
+
+    #[test]
+    fn build_wit_message_keeps_bench_stamps_on_the_host() {
+        let engine = WaferEngine::new().expect("engine");
+        let state = WaferState::new("test-node", Capabilities::sandbox());
+        let mut store = Store::new(engine.inner(), state);
+        store.limiter(|s| s.limits_mut());
+
+        let envelope = RuntimeEnvelope::from_string("source-1", "hello world")
+            .with_metadata("sensor", "a")
+            .with_bench_stamps(crate::queue::BenchStamps {
+                sequence: 7,
+                intended_ns: 1,
+                emit_ns: 2,
+                warmup: false,
+                measurement_start_seq: 0,
+                sequence_end: None,
+                burst: None,
+            });
+        let msg = build_wit_message(&mut store, &envelope).expect("should build message");
+
+        assert_eq!(msg.metadata, [("sensor".to_owned(), "a".to_owned())]);
     }
 
     #[test]
