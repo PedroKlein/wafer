@@ -1,5 +1,6 @@
 //! Attack scenario S5: Filesystem access attempt.
-//! Expected runtime behavior: Trap or error — no WASI FS capabilities granted.
+//! Expected runtime behavior: the read fails because no WASI preopen is granted,
+//! and the plugin reports the denial as an `unrecoverable` error.
 
 wit_bindgen::generate!({
     path: "../../../wit",
@@ -20,7 +21,9 @@ impl exports::wafer::pipeline::transform::Guest for AttackPlugin {
         _input: exports::wafer::pipeline::transform::Message,
     ) -> Result<exports::wafer::pipeline::transform::OutputMessage, exports::wafer::pipeline::transform::ProcessError> {
         match std::fs::read_to_string("/etc/passwd") {
-            Ok(content) => panic!("fs access unexpectedly succeeded: {} bytes", content.len()),
+            Ok(content) => Err(exports::wafer::pipeline::transform::ProcessError::ProcessingFailed(
+                format!("NOT CONTAINED: read {} bytes of /etc/passwd", content.len()),
+            )),
             Err(error) => Err(exports::wafer::pipeline::transform::ProcessError::Unrecoverable(
                 format!("fs access denied as expected: {error}"),
             )),
