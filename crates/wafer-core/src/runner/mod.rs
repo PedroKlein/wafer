@@ -115,6 +115,19 @@ pub struct HotSwapProgress {
     /// Who owns the payload: still pending, taken by the runner, or withdrawn
     /// by the API after a timeout. Exactly one side wins the transition.
     claim: AtomicU8,
+    /// Keeps the node's recorded plugin hash on whichever plugin is loaded.
+    plugin_hash: OnceLock<PluginHashUpdate>,
+}
+
+/// Per-node SHA-256 (hex) of the loaded plugin bytes, read for provenance.
+pub(crate) type PluginHashes = Arc<std::sync::RwLock<std::collections::HashMap<Box<str>, String>>>;
+
+#[derive(Debug)]
+struct PluginHashUpdate {
+    hashes: PluginHashes,
+    node_id: Box<str>,
+    replacement: String,
+    replaced: Mutex<Option<String>>,
 }
 
 const CLAIM_PENDING: u8 = 0;
@@ -136,8 +149,25 @@ impl HotSwapProgress {
             first_post_replacement_local_outcome: OnceLock::new(),
             tx: Mutex::new(Some(tx)),
             claim: AtomicU8::new(CLAIM_PENDING),
+            plugin_hash: OnceLock::new(),
         });
         (progress, rx)
+    }
+
+    /// Record `replacement` as the node's plugin hash when the runner adopts
+    /// the replacement, and put the replaced hash back if it rolls back.
+    pub(crate) fn track_plugin_hash(
+        &self,
+        hashes: PluginHashes,
+        node_id: impl Into<Box<str>>,
+        replacement: String,
+    ) {
+        let _ = self.plugin_hash.set(PluginHashUpdate {
+            hashes,
+            node_id: node_id.into(),
+            replacement,
+            replaced: Mutex::new(None),
+        });
     }
 
     /// Called by the runner before it applies the payload. Returns `false`
@@ -178,6 +208,12 @@ impl HotSwapProgress {
 
     /// Called after the replacement instance validates and initializes.
     pub fn mark_replacement_adopted(&self) {
+        if let Some(update) = self.plugin_hash.get()
+            && let Ok(mut hashes) = update.hashes.write()
+        {
+            let replaced = hashes.insert(update.node_id.clone(), update.replacement.clone());
+            *lock(&update.replaced) = replaced;
+        }
         let _ = self.replacement_adopted.set(std::time::Instant::now());
         self.adopted.notify_one();
         self.try_complete();
@@ -211,11 +247,19 @@ impl HotSwapProgress {
         }
     }
 
-    fn take_sender(&self) -> Option<oneshot::Sender<HotSwapOutcome>> {
-        match self.tx.lock() {
-            Ok(mut guard) => guard.take(),
-            Err(poisoned) => poisoned.into_inner().take(),
+    /// Called by the runner when it rolls back to the replaced plugin, even
+    /// after the outcome was reported.
+    pub(crate) fn restore_replaced_plugin_hash(&self) {
+        if let Some(update) = self.plugin_hash.get()
+            && let Some(replaced) = lock(&update.replaced).take()
+            && let Ok(mut hashes) = update.hashes.write()
+        {
+            hashes.insert(update.node_id.clone(), replaced);
         }
+    }
+
+    fn take_sender(&self) -> Option<oneshot::Sender<HotSwapOutcome>> {
+        lock(&self.tx).take()
     }
 
     fn try_complete(&self) {
@@ -291,6 +335,10 @@ impl CanaryCounters {
     }
 }
 
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Tracks the canary window state for process-time hot-swap rollback.
 ///
 /// Exists only while the canary window is open (between swap ACK and either
@@ -302,6 +350,7 @@ impl CanaryCounters {
 pub(crate) struct TransformCanaryState {
     pub snapshot: TransformRollbackSnapshot,
     pub counters: CanaryCounters,
+    pub swap: Arc<HotSwapProgress>,
 }
 
 impl std::fmt::Debug for TransformCanaryState {
@@ -314,8 +363,12 @@ impl std::fmt::Debug for TransformCanaryState {
 
 impl TransformCanaryState {
     /// Create a new canary state from the v1 InstancePre retained before swap.
-    pub fn new(pre: TransformPre, config: HotSwapConfig) -> Self {
-        Self { snapshot: TransformRollbackSnapshot { pre }, counters: CanaryCounters::new(config) }
+    pub fn new(pre: TransformPre, config: HotSwapConfig, swap: Arc<HotSwapProgress>) -> Self {
+        Self {
+            snapshot: TransformRollbackSnapshot { pre },
+            counters: CanaryCounters::new(config),
+            swap,
+        }
     }
 
     /// Check if the canary window has expired.

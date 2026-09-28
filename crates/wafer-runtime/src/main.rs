@@ -338,6 +338,12 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
                 }
             };
 
+            let wasm_bytes: Arc<[u8]> = wasm_bytes.into();
+            // Hashed alongside preparation so it cannot delay the dispatch.
+            let plugin_hash = tokio::task::spawn_blocking({
+                let wasm_bytes = Arc::clone(&wasm_bytes);
+                move || wafer_core::registry::compute_hash(&wasm_bytes)
+            });
             let (progress, completion) = wafer_core::runner::HotSwapProgress::channel();
             let result = prepare_transform_swap_timed_with_fuel(
                 &engine,
@@ -370,10 +376,17 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
                         }
                     }
 
+                    let plugin_hash = match plugin_hash.await {
+                        Ok(hash) => hash,
+                        Err(e) => {
+                            let _ = tx.send(Err(format!("hashing swap plugin failed: {e}")));
+                            return;
+                        }
+                    };
                     let _ = tx.send(Ok(PreparedSwap {
                         node_id,
                         payload: timed.payload,
-                        wasm_bytes,
+                        plugin_hash,
                         completion,
                     }));
                 }
@@ -522,7 +535,7 @@ impl ProvenanceSink {
 struct PreparedSwap {
     node_id: String,
     payload: wafer_core::runner::SwapPayload,
-    wasm_bytes: Vec<u8>,
+    plugin_hash: String,
     completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
 }
 
@@ -566,8 +579,8 @@ async fn write_shutdown_provenance(
 /// via `send_swap()`, then we continue waiting for pipeline completion.
 /// A swap that could not be prepared or dispatched fails the run: a
 /// swap benchmark in which no swap happened is not a valid sample.
-/// Once the runner reports the replacement adopted, the v2 plugin hash is
-/// recorded and provenance re-written, so a swap run names the live binary.
+/// Once the runner adopts the replacement, provenance is re-written, so a
+/// swap run names the live binary.
 async fn run_with_swap(
     orchestrator: &mut PipelineOrchestrator,
     rx: tokio::sync::oneshot::Receiver<std::result::Result<PreparedSwap, String>>,
@@ -585,9 +598,10 @@ async fn run_with_swap(
         biased;
         () = cancel.cancelled() => {}
         result = rx => match result {
-            Ok(Ok(PreparedSwap { node_id, payload, wasm_bytes, completion })) => {
+            Ok(Ok(PreparedSwap { node_id, payload, plugin_hash, completion })) => {
                 let handle = orchestrator.handle();
                 let progress = payload.progress();
+                handle.track_swap_plugin_hash(&node_id, &progress, plugin_hash);
                 let dispatched = handle
                     .try_begin_swap(&node_id)
                     .and_then(|guard| handle.send_swap(&node_id, payload).map(|()| guard));
@@ -597,7 +611,6 @@ async fn run_with_swap(
                         let recorded = record_adopted_swap(
                             handle,
                             node_id,
-                            wasm_bytes,
                             progress,
                             completion,
                             provenance,
@@ -647,16 +660,15 @@ async fn run_with_swap(
     }
 }
 
-/// Record the replacement's hash once the runner has adopted it.
+/// Re-write provenance once the runner has adopted the replacement.
 ///
-/// Adoption is what changes the loaded plugin. The outcome report only
-/// arrives after the first message processed on the replacement, so a node
-/// that stays idle until shutdown never sends one, and the provenance would
-/// otherwise keep naming the plugin the swap replaced.
+/// The runner records the replacement's hash when it adopts it and puts the
+/// replaced hash back if it rolls back, so this only decides when to write.
+/// The outcome report only arrives after the first message processed on the
+/// replacement, so a node that stays idle until shutdown never sends one.
 async fn record_adopted_swap(
     handle: PipelineHandle,
     node_id: String,
-    wasm_bytes: Vec<u8>,
     progress: Arc<wafer_core::runner::HotSwapProgress>,
     completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
     provenance: Option<ProvenanceSink>,
@@ -682,11 +694,8 @@ async fn record_adopted_swap(
             adopted
         }
     };
-    if adopted {
-        handle.record_plugin_hash(&node_id, wafer_core::registry::compute_hash(&wasm_bytes));
-        if let Some(sink) = &provenance {
-            sink.write(&handle, metadata::WrittenAt::Swap, None);
-        }
+    if adopted && let Some(sink) = &provenance {
+        sink.write(&handle, metadata::WrittenAt::Swap, None);
     }
 }
 
