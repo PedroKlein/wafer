@@ -44,7 +44,7 @@ that plugin and confirm the produced `.wasm` still loads.
 ## Pull request checklist
 
 - The workspace builds clean: `mise run build` exits 0.
-- Tests pass: `mise run test` exits 0.
+- Tests pass: `mise run test` exits 0. If you touch `eval/`, `mise run test-eval` too.
 - Clippy is clean at the project's configured level: `mise run clippy`.
 - New behaviour has at least one test. Bug fixes have a regression test
   that fails before the fix and passes after.
