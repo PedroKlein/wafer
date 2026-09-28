@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "WAFER thesis evaluation analysis and figure generation"
 requires-python = ">=3.11"
 dependencies = [
-    "scipy>=1.14",
     "numpy>=2.0",
     "matplotlib>=3.9",
     "seaborn>=0.13",
