@@ -339,7 +339,8 @@ fn write_replacement_plugin(
 /// A run stopped after the swap is adopted but before the replacement
 /// processes a message must still shut down and write provenance. The
 /// runner never reports completion in that case, and the swap payload keeps
-/// the report channel open, so shutdown must not wait on it.
+/// the report channel open, so shutdown must not wait on it; the provenance
+/// still names the adopted replacement.
 #[cfg(unix)]
 #[test]
 fn swap_run_shuts_down_when_swap_never_completes() {
@@ -348,11 +349,11 @@ fn swap_run_shuts_down_when_swap_never_completes() {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
-    let (v1_hash, _, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
+    let (v1_hash, v2_hash, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
     // One message every 4 s: the first goes out at launch, the swap is ready
     // by 1 s and the idle node adopts it right away, and the second message
-    // only arrives at 4 s. Interrupting at 3 s lands between adoption and the
-    // first message on the replacement.
+    // only arrives at 4 s. Interrupting a second after the dispatch lands
+    // between adoption and the first message on the replacement.
     let config_path = tmp.path().join("slow.toml");
     std::fs::write(
         &config_path,
@@ -403,11 +404,27 @@ path = "{}"
         .arg(&v2_path)
         .env("WAFER_METADATA_OUTPUT", &provenance_path)
         .env("WAFER_BENCH_OUTPUT_DIR", tmp.path())
-        .stdout(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("run wafer binary");
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    let stdout = child.stdout.take().expect("piped stdout");
+    let (dispatched_tx, dispatched_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        let mut stdout = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        while stdout.read_line(&mut line).unwrap() != 0 {
+            if line.contains("Hot-swap dispatched") {
+                let _ = dispatched_tx.send(());
+            }
+            line.clear();
+        }
+    });
+    dispatched_rx
+        .recv_timeout(std::time::Duration::from_secs(30))
+        .expect("swap must be dispatched within 30 s");
+    std::thread::sleep(std::time::Duration::from_secs(1));
     let status = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()
@@ -431,5 +448,6 @@ path = "{}"
         serde_json::from_slice(&std::fs::read(&provenance_path).expect("read provenance"))
             .expect("parse provenance JSON");
     assert_eq!(json["provenance_written_at"], "shutdown");
-    assert_eq!(json["wafer_plugin_hashes"]["transform"], v1_hash.as_str());
+    assert_ne!(v1_hash, v2_hash);
+    assert_eq!(json["wafer_plugin_hashes"]["transform"], v2_hash.as_str());
 }
