@@ -668,8 +668,11 @@ path for five independent host runs with 50 successful rollback events per run
 over a 300-second measurement window. Rollback candidate evidence reconciles
 `swap_requests.json`, `rollback.json`, and `sequence.csv`; it does not require a
 sink-transition timeline because failed swaps produce no successful plugin-version
-transition. Event 0 in each run is labeled
-`first-use-aot`; events 1–49 are labeled `cached`. Event-level rows stay nested
+transition. Each event's label comes from the `compile_cache` value the runtime
+returns in its swap response: `compiled` is labeled `first-use-aot`, and
+`memory_hit` or `disk_hit` is labeled `cached`. Event 0 in each run must be
+`first-use-aot` and events 1–49 must be `cached`; any other outcome fails the
+run. Event-level rows stay nested
 within their run, while comparisons use one per-run aggregate for each event
 class. Sequence evidence must remain lossless, failed attempts remain immutable,
 and neither candidate may reference an E-Swap-1/2/5/6 alias as its measurement
@@ -1062,7 +1065,7 @@ The preflight rejects a host that does not meet these conditions. Smoke runs may
 | `rustc_version` | `wafer-runtime` build.rs, `rustc --version` at compile time | Cross-compilation drops the host rustc; build-time capture keeps provenance intact. |
 | `wafer_runtime_version` | `env!("CARGO_PKG_VERSION")` | Semver of the binary that ran, not the workspace. |
 | `wafer_runtime_sha256` | `std::env::current_exe()` + SHA256, on the blocking pool after the run | Exact binary bytes so a canonical-run number can be tied to the exact build artefact. `null` in `launch` and `swap` writes. |
-| `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch AND after every adopted hot-swap (API or timed `--swap-after-secs`) by `PipelineHandle::record_plugin_hash`; the P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). The shutdown write therefore names the live replacement. |
+| `wafer_plugin_hashes` | `PipelineOrchestrator::plugin_hashes_snapshot()` | Populated at initial launch by `PipelineHandle::record_plugin_hash`. On a hot-swap (API or timed `--swap-after-secs`) the node's runner records the replacement's hash when it adopts it and restores the replaced hash if it rolls back inside the canary window, including after the swap outcome was reported. The P0.12 hot-swap guard reads from the same map, so metadata + guard stay coherent (F2 AC2). The shutdown write therefore names the plugin that was loaded when the run ended. |
 | `config_path` | The `--config` argument as given | Which file the run loaded; `config_sha256` identifies its bytes. |
 | `config_sha256` | Runtime `Sha256` of the effective config file at load time | Notebook cross-references use this as the provenance root. |
 | `kernel` | `/proc/sys/kernel/osrelease` (`uname -r` subprocess only where procfs is absent) | Kept in both the runtime provenance and the shell metadata; the runtime version wins on merge. |
