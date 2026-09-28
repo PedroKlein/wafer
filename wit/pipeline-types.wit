@@ -65,15 +65,18 @@ interface types {
     // -------------------------------------------------------------------------
 
     // Five-category error variant. The host's error policy engine dispatches each
-    // category to the configured action (retry, DLQ, skip, teardown).
+    // category to the configured action (retry, DLQ, skip, teardown). The
+    // defaults below apply when [error_policy] does not override them. A DLQ
+    // action without a [dead_letter] sink drops the message and counts it as
+    // dlq_lost.
     variant process-error {
-        // Malformed or schema-invalid input. No retry; send to DLQ immediately.
+        // Malformed or schema-invalid input. Never retried; default action DLQ.
         bad-input(string),
 
         // External dependency (HTTP API, remote DB) is unavailable. Retryable.
         dependency-failed(string),
 
-        // Internal plugin logic failed. Retryable up to configured limit.
+        // Internal plugin logic failed. Retryable up to the configured limit.
         processing-failed(string),
 
         // Plugin gave up on a deadline of its own. The host applies its timed-out

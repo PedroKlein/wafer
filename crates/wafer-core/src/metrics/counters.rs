@@ -1,4 +1,6 @@
 //! Pipeline metrics - atomic counters for runtime observability.
+//!
+//! Not used by the runtime; `GET /metrics` does not read these types.
 
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Instant;

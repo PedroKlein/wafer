@@ -1,7 +1,8 @@
 //! Transform node runner loop — cancel-safe select!, watch-channel hot-swap.
 //!
 //! Transform takes ownership of each envelope, produces a new one.
-//! DLQ safety clone BEFORE the Wasm call (~10ns Arc+Bytes bump).
+//! DLQ safety clone BEFORE the Wasm call (header `Arc` and payload `Bytes`
+//! refcount bumps plus a copy of the small lineage fields).
 //!
 //! See docs/rfcs/RFC-005-orchestrator.md D3.
 
@@ -58,7 +59,8 @@ async fn recover_after_timeout(
 /// # Cancel Safety
 ///
 /// The Wasm call (`transform.process()`) runs OUTSIDE the `select!` block.
-/// Only `receiver.recv()` is inside `select!` — which is documented cancel-safe.
+/// The `select!` in `next_input` waits only on cancel-safe futures: input
+/// `recv()`, the retry timer, the swap watch channel and cancellation.
 /// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
 #[expect(
     clippy::too_many_arguments,
@@ -188,17 +190,17 @@ pub async fn run_transform_loop_with_config(
             }
         };
 
-        // 4. DLQ safety clone BEFORE process (Arc + Bytes refcount ~10ns)
+        // 3. DLQ safety clone BEFORE process (refcount bumps, no payload copy)
         let safety = envelope.clone();
 
-        // 5. Wasm call OUTSIDE select! — runs to completion, never cancelled.
+        // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
         let result = transform.process(envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
-        // 6. Dispatch result
+        // 5. Dispatch result
         match result {
             Ok(output) => {
                 metrics.record_processed(duration_ns);

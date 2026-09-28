@@ -1,4 +1,5 @@
-//! Async bounded SPSC queue using `tokio::sync::mpsc`.
+//! Async bounded MPSC queue using `tokio::sync::mpsc` (fan-in edges share one
+//! receiver across several producers).
 
 use crate::config::DEFAULT_QUEUE_CAPACITY;
 use tokio::sync::mpsc::{self, error::SendError, error::TrySendError};

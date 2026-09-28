@@ -1,10 +1,8 @@
-//! New node type architecture — `NodeKind` enum dispatch.
+//! `NodeKind` names the closed set of node roles.
 //!
-//! This module defines the Phase 3 replacement for the current `AnyNode` enum.
-//! `NodeKind` uses enum dispatch (3-10x faster than vtable) for the closed set
-//! of node types. Each variant holds the concrete node implementation.
-//!
-//! Not yet wired into the runner — used starting in Phase 3.
+//! The launcher and hot-swap path use it to pick each role's fuel budget.
+//! The `Node` wrapper is not used by the runners, which dispatch through the
+//! concrete transform, filter and router node types.
 
 use std::sync::Arc;
 

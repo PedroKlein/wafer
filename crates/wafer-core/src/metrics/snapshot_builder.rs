@@ -1,4 +1,6 @@
 //! Snapshot builder methods for MetricsRegistry.
+//!
+//! Like the registry, not part of what `GET /metrics` serves.
 #![expect(
     clippy::unwrap_used,
     clippy::significant_drop_tightening,

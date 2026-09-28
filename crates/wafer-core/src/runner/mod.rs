@@ -47,7 +47,7 @@ pub enum HotSwapError {
     /// was then reverted. Kept as `Err` so the API caller cannot mistake
     /// a rolled-back swap for stable completion.
     RolledBack {
-        /// Wall-clock duration of the `recover_from_cached_pre` call that
+        /// Monotonic (`Instant`) duration of the `recover_from_cached_pre` call that
         /// restored v1, in nanoseconds.
         rollback_time_ns: u64,
         /// Trap message reported by v2's `process()` that triggered rollback.
@@ -236,10 +236,6 @@ impl HotSwapProgress {
         }
     }
 }
-
-// =============================================================================
-// Shared Types
-// =============================================================================
 
 // =============================================================================
 // Canary rollback state (A17): retained after swap ACK for process-time rollback

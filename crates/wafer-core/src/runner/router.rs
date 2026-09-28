@@ -143,14 +143,14 @@ pub async fn run_router_loop(
                 NextInput::Closed => break,
             };
 
-        // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
+        // 3. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
         let result = router.route(&envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
-        // 5. Dispatch result
+        // 4. Dispatch result
         match result {
             Ok(RouteOutcome::Error(e)) => {
                 // Router returned a logical routing error (not a Wasm trap)

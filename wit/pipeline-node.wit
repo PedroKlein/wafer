@@ -44,6 +44,9 @@ interface lifecycle {
     init: func(config: node-config) -> result<_, process-error>;
 
     // Graceful shutdown — flush buffers, close connections.
+    //
+    // The current host never calls close(): shutdown, hot-swap and recovery
+    // drop the instance without it, so guests must not rely on it to flush.
     close: func();
 }
 

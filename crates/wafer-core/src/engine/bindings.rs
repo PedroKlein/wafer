@@ -83,8 +83,6 @@ pub(crate) mod router_node {
 }
 
 /// Discriminator for which world a compiled component targets.
-///
-/// Used by `WaferEngine` to create the correct `InstancePre` variant.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WasmBindings {
     Transform,

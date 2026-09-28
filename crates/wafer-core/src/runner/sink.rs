@@ -2,7 +2,9 @@
 //!
 //! Sink::collect() is native Rust I/O — safe inside the event loop.
 //! Batch timeout support: if `sink.batch_timeout()` is `Some`, a timer arm
-//! triggers periodic flush of buffered messages.
+//! flushes buffered messages once no message has arrived for that long (the
+//! timer restarts on every message, so this is an idle flush, not a fixed
+//! period).
 //!
 //! See docs/rfcs/RFC-010-io-integration.md Decision 2.
 
@@ -43,7 +45,7 @@ pub async fn run_sink_loop(
 
     loop {
         let envelope = if let Some(timeout) = batch_timeout {
-            // Batching mode: recv with timeout for periodic flush
+            // Batching mode: recv with timeout; flush when input goes idle
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => break,

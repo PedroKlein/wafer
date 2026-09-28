@@ -2,7 +2,7 @@
 //!
 //! `WaferState` is the `T` in `Store<T>`. It carries WAFER-specific context:
 //! WASI sandbox, resource table for `WaferBuffer` handles, per-call log buffer
-//! for the `pipeline:host/logging` import, per-node memory limits, and the
+//! for the `wafer:pipeline/logging` import, per-node memory limits, and the
 //! node identity for structured logging.
 //!
 //! See docs/rfcs/RFC-002-host-runtime.md D8
@@ -20,13 +20,14 @@ use super::Capabilities;
 use super::http::OutboundHttpHooks;
 
 /// Default per-node memory limit (16 MiB).
-/// Constrains guest linear memory growth — OOM is contained to a single node (RQ2).
+/// Bounds guest linear-memory growth per node (RQ2). Host-side WASI resources
+/// the guest creates are not counted against this limit.
 const DEFAULT_MEMORY_LIMIT: usize = 16 * 1024 * 1024;
 
 /// Default per-node table element limit.
 const DEFAULT_TABLE_ELEMENTS: usize = 20_000;
 
-/// A single buffered log entry from a guest call to `pipeline:host/logging`.
+/// A single buffered log entry from a guest call to `wafer:pipeline/logging`.
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     pub level: LogLevel,
@@ -175,7 +176,7 @@ impl WaferState {
         self.log_buffer.clear();
     }
 
-    /// Push a log entry (called by the `pipeline:host/logging` host impl).
+    /// Push a log entry (called by the `wafer:pipeline/logging` host impl).
     #[inline]
     pub fn push_log(&mut self, level: LogLevel, message: String) {
         self.log_buffer.push(LogEntry { level, message });
@@ -201,8 +202,7 @@ impl WaferState {
     ///
     /// # Errors
     ///
-    /// Returns error if the ResourceTable is full (2^32 slots — unreachable
-    /// in practice).
+    /// Returns error if the ResourceTable is at its capacity limit.
     pub fn push_buffer(
         &mut self,
         data: bytes::Bytes,

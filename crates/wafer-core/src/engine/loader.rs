@@ -204,7 +204,7 @@ impl WaferEngine {
     /// Build a Linker pre-configured with WASI p2 and WAFER host traits.
     ///
     /// Shared setup for all three world types (transform, filter, router).
-    /// Each world imports `pipeline:types/types` and `pipeline:host/logging`,
+    /// Each world imports `wafer:pipeline/types` and `wafer:pipeline/logging`,
     /// both of which are backed by the same `WaferState` trait impls.
     fn build_linker(&self) -> Result<wasmtime::component::Linker<WaferState>> {
         let mut linker = wasmtime::component::Linker::new(&self.engine);
