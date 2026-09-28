@@ -189,28 +189,27 @@ impl BenchSource {
         self
     }
 
-    fn start_pacer(&mut self) -> Result<Pacer> {
+    fn start_pacer(&mut self) -> Result<()> {
         let pacer = Pacer::start(self.config.clone())?;
+        let measurement_start_unix_ns = pacer
+            .origin_unix_ns
+            .saturating_add(self.config.schedule_offset_ns(self.config.warmup_messages));
+        self.pacer = Some(pacer);
         if self.config.burst.is_some() {
-            let measurement_start_unix_ns = pacer
-                .origin_unix_ns
-                .saturating_add(self.config.schedule_offset_ns(self.config.warmup_messages));
             self.measurement_start_unix_ns = Some(measurement_start_unix_ns);
             self.write_burst_timing(measurement_start_unix_ns)?;
         }
-        Ok(pacer)
+        Ok(())
     }
 
     async fn next_due(&mut self) -> Result<(u64, u64)> {
         if self.pacer.is_none() {
-            self.pacer = Some(self.start_pacer()?);
+            self.start_pacer()?;
         }
         let stopped = || std::io::Error::other("bench source pacer stopped early");
         let pacer = self.pacer.as_mut().ok_or_else(stopped)?;
-        let sequence = pacer.due.recv().await.ok_or_else(stopped)?;
-        let intended_ns =
-            pacer.origin_unix_ns.saturating_add(self.config.schedule_offset_ns(sequence));
-        Ok((sequence, intended_ns))
+        let (sequence, offset_ns) = pacer.due.recv().await.ok_or_else(stopped)?;
+        Ok((sequence, pacer.origin_unix_ns.saturating_add(offset_ns)))
     }
 
     fn write_burst_timing(&self, measurement_start_ns: u64) -> std::io::Result<()> {
@@ -262,7 +261,8 @@ const PACER_AHEAD: usize = 64;
 struct Pacer {
     origin: Instant,
     origin_unix_ns: u64,
-    due: tokio::sync::mpsc::Receiver<u64>,
+    /// `(sequence, offset_ns)` of each message once it is due.
+    due: tokio::sync::mpsc::Receiver<(u64, u64)>,
 }
 
 impl Pacer {
@@ -272,12 +272,12 @@ impl Pacer {
         let origin_unix_ns = current_time_ns();
         std::thread::Builder::new().name("bench-pacer".to_owned()).spawn(move || {
             for sequence in 0..config.total_messages {
-                let offset = Duration::from_nanos(config.schedule_offset_ns(sequence));
-                let due_at = origin.checked_add(offset).unwrap_or(origin);
+                let offset_ns = config.schedule_offset_ns(sequence);
+                let due_at = origin.checked_add(Duration::from_nanos(offset_ns)).unwrap_or(origin);
                 if let Some(wait) = due_at.checked_duration_since(Instant::now()) {
                     std::thread::sleep(wait);
                 }
-                if tx.blocking_send(sequence).is_err() {
+                if tx.blocking_send((sequence, offset_ns)).is_err() {
                     return;
                 }
             }

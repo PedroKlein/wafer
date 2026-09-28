@@ -1095,6 +1095,8 @@ impl BenchSink {
     ///   experiments (only when `track_hotswap = true` and at least one
     ///   transition has been observed)
     /// - `latency.hdr` — HdrHistogram interval log
+    /// - `service.hdr`, `source-lag.hdr` — the service-time and source-lag
+    ///   parts of that latency, when messages carried `bench.emit_ns`
     /// - `throughput.csv` — periodic throughput samples
     /// - `throughput-buckets.json`, `throughput-buckets-10ms.json` and
     ///   `interval-latency.json` — derived evidence, when configured
@@ -1278,13 +1280,7 @@ impl BenchSink {
         else {
             return;
         };
-        let source_origin_ns = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.measurement_start_unix_ns")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-        if let Some(source_origin_ns) = source_origin_ns {
+        if let Some(source_origin_ns) = metadata_u64(envelope, "bench.measurement_start_unix_ns") {
             self.burst_observation
                 .get_or_insert_with(|| Box::new(BurstObservation::new(source_origin_ns)))
                 .record(source_origin_ns, arrival_unix_ns, duplicate);
@@ -1438,13 +1434,8 @@ impl Sink for BenchSink {
 
         let intended_ns = metadata_u64(&envelope, "bench.intended_ns");
         let emit_ns = metadata_u64(&envelope, "bench.emit_ns");
-        let source_origin_ns = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.measurement_start_unix_ns")
-            .and_then(|(_, value)| value.parse::<u64>().ok())
-            .filter(|value| *value > 0);
+        let source_origin_ns =
+            metadata_u64(&envelope, "bench.measurement_start_unix_ns").filter(|value| *value > 0);
 
         let now = Instant::now();
         if self.measurement_start.is_none() {
