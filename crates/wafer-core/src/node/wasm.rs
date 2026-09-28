@@ -41,20 +41,19 @@ fn map_process_error(
     }
 }
 
-/// Maps a wasmtime trap/error to `WasmProcessError`.
+/// Maps an error from a guest call to `WasmProcessError::Trapped`.
 ///
-/// Epoch interruption → TimedOut; all others → Unrecoverable.
+/// Wasmtime wraps traps in backtrace context, so the trap code is only
+/// reachable by downcasting; the message keeps the whole chain.
 fn map_trap(err: &wasmtime::Error) -> WasmProcessError {
-    // Debug repr surfaces the `Caused by:` chain (which carries the trap
-    // variant); Display shows only the top frame. The timeout classification
-    // preserves error-policy handling before the runner replaces the Store.
-    let msg = err.to_string();
-    let dbg = format!("{err:?}");
-    if msg.contains("epoch") || msg.contains("interrupt") || dbg.contains("wasm trap: interrupt") {
-        WasmProcessError::TimedOut
-    } else {
-        WasmProcessError::Unrecoverable(msg)
+    WasmProcessError::Trapped {
+        code: err.downcast_ref::<wasmtime::Trap>().copied(),
+        message: format!("{err:#}"),
     }
+}
+
+const fn host_failure(message: String) -> WasmProcessError {
+    WasmProcessError::Trapped { code: None, message }
 }
 
 /// Drains log buffer from WaferState and emits via tracing crate.
@@ -86,7 +85,7 @@ fn build_wit_message(
     let resource_rep = store
         .data_mut()
         .push_buffer(envelope.payload.clone())
-        .map_err(|e| WasmProcessError::Unrecoverable(format!("failed to push buffer: {e}")))?
+        .map_err(|e| host_failure(format!("failed to push buffer: {e}")))?
         .rep();
     let resource = wasmtime::component::Resource::new_borrow(resource_rep);
 
@@ -452,7 +451,7 @@ impl WasmTransformNode {
         if let Some(n) = self.fuel_limit {
             self.store
                 .set_fuel(n.get())
-                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+                .map_err(|e| host_failure(format!("fuel reset failed: {e}")))?;
         }
         // set_epoch_deadline is relative to the engine's current epoch; without
         // a per-call reset the store's absolute deadline lapses after
@@ -477,10 +476,11 @@ impl WasmTransformNode {
             .store
             .data_mut()
             .delete_buffer(wasmtime::component::Resource::new_own(payload_rep));
-        if let Err(e) = delete_res {
-            return Err(WasmProcessError::Unrecoverable(format!(
-                "failed to release buffer resource: {e}"
-            )));
+        // A trap already condemns the Store; keep its code rather than this one.
+        if let Err(e) = delete_res
+            && result.is_ok()
+        {
+            return Err(host_failure(format!("failed to release buffer resource: {e}")));
         }
 
         match result {
@@ -770,7 +770,7 @@ impl WasmFilterNode {
         if let Some(n) = self.fuel_limit {
             self.store
                 .set_fuel(n.get())
-                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+                .map_err(|e| host_failure(format!("fuel reset failed: {e}")))?;
         }
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
         if let Some(n) = self.epoch_deadline {
@@ -789,10 +789,11 @@ impl WasmFilterNode {
             .store
             .data_mut()
             .delete_buffer(wasmtime::component::Resource::new_own(payload_rep));
-        if let Err(e) = delete_res {
-            return Err(WasmProcessError::Unrecoverable(format!(
-                "failed to release buffer resource: {e}"
-            )));
+        // A trap already condemns the Store; keep its code rather than this one.
+        if let Err(e) = delete_res
+            && result.is_ok()
+        {
+            return Err(host_failure(format!("failed to release buffer resource: {e}")));
         }
 
         match result {
@@ -1034,7 +1035,7 @@ impl WasmRouterNode {
         if let Some(n) = self.fuel_limit {
             self.store
                 .set_fuel(n.get())
-                .map_err(|e| WasmProcessError::Unrecoverable(format!("fuel reset failed: {e}")))?;
+                .map_err(|e| host_failure(format!("fuel reset failed: {e}")))?;
         }
         // Epoch and buffer-resource lifecycle: see WasmTransformNode::process.
         if let Some(n) = self.epoch_deadline {
@@ -1053,10 +1054,11 @@ impl WasmRouterNode {
             .store
             .data_mut()
             .delete_buffer(wasmtime::component::Resource::new_own(payload_rep));
-        if let Err(e) = delete_res {
-            return Err(WasmProcessError::Unrecoverable(format!(
-                "failed to release buffer resource: {e}"
-            )));
+        // A trap already condemns the Store; keep its code rather than this one.
+        if let Err(e) = delete_res
+            && result.is_ok()
+        {
+            return Err(host_failure(format!("failed to release buffer resource: {e}")));
         }
 
         match result {
@@ -1213,17 +1215,81 @@ mod tests {
     }
 
     #[test]
-    fn map_trap_epoch_interrupt() {
-        let err = wasmtime::Error::msg("wasm trap: epoch interruption");
-        let mapped = map_trap(&err);
-        assert!(matches!(mapped, WasmProcessError::TimedOut));
+    fn guest_returned_timeout_and_unrecoverable_are_not_traps() {
+        use transform_node::wafer::pipeline::types::ProcessError as WitErr;
+
+        let timed_out = map_process_error(WitErr::TimedOut);
+        assert!(matches!(timed_out, WasmProcessError::TimedOut));
+        assert!(!timed_out.is_budget_exhausted());
+        assert!(matches!(
+            map_process_error(WitErr::Unrecoverable("fatal".into())),
+            WasmProcessError::Unrecoverable(msg) if msg == "fatal"
+        ));
+    }
+
+    fn call_trap(wat: &str, fuel: Option<u64>, epoch: bool) -> wasmtime::Error {
+        let mut config = wasmtime::Config::new();
+        config.consume_fuel(fuel.is_some()).epoch_interruption(epoch);
+        let engine = wasmtime::Engine::new(&config).expect("engine");
+        let module = wasmtime::Module::new(&engine, wat).expect("module");
+        let mut store = Store::new(&engine, ());
+        if let Some(fuel) = fuel {
+            store.set_fuel(fuel).expect("fuel");
+        }
+        if epoch {
+            store.set_epoch_deadline(1);
+            engine.increment_epoch();
+        }
+        let instance = wasmtime::Instance::new(&mut store, &module, &[]).expect("instance");
+        let run = instance.get_typed_func::<(), ()>(&mut store, "run").expect("run export");
+        run.call(&mut store, ()).expect_err("fixture must trap")
+    }
+
+    const SPIN: &str = r#"(module (func (export "run") (loop (br 0))))"#;
+
+    #[test]
+    fn map_trap_reads_the_trap_code_of_real_traps() {
+        let cases = [
+            (
+                call_trap(r#"(module (func (export "run") unreachable))"#, None, false),
+                wasmtime::Trap::UnreachableCodeReached,
+            ),
+            (
+                call_trap(
+                    r#"(module (memory 1) (func (export "run")
+                        (drop (i32.load (i32.const 70000)))))"#,
+                    None,
+                    false,
+                ),
+                wasmtime::Trap::MemoryOutOfBounds,
+            ),
+            (call_trap(SPIN, Some(10_000), false), wasmtime::Trap::OutOfFuel),
+            (call_trap(SPIN, None, true), wasmtime::Trap::Interrupt),
+        ];
+
+        for (err, expected) in cases {
+            let mapped = map_trap(&err);
+            let WasmProcessError::Trapped { code, message } = &mapped else {
+                panic!("expected a trap for {expected:?}, got {mapped:?}");
+            };
+            assert_eq!(*code, Some(expected));
+            assert!(message.contains(&expected.to_string()), "{expected:?} missing in {message}");
+            assert_eq!(
+                mapped.is_budget_exhausted(),
+                matches!(expected, wasmtime::Trap::OutOfFuel | wasmtime::Trap::Interrupt),
+                "{expected:?}"
+            );
+        }
     }
 
     #[test]
-    fn map_trap_other() {
-        let err = wasmtime::Error::msg("wasm trap: unreachable instruction");
-        let mapped = map_trap(&err);
-        assert!(matches!(mapped, WasmProcessError::Unrecoverable(_)));
+    fn map_trap_keeps_host_errors_without_a_trap_code() {
+        let mapped = map_trap(&wasmtime::Error::msg("host import failed"));
+        assert!(matches!(
+            &mapped,
+            WasmProcessError::Trapped { code: None, message } if message == "host import failed"
+        ));
+        assert!(!mapped.is_budget_exhausted());
     }
 
     #[test]
@@ -1411,7 +1477,10 @@ mod tests {
             .process(RuntimeEnvelope::from_string("fixture-source", "first"))
             .await
             .expect_err("fixture must trap");
-        anyhow::ensure!(matches!(first, WasmProcessError::Unrecoverable(_)));
+        anyhow::ensure!(matches!(
+            first,
+            WasmProcessError::Trapped { code: Some(wasmtime::Trap::UnreachableCodeReached), .. }
+        ));
         let reused_first_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
         anyhow::ensure!(
             reused_first_slot.rep() == expected_first_slot,
@@ -1473,7 +1542,10 @@ mod tests {
             .process(RuntimeEnvelope::from_string("fixture-source", "second"))
             .await
             .expect_err("recovered fixture must independently trap");
-        anyhow::ensure!(matches!(second, WasmProcessError::Unrecoverable(_)));
+        anyhow::ensure!(matches!(
+            second,
+            WasmProcessError::Trapped { code: Some(wasmtime::Trap::UnreachableCodeReached), .. }
+        ));
         let reused_second_slot = node.store.data_mut().push_buffer(Bytes::from_static(b"probe"))?;
         anyhow::ensure!(
             reused_second_slot.rep() == expected_second_slot,

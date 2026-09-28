@@ -158,8 +158,8 @@ applies the configured policy.
 | `bad-input(msg)` | `BadInput` | → DLQ immediately |
 | `dependency-failed(msg)` | `DependencyFailed` | → Retry (3×, 100 ms backoff, then DLQ) |
 | `processing-failed(msg)` | `ProcessingFailed` | → Retry (2×, 100 ms backoff, then DLQ) |
-| `timed-out` (epoch/fuel interrupt) | `TimedOut` | → Skip (drop message, increment metric) |
-| `unrecoverable(msg)` or host trap (panic, OOM, capability violation) | `Unrecoverable` | → Teardown node → `Recovering` state |
+| `timed-out`, epoch interruption or fuel exhaustion | `TimedOut` | → Skip (drop message, increment metric); after a trap the Store is also replaced |
+| `unrecoverable(msg)` or any other trap (panic, out-of-bounds access, memory limit) | `Unrecoverable` | → Teardown node → `Recovering` state |
 
 ### Retry buffer
 

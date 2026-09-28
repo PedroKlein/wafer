@@ -18,8 +18,8 @@ const MAX_BACKOFF_MS: u64 = 30_000;
 
 /// Error returned by Wasm guest `process()` / `evaluate()` / `route()` calls.
 ///
-/// Maps 1:1 to the WIT `process-error` variant type. Wasmtime traps are mapped
-/// to TimedOut (epoch interrupt) or Unrecoverable (other traps) by the caller.
+/// The first five variants are the WIT `process-error` cases the guest returned
+/// itself, so its instance is intact. `Trapped` is a call the host aborted.
 #[derive(Debug, thiserror::Error)]
 pub enum WasmProcessError {
     #[error("bad input: {0}")]
@@ -36,6 +36,22 @@ pub enum WasmProcessError {
 
     #[error("unrecoverable: {0}")]
     Unrecoverable(String),
+
+    /// A wasmtime trap (`code` is set) or a host failure while driving the
+    /// call. The Store must not be reused.
+    #[error("trapped: {message}")]
+    Trapped { code: Option<wasmtime::Trap>, message: String },
+}
+
+impl WasmProcessError {
+    /// Epoch interruption or fuel exhaustion: the guest ran past its budget.
+    #[must_use]
+    pub const fn is_budget_exhausted(&self) -> bool {
+        matches!(
+            self,
+            Self::Trapped { code: Some(wasmtime::Trap::Interrupt | wasmtime::Trap::OutOfFuel), .. }
+        )
+    }
 }
 
 /// Category tag for error classification in DLQ envelopes and metrics.
@@ -296,26 +312,28 @@ impl ErrorPolicyExecutor {
             WasmProcessError::ProcessingFailed(msg) => {
                 self.try_retry(envelope, ErrorCategory::ProcessingFailed, msg.clone())
             }
-            WasmProcessError::TimedOut => {
-                match self.config.timed_out {
-                    ResolvedSimpleAction::Skip => {}
-                    ResolvedSimpleAction::Dlq => {
-                        return self.send_to_dlq(
-                            envelope,
-                            ErrorCategory::TimedOut,
-                            "timed out".to_string(),
-                            0,
-                            DlqReason::RetriesExhausted { max_retries: 0 },
-                        );
-                    }
-                    ResolvedSimpleAction::Teardown => return ErrorPolicyAction::Teardown,
-                }
-                ErrorPolicyAction::Continue
+            WasmProcessError::TimedOut => self.timed_out(envelope, error.to_string()),
+            WasmProcessError::Trapped { .. } if error.is_budget_exhausted() => {
+                self.timed_out(envelope, error.to_string())
             }
-            WasmProcessError::Unrecoverable(_) => {
+            WasmProcessError::Unrecoverable(_) | WasmProcessError::Trapped { .. } => {
                 // Caller must enter recovery state.
                 ErrorPolicyAction::Teardown
             }
+        }
+    }
+
+    fn timed_out(&self, envelope: RuntimeEnvelope, error_msg: String) -> ErrorPolicyAction {
+        match self.config.timed_out {
+            ResolvedSimpleAction::Skip => ErrorPolicyAction::Continue,
+            ResolvedSimpleAction::Dlq => self.send_to_dlq(
+                envelope,
+                ErrorCategory::TimedOut,
+                error_msg,
+                0,
+                DlqReason::RetriesExhausted { max_retries: 0 },
+            ),
+            ResolvedSimpleAction::Teardown => ErrorPolicyAction::Teardown,
         }
     }
 
@@ -572,6 +590,37 @@ mod tests {
         assert_eq!(should_continue, ErrorPolicyAction::Teardown, "should signal recovery needed");
         assert_eq!(executor.pending_retries(), 0);
         assert!(rx.try_recv().is_err(), "unrecoverable does not DLQ directly");
+    }
+
+    #[test]
+    fn test_fuel_exhaustion_follows_timed_out_policy_and_keeps_trap_in_dlq() {
+        let (tx, mut rx) = mpsc::channel(1);
+        let config =
+            ResolvedErrorPolicy { timed_out: ResolvedSimpleAction::Dlq, ..test_policy(3, 100, 10) };
+        let mut executor = ErrorPolicyExecutor::new(config, Some(tx), "test-node");
+        let error = WasmProcessError::Trapped {
+            code: Some(wasmtime::Trap::OutOfFuel),
+            message: "wasm trap: all fuel consumed by WebAssembly".into(),
+        };
+
+        let action = executor.handle(&error, test_envelope("spin"));
+
+        assert_eq!(action, ErrorPolicyAction::Continue);
+        let dlq = rx.try_recv().expect("fuel exhaustion must reach the DLQ");
+        assert_eq!(dlq.error_category, Some(ErrorCategory::TimedOut));
+        assert!(dlq.error_message.contains("all fuel consumed"), "{}", dlq.error_message);
+    }
+
+    #[test]
+    fn test_non_budget_trap_requests_recovery() {
+        let (mut executor, mut rx) = make_executor_with_dlq(100);
+        let error = WasmProcessError::Trapped {
+            code: Some(wasmtime::Trap::MemoryOutOfBounds),
+            message: "wasm trap: out of bounds memory access".into(),
+        };
+
+        assert_eq!(executor.handle(&error, test_envelope("oob")), ErrorPolicyAction::Teardown);
+        rx.try_recv().unwrap_err();
     }
 
     #[test]

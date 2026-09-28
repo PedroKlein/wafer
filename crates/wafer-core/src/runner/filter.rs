@@ -52,16 +52,17 @@ async fn recover_after_timeout(
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
     policy: &mut ErrorPolicyExecutor,
+    error: &WasmProcessError,
     envelope: RuntimeEnvelope,
 ) -> bool {
     metrics.record_failed();
-    if !continue_after_policy_action(policy.handle(&WasmProcessError::TimedOut, envelope), metrics)
-    {
+    if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return false;
     }
     tracing::warn!(
         node = filter.node_id(),
-        "timed-out Wasm call — replacing Store before continuing"
+        %error,
+        "Wasm call ran out of budget — replacing Store before continuing"
     );
     state.transition_to_error();
     state.transition_to_recovering();
@@ -89,6 +90,10 @@ async fn recover_after_timeout(
 #[expect(
     clippy::too_many_arguments,
     reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "linear select!/match pipeline loop; splitting would fragment the control flow"
 )]
 pub async fn run_filter_loop(
     mut filter: FilterNode,
@@ -161,15 +166,25 @@ pub async fn run_filter_loop(
                 )
                 .await;
             }
-            Err(WasmProcessError::TimedOut) => {
-                if !recover_after_timeout(&mut filter, &state, &metrics, &mut policy, envelope)
-                    .await
+            Err(ref error) if error.is_budget_exhausted() => {
+                if !recover_after_timeout(
+                    &mut filter,
+                    &state,
+                    &metrics,
+                    &mut policy,
+                    error,
+                    envelope,
+                )
+                .await
                 {
                     break;
                 }
             }
-            Err(WasmProcessError::Unrecoverable(ref msg)) => {
+            Err(
+                ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
+            ) => {
                 metrics.record_failed();
+                let msg = error.to_string();
                 tracing::error!(
                     node = filter.node_id(),
                     error = %msg,
