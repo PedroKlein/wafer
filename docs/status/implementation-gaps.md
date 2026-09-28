@@ -732,7 +732,12 @@ macOS path shelled out to `ps -o rss=` instead of using the
    `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`
    at graceful shutdown.
 4. `cargo bench --bench overhead_of_memory_sampling` shows ~494 ns/call
-   (0.0000494% overhead at 1 Hz).
+   (0.0000494% overhead at 1 Hz). That figure was taken on macOS, where
+   `memory-stats` uses `task_info`. On Linux the crate now reads
+   `/proc/self/statm` (feature `always_use_statm`), which also costs a
+   few microseconds per call; the earlier default parsed all of
+   `/proc/self/smaps` and grew with the number of mappings. Re-run the
+   bench on the target host for the number a report should quote.
 5. All `ps -o rss=` calls removed from shakedown scripts.
 
 - **Closed by:** thesis-hardening T4 commits `1a2bce6`, `11f757d`,

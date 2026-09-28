@@ -117,6 +117,8 @@ pub async fn run_transform_loop_with_config(
     let mut canary: Option<TransformCanaryState> = None;
     let mut rollback_retry = None;
     let mut held = None;
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
     loop {
         // 0. Check if canary window has expired (drop snapshot to free memory)
         if let Some(ref c) = canary
@@ -187,7 +189,15 @@ pub async fn run_transform_loop_with_config(
         let envelope = if let Some(retry) = rollback_retry.take() {
             retry
         } else {
-            match next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await {
+            match next_input(
+                &mut held,
+                &mut receiver,
+                &mut policy,
+                &mut swap_rx,
+                cancelled.as_mut(),
+            )
+            .await
+            {
                 NextInput::Envelope(envelope) => envelope,
                 NextInput::Swap => continue,
                 NextInput::Closed => break,
@@ -198,14 +208,12 @@ pub async fn run_transform_loop_with_config(
         let safety = envelope.clone();
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        let start = Instant::now();
         let result = transform.process(envelope).await;
-        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
 
         // 5. Dispatch result
         match result {
             Ok(output) => {
-                metrics.record_processed(duration_ns);
+                metrics.record_processed();
                 send_downstream(&senders, output).await;
                 if let Some(progress) = pending_swap_progress.take() {
                     progress.mark_first_post_replacement_local_outcome(
@@ -647,13 +655,12 @@ mod tests {
     #[tokio::test]
     async fn test_transform_metrics_after_shutdown() {
         let metrics = Arc::new(NodeMetrics::new());
-        metrics.record_processed(1000);
-        metrics.record_processed(2000);
+        metrics.record_processed();
+        metrics.record_processed();
         metrics.record_failed();
 
         assert_eq!(metrics.processed(), 2);
         assert_eq!(metrics.attempts_failed(), 1);
-        assert_eq!(metrics.process_ns(), 3000);
     }
 
     fn retry_policy(
