@@ -865,15 +865,6 @@ PDF, and HTML, plus one hash-bound result-time observations artifact. Family
 observations cannot retain `PRE-RESULTS` or `PENDING`; genuine external gaps,
 including unmatched x86 E-Perf-5, remain report-level pending limitations.
 
-Validate this architecture before implementing or scheduling candidates:
-
-```sh
-python3 eval/scripts/validate-enhanced-architecture.py \
-  --matrix eval/canonical-matrix.json \
-  --decision .plans/rpi5-v5-enhanced-experiment-readiness/architecture-decision.json \
-  --contract eval/RESULT-CONTRACT.md
-```
-
 ### Focused-pilot contract
 
 The follow-up pilot is selected by `focused_pilot` in
