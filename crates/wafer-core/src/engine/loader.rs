@@ -20,8 +20,9 @@ use super::bindings::router_node::RouterNodePre;
 use super::bindings::transform_node::TransformNodePre;
 use super::cache::{CacheOutcome, ComponentCache};
 use super::state::WaferState;
-use crate::config::EngineConfig;
+use crate::config::{EngineConfig, FuelBudgets, NodeDef};
 use crate::error::{Result, WaferError};
+use crate::node::NodeKind;
 
 /// Core Wasm runtime engine for WAFER.
 ///
@@ -29,7 +30,8 @@ use crate::error::{Result, WaferError};
 /// component cache. Create once at startup, pass by reference everywhere.
 pub struct WaferEngine {
     engine: Engine,
-    fuel_limit: Option<NonZeroU64>,
+    fuel: FuelBudgets,
+    meters_fuel: bool,
     epoch_deadline: Option<NonZeroU64>,
     epoch_tick_ms: u64,
     /// Epoch ticker is started lazily on first use.
@@ -56,15 +58,41 @@ impl WaferEngine {
     /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
     #[must_use = "creating an engine without using it is expensive"]
     pub fn from_engine_config(engine_config: &EngineConfig) -> Result<Self> {
-        // AC F5.AC2: enable metering at engine level only when at least one
-        // limit is Some. Skipping consume_fuel/epoch_interruption when all
-        // limits are None is what lets per-store set_fuel/set_epoch_deadline
-        // be skipped without wasm traps on the first instruction.
-        let any_fuel = engine_config.fuel.transform.is_some()
-            || engine_config.fuel.filter.is_some()
-            || engine_config.fuel.router.is_some();
+        let fuel = engine_config.fuel;
+        Self::build(
+            engine_config,
+            fuel.transform.is_some() || fuel.filter.is_some() || fuel.router.is_some(),
+        )
+    }
+
+    /// Create the engine for a pipeline: like [`Self::from_engine_config`],
+    /// but a Wasm node's own `fuel` also turns fuel metering on.
+    ///
+    /// # Errors
+    ///
+    /// Returns `WaferError::PluginInit` if wasmtime engine creation fails.
+    #[must_use = "creating an engine without using it is expensive"]
+    pub fn for_pipeline(pipeline: &crate::config::Config) -> Result<Self> {
+        let fuel = pipeline.engine.fuel;
+        let node_fuel = pipeline.nodes.values().any(|node| match node {
+            NodeDef::Transform(wasm) | NodeDef::Filter(wasm) | NodeDef::Router(wasm) => {
+                wasm.fuel.is_some()
+            }
+            NodeDef::Source(_) | NodeDef::Sink(_) => false,
+        });
+        Self::build(
+            &pipeline.engine,
+            node_fuel || fuel.transform.is_some() || fuel.filter.is_some() || fuel.router.is_some(),
+        )
+    }
+
+    fn build(engine_config: &EngineConfig, meters_fuel: bool) -> Result<Self> {
+        // AC F5.AC2: enable metering at engine level only when some limit is
+        // set. Skipping consume_fuel/epoch_interruption otherwise is what lets
+        // per-store set_fuel/set_epoch_deadline be skipped without wasm traps
+        // on the first instruction.
         let mut config = Config::new();
-        config.consume_fuel(any_fuel);
+        config.consume_fuel(meters_fuel);
         config.wasm_component_model(true);
         config.epoch_interruption(engine_config.epoch_deadline.is_some());
 
@@ -73,7 +101,8 @@ impl WaferEngine {
 
         Ok(Self {
             engine,
-            fuel_limit: engine_config.fuel.transform,
+            fuel: engine_config.fuel,
+            meters_fuel,
             epoch_deadline: engine_config.epoch_deadline,
             epoch_tick_ms: engine_config.epoch_tick_ms,
             epoch_started: OnceLock::new(),
@@ -300,10 +329,19 @@ impl WaferEngine {
         &self.engine
     }
 
-    /// Configured fuel limit per process() call. `None` = unlimited.
-    #[inline]
-    pub const fn fuel_limit(&self) -> Option<NonZeroU64> {
-        self.fuel_limit
+    /// Fuel a `kind` node gets before each guest call: its own `fuel`, else
+    /// the budget for its role. Metering is engine-wide, and a store left
+    /// without fuel in a metered engine traps on its first instruction, so a
+    /// node with neither gets `NonZeroU64::MAX`. `None` when fuel is not
+    /// metered.
+    pub fn fuel_budget(&self, kind: NodeKind, node_fuel: Option<NonZeroU64>) -> Option<NonZeroU64> {
+        let role_fuel = match kind {
+            NodeKind::Transform => self.fuel.transform,
+            NodeKind::Filter => self.fuel.filter,
+            NodeKind::Router => self.fuel.router,
+            NodeKind::Source | NodeKind::Sink => return None,
+        };
+        self.meters_fuel.then(|| node_fuel.or(role_fuel).unwrap_or(NonZeroU64::MAX))
     }
 
     /// Configured epoch deadline (number of ticks before timeout). `None` = no epoch trap.
@@ -323,7 +361,7 @@ mod tests {
     #[test]
     fn engine_creation_default() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), None);
+        assert_eq!(engine.fuel_budget(NodeKind::Transform, None), None);
         assert_eq!(engine.epoch_deadline(), None);
     }
 
@@ -338,8 +376,65 @@ mod tests {
             hot_swap: HotSwapConfig::default(),
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("Failed to create engine");
-        assert_eq!(engine.fuel_limit(), NonZeroU64::new(500_000));
+        assert_eq!(engine.fuel_budget(NodeKind::Transform, None), NonZeroU64::new(500_000));
         assert_eq!(engine.epoch_deadline(), NonZeroU64::new(50));
+    }
+
+    #[test]
+    fn fuel_budget_prefers_node_then_role_then_unlimited_when_metered() {
+        let metered = WaferEngine::from_engine_config(&EngineConfig {
+            fuel: FuelBudgets { transform: NonZeroU64::new(500_000), ..Default::default() },
+            ..Default::default()
+        })
+        .expect("engine");
+        assert_eq!(
+            metered.fuel_budget(NodeKind::Transform, NonZeroU64::new(7)),
+            NonZeroU64::new(7)
+        );
+        assert_eq!(metered.fuel_budget(NodeKind::Transform, None), NonZeroU64::new(500_000));
+        assert_eq!(metered.fuel_budget(NodeKind::Filter, None), Some(NonZeroU64::MAX));
+        assert_eq!(metered.fuel_budget(NodeKind::Source, None), None);
+
+        let unmetered = WaferEngine::new().expect("engine");
+        assert_eq!(unmetered.fuel_budget(NodeKind::Router, None), None);
+    }
+
+    #[test]
+    fn node_fuel_turns_pipeline_metering_on() {
+        let pipeline: crate::config::Config = toml::from_str(
+            r#"
+[pipeline]
+name = "node-fuel"
+
+[nodes.source]
+type = "source"
+kind = "stdin"
+
+[nodes.transform]
+type = "transform"
+plugin = "unused.wasm"
+fuel = 7
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+"#,
+        )
+        .expect("config");
+        let engine = WaferEngine::for_pipeline(&pipeline).expect("engine");
+
+        assert_eq!(engine.fuel_budget(NodeKind::Transform, NonZeroU64::new(7)), NonZeroU64::new(7));
+        assert_eq!(engine.fuel_budget(NodeKind::Filter, None), Some(NonZeroU64::MAX));
+        let store = Store::new(engine.inner(), WaferState::new("fuel", Capabilities::sandbox()));
+        assert!(store.get_fuel().is_ok(), "node fuel must enable wasmtime fuel metering");
     }
 
     /// AC F5.AC2: when epoch_deadline is None, wasmtime Config leaves
@@ -359,7 +454,11 @@ mod tests {
         };
         let engine = WaferEngine::from_engine_config(&cfg).expect("engine");
         assert_eq!(engine.epoch_deadline(), None, "None epoch_deadline → no epoch trap");
-        assert_eq!(engine.fuel_limit(), None, "None fuel → no fuel limit");
+        assert_eq!(
+            engine.fuel_budget(NodeKind::Transform, None),
+            None,
+            "None fuel → no fuel limit"
+        );
 
         // Behavioral proof: engine construction skipped consume_fuel(true), so
         // a fresh Store has fuel metering disabled and get_fuel returns Err.

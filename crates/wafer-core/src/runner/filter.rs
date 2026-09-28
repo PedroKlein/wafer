@@ -117,10 +117,7 @@ pub async fn run_filter_loop(
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
                     filter.try_reconfigure(new_config_json).await
                 }
-                SwapPayload::Filter { .. } => payload.try_apply_filter(&mut filter).await,
-                _ => Err(crate::error::WaferError::Runtime(
-                    "filter node received non-filter swap payload".to_string(),
-                )),
+                _ => payload.try_apply_filter(&mut filter).await,
             };
             match result {
                 Ok(()) => {

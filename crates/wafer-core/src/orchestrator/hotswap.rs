@@ -12,6 +12,7 @@ use wasmtime::component::Component;
 use crate::engine::state::WaferState;
 use crate::engine::{CacheOutcome, Capabilities, WaferEngine};
 use crate::error::{Result, WaferError};
+use crate::node::NodeKind;
 use crate::node::wasm::PreparedTransformSwap;
 use crate::runner::{HotSwapProgress, SwapPayload};
 
@@ -262,7 +263,7 @@ pub async fn prepare_transform_swap_timed(
         node_id,
         capabilities,
         memory_limit,
-        engine.fuel_limit(),
+        engine.fuel_budget(NodeKind::Transform, None),
         progress,
     )
     .await
@@ -356,6 +357,7 @@ pub async fn prepare_filter_swap_timed(
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let wasm_bytes = Arc::<[u8]>::from(wasm_bytes);
@@ -371,8 +373,7 @@ pub async fn prepare_filter_swap_timed(
     .await?;
     let pre = Arc::new(pre);
 
-    let mut store =
-        new_swap_store(engine, node_id, capabilities, memory_limit, engine.fuel_limit())?;
+    let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
 
     let instance = pre
         .instantiate_async(&mut store)
@@ -397,6 +398,7 @@ pub async fn prepare_router_swap_timed(
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
     let wasm_bytes = Arc::<[u8]>::from(wasm_bytes);
@@ -412,8 +414,7 @@ pub async fn prepare_router_swap_timed(
     .await?;
     let pre = Arc::new(pre);
 
-    let mut store =
-        new_swap_store(engine, node_id, capabilities, memory_limit, engine.fuel_limit())?;
+    let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
 
     let instance = pre
         .instantiate_async(&mut store)

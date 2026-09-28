@@ -91,15 +91,14 @@ one-time cost. Process-time rollback (A17) restores v1 within the canary
 window when a new plugin passes `init()` but traps during `process()`.
 A follow-up review (commit `78519ea`) tightened four polish gaps: the
 API now reports `status: rolled_back` instead of `swap_converged` when
-the swap actually reverted; `max_rollback_retries` truly bounds the
-canary trap budget; `rollback_time_ns` flows into the `/hot-swap`
+the swap actually reverted; a swap rolls back at most once (a later
+trap is an ordinary failure of the restored v1); `rollback_time_ns` flows into the `/hot-swap`
 response; and `recovery_store` reapplies fuel before reinstantiate.
 Remaining observability follow-up A20 (Prometheus rollbacks_total
 series) is filed but not blocking.
 Verified by:
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
-- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
-- `cargo test -p wafer-core --lib runner::tests::canary_state_bounds_trap_count`
+- `cargo test -p wafer-core --lib runner::transform::tests::trap_after_rollback_is_handled_as_a_v1_failure`
 - `cargo test -p wafer-core --lib runner::tests::hot_swap_progress_reports_rolled_back_after_ack`
 
 ## Overall assessment
