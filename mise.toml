@@ -6,12 +6,12 @@
 #   mise.toml           — this file: tools, workspace-scope tasks (build,
 #                          test, run, cross-build)
 #   plugins/mise.toml   — plugin builds (Rust/Go/Python) + OCI registry
-#   eval/mise.toml      — experiment orchestration (E-*) + analysis notebooks
+#   eval/mise.toml      — eval plugin build + analysis notebooks
 #
 # Invocation from anywhere:
 #   mise run build                    # this file
 #   mise run //plugins:build-plugins  # plugins/mise.toml
-#   mise run //eval:e-perf-1          # eval/mise.toml
+#   mise run //eval:notebooks         # eval/mise.toml
 #   mise tasks --all                  # list everything
 #
 # Rust stays authoritative in rust-toolchain.toml. Install rustup/Rust before
