@@ -3,7 +3,7 @@ set -euo pipefail
 
 VERSION="2.1.0"
 case "$(uname -m)" in
-    aarch64) PACKAGE_ARCH="arm64" ;;
+    aarch64 | arm64) PACKAGE_ARCH="arm64" ;;
     x86_64) PACKAGE_ARCH="amd64" ;;
     *) echo "error: no native eKuiper package for $(uname -m)" >&2; exit 1 ;;
 esac
