@@ -115,8 +115,6 @@ async fn idle_transform_adopts_swap_without_input() {
         assert!(Instant::now() < deadline, "first message never reached the transform");
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    let before_signal = processed();
-
     let v2_bytes = std::fs::read(PASS_THROUGH_WASM).expect("read v2 wasm");
     let (progress, _completion) = HotSwapProgress::channel();
     let prepared = wafer_core::orchestrator::hotswap::prepare_transform_swap_timed(
@@ -130,6 +128,7 @@ async fn idle_transform_adopts_swap_without_input() {
     .await
     .expect("prepare v2 swap");
 
+    let before_signal = processed();
     let signal_at = Instant::now();
     handle.send_swap("transform", prepared.payload).expect("send_swap");
 

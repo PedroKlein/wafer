@@ -14,7 +14,7 @@ use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, Proc
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
-    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, TrackedReceiver,
+    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     continue_after_policy_action, next_input, send_downstream, take_pending_swap,
 };
 
@@ -94,7 +94,7 @@ pub async fn run_filter_loop(
     mut filter: FilterNode,
     receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
-    mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    mut swap_rx: SwapReceiver,
     mut policy: ErrorPolicyExecutor,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,

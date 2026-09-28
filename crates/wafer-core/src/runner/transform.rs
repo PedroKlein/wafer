@@ -15,7 +15,7 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
-    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, TrackedReceiver,
+    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     TransformCanaryState, continue_after_policy_action, next_input, send_downstream,
     take_pending_swap,
 };
@@ -67,7 +67,7 @@ pub async fn run_transform_loop(
     transform: TransformNode,
     receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
-    swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    swap_rx: SwapReceiver,
     policy: ErrorPolicyExecutor,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
@@ -100,7 +100,7 @@ pub async fn run_transform_loop_with_config(
     mut transform: TransformNode,
     receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
-    mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    mut swap_rx: SwapReceiver,
     mut policy: ErrorPolicyExecutor,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,

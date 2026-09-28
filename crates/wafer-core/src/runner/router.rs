@@ -15,7 +15,7 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
-    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, TrackedReceiver,
+    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     continue_after_policy_action, fan_out, next_input, take_pending_swap,
 };
 
@@ -96,7 +96,7 @@ pub async fn run_router_loop(
     mut router: WasmRouterNode,
     receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
-    mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    mut swap_rx: SwapReceiver,
     mut policy: ErrorPolicyExecutor,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,

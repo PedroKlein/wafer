@@ -195,7 +195,7 @@ pub async fn hot_swap(
         .await
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}")))?;
 
-    let (progress, completion_rx) = HotSwapProgress::channel();
+    let (progress, mut completion_rx) = HotSwapProgress::channel();
     let timed_result = match kind {
         SwapKind::Transform => {
             prepare_transform_swap_timed_with_fuel(
@@ -238,20 +238,15 @@ pub async fn hot_swap(
 
     let progress = timed_result.payload.progress();
     let signal_at = std::time::Instant::now();
+    timed_result.timeline.mark_signal_sent();
     orch.send_swap(&id, timed_result.payload)
         .map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
-    timed_result.timeline.mark_signal_sent();
 
-    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), completion_rx).await;
+    let completion = tokio::time::timeout(REPLACEMENT_OUTCOME_WAIT, &mut completion_rx).await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
-            let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
-            let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
-            let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
-            orch.record_hotswap_phase("compile", &id, compile_ns);
-            orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
-            orch.record_hotswap_phase("signal", &id, signal_ns);
+            record_preparation_phases(&orch, &id, &timed_result.timeline);
             orch.record_hotswap_phase("rollback", &id, rollback_time_ns);
             return Ok(Json(serde_json::json!({
                 "node_id": id,
@@ -274,18 +269,14 @@ pub async fn hot_swap(
             ));
         }
         Err(_) => {
-            use sha2::Digest as _;
-            let adopted_at = unfinished_replacement(&orch, &id, &progress, "hot-swap")?;
-            let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
-            let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
-            let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
-            orch.record_hotswap_phase("compile", &id, compile_ns);
-            orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
-            orch.record_hotswap_phase("signal", &id, signal_ns);
+            let adopted_at =
+                unfinished_replacement(&orch, &id, &progress, &mut completion_rx, "hot-swap")
+                    .await?;
+            record_preparation_phases(&orch, &id, &timed_result.timeline);
             let replacement_adopted_ns = adopted_at.map(|at| {
                 let ns = crate::util::duration_ns_saturating(at.duration_since(signal_at));
                 orch.record_hotswap_phase("replacement_adopted", &id, ns);
-                orch.record_plugin_hash(&id, hex::encode(sha2::Sha256::digest(&wasm_bytes)));
+                record_wasm_hash(&orch, &id, &wasm_bytes);
                 ns
             });
             return Ok((
@@ -315,12 +306,7 @@ pub async fn hot_swap(
             .first_post_replacement_local_outcome_at
             .duration_since(report.replacement_adopted_at),
     );
-    let compile_ns = timed_result.timeline.compile_duration_ns().unwrap_or(0);
-    let instantiate_ns = timed_result.timeline.instantiate_duration_ns().unwrap_or(0);
-    let signal_ns = timed_result.timeline.signal_duration_ns().unwrap_or(0);
-    orch.record_hotswap_phase("compile", &id, compile_ns);
-    orch.record_hotswap_phase("instantiate", &id, instantiate_ns);
-    orch.record_hotswap_phase("signal", &id, signal_ns);
+    record_preparation_phases(&orch, &id, &timed_result.timeline);
     orch.record_hotswap_phase("replacement_adopted", &id, replacement_adopted_ns);
     orch.record_hotswap_phase(
         "first_post_replacement_local_outcome",
@@ -328,10 +314,7 @@ pub async fn hot_swap(
         first_post_replacement_local_outcome_ns,
     );
 
-    {
-        use sha2::{Digest, Sha256};
-        orch.record_plugin_hash(&id, hex::encode(Sha256::digest(&wasm_bytes)));
-    }
+    record_wasm_hash(&orch, &id, &wasm_bytes);
 
     Ok(Json(serde_json::json!({
         "node_id": id,
@@ -351,16 +334,42 @@ pub async fn hot_swap(
     .into_response())
 }
 
+/// How long a swap or reconfigure waits for the first runner-local outcome
+/// on the replacement before answering without it.
+const REPLACEMENT_OUTCOME_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How long a replacement the runner already claimed may keep running
+/// validate/init after [`REPLACEMENT_OUTCOME_WAIT`] before the caller is
+/// answered without knowing whether it was adopted.
+const CLAIMED_REPLACEMENT_INIT_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+fn record_preparation_phases(
+    orch: &PipelineHandle,
+    id: &str,
+    timeline: &crate::orchestrator::hotswap::SwapTimeline,
+) {
+    orch.record_hotswap_phase("compile", id, timeline.compile_duration_ns().unwrap_or(0));
+    orch.record_hotswap_phase("instantiate", id, timeline.instantiate_duration_ns().unwrap_or(0));
+    orch.record_hotswap_phase("signal", id, timeline.signal_duration_ns().unwrap_or(0));
+}
+
+fn record_wasm_hash(orch: &PipelineHandle, id: &str, wasm_bytes: &[u8]) {
+    use sha2::{Digest, Sha256};
+    orch.record_plugin_hash(id, hex::encode(Sha256::digest(wasm_bytes)));
+}
+
 /// Settle a replacement whose runner-local outcome did not arrive in time.
 ///
 /// If the runner never took the payload, withdraw it so it cannot apply
 /// after the caller is told it failed, and return 504. Otherwise the runner
-/// owns it: return when it adopted the replacement (`None` while its
-/// validate/init is still running) so the caller can answer 202.
-fn unfinished_replacement(
+/// owns it: wait for its validate/init to adopt the replacement or fail, so
+/// the caller is not answered while the swap can still change the node.
+/// Returns `None` only if that init outlives [`CLAIMED_REPLACEMENT_INIT_WAIT`].
+async fn unfinished_replacement(
     orch: &PipelineHandle,
     id: &str,
     progress: &Arc<crate::runner::HotSwapProgress>,
+    completion_rx: &mut tokio::sync::oneshot::Receiver<crate::runner::HotSwapOutcome>,
     operation: &str,
 ) -> Result<Option<std::time::Instant>, (StatusCode, String)> {
     if progress.try_withdraw() {
@@ -372,7 +381,23 @@ fn unfinished_replacement(
             ),
         ));
     }
-    Ok(progress.replacement_adopted_at())
+    let settled = tokio::time::timeout(CLAIMED_REPLACEMENT_INIT_WAIT, async {
+        tokio::select! {
+            biased;
+            at = progress.replacement_adopted() => Ok(at),
+            outcome = completion_rx => match outcome {
+                Ok(Ok(report)) => Ok(report.replacement_adopted_at),
+                Ok(Err(err)) => Err((StatusCode::CONFLICT, err.to_string())),
+                Err(_) => Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("{operation} runner exited before replacement adoption"),
+                )),
+            },
+        }
+    })
+    .await;
+    settled
+        .map_or_else(|_| Ok(progress.replacement_adopted_at()), |adopted_at| adopted_at.map(Some))
 }
 
 /// POST /api/v1/nodes/:id/reconfigure — warm reconfigure via cached InstancePre
@@ -413,13 +438,13 @@ pub async fn reconfigure(
     let new_config_json = serde_json::to_string(&body.config)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid config json: {e}")))?;
 
-    let (progress, completion_rx) = HotSwapProgress::channel();
+    let (progress, mut completion_rx) = HotSwapProgress::channel();
     let payload = SwapPayload::Reconfigure { new_config_json, progress: Arc::clone(&progress) };
 
     let signal_at = std::time::Instant::now();
     orch.send_swap(&id, payload).map_err(|e| (StatusCode::NOT_FOUND, format!("{e}")))?;
 
-    let completion = tokio::time::timeout(std::time::Duration::from_secs(5), completion_rx).await;
+    let completion = tokio::time::timeout(REPLACEMENT_OUTCOME_WAIT, &mut completion_rx).await;
     let report = match completion {
         Ok(Ok(Ok(report))) => report,
         Ok(Ok(Err(crate::runner::HotSwapError::RolledBack { rollback_time_ns, reason }))) => {
@@ -439,7 +464,9 @@ pub async fn reconfigure(
             ));
         }
         Err(_) => {
-            let adopted_at = unfinished_replacement(&orch, &id, &progress, "reconfigure")?;
+            let adopted_at =
+                unfinished_replacement(&orch, &id, &progress, &mut completion_rx, "reconfigure")
+                    .await?;
             let replacement_adopted_ns = adopted_at
                 .map(|at| crate::util::duration_ns_saturating(at.duration_since(signal_at)));
             return Ok((
@@ -801,6 +828,63 @@ allow_inference = {allow_inference}
         let wasm_bytes = std::fs::read(MNIST_COMPONENT).expect("fixture bytes");
         let expected = hex::encode(sha2::Sha256::digest(&wasm_bytes));
         assert_eq!(handle.plugin_hashes_snapshot().get("mnist"), Some(&expected));
+    }
+
+    // A replacement the runner claimed but is still initializing when the
+    // outcome wait ends keeps the request open until it is adopted, so the
+    // caller never gets an answer the swap can still change.
+    #[tokio::test(start_paused = true)]
+    async fn claimed_reconfigure_waits_for_slow_init_to_adopt() {
+        let (handle, mut swaps) = replacement_handle(true);
+        let request = ReconfigureRequest {
+            config: serde_json::json!({"execution_target": "cpu"}),
+            expected_plugin_hash: None,
+        };
+        let response = tokio::spawn(async move {
+            reconfigure(State(handle), Path("mnist".to_string()), Json(request))
+                .await
+                .map(IntoResponse::into_response)
+        });
+
+        swaps.changed().await.expect("reconfigure sender");
+        let progress = swaps.borrow_and_update().clone().expect("reconfigure payload").progress();
+        assert!(progress.try_claim(), "runner claims the pending payload");
+        tokio::time::sleep(REPLACEMENT_OUTCOME_WAIT + std::time::Duration::from_secs(1)).await;
+        assert!(!response.is_finished(), "answered while init was still running");
+        progress.mark_replacement_adopted();
+
+        let response: Response =
+            response.await.expect("handler task").expect("adopted reconfigure response");
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let body =
+            axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("response body");
+        let body: serde_json::Value = serde_json::from_slice(&body).expect("response json");
+        assert_eq!(body["replacement_adopted"], true);
+    }
+
+    // A claimed replacement whose slow init then fails reports the failure
+    // instead of an accepted response.
+    #[tokio::test(start_paused = true)]
+    async fn claimed_reconfigure_reports_slow_init_failure() {
+        let (handle, mut swaps) = replacement_handle(true);
+        let request = ReconfigureRequest {
+            config: serde_json::json!({"execution_target": "cpu"}),
+            expected_plugin_hash: None,
+        };
+        let response = tokio::spawn(async move {
+            reconfigure(State(handle), Path("mnist".to_string()), Json(request))
+                .await
+                .map(IntoResponse::into_response)
+        });
+
+        swaps.changed().await.expect("reconfigure sender");
+        let progress = swaps.borrow_and_update().clone().expect("reconfigure payload").progress();
+        assert!(progress.try_claim(), "runner claims the pending payload");
+        tokio::time::sleep(REPLACEMENT_OUTCOME_WAIT + std::time::Duration::from_secs(1)).await;
+        progress.report_init_failed("init failed");
+
+        let error = response.await.expect("handler task").expect_err("init failure");
+        assert_eq!(error.0, StatusCode::CONFLICT);
     }
 
     #[tokio::test]
