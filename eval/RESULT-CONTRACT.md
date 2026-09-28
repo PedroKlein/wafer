@@ -262,7 +262,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools git grep -n -E \
   'add_to_linker_(sync|async)|spawn_blocking|block_in_place|\.instantiate(_async)?\(|call_(validate|init|process|evaluate|route)' \
   -- crates/wafer-core/src
 
-WASMTIME_REPO=/Users/i572543/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main
+WASMTIME_REPO=<path to a wasmtime checkout>
 DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C "$WASMTIME_REPO" \
   grep -n -E 'pub fn add_to_linker_(async|sync)|require_store_data_send' \
   e9f1ea232fd245aea338ab3eb7d73487ae75cab1 -- \
@@ -438,8 +438,8 @@ worktrees and never uses the developer's dirty working tree.
 set -euo pipefail
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 export TOKIO_WORKER_THREADS=4
-export ROOT=/Users/i572543/.pi/plans/component-model-shippable-improvements/scratch/p2-ab
-export REPO=/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements
+export ROOT=<scratch directory for the A/B worktrees and outputs>
+export REPO=<path to this repository>
 export BASELINE_SHA=<full-40-character-P1-T1-commit>
 export CANDIDATE_SHA=<full-40-character-P1-T5-commit>
 export WASMTIME_REV=e9f1ea232fd245aea338ab3eb7d73487ae75cab1

@@ -453,11 +453,7 @@ def parser() -> argparse.ArgumentParser:
         command = subparsers.add_parser(name)
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--independent-output", type=Path, required=True)
-        command.add_argument(
-            "--tcc-root",
-            type=Path,
-            default=Path("/Users/i572543/Dev/github.com/PedroKlein/tcc-doc/main"),
-        )
+        command.add_argument("--tcc-root", type=Path, required=True)
         command.set_defaults(handler=handler)
     return value
 

@@ -881,23 +881,6 @@ def test_seal_production_defaults_reject_fixture_composition(tmp_path: Path) -> 
     assert_unsealed(volume, reconciliation)
 
 
-def test_production_defaults_validate_the_real_terminal_reconciliation() -> None:
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("verify_storage_receipt", VERIFIER)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    reconciliation = json.loads(
-        (
-            ROOT
-            / ".plans/rpi5-v5-enhanced-experiment-readiness/t19-terminal-reconciliation.json"
-        ).read_text()
-    )
-
-    module.validate_reconciliation(reconciliation, module.EXPANDED_N5_COMPOSITION)
-
-
 def test_seal_resumes_from_exact_partial_artifacts(tmp_path: Path) -> None:
     volume, facts, verified, reconciliation = fixture(tmp_path)
     proc_root = tmp_path / "proc"
