@@ -270,8 +270,8 @@ fn swap_run_shuts_down_when_swap_never_completes() {
     let tmp = tempfile::tempdir().unwrap();
     let (v1_hash, _, v2_path) = write_replacement_plugin(&plugin_path, tmp.path());
     // One message every 4 s: the first goes out at launch, the swap is ready
-    // by 1 s and adopted right after the second message, and the third would
-    // only arrive at 8 s. Interrupting at 6 s lands between adoption and the
+    // by 1 s and the idle node adopts it right away, and the second message
+    // only arrives at 4 s. Interrupting at 3 s lands between adoption and the
     // first message on the replacement.
     let config_path = tmp.path().join("slow.toml");
     std::fs::write(
@@ -322,7 +322,7 @@ to = "sink"
         .stderr(std::process::Stdio::null())
         .spawn()
         .expect("run wafer binary");
-    std::thread::sleep(std::time::Duration::from_secs(6));
+    std::thread::sleep(std::time::Duration::from_secs(3));
     let status = std::process::Command::new("kill")
         .args(["-INT", &child.id().to_string()])
         .status()
