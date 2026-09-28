@@ -1,0 +1,26 @@
+name: commits
+
+# Fails a pull request when one of its commits was authored or committed under
+# an AI agent's identity, or carries AI attribution lines. See "Commits and
+# branches" in AGENTS.md.
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  attribution:
+    name: commit attribution
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check commit identities and trailers
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: scripts/check-commit-attribution.sh "$BASE" "$HEAD"

@@ -4,7 +4,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
-use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, Publish, QoS};
+use rumqttc::{
+    AsyncClient, Event, EventLoop, MqttOptions, Packet, Publish, QoS, SubscribeReasonCode,
+    valid_filter,
+};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
@@ -15,7 +18,10 @@ use crate::queue::RuntimeEnvelope;
 use super::Source;
 
 /// Subscribes to an MQTT topic; each message becomes a `RuntimeEnvelope`.
-/// Reconnection on errors is handled by rumqttc.
+///
+/// rumqttc reconnects after errors; the source subscribes again on every
+/// connection that does not resume a session, because neither rumqttc nor the
+/// broker keeps the subscription of a clean session.
 pub struct MqttSource {
     id: String,
     broker: String,
@@ -69,8 +75,15 @@ impl MqttSource {
     }
 }
 
+struct Subscription {
+    client: AsyncClient,
+    topic: String,
+    qos: QoS,
+}
+
 fn spawn_eventloop_task(
     mut eventloop: EventLoop,
+    subscription: Subscription,
     tx: mpsc::Sender<Publish>,
     source_id: String,
 ) -> JoinHandle<()> {
@@ -79,11 +92,31 @@ fn spawn_eventloop_task(
 
         loop {
             match eventloop.poll().await {
-                Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                Ok(Event::Incoming(Packet::ConnAck(connack))) => {
+                    if !connack.session_present
+                        && let Err(e) =
+                            subscription.client.try_subscribe(&subscription.topic, subscription.qos)
+                    {
+                        tracing::error!(
+                            source_id = %source_id,
+                            topic = %subscription.topic,
+                            error = %e,
+                            "MQTT subscribe failed"
+                        );
+                    }
                     if !is_connected {
                         tracing::info!(source_id = %source_id, "MQTT connected");
                         is_connected = true;
                     }
+                }
+                Ok(Event::Incoming(Packet::SubAck(suback)))
+                    if suback.return_codes.contains(&SubscribeReasonCode::Failure) =>
+                {
+                    tracing::error!(
+                        source_id = %source_id,
+                        topic = %subscription.topic,
+                        "MQTT broker rejected the subscription"
+                    );
                 }
                 Ok(Event::Incoming(Packet::Publish(publish))) => {
                     if tx.send(publish).await.is_err() {
@@ -127,6 +160,12 @@ impl Lifecycle for MqttSource {
                 "MQTT topic cannot be empty".into(),
             )));
         }
+        if !valid_filter(&self.topic) {
+            return Err(WaferError::Config(ConfigError::Message(format!(
+                "MQTT topic '{}' is not a valid topic filter",
+                self.topic
+            ))));
+        }
         Ok(())
     }
 
@@ -136,14 +175,14 @@ impl Lifecycle for MqttSource {
             options.set_keep_alive(std::time::Duration::from_secs(30));
 
             let (client, eventloop) = AsyncClient::new(options, 10);
-
-            let qos = Self::map_qos(self.qos);
-            client.subscribe(&self.topic, qos).await.map_err(|e| WaferError::PluginInit {
-                message: format!("Failed to subscribe to MQTT topic '{}': {}", self.topic, e),
-            })?;
+            let subscription = Subscription {
+                client: client.clone(),
+                topic: self.topic.clone(),
+                qos: Self::map_qos(self.qos),
+            };
 
             let (tx, rx) = mpsc::channel(100);
-            let handle = spawn_eventloop_task(eventloop, tx, self.id.clone());
+            let handle = spawn_eventloop_task(eventloop, subscription, tx, self.id.clone());
 
             self.client = Some(client);
             self.eventloop_handle = Some(handle);
@@ -231,6 +270,18 @@ mod tests {
                 assert!(msg.contains("topic"));
             }
             _ => panic!("Expected ConfigError::Message for empty topic"),
+        }
+    }
+
+    #[test]
+    fn test_mqtt_source_validate_invalid_topic_filter() {
+        let source =
+            MqttSource::new("test-mqtt", "localhost", 1883, "sensors/#/temp", 1, "test-client");
+        match source.validate() {
+            Err(WaferError::Config(ConfigError::Message(msg))) => {
+                assert!(msg.contains("sensors/#/temp"));
+            }
+            other => panic!("Expected ConfigError::Message for invalid filter, got {other:?}"),
         }
     }
 
