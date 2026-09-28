@@ -30,6 +30,7 @@ pub enum SinkDef {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MqttSourceConfig {
     pub broker: String,
 
@@ -52,6 +53,7 @@ pub struct MqttSourceConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MqttSinkConfig {
     pub broker: String,
 
@@ -77,11 +79,13 @@ pub struct MqttSinkConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileSourceConfig {
     pub path: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FileSinkConfig {
     pub path: String,
 
@@ -90,12 +94,15 @@ pub struct FileSinkConfig {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StdinSourceConfig {}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct StdoutSinkConfig {}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpSourceConfig {
     #[serde(default = "default_http_source_bind")]
     pub bind: String,
@@ -105,6 +112,7 @@ pub struct HttpSourceConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpSinkConfig {
     pub url: String,
 
@@ -113,6 +121,7 @@ pub struct HttpSinkConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     #[serde(default)]
     pub ca: Option<String>,
@@ -125,6 +134,7 @@ pub struct TlsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     pub username: String,
     pub password: String,
@@ -148,6 +158,7 @@ fn default_http_method() -> String {
 /// side adds internal knobs. `From<BenchSourceConfigToml>` in wafer-core
 /// bridges the two.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchSourceConfigToml {
     /// Target emission rate (msg/s).
     pub rate: f64,
@@ -172,6 +183,7 @@ pub struct BenchSourceConfigToml {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchBurstConfigToml {
     pub rate: f64,
     pub start_secs: u64,
@@ -180,6 +192,7 @@ pub struct BenchBurstConfigToml {
 
 /// Config-file form of `wafer_core::node::sink::BenchSinkConfig`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct BenchSinkConfigToml {
     /// Seconds to discard at start (warm-up exclusion). Applied on the
     /// receiving side of the sink.
