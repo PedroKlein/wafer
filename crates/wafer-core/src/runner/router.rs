@@ -51,15 +51,16 @@ async fn recover_after_timeout(
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
     policy: &mut ErrorPolicyExecutor,
+    error: &WasmProcessError,
     envelope: RuntimeEnvelope,
 ) -> bool {
-    if !continue_after_policy_action(policy.handle(&WasmProcessError::TimedOut, envelope), metrics)
-    {
+    if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return false;
     }
     tracing::warn!(
         node = router.node_id(),
-        "timed-out Wasm call — replacing Store before continuing"
+        %error,
+        "Wasm call ran out of budget — replacing Store before continuing"
     );
     state.transition_to_error();
     state.transition_to_recovering();
@@ -172,16 +173,26 @@ pub async fn run_router_loop(
                 )
                 .await;
             }
-            Err(WasmProcessError::TimedOut) => {
+            Err(ref error) if error.is_budget_exhausted() => {
                 metrics.record_failed();
-                if !recover_after_timeout(&mut router, &state, &metrics, &mut policy, envelope)
-                    .await
+                if !recover_after_timeout(
+                    &mut router,
+                    &state,
+                    &metrics,
+                    &mut policy,
+                    error,
+                    envelope,
+                )
+                .await
                 {
                     break;
                 }
             }
-            Err(WasmProcessError::Unrecoverable(ref msg)) => {
+            Err(
+                ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
+            ) => {
                 metrics.record_failed();
+                let msg = error.to_string();
                 tracing::error!(
                     node = router.node_id(),
                     error = %msg,

@@ -106,7 +106,7 @@ hot-swap) live in `non-functional.md`.
   *Statement:* Every guest error shall be classified into exactly one
   of `bad-input`, `dependency-failed`, `processing-failed`,
   `timed-out`, `unrecoverable`. Wasmtime traps map to `timed-out`
-  (epoch interrupt) or `unrecoverable` (other traps).
+  (epoch interrupt, fuel exhaustion) or `unrecoverable` (other traps).
   *Verify:* `WasmProcessError` enum in
   `crates/wafer-core/src/runner/error_policy.rs`; mapping tests.
 

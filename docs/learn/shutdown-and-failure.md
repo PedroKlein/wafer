@@ -68,12 +68,12 @@ WIT defines five process-error categories. `ErrorPolicyExecutor::handle` treats 
 | `bad-input` | Apply the configured simple action: skip, DLQ, or return a teardown signal. |
 | `dependency-failed` | Add to the bounded retry buffer with capped exponential backoff, or apply its configured exhausted action. |
 | `processing-failed` | Use the same bounded retry and terminal-action path. |
-| `timed-out` | Apply the configured simple action. The transform runner then recreates the store before continuing when policy permits. |
+| `timed-out` | Apply the configured simple action. |
 | `unrecoverable` | Return control to the runner's recovery path rather than queue a normal retry. |
 
 The runners give ready retries priority over fresh messages and wake at the earliest due deadline even when upstream is idle. Retry count survives requeue. Once exhausted, `skip`, `dlq`, or `teardown` is honored; DLQ-full and DLQ-closed remain distinct outcomes and the envelope is not requeued. Transform preserves a safety clone before calling Wasm. Pending retries are flushed to the DLQ on shutdown or before replacement.
 
-Wasmtime traps are mapped separately: epoch interruption becomes `TimedOut`; other traps become `Unrecoverable`. A timeout triggers store recovery. An unrecoverable transform trap can first use the bounded hot-swap canary rollback path when one is active, then falls back to re-instantiation from the cached pre-instantiated component. If recovery fails, that node loop exits.
+Wasmtime traps and host failures during the call become `Trapped`, which keeps the wasmtime trap code when there is one. An epoch interruption or fuel exhaustion is a timeout: the `timed_out` action applies, then the store is recreated when policy permits. Inside a transform's hot-swap canary window it counts as a trap instead. Any other trap, and a plugin-returned `unrecoverable`, can first use the bounded hot-swap canary rollback path when one is active, then falls back to re-instantiation from the cached pre-instantiated component. If recovery fails, that node loop exits. A plugin-returned `timed-out` only applies the `timed_out` action; its instance is kept.
 
 ### Task and process results
 

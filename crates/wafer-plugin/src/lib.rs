@@ -73,7 +73,7 @@ macro_rules! processing_failed {
     };
 }
 
-/// Construct a `ProcessError::TimedOut` — generally produced by the host, not plugins.
+/// Construct a `ProcessError::TimedOut` — the plugin gave up on its own deadline.
 #[macro_export]
 macro_rules! timed_out {
     () => {
@@ -81,7 +81,7 @@ macro_rules! timed_out {
     };
 }
 
-/// Construct a `ProcessError::Unrecoverable` — cannot recover, teardown needed.
+/// Construct a `ProcessError::Unrecoverable` — state is broken, the host re-instantiates.
 #[macro_export]
 macro_rules! unrecoverable {
     ($reason:expr) => {

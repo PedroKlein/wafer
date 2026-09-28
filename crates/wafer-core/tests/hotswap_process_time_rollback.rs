@@ -252,6 +252,58 @@ async fn hotswap_process_time_rollback() {
     assert_eq!(columns[4], "0", "rollback must not duplicate messages: {row}");
 }
 
+/// Path to the pre-built infinite-loop attack plugin.
+const INFINITE_LOOP_WASM: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugins/attacks/infinite-loop/target/wasm32-wasip2/release/wafer_attack_infinite_loop.wasm"
+);
+
+/// A replacement that exhausts its epoch budget inside the canary window is
+/// rolled back like one that traps.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hotswap_budget_trap_in_canary_window_rolls_back() {
+    if !Path::new(PASS_THROUGH_WASM).exists() || !Path::new(INFINITE_LOOP_WASM).exists() {
+        eprintln!("SKIP: pass-through or infinite-loop plugin not built");
+        return;
+    }
+    let tmp = tempfile::tempdir().expect("tmp dir");
+    let _env_guard = BenchDirEnv::set(tmp.path());
+    let mut orchestrator = launch_pipeline(build_config(1000), None).await.expect("launch");
+    let handle = orchestrator.handle();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let v2_bytes = std::fs::read(INFINITE_LOOP_WASM).expect("read v2 wasm");
+    let (progress, rx) = HotSwapProgress::channel();
+    let timed_swap = wafer_core::orchestrator::hotswap::prepare_transform_swap_timed(
+        handle.engine(),
+        &v2_bytes,
+        "transform",
+        wafer_core::engine::Capabilities::sandbox(),
+        64 * 1024 * 1024,
+        progress,
+    )
+    .await
+    .expect("prepare v2 swap");
+    handle.send_swap("transform", timed_swap.payload).expect("send_swap");
+
+    let outcome = tokio::time::timeout(Duration::from_secs(10), rx)
+        .await
+        .expect("progress must complete within canary window")
+        .expect("progress sender must not be dropped");
+    match outcome {
+        Err(HotSwapError::RolledBack { ref reason, .. }) => {
+            assert!(reason.contains("interrupt"), "rollback reason lost the trap: {reason}");
+        }
+        other => panic!("expected RolledBack outcome, got {other:?}"),
+    }
+    assert!(handle.node_metrics("transform").is_some_and(|m| m.rollbacks() > 0));
+
+    tokio::time::timeout(Duration::from_secs(10), orchestrator.run_until_complete())
+        .await
+        .expect("pipeline should complete after rollback")
+        .expect("pipeline should shut down cleanly");
+}
+
 /// Test: bounded rollback retries — canary retains `trap_count` across rollbacks.
 ///
 /// With `max_rollback_retries` = 1 and a v2 that traps on the first `process()`:

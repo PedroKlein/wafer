@@ -25,15 +25,16 @@ async fn recover_after_timeout(
     state: &NodeStateTracker,
     metrics: &NodeMetrics,
     policy: &mut ErrorPolicyExecutor,
+    error: &WasmProcessError,
     envelope: RuntimeEnvelope,
 ) -> bool {
-    if !continue_after_policy_action(policy.handle(&WasmProcessError::TimedOut, envelope), metrics)
-    {
+    if !continue_after_policy_action(policy.handle(error, envelope), metrics) {
         return false;
     }
     tracing::warn!(
         node = transform.node_id(),
-        "timed-out Wasm call — replacing Store before continuing"
+        %error,
+        "Wasm call ran out of budget — replacing Store before continuing"
     );
     state.transition_to_error();
     state.transition_to_recovering();
@@ -215,16 +216,26 @@ pub async fn run_transform_loop_with_config(
                     c.record_success();
                 }
             }
-            Err(WasmProcessError::TimedOut) => {
+            Err(ref error) if error.is_budget_exhausted() && canary.is_none() => {
                 metrics.record_failed();
-                if !recover_after_timeout(&mut transform, &state, &metrics, &mut policy, safety)
-                    .await
+                if !recover_after_timeout(
+                    &mut transform,
+                    &state,
+                    &metrics,
+                    &mut policy,
+                    error,
+                    safety,
+                )
+                .await
                 {
                     break;
                 }
             }
-            Err(WasmProcessError::Unrecoverable(ref msg)) => {
+            Err(
+                ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
+            ) => {
                 metrics.record_failed();
+                let msg = error.to_string();
 
                 // A17: Process-time rollback if canary window is active
                 if let Some(ref mut c) = canary {
@@ -839,6 +850,10 @@ mod tests {
                 &state,
                 &metrics,
                 &mut executor,
+                &WasmProcessError::Trapped {
+                    code: Some(wasmtime::Trap::Interrupt),
+                    message: "wasm trap: interrupt".into(),
+                },
                 RuntimeEnvelope::from_string("source", "payload"),
             )
             .await,

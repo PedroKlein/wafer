@@ -13,8 +13,8 @@
 //!    from the same `PluginTestHarness`. We do NOT assert on the exact
 //!    trap text (varies with wasmtime version) but we DO assert the
 //!    error kind is one of the expected containment variants:
-//!    - `Unrecoverable`  — trap (unreachable, OOB memory, etc.)
-//!    - `TimedOut`       — epoch interruption
+//!    - `Trapped`        — trap (unreachable, OOB memory, etc.)
+//!    - `Trapped` with an interrupt or out-of-fuel code — budget exhausted
 //!
 //!    Both variants map into `NodeStateTracker::transition_to_error`
 //!    at the runner layer (see `crates/wafer-core/src/runner/*.rs`).
@@ -100,18 +100,17 @@ const MEMORY_EXHAUST_LIMIT: usize = 4 * 1024 * 1024; // 4 MiB
 /// Classification of a `WasmProcessError` kind for readable assertions.
 #[derive(Debug, PartialEq, Eq)]
 enum ContainedAs {
-    /// Trap-like: `Unrecoverable(_)` — buffer overflow, cross-read,
-    /// panic, `StoreLimits` cap.
+    /// Trap-like: buffer overflow, cross-read, panic, `StoreLimits` cap.
+    /// The fs-access plugin's guest-returned `Unrecoverable` also lands here.
     Trap,
-    /// Fuel/epoch interruption: `TimedOut` — infinite loop when the
-    /// epoch deadline fires. Fuel-exhaustion also lands here as long
-    /// as the `map_trap` heuristic sees an "interrupt"/"epoch" string.
+    /// Epoch interruption or fuel exhaustion — infinite loop.
     TimedOut,
 }
 
 fn classify(err: &WasmProcessError) -> ContainedAs {
     match err {
-        WasmProcessError::Unrecoverable(_) => ContainedAs::Trap,
+        WasmProcessError::Trapped { .. } if err.is_budget_exhausted() => ContainedAs::TimedOut,
+        WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_) => ContainedAs::Trap,
         WasmProcessError::TimedOut => ContainedAs::TimedOut,
         // Any other variant means the sandbox did NOT actually stop
         // the exploit — the attack was allowed to return control
@@ -404,7 +403,10 @@ async fn epoch_recovery_uses_a_fresh_store() {
         .process(RuntimeEnvelope::from_string("attacker", "first"))
         .await
         .expect_err("first infinite-loop call must be interrupted");
-    assert!(matches!(first, WasmProcessError::TimedOut));
+    assert!(
+        matches!(first, WasmProcessError::Trapped { code: Some(wasmtime::Trap::Interrupt), .. }),
+        "{first:?}"
+    );
     attacker
         .node_mut()
         .recover_from_cached_pre()
@@ -415,7 +417,7 @@ async fn epoch_recovery_uses_a_fresh_store() {
         .await
         .expect_err("second infinite-loop call must be independently interrupted");
     assert!(
-        matches!(second, WasmProcessError::TimedOut),
+        matches!(second, WasmProcessError::Trapped { code: Some(wasmtime::Trap::Interrupt), .. }),
         "fresh Store must reach the epoch deadline instead of returning an unusable-instance trap: {second:?}"
     );
 }
@@ -478,6 +480,83 @@ to = "sink"
         2,
         "each epoch interruption must replace its Store before the next message"
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn fuel_exhaustion_follows_the_timed_out_policy() {
+    if !check_prereqs(&[ATK_INFINITE_LOOP]) {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dlq_path = dir.path().join("dlq.jsonl");
+    let config: Config = toml::from_str(&format!(
+        r#"
+[pipeline]
+name = "fuel-exhaustion-regression"
+
+[engine.fuel]
+transform = 1000000
+
+[error_policy]
+timed_out = "dlq"
+
+[dead_letter]
+kind = "file"
+path = {dlq_path:?}
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 100.0
+total_messages = 2
+warmup_messages = 0
+payload_size = 128
+
+[nodes.attack]
+type = "transform"
+plugin = {ATK_INFINITE_LOOP:?}
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 0
+track_sequences = false
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "attack"
+
+[[edges]]
+from = "attack"
+to = "sink"
+"#,
+    ))
+    .expect("inline config must parse");
+
+    let mut orchestrator =
+        Box::pin(launch_pipeline(config, None)).await.expect("pipeline must launch");
+    let handle = orchestrator.handle();
+    tokio::time::timeout(Duration::from_secs(10), orchestrator.run_until_complete())
+        .await
+        .expect("two fuel exhaustions must complete within ten seconds")
+        .expect("pipeline must shut down cleanly");
+
+    let metrics = handle.node_metrics("attack").expect("attack metrics");
+    assert_eq!(metrics.failed(), 2, "both infinite-loop calls must run out of fuel");
+    assert_eq!(metrics.recovery_count(), 2, "each fuel trap must replace its Store");
+
+    let records = std::fs::read_to_string(&dlq_path).expect("timed_out = dlq must write records");
+    let records = records
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("DLQ record is JSON"))
+        .collect::<Vec<_>>();
+    assert_eq!(records.len(), 2, "{records:?}");
+    for record in records {
+        assert_eq!(record["error_category"], "timed_out", "{record}");
+        let message = record["error_message"].as_str().expect("error message");
+        assert!(message.contains("all fuel consumed"), "trap code missing: {message}");
+    }
 }
 
 /// S4: memory-exhaust — allocates 1 MiB chunks in a loop. `StoreLimits`
