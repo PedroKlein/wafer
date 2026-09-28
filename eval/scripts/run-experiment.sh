@@ -317,16 +317,24 @@ else
 fi
 
 TELEMETRY_PID=""
+PROC_TELEMETRY_PID=""
 _start_pi_telemetry() {
     [ "$canonical" -eq 1 ] || return 0
     python3 "$REPO_ROOT/eval/scripts/lib/pi_telemetry.py" "$OUT_DIR" &
     TELEMETRY_PID=$!
+    python3 "$REPO_ROOT/eval/scripts/lib/proc_telemetry.py" "$OUT_DIR" \
+        --pin-cpus "${WAFER_LOADGEN_CPUSET:-}" --sut-cpus "${WAFER_RUNTIME_CPUSET:-}" &
+    PROC_TELEMETRY_PID=$!
 }
 _stop_pi_telemetry() {
-    [ -n "$TELEMETRY_PID" ] || return 0
-    kill -TERM "$TELEMETRY_PID" 2>/dev/null || true
-    wait "$TELEMETRY_PID" 2>/dev/null || true
+    local pid
+    for pid in "$TELEMETRY_PID" "$PROC_TELEMETRY_PID"; do
+        [ -n "$pid" ] || continue
+        kill -TERM "$pid" 2>/dev/null || true
+        wait "$pid" 2>/dev/null || true
+    done
     TELEMETRY_PID=""
+    PROC_TELEMETRY_PID=""
 }
 _start_pi_telemetry
 
