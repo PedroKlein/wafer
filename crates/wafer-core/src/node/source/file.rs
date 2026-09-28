@@ -96,18 +96,50 @@ impl Source for FileSource {
             }
 
             let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) => Ok(None),
-                Ok(_) => {
-                    let payload =
-                        line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
-                    Ok(Some(
-                        RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
-                            .with_metadata("source_route", self.path.display().to_string()),
-                    ))
+            loop {
+                match reader.read_line(&mut line) {
+                    Ok(0) => return Ok(None),
+                    Ok(_) => break,
+                    // A non-UTF-8 line is bad data, not a broken source: it has
+                    // been consumed, so skip it rather than fail the poll.
+                    Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                        tracing::warn!(source = %self.id, error = %e, "skipping non-UTF-8 line");
+                        line.clear();
+                    }
+                    Err(e) => return Err(WaferError::Io(e)),
                 }
-                Err(e) => Err(WaferError::Io(e)),
             }
+            let payload = line.trim_end_matches('\n').trim_end_matches('\r').as_bytes().to_vec();
+            Ok(Some(
+                RuntimeEnvelope::new(&*self.id, Bytes::from(payload))
+                    .with_metadata("source_route", self.path.display().to_string()),
+            ))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn non_utf8_lines_are_skipped_not_failed() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("input.jsonl");
+        let mut bytes = b"first\n".to_vec();
+        for _ in 0..25 {
+            bytes.extend_from_slice(b"\xff\xfe binary\n");
+        }
+        bytes.extend_from_slice(b"last\n");
+        std::fs::write(&path, bytes).expect("write input");
+
+        let mut source = FileSource::new("file", &path);
+        source.init().await.expect("init");
+
+        let first = source.poll().await.expect("poll").expect("first line");
+        assert_eq!(first.payload_as_string(), "first");
+        let last = source.poll().await.expect("bad lines must not fail the poll").expect("last");
+        assert_eq!(last.payload_as_string(), "last");
+        assert!(source.poll().await.expect("poll").is_none());
     }
 }

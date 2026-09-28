@@ -183,9 +183,9 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[expect(
     clippy::panic_in_result_fn,
-    reason = "integration test asserts that an out-of-window trigger never fires"
+    reason = "integration test asserts that an out-of-window trigger is rejected and never fires"
 )]
-async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Result<()> {
+async fn hotswap_trigger_after_publisher_deadline_is_rejected() -> anyhow::Result<()> {
     let start = Instant::now();
     let state = RecorderState {
         start,
@@ -233,9 +233,9 @@ async fn hotswap_trigger_after_publisher_deadline_does_not_fire() -> anyhow::Res
         drop_when_full: false,
     };
 
-    let report = run_publisher(args).await?;
+    let error = run_publisher(args).await.expect_err("a swap after the deadline must be rejected");
 
-    assert_eq!(report.hotswap_triggered_at_secs, None);
+    assert!(error.to_string().contains("must be less than --duration-secs"), "{error:#}");
     assert_eq!(state.recorded_ms.load(Ordering::Acquire), -1);
     server.abort();
     Ok(())
