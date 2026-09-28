@@ -4009,7 +4009,7 @@ NODE_METRIC_COLUMNS = (
     "traps_unreachable,traps_interrupt,traps_out_of_fuel,traps_memory_limit,traps_other,"
     "guest_bad_input,guest_dependency_failed,guest_processing_failed,guest_timed_out,"
     "guest_unrecoverable,attempts_failed,retries,dlq_sent,dlq_lost,skipped,"
-    "retry_exhausted_skips,dropped_on_recovery,error_state_seconds,recovery_count"
+    "retry_exhausted_skips,dropped_on_recovery,dropped_on_teardown,error_state_seconds,recovery_count"
 ).split(",")
 
 

@@ -624,7 +624,7 @@ NODE_METRICS="$OUT_DIR/per_node_metrics.csv"
 # emit a stub with the schema so downstream consumers don't crash on
 # missing file.
 if [ ! -f "$NODE_METRICS" ]; then
-    printf 'node_id,messages_in,messages_out,filtered_out,traps_total,traps_memory_out_of_bounds,traps_unreachable,traps_interrupt,traps_out_of_fuel,traps_memory_limit,traps_other,guest_bad_input,guest_dependency_failed,guest_processing_failed,guest_timed_out,guest_unrecoverable,attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,error_state_seconds,recovery_count\n' > "$NODE_METRICS"
+    printf 'node_id,messages_in,messages_out,filtered_out,traps_total,traps_memory_out_of_bounds,traps_unreachable,traps_interrupt,traps_out_of_fuel,traps_memory_limit,traps_other,guest_bad_input,guest_dependency_failed,guest_processing_failed,guest_timed_out,guest_unrecoverable,attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,dropped_on_teardown,error_state_seconds,recovery_count\n' > "$NODE_METRICS"
     printf '# per_node_metrics.csv: runtime did not emit (SIGKILL or endpoint disabled). See stdout.log.\n' >> "$NODE_METRICS"
 fi
 

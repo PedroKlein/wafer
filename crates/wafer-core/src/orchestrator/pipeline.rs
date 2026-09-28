@@ -889,7 +889,7 @@ impl PipelineOrchestrator {
     /// Only emitted on graceful shutdown, after every runner has flushed its
     /// retry buffer, so each processing node satisfies
     /// `messages_in = messages_out + filtered_out + skipped + retry_exhausted_skips
-    /// + dlq_sent + dlq_lost + dropped_on_recovery`. `messages_in` is the node's
+    /// + dlq_sent + dlq_lost + dropped_on_recovery + dropped_on_teardown`. `messages_in` is the node's
     /// input-queue dequeue count (0 for sources). `traps_*` count calls the
     /// host aborted, `guest_*` count errors the guest returned, and
     /// `attempts_failed` counts every failed call including retries.
@@ -914,7 +914,7 @@ impl PipelineOrchestrator {
         }
         writeln!(
             f,
-            ",attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,error_state_seconds,recovery_count"
+            ",attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,dropped_on_teardown,error_state_seconds,recovery_count"
         )?;
         let mut recovery = std::fs::File::create(dir.join("recovery.csv"))?;
         writeln!(recovery, "node_id,sample_index,duration_ns")?;
@@ -951,7 +951,7 @@ impl PipelineOrchestrator {
             let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
             writeln!(
                 f,
-                ",{},{},{},{},{},{},{},{error_state_secs:.6},{}",
+                ",{},{},{},{},{},{},{},{},{error_state_secs:.6},{}",
                 m.attempts_failed(),
                 m.retries(),
                 m.dlq_sent(),
@@ -959,6 +959,7 @@ impl PipelineOrchestrator {
                 m.skipped(),
                 m.exhausted_skips(),
                 m.dropped_on_recovery(),
+                m.dropped_on_teardown(),
                 m.recovery_count()
             )?;
             for (sample_index, duration_ns) in m.recovery_samples_ns().into_iter().enumerate() {
