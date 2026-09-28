@@ -5,7 +5,8 @@
 //! - Per-call buffer resource push + fuel reset + log lifecycle
 //! - Error mapping from WIT process-error → WasmProcessError
 //! - Hot-swap replacement (RAII drops old Store)
-//! - Recovery from cached InstancePre (~5µs re-instantiation)
+//! - Recovery from cached InstancePre (new Store and WASI context,
+//!   instantiation, then the guest's `validate()` and `init()`)
 //!
 //! CRITICAL: These calls MUST run to completion — NEVER inside select! branches.
 //! See docs/rfcs/RFC-005-orchestrator.md D5–D7.

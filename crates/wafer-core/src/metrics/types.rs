@@ -76,6 +76,11 @@ impl SinkMetrics {
 }
 
 /// Hot-swap metrics (aggregated across all swaps).
+///
+/// The runtime fills only `phase_histogram` and `recovery_duration`, which
+/// `GET /metrics` renders. The scalar counters are written only by
+/// `MetricsRegistry`, which the runtime does not use; the `drain_*`, `flip_*` and `messages_drained_total` fields describe
+/// the retired drain-and-flip swap and stay at zero.
 #[derive(Debug)]
 pub struct HotSwapMetrics {
     pub total: AtomicU64,
@@ -90,7 +95,7 @@ pub struct HotSwapMetrics {
     /// P0.10 (A3 residual): per-phase, per-node histogram of hot-swap
     /// timings for E-Swap-6 phase decomposition. Keyed by
     /// `(phase, node_id)` for six phases: compile, instantiate, signal,
-    /// replacement_adopted, first_post_replacement_local_outcome. Wrapped in RwLock because the label
+    /// replacement_adopted, first_post_replacement_local_outcome, rollback. Wrapped in RwLock because the label
     /// set is small (`num_swappable_nodes * 6`) and the map is only
     /// touched inside record/emit paths, not on the message hot path.
     pub phase_histogram:

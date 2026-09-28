@@ -144,7 +144,7 @@ pub async fn run_filter_loop(
                 NextInput::Closed => break,
             };
 
-        // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
+        // 2. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
         let result = filter.evaluate(&envelope).await;

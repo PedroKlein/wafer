@@ -1,9 +1,11 @@
 //! Node state tracking for hot-swap support.
 //!
 //! ```text
-//! Starting → Running ⟶ Draining → Retired
-//!                    ↘ Error → Recovering → Running
+//! Starting → Running
+//!          ↘ Error → Recovering → Running
 //! ```
+//!
+//! `Draining` and `Retired` exist on [`NodeState`] but no runner enters them.
 
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use wafer_types::NodeState;

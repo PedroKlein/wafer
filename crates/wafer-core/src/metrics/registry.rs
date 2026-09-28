@@ -1,4 +1,8 @@
 //! Prometheus metrics registry.
+//!
+//! Not used by the runtime: `GET /metrics` is rendered by
+//! `api::handlers::metrics` from the orchestrator's own counters. This
+//! registry is exercised only by its tests and `benches/metrics.rs`.
 #![expect(
     clippy::unwrap_used,
     reason = "RwLock::read/write().unwrap() is idiomatic — lock poisoning implies a prior panic which is unrecoverable anyway"

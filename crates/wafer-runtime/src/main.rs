@@ -254,9 +254,9 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let mut bench_tasks = Vec::new();
     if bench_output_dir.is_some() {
         let cancel = bench_cancel.clone();
-        // MemoryRecorder is !Send across the spawn boundary because it
-        // holds &mut self. Wrap in an Arc<Mutex> so the spawned task
-        // owns the recorder and we can retrieve samples after cancel.
+        // The sampler task holds the lock for its whole life; the shared
+        // handle lets flush_bench_artifacts read the samples once the task
+        // has been cancelled and joined.
         let recorder = Arc::new(tokio::sync::Mutex::new(MemoryRecorder::new()));
         let rec_clone = Arc::clone(&recorder);
         bench_tasks.push(tokio::spawn(async move {

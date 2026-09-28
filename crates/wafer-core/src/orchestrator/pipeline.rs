@@ -85,8 +85,8 @@ pub struct PipelineHandle {
     /// and rendered by the /metrics handler.
     hotswap_metrics: Arc<crate::metrics::types::HotSwapMetrics>,
     /// P0.12 (A5 residual): per-node cached SHA-256 (hex) of the currently
-    /// loaded plugin bytes. Populated by the hot-swap handler on
-    /// successful convergence. Consumed by
+    /// loaded plugin bytes. Seeded by the launcher for every Wasm node and
+    /// updated by the hot-swap handler on successful convergence. Consumed by
     /// [`verify_plugin_hash`](Self::verify_plugin_hash) so `/reconfigure`
     /// can reject callers whose mental model has diverged from the
     /// actually-running binary.
@@ -214,8 +214,9 @@ impl PipelineHandle {
 
     /// P0.12 (A5 residual): verify that `expected_hex` matches the cached
     /// hash for `node_id`. Returns:
-    /// - `Ok(())` when the node has no cached hash yet (backward compat
-    ///   with the initial-launcher path, which does not yet register).
+    /// - `Ok(())` when the node has no cached hash. The launcher registers
+    ///   every Wasm plugin it loads, so this only applies to nodes without
+    ///   a Wasm plugin.
     /// - `Ok(())` when the expected hash exactly matches the cached one.
     /// - `Err(WaferError::Runtime("plugin-hash-mismatch…"))` otherwise.
     ///

@@ -1,7 +1,9 @@
 //! Runtime envelope type for pipeline messages.
 //!
 //! Uses `Arc<EnvelopeHeader>` for cheap fan-out clones and `Bytes` for
-//! zero-copy payload sharing from MQTT/network sources.
+//! payload sharing between host-side stages. Sharing stops at the Wasm
+//! boundary: every Wasm hop copies the payload out of guest memory and
+//! copies the header strings in both directions.
 
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};

@@ -9,8 +9,10 @@
 )]
 //! Metrics endpoint benchmarks for WAFER.
 //!
-//! Measures the performance of the Prometheus metrics registry to ensure
-//! metrics collection and encoding doesn't impact pipeline throughput.
+//! Measures the performance of the Prometheus metrics registry
+//! (`MetricsRegistry`). The runtime does not use that registry: `GET /metrics`
+//! is rendered by `api::handlers::metrics`, so these numbers are not the cost
+//! of a live scrape.
 //!
 //! Targets (per SPEC §12.2):
 //! - Metrics encoding: < 1ms for typical pipeline (10 nodes, 15 queues)

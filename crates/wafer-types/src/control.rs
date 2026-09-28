@@ -54,12 +54,14 @@ pub struct PipelineStatus {
 
 /// Current state of a node.
 ///
-/// State transitions for hot-swap:
+/// Runners move between these states:
 /// ```text
-/// Starting → Running ⟶ Draining → Retired
-///                    ↘ Error
-///                    ↘ Recovering → Running  (after unrecoverable + re-instantiation)
+/// Starting → Running
+///          ↘ Error → Recovering → Running  (after a trap or unrecoverable error)
 /// ```
+///
+/// `Draining` and `Retired` belong to an earlier hot-swap design; no runner
+/// enters them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeState {
