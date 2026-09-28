@@ -124,6 +124,9 @@ async fn round_trip_10k_messages_reports_zero_loss_and_zero_duplicates() -> anyh
     assert_eq!(summary["intended"], TOTAL_MESSAGES);
     assert_eq!(summary["rejected"], 0);
     assert_eq!(summary["enqueued"], TOTAL_MESSAGES);
+    assert_eq!(summary["acked"], TOTAL_MESSAGES);
+    assert_eq!(summary["unacked_at_exit"], 0);
+    assert_eq!(summary["connects"], 1);
     assert_eq!(summary["measurement_duration_ns"], 2_000_000_000_u64);
     assert!(summary["deadline_misses"].is_u64());
 
