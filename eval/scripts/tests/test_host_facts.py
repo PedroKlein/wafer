@@ -8,7 +8,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
-from host_facts import platform_facts  # noqa: E402
+from host_facts import PLATFORM_KEYS, platform_facts  # noqa: E402
+import canonical_runner  # noqa: E402
 
 KEYS = {
     "hardware_model", "cpu_model", "physical_cores", "online_cpus", "smt",
@@ -95,6 +96,42 @@ def test_intel_no_turbo_and_jetson_power_mode() -> None:
     assert facts["hardware_model"] == "NVIDIA Jetson Orin Nano Developer Kit"
     assert facts["physical_cores"] == 4
     assert facts["power_mode"] == "25W"
+
+
+def test_cpu_model_uses_first_compatible_entry_when_cpuinfo_names_none() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        (root / "proc/device-tree").mkdir(parents=True)
+        (root / "proc/device-tree/compatible").write_bytes(b"raspberrypi,5-model-b\x00brcm,bcm2712\x00")
+        write(root, "proc/cpuinfo", "processor\t: 0\n\n")
+        facts = platform_facts(root, fake_runner({}))
+    assert facts["cpu_model"] == "raspberrypi,5-model-b"
+
+
+def test_disabled_pstate_reports_the_real_scaling_driver() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write(root, "sys/devices/system/cpu/intel_pstate/status", "off\n")
+        write(root, "sys/devices/system/cpu/cpu0/cpufreq/scaling_driver", "acpi-cpufreq\n")
+        facts = platform_facts(root, fake_runner({}))
+    assert facts["cpufreq_driver"] == "acpi-cpufreq"
+
+
+def test_static_measurement_metadata_carries_platform_facts() -> None:
+    facts = {
+        "git_sha": "a" * 40, "git_dirty": False, "git_tags": ["v1"], "arch": "aarch64",
+        "isolated_cpus": "1-3", "cpu_governors": ["performance"], "throttled": "0x0",
+        "hardware_model": "Raspberry Pi 5 Model B Rev 1.0", "cpu_model": None,
+        "physical_cores": 4, "online_cpus": "0-3", "smt": None, "turbo": None,
+        "cpufreq_driver": "cpufreq-dt", "os_release": "Debian GNU/Linux 13 (trixie)",
+        "glibc_version": "2.41", "power_mode": None,
+    }
+    metadata = canonical_runner.static_host_metadata(facts)
+    assert set(PLATFORM_KEYS) <= set(metadata)
+    assert metadata["hardware_model"] == facts["hardware_model"]
+    assert metadata["glibc_version"] == "2.41"
+    assert metadata["power_mode"] is None
+    assert metadata["git_tags"] == ["v1"]
 
 
 def test_empty_root_yields_all_keys_as_null() -> None:
