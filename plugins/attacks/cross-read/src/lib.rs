@@ -1,5 +1,5 @@
 //! Attack scenario S2: Cross-read attempt (host memory access).
-//! Expected runtime behavior: Trap (out-of-bounds memory access) — linear memory is isolated.
+//! Expected runtime behavior: out-of-bounds memory access trap, since linear memory is isolated.
 
 wit_bindgen::generate!({
     path: "../../../wit",
@@ -19,10 +19,11 @@ impl exports::wafer::pipeline::transform::Guest for AttackPlugin {
     fn process(
         _input: exports::wafer::pipeline::transform::Message,
     ) -> Result<exports::wafer::pipeline::transform::OutputMessage, exports::wafer::pipeline::transform::ProcessError> {
-        // Attempt to read from a fabricated host memory address
-        let host_addr: *const u8 = 0xDEAD_BEEF_usize as *const u8;
-        let _stolen_byte = unsafe { core::ptr::read(host_addr) };
-        unreachable!()
+        let host_addr = core::ptr::without_provenance::<u8>(0xDEAD_BEEF);
+        let stolen = unsafe { core::ptr::read_volatile(host_addr) };
+        Err(exports::wafer::pipeline::transform::ProcessError::ProcessingFailed(format!(
+            "NOT CONTAINED: read {stolen:#04x} from {host_addr:p}"
+        )))
     }
 }
 
