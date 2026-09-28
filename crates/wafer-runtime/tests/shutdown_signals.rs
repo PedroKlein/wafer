@@ -1,13 +1,11 @@
 #![cfg(test)]
 #![cfg(unix)]
-#![expect(
-    clippy::print_stderr,
-    reason = "test diagnostic output explains when the pre-built Wasm fixture is unavailable"
-)]
 
 use std::path::PathBuf;
 use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
+
+use wafer_core::testing::artifact_available;
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join(relative)
@@ -36,8 +34,7 @@ fn second_sigterm_exits_while_a_guest_blocks_the_graceful_shutdown() {
     let plugin = repo_path(
         "plugins/attacks/infinite-loop/target/wasm32-wasip2/release/wafer_attack_infinite_loop.wasm",
     );
-    if !plugin.exists() {
-        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+    if !artifact_available(&plugin) {
         return;
     }
     let dir = tempfile::tempdir().unwrap();
@@ -73,8 +70,13 @@ to = "spin"
 [[edges]]
 from = "spin"
 to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            plugin.display()
+            plugin.display(),
+            dir.path().join("dlq.jsonl").display()
         ),
     )
     .unwrap();

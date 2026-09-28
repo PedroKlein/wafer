@@ -9,6 +9,19 @@
       "recovery.csv": {
         "csv_header": "node_id,sample_index,duration_ns"
       },
+      "dlq.jsonl": {
+        "jsonl_keys": [
+          "error_category",
+          "error_message",
+          "original",
+          "parent_id",
+          "reason",
+          "retry_count",
+          "source_node",
+          "timestamp",
+          "trace_id"
+        ]
+      },
       "memory.csv": {
         "csv_header": "elapsed_ms,rss_bytes"
       },
@@ -157,7 +170,10 @@
     "wafer-loadgen publish": {
       "publisher-summary.json": {
         "json_keys": [
+          "acked",
           "actual_rate",
+          "connection_errors",
+          "connects",
           "deadline_misses",
           "elapsed_ms",
           "enqueued",
@@ -169,7 +185,8 @@
           "published",
           "rejected",
           "schema_version",
-          "source_lag_ns"
+          "source_lag_ns",
+          "unacked_at_exit"
         ]
       }
     },

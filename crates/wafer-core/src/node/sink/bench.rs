@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hdrhistogram::Histogram;
@@ -1163,18 +1164,18 @@ impl BenchSink {
         write_atomic(&dir.join("swap_timeline.json"), json.as_bytes())
     }
 
-    fn record_sequence(&mut self, envelope: &RuntimeEnvelope) -> bool {
-        let Some(seq) = metadata_u64(envelope, "bench.sequence") else { return false };
+    fn record_sequence(&mut self, stamps: &BenchStamps<'_>) -> bool {
         let Some(tracker) = &mut self.sequence_tracker else { return false };
+        let Some(seq) = stamps.sequence else { return false };
         // BenchSource stamps the measured population on every message; the
         // first one is enough. A source that does not is measured from the
         // first number seen to the highest.
         if !self.sequence_population_read {
             self.sequence_population_read = true;
-            if let Some(start) = metadata_u64(envelope, "bench.measurement_start_seq") {
+            if let Some(start) = stamps.measurement_start_seq {
                 tracker.anchor_start(start);
             }
-            if let Some(end) = metadata_u64(envelope, "bench.sequence_end") {
+            if let Some(end) = stamps.sequence_end {
                 tracker.anchor_end(end);
             }
         }
@@ -1183,16 +1184,12 @@ impl BenchSink {
 
     fn record_burst_bucket(
         &mut self,
-        envelope: &RuntimeEnvelope,
+        stamps: &BenchStamps<'_>,
         arrival_unix_ns: u64,
         duplicate: bool,
     ) {
-        let Some((_, phase)) =
-            envelope.header.metadata.iter().find(|(key, _)| key.as_ref() == "bench.phase")
-        else {
-            return;
-        };
-        if let Some(source_origin_ns) = metadata_u64(envelope, "bench.measurement_start_unix_ns") {
+        let Some(phase) = stamps.phase else { return };
+        if let Some(source_origin_ns) = stamps.measurement_start_unix_ns {
             self.burst_observation
                 .get_or_insert_with(|| Box::new(BurstObservation::new(source_origin_ns)))
                 .record(source_origin_ns, arrival_unix_ns, duplicate);
@@ -1201,12 +1198,68 @@ impl BenchSink {
         }
         if let Some(count) = ["before", "burst", "after"]
             .iter()
-            .position(|candidate| candidate == &phase.as_ref())
+            .position(|candidate| *candidate == phase)
             .and_then(|index| self.burst_phase_received.get_mut(index))
         {
             *count = count.saturating_add(1);
         }
     }
+}
+
+/// The `bench.*` and `plugin.version` metadata of one envelope, read in a
+/// single pass over the header.
+#[derive(Default)]
+struct BenchStamps<'a> {
+    sequence: Option<u64>,
+    intended_ns: Option<u64>,
+    emit_ns: Option<u64>,
+    warmup: Option<bool>,
+    measurement_start_seq: Option<u64>,
+    sequence_end: Option<u64>,
+    measurement_start_unix_ns: Option<u64>,
+    phase: Option<&'a str>,
+    plugin_version: Option<&'a str>,
+}
+
+impl<'a> BenchStamps<'a> {
+    fn parse(metadata: &'a [(Box<str>, Box<str>)]) -> Self {
+        let mut stamps = Self::default();
+        for (key, value) in metadata {
+            match key.as_ref() {
+                "bench.sequence" => stamps.sequence = value.parse().ok(),
+                "bench.intended_ns" => stamps.intended_ns = value.parse().ok(),
+                "bench.emit_ns" => stamps.emit_ns = value.parse().ok(),
+                "bench.warmup" => stamps.warmup = value.parse().ok(),
+                "bench.measurement_start_seq" => {
+                    stamps.measurement_start_seq = value.parse().ok();
+                }
+                "bench.sequence_end" => stamps.sequence_end = value.parse().ok(),
+                "bench.measurement_start_unix_ns" => {
+                    stamps.measurement_start_unix_ns = value.parse().ok();
+                }
+                "bench.phase" => stamps.phase = Some(value.as_ref()),
+                "plugin.version" => stamps.plugin_version = Some(value.as_ref()),
+                _ => {}
+            }
+        }
+        stamps
+    }
+}
+
+/// A completed `Ok(())` with no heap allocation: `Box::pin` of a zero-sized
+/// future does not allocate, unlike `Box::pin(async { Ok(()) })`.
+struct Done;
+
+impl Future for Done {
+    type Output = Result<()>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn done() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+    Box::pin(Done)
 }
 
 /// Wall-clock nanoseconds since the Unix epoch, for the measurement window
@@ -1242,7 +1295,7 @@ impl Lifecycle for BenchSink {
             self.interval_recorder =
                 Some(IntervalRecorder::new(wall_clock_ns(), configured_measurement_secs()));
         }
-        Box::pin(async { Ok(()) })
+        done()
     }
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
@@ -1281,6 +1334,11 @@ impl Sink for BenchSink {
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        // The arrival stamp comes before any other work so the measured
+        // latency excludes the sink's own bookkeeping.
+        let arrival_unix_ns = monotonic_unix_ns();
+        let now = Instant::now();
+
         // Initialize warmup timer on first message
         if !self.started {
             self.started = true;
@@ -1289,34 +1347,27 @@ impl Sink for BenchSink {
                     clippy::arithmetic_side_effects,
                     reason = "Instant + Duration cannot overflow for realistic warmup values"
                 )]
-                let deadline =
-                    Instant::now() + std::time::Duration::from_secs(self.config.warmup_secs);
+                let deadline = now + std::time::Duration::from_secs(self.config.warmup_secs);
                 self.warmup_until = Some(deadline);
             }
         }
 
         self.message_count = self.message_count.saturating_add(1);
 
+        let stamps = BenchStamps::parse(&envelope.header.metadata);
+
         // BenchSource marks the exact warmup population. Other sources retain
         // the wall-clock fallback because they do not know the benchmark phase.
-        let warmup_marker = envelope
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.warmup")
-            .and_then(|(_, value)| value.parse::<bool>().ok());
-        let in_warmup = warmup_marker
-            .unwrap_or_else(|| self.warmup_until.is_some_and(|until| Instant::now() < until));
+        let in_warmup =
+            stamps.warmup.unwrap_or_else(|| self.warmup_until.is_some_and(|until| now < until));
         if in_warmup {
-            return Box::pin(async { Ok(()) });
+            return done();
         }
 
-        let intended_ns = metadata_u64(&envelope, "bench.intended_ns");
-        let emit_ns = metadata_u64(&envelope, "bench.emit_ns");
-        let source_origin_ns =
-            metadata_u64(&envelope, "bench.measurement_start_unix_ns").filter(|value| *value > 0);
+        let intended_ns = stamps.intended_ns;
+        let emit_ns = stamps.emit_ns;
+        let source_origin_ns = stamps.measurement_start_unix_ns.filter(|value| *value > 0);
 
-        let now = Instant::now();
         if self.measurement_start.is_none() {
             self.measurement_start = Some(now);
             let start_wall_time = SystemTime::now();
@@ -1330,9 +1381,8 @@ impl Sink for BenchSink {
             self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
 
-        let arrival_unix_ns = monotonic_unix_ns();
-        let duplicate = self.record_sequence(&envelope);
-        self.record_burst_bucket(&envelope, arrival_unix_ns, duplicate);
+        let duplicate = self.record_sequence(&stamps);
+        self.record_burst_bucket(&stamps, arrival_unix_ns, duplicate);
 
         let since_start = self
             .measurement_start
@@ -1367,25 +1417,14 @@ impl Sink for BenchSink {
             intervals.record(elapsed_ns, latency_ns, duplicate);
         }
 
-        // Hot-swap version tracking
         if let Some(ref mut recorder) = self.hotswap_recorder
-            && let Some((_, version)) =
-                envelope.header.metadata.iter().find(|(k, _)| k.as_ref() == "plugin.version")
+            && let Some(version) = stamps.plugin_version
         {
-            recorder.record(version.as_ref(), monotonic_unix_ns());
+            recorder.record(version, arrival_unix_ns);
         }
 
-        Box::pin(async { Ok(()) })
+        done()
     }
-}
-
-fn metadata_u64(envelope: &RuntimeEnvelope, key: &str) -> Option<u64> {
-    envelope
-        .header
-        .metadata
-        .iter()
-        .find(|(k, _)| k.as_ref() == key)
-        .and_then(|(_, value)| value.parse::<u64>().ok())
 }
 
 /// Records `to - from` within the shared latency bounds, counting clamped

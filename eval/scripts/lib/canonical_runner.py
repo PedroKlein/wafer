@@ -230,15 +230,27 @@ def analyze_capacity_scout_summary(
         intended = int(publisher["intended"])
         rejected = int(publisher["rejected"])
         enqueued = int(publisher["enqueued"])
+        acked = int(publisher["acked"])
+        unacked_at_exit = int(publisher["unacked_at_exit"])
+        connects = int(publisher["connects"])
         received_events = int(subscriber["total_recorded"])
         duplicates = int(subscriber["sequence"]["total_duplicates"])
         ignored_warmup = int(subscriber.get("ignored_sequence_count", 0))
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("capacity-scout counters are missing or invalid") from error
-    if min(intended, rejected, enqueued, received_events, duplicates, ignored_warmup) < 0:
+    if min(
+        intended, rejected, enqueued, acked, unacked_at_exit, connects,
+        received_events, duplicates, ignored_warmup,
+    ) < 0:
         raise ValueError("capacity-scout counters must be non-negative")
     if intended != rejected + enqueued:
         raise ValueError("counter identity failed: intended = rejected + enqueued")
+    if enqueued != acked + unacked_at_exit:
+        raise ValueError("counter identity failed: enqueued = acked + unacked_at_exit")
+    if connects != 1:
+        raise ValueError(f"publisher connected {connects} times; the run must use one session")
+    if unacked_at_exit:
+        raise ValueError(f"broker never acknowledged {unacked_at_exit} enqueued messages")
     if _subscriber_latency_is_suspect(subscriber):
         raise ValueError("subscriber reported parse errors, clamped latency or a clock step")
     if int(subscriber.get("sequence", {}).get("total_received", -1)) != received_events:
@@ -248,9 +260,9 @@ def analyze_capacity_scout_summary(
     if duplicates > received_events:
         raise ValueError("duplicates exceed received events")
     received_unique = received_events - duplicates
-    if received_unique > enqueued:
-        raise ValueError("unique receipts exceed enqueued messages")
-    downstream_lost = enqueued - received_unique
+    if received_unique > acked:
+        raise ValueError("unique receipts exceed acknowledged messages")
+    downstream_lost = acked - received_unique
     total_undelivered = rejected + downstream_lost
     duration_secs = measurement_duration_ns / 1_000_000_000
     return {
@@ -258,6 +270,7 @@ def analyze_capacity_scout_summary(
             "intended": intended,
             "rejected": rejected,
             "enqueued": enqueued,
+            "acked": acked,
             "received_events": received_events,
             "received_unique": received_unique,
             "downstream_lost": downstream_lost,
@@ -276,6 +289,18 @@ def analyze_capacity_scout_summary(
             "p99": int(subscriber["latency_p99_ns"]),
         },
     }
+
+
+def _publisher_counters_from_messages(messages: dict) -> dict:
+    """Rebuild the publisher counters an admitted result was derived from.
+
+    A result only reaches this point when every enqueued message was
+    acknowledged over a single session, so those two fields are implied.
+    """
+    counters = {field: messages[field] for field in ("intended", "rejected", "enqueued", "acked")}
+    counters["unacked_at_exit"] = int(messages["enqueued"]) - int(messages["acked"])
+    counters["connects"] = 1
+    return counters
 
 
 def validate_capacity_scout_result(result: dict) -> None:
@@ -317,7 +342,7 @@ def validate_capacity_scout_result(result: dict) -> None:
     if set(result["thermal"]) != {"max_temperature_millicelsius", "throttled"}:
         raise ValueError("capacity-scout thermal summary is incomplete")
     summary = analyze_capacity_scout_summary(
-        {field: result["messages"][field] for field in ("intended", "rejected", "enqueued")},
+        _publisher_counters_from_messages(result["messages"]),
         {
             "total_recorded": result["messages"]["received_events"],
             "total_messages": result["messages"]["received_events"],
@@ -443,7 +468,7 @@ def validate_capacity_run_result(result: dict) -> None:
     if result["source_dirty"] is not False:
         raise ValueError("capacity-run source must be clean")
     summary = analyze_capacity_scout_summary(
-        {field: result["messages"][field] for field in ("intended", "rejected", "enqueued")},
+        _publisher_counters_from_messages(result["messages"]),
         {
             "total_recorded": result["messages"]["received_events"],
             "total_messages": result["messages"]["received_events"],
@@ -1810,10 +1835,11 @@ def analyze_swap3_disruption(
     intended = int(publisher["intended"])
     rejected = int(publisher["rejected"])
     enqueued = int(publisher["enqueued"])
+    acked = int(publisher["acked"])
     received_events = int(subscriber["total_recorded"])
     duplicates = int(subscriber["sequence"]["total_duplicates"])
     received_unique = received_events - duplicates
-    if intended != rejected + enqueued or received_unique > enqueued:
+    if intended != rejected + enqueued or acked > enqueued or received_unique > acked:
         raise ValueError("E-Swap-3 sequence totals do not reconcile")
     return {
         "schema_version": 1,
@@ -1831,6 +1857,7 @@ def analyze_swap3_disruption(
             "intended": intended,
             "rejected": rejected,
             "enqueued": enqueued,
+            "acked": acked,
             "received_events": received_events,
             "received_unique": received_unique,
         },
@@ -3086,6 +3113,7 @@ def derive_containment(output: Path, experiment: str, condition: str) -> dict:
         raise ValueError("per_node_metrics.csv contains no runtime metric rows")
     try:
         traps_total = sum(int(row["traps_total"]) for row in rows)
+        dlq_sent_total = sum(int(row["dlq_sent"]) for row in rows)
         healthy_messages = max(
             (int(row["messages_out"]) for row in rows if row["node_id"] not in {"attack", "branch_b"}),
             default=0,
@@ -3104,8 +3132,18 @@ def derive_containment(output: Path, experiment: str, condition: str) -> dict:
         "traps_total": traps_total,
         "healthy_messages_out": healthy_messages,
         "runtime_panic": runtime_panic,
+        "dlq_sent_total": dlq_sent_total,
+        "dlq_records": count_dlq_records(output / "dlq.jsonl"),
         "nodes": rows,
     }
+
+
+def count_dlq_records(path: Path) -> int | None:
+    """Lines in the runtime's dead-letter file, or None when no DLQ was written."""
+    if not path.is_file():
+        return None
+    with path.open(encoding="utf-8") as stream:
+        return sum(1 for line in stream if line.strip())
 
 
 def summarize_recovery(path: Path) -> dict:

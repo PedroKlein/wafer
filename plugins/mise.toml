@@ -118,6 +118,12 @@ PATH="$GO_ROOT/bin:$PATH" GOROOT="$GO_ROOT" \
 echo "Built: wafer-uppercase-go.wasm ($(wc -c < wafer-uppercase-go.wasm | tr -d ' ') bytes)"
 '''
 
+[tasks.test-plugin-go]
+description = "Run the host-side tests against the TinyGo uppercase plugin"
+depends = [":build-plugin-go"]
+dir = "{{config_root}}/.."
+run = "cargo test --locked -p wafer-core --test polyglot_go_uppercase -- --ignored"
+
 [tasks.plugin-go-generate]
 description = "Regenerate Go WIT bindings for plugins/go/uppercase (see plugins/go/uppercase/README.md before running — output may need hand-patching against cm@v0.3.0)."
 dir = "{{config_root}}/go/uppercase"

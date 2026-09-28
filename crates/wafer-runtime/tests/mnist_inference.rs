@@ -8,9 +8,23 @@ use sha2::{Digest, Sha256};
 
 const MODEL_SHA256: &str = "2f06e72de813a8635c9bc0397ac447a601bdbfa7df4bebc278723b958831c9bf";
 const DIGIT_SHA256: &str = "e960be7e1f0d63c211aeebe76c3e49672683fed626525edd80ea1e478890f1d1";
-const RAW_OUTPUT_SHA256: &str = "cc4bc94ff02cefb52b5910acb3c05d4e362c20cccf70887c9875562c914db61e";
-const FORMATTED_OUTPUT_SHA256: &str =
-    "09e2fa9d7643793490f2cbdf3cf5d70a7fd27d611237d6466f12a432f7d4f959";
+/// Logits for `digit_7.bin` from the pinned model. ONNX Runtime's CPU kernels
+/// pick different SIMD paths per architecture and thread count, so the last
+/// bits vary between hosts; the tolerance below absorbs that while a wrong
+/// model, tensor layout or preprocessing step still fails.
+const EXPECTED_LOGITS: [f32; 10] = [
+    -4.632_588_4,
+    9.217_722,
+    2.058_747_5,
+    1.549_880_6,
+    4.094_675,
+    -1.061_206_2,
+    -12.366_721,
+    10.550_474,
+    -11.236_794,
+    -0.898_982,
+];
+const LOGIT_TOLERANCE: f32 = 1e-3;
 
 fn repo_path(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(relative)
@@ -93,12 +107,17 @@ to = "result-format"
 [[edges]]
 from = "result-format"
 to = "formatted-sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
             digit.display(),
             inference.display(),
             raw_path.display(),
             format.display(),
             formatted_path.display(),
+            dir.path().join("dlq.jsonl").display(),
         ),
     )?;
 
@@ -147,16 +166,6 @@ fn known_digit_runs_through_real_cpu_pipeline() -> Result<(), Box<dyn Error>> {
     require(raw_again == raw, "CPU logits changed across fresh Stores")?;
     require(formatted_again == formatted, "formatted output changed across fresh Stores")?;
     require(raw.len() == 10 * size_of::<f32>(), "wrong raw output size")?;
-    // The pinned hashes were recorded on aarch64. ONNX Runtime's CPU kernels
-    // pick different SIMD paths per architecture, so x86_64 logits differ in
-    // the last bits while staying deterministic and predicting the same digit.
-    if cfg!(target_arch = "aarch64") {
-        require(sha256_bytes(&raw) == RAW_OUTPUT_SHA256, "raw output hash changed")?;
-        require(
-            sha256_bytes(&formatted) == FORMATTED_OUTPUT_SHA256,
-            "formatted output hash changed",
-        )?;
-    }
 
     let logits = raw
         .as_chunks::<{ size_of::<f32>() }>()
@@ -166,6 +175,12 @@ fn known_digit_runs_through_real_cpu_pipeline() -> Result<(), Box<dyn Error>> {
         .collect::<Vec<_>>();
     require(logits.len() == 10, "expected ten logits")?;
     require(logits.iter().all(|logit| logit.is_finite()), "non-finite logit")?;
+    for (index, (actual, expected)) in logits.iter().zip(EXPECTED_LOGITS).enumerate() {
+        require(
+            (actual - expected).abs() <= LOGIT_TOLERANCE * expected.abs().max(1.0),
+            format!("logit {index}: got {actual}, expected {expected} (all: {logits:?})"),
+        )?;
+    }
     let prediction = logits
         .iter()
         .enumerate()
@@ -174,8 +189,19 @@ fn known_digit_runs_through_real_cpu_pipeline() -> Result<(), Box<dyn Error>> {
     require(prediction == Some(7), "expected digit 7")?;
 
     let json: Value = serde_json::from_slice(&formatted)?;
-    require(json["prediction"] == "7", "formatted prediction changed")?;
-    require(json["scores"].as_array().map(Vec::len) == Some(10), "wrong score count")?;
+    require(json["prediction"] == "7", format!("formatted prediction changed: {json}"))?;
+    require(json["above_threshold"] == true, format!("threshold flag changed: {json}"))?;
+    let scores: Vec<f32> = serde_json::from_value(json["scores"].clone())?;
+    require(scores.len() == 10, "wrong score count")?;
+    // The formatter prints four decimals, so it may sit up to 5e-5 from the logit.
+    for (index, (score, logit)) in scores.iter().zip(&logits).enumerate() {
+        require(
+            (score - logit).abs() <= 1e-3,
+            format!("score {index}: formatted {score}, logit {logit}"),
+        )?;
+    }
+    let confidence = json["confidence"].as_f64().ok_or("confidence missing")?;
+    require((confidence - f64::from(logits[7])).abs() <= 1e-3, "confidence is not the top logit")?;
     Ok(())
 }
 
@@ -211,8 +237,13 @@ to = "mnist-inference"
 [[edges]]
 from = "mnist-inference"
 to = "stdout"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            inference.display()
+            inference.display(),
+            dir.path().join("dlq.jsonl").display()
         ),
     )?;
     let output = Command::new(env!("CARGO_BIN_EXE_wafer"))

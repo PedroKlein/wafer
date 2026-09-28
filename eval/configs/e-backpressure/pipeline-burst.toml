@@ -5,6 +5,10 @@
 name = "e-backpressure"
 description = "Burst backpressure validation — MQTT bookend pipeline"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

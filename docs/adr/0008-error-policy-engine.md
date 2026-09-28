@@ -36,13 +36,24 @@
 > its instance. A trap inside a Transform's canary window after a hot-swap
 > rolls back to the previous version instead.
 >
-> **DLQ without a dead-letter sink.** The validator requires `[dead_letter]`
-> only when an edge uses `overflow = "dead-letter"`. It does not check
-> error-policy actions, although `bad_input` and retry `exhausted` default to
-> `dlq`. When a policy resolves to `dlq` and no `[dead_letter]` is configured,
-> the message is dropped with a warning and counted as `dlq_lost`; it is not
-> recorded anywhere else. The "validator rejects" requirement under
-> Consequences below was never implemented.
+> **Dead-letter sink and evidence.** The validator requires `[dead_letter]`
+> when an edge uses `overflow = "dead-letter"` and when any processing node's
+> effective `bad_input`, `timed_out`, or retry `exhausted` action is `dlq`
+> (the defaults for `bad_input` and `exhausted`), so "no message silently
+> disappears" holds for every accepted config. A message whose call trapped,
+> or for which the guest returned `unrecoverable`, is written to the DLQ
+> with reason `trapped { kind }` or `unrecoverable` before the node is
+> re-instantiated and is counted as `dlq_sent`; only a pipeline without a
+> DLQ (possible when every action is `skip` or `teardown`) still counts it as
+> `dropped_on_recovery`. A timed-out message is recorded with reason
+> `timed_out`. Pending retries are flushed with `hot_swap_drain` only after
+> the replacement passed `validate() + init()`; a failed swap keeps v1 and
+> its retries. When upstream closes, retries still in backoff get their
+> remaining attempts before the runner exits, and `recovery_failed` marks
+> retries lost because the node could not be re-instantiated. `retry_count`
+> is per node: a node's output starts with a fresh budget. The file sink
+> writes each record as it arrives and keeps draining until every node has
+> exited, so `dlq_sent` equals the records on disk at shutdown.
 >
 > The remainder is the historical design record.
 

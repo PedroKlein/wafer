@@ -34,6 +34,7 @@ pub mod orchestrator;
 pub mod queue;
 pub mod registry;
 pub mod runner;
+#[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod util;
 

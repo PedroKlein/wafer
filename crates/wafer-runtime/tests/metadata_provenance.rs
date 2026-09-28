@@ -1,9 +1,5 @@
 #![cfg(test)]
 #![expect(
-    clippy::print_stderr,
-    reason = "test diagnostic output: prints reason when the test is skipped due to missing fixture"
-)]
-#![expect(
     clippy::let_underscore_must_use,
     reason = "test: fire-and-forget on task handles during setup"
 )]
@@ -32,6 +28,7 @@ use sha2::{Digest, Sha256};
 
 use wafer_config::{load_config, validate};
 use wafer_core::orchestrator::launch_pipeline;
+use wafer_core::testing::artifact_available;
 
 /// Absolute path to a repo-relative artefact (uses `CARGO_MANIFEST_DIR`
 /// so the test works regardless of the cwd cargo picks).
@@ -41,15 +38,13 @@ fn repo_path(rel: &str) -> PathBuf {
     PathBuf::from(manifest).join("..").join("..").join(rel)
 }
 
+const PASS_THROUGH_WASM: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
+);
+
 fn pass_through_plugin_bytes() -> Vec<u8> {
-    let path =
-        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-    std::fs::read(&path).unwrap_or_else(|e| {
-        panic!(
-            "pass-through plugin missing at {} — run `just build-plugins` first: {e}",
-            path.display()
-        )
-    })
+    std::fs::read(PASS_THROUGH_WASM).expect("read pass-through plugin")
 }
 
 /// AC1 + AC2 + AC3: fresh launch produces a provenance JSON containing all
@@ -57,11 +52,8 @@ fn pass_through_plugin_bytes() -> Vec<u8> {
 /// the SHA256 of the on-disk .wasm bytes (single-source-of-truth invariant).
 #[tokio::test]
 async fn metadata_provenance_complete() {
-    // Skip when the shakedown fixture hasn't been generated (rare in the
-    // main dev loop; matches how bench_pipeline.rs handles fixtures).
     let config_path = repo_path("eval/configs/pipeline-shakedown.toml");
-    if !config_path.exists() {
-        eprintln!("skipping — {} missing", config_path.display());
+    if !artifact_available(PASS_THROUGH_WASM) {
         return;
     }
     let plugin_bytes = pass_through_plugin_bytes();
@@ -202,10 +194,8 @@ fn assert_shutdown_build_provenance(json: &serde_json::Value, exe: &str) {
 #[test]
 fn swap_run_provenance_records_replacement_hash() {
     let config_path = repo_path("eval/configs/pipeline-shakedown.toml");
-    let plugin_path =
-        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-    if !config_path.exists() || !plugin_path.exists() {
-        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+    let plugin_path = PathBuf::from(PASS_THROUGH_WASM);
+    if !artifact_available(&plugin_path) {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -261,10 +251,8 @@ fn write_replacement_plugin(
 #[cfg(unix)]
 #[test]
 fn swap_run_shuts_down_when_swap_never_completes() {
-    let plugin_path =
-        repo_path("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-    if !plugin_path.exists() {
-        eprintln!("skipping — build plugins first with `mise run build-plugins`");
+    let plugin_path = PathBuf::from(PASS_THROUGH_WASM);
+    if !artifact_available(&plugin_path) {
         return;
     }
     let tmp = tempfile::tempdir().unwrap();
@@ -304,8 +292,13 @@ to = "transform"
 [[edges]]
 from = "transform"
 to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            plugin_path.display()
+            plugin_path.display(),
+            tmp.path().join("dlq.jsonl").display()
         ),
     )
     .unwrap();

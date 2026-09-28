@@ -121,11 +121,14 @@ first attempt, doubles later delays to a 30-second cap, and preserves retry
 count through requeue and DLQ serialization. Exhaustion honors `skip`, `dlq`,
 or `teardown`; DLQ-full and DLQ-closed remain distinct outcomes. The
 configurable `teardown` action is a one-way stop: it ends the node's runner
-loop without recovery. A `dlq` action with no `[dead_letter]` sink configured
-drops the message and counts it as `dlq_lost`; the validator does not require
-`[dead_letter]` for error-policy DLQ actions, only for `overflow =
-"dead-letter"` edges. Buffered retries are flushed with `HotSwapDrain` on
-replacement and `Shutdown` on exit.
+loop without recovery. The validator requires `[dead_letter]` whenever an
+effective error-policy action is `dlq`, as it does for `overflow =
+"dead-letter"` edges. Trapped and `unrecoverable` messages are recorded in the
+DLQ before the node is re-instantiated. Buffered retries are flushed with
+`HotSwapDrain` once a replacement is adopted (a failed swap keeps them),
+`RecoveryFailed` when re-instantiation fails, and `Shutdown` on exit; after
+upstream EOF they are still served when their backoff expires. `retry_count`
+is reset on a node's output.
 See
 [ADR-0008](../adr/0008-error-policy-engine.md) and [RFC-002
 §D4](../rfcs/RFC-002-host-runtime.md).

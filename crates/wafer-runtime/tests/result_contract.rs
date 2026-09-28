@@ -39,6 +39,10 @@ to = "transform"
 [[edges]]
 from = "transform"
 to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
 "#;
 
 fn repo_path(relative: &str) -> PathBuf {
@@ -85,14 +89,22 @@ fn assert_matches(dir: &Path, name: &str, expected: &Value) {
         assert_eq!(text.lines().next(), Some(header), "{name} header");
     } else if let Some(keys) = expected["json_keys"].as_array() {
         let value: Value = serde_json::from_slice(&bytes).unwrap();
-        let actual: BTreeSet<&str> =
-            value.as_object().unwrap().keys().map(String::as_str).collect();
-        let expected: BTreeSet<&str> = keys.iter().map(|key| key.as_str().unwrap()).collect();
-        assert_eq!(actual, expected, "{name} keys");
+        assert_object_keys(name, &value, keys);
+    } else if let Some(keys) = expected["jsonl_keys"].as_array() {
+        for line in String::from_utf8(bytes).unwrap().lines() {
+            let value: Value = serde_json::from_str(line).unwrap();
+            assert_object_keys(name, &value, keys);
+        }
     } else {
         assert_eq!(expected["hdr_encoding"], "interval-log", "{name}: unknown schema entry");
         assert!(bytes.starts_with(b"#"), "{name} is not an interval log");
     }
+}
+
+fn assert_object_keys(name: &str, value: &Value, keys: &[Value]) {
+    let actual: BTreeSet<&str> = value.as_object().unwrap().keys().map(String::as_str).collect();
+    let expected: BTreeSet<&str> = keys.iter().map(|key| key.as_str().unwrap()).collect();
+    assert_eq!(actual, expected, "{name} keys");
 }
 
 #[test]
@@ -127,6 +139,7 @@ fn contract_documents_every_schema_entry() {
                 .or_else(|| {
                     entry["json_keys"]
                         .as_array()
+                        .or_else(|| entry["jsonl_keys"].as_array())
                         .map(|keys| keys.iter().filter_map(Value::as_str).collect())
                 })
                 .unwrap_or_default();

@@ -118,9 +118,9 @@ async fn native_baseline_roundtrip_content_router() {
     }
 }
 
-/// Basic soak: 10K messages through each transform must not panic or
-/// leak. This is not a benchmark — the assertion is simply "the loop
-/// completes." Bench numbers live in `benches/native_vs_wasm.rs`.
+/// Soak: 10K messages through each kind, every result checked, so a
+/// per-message state leak or a wrong verdict late in the run fails the test.
+/// Bench numbers live in `benches/native_vs_wasm.rs`.
 #[tokio::test]
 async fn native_baseline_soak_all_kinds() {
     let mut pass = NativeTransform::passthrough("soak-pass");
@@ -131,14 +131,21 @@ async fn native_baseline_soak_all_kinds() {
     for i in 0..10_000 {
         let temp = f64::from(i % 100);
         let payload = format!(r#"{{"temperature":{temp},"level":{temp}}}"#);
-        let env = RuntimeEnvelope::from_string("soak", payload);
+        let env = RuntimeEnvelope::from_string("soak", payload.clone());
 
-        // Every kind must complete every iteration.
         // Use ProcessNode::process for transforms (sync) since two
         // traits define a `process` method with the same name.
-        let _ = ProcessNode::process(&mut pass, env.clone()).unwrap();
-        let _ = ProcessNode::process(&mut json, env.clone()).unwrap();
-        let _ = filt.evaluate(&env).await.unwrap();
-        let _ = rout.route(env).await.unwrap();
+        let out = ProcessNode::process(&mut pass, env.clone()).unwrap();
+        assert_eq!(&*out.payload, payload.as_bytes(), "i={i}");
+        let out = ProcessNode::process(&mut json, env.clone()).unwrap();
+        assert_eq!(&*out.payload, format!(r#"{{"temperature":{temp}}}"#).as_bytes(), "i={i}");
+        let expected_filter =
+            if temp > 30.0 { FilterOutcome::Forward } else { FilterOutcome::Drop };
+        assert_eq!(filt.evaluate(&env).await.unwrap(), expected_filter, "i={i}");
+        let expected_port = if temp >= 50.0 { "hi" } else { "lo" };
+        match rout.route(env).await.unwrap() {
+            RouteResult::Route(port, _) => assert_eq!(port, expected_port, "i={i}"),
+            other => panic!("router must route at i={i}, got {other:?}"),
+        }
     }
 }
