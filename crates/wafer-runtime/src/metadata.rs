@@ -1,10 +1,21 @@
 //! Runtime-side provenance emission for `metadata.json` (F2 / RESULT-CONTRACT §runtime).
 //!
 //! Writes a JSON snapshot of the fields only the runtime can produce
-//! authoritatively: resolved wasmtime version, config sha256, per-plugin
-//! sha256 (shared with the P0.12 hot-swap guard), runtime-binary sha256,
-//! rustc version, kernel string. The shell harness (`run-experiment.sh`)
-//! reads this file and merges the fields into the per-run `metadata.json`.
+//! authoritatively: resolved wasmtime and ONNX Runtime packages, build
+//! profile/flags/features/commit, config sha256, per-plugin sha256 (shared
+//! with the P0.12 hot-swap guard), runtime-binary sha256, rustc version,
+//! kernel string, and the effective tokio worker count and CPU affinity.
+//! The shell harness (`run-experiment.sh`) reads this file after the runtime
+//! exits and merges the fields into the per-run `metadata.json`.
+//!
+//! The file is written up to three times, each overwrite replacing the
+//! last atomically: at launch (so a mid-run crash still leaves provenance),
+//! after each successful timed hot-swap (so the live plugin hashes are on
+//! disk), and at shutdown. Only the shutdown write carries
+//! `wafer_runtime_sha256`: hashing the whole binary reads O(100 MB), which
+//! must not overlap a measured window (E-Perf-9 `first_process` in
+//! particular), so earlier writes record it as `null`. `provenance_written_at` says
+//! which write the file holds.
 //!
 //! Emission is opt-in via `WAFER_METADATA_OUTPUT` (path to a JSON file) or
 //! falls back to `$WAFER_BENCH_OUTPUT_DIR/runtime-provenance.json` when the
@@ -18,13 +29,31 @@ use anyhow::{Context, Result};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
-use wafer_core::orchestrator::PipelineOrchestrator;
+use wafer_core::orchestrator::PipelineHandle;
 use wafer_types::config::Config;
 
 /// Filename written under `$WAFER_BENCH_OUTPUT_DIR` when the more specific
 /// `WAFER_METADATA_OUTPUT` env var is not set. Consumed by
 /// `run-experiment.sh::_write_metadata` on shutdown.
 pub const DEFAULT_FILENAME: &str = "runtime-provenance.json";
+
+/// Which point of the run a provenance write describes.
+#[derive(Debug, Clone, Copy)]
+pub enum WrittenAt {
+    Launch,
+    Swap,
+    Shutdown,
+}
+
+impl WrittenAt {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Launch => "launch",
+            Self::Swap => "swap",
+            Self::Shutdown => "shutdown",
+        }
+    }
+}
 
 /// Resolve the provenance output path from env vars. Precedence:
 /// 1. `WAFER_METADATA_OUTPUT` (explicit path — file or dir).
@@ -45,14 +74,17 @@ pub fn resolve_output_path() -> Option<PathBuf> {
         .map(|dir| PathBuf::from(dir).join(DEFAULT_FILENAME))
 }
 
-/// Write the runtime-owned provenance JSON to `path`. Errors here abort
-/// startup rather than degrade silently because a missing provenance
-/// artefact breaks canonical-runs reproducibility (RESULT-CONTRACT).
+/// Write the runtime-owned provenance JSON to `path` via a temporary file and
+/// rename, so the harness never reads a half-written file. Callers log and
+/// continue on error: the harness records a missing sidecar as `null`, and
+/// the canonical verifier rejects such a leaf.
 pub fn write_provenance(
     path: &Path,
-    orchestrator: &PipelineOrchestrator,
+    handle: &PipelineHandle,
     config_path: &Path,
     config: &Config,
+    written_at: WrittenAt,
+    runtime_sha256: Option<&str>,
 ) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -60,28 +92,29 @@ pub fn write_provenance(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create provenance parent dir {}", parent.display()))?;
     }
-    let payload = provenance_json(orchestrator, config_path, config)?;
+    let payload = provenance_json(handle, config_path, config, written_at, runtime_sha256)?;
     let text = serde_json::to_string_pretty(&payload).context("serialize runtime provenance")?;
-    std::fs::write(path, text).with_context(|| format!("write {}", path.display()))?;
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, text).with_context(|| format!("write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path).with_context(|| format!("rename to {}", path.display()))?;
     Ok(())
 }
 
 /// Build the JSON payload. Split from `write_provenance` so the
 /// integration test can assert on the object without touching disk.
 pub fn provenance_json(
-    orchestrator: &PipelineOrchestrator,
+    handle: &PipelineHandle,
     config_path: &Path,
     config: &Config,
+    written_at: WrittenAt,
+    runtime_sha256: Option<&str>,
 ) -> Result<Value> {
     let config_sha256 = sha256_of_file(config_path)
         .with_context(|| format!("hash config file {}", config_path.display()))?;
-    let wafer_runtime_sha256 = runtime_binary_sha256().unwrap_or_else(|_| "unknown".to_string());
-    let plugin_hashes_map: Map<String, Value> = orchestrator
-        .handle()
-        .plugin_hashes_snapshot()
-        .into_iter()
-        .map(|(k, v)| (k, Value::String(v)))
-        .collect();
+    let plugin_hashes_map: Map<String, Value> =
+        handle.plugin_hashes_snapshot().into_iter().map(|(k, v)| (k, Value::String(v))).collect();
 
     let fuel = &config.engine.fuel;
     let has_fuel = fuel.transform.is_some() || fuel.filter.is_some() || fuel.router.is_some();
@@ -94,10 +127,24 @@ pub fn provenance_json(
     };
 
     Ok(json!({
+        "provenance_written_at": written_at.as_str(),
         "wasmtime_version": env!("WAFER_WASMTIME_VERSION"),
+        "wasmtime_source": env!("WAFER_WASMTIME_SOURCE"),
+        "ort_sys_version": env!("WAFER_ORT_SYS_VERSION"),
+        "ort_sys_source": env!("WAFER_ORT_SYS_SOURCE"),
+        "ort_link": env!("WAFER_ORT_LINK"),
         "rustc_version": env!("WAFER_RUSTC_VERSION"),
         "wafer_runtime_version": env!("CARGO_PKG_VERSION"),
-        "wafer_runtime_sha256": wafer_runtime_sha256,
+        "wafer_runtime_sha256": runtime_sha256,
+        "runtime_build": {
+            "git_sha": env!("WAFER_BUILD_GIT_SHA"),
+            "git_dirty": env!("WAFER_BUILD_GIT_DIRTY"),
+            "profile": env!("WAFER_BUILD_PROFILE"),
+            "opt_level": env!("WAFER_BUILD_OPT_LEVEL"),
+            "target": env!("WAFER_BUILD_TARGET"),
+            "rustflags": env!("WAFER_BUILD_RUSTFLAGS"),
+            "features": env!("WAFER_BUILD_FEATURES"),
+        },
         "config_path": config_path.display().to_string(),
         "config_sha256": config_sha256,
         "wafer_plugin_hashes": Value::Object(plugin_hashes_map),
@@ -110,35 +157,56 @@ pub fn provenance_json(
         "epoch_tick_ms": config.engine.epoch_tick_ms,
         "effective_metering_mode": effective_metering_mode,
         "kernel": kernel_string(),
+        "tokio_worker_threads": tokio::runtime::Handle::try_current()
+            .ok()
+            .map(|handle| handle.metrics().num_workers()),
+        "available_parallelism": std::thread::available_parallelism().ok().map(std::num::NonZeroUsize::get),
+        "cpus_allowed_list": cpus_allowed_list(),
     }))
 }
 
 /// SHA-256 (hex) of a file's bytes. Read fully into memory — configs
-/// and runtime binaries are both bounded (< 100 MB in practice).
+/// and runtime binaries are both bounded (< 1 GB in practice).
 fn sha256_of_file(path: &Path) -> std::io::Result<String> {
     let bytes = std::fs::read(path)?;
     Ok(hex::encode(Sha256::digest(&bytes)))
 }
 
-/// Best-effort self-hash. Returns Err on hosts where `current_exe()` is
-/// unreliable (some sandboxed environments); callers substitute "unknown".
-fn runtime_binary_sha256() -> std::io::Result<String> {
+/// Best-effort self-hash. Call it only outside measured windows and off the
+/// async workers (`spawn_blocking`): it reads the whole binary. Returns Err on
+/// hosts where `current_exe()` is unreliable (some sandboxed environments).
+pub fn runtime_binary_sha256() -> std::io::Result<String> {
     let exe = std::env::current_exe()?;
     sha256_of_file(&exe)
 }
 
-/// `uname -r`-equivalent via a subprocess so we don't take a new dep just
-/// for a single string. Falls back to `unknown` on hosts without `uname`
-/// (e.g. Windows CI, which is out of scope but must not panic).
+/// Kernel release. On Linux this is one small procfs read; forking `uname`
+/// is kept only as the fallback for hosts without procfs (macOS dev runs).
 fn kernel_string() -> String {
-    std::process::Command::new("uname")
-        .arg("-r")
-        .output()
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
         .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            std::process::Command::new("uname")
+                .arg("-r")
+                .output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+        })
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// CPUs this process may run on (`taskset` / cpuset), from
+/// `/proc/self/status`. `None` off Linux.
+fn cpus_allowed_list() -> Option<String> {
+    let status = std::fs::read_to_string("/proc/self/status").ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Cpus_allowed_list:"))
+        .map(|value| value.trim().to_string())
 }
 
 #[cfg(test)]
@@ -171,5 +239,16 @@ mod tests {
         unsafe { std::env::remove_var("WAFER_METADATA_OUTPUT") };
         // SAFETY: single-threaded test wrt these vars; no other thread reads them.
         unsafe { std::env::remove_var("WAFER_BENCH_OUTPUT_DIR") };
+    }
+
+    #[test]
+    fn kernel_string_is_non_empty() {
+        assert!(!kernel_string().is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn cpus_allowed_list_is_read_on_linux() {
+        assert!(cpus_allowed_list().is_some_and(|list| !list.is_empty()));
     }
 }
