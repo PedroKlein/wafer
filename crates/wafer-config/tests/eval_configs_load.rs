@@ -1,4 +1,4 @@
-//! Assert every `eval/configs/*.toml` loads and validates.
+//! Assert every `eval/configs/**/*.toml` loads and validates.
 //!
 //! Every pipeline TOML shipped in the evaluation infrastructure must be
 //! runnable via `wafer-runtime --config ...`. This test walks the
@@ -32,14 +32,31 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+fn collect_tomls(dir: &Path, paths: &mut Vec<PathBuf>) {
+    #[expect(clippy::panic, reason = "test-only: fail loudly if a config dir is unreadable")]
+    let entries = std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read {}: {e}", dir.display()));
+    for path in entries.filter_map(|e| e.ok().map(|e| e.path())) {
+        if path.is_dir() {
+            collect_tomls(&path, paths);
+        } else if path.extension().is_some_and(|e| e == "toml") {
+            paths.push(path);
+        }
+    }
+}
+
+/// Comparator runs (e.g. eKuiper) keep their settings next to the WAFER
+/// pipelines but are not pipeline configs.
+fn is_comparator_config(path: &Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|text| text.parse::<toml::Table>().ok())
+        .is_some_and(|table| table.contains_key("comparator"))
+}
+
 fn all_configs() -> Vec<PathBuf> {
-    let dir = workspace_root().join("eval/configs");
-    #[expect(clippy::panic, reason = "test-only: fail loudly if the eval dir is missing")]
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&dir)
-        .unwrap_or_else(|e| panic!("read eval/configs: {e}"))
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
-        .collect();
+    let mut paths = Vec::new();
+    collect_tomls(&workspace_root().join("eval/configs"), &mut paths);
+    paths.retain(|path| !is_comparator_config(path));
     paths.sort();
     assert!(!paths.is_empty(), "eval/configs/ contains no .toml files");
     paths
@@ -88,7 +105,7 @@ fn every_eval_config_loads_and_validates() {
     }
     assert!(
         failures.is_empty(),
-        "eval/configs/*.toml validation failures:\n{}",
+        "eval/configs/**/*.toml validation failures:\n{}",
         failures.join("\n")
     );
 }

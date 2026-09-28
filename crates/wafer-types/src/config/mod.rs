@@ -25,6 +25,7 @@ pub use source_sink::{
 };
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
     pub pipeline: Option<PipelineConfig>,
@@ -126,7 +127,7 @@ pub enum PluginSpec {
 /// Structured variants of [`PluginSpec`]. Serde discriminates on the
 /// `kind` field.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "kebab-case")]
 pub enum PluginSpecStructured {
     /// Explicit Wasm form: `plugin = { kind = "wasm", path = "…" }`.
     /// Equivalent to the bare-string shorthand.
@@ -188,6 +189,7 @@ impl From<PluginSpec> for String {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct WasmNodeDef {
     pub plugin: PluginSpec,
 
@@ -224,6 +226,7 @@ pub struct WasmNodeDef {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EdgeDef {
     pub from: String,
     pub to: String,
@@ -643,5 +646,88 @@ transform = 0
         assert_eq!(config.fuel.filter, None);
         assert_eq!(config.fuel.router, None);
         assert_eq!(config.epoch_tick_ms, 5);
+    }
+
+    const MINIMAL_PIPELINE: &str = r#"
+[nodes.in]
+type = "source"
+kind = "stdin"
+
+[nodes.t]
+type = "transform"
+plugin = "t.wasm"
+
+[nodes.out]
+type = "sink"
+kind = "bench-sink"
+
+[[edges]]
+from = "in"
+to = "t"
+
+[[edges]]
+from = "t"
+to = "out"
+"#;
+
+    fn assert_unknown_field(toml_str: &str, case: &str) {
+        let err =
+            toml::from_str::<Config>(toml_str).expect_err(&format!("{case} must be rejected"));
+        assert!(err.to_string().contains("unknown field"), "{case}: {err}");
+    }
+
+    #[test]
+    fn unknown_keys_in_nodes_and_edges_are_rejected() {
+        for (table, extra) in [
+            ("[nodes.t]", "fule = 1000"),
+            ("[nodes.t]", "capabilities = { allow_inferense = true }"),
+            ("[nodes.t]", "error_policy = { bad_inupt = \"skip\" }"),
+            ("[nodes.in]", "rate = 10.0"),
+            ("[nodes.out]", "warmup_sec = 0"),
+            ("[[edges]]", "capacty = 8"),
+        ] {
+            let toml_str = MINIMAL_PIPELINE.replacen(table, &format!("{table}\n{extra}"), 1);
+            assert_unknown_field(&toml_str, &format!("{table} {extra}"));
+        }
+    }
+
+    #[test]
+    fn unknown_keys_in_top_level_tables_are_rejected() {
+        for table in [
+            "[engine]\nepoch_deadine = 100",
+            "[engine.fuel]\ntransfrom = 10",
+            "[engine.hot_swap]\ncanary_window = 10",
+            "[error_policy.processing_failed]\nretry = 1",
+            "[dead_letter]\nkind = \"file\"\npath = \"dlq.jsonl\"\nappend = true",
+            "[metrics]\nport = 9000",
+            "[egine]\nepoch_tick_ms = 5",
+        ] {
+            assert_unknown_field(&format!("{MINIMAL_PIPELINE}\n{table}\n"), table);
+        }
+    }
+
+    #[test]
+    fn structured_plugin_rejects_unknown_keys() {
+        let toml_str = MINIMAL_PIPELINE.replacen(
+            "plugin = \"t.wasm\"",
+            "plugin = { kind = \"native\", function = \"passthrough\", fule = 10 }",
+            1,
+        );
+        toml::from_str::<Config>(&toml_str)
+            .expect_err("an unknown key in a structured plugin must be rejected");
+    }
+
+    #[test]
+    fn opaque_plugin_config_accepts_any_keys() {
+        let toml_str = MINIMAL_PIPELINE.replacen(
+            "[nodes.t]",
+            "[nodes.t]\nconfig = { threshold = 50, anything = true }",
+            1,
+        );
+        let config: Config = toml::from_str(&toml_str).expect("plugin config is passed through");
+        let NodeDef::Transform(transform) = &config.nodes["t"] else {
+            panic!("t must be a transform");
+        };
+        assert!(transform.config.is_some());
     }
 }

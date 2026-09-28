@@ -57,6 +57,7 @@ pub(super) const fn default_true() -> bool {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct EngineConfig {
     /// Epoch ticks before a Wasm call traps. `None` = no epoch interrupt.
     ///
@@ -100,6 +101,7 @@ impl Default for EngineConfig {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct FuelBudgets {
     /// Fuel per transform `process()` call. `None` = unlimited (`set_fuel` skipped).
     ///
@@ -129,6 +131,7 @@ pub struct FuelBudgets {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MemoryLimits {
     #[serde(default = "default_memory_transform")]
     pub transform: usize,
@@ -156,6 +159,7 @@ impl Default for MemoryLimits {
 /// of v1 for a bounded canary window. If v2 traps during `process()` within
 /// that window, the runtime automatically rolls back to v1.
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct HotSwapConfig {
     /// Number of consecutive successful `process()` calls on v2 required
     /// before the rollback snapshot is dropped. Default: 32.
@@ -184,6 +188,7 @@ impl Default for HotSwapConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ErrorPolicyConfig {
     #[serde(default = "default_bad_input_action")]
     pub bad_input: SimpleAction,
@@ -232,6 +237,7 @@ impl std::fmt::Display for SimpleAction {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RetryConfig {
     #[serde(default = "default_retries")]
     pub retries: u32,
@@ -296,7 +302,7 @@ impl std::fmt::Display for OverflowPolicy {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "kebab-case")]
 pub enum DeadLetterConfig {
     Mqtt {
         broker: String,
@@ -471,6 +477,7 @@ const fn global_ipv6(ip: Ipv6Addr) -> bool {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Capabilities {
     #[serde(default)]
     pub inherit_stdio: bool,

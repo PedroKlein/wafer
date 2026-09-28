@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use super::engine::default_true;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct PipelineConfig {
     #[serde(default)]
     pub name: Option<String>,
@@ -12,6 +13,7 @@ pub struct PipelineConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -27,6 +29,7 @@ impl Default for ApiConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct MetricsConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -42,6 +45,7 @@ impl Default for MetricsConfig {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct RegistryConfig {
     #[serde(default)]
     pub cache_dir: Option<String>,

@@ -26,10 +26,14 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_filter_single_inbound(config, &mut errors);
     check_router_single_inbound(config, &mut errors);
     check_router_edges_have_port(config, &mut errors);
+    check_port_only_on_router_edges(config, &mut errors);
+    check_duplicate_edges(config, &mut errors);
+    check_processing_nodes_have_input_and_output(config, &mut errors);
     check_stdin_singleton(config, &mut errors);
     check_stdout_singleton(config, &mut errors);
     check_dead_letter_required_for_overflow(config, &mut errors);
     check_queue_capacities(config, &mut errors);
+    check_epoch_tick(config, &mut errors);
     check_outbound_http(config, &mut errors);
     check_unsupported_allow_inference(config, &mut errors);
     check_orphan_nodes(config, &mut errors);
@@ -143,6 +147,67 @@ fn check_router_edges_have_port(config: &Config, errors: &mut Vec<ValidationErro
     }
 }
 
+/// Only router output is addressed by port; any other node sends to every outbound edge.
+fn check_port_only_on_router_edges(config: &Config, errors: &mut Vec<ValidationError>) {
+    for (i, edge) in config.edges.iter().enumerate() {
+        let Some(source_node) = config.nodes.get(&edge.from) else {
+            continue;
+        };
+        if edge.port.is_some() && source_node.category() != NodeCategory::Router {
+            errors.push(ValidationError::new(format!(
+                "edge[{i}]: 'port' is only allowed on edges from a router, but '{}' is a {}",
+                edge.from,
+                source_node.category()
+            )));
+        }
+    }
+}
+
+/// A repeated edge becomes a second sender on the same queue and delivers every message twice.
+fn check_duplicate_edges(config: &Config, errors: &mut Vec<ValidationError>) {
+    let mut seen = std::collections::HashSet::new();
+    for (i, edge) in config.edges.iter().enumerate() {
+        if !seen.insert((edge.from.as_str(), edge.to.as_str(), edge.port.as_deref())) {
+            errors.push(ValidationError::new(format!(
+                "edge[{i}]: duplicate edge '{}' -> '{}'",
+                edge.from, edge.to
+            )));
+        }
+    }
+}
+
+/// A connected transform, filter or router needs an inbound edge to receive
+/// messages and an outbound edge so its output is not discarded.
+fn check_processing_nodes_have_input_and_output(
+    config: &Config,
+    errors: &mut Vec<ValidationError>,
+) {
+    let inbound: std::collections::HashSet<&str> =
+        config.edges.iter().map(|e| e.to.as_str()).collect();
+    let outbound: std::collections::HashSet<&str> =
+        config.edges.iter().map(|e| e.from.as_str()).collect();
+
+    for (id, node) in &config.nodes {
+        if matches!(node.category(), NodeCategory::Source | NodeCategory::Sink) {
+            continue;
+        }
+        let has_inbound = inbound.contains(id.as_str());
+        let has_outbound = outbound.contains(id.as_str());
+        if has_inbound && !has_outbound {
+            errors.push(ValidationError::new(format!(
+                "{} node '{id}' has no outbound edge, so its output would be discarded",
+                node.category()
+            )));
+        }
+        if has_outbound && !has_inbound {
+            errors.push(ValidationError::new(format!(
+                "{} node '{id}' has no inbound edge, so it would never receive a message",
+                node.category()
+            )));
+        }
+    }
+}
+
 /// At most one stdin source is allowed (process has only one stdin).
 fn check_stdin_singleton(config: &Config, errors: &mut Vec<ValidationError>) {
     let stdin_count = config
@@ -221,6 +286,13 @@ fn check_queue_capacities(config: &Config, errors: &mut Vec<ValidationError>) {
     });
     if dead_letter_capacity == Some(0) {
         errors.push(ValidationError::new("dead_letter.queue_capacity must be greater than zero"));
+    }
+}
+
+/// A zero tick makes the epoch thread spin a full core and every epoch deadline expire at once.
+fn check_epoch_tick(config: &Config, errors: &mut Vec<ValidationError>) {
+    if config.engine.epoch_tick_ms == 0 {
+        errors.push(ValidationError::new("engine.epoch_tick_ms must be greater than zero"));
     }
 }
 
@@ -444,6 +516,97 @@ mod tests {
         let result = validate(&config);
         let errors = result.unwrap_err();
         assert!(errors.iter().any(|e| e.message.contains("orphan")));
+    }
+
+    #[test]
+    fn test_duplicate_edge_rejected() {
+        let config = simple_config(
+            vec![("in", stdin_source()), ("t", transform("t.wasm")), ("out", stdout_sink())],
+            vec![edge("in", "t"), edge("t", "out"), edge("t", "out")],
+        );
+        let errors = validate(&config).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message == "edge[2]: duplicate edge 't' -> 'out'"),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_router_ports_to_same_node_are_not_duplicates() {
+        let config = simple_config(
+            vec![("in", stdin_source()), ("r", router("r.wasm")), ("out", stdout_sink())],
+            vec![
+                edge("in", "r"),
+                edge_with_port("r", "out", "high"),
+                edge_with_port("r", "out", "low"),
+            ],
+        );
+        validate(&config).expect("distinct router ports may share a destination");
+    }
+
+    #[test]
+    fn test_port_on_non_router_edge_rejected() {
+        let config = simple_config(
+            vec![("in", stdin_source()), ("t", transform("t.wasm")), ("out", stdout_sink())],
+            vec![edge("in", "t"), edge_with_port("t", "out", "alert")],
+        );
+        let errors = validate(&config).unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.message.contains("'port' is only allowed on edges from a router")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_processing_node_without_outbound_edge_rejected() {
+        let config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                ("t", transform("t.wasm")),
+                ("dead_end", transform("d.wasm")),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "t"), edge("t", "out"), edge("t", "dead_end")],
+        );
+        let errors = validate(&config).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message.contains("'dead_end' has no outbound edge")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_processing_node_without_inbound_edge_rejected() {
+        let config = simple_config(
+            vec![
+                ("in", stdin_source()),
+                ("t", transform("t.wasm")),
+                ("starved", filter("f.wasm")),
+                ("out", stdout_sink()),
+            ],
+            vec![edge("in", "t"), edge("t", "out"), edge("starved", "out")],
+        );
+        let errors = validate(&config).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message.contains("'starved' has no inbound edge")),
+            "{errors:?}"
+        );
+    }
+
+    #[test]
+    fn test_zero_epoch_tick_rejected() {
+        let mut config = simple_config(
+            vec![("in", stdin_source()), ("out", stdout_sink())],
+            vec![edge("in", "out")],
+        );
+        config.engine.epoch_tick_ms = 0;
+        let errors = validate(&config).unwrap_err();
+        assert!(
+            errors.iter().any(|e| e.message == "engine.epoch_tick_ms must be greater than zero"),
+            "{errors:?}"
+        );
     }
 
     #[test]
