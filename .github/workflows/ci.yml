@@ -74,14 +74,7 @@ jobs:
           restore-keys: plugins-${{ runner.os }}-
 
       - name: Build Wasm plugins
-        run: |
-          set -euo pipefail
-          cd plugins
-          for plugin in */Cargo.toml attacks/*/Cargo.toml; do
-            echo "::group::${plugin%/Cargo.toml}"
-            cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
-            echo "::endgroup::"
-          done
+        run: plugins/build-plugins.sh
 
       - name: Build release wafer-loadgen
         # wasi_async_runner reads HDR summaries through the release binary.

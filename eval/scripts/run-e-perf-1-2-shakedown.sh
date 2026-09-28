@@ -79,7 +79,7 @@ WAFER_BIN="$REPO_ROOT/target/release/wafer"
 LOADGEN_BIN="$REPO_ROOT/target/release/wafer-loadgen"
 if [ "$skip_build" -eq 0 ]; then
     _log "building wafer-runtime + wafer-loadgen (release)"
-    cargo build --release -p wafer-runtime -p wafer-loadgen >&2
+    cargo build --locked --release -p wafer-runtime -p wafer-loadgen >&2
 fi
 [ -x "$WAFER_BIN" ]   || { _log "wafer binary missing"; exit 3; }
 [ -x "$LOADGEN_BIN" ] || { _log "loadgen binary missing"; exit 3; }

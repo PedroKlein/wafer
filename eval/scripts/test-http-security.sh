@@ -110,9 +110,7 @@ echo 'H12 PASS: prohibited IP literal classes rejected statically' | tee -a "$al
 run_exact wafer-core lib node::wasm::tests::accepted_hot_swap_preserves_outbound_http_grant
 run_exact wafer-core lib node::wasm::tests::hot_swap_rejects_outbound_http_expansion
 
-for plugin in pass-through pass-through-v2-panics; do
-  cargo build --release --locked --manifest-path "plugins/$plugin/Cargo.toml" --target wasm32-wasip2
-done
+plugins/build-plugins.sh pass-through pass-through-v2-panics
 run_exact wafer-core hotswap_process_time_rollback hotswap_process_time_rollback regular 600
 run_exact wafer-core lib node::wasm::tests::inference_and_outbound_http_survive_recovery_together regular 600
 echo 'H20 PASS: inference and outbound HTTP grants survived fresh-Store recovery' | tee -a "$all_log"

@@ -13,7 +13,7 @@
 
 [tasks.plugin]
 description = "Build the pass-through plugin"
-run = "cargo build --release --manifest-path pass-through/Cargo.toml --target wasm32-wasip2"
+run = "./build-plugins.sh pass-through"
 
 [tasks.validate]
 description = "Validate the pass-through plugin WASM component"
@@ -22,25 +22,22 @@ run = "wasm-tools validate --features component-model pass-through/target/wasm32
 
 [tasks.mnist-inference]
 description = "Build the MNIST inference plugin"
-run = "cargo build --release --locked --manifest-path mnist-inference/Cargo.toml --target wasm32-wasip2"
+run = "./build-plugins.sh mnist-inference"
 
 [tasks.validate-mnist-inference]
 description = "Validate the MNIST inference plugin WASM component"
 depends = [":mnist-inference"]
 run = "wasm-tools validate --features component-model mnist-inference/target/wasm32-wasip2/release/wafer_mnist_inference.wasm"
 
-[tasks.build-plugins]
-description = "Build all Rust plugins (regular + attacks) for wasm32-wasip2 (release)"
-run = '''
-set -euo pipefail
-for plugin in */Cargo.toml attacks/*/Cargo.toml; do
-  name=${plugin%/Cargo.toml}
-  echo "Building plugin: $name"
-  cargo build --release --manifest-path "$plugin" --target wasm32-wasip2
-done
 # Binaryen's wasm-opt does not support Component Model binaries.
-# Validate release components with wasm-tools after this build.
-'''
+# Validate release components with wasm-tools after these builds.
+[tasks.build-plugins]
+description = "Build all Rust plugins (regular + attacks) for wasm32-wasip2 (release) and record ARTIFACTS.sha256"
+run = "./build-plugins.sh"
+
+[tasks.verify-plugins]
+description = "Rebuild all Rust plugins and check them against ARTIFACTS.sha256"
+run = "./build-plugins.sh --check"
 
 [tasks.build-plugin]
 description = "Build one plugin for wasm32-wasip2: mise run //plugins:build-plugin <name>"
@@ -51,7 +48,7 @@ if [ $# -ne 1 ]; then
   echo "usage: mise run //plugins:build-plugin <name>" >&2
   exit 2
 fi
-cargo build --release --manifest-path "$1/Cargo.toml" --target wasm32-wasip2
+./build-plugins.sh "$1"
 ' --
 '''
 
@@ -79,7 +76,7 @@ set -euo pipefail
 for plugin in */Cargo.toml attacks/*/Cargo.toml; do
   name=${plugin%/Cargo.toml}
   echo "Checking plugin: $name"
-  cargo check --manifest-path "$plugin"
+  cargo check --locked --manifest-path "$plugin"
 done
 '''
 
@@ -91,7 +88,7 @@ host=$(rustc -vV | awk '/^host:/ { print $2 }')
 for plugin in */Cargo.toml; do
   name=${plugin%/Cargo.toml}
   echo "Testing plugin: $name"
-  cargo test --manifest-path "$plugin" --target "$host"
+  cargo test --locked --manifest-path "$plugin" --target "$host"
 done
 '''
 

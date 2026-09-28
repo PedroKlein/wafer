@@ -133,7 +133,7 @@ _now_ns() {
 WAFER_BIN="$REPO_ROOT/target/release/wafer"
 if [ "$skip_build" -eq 0 ]; then
     _log "building wafer-runtime (release)"
-    cargo build --release -p wafer-runtime >&2
+    cargo build --locked --release -p wafer-runtime >&2
 fi
 [ -x "$WAFER_BIN" ] || { _log "wafer binary missing at $WAFER_BIN"; exit 3; }
 

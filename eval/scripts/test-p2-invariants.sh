@@ -29,9 +29,7 @@ rust_plugins=(
   attacks/memory-exhaust
   attacks/panic
 )
-for plugin in "${rust_plugins[@]}"; do
-  cargo build --release --locked --manifest-path "plugins/$plugin/Cargo.toml" --target wasm32-wasip2
-done
+plugins/build-plugins.sh "${rust_plugins[@]}"
 mise run //plugins:build-plugin-go
 cargo build --release --locked -p wafer-loadgen
 

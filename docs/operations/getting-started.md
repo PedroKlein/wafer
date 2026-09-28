@@ -9,8 +9,8 @@ first WAFER pipeline. If any step fails, jump to
 - **Rust via rustup**. Install from <https://rustup.rs/> before running
   `mise install`; several mise-managed helper tools are installed through
   Cargo and require `cargo` to already exist. `rust-toolchain.toml` pins Rust
-  `1.98.1` with `rustfmt`, `clippy`, and `wasm32-wasip2`; `Cargo.toml` declares
-  workspace MSRV `1.95`.
+  `1.98.1` with `rustfmt`, `clippy`, and `wasm32-wasip2`; older compilers are
+  not tested.
 - **`mise`** — primary development tool manager and command runner via
   `mise.toml`. Install via <https://mise.jdx.dev/> or your package manager.
   Rust itself remains controlled by `rust-toolchain.toml`. After cloning, run
@@ -22,6 +22,10 @@ first WAFER pipeline. If any step fails, jump to
   list --installed`.
 - **A C toolchain** — required by wasmtime's build. Any recent
   `clang`/`gcc` works.
+- **Network access on the first build**, or a local ONNX Runtime. The build
+  downloads a pinned, hash-checked ONNX Runtime from `cdn.pyke.io` once. For
+  offline builds set `ORT_LIB_LOCATION`; see
+  [ONNX Runtime](dependencies.md#onnx-runtime).
 - *(Optional)* **Docker** — if you plan to try the MQTT examples,
   you'll need a Mosquitto broker. See
   [`mqtt-setup.md`](mqtt-setup.md).

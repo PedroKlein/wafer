@@ -116,6 +116,11 @@ mise run cross-build-pi-check
 mise run //plugins:build-plugins
 ```
 
+`build-plugins` records the plugin hashes in `plugins/ARTIFACTS.sha256`. Before
+a later deployment from the same machine, `mise run //plugins:verify-plugins`
+rebuilds the plugins and fails if any of them changed. See
+[Plugin artifacts](../operations/dependencies.md#plugin-artifacts).
+
 Preview and deploy:
 
 ```sh

@@ -13,12 +13,13 @@ name = "wafer"
 path = "src/main.rs"
 
 [features]
-default = ["http-api"]
+default = ["http-api", "ort-download"]
 http-api = ["wafer-core/http-api"]
 # Phase 2 integration tests (require WASM fixtures)
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wafer-core/cuda"]
+ort-download = ["wafer-core/ort-download"]
 
 [dependencies]
 wafer-config = { workspace = true }
