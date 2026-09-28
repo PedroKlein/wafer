@@ -973,9 +973,9 @@ runner rejects any non-zero code (`RuntimeError: wafer runtime exited with N`).
 | Code | Meaning | Artefacts |
 | --- | --- | --- |
 | `0` | Every node task exited cleanly (natural completion or SIGTERM/SIGINT drain). | All runtime-owned artefacts. |
-| `1` | Startup failed for a reason other than configuration: engine creation, plugin load or compile, control-plane bind, `startup.json` write. | Whatever was written before the failure; usually none. |
-| `2` | Invalid configuration: TOML load, semantic validation, or a source/sink `validate()` run at launch (for example a bench-source `rate = 0` or an inconsistent burst block, a mistyped HTTP `bind`). Nothing is spawned. Also clap's code for bad arguments. | None. |
-| `3` | The pipeline started but failed while running: a node task panicked (the log names the node), a source/sink `init()` failed (the pipeline is cancelled at once), a source hit its poll-error budget, the DLQ sink failed, or a `--swap-after-secs` swap could not be prepared or dispatched. | Bench artefacts and `runtime-provenance.json` are still flushed before exiting, for post-mortem analysis only; the leaf is not a valid sample. |
+| `1` | Startup failed for a reason other than configuration: engine creation, plugin compile, control-plane bind, or a `startup.json` write after an otherwise clean run. | Whatever was written before the failure; usually none. |
+| `2` | Invalid configuration: TOML load, semantic validation, or a source/sink `validate()` run at launch (for example a bench-source `rate = 0` or an inconsistent burst block, a mistyped HTTP `bind`), a local plugin path that cannot be read, or bad `--swap-*` arguments. Nothing is spawned, except that a `--swap-node` that is not a swappable Wasm node is only found after launch and the pipeline is drained first. Also clap's code for bad arguments. | None. |
+| `3` | The pipeline started but failed while running: a node task panicked (the log names the node), a source/sink `init()` failed (the pipeline is cancelled at once), a source hit its poll-error budget, a sink's final flush or `close()` failed, a node did not stop within the 10 s shutdown deadline and was aborted, the DLQ sink failed or did not stop in time, or a `--swap-after-secs` swap could not be prepared or dispatched. | Bench artefacts and `runtime-provenance.json` are still flushed before exiting, for post-mortem analysis only; the leaf is not a valid sample. |
 
 A run killed by the harness after its SIGTERM grace period reports the
 signal's code (e.g. `137`), not one of the above.
@@ -983,7 +983,7 @@ signal's code (e.g. `137`), not one of the above.
 `wafer-loadgen publish --profile hotswap-trigger` follows the same rule: if
 the hot-swap POST fails (transport error or non-2xx), it still writes
 `--hotswap-result-path` with an `error` field (and `http_status` when a
-response arrived) and the summary file, then exits non-zero.
+response arrived) and the summary file, with `hotswap_triggered_at_secs: null`, then exits non-zero. A `--hotswap-swap-at-secs` at or beyond `--duration-secs` is rejected before publishing.
 
 For final WAFER leaves, the verifier compares these effective metering fields with the condition in `canonical-matrix.json`. E-Perf-7 uses its four-way `metering_modes` table; declared attack stimuli use their condition-specific exceptions; all other WAFER conditions use `final_campaign.canonical_metering`. A missing or mismatched value is a contract violation.
 

@@ -106,3 +106,25 @@ fn sink_init_failure_exits_three_and_names_the_node() {
     assert_eq!(output.status.code(), Some(3), "{text}");
     assert!(text.contains("sink 'sink' init failed"), "{text}");
 }
+
+#[test]
+fn bad_swap_arguments_exit_two_before_running() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("out.jsonl");
+    let config =
+        write_config(dir.path(), BENCH_SOURCE, &format!("kind = \"file\"\npath = {out:?}"));
+
+    let output = Command::new(env!("CARGO_BIN_EXE_wafer"))
+        .arg("--config")
+        .arg(&config)
+        .arg("--no-api")
+        .args(["--swap-after-secs", "5", "--swap-node", "typo", "--swap-plugin", "v2.wasm"])
+        .env_remove("WAFER_BENCH_OUTPUT_DIR")
+        .output()
+        .expect("run wafer");
+
+    let text = combined_output(&output);
+    assert_eq!(output.status.code(), Some(2), "{text}");
+    assert!(text.contains("--swap-node 'typo' must name a Transform"), "{text}");
+    assert!(!out.exists(), "no node may run when the swap arguments are invalid");
+}

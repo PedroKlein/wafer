@@ -201,6 +201,13 @@ async fn run() -> Result<ExitCode> {
         .unwrap_or("wafer-pipeline");
     info!(pipeline = %pipeline_name, "Configuration loaded");
 
+    // Check the timed-swap arguments before any node starts.
+    let swap_plan = args
+        .swap_after_secs
+        .map(|delay_secs| SwapPlan::from_args(&args, &config, delay_secs))
+        .transpose()
+        .context(ConfigInvalid)?;
+
     let launch_started = Instant::now();
     let launched = launch_pipeline_timed(config.clone(), Some(&args.config))
         .await
@@ -258,25 +265,25 @@ async fn run() -> Result<ExitCode> {
     let control_plane_tasks = launch_control_plane(&args, &orchestrator).await?;
 
     // Spawn timed swap trigger if configured (RQ3 benchmark mode)
-    if let Some(delay_secs) = args.swap_after_secs {
-        let node_id =
-            args.swap_node.clone().context("--swap-after-secs requires --swap-node <ID>")?;
-        let plugin_path =
-            args.swap_plugin.clone().context("--swap-after-secs requires --swap-plugin <PATH>")?;
-
+    if let Some(SwapPlan {
+        delay_secs,
+        node_id,
+        plugin_path,
+        capabilities,
+        memory_limit,
+        fuel_limit,
+    }) = swap_plan
+    {
         if !orchestrator.swappable_nodes().contains(&node_id.as_str()) {
-            anyhow::bail!("--swap-node '{node_id}' is not a swappable Wasm node");
+            // Nodes are already running: stop them cleanly before reporting.
+            if let Err(e) = orchestrator.shutdown().await {
+                warn!(error = %e, "pipeline shutdown after a rejected --swap-node failed");
+            }
+            wait_control_plane(control_plane_tasks).await;
+            return Err(anyhow::anyhow!("--swap-node '{node_id}' is not a swappable Wasm node")
+                .context(ConfigInvalid));
         }
 
-        let NodeDef::Transform(wasm) =
-            config.nodes.get(&node_id).context("--swap-node must name a Transform")?
-        else {
-            anyhow::bail!("--swap-node '{node_id}' must name a Transform");
-        };
-        let capabilities = Capabilities::try_from(&wasm.capabilities)
-            .context("invalid outbound HTTP capability")?;
-        let memory_limit = wasm.memory_limit.unwrap_or(config.engine.memory.transform);
-        let fuel_limit = wasm.fuel.or(config.engine.fuel.transform);
         let output_dir = args.swap_output_dir.clone();
         let engine = Arc::clone(orchestrator.engine());
         let cancel = orchestrator.cancel_token().clone();
@@ -374,7 +381,7 @@ async fn run() -> Result<ExitCode> {
     let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
     log_run_result(&run_result);
 
-    if let Some(path) = startup::resolve_output_path() {
+    let startup_written = startup::resolve_output_path().map_or(Ok(()), |path| {
         startup::write_startup(
             &path,
             &orchestrator,
@@ -382,16 +389,58 @@ async fn run() -> Result<ExitCode> {
             launch_started,
             launch_completed,
             launch_timings,
-        )?;
-        info!(path = %path.display(), "Startup phases written");
-    }
+        )
+        .inspect(|()| info!(path = %path.display(), "Startup phases written"))
+    });
 
     flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
     orchestrator.cancel();
     wait_control_plane(control_plane_tasks).await;
 
     info!("WAFER Runtime stopped");
+    // A failed run outranks a failed startup.json write: report it as 3.
+    if run_result.is_ok() {
+        startup_written?;
+    } else if let Err(e) = startup_written {
+        error!(error = format!("{e:#}"), "startup phases write failed");
+    }
     Ok(pipeline_exit_code(&run_result))
+}
+
+/// Timed hot-swap requested with `--swap-after-secs`, checked before launch.
+struct SwapPlan {
+    delay_secs: u64,
+    node_id: String,
+    plugin_path: PathBuf,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
+}
+
+impl SwapPlan {
+    fn from_args(
+        args: &Args,
+        config: &wafer_types::config::Config,
+        delay_secs: u64,
+    ) -> Result<Self> {
+        let node_id =
+            args.swap_node.clone().context("--swap-after-secs requires --swap-node <ID>")?;
+        let plugin_path =
+            args.swap_plugin.clone().context("--swap-after-secs requires --swap-plugin <PATH>")?;
+        let Some(NodeDef::Transform(wasm)) = config.nodes.get(&node_id) else {
+            anyhow::bail!("--swap-node '{node_id}' must name a Transform");
+        };
+        let capabilities = Capabilities::try_from(&wasm.capabilities)
+            .context("invalid outbound HTTP capability")?;
+        Ok(Self {
+            delay_secs,
+            memory_limit: wasm.memory_limit.unwrap_or(config.engine.memory.transform),
+            fuel_limit: wasm.fuel.or(config.engine.fuel.transform),
+            node_id,
+            plugin_path,
+            capabilities,
+        })
+    }
 }
 
 fn log_run_result(run_result: &Result<()>) {
@@ -440,8 +489,13 @@ async fn run_with_swap(
                 }
             },
             Ok(Err(e)) => swap_failure = Some(e),
-            // The trigger task ended without a result: it was cancelled.
-            Err(_) => {}
+            // The trigger task ended without a result. On cancel that is
+            // expected; otherwise it panicked and no swap happened.
+            Err(_) if cancel.is_cancelled() => {}
+            Err(_) => {
+                error!("Hot-swap trigger task ended without a result");
+                swap_failure = Some("hot-swap trigger task ended without a result".to_owned());
+            }
         }
     }
 

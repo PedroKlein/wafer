@@ -133,7 +133,8 @@ and remaining tasks may be aborted after the shutdown deadline.
 The process exit code says whether the run succeeded: `0` when every node
 exited cleanly, `2` for an invalid configuration (nothing is started), `3`
 when the pipeline failed after starting (a node panicked, a source or sink
-failed to initialise, or the DLQ sink failed; the log names the node), and
+failed to initialise or to flush and close, a node had to be aborted at the
+shutdown deadline, or the DLQ sink failed; the log names the node), and
 `1` for any other startup failure. Under a supervisor such as systemd,
 `Restart=on-failure` therefore restarts only failed runs. The full table is
 in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status).

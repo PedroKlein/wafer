@@ -609,8 +609,7 @@ impl PipelineOrchestrator {
                                         &pipeline_cancel,
                                     ));
                                 }
-                                run_sink_loop(sink, receiver, cancel, state, metrics).await;
-                                Ok(())
+                                run_sink_loop(sink, receiver, cancel, state, metrics).await
                             })
                             .id()
                     } else {
@@ -657,6 +656,24 @@ impl PipelineOrchestrator {
         }
     }
 
+    /// Abort the node tasks still running at the shutdown deadline and describe
+    /// them. Their `close()` never ran, so their output may be incomplete.
+    async fn abort_stuck_tasks(&mut self) -> String {
+        let mut stuck: Vec<String> = self.task_nodes.drain().map(|(_, node)| node.into()).collect();
+        stuck.sort_unstable();
+        let stuck = stuck.join("', '");
+        tracing::error!(
+            nodes = %stuck,
+            timeout_secs = SHUTDOWN_TIMEOUT.as_secs(),
+            "Shutdown timeout, aborting remaining node tasks"
+        );
+        self.tasks.shutdown().await;
+        format!(
+            "node(s) '{stuck}' did not stop within {}s and were aborted",
+            SHUTDOWN_TIMEOUT.as_secs()
+        )
+    }
+
     fn take_task_node(&mut self, task_id: TaskId) -> String {
         self.task_nodes.remove(&task_id).map_or_else(|| "<unknown>".to_owned(), String::from)
     }
@@ -691,49 +708,17 @@ impl PipelineOrchestrator {
     /// tasks complete → join all.
     ///
     /// Uses a timeout to prevent hanging if a task is stuck.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::run_until_complete`]: a node that failed, panicked, or
+    /// had to be aborted at the timeout fails the shutdown.
     pub async fn shutdown(&mut self) -> Result<()> {
         tracing::info!("Pipeline shutdown initiated");
         self.cancel_token.cancel();
-
-        // Wait for all tasks with timeout
-        let deadline = tokio::time::sleep(SHUTDOWN_TIMEOUT);
-        tokio::pin!(deadline);
-
-        loop {
-            tokio::select! {
-                biased;
-                () = &mut deadline => {
-                    tracing::warn!(
-                        remaining = self.tasks.len(),
-                        "Shutdown timeout — aborting remaining tasks"
-                    );
-                    self.tasks.shutdown().await;
-                    break;
-                }
-                result = self.tasks.join_next_with_id() => {
-                    match result {
-                        Some(joined) => {
-                            let _failure = self.record_task_exit(joined, "during shutdown");
-                        }
-                        None => break, // All tasks done
-                    }
-                }
-            }
-        }
-
-        // Wait for DLQ task
-        if let Some(handle) = self.dlq_handle.take() {
-            match tokio::time::timeout(Duration::from_secs(5), handle).await {
-                Ok(Ok(Ok(()))) => {}
-                Ok(Ok(Err(e))) => return Err(e),
-                Ok(Err(e)) => tracing::error!(error = %e, "DLQ task panicked"),
-                Err(_) => tracing::warn!("DLQ task did not exit within timeout"),
-            }
-        }
-
-        self.running.store(false, Ordering::Release);
+        let result = self.run_until_complete().await;
         tracing::info!("Pipeline shutdown complete");
-        Ok(())
+        result
     }
 
     /// Run the pipeline until all tasks complete naturally or cancellation fires.
@@ -765,7 +750,7 @@ impl PipelineOrchestrator {
                         tokio::select! {
                             biased;
                             () = &mut deadline => {
-                                self.tasks.shutdown().await;
+                                failures.push(self.abort_stuck_tasks().await);
                                 break;
                             }
                             result = self.tasks.join_next_with_id() => match result {
@@ -805,7 +790,10 @@ impl PipelineOrchestrator {
                     tracing::error!(error = %e, "DLQ task panicked");
                     failures.push(format!("DLQ task panicked: {e}"));
                 }
-                Err(_) => tracing::warn!("DLQ task did not exit within timeout"),
+                Err(_) => {
+                    tracing::error!("DLQ task did not exit within timeout");
+                    failures.push("DLQ task did not stop within 5s".to_owned());
+                }
             }
         }
 
@@ -1163,6 +1151,7 @@ mod tests {
     /// Test sink that can fail `init()` or panic on its first message.
     struct FaultySink {
         fail_init: bool,
+        hang_on_close: bool,
     }
 
     impl crate::node::Lifecycle for FaultySink {
@@ -1190,7 +1179,13 @@ mod tests {
         }
 
         fn close(&mut self) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
-            Box::pin(async { Ok(()) })
+            let hang = self.hang_on_close;
+            Box::pin(async move {
+                if hang {
+                    std::future::pending::<()>().await;
+                }
+                Ok(())
+            })
         }
     }
 
@@ -1204,7 +1199,7 @@ mod tests {
     }
 
     fn faulty_sink_orchestrator(
-        fail_init: bool,
+        sink: FaultySink,
     ) -> (tokio::sync::mpsc::Sender<RuntimeEnvelope>, PipelineOrchestrator) {
         let config = source_sink_config();
         let engine = Arc::new(WaferEngine::new().expect("engine"));
@@ -1212,14 +1207,15 @@ mod tests {
         let mut sources: HashMap<String, Box<dyn crate::node::Source + Send>> = HashMap::new();
         sources.insert("src".to_string(), Box::new(source));
         let mut sinks: HashMap<String, Box<dyn crate::node::Sink + Send>> = HashMap::new();
-        sinks.insert("sink".to_string(), Box::new(FaultySink { fail_init }));
+        sinks.insert("sink".to_string(), Box::new(sink));
         let build_output = build_pipeline_with_io(&config, sources, sinks).expect("build");
         (source_tx, PipelineOrchestrator::from_build_output(build_output, config, engine))
     }
 
     #[tokio::test]
     async fn node_panic_fails_the_run_and_names_the_node() {
-        let (source_tx, mut orch) = faulty_sink_orchestrator(false);
+        let (source_tx, mut orch) =
+            faulty_sink_orchestrator(FaultySink { fail_init: false, hang_on_close: false });
         source_tx.send(RuntimeEnvelope::from_string("test", "boom")).await.expect("send");
         drop(source_tx);
 
@@ -1235,7 +1231,8 @@ mod tests {
     #[tokio::test]
     async fn sink_init_failure_cancels_and_fails_the_run() {
         // The source never reaches EOF, so only the init failure can end the run.
-        let (_source_tx, mut orch) = faulty_sink_orchestrator(true);
+        let (_source_tx, mut orch) =
+            faulty_sink_orchestrator(FaultySink { fail_init: true, hang_on_close: false });
 
         let err = tokio::time::timeout(Duration::from_secs(5), orch.run_until_complete())
             .await
@@ -1245,6 +1242,18 @@ mod tests {
         assert!(err.to_string().contains("sink 'sink' init failed"), "{err}");
         assert_eq!(orch.node_state("sink"), Some(NodeState::Error));
         assert!(orch.cancel_token().is_cancelled());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn node_stuck_at_shutdown_is_aborted_and_fails_the_run() {
+        let (_source_tx, mut orch) =
+            faulty_sink_orchestrator(FaultySink { fail_init: false, hang_on_close: true });
+
+        let err = orch.shutdown().await.expect_err("an aborted node must fail the shutdown");
+
+        let err = err.to_string();
+        assert!(err.contains("node(s) 'sink' did not stop within 10s"), "{err}");
+        assert!(!orch.is_running());
     }
 
     #[tokio::test]

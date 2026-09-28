@@ -365,6 +365,15 @@ impl PublishArgs {
                         "--hotswap-swap-at-secs must be a finite, non-negative number of seconds"
                     );
                 }
+                // A swap scheduled at or after the end of the run never fires.
+                let duration = Duration::from_secs(self.duration_secs).as_secs_f64();
+                if self.hotswap_swap_at_secs >= duration {
+                    anyhow::bail!(
+                        "--hotswap-swap-at-secs ({}) must be less than --duration-secs ({})",
+                        self.hotswap_swap_at_secs,
+                        self.duration_secs
+                    );
+                }
                 Ok(LoadShape::HotswapTrigger {
                     base_rate: self.rate.max(1),
                     swap_at_secs: self.hotswap_swap_at_secs,
@@ -756,7 +765,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         deadline_misses,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
-        hotswap_triggered_at_secs: hotswap_target,
+        hotswap_triggered_at_secs: hotswap_target.filter(|_| hotswap_failure.is_none()),
     };
     if let Some(path) = args.summary_file {
         std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&report)?))?;
@@ -780,8 +789,8 @@ pub struct PublisherReport {
     pub deadline_misses: u64,
     pub elapsed_ms: u64,
     pub actual_rate: f64,
-    /// If profile = hotswap-trigger, the offset (secs) at which the trigger
-    /// task was scheduled to fire. `None` for other profiles.
+    /// If profile = hotswap-trigger, the offset (secs) at which the swap was
+    /// triggered. `None` for other profiles and when the swap request failed.
     pub hotswap_triggered_at_secs: Option<f64>,
 }
 
@@ -850,7 +859,8 @@ mod tests {
 
     #[test]
     fn rejects_negative_or_non_finite_swap_offsets() {
-        for bad in [-1.0, f64::NAN, f64::INFINITY] {
+        // hotswap_args runs for 1 s, so 1.0 and later would never fire.
+        for bad in [-1.0, f64::NAN, f64::INFINITY, 1.0, 45.0] {
             let mut args = hotswap_args("http://localhost".into(), "unused.json".into());
             args.hotswap_swap_at_secs = bad;
             assert!(args.resolve_shape().is_err(), "{bad} must be rejected");
