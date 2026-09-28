@@ -223,6 +223,10 @@ def check_publisher_summary(path: Path) -> list[str]:
                 violations.append("publisher-summary.json measurement duration must be positive")
             if int(value["intended"]) != int(value["rejected"]) + int(value["enqueued"]):
                 violations.append("publisher-summary.json counters do not reconcile")
+            if value.get("exit_reason", "duration") != "duration":
+                violations.append(
+                    f"publisher-summary.json run stopped early: {value['exit_reason']}"
+                )
         except (TypeError, ValueError):
             violations.append("publisher-summary.json counters must be integers")
     return violations
@@ -246,6 +250,9 @@ def check_subscriber_metadata(path: Path) -> list[str]:
     )
     if not required <= value.keys():
         return violations
+    if value.get("status", "complete") != "complete":
+        reasons = "; ".join(str(reason) for reason in value.get("partial_reasons", []))
+        violations.append(f"subscriber-metadata.json run is {value['status']}: {reasons}")
     sequence = value["sequence"]
     sequence_fields = {"total_received", "total_gaps", "total_duplicates"}
     if not isinstance(sequence, dict) or not sequence_fields <= sequence.keys():
@@ -1932,6 +1939,11 @@ def check_leaf(
         if core == "metadata.json" and experiment in LEGACY_METADATA_MISSING_ALLOWED:
             continue
         violations.append(f"missing core artefact: {core}")
+
+    for export_errors in sorted(leaf.glob("**/export-errors.json")):
+        violations.append(
+            f"{export_errors.relative_to(leaf)} present: BenchSink could not write every artifact"
+        )
 
     # T8: warn (don't fail) when metadata.json is present but lacks the
     # provenance keys that `write_metadata.py` merges from

@@ -29,7 +29,8 @@ use tracing::{error, info, warn};
 
 use crate::payload::PayloadTemplate;
 use crate::profile::{LoadShape, Scheduler};
-use crate::recorder::PublisherTimingReceipt;
+use crate::recorder::{PublisherTimingReceipt, write_atomic};
+use crate::stop_signal::StopSignal;
 
 /// Arguments for the `publish` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -468,9 +469,7 @@ fn write_timing_receipt(path: &std::path::Path, measurement_started_ns: u64) -> 
         event_unix_epoch_ns: measurement_started_ns.saturating_add(EVENT_OFFSET_NS),
         event_offset_ns: EVENT_OFFSET_NS,
     };
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, format!("{}\n", serde_json::to_string_pretty(&receipt)?))?;
-    std::fs::rename(temporary, path)?;
+    write_atomic(path, format!("{}\n", serde_json::to_string_pretty(&receipt)?).as_bytes())?;
     Ok(())
 }
 
@@ -610,10 +609,12 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             elapsed_ms: 0,
             actual_rate: 0.0,
             hotswap_triggered_at_secs: None,
+            exit_reason: "dry-run".into(),
         });
     }
 
     let shape = args.resolve_shape()?;
+    let mut stop_signal = StopSignal::install()?;
 
     info!(
         broker = %args.broker_host,
@@ -673,6 +674,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     let mut offered: u64 = 0;
     let mut errors: u64 = 0;
     let mut deadline_misses: u64 = 0;
+    let mut exit_reason = "duration";
 
     loop {
         // Fetch next publish offset and sleep until then. Open-loop: even if
@@ -683,7 +685,15 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         if target >= deadline {
             break;
         }
-        tokio::time::sleep_until(target).await;
+        tokio::select! {
+            biased;
+            reason = stop_signal.recv() => {
+                info!(signal = reason, "Stop signal received; writing summary");
+                exit_reason = reason;
+                break;
+            }
+            () = tokio::time::sleep_until(target) => {}
+        }
 
         let ts = now_ns();
         let payload_vec: Vec<u8> = payload_template.map_or_else(
@@ -693,13 +703,19 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             .into_bytes(),
             |tpl| tpl.render(ts, seq),
         );
+        let enqueued = tokio::select! {
+            biased;
+            reason = stop_signal.recv() => {
+                info!(signal = reason, "Stop signal received; writing summary");
+                exit_reason = reason;
+                break;
+            }
+            result = enqueue_publish(&client, &args.topic, payload_vec, args.drop_when_full) => result,
+        };
         if let Some(trace) = &mut trace {
             writeln!(trace, "{seq},{ts}")?;
         }
-
-        if let Err(error) =
-            enqueue_publish(&client, &args.topic, payload_vec, args.drop_when_full).await
-        {
+        if let Err(error) = enqueued {
             if !args.drop_when_full {
                 warn!("Publish error (seq={seq}): {error}");
             }
@@ -722,6 +738,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     // A failed swap fails the run, but only after the summary is written so
     // the evidence of what was offered survives.
     let hotswap_failure = match hotswap_task {
+        Some(t) if exit_reason != "duration" => {
+            t.abort();
+            None
+        }
         Some(t) => match t.await {
             Ok(Ok(())) => None,
             Ok(Err(e)) => Some(e),
@@ -766,9 +786,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
         hotswap_triggered_at_secs: hotswap_target.filter(|_| hotswap_failure.is_none()),
+        exit_reason: exit_reason.to_owned(),
     };
     if let Some(path) = args.summary_file {
-        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&report)?))?;
+        write_atomic(&path, format!("{}\n", serde_json::to_string_pretty(&report)?).as_bytes())?;
     }
     if let Some(e) = hotswap_failure {
         return Err(e.context("hot-swap trigger failed; the run did not swap"));
@@ -792,6 +813,8 @@ pub struct PublisherReport {
     /// If profile = hotswap-trigger, the offset (secs) at which the swap was
     /// triggered. `None` for other profiles and when the swap request failed.
     pub hotswap_triggered_at_secs: Option<f64>,
+    /// `duration` when the schedule ran to its end, or the signal that stopped it.
+    pub exit_reason: String,
 }
 
 #[cfg(test)]

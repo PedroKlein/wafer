@@ -21,6 +21,7 @@
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4 / D9.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -177,7 +178,7 @@ impl IntervalRecorder {
         Ok(())
     }
 
-    fn write(&self, path: &Path, aggregate_count: u64) -> anyhow::Result<()> {
+    fn artifact(&self, aggregate_count: u64) -> anyhow::Result<Vec<u8>> {
         if !self.finalized {
             anyhow::bail!("interval recorder was not finalized");
         }
@@ -201,8 +202,7 @@ impl IntervalRecorder {
             "late_arrivals": self.late_arrivals,
             "rows": self.rows,
         });
-        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
-        Ok(())
+        Ok(format!("{}\n", serde_json::to_string_pretty(&artifact)?).into_bytes())
     }
 }
 
@@ -377,7 +377,7 @@ fn write_fine_event_buckets(
         "canonical_series": "throughput-buckets.json",
         "loss_accounting": "canonical-sequence-and-primary-drain-only",
     });
-    fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
+    write_atomic(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?).as_bytes())?;
     Ok(())
 }
 
@@ -460,7 +460,7 @@ impl EventBucketRecorder {
             "duplicates": duplicates,
             "buckets": buckets,
         });
-        fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))?;
+        write_atomic(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?).as_bytes())?;
         write_fine_event_buckets(
             &path.with_file_name("throughput-buckets-10ms.json"),
             &self.samples,
@@ -663,6 +663,13 @@ pub struct SubscriberMetadata {
     pub ended_at_ns: u64,
     /// Why the subscriber stopped.
     pub exit_reason: String,
+    /// `complete`, or `partial` when a bounded side artifact overflowed or
+    /// failed and was left out. The aggregate artifacts are complete either way.
+    #[serde(default = "complete_status")]
+    pub status: String,
+    /// Why the run is `partial`. Empty for a complete run.
+    #[serde(default)]
+    pub partial_reasons: Vec<String>,
     /// Git SHA of the wafer tree that built this binary, if the environment
     /// injected it (via `WAFER_GIT_SHA` at run time or build-time `env!`).
     pub git_sha: Option<String>,
@@ -698,6 +705,10 @@ pub struct SubscriberMetadata {
     pub sequence: SequenceReport,
 }
 
+fn complete_status() -> String {
+    "complete".to_owned()
+}
+
 /// End-to-end latency recorder for the `wafer-loadgen subscribe` command.
 ///
 /// Bounded `1_000` ns (1 µs) → `10_000_000_000` ns (10 s) at 3 significant digits.
@@ -712,6 +723,7 @@ pub struct LatencyRecorder {
     negative_latency: u64,
     ignored_sequences: u64,
     last_record_duplicate: bool,
+    partial_reasons: Vec<String>,
 }
 
 impl LatencyRecorder {
@@ -747,6 +759,7 @@ impl LatencyRecorder {
             negative_latency: 0,
             ignored_sequences: 0,
             last_record_duplicate: false,
+            partial_reasons: Vec::new(),
         }
     }
 
@@ -766,13 +779,16 @@ impl LatencyRecorder {
         self.record_json_with_sequence_end(payload, receive_ns, None)
     }
 
+    /// Like [`Self::record_json`], and also feeds the interval recorder when
+    /// enabled. An interval bound violation drops `interval-latency.json` and
+    /// marks the run partial; the aggregate recording continues.
     pub(crate) fn record_json_at(
         &mut self,
         payload: &[u8],
         receive_ns: u64,
         elapsed_ns: u64,
         sequence_end_exclusive: Option<u64>,
-    ) -> anyhow::Result<RecordOutcome> {
+    ) -> RecordOutcome {
         let outcome =
             self.record_json_with_sequence_end(payload, receive_ns, sequence_end_exclusive);
         if let RecordOutcome::Recorded { latency_ns, .. } = outcome
@@ -782,13 +798,29 @@ impl LatencyRecorder {
                 intervals.measurement_start_unix_epoch_ns = receive_ns;
                 elapsed_ns
             });
-            intervals.record(
+            if let Err(error) = intervals.record(
                 elapsed_ns.saturating_sub(origin),
                 latency_ns,
                 self.last_record_duplicate,
-            )?;
+            ) {
+                self.drop_intervals(&error);
+            }
         }
-        Ok(outcome)
+        outcome
+    }
+
+    fn drop_intervals(&mut self, error: &anyhow::Error) {
+        self.intervals = None;
+        self.mark_partial(format!("interval-latency.json: {error}"));
+    }
+
+    /// Record why the run's artifacts are incomplete.
+    pub(crate) fn mark_partial(&mut self, reason: String) {
+        self.partial_reasons.push(reason);
+    }
+
+    pub(crate) fn partial_reasons(&self) -> &[String] {
+        &self.partial_reasons
     }
 
     /// Record only messages whose sequence is below `sequence_end_exclusive`.
@@ -948,29 +980,64 @@ impl LatencyRecorder {
         csv
     }
 
-    pub(crate) fn finalize_intervals(&mut self, measurement_elapsed_ns: u64) -> anyhow::Result<()> {
+    pub(crate) fn finalize_intervals(&mut self, measurement_elapsed_ns: u64) {
         if let Some(intervals) = &mut self.intervals {
             let elapsed_ns = measurement_elapsed_ns
                 .saturating_sub(self.interval_origin_elapsed_ns.unwrap_or_default());
-            intervals.finalize(elapsed_ns)?;
+            if let Err(error) = intervals.finalize(elapsed_ns) {
+                self.drop_intervals(&error);
+            }
         }
-        Ok(())
     }
 
-    /// Write aggregate artifacts and, when enabled, `interval-latency.json` to `dir`.
+    /// Write aggregate artifacts and, when enabled, `interval-latency.json` to `dir`,
+    /// then `subscriber-metadata.json`.
     ///
     /// # Errors
     /// - Directory creation failure.
     /// - Any file write failure.
     /// - [`HdrHistogram`] V2 serialization failure (unreachable in practice).
     pub fn write_artifacts(
+        &mut self,
+        dir: &Path,
+        metadata: SubscriberMetadata,
+    ) -> anyhow::Result<()> {
+        self.write_measurements(dir)?;
+        self.write_metadata(dir, metadata)
+    }
+
+    /// Write `latency.hdr`, `sequence.csv` and, when enabled,
+    /// `interval-latency.json`. An interval fragment that fails its checks is
+    /// left out and marks the run partial.
+    ///
+    /// # Errors
+    /// Directory creation, serialization or file write failure.
+    pub(crate) fn write_measurements(&mut self, dir: &Path) -> anyhow::Result<()> {
+        fs::create_dir_all(dir)?;
+        let hdr_bytes =
+            self.serialize_v2().map_err(|e| anyhow::anyhow!("hdr V2 serialize: {e:?}"))?;
+        write_atomic(&dir.join("latency.hdr"), &hdr_bytes)?;
+        write_atomic(&dir.join("sequence.csv"), self.sequence_csv().as_bytes())?;
+        if let Some(intervals) = &self.intervals {
+            match intervals.artifact(self.histogram.len()) {
+                Ok(bytes) => write_atomic(&dir.join("interval-latency.json"), &bytes)?,
+                Err(error) => self.drop_intervals(&error),
+            }
+        }
+        Ok(())
+    }
+
+    /// Write `subscriber-metadata.json`. Call it after every other subscriber
+    /// artifact, so its presence means they are complete.
+    ///
+    /// # Errors
+    /// Directory creation, serialization or file write failure.
+    pub(crate) fn write_metadata(
         &self,
         dir: &Path,
         mut metadata: SubscriberMetadata,
     ) -> anyhow::Result<()> {
         fs::create_dir_all(dir)?;
-
-        // Fill measurement-derived fields.
         metadata.total_recorded = self.total_recorded();
         metadata.total_messages = self.total_messages;
         metadata.parse_errors = self.parse_errors;
@@ -987,29 +1054,35 @@ impl LatencyRecorder {
         metadata.histogram_highest_ns = Self::HIGHEST_NS;
         metadata.histogram_sig_digits = Self::SIG_DIGITS;
         metadata.sequence = SequenceReport::from(&self.sequence);
-
-        // latency.hdr — raw V2 bytes.
-        let hdr_bytes =
-            self.serialize_v2().map_err(|e| anyhow::anyhow!("hdr V2 serialize: {e:?}"))?;
-        let mut hdr_file = fs::File::create(dir.join("latency.hdr"))?;
-        hdr_file.write_all(&hdr_bytes)?;
-
-        // sequence.csv
-        let mut csv_file = fs::File::create(dir.join("sequence.csv"))?;
-        csv_file.write_all(self.sequence_csv().as_bytes())?;
-
-        // subscriber-metadata.json
+        metadata.partial_reasons.clone_from(&self.partial_reasons);
+        let status = if self.partial_reasons.is_empty() { "complete" } else { "partial" };
+        status.clone_into(&mut metadata.status);
         let json = serde_json::to_string_pretty(&metadata)?;
-        let mut meta_file = fs::File::create(dir.join("subscriber-metadata.json"))?;
-        meta_file.write_all(json.as_bytes())?;
-        meta_file.write_all(b"\n")?;
-
-        if let Some(intervals) = &self.intervals {
-            intervals.write(&dir.join("interval-latency.json"), self.histogram.len())?;
-        }
-
+        write_atomic(&dir.join("subscriber-metadata.json"), format!("{json}\n").as_bytes())?;
         Ok(())
     }
+}
+
+/// Write `bytes` to a temporary file beside `path`, sync it, then rename it
+/// over `path`, so an interrupted run never leaves a truncated artifact.
+///
+/// # Errors
+/// Any create, write, sync or rename failure, or a `path` without a file name.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "artifact path has no file name")
+    })?;
+    let mut temporary_name = OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(".tmp");
+    let temporary = path.with_file_name(temporary_name);
+    let result = fs::File::create(&temporary)
+        .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
+        .and_then(|()| fs::rename(&temporary, path));
+    if result.is_err() {
+        drop(fs::remove_file(&temporary));
+    }
+    result
 }
 
 impl Default for LatencyRecorder {
@@ -1437,10 +1510,8 @@ mod tests {
         let mut intervals = IntervalRecorder::new(9_000_000_000, 1).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         intervals.finalize(1_000_000_000).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("interval-latency.json");
-        intervals.write(&path, 1).unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        let value: serde_json::Value =
+            serde_json::from_slice(&intervals.artifact(1).unwrap()).unwrap();
         assert_eq!(value["interval_clock"], "monotonic-elapsed");
         assert_eq!(value["alignment_clock"], "unix-epoch");
         assert_eq!(value["maximum_rows"], 3);
@@ -1455,8 +1526,7 @@ mod tests {
         let mut intervals = IntervalRecorder::new(0, 1).unwrap();
         intervals.record(0, 10_000, false).unwrap();
         intervals.finalize(1_000_000_000).unwrap();
-        let dir = tempfile::tempdir().unwrap();
-        assert!(intervals.write(&dir.path().join("interval-latency.json"), 2).is_err());
+        intervals.artifact(2).unwrap_err();
     }
 
     #[test]
@@ -1478,13 +1548,15 @@ mod tests {
         let mut recorder = LatencyRecorder::with_sequence_example_limit(Some(4));
         recorder.enable_intervals(1_000_000_000, 2).unwrap();
         let payload = br#"{"ts":1000000000,"seq":0}"#;
-        recorder.record_json_at(payload, 1_000_010_000, 500_000_000, None).unwrap();
+        recorder.record_json_at(payload, 1_000_010_000, 500_000_000, None);
         let metadata = SubscriberMetadata {
             broker: "localhost:1883".into(),
             topic: "wafer/test".into(),
             started_at_ns: 1_000_000_000,
             ended_at_ns: 2_500_000_000,
             exit_reason: "sigint".into(),
+            status: String::new(),
+            partial_reasons: vec![],
             git_sha: None,
             host_tag: None,
             sequence_end_exclusive: None,
@@ -1513,7 +1585,7 @@ mod tests {
                 examples_truncated: false,
             },
         };
-        recorder.finalize_intervals(2_000_000_000).unwrap();
+        recorder.finalize_intervals(2_000_000_000);
         recorder.write_artifacts(dir.path(), metadata).unwrap();
         let value: serde_json::Value =
             serde_json::from_slice(&fs::read(dir.path().join("interval-latency.json")).unwrap())
@@ -1521,6 +1593,89 @@ mod tests {
         assert_eq!(value["row_count"], 2);
         assert_eq!(value["rows"][0]["latency_count"], 1);
         assert_eq!(value["rows"][1]["latency_count"], 0);
+    }
+
+    #[test]
+    fn interval_overflow_keeps_aggregate_artifacts_and_marks_run_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = LatencyRecorder::new();
+        recorder.enable_intervals(1_000_000_000, 1).unwrap();
+        for (seq, elapsed_ns) in [(0, 0), (1, 5_000_000_000), (2, 5_100_000_000)] {
+            let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
+            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns, None);
+        }
+        recorder.finalize_intervals(6_000_000_000);
+        let metadata: SubscriberMetadata = serde_json::from_value(serde_json::json!({
+            "broker": "localhost:1883", "topic": "wafer/test", "started_at_ns": 1,
+            "ended_at_ns": 2, "exit_reason": "sigterm", "git_sha": null, "host_tag": null,
+            "total_recorded": 0, "total_messages": 0, "parse_errors": 0,
+            "negative_latency_count": 0, "latency_min_ns": 0, "latency_max_ns": 0,
+            "latency_mean_ns": 0.0, "latency_p50_ns": 0, "latency_p95_ns": 0,
+            "latency_p99_ns": 0, "latency_p999_ns": 0, "histogram_lowest_ns": 0,
+            "histogram_highest_ns": 0, "histogram_sig_digits": 0,
+            "sequence": {"total_received": 0, "total_gaps": 0, "total_duplicates": 0,
+                         "gap_ranges": [], "duplicate_seqs": []},
+        }))
+        .unwrap();
+
+        recorder.write_artifacts(dir.path(), metadata).unwrap();
+
+        assert!(dir.path().join("latency.hdr").is_file());
+        assert!(dir.path().join("sequence.csv").is_file());
+        assert!(!dir.path().join("interval-latency.json").exists());
+        let written: SubscriberMetadata =
+            serde_json::from_slice(&fs::read(dir.path().join("subscriber-metadata.json")).unwrap())
+                .unwrap();
+        assert_eq!(written.status, "partial");
+        assert_eq!(written.partial_reasons.len(), 1);
+        assert!(written.partial_reasons[0].contains("interval row limit exceeded"));
+        assert_eq!(written.total_recorded, 3);
+        assert_eq!(written.sequence.total_received, 3);
+    }
+
+    #[test]
+    fn interval_population_mismatch_marks_run_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = LatencyRecorder::new();
+        recorder.enable_intervals(1_000_000_000, 5).unwrap();
+        for (seq, elapsed_ns) in [(0, 0), (1, 1_500_000_000), (2, 500_000_000)] {
+            let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
+            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns, None);
+        }
+        recorder.finalize_intervals(2_000_000_000);
+
+        recorder.write_measurements(dir.path()).unwrap();
+
+        assert!(recorder.partial_reasons()[0].contains("differs from aggregate"));
+        assert!(!dir.path().join("interval-latency.json").exists());
+    }
+
+    #[test]
+    fn write_artifacts_leaves_no_temporary_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut recorder = LatencyRecorder::new();
+        recorder.record(0, 10_000_000, 0);
+        let metadata: SubscriberMetadata = serde_json::from_value(serde_json::json!({
+            "broker": "localhost:1883", "topic": "wafer/test", "started_at_ns": 1,
+            "ended_at_ns": 2, "exit_reason": "total-messages", "git_sha": null,
+            "host_tag": null, "total_recorded": 0, "total_messages": 0, "parse_errors": 0,
+            "negative_latency_count": 0, "latency_min_ns": 0, "latency_max_ns": 0,
+            "latency_mean_ns": 0.0, "latency_p50_ns": 0, "latency_p95_ns": 0,
+            "latency_p99_ns": 0, "latency_p999_ns": 0, "histogram_lowest_ns": 0,
+            "histogram_highest_ns": 0, "histogram_sig_digits": 0,
+            "sequence": {"total_received": 0, "total_gaps": 0, "total_duplicates": 0,
+                         "gap_ranges": [], "duplicate_seqs": []},
+        }))
+        .unwrap();
+
+        recorder.write_artifacts(dir.path(), metadata).unwrap();
+
+        let mut names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["latency.hdr", "sequence.csv", "subscriber-metadata.json"]);
     }
 
     #[test]
@@ -1533,9 +1688,7 @@ mod tests {
         for seq in 0..3 {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
             baseline.record_json(payload.as_bytes(), 1_000_010_000);
-            interval
-                .record_json_at(payload.as_bytes(), 1_000_010_000, seq * 100_000_000, None)
-                .unwrap();
+            interval.record_json_at(payload.as_bytes(), 1_000_010_000, seq * 100_000_000, None);
         }
         let metadata = SubscriberMetadata {
             broker: "localhost:1883".into(),
@@ -1543,6 +1696,8 @@ mod tests {
             started_at_ns: 1_000_000_000,
             ended_at_ns: 2_000_000_000,
             exit_reason: "total-messages".into(),
+            status: String::new(),
+            partial_reasons: vec![],
             git_sha: None,
             host_tag: None,
             sequence_end_exclusive: None,
@@ -1572,7 +1727,7 @@ mod tests {
             },
         };
         baseline.write_artifacts(baseline_dir.path(), metadata.clone()).unwrap();
-        interval.finalize_intervals(1_000_000_000).unwrap();
+        interval.finalize_intervals(1_000_000_000);
         interval.write_artifacts(interval_dir.path(), metadata).unwrap();
         for artifact in ["latency.hdr", "sequence.csv", "subscriber-metadata.json"] {
             assert_eq!(
@@ -1597,6 +1752,8 @@ mod tests {
             started_at_ns: 1,
             ended_at_ns: 2,
             exit_reason: "total-messages".into(),
+            status: String::new(),
+            partial_reasons: vec![],
             git_sha: Some("deadbeef".into()),
             host_tag: Some("shakedown-macos".into()),
             sequence_end_exclusive: None,

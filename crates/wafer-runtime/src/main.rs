@@ -27,6 +27,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, ValueEnum};
 use tokio::signal;
 use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 
@@ -371,12 +372,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
         });
 
         // Receive payload and dispatch swap within the run loop
-        let cancel = orchestrator.cancel_token().clone();
-        tokio::spawn(async move {
-            shutdown_signal().await;
-            info!("Shutdown signal received");
-            cancel.cancel();
-        });
+        spawn_shutdown_signal_thread(orchestrator.cancel_token().clone())?;
 
         // Custom run loop that also handles swap delivery
         let run_result = run_with_swap(&mut orchestrator, rx, provenance.clone()).await;
@@ -391,12 +387,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     }
 
     // Standard mode: no swap trigger
-    let cancel = orchestrator.cancel_token().clone();
-    tokio::spawn(async move {
-        shutdown_signal().await;
-        info!("Shutdown signal received");
-        cancel.cancel();
-    });
+    spawn_shutdown_signal_thread(orchestrator.cancel_token().clone())?;
 
     let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
     log_run_result(&run_result);
@@ -821,28 +812,71 @@ async fn flush_bench_artifacts(
     }
 }
 
-#[expect(
-    clippy::expect_used,
-    reason = "signal handler installation is fundamental infrastructure: failure means the runtime cannot shut down cleanly on SIGINT/SIGTERM, so panicking is the only defensible response"
-)]
-async fn shutdown_signal() {
-    let ctrl_c = async {
-        signal::ctrl_c().await.expect("Failed to install Ctrl+C handler");
+/// Cancel the pipeline on the first SIGINT or SIGTERM and exit at once on the
+/// second, for a shutdown that does not finish.
+///
+/// The listener runs on its own thread and runtime: a guest spinning on a
+/// worker with no fuel or epoch limit can starve the main runtime's drivers,
+/// and then no task there would ever see the signal.
+fn spawn_shutdown_signal_thread(cancel: CancellationToken) -> std::io::Result<()> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_io().build()?;
+    let mut signals = {
+        let _context = runtime.enter();
+        ShutdownSignals::install()?
     };
+    std::thread::Builder::new().name("wafer-signals".into()).spawn(move || {
+        runtime.block_on(async move {
+            signals.recv().await;
+            info!("Shutdown signal received");
+            cancel.cancel();
+            let exit_code = signals.recv().await;
+            error!("Second shutdown signal received; exiting without finishing the shutdown");
+            #[expect(
+                clippy::exit,
+                reason = "the operator signalled again because the graceful shutdown did not finish"
+            )]
+            std::process::exit(exit_code);
+        });
+    })?;
+    Ok(())
+}
 
+struct ShutdownSignals {
     #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("Failed to install signal handler")
-            .recv()
-            .await;
-    };
+    terminate: signal::unix::Signal,
+    #[cfg(unix)]
+    interrupt: signal::unix::Signal,
+}
+
+impl ShutdownSignals {
+    #[cfg(unix)]
+    fn install() -> std::io::Result<Self> {
+        use signal::unix::{SignalKind, signal};
+        Ok(Self {
+            terminate: signal(SignalKind::terminate())?,
+            interrupt: signal(SignalKind::interrupt())?,
+        })
+    }
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    const fn install() -> std::io::Result<Self> {
+        Ok(Self {})
+    }
 
-    tokio::select! {
-        () = ctrl_c => {},
-        () = terminate => {},
+    /// Wait for the next signal and return the shell's exit code for it.
+    #[cfg(unix)]
+    async fn recv(&mut self) -> i32 {
+        tokio::select! {
+            _ = self.terminate.recv() => 143,
+            _ = self.interrupt.recv() => 130,
+        }
+    }
+
+    #[cfg(not(unix))]
+    async fn recv(&mut self) -> i32 {
+        if signal::ctrl_c().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+        130
     }
 }

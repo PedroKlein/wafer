@@ -7,7 +7,6 @@
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D4, D7, D9.
 
 use std::future::Future;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -20,6 +19,7 @@ use serde::Serialize;
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
 use crate::queue::RuntimeEnvelope;
+use crate::util::write_atomic;
 
 // =============================================================================
 // SequenceTracker
@@ -445,7 +445,7 @@ impl IntervalRecorder {
             "late_arrivals": 0,
             "rows": self.rows,
         });
-        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?))
+        write_atomic(path, format!("{}\n", serde_json::to_string_pretty(&artifact)?).as_bytes())
     }
 }
 
@@ -767,9 +767,9 @@ impl BurstObservation {
             "canonical_series": "throughput-buckets.json",
             "loss_accounting": "canonical-sequence-and-primary-drain-only",
         });
-        std::fs::write(
-            dir.join("throughput-buckets-10ms.json"),
-            format!("{}\n", serde_json::to_string_pretty(&artifact)?),
+        write_atomic(
+            &dir.join("throughput-buckets-10ms.json"),
+            format!("{}\n", serde_json::to_string_pretty(&artifact)?).as_bytes(),
         )
     }
 }
@@ -1059,108 +1059,141 @@ impl BenchSink {
             "duplicates": duplicates,
             "phase_received_messages": self.burst_phase_received,
         });
-        std::fs::write(
-            dir.join("throughput-buckets.json"),
-            format!("{}\n", serde_json::to_string_pretty(&value)?),
-        )?;
+        write_atomic(
+            &dir.join("throughput-buckets.json"),
+            format!("{}\n", serde_json::to_string_pretty(&value)?).as_bytes(),
+        )
+    }
+
+    fn write_fine_event_buckets(&self, dir: &Path) -> std::io::Result<()> {
+        let Some(observation) = &self.burst_observation else { return Ok(()) };
         let fine_receipt = std::env::var_os("WAFER_SWAP_ACTUAL_T0_RECEIPT").map(PathBuf::from);
         observation.write_fine_event_buckets(dir, fine_receipt.as_deref())
     }
 
     /// Export all measurement data to a directory.
     ///
-    /// Creates:
-    /// - `latency.hdr` — HdrHistogram interval log
-    /// - `throughput.csv` — periodic throughput samples
-    /// - `measurement-window.json` — exact post-warmup wall-clock bounds
+    /// Creates, in this order:
     /// - `sequence.csv` — gap and duplicate accounting (only when the
     ///   sink was constructed with `track_sequences = true`)
+    /// - `measurement-window.json` — exact post-warmup wall-clock bounds
     /// - `swap_timeline.json` — per-transition timeline for hot-swap
     ///   experiments (only when `track_hotswap = true` and at least one
     ///   transition has been observed)
+    /// - `latency.hdr` — HdrHistogram interval log
+    /// - `throughput.csv` — periodic throughput samples
+    /// - `throughput-buckets.json`, `throughput-buckets-10ms.json` and
+    ///   `interval-latency.json` — derived evidence, when configured
+    ///
+    /// Every file is written atomically. A failed artifact does not stop the
+    /// others: the failures are listed in `export-errors.json`.
     ///
     /// # Errors
-    /// Returns IO errors from directory creation or file writing.
+    /// Returns an error naming every artifact that could not be written.
     pub fn export_to_dir(&self, dir: &Path) -> std::io::Result<()> {
         std::fs::create_dir_all(dir)?;
 
-        // Write latency.hdr
-        let hdr_content = self.to_hdr_log();
-        let mut hdr_file = std::fs::File::create(dir.join("latency.hdr"))?;
-        hdr_file.write_all(hdr_content.as_bytes())?;
-
-        // Write throughput.csv
-        let csv_content = self.throughput_csv();
-        let mut csv_file = std::fs::File::create(dir.join("throughput.csv"))?;
-        csv_file.write_all(csv_content.as_bytes())?;
-
-        self.write_burst_evidence(dir)?;
-
-        if let Some(intervals) = &self.interval_recorder
-            && intervals.finalized
-        {
-            intervals.write(&dir.join("interval-latency.json"), self.histogram.len())?;
+        let intervals = self.interval_recorder.as_ref().filter(|intervals| intervals.finalized);
+        let results = [
+            ("sequence.csv", self.write_sequence(dir)),
+            ("measurement-window.json", self.write_measurement_window(dir)),
+            ("swap_timeline.json", self.write_swap_timeline(dir)),
+            ("latency.hdr", write_atomic(&dir.join("latency.hdr"), self.to_hdr_log().as_bytes())),
+            (
+                "throughput.csv",
+                write_atomic(&dir.join("throughput.csv"), self.throughput_csv().as_bytes()),
+            ),
+            ("throughput-buckets.json", self.write_burst_evidence(dir)),
+            ("throughput-buckets-10ms.json", self.write_fine_event_buckets(dir)),
+            (
+                "interval-latency.json",
+                intervals.map_or(Ok(()), |intervals| {
+                    intervals.write(&dir.join("interval-latency.json"), self.histogram.len())
+                }),
+            ),
+        ];
+        let errors: Vec<_> = results
+            .into_iter()
+            .filter_map(|(artifact, result)| result.err().map(|error| (artifact, error)))
+            .collect();
+        if errors.is_empty() {
+            return Ok(());
         }
 
-        if let Some(started) = self.start_wall_time {
-            let started_ns =
-                started.duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating);
-            let finished_ns = current_time_ns();
-            let mut window_file = std::fs::File::create(dir.join("measurement-window.json"))?;
-            writeln!(window_file, "{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}")?;
+        let report = serde_json::json!({
+            "schema_version": 1,
+            "errors": errors
+                .iter()
+                .map(|(artifact, error)| {
+                    serde_json::json!({ "artifact": artifact, "error": error.to_string() })
+                })
+                .collect::<Vec<_>>(),
+        });
+        let mut summary = errors
+            .iter()
+            .map(|(artifact, error)| format!("{artifact}: {error}"))
+            .collect::<Vec<_>>();
+        if let Err(error) = write_atomic(
+            &dir.join("export-errors.json"),
+            format!("{}\n", serde_json::to_string_pretty(&report)?).as_bytes(),
+        ) {
+            summary.push(format!("export-errors.json: {error}"));
         }
+        Err(std::io::Error::other(format!("bench export incomplete: {}", summary.join("; "))))
+    }
 
-        // Write sequence.csv when the sink was configured to track sequences.
+    fn write_sequence(&self, dir: &Path) -> std::io::Result<()> {
         // Absence of the file signals "not tracked" — the P1.1 result contract
         // treats sequence.csv as conditional-on-configuration.
-        if let Some(tracker) = &self.sequence_tracker {
-            let total_expected = tracker.total_expected();
-            let mut seq_file = std::fs::File::create(dir.join("sequence.csv"))?;
-            writeln!(
-                seq_file,
-                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count"
-            )?;
-            writeln!(
-                seq_file,
-                "{},{},{},{},{}",
-                total_expected,
-                tracker.total_received(),
-                tracker.gaps().len(),
-                tracker.total_gaps(),
-                tracker.total_duplicates(),
-            )?;
-        }
+        let Some(tracker) = &self.sequence_tracker else { return Ok(()) };
+        let csv = format!(
+            "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n{},{},{},{},{}\n",
+            tracker.total_expected(),
+            tracker.total_received(),
+            tracker.gaps().len(),
+            tracker.total_gaps(),
+            tracker.total_duplicates(),
+        );
+        write_atomic(&dir.join("sequence.csv"), csv.as_bytes())
+    }
 
-        // Write swap_timeline.json when the hot-swap recorder observed a
-        // transition. Even a single-transition dataset is worth emitting so
-        // downstream analysis notebooks can compute pause statistics without
-        // scraping stdout.
-        if let Some(recorder) = &self.hotswap_recorder
-            && !recorder.transitions().is_empty()
-        {
-            let mut swap_file = std::fs::File::create(dir.join("swap_timeline.json"))?;
-            let transitions_json: Vec<String> = recorder
-                .transitions()
-                .iter()
-                .map(|t| {
-                    format!(
-                        "{{\"from\":\"{}\",\"to\":\"{}\",\"pause_ns\":{}}}",
-                        t.from.replace('"', "\\\""),
-                        t.to.replace('"', "\\\""),
-                        t.pause_ns,
-                    )
-                })
-                .collect();
-            writeln!(
-                swap_file,
-                "{{\"transitions\":[{}],\"first_v2_ns\":{},\"last_v1_ns\":{}}}",
-                transitions_json.join(","),
-                recorder.first_v2_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
-                recorder.last_v1_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
-            )?;
-        }
+    fn write_measurement_window(&self, dir: &Path) -> std::io::Result<()> {
+        let Some(started) = self.start_wall_time else { return Ok(()) };
+        let started_ns =
+            started.duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating);
+        let finished_ns = current_time_ns();
+        write_atomic(
+            &dir.join("measurement-window.json"),
+            format!("{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}\n").as_bytes(),
+        )
+    }
 
-        Ok(())
+    fn write_swap_timeline(&self, dir: &Path) -> std::io::Result<()> {
+        // Even a single-transition dataset is worth emitting so downstream
+        // analysis notebooks can compute pause statistics without scraping stdout.
+        let Some(recorder) = &self.hotswap_recorder else { return Ok(()) };
+        if recorder.transitions().is_empty() {
+            return Ok(());
+        }
+        let transitions_json: Vec<String> = recorder
+            .transitions()
+            .iter()
+            .map(|t| {
+                format!(
+                    "{{\"from\":\"{}\",\"to\":\"{}\",\"pause_ns\":{}}}",
+                    t.from.replace('"', "\\\""),
+                    t.to.replace('"', "\\\""),
+                    t.pause_ns,
+                )
+            })
+            .collect();
+        let json = format!(
+            "{{\"transitions\":[{}],\"first_v2_ns\":{},\"last_v1_ns\":{}}}\n",
+            transitions_json.join(","),
+            recorder.first_v2_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
+            recorder.last_v1_ns().map_or_else(|| String::from("null"), |v| v.to_string()),
+        );
+        write_atomic(&dir.join("swap_timeline.json"), json.as_bytes())
     }
 
     fn record_sequence(&mut self, envelope: &RuntimeEnvelope) -> bool {
@@ -1612,6 +1645,36 @@ mod tests {
         .unwrap();
         assert_eq!(window["started_ns"], value["measurement_start_unix_epoch_ns"]);
         assert!(window["finished_ns"].as_u64().unwrap() > window["started_ns"].as_u64().unwrap());
+    }
+
+    #[tokio::test]
+    async fn failed_interval_export_keeps_primary_artifacts_and_reports_the_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = BenchSinkConfig::for_test().with_output_dir(dir.path());
+        let mut sink = BenchSink::new(config);
+        sink.init().await.unwrap();
+        let source_origin_beyond_interval_bound = current_time_ns() - 400_000_000_000;
+        let envelope = make_bench_envelope(0).with_metadata(
+            "bench.measurement_start_unix_ns",
+            source_origin_beyond_interval_bound.to_string(),
+        );
+        sink.collect(envelope).await.unwrap();
+
+        let error = sink.close().await.unwrap_err();
+
+        assert!(error.to_string().contains("interval-latency.json"), "{error}");
+        for artifact in ["sequence.csv", "measurement-window.json", "latency.hdr", "throughput.csv"]
+        {
+            assert!(dir.path().join(artifact).is_file(), "{artifact} missing");
+        }
+        assert!(!dir.path().join("interval-latency.json").exists());
+        let errors: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(dir.path().join("export-errors.json")).unwrap())
+                .unwrap();
+        assert_eq!(errors["errors"][0]["artifact"], "interval-latency.json");
+        assert!(
+            errors["errors"][0]["error"].as_str().unwrap().contains("interval row limit exceeded")
+        );
     }
 
     #[tokio::test]

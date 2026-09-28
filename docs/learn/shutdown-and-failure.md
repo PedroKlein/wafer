@@ -108,6 +108,8 @@ Shutdown has two layers:
 
 This makes shutdown finite even if an adapter or task fails to cooperate. The trade-off is that "graceful" describes attempted cleanup, not guaranteed completion of all messages.
 
+The window is 5 s. `JoinSet::shutdown` cannot stop a guest that is still running with no fuel or epoch limit, so the runtime binary also exits at once, with status 143 or 130, on a second SIGTERM or SIGINT. Its signal listener runs on a dedicated thread with its own Tokio runtime, because a spinning guest can starve the main runtime's drivers.
+
 Failure handling is similarly layered. WIT errors are typed data processed by `ErrorPolicyExecutor`; Wasmtime traps can require store recovery; task panics are observed at the orchestrator boundary. Keeping those categories separate avoids treating every guest failure as either a process crash or a retryable record.
 
 ## Status boundaries
@@ -129,6 +131,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 - **Test:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbol: `async fn test_sink_loop_cancel_drains_and_flushes()`
 - **Test:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbol: `fn test_flush_to_dlq_drains_all_entries()`
 - **Test:** [`crates/wafer-runtime/tests/runtime_control_plane.rs`](../../crates/wafer-runtime/tests/runtime_control_plane.rs) | symbol: `async fn api_health_nodes_and_sigterm_shutdown()`
+- **Test:** [`crates/wafer-runtime/tests/shutdown_signals.rs`](../../crates/wafer-runtime/tests/shutdown_signals.rs) | symbol: `fn second_sigterm_exits_while_a_guest_blocks_the_graceful_shutdown()`
 
 ## Checkpoint
 

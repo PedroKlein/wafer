@@ -7,10 +7,11 @@
 //! one per SUT/comparator.
 //!
 //! Cancel model: two exit signals compete. Whichever fires first wins.
-//! 1. SIGINT / Ctrl-C via `tokio::signal::ctrl_c()`.
+//! 1. SIGTERM or SIGINT, handled from the start of the run.
 //! 2. `--total-messages` reached (or its default).
 //!
-//! Both paths flush artifacts before returning.
+//! Both paths flush artifacts before returning. When a bounded side artifact
+//! overflows, recording continues and the run is written as `partial`.
 
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -26,6 +27,7 @@ use crate::recorder::{
     ActionTimingReceipt, EventBucketRecorder, LatencyRecorder, PublisherTimingReceipt,
     RecordOutcome, SequenceReport, SubscriberMetadata, now_ns,
 };
+use crate::stop_signal::StopSignal;
 
 /// Arguments for the `subscribe` subcommand.
 #[derive(Args, Debug, Clone)]
@@ -105,13 +107,14 @@ const fn qos_from_u8(q: u8) -> QoS {
     }
 }
 
-/// Run the subscriber loop. Returns after either SIGINT or `total_messages`
+/// Run the subscriber loop. Returns after SIGTERM, SIGINT or `total_messages`
 /// (whichever comes first). Artifacts are written to `args.output_dir` before
 /// return, regardless of exit path.
 ///
 /// # Errors
 /// - MQTT connection failure (never reached; rumqttc reconnects internally).
 /// - Artifact write failure.
+/// - A partial run, after its artifacts are written.
 #[expect(
     clippy::too_many_lines,
     reason = "single-function driver keeps the cancel-safe select! and the metadata\n     construction in one place; splitting into helpers would obscure the exit-path invariant."
@@ -120,6 +123,7 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     if args.measurement_secs == 0 {
         anyhow::bail!("--measurement-secs must be greater than zero");
     }
+    let mut stop_signal = StopSignal::install()?;
     let (host, port) = parse_broker(&args.broker);
     let broker_display = format!("{host}:{port}");
     info!(
@@ -211,52 +215,25 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     }
     let started_at_ns = now_ns();
 
-    // Ctrl-C exit path. On non-unix builds `ctrl_c` still resolves.
-    let sigint = tokio::signal::ctrl_c();
-    tokio::pin!(sigint);
-
     let mut exit_reason = "eof";
-    let mut recording_error = None;
     loop {
         tokio::select! {
             biased;
-            _ = &mut sigint => {
-                info!("SIGINT received — flushing artifacts");
-                exit_reason = "sigint";
+            reason = stop_signal.recv() => {
+                info!(signal = reason, "Stop signal received; flushing artifacts");
+                exit_reason = reason;
                 break;
             }
             recv = rx.recv() => {
                 match recv {
                     Some((receive_ns, elapsed_ns, payload)) => {
-                        let outcome = match recorder.record_json_at(
-                            &payload,
-                            receive_ns,
-                            elapsed_ns,
+                        record_message(
+                            &mut recorder,
+                            &mut event_buckets,
+                            trace.as_mut(),
+                            (receive_ns, elapsed_ns, &payload),
                             args.sequence_end_exclusive,
-                        ) {
-                            Ok(outcome) => outcome,
-                            Err(error) => {
-                                recording_error = Some(error);
-                                exit_reason = "interval-error";
-                                break;
-                            }
-                        };
-                        if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
-                            if let Some(buckets) = &mut event_buckets
-                                && let Err(error) = buckets.record(
-                                    receive_ns,
-                                    recorder.last_record_duplicate(),
-                                )
-                            {
-                                recording_error = Some(error);
-                                exit_reason = "event-bucket-error";
-                                break;
-                            }
-                            if let Some(trace) = &mut trace {
-                                let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
-                                writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
-                            }
-                        }
+                        )?;
                         if args.total_messages > 0 && recorder.total_messages() >= args.total_messages {
                             exit_reason = "total-messages";
                             info!(
@@ -277,38 +254,18 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
 
     shutdown.cancel();
     while let Some((receive_ns, elapsed_ns, payload)) = rx.recv().await {
-        if exit_reason == "total-messages" || recording_error.is_some() {
+        if exit_reason == "total-messages" {
             continue;
         }
-        let outcome = match recorder.record_json_at(
-            &payload,
-            receive_ns,
-            elapsed_ns,
+        record_message(
+            &mut recorder,
+            &mut event_buckets,
+            trace.as_mut(),
+            (receive_ns, elapsed_ns, &payload),
             args.sequence_end_exclusive,
-        ) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                recording_error = Some(error);
-                continue;
-            }
-        };
-        if let RecordOutcome::Recorded { latency_ns, seq } = outcome {
-            if let Some(buckets) = &mut event_buckets
-                && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
-            {
-                recording_error = Some(error);
-                continue;
-            }
-            if let Some(trace) = &mut trace {
-                let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
-                writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
-            }
-        }
+        )?;
     }
     eventloop_task.await?;
-    if let Some(error) = recording_error {
-        return Err(error);
-    }
     let measurement_elapsed_ns =
         u64::try_from(measurement_start.elapsed().as_nanos()).unwrap_or(u64::MAX);
     let ended_at_ns = now_ns();
@@ -322,12 +279,14 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         started_at_ns,
         ended_at_ns,
         exit_reason: exit_reason.to_owned(),
+        // Status and measurement fields are filled by write_artifacts.
+        status: String::new(),
+        partial_reasons: vec![],
         git_sha: std::env::var("WAFER_GIT_SHA").ok(),
         host_tag: args.host_tag.clone(),
         sequence_end_exclusive: args.sequence_end_exclusive,
         ignored_sequence_count: 0,
         unexpected_sequence_count: 0,
-        // Measurement fields are filled by write_artifacts.
         total_recorded: 0,
         total_messages: 0,
         parse_errors: 0,
@@ -352,28 +311,16 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
         },
     };
 
-    recorder.finalize_intervals(measurement_elapsed_ns)?;
-    recorder.write_artifacts(&args.output_dir, metadata)?;
-    if let Some(buckets) = event_buckets {
-        let action_path = args.action_timing_receipt.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("event-aligned capture requires --action-timing-receipt")
-        })?;
-        let deadline = tokio::time::Instant::now()
-            .checked_add(Duration::from_secs(30))
-            .unwrap_or_else(tokio::time::Instant::now);
-        let action = loop {
-            match tokio::fs::read(action_path).await {
-                Ok(bytes) => break serde_json::from_slice::<ActionTimingReceipt>(&bytes)?,
-                Err(error)
-                    if error.kind() == std::io::ErrorKind::NotFound
-                        && tokio::time::Instant::now() < deadline =>
-                {
-                    tokio::time::sleep(Duration::from_millis(10)).await;
-                }
-                Err(error) => return Err(error.into()),
-            }
-        };
-        buckets.write(&args.output_dir.join("throughput-buckets.json"), &action)?;
+    recorder.finalize_intervals(measurement_elapsed_ns);
+    recorder.write_measurements(&args.output_dir)?;
+    if let Some(buckets) = event_buckets
+        && let Err(error) = write_event_buckets(&buckets, &args).await
+    {
+        recorder.mark_partial(format!("throughput-buckets.json: {error:#}"));
+    }
+    recorder.write_metadata(&args.output_dir, metadata)?;
+    if !recorder.partial_reasons().is_empty() {
+        anyhow::bail!("run is partial: {}", recorder.partial_reasons().join("; "));
     }
 
     let report = SubscriberReport {
@@ -399,6 +346,54 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
     );
 
     Ok(report)
+}
+
+fn record_message(
+    recorder: &mut LatencyRecorder,
+    event_buckets: &mut Option<Box<EventBucketRecorder>>,
+    trace: Option<&mut BufWriter<std::fs::File>>,
+    (receive_ns, elapsed_ns, payload): (u64, u64, &[u8]),
+    sequence_end_exclusive: Option<u64>,
+) -> std::io::Result<()> {
+    let outcome = recorder.record_json_at(payload, receive_ns, elapsed_ns, sequence_end_exclusive);
+    let RecordOutcome::Recorded { latency_ns, seq } = outcome else { return Ok(()) };
+    if let Some(buckets) = event_buckets
+        && let Err(error) = buckets.record(receive_ns, recorder.last_record_duplicate())
+    {
+        *event_buckets = None;
+        recorder.mark_partial(format!("throughput-buckets.json: {error}"));
+    }
+    if let Some(trace) = trace {
+        let payload_ts_ns = receive_ns.saturating_sub(latency_ns);
+        writeln!(trace, "{seq},{payload_ts_ns},{receive_ns},{latency_ns}")?;
+    }
+    Ok(())
+}
+
+async fn write_event_buckets(
+    buckets: &EventBucketRecorder,
+    args: &SubscribeArgs,
+) -> anyhow::Result<()> {
+    let action_path = args
+        .action_timing_receipt
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("event-aligned capture requires --action-timing-receipt"))?;
+    let deadline = tokio::time::Instant::now()
+        .checked_add(Duration::from_secs(30))
+        .unwrap_or_else(tokio::time::Instant::now);
+    let action = loop {
+        match tokio::fs::read(action_path).await {
+            Ok(bytes) => break serde_json::from_slice::<ActionTimingReceipt>(&bytes)?,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && tokio::time::Instant::now() < deadline =>
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(error) => return Err(error.into()),
+        }
+    };
+    buckets.write(&args.output_dir.join("throughput-buckets.json"), &action)
 }
 
 /// Post-run summary returned by `run_subscriber`. Test harnesses assert on this.
