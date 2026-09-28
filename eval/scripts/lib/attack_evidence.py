@@ -14,7 +14,7 @@ EXPECTED_OUTCOMES = (
     "cross-read-trap",
     "epoch-timeout",
     "memory-limit-trap",
-    "fs-read-denied-trap",
+    "fs-read-denied",
     "guest-panic-trap",
 )
 _EXPECTED_MANIFEST_IDS = {HEALTHY_REFERENCE_ID, *EXPECTED_SCENARIOS}
