@@ -1339,7 +1339,7 @@ mod tests {
         );
     }
 
-    fn mnist_engine() -> anyhow::Result<WaferEngine> {
+    fn mnist_engine() -> anyhow::Result<Arc<WaferEngine>> {
         let config = EngineConfig {
             epoch_deadline: NonZeroU64::new(1000),
             fuel: FuelBudgets { transform: NonZeroU64::new(MNIST_FUEL), ..FuelBudgets::default() },
@@ -1348,7 +1348,7 @@ mod tests {
         };
         let engine = WaferEngine::from_engine_config(&config)?;
         engine.ensure_epoch_ticker();
-        Ok(engine)
+        Ok(Arc::new(engine))
     }
 
     async fn mnist_node_with_engine(engine: &WaferEngine) -> anyhow::Result<WasmTransformNode> {
@@ -1382,7 +1382,7 @@ mod tests {
     }
 
     async fn mnist_node() -> anyhow::Result<WasmTransformNode> {
-        mnist_node_with_engine(&mnist_engine()?).await
+        mnist_node_with_engine(&*mnist_engine()?).await
     }
 
     async fn mnist_prediction(node: &mut WasmTransformNode) -> anyhow::Result<(usize, Bytes)> {

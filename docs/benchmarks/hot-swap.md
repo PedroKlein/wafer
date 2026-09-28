@@ -8,7 +8,7 @@ A stateless hot-swap reports preparation and runner-local progress separately:
 
 | Phase | Runtime action | API field |
 |---|---|---|
-| Compile | Compile the replacement component from bytes. | `compile_ns` |
+| Compile | Compile the replacement component from bytes on tokio's blocking pool, or reuse one this process already compiled; `compile_cache` says which. | `compile_ns` |
 | Instantiate | Instantiate a fresh Store with the target limits and capabilities. | `instantiate_ns` |
 | Signal | Publish the prepared payload to the node runner. | `signal_ns` |
 | Replacement adoption | The runner validates, initializes, and installs the replacement between messages. | `replacement_adopted_ns` |
@@ -90,7 +90,7 @@ ADR-0003 / ADR-0012 / RFC-005) has five observable phases:
 
 | Phase | Runtime action | Measured where |
 |-------|----------------|----------------|
-| **Compile** | `Component::from_binary(&Engine, wasm_bytes)`; produces a compiled artefact, checks the AOT cache. | `prepare_transform_swap_timed` in `crates/wafer-core/src/orchestrator/hotswap.rs` (`compile_ns`). |
+| **Compile** | `WaferEngine::compile_cached` on the blocking pool: in-memory cache (seeded at launch), then the optional disk cache, then `Component::new`. | `prepare_transform_swap_timed` in `crates/wafer-core/src/orchestrator/hotswap.rs` (`compile_ns`). |
 | **Instantiate** | `InstancePre::instantiate_async` against a fresh `Store` seeded with the target's `WaferState` and `StoreLimits`. | Same call (`instantiate_ns`). |
 | **Signal** | Host publishes `Some(SwapPayload)` onto the node's `watch::Sender<Option<SwapPayload>>`. | Handler side (`SwapTimeline::signal`). |
 | **Ack** | Runner loop's `select!` observes the watch update on the next iteration and drops the old `Instance` / `Store`. | Runner-side timestamp (`SwapTimeline::ack`). |

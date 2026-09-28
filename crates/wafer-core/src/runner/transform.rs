@@ -130,7 +130,7 @@ pub async fn run_transform_loop_with_config(
         if rollback_retry.is_none()
             && let Some(payload) = take_pending_swap(&mut swap_rx)
         {
-            policy.flush_to_dlq("hot_swap_drain");
+            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
 
             // Retain v1 InstancePre BEFORE applying swap (for rollback)
@@ -141,10 +141,7 @@ pub async fn run_transform_loop_with_config(
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
                     transform.try_reconfigure(new_config_json).await
                 }
-                SwapPayload::Transform { .. } => payload.try_apply_transform(&mut transform).await,
-                _ => Err(crate::error::WaferError::Runtime(
-                    "transform node received non-transform swap payload".to_string(),
-                )),
+                _ => payload.try_apply_transform(&mut transform).await,
             };
             match result {
                 Ok(()) => {
@@ -217,7 +214,7 @@ pub async fn run_transform_loop_with_config(
                 }
             }
             Err(ref error) if error.is_budget_exhausted() && canary.is_none() => {
-                metrics.record_failed();
+                metrics.record_error(error);
                 if !recover_after_timeout(
                     &mut transform,
                     &state,
@@ -234,112 +231,71 @@ pub async fn run_transform_loop_with_config(
             Err(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
-                metrics.record_failed();
+                metrics.record_error(error);
                 let msg = error.to_string();
 
-                // A17: Process-time rollback if canary window is active
-                if let Some(ref mut c) = canary {
-                    if c.record_trap() {
-                        // Attempt rollback to v1
-                        tracing::warn!(
-                            node = transform.node_id(),
-                            error = %msg,
-                            trap_count = c.counters.trap_count,
-                            max_rollback_retries = c.counters.config.max_rollback_retries,
-                            "process-time trap during canary window — rolling back to v1"
-                        );
-                        state.transition_to_error();
-                        // Restore v1's InstancePre BEFORE recovery so
-                        // recover_from_cached_pre instantiates v1, not v2.
-                        if let Some(wasm) = transform.as_wasm_mut() {
-                            wasm.set_cached_pre(c.snapshot.pre.clone());
-                        }
-                        let rollback_start = Instant::now();
-                        match transform.recover_from_cached_pre().await {
-                            Ok(()) => {
-                                let rollback_ns =
-                                    crate::util::duration_ns_saturating(rollback_start.elapsed());
-                                tracing::info!(
-                                    node = transform.node_id(),
-                                    rollback_time_ns = rollback_ns,
-                                    trap_count = c.counters.trap_count,
-                                    max_rollback_retries = c.counters.config.max_rollback_retries,
-                                    "process-time rollback to v1 succeeded"
-                                );
-                                state.transition_to_recovering();
-                                if let Some(duration_ns) =
-                                    state.transition_recovering_to_running_timed()
-                                {
-                                    metrics.record_recovery(duration_ns);
-                                }
-                                metrics.record_rollback();
-                                // B1: notify the API caller with a RolledBack
-                                // outcome before a later v1 message can report a local outcome.
-                                // Taking the progress ensures the sender is
-                                // consumed — subsequent mark_first_post_replacement_local_outcome calls
-                                // become no-ops.
-                                if let Some(progress) = pending_swap_progress.take() {
-                                    progress.report_rolled_back(rollback_ns, msg.clone());
-                                }
-                                rollback_retry = Some(safety);
-                                // B2: intentionally do NOT drop canary here.
-                                // trap_count remains so a subsequent trap
-                                // inside the canary window counts toward
-                                // max_rollback_retries. Once trap_count
-                                // exceeds M, record_trap() returns false and
-                                // the escalation branch below drops canary.
-                                //
-                                // The snapshot itself is still valid — v1
-                                // pre is idempotent, so re-instantiating it
-                                // on a future trap is safe.
-                                continue;
-                            }
-                            Err(error) => {
-                                tracing::error!(
-                                    node = transform.node_id(),
-                                    %error,
-                                    trap_count = c.counters.trap_count,
-                                    "process-time rollback failed — escalating to recovery"
-                                );
-                                // B1: rollback attempt itself failed —
-                                // the API caller should still learn the
-                                // swap did not converge. Report with
-                                // rollback_time_ns=0 to signal the failure.
-                                if let Some(progress) = pending_swap_progress.take() {
-                                    progress
-                                        .report_rolled_back(0, format!("rollback failed: {error}"));
-                                }
-                                // Fallthrough to standard recovery
-                                canary = None;
-                            }
-                        }
-                    } else {
-                        // Retries exhausted — escalate to Recovery state
-                        tracing::error!(
-                            node = transform.node_id(),
-                            error = %msg,
-                            trap_count = c.counters.trap_count,
-                            max_rollback_retries = c.counters.config.max_rollback_retries,
-                            "canary rollback retries exhausted — escalating to recovery"
-                        );
-                        // B1: also notify the API caller that the swap did
-                        // not converge. rollback_time_ns=0 marks the escalation.
-                        if let Some(progress) = pending_swap_progress.take() {
-                            progress.report_rolled_back(
-                                0,
-                                format!(
-                                    "canary budget exhausted after {} traps (max={}): {}",
-                                    c.counters.trap_count,
-                                    c.counters.config.max_rollback_retries,
-                                    msg
-                                ),
+                // A17: a trap inside the canary window rolls back to v1 once;
+                // taking the canary means a v1 trap afterwards is an ordinary
+                // failure, not another rollback.
+                if let Some(c) = canary.take() {
+                    tracing::warn!(
+                        node = transform.node_id(),
+                        error = %msg,
+                        "process-time trap during canary window — rolling back to v1"
+                    );
+                    state.transition_to_error();
+                    // Restore v1's InstancePre BEFORE recovery so
+                    // recover_from_cached_pre instantiates v1, not v2.
+                    if let Some(wasm) = transform.as_wasm_mut() {
+                        wasm.set_cached_pre(c.snapshot.pre);
+                    }
+                    let rollback_start = Instant::now();
+                    match transform.recover_from_cached_pre().await {
+                        Ok(()) => {
+                            let rollback_ns =
+                                crate::util::duration_ns_saturating(rollback_start.elapsed());
+                            tracing::info!(
+                                node = transform.node_id(),
+                                rollback_time_ns = rollback_ns,
+                                "process-time rollback to v1 succeeded"
                             );
+                            state.transition_to_recovering();
+                            if let Some(duration_ns) =
+                                state.transition_recovering_to_running_timed()
+                            {
+                                metrics.record_recovery(duration_ns);
+                            }
+                            metrics.record_rollback();
+                            // B1: notify the API caller with a RolledBack
+                            // outcome before a later v1 message can report a local outcome.
+                            // Taking the progress ensures the sender is
+                            // consumed — subsequent mark_first_post_replacement_local_outcome calls
+                            // become no-ops.
+                            if let Some(progress) = pending_swap_progress.take() {
+                                progress.report_rolled_back(rollback_ns, msg.clone());
+                            }
+                            rollback_retry = Some(safety);
+                            continue;
                         }
-                        canary = None;
+                        Err(error) => {
+                            tracing::error!(
+                                node = transform.node_id(),
+                                %error,
+                                "process-time rollback failed — escalating to recovery"
+                            );
+                            // B1: rollback attempt itself failed —
+                            // the API caller should still learn the
+                            // swap did not converge. Report with
+                            // rollback_time_ns=0 to signal the failure.
+                            if let Some(progress) = pending_swap_progress.take() {
+                                progress.report_rolled_back(0, format!("rollback failed: {error}"));
+                            }
+                        }
                     }
                 }
 
                 // Standard recovery path (existing A7 behavior)
+                metrics.record_dropped_on_recovery();
                 tracing::error!(
                     node = transform.node_id(),
                     error = %msg,
@@ -360,7 +316,7 @@ pub async fn run_transform_loop_with_config(
                 }
             }
             Err(e) => {
-                metrics.record_failed();
+                metrics.record_error(&e);
                 if !continue_after_policy_action(policy.handle(&e, safety), &metrics) {
                     break;
                 }
@@ -369,7 +325,7 @@ pub async fn run_transform_loop_with_config(
     }
 
     // Flush remaining retries to DLQ on exit
-    policy.flush_to_dlq("shutdown");
+    policy.flush_to_dlq("shutdown", &metrics);
 }
 
 #[cfg(test)]
@@ -449,7 +405,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
@@ -514,7 +470,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
@@ -553,11 +509,7 @@ mod tests {
             CancellationToken::new(),
             state,
             Arc::clone(&metrics),
-            HotSwapConfig {
-                canary_success_count: 32,
-                canary_window_ms: 10_000,
-                max_rollback_retries: 1,
-            },
+            HotSwapConfig::default(),
         )
         .await;
 
@@ -572,6 +524,63 @@ mod tests {
         assert_eq!(metrics.recovery_count(), 1);
         assert_eq!(metrics.processed(), 1, "only the replayed v1 result is forwarded");
         assert!(output_rx.try_recv().is_err(), "trapping message must be replayed exactly once");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn trap_after_rollback_is_handled_as_a_v1_failure() {
+        let engine = Arc::new(WaferEngine::new().expect("engine"));
+        let component = engine.load_component_from_bytes(TRAP_COMPONENT, "trap").expect("trap");
+        let pre = Arc::new(engine.pre_instantiate_transform(&component).expect("pre"));
+        let mut store =
+            Store::new(engine.inner(), WaferState::new("trap", Capabilities::sandbox()));
+        store.limiter(|state| state.limits_mut());
+        let bindings = pre.instantiate_async(&mut store).await.expect("instantiate v1");
+        let mut v1 = WasmTransformNode::new(store, bindings, pre, None);
+        v1.validate_and_init("{}").await.expect("v1 init");
+        let (progress, completion) = HotSwapProgress::channel();
+        let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed(
+            &engine,
+            TRAP_COMPONENT,
+            "trap",
+            Capabilities::sandbox(),
+            16 * 1024 * 1024,
+            progress,
+        )
+        .await
+        .expect("v2");
+
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (output_tx, _output_rx) = mpsc::channel(1);
+        let (swap_tx, swap_rx) = watch::channel(None);
+        let metrics = Arc::new(NodeMetrics::new());
+        swap_tx.send(Some(replacement.payload)).expect("replacement signal");
+        input_tx.send(RuntimeEnvelope::from_string("source", "poison")).await.expect("input");
+        drop(input_tx);
+
+        run_transform_loop_with_config(
+            v1.into(),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "trap"),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+            HotSwapConfig::default(),
+        )
+        .await;
+
+        assert!(matches!(
+            completion.await.expect("rollback outcome"),
+            Err(crate::runner::HotSwapError::RolledBack { .. })
+        ));
+        assert_eq!(metrics.rollbacks(), 1, "only the v2 trap rolls back");
+        assert_eq!(
+            metrics.attempts_failed(),
+            2,
+            "v2 trap, then the replayed message trapping on v1"
+        );
+        assert_eq!(metrics.recovery_count(), 2);
     }
 
     /// Creates test infrastructure for the transform loop.
@@ -641,7 +650,7 @@ mod tests {
         metrics.record_failed();
 
         assert_eq!(metrics.processed(), 2);
-        assert_eq!(metrics.failed(), 1);
+        assert_eq!(metrics.attempts_failed(), 1);
         assert_eq!(metrics.process_ns(), 3000);
     }
 
@@ -663,6 +672,75 @@ mod tests {
             timed_out: crate::runner::error_policy::ResolvedSimpleAction::Skip,
             retry_buffer_capacity: 1,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn every_dequeued_message_has_exactly_one_fate() {
+        use crate::node::QueueMetrics;
+        use crate::runner::error_policy::{
+            ErrorCategory, ResolvedRetryConfig, ResolvedSimpleAction,
+        };
+
+        let (input_tx, input_rx) = mpsc::channel(4);
+        let (output_tx, mut output_rx) = mpsc::channel(4);
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(2);
+        let (_swap_tx, swap_rx) = watch::channel(None);
+        let queue = Arc::new(QueueMetrics::default());
+        let metrics = Arc::new(NodeMetrics::new());
+        let non_utf8: &'static [u8] = b"\xff";
+        for payload in [br#"{"temperature":1}"#.as_slice(), non_utf8, b"{}", non_utf8] {
+            let mut envelope = RuntimeEnvelope::from_string("source", "");
+            envelope.payload = bytes::Bytes::from_static(payload);
+            input_tx.send(envelope).await.expect("input");
+        }
+        drop(input_tx);
+        let retry_once = ResolvedRetryConfig {
+            retries: 1,
+            backoff_ms: 60_000,
+            exhausted: ResolvedSimpleAction::Dlq,
+        };
+        let policy = ResolvedErrorPolicy {
+            bad_input: ResolvedSimpleAction::Dlq,
+            dependency_failed: retry_once,
+            processing_failed: retry_once,
+            timed_out: ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 4,
+        };
+
+        run_transform_loop(
+            TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+            TrackedReceiver::new(input_rx, Arc::clone(&queue)),
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(policy, Some(dlq_tx), "node"),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+        )
+        .await;
+
+        assert_eq!(queue.dequeued(), 4);
+        assert_eq!(metrics.processed(), 1);
+        assert_eq!(metrics.retries(), 1, "the missing-field message is queued for a retry");
+        assert_eq!(metrics.dlq_sent(), 2, "the DLQ holds two records");
+        assert_eq!(metrics.dlq_lost(), 1, "the retry flushed at shutdown finds the DLQ full");
+        assert_eq!(metrics.attempts_failed(), 3);
+        assert_eq!(metrics.guest_errors(ErrorCategory::BadInput), 2);
+        assert_eq!(metrics.guest_errors(ErrorCategory::ProcessingFailed), 1);
+        assert_eq!(metrics.traps_total(), 0, "guest-returned errors are not traps");
+        assert_eq!(
+            queue.dequeued(),
+            metrics.processed()
+                + metrics.filtered_out()
+                + metrics.skipped()
+                + metrics.exhausted_skips()
+                + metrics.dlq_sent()
+                + metrics.dlq_lost()
+                + metrics.dropped_on_recovery()
+                + metrics.dropped_on_teardown()
+        );
+        assert!(output_rx.recv().await.is_some());
+        assert!(dlq_rx.recv().await.is_some() && dlq_rx.recv().await.is_some());
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

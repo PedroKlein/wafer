@@ -35,16 +35,22 @@ description = "MQTT -> filter -> alert"  # optional
 | `epoch_deadline` | `Option<NonZeroU64>` | `None` | Epoch ticks per Wasm call. Omission disables epoch interruption. |
 | `epoch_tick_ms` | `u64` | `10` | Wall-clock milliseconds per epoch tick. Must be greater than zero. A ticker alone does not impose a deadline. |
 | `default_queue_capacity` | `usize` | `1024` | Fallback capacity when no incoming edge for a destination declares one. |
-| `fuel.transform` | `Option<NonZeroU64>` | `None` | Fuel per Transform call. Omission disables fuel for this category. |
+| `fuel.transform` | `Option<NonZeroU64>` | `None` | Fuel per Transform call. Omission leaves the category unlimited (see below). |
 | `fuel.filter` | `Option<NonZeroU64>` | `None` | Fuel per Filter call. |
 | `fuel.router` | `Option<NonZeroU64>` | `None` | Fuel per Router call. |
 | `memory.transform` | `usize` | `67_108_864` | Transform linear-memory limit, 64 MiB. |
 | `memory.filter` | `usize` | `16_777_216` | Filter linear-memory limit, 16 MiB. |
 | `memory.router` | `usize` | `16_777_216` | Router linear-memory limit, 16 MiB. |
+| `hot_swap.canary_success_count` | `u32` | `32` | Successful Transform calls after a swap that close the rollback window. |
+| `hot_swap.canary_window_ms` | `u64` | `10_000` | Wall-clock milliseconds after a swap that close the rollback window, whichever comes first. |
 
 Fuel and epoch values must be positive when present. Zero is rejected; omission produces `None`. Queue capacities must be greater than zero: the validator rejects zero for `default_queue_capacity`, `[[edges]].capacity`, retry buffers, and DLQ queues before channel construction. `[nodes.NAME.fuel]` overrides a configured pipeline fuel value for one Wasm node.
 
-Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults. E-Perf-7 disables a mechanism by omitting its field:
+Fuel metering is engine-wide. It is off only when no `fuel.*` value and no node `fuel` is set. Once any is set, every Wasm node is refilled before each call with its own `fuel`, else its category's value, else `u64::MAX`, so an omitted category stays unlimited in practice while still paying the metering cost.
+
+If a replaced Transform traps while its rollback window is open, the runtime restores the previous component once and closes the window; a later trap is handled like any other failure of the restored component.
+
+Ordinary final WAFER evaluation configs set Transform fuel to `10_000_000`, Filter and Router fuel to `500_000`, `epoch_deadline` to `100`, and `epoch_tick_ms` to `10`. These are evaluation values, not runtime defaults. E-Perf-7 disables a mechanism by omitting its field (its pipelines set no other fuel value):
 
 | Mode | `fuel.transform` | `epoch_deadline` |
 |---|---|---|
@@ -134,7 +140,7 @@ The configuration struct remains `WasmNodeDef`, but `plugin` can select a Wasm c
 | Field | Type | Notes |
 |-------|------|-------|
 | `plugin` | `string` or tagged inline table (required) | A string selects a local/OCI Wasm component. `{ kind = "wasm", path = "..." }` is the explicit equivalent. `{ kind = "native", function = "..." }` selects a built-in baseline. Only loaded Wasm implementations are replacement-eligible. |
-| `fuel` | `Option<u64>` | Overrides the pipeline default for this node. |
+| `fuel` | `Option<u64>` | Overrides the pipeline default for this node. Setting it turns fuel metering on for the engine. |
 | `capabilities` | `Capabilities` | `{inherit_stdio, inherit_env, allow_inference, outbound_http}`. Booleans default to `false`; `outbound_http` defaults to an empty deny-all list. `allow_inference=true` selects the inference linker and store only for a Wasm Transform. |
 | `config` | `Option<toml::Value>` | Free-form plugin config; serialised to JSON and passed to `lifecycle.init` as `node-config.config`. |
 | `error_policy` | `Option<ErrorPolicyConfig>` | Per-node table that replaces the pipeline-level table when present. |

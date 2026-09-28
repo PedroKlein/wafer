@@ -13,7 +13,7 @@ traverse, see [03-building-blocks.md](./03-building-blocks.md).
 > fan-out lineage assignment, per-node-type `/hot-swap` dispatch,
 > retry-exhaustion + `Recovering` state transitions,
 > capability-aware instantiation, and process-time hot-swap rollback
-> (canary window + bounded retry, A17 closed 2026-08-02) are all
+> (canary window, one rollback per swap, A17 closed 2026-08-02) are all
 > wired. See [`../status/implementation-gaps.md`](../status/implementation-gaps.md)
 > for the full history; only observability follow-up **A20**
 > (Prometheus rollback counter) is still open, and it does not affect

@@ -8,7 +8,7 @@ const MNIST_MEMORY: usize = 64 * 1024 * 1024;
 
 #[tokio::test]
 async fn granted_inference_hot_swap_prepares_real_component() {
-    let engine = WaferEngine::new().expect("engine");
+    let engine = std::sync::Arc::new(WaferEngine::new().expect("engine"));
     let (progress, _completion) = HotSwapProgress::channel();
 
     let result = prepare_transform_swap_timed(
@@ -28,7 +28,7 @@ async fn granted_inference_hot_swap_prepares_real_component() {
 
 #[tokio::test]
 async fn ungranted_inference_hot_swap_fails_during_preparation() {
-    let engine = WaferEngine::new().expect("engine");
+    let engine = std::sync::Arc::new(WaferEngine::new().expect("engine"));
     let (progress, _completion) = HotSwapProgress::channel();
 
     let Err(error) = prepare_transform_swap_timed(

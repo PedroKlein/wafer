@@ -111,7 +111,8 @@ async fn load_http_transform(capabilities: Capabilities) -> Result<WasmTransform
         WaferState::new_with_memory_limit("http-security", capabilities.clone(), TEST_MEMORY_LIMIT);
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|state| state.limits_mut());
-    if let Some(fuel) = engine.fuel_limit() {
+    let fuel_limit = engine.fuel_budget(wafer_core::node::NodeKind::Transform, None);
+    if let Some(fuel) = fuel_limit {
         store.set_fuel(fuel.get())?;
     }
     if let Some(epoch) = engine.epoch_deadline() {
@@ -119,7 +120,7 @@ async fn load_http_transform(capabilities: Capabilities) -> Result<WasmTransform
         store.set_epoch_deadline(epoch.get());
     }
     let bindings = pre.instantiate_async(&mut store).await?;
-    let mut node = WasmTransformNode::new(store, bindings, pre, engine.fuel_limit());
+    let mut node = WasmTransformNode::new(store, bindings, pre, fuel_limit);
     node.configure_runtime(
         capabilities,
         TEST_MEMORY_LIMIT,
@@ -634,7 +635,7 @@ async fn real_p2_component_hot_swap_retains_original_grant() -> Result<()> {
     let capabilities = capability(allowed_port)?;
     let node = load_http_transform(capabilities.clone()).await?;
     let mut node = TransformNode::from(node);
-    let engine = WaferEngine::new()?;
+    let engine = Arc::new(WaferEngine::new()?);
     let (progress, _completion) = HotSwapProgress::channel();
     let replacement = prepare_transform_swap_timed(
         &engine,

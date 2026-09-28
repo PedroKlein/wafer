@@ -4,7 +4,6 @@
 //! Wasm compilation, source/sink construction, and topology wiring.
 
 use std::collections::HashMap;
-use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -20,7 +19,8 @@ use crate::error::{ConfigError, Result, WaferError};
 use crate::node::wasm::{WasmFilterNode, WasmRouterNode, WasmTransformNode};
 use crate::node::{
     BenchBurstSchedule, BenchSink, BenchSinkConfig, BenchSource, BenchSourceConfig, FileSink,
-    FileSource, HttpSink, HttpSource, MqttSink, MqttSource, Sink, Source, StdinSource, StdoutSink,
+    FileSource, HttpSink, HttpSource, MqttSink, MqttSource, NodeKind, Sink, Source, StdinSource,
+    StdoutSink,
 };
 use crate::orchestrator::builder::{NodeBundleKind, build_pipeline_with_io};
 use crate::orchestrator::pipeline::PipelineOrchestrator;
@@ -112,7 +112,7 @@ pub async fn launch_pipeline_timed(
 ) -> Result<TimedPipelineLaunch> {
     let launch_started = Instant::now();
     let mut timings = LaunchTimings::default();
-    let engine = WaferEngine::from_engine_config(&config.engine)?;
+    let engine = WaferEngine::for_pipeline(&config)?;
     engine.ensure_epoch_ticker();
     let engine = Arc::new(engine);
 
@@ -155,7 +155,6 @@ pub async fn launch_pipeline_timed(
                     load_transform_node_dispatch(
                         &bundle.node_id,
                         wasm,
-                        config.engine.fuel.transform,
                         config.engine.memory.transform,
                         &engine,
                         &registry,
@@ -171,7 +170,6 @@ pub async fn launch_pipeline_timed(
                     load_filter_node_dispatch(
                         &bundle.node_id,
                         wasm,
-                        config.engine.fuel.filter,
                         config.engine.memory.filter,
                         &engine,
                         &registry,
@@ -187,7 +185,6 @@ pub async fn launch_pipeline_timed(
                     load_router_node(
                         &bundle.node_id,
                         wasm,
-                        config.engine.fuel.router,
                         config.engine.memory.router,
                         &engine,
                         &registry,
@@ -340,7 +337,6 @@ fn resolve_bench_sink_output_dir(
 async fn load_transform_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -355,7 +351,6 @@ async fn load_transform_node_dispatch(
     let wasm_node = load_transform_node(
         node_id,
         wasm,
-        default_fuel,
         default_memory,
         engine,
         registry,
@@ -393,7 +388,6 @@ fn build_native_transform(node_id: &str, function: &str) -> Result<crate::node::
 async fn load_transform_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -411,7 +405,7 @@ async fn load_transform_node(
     let phase_started = Instant::now();
     let capabilities = capabilities_from_config(&wasm.capabilities)?;
     let memory_limit = wasm.memory_limit.unwrap_or(default_memory);
-    let fuel_limit = wasm.fuel.or(default_fuel);
+    let fuel_limit = engine.fuel_budget(NodeKind::Transform, wasm.fuel);
     let state = WaferState::new_with_memory_limit(node_id, capabilities.clone(), memory_limit);
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
@@ -533,7 +527,6 @@ fn as_f64(v: &toml::Value) -> Option<f64> {
 async fn load_filter_node_dispatch(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -548,7 +541,6 @@ async fn load_filter_node_dispatch(
     let wasm_node = load_filter_node(
         node_id,
         wasm,
-        default_fuel,
         default_memory,
         engine,
         registry,
@@ -589,7 +581,6 @@ pub fn build_native_filter_from_def(
 async fn load_filter_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -615,8 +606,9 @@ async fn load_filter_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
+    let fuel_limit = engine.fuel_budget(NodeKind::Filter, wasm.fuel);
     // AC F5.AC2: skip metering setters when unlimited; see transform loader.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
@@ -631,7 +623,7 @@ async fn load_filter_node(
     })?;
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmFilterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
+    let mut node = WasmFilterNode::new(store, bindings, pre, fuel_limit);
     node.configure_runtime(
         capabilities,
         wasm.memory_limit.unwrap_or(default_memory),
@@ -655,7 +647,6 @@ async fn load_filter_node(
 async fn load_router_node(
     node_id: &str,
     wasm: &WasmNodeDef,
-    default_fuel: Option<NonZeroU64>,
     default_memory: usize,
     engine: &Arc<WaferEngine>,
     registry: &WaferRegistry,
@@ -681,8 +672,9 @@ async fn load_router_node(
     );
     let mut store = Store::new(engine.inner(), state);
     store.limiter(|s| s.limits_mut());
+    let fuel_limit = engine.fuel_budget(NodeKind::Router, wasm.fuel);
     // AC F5.AC2: skip metering setters when unlimited; see transform loader.
-    if let Some(n) = engine.fuel_limit() {
+    if let Some(n) = fuel_limit {
         store
             .set_fuel(n.get())
             .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
@@ -697,7 +689,7 @@ async fn load_router_node(
     })?;
 
     let config_json = node_config_json(wasm)?;
-    let mut node = WasmRouterNode::new(store, bindings, pre, wasm.fuel.or(default_fuel));
+    let mut node = WasmRouterNode::new(store, bindings, pre, fuel_limit);
     node.configure_runtime(
         capabilities,
         wasm.memory_limit.unwrap_or(default_memory),
@@ -724,7 +716,7 @@ async fn resolve_and_load_component(
     engine: &WaferEngine,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
-) -> Result<(wasmtime::component::Component, String)> {
+) -> Result<(Arc<wasmtime::component::Component>, String)> {
     let plugin_path = wasm.plugin.wasm_path().ok_or_else(|| {
         WaferError::Runtime(format!(
             "resolve_and_load_component called on non-Wasm plugin for node '{node_id}'"
@@ -759,7 +751,9 @@ async fn resolve_and_load_component(
         }
     };
     let ResolvedPlugin { content: bytes, content_hash: plugin_hash, .. } = resolved;
-    let component = engine.load_component_from_bytes(&bytes, &source_tag)?;
+    // Through the cache, so a later hot-swap back to this binary reuses the
+    // compiled component instead of paying a second cold compile.
+    let (component, _) = engine.compile_cached(&bytes, &source_tag)?;
     Ok((component, plugin_hash))
 }
 
@@ -1021,6 +1015,136 @@ port = "default"
         assert!(!eligible.contains(&"sink"));
 
         orchestrator.shutdown().await.expect("shutdown wasm pipeline");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[expect(clippy::large_futures, reason = "test launches the real Wasm pipeline")]
+    async fn unbudgeted_filter_keeps_running_when_transforms_are_metered() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let transform =
+            root.join("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+        let filter = root.join(
+            "plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm",
+        );
+        if !transform.exists() || !filter.exists() {
+            return;
+        }
+        let config: Config = toml::from_str(&format!(
+            r#"
+[pipeline]
+name = "partial-fuel-budgets"
+
+[engine.fuel]
+transform = 1_000_000
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 50000.0
+total_messages = 10000
+warmup_messages = 0
+payload_size = 64
+
+[nodes.transform]
+type = "transform"
+plugin = {transform:?}
+
+[nodes.filter]
+type = "filter"
+plugin = {filter:?}
+
+[nodes.filter.config]
+field = "temperature"
+min = 0.0
+max = 100.0
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "filter"
+
+[[edges]]
+from = "filter"
+to = "sink"
+"#,
+            transform = transform.display(),
+            filter = filter.display(),
+        ))
+        .expect("partial fuel config");
+        let mut orchestrator = launch_pipeline(config, None).await.expect("launch");
+        let handle = orchestrator.handle();
+
+        tokio::time::timeout(Duration::from_secs(30), orchestrator.run_until_complete())
+            .await
+            .expect("pipeline finishes")
+            .expect("no node fails");
+
+        let filter = handle.node_metrics("filter").expect("filter metrics");
+        assert_eq!(
+            filter.processed() + filter.attempts_failed(),
+            10_000,
+            "every message reached the guest"
+        );
+        assert_eq!(filter.recovery_count(), 0);
+    }
+
+    #[tokio::test]
+    #[expect(clippy::large_futures, reason = "test launches the real Wasm pipeline")]
+    async fn node_fuel_without_engine_budgets_launches_metered() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let transform =
+            root.join("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
+        if !transform.exists() {
+            return;
+        }
+        let config: Config = toml::from_str(&format!(
+            r#"
+[pipeline]
+name = "node-fuel"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 10000.0
+total_messages = 100
+warmup_messages = 0
+payload_size = 64
+
+[nodes.transform]
+type = "transform"
+plugin = {transform:?}
+fuel = 1_000_000
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"
+"#,
+            transform = transform.display(),
+        ))
+        .expect("node fuel config");
+        let mut orchestrator = launch_pipeline(config, None).await.expect("launch");
+        let handle = orchestrator.handle();
+
+        tokio::time::timeout(Duration::from_secs(10), orchestrator.run_until_complete())
+            .await
+            .expect("pipeline finishes")
+            .expect("no node fails");
+        assert_eq!(handle.node_metrics("transform").expect("metrics").processed(), 100);
     }
 
     #[test]

@@ -507,15 +507,14 @@ and ended in permanent Error.
    within the window, the runner restores v1’s `InstancePre`, calls
    `validate() + init()`, transitions Error → Recovering → Running,
    and resumes message processing on v1.
-3. **Bounded retries (M):** `max_rollback_retries` (default 3) caps
-   how many traps trigger a rollback before escalating to the standard
-   A7 Recovering path. Prevents thrash loops.
+3. **One rollback per swap:** the rollback closes the canary window,
+   so a trap on the restored v1 takes the standard A7 Recovering path.
 4. **Metric:** `NodeMetrics::rollbacks()` counter — exposed by the
    runner; readable from `PipelineHandle::node_metrics`.
 5. **SwapTimeline:** `rollback_time_ns: Option<u64>` field added to
    `swap_timeline.json` schema.
 6. **Config schema:** `[engine.hot_swap]` section with fields
-   `canary_success_count`, `canary_window_ms`, `max_rollback_retries`
+   `canary_success_count`, `canary_window_ms`
    (all `#[serde(default)]` for backward compat).
 
 **Closed by:** thesis-hardening T1 — `run_transform_loop_with_config`
@@ -543,6 +542,10 @@ T1 landing; all four fixed in one patch:
   window count toward the budget. State-machine invariants covered
   by `canary_state_bounds_trap_count` +
   `canary_state_record_trap_semantics_matches_model` unit tests.
+  *Superseded:* keeping the canary armed made a replayed message that
+  also trapped on v1 count as further "rollbacks" (v1 onto v1). A
+  rollback now closes the canary window, a later trap takes the normal
+  recovery path, and `max_rollback_retries` was removed.
   Also tightened canary arming to `SwapPayload::Transform` only —
   reconfigure has its own atomic rollback inside `try_reconfigure`.
 - **M1.** `SwapTimeline.rollback_time_ns` now populated in the API
@@ -557,7 +560,7 @@ T1 landing; all four fixed in one patch:
 
 **Tests:**
 - `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_process_time_rollback`
-- `cargo test -p wafer-core --test hotswap_process_time_rollback hotswap_bounded_rollback_thrash`
+- `cargo test -p wafer-core --lib runner::transform::tests::trap_after_rollback_is_handled_as_a_v1_failure`
 - `cargo test -p wafer-core --lib runner::tests` (canary state machine
   + rollback progress reporting)
 

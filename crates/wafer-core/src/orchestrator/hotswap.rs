@@ -4,13 +4,15 @@
 //! See docs/rfcs/RFC-005-orchestrator.md D6.
 
 use std::sync::Arc;
+use std::time::Instant;
 
 use wasmtime::Store;
+use wasmtime::component::Component;
 
-use crate::engine::Capabilities;
-use crate::engine::WaferEngine;
 use crate::engine::state::WaferState;
+use crate::engine::{CacheOutcome, Capabilities, WaferEngine};
 use crate::error::{Result, WaferError};
+use crate::node::NodeKind;
 use crate::node::wasm::PreparedTransformSwap;
 use crate::runner::{HotSwapProgress, SwapPayload};
 
@@ -79,6 +81,8 @@ pub struct SwapTimeline {
     pub first_post_replacement_local_outcome: Option<std::time::Instant>,
     /// Duration of process-time rollback to v1, if triggered (A17).
     pub rollback_time_ns: Option<u64>,
+    /// Whether the compile phase compiled the component or reused a cached one.
+    pub compile_cache: Option<CacheOutcome>,
 }
 
 impl SwapTimeline {
@@ -93,6 +97,7 @@ impl SwapTimeline {
             swap_acked: None,
             first_post_replacement_local_outcome: None,
             rollback_time_ns: None,
+            compile_cache: None,
         }
     }
 
@@ -194,7 +199,8 @@ impl SwapTimeline {
   "ack_ns": {},
   "first_post_replacement_local_outcome_ns": {},
   "total_ns": {},
-  "rollback_time_ns": {}
+  "rollback_time_ns": {},
+  "compile_cache": {}
 }}"#,
             fmt_opt(self.compile_duration_ns()),
             fmt_opt(self.instantiate_duration_ns()),
@@ -203,6 +209,8 @@ impl SwapTimeline {
             fmt_opt(self.first_post_replacement_local_outcome_duration_ns()),
             fmt_opt(self.total_duration_ns()),
             fmt_opt(self.rollback_time_ns),
+            self.compile_cache
+                .map_or_else(|| "null".to_string(), |c| format!("\"{}\"", c.as_str())),
         )
     }
 }
@@ -213,9 +221,36 @@ pub struct TimedSwapResult {
     pub timeline: SwapTimeline,
 }
 
+/// Compile and link a replacement on the blocking pool.
+///
+/// A cache miss runs Cranelift, and linking type-checks every import; both
+/// are synchronous and would otherwise stall a runtime worker that is also
+/// driving pipeline nodes. The compile phase ends inside the blocking task,
+/// so linking stays in the instantiate phase as before.
+async fn compile_and_link<P: Send + 'static>(
+    engine: &Arc<WaferEngine>,
+    wasm_bytes: Arc<[u8]>,
+    node_id: &str,
+    timeline: &mut SwapTimeline,
+    link: impl FnOnce(&WaferEngine, &Component) -> Result<P> + Send + 'static,
+) -> Result<P> {
+    let engine = Arc::clone(engine);
+    let name = node_id.to_owned();
+    let (pre, compile_done, outcome) = tokio::task::spawn_blocking(move || {
+        let (component, outcome) = engine.compile_cached(&wasm_bytes, &name)?;
+        let compile_done = Instant::now();
+        link(&engine, &component).map(|pre| (pre, compile_done, outcome))
+    })
+    .await
+    .map_err(|e| WaferError::PluginInit { message: format!("compile task failed: {e}") })??;
+    timeline.compile_done = Some(compile_done);
+    timeline.compile_cache = Some(outcome);
+    Ok(pre)
+}
+
 /// Prepare a transform swap with timeline instrumentation.
 pub async fn prepare_transform_swap_timed(
-    engine: &WaferEngine,
+    engine: &Arc<WaferEngine>,
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
@@ -228,7 +263,7 @@ pub async fn prepare_transform_swap_timed(
         node_id,
         capabilities,
         memory_limit,
-        engine.fuel_limit(),
+        engine.fuel_budget(NodeKind::Transform, None),
         progress,
     )
     .await
@@ -236,7 +271,7 @@ pub async fn prepare_transform_swap_timed(
 
 /// Prepare a transform swap using the target node's effective fuel limit.
 pub async fn prepare_transform_swap_timed_with_fuel(
-    engine: &WaferEngine,
+    engine: &Arc<WaferEngine>,
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
@@ -244,14 +279,58 @@ pub async fn prepare_transform_swap_timed_with_fuel(
     fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
+    let wasm_bytes = Arc::<[u8]>::from(wasm_bytes);
     let mut timeline = SwapTimeline::start();
 
-    let component = engine.compile_cached(wasm_bytes)?;
-    timeline.mark_compile_done();
+    let replacement = if capabilities.allow_inference {
+        let pre = compile_and_link(
+            engine,
+            wasm_bytes,
+            node_id,
+            &mut timeline,
+            WaferEngine::pre_instantiate_inference,
+        )
+        .await?;
+        let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
+        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
+        })?;
+        PreparedTransformSwap::inference(store, bindings, Arc::new(pre))
+    } else {
+        let pre = compile_and_link(
+            engine,
+            wasm_bytes,
+            node_id,
+            &mut timeline,
+            WaferEngine::pre_instantiate_transform,
+        )
+        .await?;
+        let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
+        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
+            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
+        })?;
+        PreparedTransformSwap::ordinary(store, bindings, Arc::new(pre))
+    };
+    timeline.mark_instantiate_done();
 
+    let payload = SwapPayload::Transform {
+        replacement: Arc::new(std::sync::Mutex::new(Some(replacement))),
+        progress,
+    };
+
+    Ok(TimedSwapResult { payload, timeline })
+}
+
+fn new_swap_store(
+    engine: &WaferEngine,
+    node_id: &str,
+    capabilities: Capabilities,
+    memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
+) -> Result<Store<WaferState>> {
     let mut store = Store::new(
         engine.inner(),
-        WaferState::new_with_memory_limit(node_id, capabilities.clone(), memory_limit),
+        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
     );
     // Activate configured StoreLimits (A8): without this, `memory_size` is ignored
     // and the swapped-in instance can outgrow the launcher-enforced budget.
@@ -268,62 +347,33 @@ pub async fn prepare_transform_swap_timed_with_fuel(
         store.epoch_deadline_trap();
         store.set_epoch_deadline(n.get());
     }
-
-    let replacement = if capabilities.allow_inference {
-        let pre = Arc::new(engine.pre_instantiate_inference(&component)?);
-        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
-            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-        })?;
-        PreparedTransformSwap::inference(store, bindings, pre)
-    } else {
-        let pre = Arc::new(engine.pre_instantiate_transform(&component)?);
-        let bindings = pre.instantiate_async(&mut store).await.map_err(|e| {
-            WaferError::PluginInit { message: format!("instantiation failed: {e}") }
-        })?;
-        PreparedTransformSwap::ordinary(store, bindings, pre)
-    };
-    timeline.mark_instantiate_done();
-
-    let payload = SwapPayload::Transform {
-        replacement: Arc::new(std::sync::Mutex::new(Some(replacement))),
-        progress,
-    };
-
-    Ok(TimedSwapResult { payload, timeline })
+    Ok(store)
 }
 
 /// Prepare a filter swap with timeline instrumentation.
 pub async fn prepare_filter_swap_timed(
-    engine: &WaferEngine,
+    engine: &Arc<WaferEngine>,
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
+    let wasm_bytes = Arc::<[u8]>::from(wasm_bytes);
     let mut timeline = SwapTimeline::start();
 
-    let component = engine.compile_cached(wasm_bytes)?;
-    timeline.mark_compile_done();
-
-    let pre = engine.pre_instantiate_filter(&component)?;
+    let pre = compile_and_link(
+        engine,
+        wasm_bytes,
+        node_id,
+        &mut timeline,
+        WaferEngine::pre_instantiate_filter,
+    )
+    .await?;
     let pre = Arc::new(pre);
 
-    let mut store = Store::new(
-        engine.inner(),
-        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
-    );
-    store.limiter(|s| s.limits_mut());
-    // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
-    if let Some(n) = engine.fuel_limit() {
-        store
-            .set_fuel(n.get())
-            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
-    }
-    if let Some(n) = engine.epoch_deadline() {
-        store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
-    }
+    let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
 
     let instance = pre
         .instantiate_async(&mut store)
@@ -343,36 +393,28 @@ pub async fn prepare_filter_swap_timed(
 
 /// Prepare a router swap with timeline instrumentation.
 pub async fn prepare_router_swap_timed(
-    engine: &WaferEngine,
+    engine: &Arc<WaferEngine>,
     wasm_bytes: &[u8],
     node_id: &str,
     capabilities: Capabilities,
     memory_limit: usize,
+    fuel_limit: Option<std::num::NonZeroU64>,
     progress: Arc<HotSwapProgress>,
 ) -> Result<TimedSwapResult> {
+    let wasm_bytes = Arc::<[u8]>::from(wasm_bytes);
     let mut timeline = SwapTimeline::start();
 
-    let component = engine.compile_cached(wasm_bytes)?;
-    timeline.mark_compile_done();
-
-    let pre = engine.pre_instantiate_router(&component)?;
+    let pre = compile_and_link(
+        engine,
+        wasm_bytes,
+        node_id,
+        &mut timeline,
+        WaferEngine::pre_instantiate_router,
+    )
+    .await?;
     let pre = Arc::new(pre);
 
-    let mut store = Store::new(
-        engine.inner(),
-        WaferState::new_with_memory_limit(node_id, capabilities, memory_limit),
-    );
-    store.limiter(|s| s.limits_mut());
-    // AC F5.AC2: skip metering setters when unlimited; see transform swap path.
-    if let Some(n) = engine.fuel_limit() {
-        store
-            .set_fuel(n.get())
-            .map_err(|e| WaferError::PluginInit { message: format!("failed to set fuel: {e}") })?;
-    }
-    if let Some(n) = engine.epoch_deadline() {
-        store.epoch_deadline_trap();
-        store.set_epoch_deadline(n.get());
-    }
+    let mut store = new_swap_store(engine, node_id, capabilities, memory_limit, fuel_limit)?;
 
     let instance = pre
         .instantiate_async(&mut store)

@@ -37,6 +37,7 @@ use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
 use wafer_core::config::NodeDef;
 use wafer_core::engine::Capabilities;
 use wafer_core::error::WaferError;
+use wafer_core::node::NodeKind;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel;
 use wafer_core::orchestrator::launch_pipeline_timed;
 use wafer_core::orchestrator::{PipelineHandle, PipelineOrchestrator};
@@ -285,7 +286,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
         plugin_path,
         capabilities,
         memory_limit,
-        fuel_limit,
+        node_fuel,
     }) = swap_plan
     {
         if !orchestrator.swappable_nodes().contains(&node_id.as_str()) {
@@ -300,6 +301,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
 
         let output_dir = args.swap_output_dir.clone();
         let engine = Arc::clone(orchestrator.engine());
+        let fuel_limit = engine.fuel_budget(NodeKind::Transform, node_fuel);
         let cancel = orchestrator.cancel_token().clone();
 
         // Use a oneshot to pass the prepared swap payload back to main
@@ -344,6 +346,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
                         node = %node_id,
                         compile_ns = ?timed.timeline.compile_duration_ns(),
                         instantiate_ns = ?timed.timeline.instantiate_duration_ns(),
+                        compile_cache = ?timed.timeline.compile_cache,
                         "Swap prepared"
                     );
 
@@ -428,7 +431,7 @@ struct SwapPlan {
     plugin_path: PathBuf,
     capabilities: Capabilities,
     memory_limit: usize,
-    fuel_limit: Option<std::num::NonZeroU64>,
+    node_fuel: Option<std::num::NonZeroU64>,
 }
 
 impl SwapPlan {
@@ -449,7 +452,7 @@ impl SwapPlan {
         Ok(Self {
             delay_secs,
             memory_limit: wasm.memory_limit.unwrap_or(config.engine.memory.transform),
-            fuel_limit: wasm.fuel.or(config.engine.fuel.transform),
+            node_fuel: wasm.fuel,
             node_id,
             plugin_path,
             capabilities,
@@ -573,17 +576,25 @@ async fn run_with_swap(
         () = cancel.cancelled() => {}
         result = rx => match result {
             Ok(Ok(PreparedSwap { node_id, payload, wasm_bytes, completion })) => {
-                match orchestrator.send_swap(&node_id, payload) {
-                    Ok(()) => {
+                let handle = orchestrator.handle();
+                let dispatched = handle
+                    .try_begin_swap(&node_id)
+                    .and_then(|guard| handle.send_swap(&node_id, payload).map(|()| guard));
+                match dispatched {
+                    Ok(guard) => {
                         info!(node = %node_id, "Hot-swap dispatched");
-                        adoption = Some(tokio::spawn(record_adopted_swap(
-                            orchestrator.handle(),
+                        let recorded = record_adopted_swap(
+                            handle,
                             node_id,
                             wasm_bytes,
                             completion,
                             provenance,
                             run_done.clone(),
-                        )));
+                        );
+                        adoption = Some(tokio::spawn(async move {
+                            recorded.await;
+                            drop(guard);
+                        }));
                     }
                     Err(e) => {
                         error!(error = %e, "Hot-swap dispatch failed");

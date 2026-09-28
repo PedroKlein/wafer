@@ -159,7 +159,7 @@ mod tests {
             assert!(env.trace_id().is_some(), "source ingress should assign trace_id");
         }
         assert_eq!(metrics.processed(), 10);
-        assert_eq!(metrics.failed(), 0);
+        assert_eq!(metrics.attempts_failed(), 0);
     }
 
     /// A source whose every `poll()` fails immediately without awaiting.
@@ -220,7 +220,7 @@ mod tests {
 
         let err = result.expect_err("a permanently failing source must fail the run");
         assert!(err.to_string().contains("broken-src"), "{err}");
-        assert_eq!(metrics.failed(), u64::from(MAX_CONSECUTIVE_POLL_ERRORS));
+        assert_eq!(metrics.attempts_failed(), u64::from(MAX_CONSECUTIVE_POLL_ERRORS));
         assert_eq!(state.state(), wafer_types::NodeState::Error);
         assert!(
             started.elapsed() >= POLL_ERROR_BACKOFF_MAX,

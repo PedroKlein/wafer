@@ -697,30 +697,6 @@ impl PipelineOrchestrator {
         self.task_nodes.remove(&task_id).map_or_else(|| "<unknown>".to_owned(), String::from)
     }
 
-    /// Send a hot-swap payload to a specific node via its watch channel.
-    ///
-    /// The node loop will pick up the new instance between messages.
-    /// This is non-blocking — the caller doesn't wait for the swap to complete.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the node doesn't exist or doesn't support hot-swap.
-    pub fn send_swap(&self, node_id: &str, payload: SwapPayload) -> Result<()> {
-        let sender = self.watch_senders.get(node_id).ok_or_else(|| {
-            WaferError::Runtime(format!(
-                "cannot hot-swap node '{node_id}': not found or not a Wasm node"
-            ))
-        })?;
-
-        sender.send(Some(payload)).map_err(|_send_err| {
-            WaferError::Runtime(format!(
-                "cannot hot-swap node '{node_id}': receiver dropped (task dead?)"
-            ))
-        })?;
-
-        Ok(())
-    }
-
     /// Initiate graceful shutdown.
     ///
     /// Fires the cancellation token → all runner loops break → flush retries →
@@ -886,12 +862,14 @@ impl PipelineOrchestrator {
 
     /// Export aggregate per-node metrics and exact recovery samples.
     ///
-    /// Schema: `node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count`
-    ///
-    /// Only emitted on graceful shutdown. `messages_in` = processed + failed
-    /// (every attempt counts as an incoming message). `error_state_seconds`
-    /// is derived from cumulative recovery duration (time from Error entry to
-    /// Running re-entry).
+    /// Only emitted on graceful shutdown, after every runner has flushed its
+    /// retry buffer, so each processing node satisfies
+    /// `messages_in = messages_out + filtered_out + skipped + retry_exhausted_skips
+    /// + dlq_sent + dlq_lost + dropped_on_recovery + dropped_on_teardown`. `messages_in` is the node's
+    /// input-queue dequeue count (0 for sources). `traps_*` count calls the
+    /// host aborted, `guest_*` count errors the guest returned, and
+    /// `attempts_failed` counts every failed call including retries.
+    /// `error_state_seconds` is the cumulative Error to Running recovery time.
     ///
     /// # Errors
     ///
@@ -899,11 +877,20 @@ impl PipelineOrchestrator {
     pub fn export_per_node_metrics(&self, dir: &std::path::Path) -> std::io::Result<()> {
         use std::io::Write;
 
+        use crate::runner::error_policy::{ErrorCategory, TrapKind};
+
         let path = dir.join("per_node_metrics.csv");
         let mut f = std::fs::File::create(&path)?;
+        write!(f, "node_id,messages_in,messages_out,filtered_out,traps_total")?;
+        for kind in TrapKind::ALL {
+            write!(f, ",traps_{}", kind.as_str())?;
+        }
+        for category in ErrorCategory::ALL {
+            write!(f, ",guest_{category}")?;
+        }
         writeln!(
             f,
-            "node_id,messages_in,messages_out,traps_total,error_state_seconds,recovery_count,retry_exhausted_skips"
+            ",attempts_failed,retries,dlq_sent,dlq_lost,skipped,retry_exhausted_skips,dropped_on_recovery,dropped_on_teardown,error_state_seconds,recovery_count"
         )?;
         let mut recovery = std::fs::File::create(dir.join("recovery.csv"))?;
         writeln!(recovery, "node_id,sample_index,duration_ns")?;
@@ -914,14 +901,24 @@ impl PipelineOrchestrator {
 
         for node_id in node_ids {
             let Some(m) = self.metrics.get(node_id) else { continue };
-            let messages_out = m.processed();
-            let traps_total = m.failed();
-            let messages_in = messages_out.saturating_add(traps_total);
-            let recovery_count = m.recovery_count();
-            let exhausted_skips = m.exhausted_skips();
-            // error_state_seconds: cumulative time in Error/Recovering states.
-            // recovery_ns_total accumulates the full Error→Recovering→Running
-            // duration for each recovery cycle.
+            let messages_in = self
+                .queue_probes
+                .iter()
+                .find(|probe| &*probe.queue == node_id)
+                .map_or(0, |probe| probe.metrics.dequeued());
+            write!(
+                f,
+                "{node_id},{messages_in},{},{},{}",
+                m.processed(),
+                m.filtered_out(),
+                m.traps_total()
+            )?;
+            for kind in TrapKind::ALL {
+                write!(f, ",{}", m.traps(kind))?;
+            }
+            for category in ErrorCategory::ALL {
+                write!(f, ",{}", m.guest_errors(category))?;
+            }
             #[expect(
                 clippy::as_conversions,
                 clippy::cast_precision_loss,
@@ -930,7 +927,16 @@ impl PipelineOrchestrator {
             let error_state_secs = m.recovery_ns_total() as f64 / 1_000_000_000.0;
             writeln!(
                 f,
-                "{node_id},{messages_in},{messages_out},{traps_total},{error_state_secs:.6},{recovery_count},{exhausted_skips}"
+                ",{},{},{},{},{},{},{},{},{error_state_secs:.6},{}",
+                m.attempts_failed(),
+                m.retries(),
+                m.dlq_sent(),
+                m.dlq_lost(),
+                m.skipped(),
+                m.exhausted_skips(),
+                m.dropped_on_recovery(),
+                m.dropped_on_teardown(),
+                m.recovery_count()
             )?;
             for (sample_index, duration_ns) in m.recovery_samples_ns().into_iter().enumerate() {
                 writeln!(recovery, "{node_id},{sample_index},{duration_ns}")?;
@@ -1553,8 +1559,15 @@ mod tests {
         assert!(recovery.contains("src,1,67890"));
         let node_metrics = std::fs::read_to_string(output.path().join("per_node_metrics.csv"))
             .expect("read node metrics");
-        assert!(node_metrics.contains("retry_exhausted_skips"));
-        assert!(node_metrics.contains("src,0,0,0,0.000080,2,1"));
+        let mut lines = node_metrics.lines();
+        let header: Vec<&str> = lines.next().expect("header").split(',').collect();
+        let src: Vec<&str> =
+            lines.find(|line| line.starts_with("src,")).expect("src row").split(',').collect();
+        assert_eq!(header.len(), src.len(), "every row matches the header");
+        let column = |name: &str| src[header.iter().position(|h| *h == name).expect(name)];
+        assert_eq!(column("retry_exhausted_skips"), "1");
+        assert_eq!(column("error_state_seconds"), "0.000080");
+        assert_eq!(column("recovery_count"), "2");
 
         orchestrator.shutdown().await.expect("shutdown");
     }

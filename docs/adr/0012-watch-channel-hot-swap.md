@@ -30,7 +30,7 @@ We use a per-node `tokio::sync::watch` channel to deliver hot-swap payloads to e
 
 The hot-swap sequence becomes:
 
-1. **PREPARE** — The orchestrator compiles the new `.wasm` component, pre-instantiates it (`InstancePre`), creates a fresh `Store` with fuel/epoch configuration, and packages everything into a typed `SwapPayload` variant (`Transform`, `Filter`, or `Router`). Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` (`prepare_transform_swap`, `prepare_filter_swap`, `prepare_router_swap`).
+1. **PREPARE** — The orchestrator compiles the new `.wasm` component and pre-instantiates it (`InstancePre`) on tokio's blocking pool, so a Cranelift compile never occupies a worker that drives pipeline nodes, then creates a fresh `Store` with fuel/epoch configuration, and packages everything into a typed `SwapPayload` variant (`Transform`, `Filter`, or `Router`). Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` (`prepare_transform_swap`, `prepare_filter_swap`, `prepare_router_swap`).
 
 2. **SIGNAL** — The orchestrator sends `Some(payload)` via the `watch::Sender`. This is a single atomic pointer swap inside the watch channel; it does not block.
 

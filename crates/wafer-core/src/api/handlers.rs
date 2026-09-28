@@ -12,6 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::orchestrator::PipelineHandle;
+use crate::runner::error_policy::{ErrorCategory, TrapKind};
 
 /// Shared state type for axum handlers.
 pub type AppState = Arc<PipelineHandle>;
@@ -87,7 +88,7 @@ pub async fn list_nodes(State(orch): State<AppState>) -> Json<Vec<NodeInfoRespon
             let state =
                 orch.node_state(id).map_or_else(|| "Unknown".to_string(), |s| format!("{s:?}"));
             let (processed, failed) =
-                orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.failed()));
+                orch.node_metrics(id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
             NodeInfoResponse {
                 id: id.clone(),
                 state,
@@ -107,7 +108,7 @@ pub async fn get_node(
 ) -> Result<Json<NodeInfoResponse>, StatusCode> {
     let state = orch.node_state(&id).ok_or(StatusCode::NOT_FOUND)?;
     let (processed, failed) =
-        orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.failed()));
+        orch.node_metrics(&id).map_or((0, 0), |m| (m.processed(), m.attempts_failed()));
     let swappable = orch.swappable_nodes().contains(&id.as_str());
 
     Ok(Json(NodeInfoResponse {
@@ -142,6 +143,7 @@ pub async fn hot_swap(
     Json(body): Json<HotSwapRequest>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
     use crate::config::NodeDef;
+    use crate::node::NodeKind;
     use crate::orchestrator::hotswap::{
         prepare_filter_swap_timed, prepare_router_swap_timed,
         prepare_transform_swap_timed_with_fuel,
@@ -162,34 +164,25 @@ pub async fn hot_swap(
     let _replacement_guard =
         orch.try_begin_swap(&id).map_err(|error| replacement_guard_error(&error))?;
 
-    let resolve_capabilities = |capabilities| {
-        capabilities_from_config(capabilities)
-            .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
-    };
-    let (kind, capabilities, memory_limit, transform_fuel) = match engine_config.nodes.get(&id) {
-        Some(NodeDef::Transform(wasm)) => (
-            SwapKind::Transform,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.transform),
-            wasm.fuel.or(engine_config.engine.fuel.transform),
-        ),
-        Some(NodeDef::Filter(wasm)) => (
-            SwapKind::Filter,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.filter),
-            None,
-        ),
-        Some(NodeDef::Router(wasm)) => (
-            SwapKind::Router,
-            resolve_capabilities(&wasm.capabilities)?,
-            wasm.memory_limit.unwrap_or(engine_config.engine.memory.router),
-            None,
-        ),
+    let (kind, node_kind, wasm, memory_limit) = match engine_config.nodes.get(&id) {
+        Some(NodeDef::Transform(wasm)) => {
+            (SwapKind::Transform, NodeKind::Transform, wasm, engine_config.engine.memory.transform)
+        }
+        Some(NodeDef::Filter(wasm)) => {
+            (SwapKind::Filter, NodeKind::Filter, wasm, engine_config.engine.memory.filter)
+        }
+        Some(NodeDef::Router(wasm)) => {
+            (SwapKind::Router, NodeKind::Router, wasm, engine_config.engine.memory.router)
+        }
         Some(NodeDef::Source(_) | NodeDef::Sink(_)) => {
             return Err((StatusCode::NOT_FOUND, format!("node '{id}' does not support hot-swap")));
         }
         None => return Err((StatusCode::NOT_FOUND, format!("node '{id}' not found"))),
     };
+    let capabilities = capabilities_from_config(&wasm.capabilities)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+    let memory_limit = wasm.memory_limit.unwrap_or(memory_limit);
+    let fuel_limit = engine.fuel_budget(node_kind, wasm.fuel);
 
     let wasm_bytes = tokio::fs::read(&body.wasm_path)
         .await
@@ -204,7 +197,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
-                transform_fuel,
+                fuel_limit,
                 progress,
             )
             .await
@@ -216,6 +209,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
+                fuel_limit,
                 progress,
             )
             .await
@@ -227,6 +221,7 @@ pub async fn hot_swap(
                 &id,
                 capabilities,
                 memory_limit,
+                fuel_limit,
                 progress,
             )
             .await
@@ -236,6 +231,8 @@ pub async fn hot_swap(
         (StatusCode::INTERNAL_SERVER_ERROR, format!("swap preparation failed: {e}"))
     })?;
 
+    let compile_cache =
+        timed_result.timeline.compile_cache.map(crate::engine::CacheOutcome::as_str);
     let progress = timed_result.payload.progress();
     let signal_at = std::time::Instant::now();
     timed_result.timeline.mark_signal_sent();
@@ -252,6 +249,7 @@ pub async fn hot_swap(
                 "node_id": id,
                 "status": "rolled_back",
                 "reason": reason,
+                "compile_cache": compile_cache,
                 "timeline": {
                     "compile_ns": timed_result.timeline.compile_duration_ns(),
                     "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -285,6 +283,7 @@ pub async fn hot_swap(
                     "node_id": id,
                     "replacement_adopted": adopted_at.is_some(),
                     "first_post_replacement_local_outcome": null,
+                    "compile_cache": compile_cache,
                     "timeline": {
                         "compile_ns": timed_result.timeline.compile_duration_ns(),
                         "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -323,6 +322,7 @@ pub async fn hot_swap(
             "disposition": report.first_post_replacement_local_outcome.as_str(),
             "after_adoption_ns": first_post_replacement_local_outcome_ns,
         },
+        "compile_cache": compile_cache,
         "timeline": {
             "compile_ns": timed_result.timeline.compile_duration_ns(),
             "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -476,9 +476,9 @@ pub async fn reconfigure(
                     "replacement_adopted": adopted_at.is_some(),
                     "first_post_replacement_local_outcome": null,
                     "timeline": {
-                        "compile_ns": 0u64,
-                        "instantiate_ns": 0u64,
-                        "signal_ns": 0u64,
+                        "compile_ns": null,
+                        "instantiate_ns": null,
+                        "signal_ns": null,
                         "replacement_adopted_ns": replacement_adopted_ns,
                         "first_post_replacement_local_outcome_ns": null,
                     }
@@ -505,9 +505,9 @@ pub async fn reconfigure(
             "after_adoption_ns": first_post_replacement_local_outcome_ns,
         },
         "timeline": {
-            "compile_ns": 0u64,
-            "instantiate_ns": 0u64,
-            "signal_ns": 0u64,
+            "compile_ns": null,
+            "instantiate_ns": null,
+            "signal_ns": null,
             "replacement_adopted_ns": replacement_adopted_ns,
             "first_post_replacement_local_outcome_ns": first_post_replacement_local_outcome_ns,
         }
@@ -535,14 +535,37 @@ pub async fn metrics(State(orch): State<AppState>) -> impl IntoResponse {
         if let Some(m) = orch.node_metrics(node_id) {
             writeln!(output, "wafer_node_processed_total{{node=\"{node_id}\"}} {}", m.processed())
                 .expect("String write is infallible");
-            writeln!(output, "wafer_node_failed_total{{node=\"{node_id}\"}} {}", m.failed())
+            for (name, value) in [
+                ("failed", m.attempts_failed()),
+                ("filtered_out", m.filtered_out()),
+                ("retries", m.retries()),
+                ("dlq_sent", m.dlq_sent()),
+                ("dlq_lost", m.dlq_lost()),
+                ("skipped", m.skipped()),
+                ("retry_exhausted_skip", m.exhausted_skips()),
+                ("dropped_on_recovery", m.dropped_on_recovery()),
+                ("dropped_on_teardown", m.dropped_on_teardown()),
+            ] {
+                writeln!(output, "wafer_node_{name}_total{{node=\"{node_id}\"}} {value}")
+                    .expect("String write is infallible");
+            }
+            for kind in TrapKind::ALL {
+                writeln!(
+                    output,
+                    "wafer_node_traps_total{{node=\"{node_id}\",kind=\"{}\"}} {}",
+                    kind.as_str(),
+                    m.traps(kind)
+                )
                 .expect("String write is infallible");
-            writeln!(
-                output,
-                "wafer_node_retry_exhausted_skip_total{{node=\"{node_id}\"}} {}",
-                m.exhausted_skips()
-            )
-            .expect("String write is infallible");
+            }
+            for category in ErrorCategory::ALL {
+                writeln!(
+                    output,
+                    "wafer_node_guest_errors_total{{node=\"{node_id}\",category=\"{category}\"}} {}",
+                    m.guest_errors(category)
+                )
+                .expect("String write is infallible");
+            }
         }
     }
 

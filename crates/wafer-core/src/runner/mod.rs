@@ -261,9 +261,8 @@ impl std::fmt::Debug for TransformRollbackSnapshot {
 }
 
 /// State-machine slice of `TransformCanaryState` — the counters and config
-/// that determine whether a trap triggers rollback or exhausts the retry
-/// budget. Split out from the parent so unit tests can exercise the
-/// production `record_trap` / `record_success` / `retries_exhausted` /
+/// that decide when the canary window closes. Split out from the parent so
+/// unit tests can exercise the production `record_success` /
 /// `window_expired` semantics without fabricating a real
 /// `Arc<TransformNodePre<WaferState>>` (which requires a compiled
 /// component + linker).
@@ -274,14 +273,13 @@ impl std::fmt::Debug for TransformRollbackSnapshot {
 #[derive(Debug)]
 pub(crate) struct CanaryCounters {
     pub success_count: u32,
-    pub trap_count: u32,
     pub window_start: Instant,
     pub config: HotSwapConfig,
 }
 
 impl CanaryCounters {
     pub fn new(config: HotSwapConfig) -> Self {
-        Self { success_count: 0, trap_count: 0, window_start: Instant::now(), config }
+        Self { success_count: 0, window_start: Instant::now(), config }
     }
 
     pub fn window_expired(&self) -> bool {
@@ -290,19 +288,8 @@ impl CanaryCounters {
                 >= self.config.canary_window_ms
     }
 
-    pub const fn retries_exhausted(&self) -> bool {
-        self.trap_count > self.config.max_rollback_retries
-    }
-
     pub const fn record_success(&mut self) {
         self.success_count = self.success_count.saturating_add(1);
-    }
-
-    /// Record a trap and return whether rollback should fire.
-    /// Returns true if we should roll back, false if retries exhausted.
-    pub const fn record_trap(&mut self) -> bool {
-        self.trap_count = self.trap_count.saturating_add(1);
-        !self.retries_exhausted()
     }
 }
 
@@ -338,24 +325,9 @@ impl TransformCanaryState {
         self.counters.window_expired()
     }
 
-    /// Check if the rollback retry budget is exhausted.
-    #[expect(
-        dead_code,
-        reason = "used by upcoming process-time rollback integration in runner loop"
-    )]
-    pub const fn retries_exhausted(&self) -> bool {
-        self.counters.retries_exhausted()
-    }
-
     /// Record a successful process() call.
     pub const fn record_success(&mut self) {
         self.counters.record_success();
-    }
-
-    /// Record a trap and return whether rollback should fire.
-    /// Returns true if we should roll back, false if retries exhausted.
-    pub const fn record_trap(&mut self) -> bool {
-        self.counters.record_trap()
     }
 }
 
@@ -448,15 +420,17 @@ pub(crate) fn continue_after_policy_action(
     metrics: &NodeMetrics,
 ) -> bool {
     match action {
-        ErrorPolicyAction::ExhaustedSkip => {
-            metrics.record_exhausted_skip();
-            true
-        }
-        ErrorPolicyAction::Teardown => false,
-        ErrorPolicyAction::Continue | ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => {
-            true
+        ErrorPolicyAction::Retried => metrics.record_retry(),
+        ErrorPolicyAction::DlqSent => metrics.record_dlq_sent(),
+        ErrorPolicyAction::Skipped => metrics.record_skipped(),
+        ErrorPolicyAction::ExhaustedSkip => metrics.record_exhausted_skip(),
+        ErrorPolicyAction::DlqFull | ErrorPolicyAction::DlqClosed => metrics.record_dlq_lost(),
+        ErrorPolicyAction::Teardown => {
+            metrics.record_dropped_on_teardown();
+            return false;
         }
     }
+    true
 }
 
 /// Receiving end of a node's hot-swap watch channel.
@@ -635,102 +609,75 @@ impl SwapPayload {
     ///
     /// On failure the target node keeps its v1 store/bindings/pre unchanged.
     ///
-    /// Native transforms reject the swap with a stable
-    /// `WaferError::Runtime` message (the baseline is by construction
-    /// not swappable).
+    /// # Errors
     ///
-    /// # Panics
-    ///
-    /// Panics if the swap payload has already been consumed. This is a bug —
-    /// each `SwapPayload` is single-consumer.
-    #[expect(
-        clippy::expect_used,
-        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
-    )]
+    /// Fails without touching the node when the payload is not a transform
+    /// replacement, was already applied, or targets a native baseline
+    /// transform (not swappable by construction), and when the replacement's
+    /// `validate()`/`init()` fails.
     pub async fn try_apply_transform(
         self,
         node: &mut crate::node::TransformNode,
     ) -> Result<(), crate::error::WaferError> {
-        if let Self::Transform { replacement, .. } = self {
-            let wasm = node.as_wasm_mut().ok_or_else(|| {
-                crate::error::WaferError::Runtime(
-                    "native baseline transforms do not support hot-swap".into(),
-                )
-            })?;
-            let replacement = replacement
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload already consumed");
-            wasm.try_hot_swap(replacement).await?;
-        }
-        Ok(())
+        let Self::Transform { replacement, .. } = self else {
+            return Err(wrong_payload("transform"));
+        };
+        let wasm = node.as_wasm_mut().ok_or_else(|| {
+            crate::error::WaferError::Runtime(
+                "native baseline transforms do not support hot-swap".into(),
+            )
+        })?;
+        let replacement = take_once(&replacement)?;
+        wasm.try_hot_swap(replacement).await
     }
 
-    /// Native filters have no InstancePre — a swap payload targeting one
-    /// returns an error so the runner logs `hot-swap init failed; keeping
-    /// v1` (parallel to the native-transform contract in [`TransformNode`]).
+    /// Apply this swap payload to a filter node with rollback-on-init-failure.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the swap payload's store or bindings have already been consumed.
-    #[expect(
-        clippy::expect_used,
-        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
-    )]
+    /// As [`Self::try_apply_transform`], for filters.
     pub async fn try_apply_filter(
         self,
         node: &mut crate::node::FilterNode,
     ) -> Result<(), crate::error::WaferError> {
-        if let Self::Filter { new_store, new_bindings, new_pre, .. } = self {
-            let wasm = node.as_wasm_mut().ok_or_else(|| {
-                crate::error::WaferError::Runtime(
-                    "native baseline filters do not support hot-swap".into(),
-                )
-            })?;
-            let store = new_store
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload bindings already consumed");
-            wasm.try_hot_swap(store, bindings, new_pre).await?;
-        }
-        Ok(())
+        let Self::Filter { new_store, new_bindings, new_pre, .. } = self else {
+            return Err(wrong_payload("filter"));
+        };
+        let wasm = node.as_wasm_mut().ok_or_else(|| {
+            crate::error::WaferError::Runtime(
+                "native baseline filters do not support hot-swap".into(),
+            )
+        })?;
+        let (store, bindings) = (take_once(&new_store)?, take_once(&new_bindings)?);
+        wasm.try_hot_swap(store, bindings, new_pre).await
     }
 
     /// Apply this swap payload to a router node with rollback-on-init-failure.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the swap payload's store or bindings have already been consumed.
-    #[expect(
-        clippy::expect_used,
-        reason = "SwapPayload is single-consumer; .take() returns None only if consumed twice, which is a bug"
-    )]
+    /// As [`Self::try_apply_transform`], for routers.
     pub async fn try_apply_router(
         self,
         node: &mut WasmRouterNode,
     ) -> Result<(), crate::error::WaferError> {
-        if let Self::Router { new_store, new_bindings, new_pre, .. } = self {
-            let store = new_store
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload store already consumed");
-            let bindings = new_bindings
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .take()
-                .expect("swap payload bindings already consumed");
-            node.try_hot_swap(store, bindings, new_pre).await?;
-        }
-        Ok(())
+        let Self::Router { new_store, new_bindings, new_pre, .. } = self else {
+            return Err(wrong_payload("router"));
+        };
+        let (store, bindings) = (take_once(&new_store)?, take_once(&new_bindings)?);
+        node.try_hot_swap(store, bindings, new_pre).await
     }
+}
+
+fn wrong_payload(kind: &str) -> crate::error::WaferError {
+    crate::error::WaferError::Runtime(format!("{kind} node received a non-{kind} swap payload"))
+}
+
+fn take_once<T>(slot: &std::sync::Mutex<Option<T>>) -> Result<T, crate::error::WaferError> {
+    slot.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+        .ok_or_else(|| crate::error::WaferError::Runtime("swap payload already applied".into()))
 }
 
 // =============================================================================
@@ -977,65 +924,6 @@ mod tests {
         );
     }
 
-    // ---- A17: canary state machine invariants (B2 unit-level cover) ----
-    //
-    // BL-4 fix (2026-08-02): these tests now exercise the production
-    // `CanaryCounters` methods directly (see runner/mod.rs
-    // `TransformCanaryState::record_trap` delegates to `counters.record_trap`).
-    // A refactor changing the record_trap semantics will surface here.
-
-    #[test]
-    fn canary_counters_bounds_trap_count() {
-        // AC: after M in-budget traps, trap M+1 must flip record_trap to
-        // false (retries exhausted). Test the production CanaryCounters.
-        let config = wafer_types::config::HotSwapConfig {
-            canary_success_count: 32,
-            canary_window_ms: 10_000,
-            max_rollback_retries: 3,
-        };
-        let max = config.max_rollback_retries;
-        let mut counters = CanaryCounters::new(config);
-
-        for i in 1..=max {
-            let within = counters.record_trap();
-            assert!(within, "trap #{i} must be within budget of M={max}");
-            assert_eq!(counters.trap_count, i);
-            assert!(!counters.retries_exhausted());
-        }
-        // Trap M+1 must exhaust the budget.
-        let within = counters.record_trap();
-        assert!(!within, "trap #{} must exhaust budget of M={max}", max + 1);
-        assert_eq!(counters.trap_count, max + 1);
-        assert!(counters.retries_exhausted());
-    }
-
-    #[test]
-    fn canary_counters_record_trap_matches_spec_across_budgets() {
-        // Sanity: exercise `retries_exhausted` boundary across a range of
-        // budgets. For a budget M, the first M calls to record_trap must
-        // return true; every subsequent call must return false.
-        for max in [0u32, 1, 3, 10] {
-            let config = wafer_types::config::HotSwapConfig {
-                canary_success_count: 32,
-                canary_window_ms: 10_000,
-                max_rollback_retries: max,
-            };
-            let mut counters = CanaryCounters::new(config);
-            let mut escalations = 0u32;
-            for _ in 0..(max + 5) {
-                let within = counters.record_trap();
-                if !within {
-                    escalations = escalations.saturating_add(1);
-                }
-            }
-            // With `max+5` traps, exactly 5 escalations should have been
-            // observed once trap_count crossed the budget.
-            assert_eq!(escalations, 5, "escalation count wrong for max={max}");
-            assert_eq!(counters.trap_count, max + 5);
-            assert!(counters.retries_exhausted());
-        }
-    }
-
     #[test]
     fn canary_counters_record_success_and_window_expiry() {
         // AC: record_success increments success_count. window_expired
@@ -1043,7 +931,6 @@ mod tests {
         let config = wafer_types::config::HotSwapConfig {
             canary_success_count: 3,
             canary_window_ms: 10_000,
-            max_rollback_retries: 3,
         };
         let mut counters = CanaryCounters::new(config);
 
@@ -1364,17 +1251,26 @@ mod tests {
     }
 
     #[test]
-    fn exhausted_skip_action_records_once_without_counting_other_actions() {
+    fn every_policy_action_is_counted_once() {
         let metrics = NodeMetrics::new();
-        assert!(continue_after_policy_action(ErrorPolicyAction::Continue, &metrics));
-        assert!(continue_after_policy_action(ErrorPolicyAction::DlqFull, &metrics));
-        assert!(continue_after_policy_action(ErrorPolicyAction::DlqClosed, &metrics));
-        assert_eq!(metrics.exhausted_skips(), 0);
-
-        assert!(continue_after_policy_action(ErrorPolicyAction::ExhaustedSkip, &metrics));
-        assert_eq!(metrics.exhausted_skips(), 1);
+        for action in [
+            ErrorPolicyAction::Retried,
+            ErrorPolicyAction::DlqSent,
+            ErrorPolicyAction::Skipped,
+            ErrorPolicyAction::ExhaustedSkip,
+            ErrorPolicyAction::DlqFull,
+            ErrorPolicyAction::DlqClosed,
+        ] {
+            assert!(continue_after_policy_action(action, &metrics), "{action:?} continues");
+        }
         assert!(!continue_after_policy_action(ErrorPolicyAction::Teardown, &metrics));
+
+        assert_eq!(metrics.retries(), 1);
+        assert_eq!(metrics.dlq_sent(), 1);
+        assert_eq!(metrics.skipped(), 1);
         assert_eq!(metrics.exhausted_skips(), 1);
+        assert_eq!(metrics.dlq_lost(), 2);
+        assert_eq!(metrics.dropped_on_teardown(), 1);
     }
 
     #[tokio::test(start_paused = true)]

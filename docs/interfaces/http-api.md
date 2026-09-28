@@ -84,6 +84,7 @@ Successful local adoption response:
     "disposition": "forwarded-enqueued",
     "after_adoption_ns": 68042
   },
+  "compile_cache": "compiled",
   "timeline": {
     "compile_ns": 8912345,
     "instantiate_ns": 1204567,
@@ -93,6 +94,12 @@ Successful local adoption response:
   }
 }
 ```
+
+`compile_cache` says what `compile_ns` measured: `compiled` for a Cranelift
+compile, `memory_hit` when this process already compiled the same bytes (a
+previous swap, or the component loaded at launch), or `disk_hit` when an
+on-disk cache is configured and holds the component. Compilation and linking
+run on tokio's blocking pool, not on the workers that drive pipeline nodes.
 
 The disposition is one of `forwarded-enqueued`, `filter-dropped`, or
 `router-no-route`. This response proves replacement adoption and one local
@@ -107,6 +114,7 @@ return HTTP 200 with an explicit rollback:
   "node_id": "parse",
   "status": "rolled_back",
   "reason": "replacement process trap",
+  "compile_cache": "compiled",
   "timeline": {
     "compile_ns": 7058000,
     "instantiate_ns": 247000,
@@ -152,8 +160,9 @@ Request:
 
 Reconfiguration uses the loaded component's cached `InstancePre`, validates and
 initializes a fresh instance, and uses the same per-node mutation guard and
-runner-local response contract as hot-swap. On success, compile, instantiate,
-and signal durations are zero. A non-empty `expected_plugin_hash` mismatch
+runner-local response contract as hot-swap. Nothing is compiled or signalled
+through the hot-swap preparation path, so `compile_ns`, `instantiate_ns`, and
+`signal_ns` are null and there is no `compile_cache`. A non-empty `expected_plugin_hash` mismatch
 returns HTTP 409. Initial launch does not populate that hash registry; callers
 that require the guard must first complete a successful hot-swap.
 
