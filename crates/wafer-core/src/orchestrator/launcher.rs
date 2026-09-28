@@ -129,10 +129,10 @@ pub async fn launch_pipeline_timed(
     for (node_id, node_def) in &config.nodes {
         match node_def {
             NodeDef::Source(source_def) => {
-                sources.insert(node_id.clone(), create_source(node_id, source_def));
+                sources.insert(node_id.clone(), create_source(node_id, source_def)?);
             }
             NodeDef::Sink(sink_def) => {
-                sinks.insert(node_id.clone(), create_sink(node_id, sink_def));
+                sinks.insert(node_id.clone(), create_sink(node_id, sink_def)?);
             }
             NodeDef::Transform(_) | NodeDef::Filter(_) | NodeDef::Router(_) => {}
         }
@@ -234,8 +234,10 @@ fn mark_replacement_eligible(build_output: &mut crate::orchestrator::builder::Bu
 // Source Factory
 // =============================================================================
 
-fn create_source(node_id: &str, source_def: &SourceDef) -> Box<dyn Source + Send> {
-    match source_def {
+/// Build a source and run its `validate()`, so a bad adapter config fails the
+/// launch instead of producing an empty or silently degraded run.
+fn create_source(node_id: &str, source_def: &SourceDef) -> Result<Box<dyn Source + Send>> {
+    let source: Box<dyn Source + Send> = match source_def {
         SourceDef::Stdin(_) => Box::new(StdinSource::new(node_id)),
         SourceDef::File(cfg) => Box::new(FileSource::new(node_id, &cfg.path)),
         SourceDef::Mqtt(cfg) => {
@@ -251,7 +253,9 @@ fn create_source(node_id: &str, source_def: &SourceDef) -> Box<dyn Source + Send
         }
         SourceDef::Http(cfg) => Box::new(HttpSource::new(node_id, &cfg.bind, &cfg.path)),
         SourceDef::BenchSource(cfg) => Box::new(bench_source_from_toml(node_id, cfg)),
-    }
+    };
+    source.validate().map_err(|e| invalid_io_node("source", node_id, &e))?;
+    Ok(source)
 }
 
 fn bench_source_from_toml(node_id: &str, cfg: &BenchSourceConfigToml) -> BenchSource {
@@ -270,8 +274,9 @@ fn bench_source_from_toml(node_id: &str, cfg: &BenchSourceConfigToml) -> BenchSo
 // Sink Factory
 // =============================================================================
 
-fn create_sink(node_id: &str, sink_def: &SinkDef) -> Box<dyn Sink + Send> {
-    match sink_def {
+/// Build a sink and run its `validate()` before anything is spawned.
+fn create_sink(node_id: &str, sink_def: &SinkDef) -> Result<Box<dyn Sink + Send>> {
+    let sink: Box<dyn Sink + Send> = match sink_def {
         SinkDef::Stdout(_) => Box::new(StdoutSink::new(node_id)),
         SinkDef::File(cfg) => Box::new(FileSink::new(node_id, &cfg.path)),
         SinkDef::Mqtt(cfg) => {
@@ -280,7 +285,13 @@ fn create_sink(node_id: &str, sink_def: &SinkDef) -> Box<dyn Sink + Send> {
         }
         SinkDef::Http(cfg) => Box::new(HttpSink::new(node_id, &cfg.url)),
         SinkDef::BenchSink(cfg) => Box::new(bench_sink_from_toml(node_id, cfg)),
-    }
+    };
+    sink.validate().map_err(|e| invalid_io_node("sink", node_id, &e))?;
+    Ok(sink)
+}
+
+fn invalid_io_node(role: &str, node_id: &str, error: &WaferError) -> WaferError {
+    WaferError::Config(ConfigError::Message(format!("{role} '{node_id}' is invalid: {error}")))
 }
 
 fn bench_sink_from_toml(node_id: &str, cfg: &BenchSinkConfigToml) -> BenchSink {
@@ -803,6 +814,79 @@ mod tests {
         BenchSinkConfigToml, BenchSourceConfigToml, HttpHost, HttpScheme, OutboundHttpDestination,
     };
     use crate::node::Lifecycle;
+
+    #[tokio::test]
+    async fn invalid_bench_source_fails_launch_before_spawning() {
+        let config: Config = toml::from_str(
+            r#"
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 0.0
+total_messages = 10
+
+[nodes.sink]
+type = "sink"
+kind = "stdout"
+
+[[edges]]
+from = "source"
+to = "sink"
+"#,
+        )
+        .expect("config");
+
+        let Err(err) = Box::pin(launch_pipeline(config, None)).await else {
+            panic!("a zero-rate bench source must fail launch");
+        };
+        assert!(matches!(err, WaferError::Config(_)), "{err}");
+        assert!(err.to_string().contains("source 'source' is invalid"), "{err}");
+    }
+
+    /// Every bench/MQTT/HTTP adapter block in the evaluation configs must pass
+    /// the `validate()` that launch now runs, so no evaluation config starts
+    /// failing at launch. (File adapters are skipped: their paths are
+    /// resolved at run time relative to the harness working directory.)
+    #[test]
+    fn evaluation_config_adapters_pass_validation() {
+        fn toml_files(dir: &Path, out: &mut Vec<PathBuf>) {
+            for entry in std::fs::read_dir(dir).expect("read dir").flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    toml_files(&path, out);
+                } else if path.extension().is_some_and(|ext| ext == "toml") {
+                    out.push(path);
+                }
+            }
+        }
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eval/configs");
+        let mut files = Vec::new();
+        toml_files(&root, &mut files);
+        let mut checked = 0;
+        for file in files {
+            let Ok(config) =
+                toml::from_str::<Config>(&std::fs::read_to_string(&file).expect("read"))
+            else {
+                continue; // not a pipeline config
+            };
+            for (node_id, def) in &config.nodes {
+                let result = match def {
+                    NodeDef::Source(
+                        source @ (SourceDef::BenchSource(_)
+                        | SourceDef::Mqtt(_)
+                        | SourceDef::Http(_)),
+                    ) => create_source(node_id, source).map(drop),
+                    NodeDef::Sink(
+                        sink @ (SinkDef::BenchSink(_) | SinkDef::Mqtt(_) | SinkDef::Http(_)),
+                    ) => create_sink(node_id, sink).map(drop),
+                    _ => continue,
+                };
+                result.unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no evaluation config adapters found under {}", root.display());
+    }
 
     #[test]
     fn bench_sink_relative_output_directory_is_scoped_to_run() {
