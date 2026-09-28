@@ -162,6 +162,7 @@ mise run setup          # Verify Rust/rustup, then install pinned helper tools
 mise tasks ls           # List all available tasks
 mise run build          # Build entire workspace
 mise run test           # Run all tests
+mise run test-eval      # Run the evaluation harness tests (Python and shell)
 mise run check          # Type-check without building
 mise run fmt            # Format code with rustfmt
 mise run clippy         # Run clippy lints

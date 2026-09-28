@@ -101,6 +101,18 @@ description = "Build the Wasm plugins, then run the workspace tests with every p
 env = { WAFER_REQUIRE_PLUGINS = "1" }
 run = ["plugins/build-plugins.sh --no-record", "cargo test --locked --workspace"]
 
+[tasks.test-eval]
+description = "Run the evaluation harness tests (pytest suites plus the shell tests; needs built plugins and uv)"
+run = [
+  "python3 -m pytest eval/scripts/tests -q",
+  "eval/scripts/tests/test_eval_portability.sh",
+  "eval/scripts/tests/test_host_tags.sh",
+  "eval/scripts/tests/test_pi5_tooling.sh",
+  "eval/scripts/tests/test_run_experiment_canonical.sh",
+  "eval/ekuiper/test-native-scripts.sh",
+  "uv run --directory eval/analysis --frozen pytest -q",
+]
+
 [tasks.test-docker]
 description = "Run the tests that need a Docker daemon (MQTT broker containers)"
 run = [
