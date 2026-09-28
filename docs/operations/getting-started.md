@@ -95,7 +95,7 @@ curl -s http://127.0.0.1:9090/ready
 # {"ready": true}
 
 curl -s http://127.0.0.1:9090/api/v1/nodes | jq
-# [{"id":"source","state":"Running","processed":0,"failed":0,"replacement_eligible":false}, ...]
+# [{"id":"source","state":"running","processed":0,"failed":0,"replacement_eligible":false}, ...]
 
 curl -s http://127.0.0.1:9090/metrics | head
 # wafer_node_processed_total{node="upper"} 3

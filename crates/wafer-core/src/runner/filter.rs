@@ -10,7 +10,7 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker, ProcessingGuard};
+use crate::node::{FilterNode, FilterOutcome, NodeMetrics, NodeStateTracker};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
@@ -74,6 +74,7 @@ async fn recover_after_timeout(
             true
         }
         Err(error) => {
+            state.transition_to_error();
             tracing::error!(node = filter.node_id(), %error, "recovery failed");
             policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
             false
@@ -106,6 +107,7 @@ pub async fn run_filter_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
@@ -147,10 +149,8 @@ pub async fn run_filter_loop(
 
         // 2. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
-        let guard = ProcessingGuard::enter(&state);
         let result = filter.evaluate(&envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(guard);
 
         match result {
             Ok(outcome) => {
@@ -198,6 +198,7 @@ pub async fn run_filter_loop(
                         }
                     }
                     Err(error) => {
+                        state.transition_to_error();
                         tracing::error!(node = filter.node_id(), %error, "recovery failed");
                         policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
                         break;
@@ -257,13 +258,11 @@ mod tests {
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-filter");
         let cancel = CancellationToken::new();
-        let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
 
         cancel.cancel();
 
         // Verify the loop infrastructure is valid
-        assert!(!state.is_processing());
         assert_eq!(metrics.processed(), 0);
         assert_eq!(metrics.attempts_failed(), 0);
     }

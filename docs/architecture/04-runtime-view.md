@@ -189,7 +189,7 @@ replay), and tracing correlation IDs (`trace_id`, `parent_id`).
 
 When a guest returns `unrecoverable` or the host traps the call (other than an epoch or fuel trap handled by the `timed_out` action), the runner drops the message, enters `Recovering`, creates a fresh Store from the cached `InstancePre`, reapplies limits, and runs lifecycle validation and initialization. Success returns to `Running`; failure ends that node loop. Transform may first attempt its process-time canary rollback (once per swap) when one is active. Guest state does not survive recovery.
 
-**Node state reporting.** Every `NodeStateTracker` starts in `Starting`. The Wasm Transform, Filter, and Router runner loops do not move a healthy node to `Running` after startup; only the recovery path above (and the native passthrough loop) does. A Wasm node that has never failed therefore reports `Starting` through `GET /api/v1/nodes` while it processes messages normally, and `Running` appears only after a recovery. Do not use `Running` as a startup-health signal in the current build.
+**Node state reporting.** Every `NodeStateTracker` starts in `Starting` and moves to `Running` when its runner loop starts, which for a Source or Sink is after its `init()` succeeded and for a Wasm node after launch validated and initialized its instance. A trap or `unrecoverable` error moves it to `Error`, then `Recovering`, then back to `Running`. A failed init, a panicked node task, or a failed recovery leaves it in `Error`. `GET /api/v1/nodes` reports these states as lowercase strings.
 
 ### Shutdown (cancel-all)
 

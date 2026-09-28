@@ -46,7 +46,7 @@ The pipeline builder calls `mpsc::channel(capacity)`. A bounded channel accepts 
 
 `Arc<T>` is an atomically reference-counted pointer for shared ownership across tasks. WAFER uses it for immutable envelope headers and for shared state or metric handles. `Arc` does not make inner data mutable by itself; mutation still needs an appropriate atomic or lock.
 
-RAII ties cleanup to ownership. `ProcessingGuard` marks a node as processing when constructed and clears that flag in `Drop`. Early returns through `?` still drop the guard, so callers cannot accidentally leave the state stuck. `SwapGuard` applies the same pattern to the per-node swap-in-progress flag.
+RAII ties cleanup to ownership. `SwapGuard` sets the per-node swap-in-progress flag when constructed and clears it in `Drop`. Early returns through `?` still drop the guard, so callers cannot accidentally leave the flag stuck.
 
 ## Working vocabulary
 
@@ -80,7 +80,7 @@ RAII ties cleanup to ownership. `ProcessingGuard` marks a node as processing whe
 - **Source:** [`crates/wafer-types/src/config/mod.rs`](../../crates/wafer-types/src/config/mod.rs) | symbols: `pub enum NodeDef`, `pub const fn category`
 - **Source:** [`crates/wafer-core/src/node/traits.rs`](../../crates/wafer-core/src/node/traits.rs) | symbols: `pub trait Lifecycle`, `pub trait Transform`, `Box<dyn Future`
 - **Source:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `pub struct RuntimeEnvelope`, `Arc<EnvelopeHeader>`, `pub payload: Bytes`
-- **Source:** [`crates/wafer-core/src/node/state.rs`](../../crates/wafer-core/src/node/state.rs) | symbols: `pub struct ProcessingGuard`, `impl Drop for ProcessingGuard`
+- **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub struct SwapGuard`, `impl Drop for SwapGuard`
 - **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `fn collect_downstream_senders`, `overflow: e.overflow`
 - **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `async fn send_one`, `sender.sender.reserve().await`
 - **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`

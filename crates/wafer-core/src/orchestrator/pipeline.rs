@@ -957,7 +957,6 @@ async fn run_passthrough_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
-    use crate::node::ProcessingGuard;
     use std::time::Instant;
 
     state.transition_to_running();
@@ -973,11 +972,9 @@ async fn run_passthrough_loop(
         };
 
         let start = Instant::now();
-        let guard = ProcessingGuard::enter(&state);
         // Identity: forward unchanged
         send_downstream(&senders, envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(guard);
         metrics.record_processed(duration_ns);
     }
 }
