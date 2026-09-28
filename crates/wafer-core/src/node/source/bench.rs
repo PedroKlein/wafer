@@ -2,11 +2,11 @@
 //!
 //! `BenchSource` emits messages on an open-loop schedule fixed when the first
 //! message is requested. Each message carries its scheduled time
-//! (`bench.intended_ns`) and the time it actually left the source
-//! (`bench.emit_ns`), so a stalled pipeline shows up as latency instead of
-//! silently delaying the schedule (coordinated omission, Tene 2012). Each
-//! message also carries a monotonic sequence number for gap/duplicate
-//! detection at the sink.
+//! (`intended_ns`) and the time it actually left the source (`emit_ns`), so
+//! a stalled pipeline shows up as latency instead of silently delaying the
+//! schedule (coordinated omission, Tene 2012). Each message also carries a
+//! monotonic sequence number for gap/duplicate detection at the sink. These
+//! travel as host-only [`BenchStamps`], so Wasm guests never see or copy them.
 //!
 //! See docs/rfcs/RFC-008-evaluation-harness.md — Session 8 D3A.
 
@@ -19,7 +19,7 @@ use bytes::Bytes;
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Source};
-use crate::queue::RuntimeEnvelope;
+use crate::queue::{BenchStamps, BurstPhase, BurstStamps, RuntimeEnvelope};
 use crate::util::monotonic_unix_ns;
 
 /// Configuration for a benchmark source node.
@@ -93,15 +93,15 @@ impl BenchSourceConfig {
         )
     }
 
-    fn burst_phase(&self, sequence: u64) -> Option<usize> {
+    fn burst_phase(&self, sequence: u64) -> Option<BurstPhase> {
         let measurement_index = sequence.checked_sub(self.warmup_messages)?;
         let [before, during, _] = self.burst_phase_counts()?;
         Some(if measurement_index < before {
-            0
+            BurstPhase::Before
         } else if measurement_index < before.saturating_add(during) {
-            1
+            BurstPhase::Burst
         } else {
-            2
+            BurstPhase::After
         })
     }
 
@@ -398,35 +398,24 @@ impl Source for BenchSource {
             let burst_phase = self.config.burst_phase(seq);
             self.sequence = seq.saturating_add(1);
             if let Some(count) =
-                burst_phase.and_then(|phase| self.emitted_phase_counts.get_mut(phase))
+                burst_phase.and_then(|phase| self.emitted_phase_counts.get_mut(phase.index()))
             {
                 *count = count.saturating_add(1);
             }
 
-            let mut envelope = RuntimeEnvelope::new(self.id.clone(), self.payload.clone())
-                .with_metadata("bench.sequence", seq.to_string())
-                .with_metadata("bench.intended_ns", intended_ns.to_string())
-                .with_metadata("bench.warmup", (seq < self.config.warmup_messages).to_string())
-                .with_metadata(
-                    "bench.measurement_start_seq",
-                    self.config.warmup_messages.to_string(),
-                );
-            if let Some(phase) = burst_phase
-                && let Some(name) = ["before", "burst", "after"].get(phase)
-            {
-                envelope = envelope
-                    .with_metadata("bench.phase", *name)
-                    .with_metadata(
-                        "bench.measurement_offset_ns",
-                        self.config.measurement_offset_ns(seq).unwrap_or(0).to_string(),
-                    )
-                    .with_metadata(
-                        "bench.measurement_start_unix_ns",
-                        self.measurement_start_unix_ns.unwrap_or(0).to_string(),
-                    );
-            }
-
-            Ok(Some(envelope.with_metadata("bench.emit_ns", monotonic_unix_ns().to_string())))
+            let burst = burst_phase.map(|phase| BurstStamps {
+                phase,
+                measurement_start_unix_ns: self.measurement_start_unix_ns,
+            });
+            let envelope = RuntimeEnvelope::new(self.id.clone(), self.payload.clone());
+            Ok(Some(envelope.with_bench_stamps(BenchStamps {
+                sequence: seq,
+                intended_ns,
+                emit_ns: monotonic_unix_ns(),
+                warmup: seq < self.config.warmup_messages,
+                measurement_start_seq: self.config.warmup_messages,
+                burst,
+            })))
         })
     }
 }
@@ -461,31 +450,21 @@ mod tests {
 
         for expected_seq in 0..10u64 {
             let msg = source.poll().await.unwrap().unwrap();
-            let seq_meta = msg
-                .header
-                .metadata
-                .iter()
-                .find(|(k, _)| k.as_ref() == "bench.sequence")
-                .map(|(_, v)| v.as_ref())
-                .unwrap();
-            assert_eq!(seq_meta, expected_seq.to_string());
+            assert_eq!(msg.header.bench.unwrap().sequence, expected_seq);
         }
     }
 
     #[tokio::test]
-    async fn metadata_contains_required_fields() {
+    async fn stamps_stay_out_of_guest_visible_metadata() {
         let config = BenchSourceConfig::new(100_000.0, 1);
         let mut source = BenchSource::new(config);
 
         source.init().await.unwrap();
 
         let msg = source.poll().await.unwrap().unwrap();
-        let keys: Vec<&str> = msg.header.metadata.iter().map(|(k, _)| k.as_ref()).collect();
-        assert!(keys.contains(&"bench.sequence"));
-        assert!(keys.contains(&"bench.intended_ns"));
-        assert!(keys.contains(&"bench.emit_ns"));
-        assert!(keys.contains(&"bench.warmup"));
-        assert!(keys.contains(&"bench.measurement_start_seq"));
+        assert!(msg.header.metadata.is_empty(), "metadata = {:?}", msg.header.metadata);
+        let stamps = msg.header.bench.unwrap();
+        assert!(stamps.emit_ns >= stamps.intended_ns);
     }
 
     #[tokio::test]
@@ -496,14 +475,7 @@ mod tests {
 
         for expected in [true, true, false] {
             let message = source.poll().await.unwrap().unwrap();
-            let warmup = message
-                .header
-                .metadata
-                .iter()
-                .find(|(key, _)| key.as_ref() == "bench.warmup")
-                .map(|(_, value)| value.as_ref())
-                .unwrap();
-            assert_eq!(warmup, expected.to_string());
+            assert_eq!(message.header.bench.unwrap().warmup, expected);
         }
     }
 
@@ -515,14 +487,7 @@ mod tests {
 
         for _ in 0..3 {
             let message = source.poll().await.unwrap().unwrap();
-            let boundary = message
-                .header
-                .metadata
-                .iter()
-                .find(|(key, _)| key.as_ref() == "bench.measurement_start_seq")
-                .map(|(_, value)| value.as_ref())
-                .unwrap();
-            assert_eq!(boundary, "2");
+            assert_eq!(message.header.bench.unwrap().measurement_start_seq, 2);
         }
     }
 
@@ -536,13 +501,8 @@ mod tests {
 
         let _warmup = source.poll().await.unwrap().unwrap();
         let measured = source.poll().await.unwrap().unwrap();
-        let origin = measured
-            .header
-            .metadata
-            .iter()
-            .find(|(key, _)| key.as_ref() == "bench.measurement_start_unix_ns")
-            .and_then(|(_, value)| value.parse::<u64>().ok());
-        assert_eq!(origin, source.measurement_start_unix_ns);
+        let burst = measured.header.bench.unwrap().burst.unwrap();
+        assert_eq!(burst.measurement_start_unix_ns, source.measurement_start_unix_ns);
     }
 
     #[tokio::test]
@@ -615,16 +575,6 @@ mod tests {
         assert_eq!(config.payload_size, 512);
     }
 
-    fn metadata_u64(message: &RuntimeEnvelope, key: &str) -> u64 {
-        message
-            .header
-            .metadata
-            .iter()
-            .find(|(k, _)| k.as_ref() == key)
-            .and_then(|(_, value)| value.parse().ok())
-            .unwrap()
-    }
-
     #[tokio::test]
     async fn late_poll_keeps_the_scheduled_time_and_reports_the_lag() {
         let mut source = BenchSource::new(BenchSourceConfig::new(10.0, 3));
@@ -635,11 +585,10 @@ mod tests {
         let second = source.poll().await.unwrap().unwrap();
         let third = source.poll().await.unwrap().unwrap();
 
-        let origin = metadata_u64(&first, "bench.intended_ns");
-        assert_eq!(metadata_u64(&second, "bench.intended_ns"), origin + 100_000_000);
-        assert_eq!(metadata_u64(&third, "bench.intended_ns"), origin + 200_000_000);
-        let lag =
-            metadata_u64(&second, "bench.emit_ns") - metadata_u64(&second, "bench.intended_ns");
+        let [first, second, third] = [first, second, third].map(|m| m.header.bench.unwrap());
+        assert_eq!(second.intended_ns, first.intended_ns + 100_000_000);
+        assert_eq!(third.intended_ns, first.intended_ns + 200_000_000);
+        let lag = second.emit_ns - second.intended_ns;
         assert!(lag >= 200_000_000, "second message left {lag} ns after its slot");
     }
 

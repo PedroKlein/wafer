@@ -258,8 +258,7 @@ mod tests {
         }
     }
 
-    /// Regression: guest metadata must reach the runtime envelope, or the
-    /// sink cannot observe `bench.intended_ns` and records zero samples.
+    /// Regression: guest metadata must reach the runtime envelope.
     #[tokio::test]
     async fn pass_through_propagates_metadata() {
         if !Path::new(PASS_THROUGH_WASM).exists() {
@@ -271,20 +270,46 @@ mod tests {
         let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
 
         let input = RuntimeEnvelope::from_string("src", "hello")
-            .with_metadata("bench.sequence", "42")
-            .with_metadata("bench.intended_ns", "1234567890123");
+            .with_metadata("sensor", "a")
+            .with_metadata("unit", "celsius");
         let out = transform.process(input).await.expect("transform must succeed");
 
         let md: Vec<(&str, &str)> =
             out.header.metadata.iter().map(|(k, v)| (k.as_ref(), v.as_ref())).collect();
+        assert_eq!(md, [("sensor", "a"), ("unit", "celsius")]);
+    }
+
+    /// Bench stamps stay on the host: the guest gets no metadata for them,
+    /// and the output carries the input's stamps unchanged.
+    #[tokio::test]
+    async fn bench_stamps_bypass_the_guest_and_survive_the_transform() {
+        use crate::queue::BenchStamps;
+
+        if !Path::new(PASS_THROUGH_WASM).exists() {
+            eprintln!("SKIP: pass-through.wasm not built");
+            return;
+        }
+
+        let harness = PluginTestHarness::new().unwrap();
+        let mut transform = harness.load_transform(PASS_THROUGH_WASM).await.unwrap();
+
+        let stamps = BenchStamps {
+            sequence: 42,
+            intended_ns: 1_234_567_890_123,
+            emit_ns: 1_234_567_890_456,
+            warmup: false,
+            measurement_start_seq: 10,
+            burst: None,
+        };
+        let input = RuntimeEnvelope::from_string("src", "hello").with_bench_stamps(stamps);
+        let out = transform.process(input).await.expect("transform must succeed");
+
         assert!(
-            md.contains(&("bench.sequence", "42")),
-            "transform dropped bench.sequence; metadata = {md:?}"
+            out.header.metadata.is_empty(),
+            "guest saw harness data: {:?}",
+            out.header.metadata
         );
-        assert!(
-            md.contains(&("bench.intended_ns", "1234567890123")),
-            "transform dropped bench.intended_ns; metadata = {md:?}"
-        );
+        assert_eq!(out.header.bench, Some(stamps));
     }
 
     /// Regression: `Store::set_epoch_deadline` is relative to the engine's
@@ -430,9 +455,7 @@ mod tests {
 
         for size in [16_usize, 128, 1024, 10_240, 102_400] {
             let payload = Bytes::from(vec![0x42u8; size]);
-            let env = RuntimeEnvelope::new("bench-source", payload)
-                .with_metadata("bench.sequence", "0")
-                .with_metadata("bench.intended_ns", "1234567890123456789");
+            let env = RuntimeEnvelope::new("bench-source", payload);
             match t.process(env).await {
                 Ok(out) => eprintln!("size={size:>6}: OK payload_len={}", out.payload.len()),
                 Err(e) => eprintln!("size={size:>6}: FAIL {e}"),

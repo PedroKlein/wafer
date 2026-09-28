@@ -1,6 +1,6 @@
 //! Dead Letter Queue (DLQ) types and utilities.
 
-use crate::queue::RuntimeEnvelope;
+use crate::queue::{BenchStamps, RuntimeEnvelope};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -41,6 +41,10 @@ pub struct SerializableEnvelope {
     /// pre-existing DLQ records readable.
     #[serde(default)]
     pub retry_count: u32,
+    /// `BenchSource` stamps, so a dead-lettered message stays identifiable
+    /// by sequence number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bench: Option<BenchStamps>,
 }
 
 impl From<RuntimeEnvelope> for SerializableEnvelope {
@@ -57,6 +61,7 @@ impl From<RuntimeEnvelope> for SerializableEnvelope {
                 .collect(),
             payload: env.payload.to_vec(),
             retry_count: env.retry_count,
+            bench: env.header.bench,
         }
     }
 }
@@ -77,6 +82,7 @@ impl From<SerializableEnvelope> for RuntimeEnvelope {
                 .into_iter()
                 .map(|(k, v)| (k.into_boxed_str(), v.into_boxed_str()))
                 .collect(),
+            bench: env.bench,
         };
         Self {
             header: Arc::new(header),
@@ -214,5 +220,31 @@ mod tests {
             legacy.retry_count, 0,
             "legacy DLQ records (no retry_count field) must default to 0"
         );
+    }
+
+    #[test]
+    fn dlq_json_roundtrip_preserves_bench_stamps() {
+        use crate::queue::{BurstPhase, BurstStamps};
+
+        let stamps = BenchStamps {
+            sequence: 41,
+            intended_ns: 1_000,
+            emit_ns: 1_250,
+            warmup: false,
+            measurement_start_seq: 10,
+            burst: Some(BurstStamps {
+                phase: BurstPhase::Burst,
+                measurement_start_unix_ns: Some(900),
+            }),
+        };
+        let envelope = RuntimeEnvelope::from_string("src", "late").with_bench_stamps(stamps);
+        let json = serde_json::to_string(&SerializableEnvelope::from(envelope)).unwrap();
+
+        assert!(json.contains("\"sequence\":41"), "record must name the sequence: {json}");
+        let decoded: SerializableEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(RuntimeEnvelope::from(decoded).header.bench, Some(stamps));
+
+        let unstamped = SerializableEnvelope::from(RuntimeEnvelope::from_string("src", "x"));
+        assert!(!serde_json::to_string(&unstamped).unwrap().contains("bench"));
     }
 }

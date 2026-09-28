@@ -216,11 +216,12 @@ pub struct WasmNodeDef {
 
     /// Opaque version string for this plugin instance.
     ///
-    /// Passed to the guest via `NodeConfig.plugin-version` at init time and
-    /// stamped by the host into every outgoing envelope's `plugin.version`
-    /// metadata. Enables `BenchSink::HotSwapRecorder` to detect the v1 → v2
-    /// transition boundary during hot-swap experiments (E-Swap-1). Defaults
-    /// to `""` when unset; the runtime does not enforce semver.
+    /// Passed to the guest via `NodeConfig.plugin-version` at init time. The
+    /// host does not stamp it anywhere: plugins that write `plugin.version`
+    /// metadata (the pass-through v1/v2 plugins, which `BenchSink` uses to
+    /// find the hot-swap boundary) use it in place of their built-in version.
+    /// A swap keeps the node's value. Defaults to `""` when unset; the runtime
+    /// does not enforce semver.
     #[serde(default)]
     pub plugin_version: Option<String>,
 }

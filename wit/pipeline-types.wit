@@ -22,7 +22,8 @@ interface types {
     //
     // Input payloads live in host memory. Components read bytes on demand via
     // these methods. Router and filter plugins never need to call read() at all,
-    // achieving zero-copy routing.
+    // so the payload is never copied for routing. The message header strings
+    // below are still copied into the guest on every call.
     // -------------------------------------------------------------------------
 
     resource buffer {

@@ -5,4 +5,4 @@ pub(crate) mod envelope;
 
 pub use crate::config::DEFAULT_QUEUE_CAPACITY;
 pub use bounded::{BoundedQueue, QueueReceiver, QueueSender};
-pub use envelope::{EnvelopeHeader, RuntimeEnvelope};
+pub use envelope::{BenchStamps, BurstPhase, BurstStamps, EnvelopeHeader, RuntimeEnvelope};
