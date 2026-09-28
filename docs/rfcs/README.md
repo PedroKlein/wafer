@@ -41,7 +41,7 @@ that points back.
 | RFC-003 §A3 | RFC-002 | `RuntimeEnvelope` redesigned to `{ header: Arc<EnvelopeHeader>, payload: Bytes, lineage: Lineage }` so clone is near-free (refcount bumps) for borrow-only nodes. |
 | RFC-005 §D6 | RFC-002, [ADR-0003](../adr/0003-hot-swap-mechanism.md) | Drain-and-flip 4-phase hot-swap replaced with a watch-channel between-messages model (`watch::Sender<Option<SwapPayload>>` per Wasm node). Each runner polls `swap_rx.has_changed()` between messages and applies the payload before the next `select!` iteration. |
 | RFC-007 §W2 | RFC-002 | Adds `limits: StoreLimits` to `WaferState` for per-node memory containment (RQ2 scenario S4). |
-| RFC-007 §W4 | RFC-004 | Adds `fuel = true/false` and `epoch = true/false` boolean toggles to `[engine]` for the four-way metering-overhead decomposition. |
+| RFC-007 §W4 | RFC-004 | Adds per-category `[engine.fuel]` budgets and makes fuel and epoch metering independently switchable for the four-way metering-overhead decomposition; each is off when its values are omitted (the proposed boolean toggles were not implemented). |
 | RFC-007 §W5 | RFC-005 | Epoch ticker moves from `tokio::spawn` to a dedicated `std::thread::spawn` OS thread — guarantees firing under runtime saturation. |
 | RFC-008 §W1 | RFC-005 | `ProcessNode` trait abstraction generalised so a native Rust baseline can share the orchestrator/channels code paths. |
 | RFC-008 §W2 | RFC-006 | `TestPipeline` generalised into a shared `PipelineBuilder` with pluggable I/O adapters (`MemorySource` / `BenchSource` / `MqttSource` × `CollectorSink` / `BenchSink` / `NullSink`). |

@@ -108,7 +108,8 @@ impl PluginTestHarness {
         // return Err when fuel_limit is None. Fuel + epoch must be applied
         // before instantiation — start functions consume fuel and the epoch
         // ticker is running.
-        if let Some(n) = self.engine.fuel_limit() {
+        let fuel_limit = self.engine.fuel_budget(crate::node::NodeKind::Transform, None);
+        if let Some(n) = fuel_limit {
             store.set_fuel(n.get()).map_err(|e| crate::error::WaferError::PluginInit {
                 message: format!("failed to set fuel: {e}"),
             })?;
@@ -123,7 +124,7 @@ impl PluginTestHarness {
             .await
             .map_err(|e| crate::error::WaferError::PluginInit { message: e.to_string() })?;
 
-        let mut node = WasmTransformNode::new(store, bindings, pre, self.engine.fuel_limit());
+        let mut node = WasmTransformNode::new(store, bindings, pre, fuel_limit);
         // Propagate the engine's epoch deadline into the node so it resets the
         // deadline on every process() call. Without this, the per-call
         // `set_epoch_deadline` guard inside `WasmTransformNode::process` is a

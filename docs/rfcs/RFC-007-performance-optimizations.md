@@ -103,7 +103,7 @@ Replace manual `set_processing(true)` / `set_processing(false)` with a Drop guar
 ## Implementation Notes
 
 - **Decision 1 (compiled cache):** The two-tier implementation exists in `crates/wafer-core/src/engine/cache.rs`, but `launch_pipeline` constructs `WaferEngine::from_engine_config`, so the disk tier is not active in production startup. E-Perf-9 must not claim a compiled-cache hit until that wiring and artifact provenance exist.
-- **Decision 6 (fuel/epoch flags):** Implemented in `crates/wafer-types/src/config/engine.rs` — `EngineConfig` struct with `fuel_enabled`, `epoch_enabled`, `epoch_tick_ms`, `epoch_deadline` fields and `FuelBudgets` sub-struct.
+- **Decision 6 (fuel/epoch flags):** Implemented without boolean flags in `crates/wafer-types/src/config/engine.rs`: fuel metering is on when any `[engine.fuel]` budget or node `fuel` is set, and epoch interruption is on when `epoch_deadline` is set. `EngineConfig` holds `epoch_tick_ms`, `epoch_deadline`, and the `FuelBudgets` sub-struct.
 - **Decision 9 (StoreLimits):** Implemented via `StoreLimitsBuilder` in the Store constructor per-node, with `trap_on_grow_failure(true)`.
 - **Decision C1 (epoch OS thread):** Implemented in the engine/orchestrator startup path using `std::thread::Builder::new().name("wafer-epoch-ticker")`.
 - **Decision C2 (Box<str>):** Applied to `EnvelopeHeader` fields and `node_id` in `WaferState`.

@@ -99,9 +99,14 @@ impl Default for EngineConfig {
     }
 }
 
+/// Per-role fuel budgets; metering is engine-wide.
+///
+/// Once any role (or node) has a budget, a role left at `None` is refilled
+/// with `u64::MAX` before each call, which is unlimited in practice. With no
+/// budget anywhere, fuel is not metered at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 pub struct FuelBudgets {
-    /// Fuel per transform `process()` call. `None` = unlimited (`set_fuel` skipped).
+    /// Fuel per transform `process()` call. `None` = unlimited.
     ///
     /// `NonZeroU64`: `0` would trap on the first fuel check (P0.13 lesson).
     #[serde(
@@ -154,7 +159,8 @@ impl Default for MemoryLimits {
 ///
 /// After a swap succeeds (ACK phase), the runner retains a rollback snapshot
 /// of v1 for a bounded canary window. If v2 traps during `process()` within
-/// that window, the runtime automatically rolls back to v1.
+/// that window, the runtime rolls back to v1 once and closes the window, so a
+/// later trap is handled as a v1 failure.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HotSwapConfig {
     /// Number of consecutive successful `process()` calls on v2 required
@@ -166,11 +172,6 @@ pub struct HotSwapConfig {
     /// after swap ACK. Default: `10_000` (10s).
     #[serde(default = "default_canary_window_ms")]
     pub canary_window_ms: u64,
-
-    /// Maximum number of rollback retries before escalating to the
-    /// Recovery state. Default: 3.
-    #[serde(default = "default_max_rollback_retries")]
-    pub max_rollback_retries: u32,
 }
 
 impl Default for HotSwapConfig {
@@ -178,7 +179,6 @@ impl Default for HotSwapConfig {
         Self {
             canary_success_count: default_canary_success_count(),
             canary_window_ms: default_canary_window_ms(),
-            max_rollback_retries: default_max_rollback_retries(),
         }
     }
 }
@@ -551,10 +551,6 @@ const fn default_canary_success_count() -> u32 {
 
 const fn default_canary_window_ms() -> u64 {
     10_000
-}
-
-const fn default_max_rollback_retries() -> u32 {
-    3
 }
 
 #[cfg(test)]

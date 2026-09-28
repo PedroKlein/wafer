@@ -15,8 +15,8 @@
 > endpoint dispatches per node type (A10). Process-time rollback (A17,
 > closed 2026-08-02): after swap ACK, the runner retains v1’s
 > `InstancePre` for a bounded canary window; if v2 traps during
-> `process()`, the runtime restores v1 automatically (bounded by
-> `max_rollback_retries` to prevent thrash).
+> `process()`, the runtime restores v1 automatically, at most once per
+> swap: the rollback closes the canary window.
 >
 > **Current response boundary.** Successful replacement reports
 > `replacement_adopted` and `first_post_replacement_local_outcome`; neither is

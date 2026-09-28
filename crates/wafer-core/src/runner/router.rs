@@ -115,10 +115,7 @@ pub async fn run_router_loop(
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
                     router.try_reconfigure(new_config_json).await
                 }
-                SwapPayload::Router { .. } => payload.try_apply_router(&mut router).await,
-                _ => Err(crate::error::WaferError::Runtime(
-                    "router node received non-router swap payload".to_string(),
-                )),
+                _ => payload.try_apply_router(&mut router).await,
             };
             match result {
                 Ok(()) => {

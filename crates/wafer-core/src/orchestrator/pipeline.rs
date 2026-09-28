@@ -697,30 +697,6 @@ impl PipelineOrchestrator {
         self.task_nodes.remove(&task_id).map_or_else(|| "<unknown>".to_owned(), String::from)
     }
 
-    /// Send a hot-swap payload to a specific node via its watch channel.
-    ///
-    /// The node loop will pick up the new instance between messages.
-    /// This is non-blocking — the caller doesn't wait for the swap to complete.
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the node doesn't exist or doesn't support hot-swap.
-    pub fn send_swap(&self, node_id: &str, payload: SwapPayload) -> Result<()> {
-        let sender = self.watch_senders.get(node_id).ok_or_else(|| {
-            WaferError::Runtime(format!(
-                "cannot hot-swap node '{node_id}': not found or not a Wasm node"
-            ))
-        })?;
-
-        sender.send(Some(payload)).map_err(|_send_err| {
-            WaferError::Runtime(format!(
-                "cannot hot-swap node '{node_id}': receiver dropped (task dead?)"
-            ))
-        })?;
-
-        Ok(())
-    }
-
     /// Initiate graceful shutdown.
     ///
     /// Fires the cancellation token → all runner loops break → flush retries →
