@@ -9,9 +9,9 @@
 //! The scheduler assigns each message a target offset from the run start based
 //! solely on the shape and the message index — NOT on how quickly previous
 //! messages actually completed. If publish work runs late, downstream target
-//! offsets do not shift; the publisher may fall behind or drop-and-skip, but
-//! it never speeds up to "catch up". This preserves the arrival-rate
-//! independence required by Coordinated Omission correctness.
+//! offsets do not shift: overdue messages go out back to back, stamped with
+//! their target time, so the delay is measured as latency instead of being
+//! hidden (coordinated omission).
 //!
 //! # Shapes
 //!
