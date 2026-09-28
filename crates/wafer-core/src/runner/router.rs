@@ -11,7 +11,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::wasm::WasmRouterNode;
-use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
+use crate::node::{NodeMetrics, NodeStateTracker, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
@@ -72,6 +72,7 @@ async fn recover_after_timeout(
             true
         }
         Err(error) => {
+            state.transition_to_error();
             tracing::error!(node = router.node_id(), %error, "recovery failed");
             false
         }
@@ -103,6 +104,7 @@ pub async fn run_router_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) {
+    state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
@@ -145,10 +147,8 @@ pub async fn run_router_loop(
 
         // 3. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
-        let guard = ProcessingGuard::enter(&state);
         let result = router.route(&envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(guard);
 
         // 4. Dispatch result
         match result {
@@ -206,6 +206,7 @@ pub async fn run_router_loop(
                         }
                     }
                     Err(error) => {
+                        state.transition_to_error();
                         tracing::error!(node = router.node_id(), %error, "recovery failed");
                         break;
                     }
@@ -263,12 +264,10 @@ mod tests {
         let (_swap_tx, _swap_rx) = watch::channel::<Option<SwapPayload>>(None);
         let _policy = ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "test-router");
         let cancel = CancellationToken::new();
-        let state = Arc::new(NodeStateTracker::running());
         let metrics = Arc::new(NodeMetrics::new());
 
         cancel.cancel();
 
-        assert!(!state.is_processing());
         assert_eq!(metrics.processed(), 0);
     }
 

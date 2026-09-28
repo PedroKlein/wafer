@@ -67,7 +67,7 @@ mod tests {
             PipelineEvent::NodeStateChanged {
                 node_id: "a".to_string(),
                 old_state: NodeState::Running,
-                new_state: NodeState::Draining,
+                new_state: NodeState::Error,
             },
             PipelineEvent::ConfigReloaded { swapped_nodes: vec!["a".to_string()] },
             PipelineEvent::DrainStarted,
