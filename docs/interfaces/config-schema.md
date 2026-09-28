@@ -75,7 +75,7 @@ Pipeline-wide default. A present `[nodes.NAME.error_policy]` table replaces the 
 
 `RetryConfig` fields: `retries: u32`, `backoff_ms: u64`, `exhausted: SimpleAction`. The first retry waits exactly `backoff_ms`; later delays double up to 30 seconds. The bounded buffer selects the earliest due entry, so an earlier-deadline retry cannot be stranded behind a later one. Exhaustion honors the configured `skip`, `dlq`, or `teardown` action. DLQ-full and DLQ-closed outcomes are distinct and exhausted envelopes are not requeued.
 
-`unrecoverable` errors are not configurable: they always trigger a node teardown and re-instantiation from the cached `InstancePre`.
+`unrecoverable` errors and traps are not configurable: the message is written to the DLQ (reason `unrecoverable` or `trapped`) and the node is re-instantiated from the cached `InstancePre`.
 
 ## `[dead_letter]`
 
@@ -100,7 +100,9 @@ path          = "/var/log/wafer/dlq.jsonl"
 queue_capacity = 5000         # default 5000
 ```
 
-The configured sink is active: the runtime drains DLQ records to the MQTT topic or file. Queue-overflow DLQ records use `QueueFull`; guest-error records retain their error category and retry count. Destination closed, DLQ full, and DLQ closed are separate counters rather than successful dead-letter delivery.
+The configured sink is active: the runtime drains DLQ records to the MQTT topic or file, one JSON object per record. Each record carries `timestamp`, `source_node`, `error_category` (null for a trap or queue overflow), `error_message`, `retry_count`, `reason`, `original` (the envelope, payload base64-encoded), `trace_id` and `parent_id`. `reason.type` is one of `bad_input`, `timed_out`, `retries_exhausted`, `retry_buffer_full`, `hot_swap_drain`, `shutdown`, `queue_full`, `trapped` (with `kind`), `unrecoverable` or `recovery_failed`. Destination closed, DLQ full, and DLQ closed are separate counters rather than successful dead-letter delivery.
+
+A relative file `path` is resolved against the working directory, or against `WAFER_BENCH_OUTPUT_DIR` when the runtime is started with it set, which is how the evaluation configs put `dlq.jsonl` into the run's result directory. The file sink writes each record as it arrives and keeps draining until every node has exited.
 
 ## `[registry]`
 
@@ -275,14 +277,15 @@ together; the runtime exits with status 2 and starts nothing.
 - A transform, filter or router has at least one inbound and one outbound edge.
 - Every node is connected to an edge, and the graph has no cycle.
 - At most one `stdin` source and one `stdout` sink.
-- An edge with `overflow = "dead-letter"` requires a `[dead_letter]` section.
+- An edge with `overflow = "dead-letter"` requires a `[dead_letter]` section, and so does any Transform, Filter or Router whose effective `bad_input`, `timed_out`, `dependency_failed.exhausted` or `processing_failed.exhausted` action is `dlq` (the per-node table when present, otherwise `[error_policy]`).
 - `engine.default_queue_capacity`, `[[edges]].capacity`, both `retry_buffer_capacity` levels, and `dead_letter.queue_capacity` are greater than zero; so is `engine.epoch_tick_ms`.
 - `outbound_http` appears only on Wasm nodes, and its destinations are valid and not duplicated after normalization.
 - `allow_inference = true` appears only on a Wasm Transform.
 
 Zero for `epoch_deadline` or any fuel value is rejected while parsing.
-`[dead_letter]` is not required when an error-policy action is `dlq`: without
-it, those messages are counted in `wafer_node_dlq_lost_total` and discarded.
+Because `bad_input` and both `exhausted` actions default to `dlq`, a pipeline
+with a processing node needs `[dead_letter]` unless it sets those actions to
+`skip` or `teardown`.
 
 ## Minimal example
 

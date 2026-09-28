@@ -13,7 +13,11 @@ fn inference_fixture() -> PathBuf {
 fn run_config(contents: &str) -> Result<Output, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let config = dir.path().join("pipeline.toml");
-    fs::write(&config, contents)?;
+    let dead_letter = format!(
+        "[dead_letter]\nkind = \"file\"\npath = \"{}\"\n",
+        dir.path().join("dlq.jsonl").display()
+    );
+    fs::write(&config, format!("{dead_letter}{contents}"))?;
 
     Ok(Command::new(env!("CARGO_BIN_EXE_wafer"))
         .arg("--config")

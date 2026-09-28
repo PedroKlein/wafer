@@ -124,19 +124,23 @@ later waits double to 30 seconds, and the bounded buffer selects the earliest
 due entry even while upstream is idle.
 
 Exhaustion honors the configured `skip`, `dlq`, or `teardown` action and
-exhausted messages are not requeued. Unrecoverable errors and traps
+exhausted messages are not requeued. Unrecoverable errors and traps write the
+message to the DLQ (reason `unrecoverable` or `trapped` with the trap kind) and
 re-instantiate from cached `InstancePre`. Epoch interruption and fuel
 exhaustion instead follow the `timed_out` action (default `skip`), and the
 trapped instance is replaced; inside a Transform canary window they roll back
 like any other trap. The `teardown` action stops that node's runner for the
 rest of the run; it does not recover the node.
 
-By default bad input and exhausted retries go to the DLQ, but a `[dead_letter]`
-section is not required. Without one, those messages are dropped with a
-warning and counted as `dlq_lost`. Of the evaluation configs under
-`eval/configs/`, only `e-backpressure/pipeline-dead-letter.toml` configures a
-DLQ, so in every other experiment such a message leaves no copy; it shows up
-only in the `dlq_lost` column and, where sequences are tracked, as a gap.
+By default bad input and exhausted retries go to the DLQ, so the validator
+requires a `[dead_letter]` section whenever a processing node's effective
+policy has a `dlq` action. Every pipeline config under `eval/configs/` and
+`examples/` has a file DLQ (`dlq.jsonl`, placed in the result directory by the
+harness), so a message removed by the error policy or by a trap leaves a
+record there and is counted as `dlq_sent`; `dlq_lost` is left for a full or
+closed DLQ. Retries survive a failed hot-swap and are served after upstream
+EOF; `retry_count` is reset on a node's output. The file sink writes each
+record at once and drains until every node has exited.
 
 Every error-policy outcome has its own per-node counter (retried, DLQ sent, DLQ
 lost, skipped, exhausted skip), traps are counted by kind apart from errors the

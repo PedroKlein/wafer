@@ -14,6 +14,10 @@ transform = 100000000
 [engine.memory]
 transform = 67108864
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.file-source]
 type = "source"
 kind = "file"

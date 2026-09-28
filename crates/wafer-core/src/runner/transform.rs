@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::node::TransformNode;
 use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
 use crate::queue::RuntimeEnvelope;
-use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
+use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     TransformCanaryState, continue_after_policy_action, next_input, send_downstream,
@@ -49,6 +49,7 @@ async fn recover_after_timeout(
         }
         Err(error) => {
             tracing::error!(node = transform.node_id(), %error, "recovery failed");
+            policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
             false
         }
     }
@@ -132,7 +133,6 @@ pub async fn run_transform_loop_with_config(
         if rollback_retry.is_none()
             && let Some(payload) = take_pending_swap(&mut swap_rx)
         {
-            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
 
             // Retain v1 InstancePre BEFORE applying swap (for rollback)
@@ -147,6 +147,9 @@ pub async fn run_transform_loop_with_config(
             };
             match result {
                 Ok(()) => {
+                    // Retries do not survive the swap; a failed swap keeps v1
+                    // and its pending retries.
+                    policy.flush_to_dlq(&DlqReason::HotSwapDrain, &metrics);
                     progress.mark_replacement_adopted();
                     pending_swap_progress = Some(progress);
                     metrics.record_swap();
@@ -297,7 +300,7 @@ pub async fn run_transform_loop_with_config(
                 }
 
                 // Standard recovery path (existing A7 behavior)
-                metrics.record_dropped_on_recovery();
+                policy.record_condemned(safety, error, &metrics);
                 tracing::error!(
                     node = transform.node_id(),
                     error = %msg,
@@ -313,6 +316,7 @@ pub async fn run_transform_loop_with_config(
                     }
                     Err(error) => {
                         tracing::error!(node = transform.node_id(), %error, "recovery failed");
+                        policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
                         break;
                     }
                 }
@@ -327,7 +331,7 @@ pub async fn run_transform_loop_with_config(
     }
 
     // Flush remaining retries to DLQ on exit
-    policy.flush_to_dlq("shutdown", &metrics);
+    policy.flush_to_dlq(&DlqReason::Shutdown, &metrics);
 }
 
 #[cfg(test)]
@@ -497,7 +501,6 @@ mod tests {
         let mut input = RuntimeEnvelope::new("fixture", bytes::Bytes::from_static(MNIST_DIGIT));
         input.set_parent_id("parent-before-trap");
         input.ensure_trace_id();
-        input.retry_count = 4;
         let trace_id = input.trace_id().expect("trace id").to_string();
         input_tx.send(input).await.expect("input receiver");
         drop(input_tx);
@@ -521,7 +524,6 @@ mod tests {
         assert_eq!(prediction(&output), Some(7));
         assert_eq!(output.parent_id(), Some("parent-before-trap"));
         assert_eq!(output.trace_id(), Some(trace_id.as_str()));
-        assert_eq!(output.retry_count, 4);
         assert_eq!(metrics.rollbacks(), 1);
         assert_eq!(metrics.recovery_count(), 1);
         assert_eq!(metrics.processed(), 1, "only the replayed v1 result is forwarded");
@@ -696,11 +698,8 @@ mod tests {
             input_tx.send(envelope).await.expect("input");
         }
         drop(input_tx);
-        let retry_once = ResolvedRetryConfig {
-            retries: 1,
-            backoff_ms: 60_000,
-            exhausted: ResolvedSimpleAction::Dlq,
-        };
+        let retry_once =
+            ResolvedRetryConfig { retries: 1, backoff_ms: 1, exhausted: ResolvedSimpleAction::Dlq };
         let policy = ResolvedErrorPolicy {
             bad_input: ResolvedSimpleAction::Dlq,
             dependency_failed: retry_once,
@@ -725,10 +724,14 @@ mod tests {
         assert_eq!(metrics.processed(), 1);
         assert_eq!(metrics.retries(), 1, "the missing-field message is queued for a retry");
         assert_eq!(metrics.dlq_sent(), 2, "the DLQ holds two records");
-        assert_eq!(metrics.dlq_lost(), 1, "the retry flushed at shutdown finds the DLQ full");
-        assert_eq!(metrics.attempts_failed(), 3);
+        assert_eq!(
+            metrics.dlq_lost(),
+            1,
+            "the retry runs after upstream EOF, exhausts its budget and finds the DLQ full"
+        );
+        assert_eq!(metrics.attempts_failed(), 4);
         assert_eq!(metrics.guest_errors(ErrorCategory::BadInput), 2);
-        assert_eq!(metrics.guest_errors(ErrorCategory::ProcessingFailed), 1);
+        assert_eq!(metrics.guest_errors(ErrorCategory::ProcessingFailed), 2);
         assert_eq!(metrics.traps_total(), 0, "guest-returned errors are not traps");
         assert_eq!(
             queue.dequeued(),
@@ -743,6 +746,71 @@ mod tests {
         );
         assert!(output_rx.recv().await.is_some());
         assert!(dlq_rx.recv().await.is_some() && dlq_rx.recv().await.is_some());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn failed_swap_keeps_pending_retries() {
+        use crate::runner::error_policy::{DlqReason, ResolvedRetryConfig, ResolvedSimpleAction};
+
+        let (input_tx, input_rx) = mpsc::channel(2);
+        let (output_tx, _output_rx) = mpsc::channel(2);
+        let (dlq_tx, mut dlq_rx) = mpsc::channel(2);
+        let (swap_tx, swap_rx) = watch::channel(None);
+        let metrics = Arc::new(NodeMetrics::new());
+        let cancel = CancellationToken::new();
+        let retry_slowly = ResolvedRetryConfig {
+            retries: 1,
+            backoff_ms: 60_000,
+            exhausted: ResolvedSimpleAction::Dlq,
+        };
+        let policy = ResolvedErrorPolicy {
+            bad_input: ResolvedSimpleAction::Dlq,
+            dependency_failed: retry_slowly,
+            processing_failed: retry_slowly,
+            timed_out: ResolvedSimpleAction::Skip,
+            retry_buffer_capacity: 4,
+        };
+        // json_parse reports a missing field as processing-failed, so this
+        // message sits in the retry buffer for the rest of the test.
+        input_tx.send(RuntimeEnvelope::from_string("source", "{}")).await.expect("input receiver");
+
+        let runner = tokio::spawn(run_transform_loop(
+            TransformNode::Native(crate::node::native::NativeTransform::json_parse("native")),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(policy, Some(dlq_tx), "node"),
+            cancel.clone(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while metrics.retries() == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the message must enter the retry buffer");
+
+        // A native transform cannot be swapped, so the replacement fails init
+        // and v1 stays in place.
+        let (progress, completion) = HotSwapProgress::channel();
+        swap_tx
+            .send(Some(SwapPayload::Transform {
+                replacement: Arc::new(std::sync::Mutex::new(None)),
+                progress,
+            }))
+            .expect("swap signal");
+        let outcome = completion.await.expect("swap outcome");
+        assert!(matches!(outcome, Err(crate::runner::HotSwapError::InitFailed(_))), "{outcome:?}");
+        assert!(dlq_rx.try_recv().is_err(), "a failed swap must not flush the retry buffer");
+
+        cancel.cancel();
+        runner.await.expect("runner task");
+        let record = dlq_rx.try_recv().expect("the retry is flushed when the runner exits");
+        assert_eq!(record.reason, DlqReason::Shutdown);
+        assert_eq!(record.retry_count, 1);
+        assert_eq!(metrics.dlq_sent(), 1);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

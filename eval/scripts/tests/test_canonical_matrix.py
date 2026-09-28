@@ -401,7 +401,7 @@ def test_backpressure_freezes_policy_specific_internal_queue_contract() -> None:
         assert config["edges"][0]["capacity"] == 64
         assert config["edges"][0]["overflow"] == policy
         assert config["edges"][1]["overflow"] == "slow"
-        assert ("dead_letter" in config) == (policy == "dead-letter")
+        assert config["dead_letter"]["kind"] == "file", "every run records dead-lettered messages"
 
 
 def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:

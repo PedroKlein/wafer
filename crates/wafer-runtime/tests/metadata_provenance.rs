@@ -304,8 +304,13 @@ to = "transform"
 [[edges]]
 from = "transform"
 to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            plugin_path.display()
+            plugin_path.display(),
+            tmp.path().join("dlq.jsonl").display()
         ),
     )
     .unwrap();

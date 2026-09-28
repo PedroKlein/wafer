@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::io::{BufWriter, Write};
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -475,8 +475,7 @@ impl PipelineOrchestrator {
         };
 
         if let Some((dlq_rx, dlq_config)) = build_output.dlq {
-            let cancel = build_output.cancel_token.clone();
-            let handle = tokio::spawn(run_dlq_sink(dlq_rx, cancel, dlq_config));
+            let handle = tokio::spawn(run_dlq_sink(dlq_rx, dlq_config));
             orchestrator.dlq_handle = Some(handle);
         }
 
@@ -983,23 +982,24 @@ async fn run_passthrough_loop(
     }
 }
 
-/// Configured DLQ sink that drains envelopes until cancellation or sender closure.
+/// Configured DLQ sink. It drains records until every node has dropped its
+/// sender: nodes flush their retry buffers into the channel while they exit,
+/// so stopping at cancellation would lose those records.
 async fn run_dlq_sink(
     mut receiver: tokio::sync::mpsc::Receiver<DlqEnvelope>,
-    cancel: CancellationToken,
     config: crate::config::DeadLetterConfig,
 ) -> Result<()> {
     match config {
         crate::config::DeadLetterConfig::File { path, .. } => {
-            let file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
-            let mut writer = BufWriter::new(file);
-            while let Some(envelope) = recv_or_cancel(&mut receiver, &cancel).await {
-                writer.write_all(&envelope.to_json_bytes().map_err(|error| {
+            let mut file = std::fs::OpenOptions::new().create(true).append(true).open(path)?;
+            while let Some(envelope) = receiver.recv().await {
+                let mut line = envelope.to_json_bytes().map_err(|error| {
                     WaferError::Runtime(format!("failed to serialize DLQ record: {error}"))
-                })?)?;
-                writer.write_all(b"\n")?;
+                })?;
+                line.push(b'\n');
+                file.write_all(&line)?;
             }
-            writer.flush()?;
+            file.sync_all()?;
         }
         crate::config::DeadLetterConfig::Mqtt { broker, port, topic, tls, auth, .. } => {
             let mut options = rumqttc::MqttOptions::new("wafer-dlq", broker, port);
@@ -1039,7 +1039,7 @@ async fn run_dlq_sink(
                 }
                 Ok::<(), rumqttc::ConnectionError>(())
             });
-            while let Some(envelope) = recv_or_cancel(&mut receiver, &cancel).await {
+            while let Some(envelope) = receiver.recv().await {
                 client
                     .publish(
                         &topic,
@@ -1068,17 +1068,6 @@ async fn run_dlq_sink(
         }
     }
     Ok(())
-}
-
-async fn recv_or_cancel(
-    receiver: &mut tokio::sync::mpsc::Receiver<DlqEnvelope>,
-    cancel: &CancellationToken,
-) -> Option<DlqEnvelope> {
-    tokio::select! {
-        biased;
-        () = cancel.cancelled() => receiver.try_recv().ok(),
-        message = receiver.recv() => message,
-    }
 }
 
 #[cfg(test)]
@@ -1289,13 +1278,11 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("dlq.jsonl");
         let (tx, rx) = tokio::sync::mpsc::channel(2);
-        let cancel = CancellationToken::new();
         tx.send(dlq_test_envelope("failed-message")).await.expect("enqueue DLQ record");
         drop(tx);
 
         run_dlq_sink(
             rx,
-            cancel,
             DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 2 },
         )
         .await
@@ -1310,32 +1297,39 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_file_dlq_drains_all_buffered_records() {
+    async fn file_dlq_keeps_draining_until_the_last_sender_is_gone() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("dlq.jsonl");
         let (tx, rx) = tokio::sync::mpsc::channel(3);
         tx.send(dlq_test_envelope("first")).await.expect("first DLQ record");
         tx.send(dlq_test_envelope("second")).await.expect("second DLQ record");
-        drop(tx);
-        let cancel = CancellationToken::new();
-        cancel.cancel();
-
-        run_dlq_sink(
+        let sink = tokio::spawn(run_dlq_sink(
             rx,
-            cancel,
             DeadLetterConfig::File { path: path.to_string_lossy().into_owned(), queue_capacity: 3 },
-        )
-        .await
-        .expect("cancellation must drain buffered file DLQ records");
+        ));
+
+        // A node still flushing its retry buffer after the pipeline was
+        // cancelled: the sink must be there to take the record.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!sink.is_finished(), "sink must wait for the remaining sender");
+        tx.send(dlq_test_envelope("late")).await.expect("late DLQ record");
+        drop(tx);
+
+        tokio::time::timeout(Duration::from_secs(5), sink)
+            .await
+            .expect("sink ends once every sender is dropped")
+            .expect("sink task")
+            .expect("file DLQ must persist every record");
 
         let lines: Vec<_> = std::fs::read_to_string(path)
             .expect("configured DLQ file")
             .lines()
             .map(|line| serde_json::from_str::<serde_json::Value>(line).expect("DLQ JSONL record"))
             .collect();
-        assert_eq!(lines.len(), 2);
+        assert_eq!(lines.len(), 3);
         assert_eq!(lines[0]["original"]["payload"], "Zmlyc3Q=");
         assert_eq!(lines[1]["original"]["payload"], "c2Vjb25k");
+        assert_eq!(lines[2]["original"]["payload"], "bGF0ZQ==");
     }
 
     #[tokio::test]
@@ -1372,7 +1366,6 @@ mod tests {
         drop(tx);
         let sink = tokio::spawn(run_dlq_sink(
             rx,
-            CancellationToken::new(),
             DeadLetterConfig::Mqtt {
                 broker: host.to_string(),
                 port,
@@ -1417,7 +1410,6 @@ mod tests {
             Duration::from_secs(1),
             run_dlq_sink(
                 rx,
-                CancellationToken::new(),
                 DeadLetterConfig::Mqtt {
                     broker: "127.0.0.1".to_string(),
                     port,

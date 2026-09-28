@@ -20,6 +20,10 @@
 name = "bench-diamond"
 description = "Diamond topology for E-Iso-7: healthy pass-through vs infinite-loop attack, fan-in at sink"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

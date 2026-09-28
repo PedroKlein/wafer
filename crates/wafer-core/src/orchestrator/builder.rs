@@ -10,7 +10,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
-use crate::config::{Config, EdgeDef, NodeCategory, NodeDef, OverflowPolicy};
+use crate::config::{Config, EdgeDef, NodeCategory, OverflowPolicy};
 use crate::dag::graph::DagGraph;
 use crate::error::{ConfigError, Result, WaferError};
 use crate::node::wasm::WasmRouterNode;
@@ -388,21 +388,13 @@ fn wire_queues(edges: &[EdgeDef], default_capacity: usize) -> QueueWiring {
 
 /// Resolve error policy for a node: per-node overrides beat pipeline defaults.
 fn resolve_error_policy(config: &Config, node_id: &str) -> ResolvedErrorPolicy {
-    let base = config.error_policy.clone();
-    let override_policy = match config.nodes.get(node_id) {
-        Some(NodeDef::Transform(wasm) | NodeDef::Filter(wasm) | NodeDef::Router(wasm)) => {
-            wasm.error_policy.clone()
-        }
-        _ => None,
-    };
-
-    override_policy.unwrap_or(base).into()
+    config.effective_error_policy(node_id).unwrap_or(&config.error_policy).clone().into()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig};
+    use crate::config::{NodeDef, SinkDef, SourceDef, StdinSourceConfig, StdoutSinkConfig};
     use crate::runner::send_downstream;
     use std::time::Duration;
 

@@ -508,8 +508,12 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
                 }[experiment]},
                 "attempts_failed": "2",
                 "recovery_count": "2",
+                "dlq_sent": "2",
             }],
+            "dlq_sent_total": 2,
+            "dlq_records": 2,
         }))
+        (result / "dlq.jsonl").write_text('{"reason":{"type":"trapped"}}\n' * 2)
     if experiment == "e-iso-7":
         (result / "branch-isolation.json").write_text(json.dumps({
             "condition": condition,
@@ -644,6 +648,7 @@ def test_focused_semantic_invariants_reject_malformed_artifacts() -> None:
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value.update(condition="panic"), "expected condition"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(traps_total="bogus"), "invalid runtime metrics"),
         ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(recovery_count="1"), "epoch recovery count"),
+        ("e-iso-4", "infinite-loop", "wafer", "containment.json", lambda value: value["nodes"][0].update(dlq_sent="1"), "dlq.jsonl holds 2 records but nodes sent 1"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(target_shortfall_messages=1, offered_messages=999, received_messages=999, throughput={"total_messages": 999}, latency_ns={"sample_count": 999}), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_a"].update(gap_messages=1), "branch A is not lossless"),
         ("e-iso-7", "control", "wafer", "branch-isolation.json", lambda value: value["branches"]["branch_b"].update(source_node="source_a"), "independent source populations"),

@@ -3830,6 +3830,8 @@ def test_isolation_derivations_use_raw_runtime_metrics() -> None:
         assert containment["expected_mechanism"] == "traps_unreachable"
         assert containment["traps_total"] == 12_000
         assert containment["runtime_panic"] is False
+        assert containment["dlq_sent_total"] == 0
+        assert containment["dlq_records"] is None, "no dead-letter file was written"
 
         (root / "recovery.csv").write_text(
             "node_id,sample_index,duration_ns\n"
@@ -4044,6 +4046,27 @@ def test_containment_requires_the_expected_mechanism_alone(
         write_node_metrics(root, attack)
         (root / "stdout.log").write_text("")
         assert derive_containment(root, experiment, condition)["contained"] is contained
+
+
+def test_containment_reports_dead_letter_evidence() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_node_metrics(root, attack={
+            "messages_in": 3,
+            "traps_total": 3,
+            "traps_memory_out_of_bounds": 3,
+            "attempts_failed": 3,
+            "dlq_sent": 3,
+            "recovery_count": 3,
+        })
+        (root / "stdout.log").write_text("")
+        (root / "dlq.jsonl").write_text(
+            '{"reason":{"type":"trapped","kind":"memory_out_of_bounds"}}\n' * 3 + "\n"
+        )
+        containment = derive_containment(root, "e-iso-1", "buffer-overflow")
+        assert containment["contained"] is True
+        assert containment["dlq_sent_total"] == 3
+        assert containment["dlq_records"] == 3, "blank lines are not records"
 
 
 def test_containment_rejects_metrics_without_split_counters() -> None:
