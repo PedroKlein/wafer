@@ -43,6 +43,7 @@ from results_layout import (
 )
 from containment import assess_containment
 from interval_metrics import compose_interval_metrics
+from latency_evidence import latency_evidence_violations
 from write_metadata import merge_metadata
 
 
@@ -212,11 +213,11 @@ SWAP4_PHASES = (
 
 
 def _subscriber_latency_is_suspect(metadata: dict) -> bool:
-    return (
-        metadata.get("parse_errors") != 0
-        or metadata.get("negative_latency_count") != 0
-        or metadata.get("above_highest_latency_count", 0) != 0
-        or metadata.get("clock_steps", 0) != 0
+    return any(
+        metadata.get(field) != 0
+        for field in (
+            "parse_errors", "negative_latency_count", "above_highest_latency_count", "clock_steps"
+        )
     )
 
 
@@ -326,6 +327,8 @@ def validate_capacity_scout_result(result: dict) -> None:
             "unexpected_sequence_count": result["messages"]["unexpected"],
             "parse_errors": 0,
             "negative_latency_count": 0,
+            "above_highest_latency_count": 0,
+            "clock_steps": 0,
             "latency_p50_ns": 0,
             "latency_p95_ns": 0,
             "latency_p99_ns": 0,
@@ -453,6 +456,8 @@ def validate_capacity_run_result(result: dict) -> None:
             "unexpected_sequence_count": result["messages"]["unexpected"],
             "parse_errors": 0,
             "negative_latency_count": 0,
+            "above_highest_latency_count": 0,
+            "clock_steps": 0,
             **{f"latency_{name}_ns": result["latency_ns"][name] for name in ("p50", "p95", "p99")},
             "sequence": {
                 "total_received": result["messages"]["received_events"],
@@ -2940,10 +2945,13 @@ def _summarize_branch_artifacts(
                 "started_ns": int(raw_window["started_ns"]),
                 "finished_ns": int(raw_window["finished_ns"]),
             }
-        except (KeyError, OSError, TypeError, ValueError) as error:
+            violations = latency_evidence_violations(raw_window)
+        except (AttributeError, KeyError, OSError, TypeError, ValueError) as error:
             raise ValueError(f"{branch_dir}/measurement-window.json is invalid") from error
         if window["finished_ns"] <= window["started_ns"]:
             raise ValueError(f"{branch_dir}/measurement-window.json is empty or reversed")
+        if violations:
+            raise ValueError(f"{branch_dir}: {'; '.join(violations)}")
 
     total_messages = sum(sample["msg_count"] for sample in throughput)
     if total_messages != sequence["total_received"]:

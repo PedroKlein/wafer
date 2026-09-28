@@ -815,6 +815,12 @@ impl LatencyRecorder {
         outcome
     }
 
+    /// Take the wall clock at the monotonic zero that `elapsed_ns` counts from,
+    /// so a step before the first message is caught too.
+    pub(crate) fn anchor_clock(&mut self, wall_ns_at_zero: u64) {
+        self.clock_steps.observe(wall_ns_at_zero, 0);
+    }
+
     fn drop_intervals(&mut self, error: &anyhow::Error) {
         self.intervals = None;
         self.mark_partial(format!("interval-latency.json: {error}"));
@@ -1096,7 +1102,10 @@ struct ClockSteps {
 }
 
 impl ClockSteps {
-    const TOLERANCE_NS: u128 = 1_000_000;
+    /// NTP clients slew small offsets and only step large ones (ntpd above
+    /// 128 ms, systemd-timesyncd above 400 ms), so a real step is well above
+    /// this, while a thread delayed between the two clock reads stays below it.
+    const TOLERANCE_NS: u128 = 100_000_000;
 
     fn observe(&mut self, wall_ns: u64, monotonic_elapsed_ns: u64) {
         let gap = i128::from(wall_ns).saturating_sub(i128::from(monotonic_elapsed_ns));
@@ -1252,14 +1261,20 @@ mod tests {
     #[test]
     fn a_wall_clock_step_between_messages_is_counted() {
         let mut rec = LatencyRecorder::new();
+        rec.anchor_clock(1_900_000_000);
         let payload = |seq: u64| format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
 
-        rec.record_json_at(payload(0).as_bytes(), 2_000_000_000, 0, None);
-        rec.record_json_at(payload(1).as_bytes(), 2_100_000_000, 100_000_000, None);
-        assert_eq!(rec.clock_steps(), 0);
+        rec.record_json_at(payload(0).as_bytes(), 2_100_000_000, 50_000_000, None);
+        assert_eq!(rec.clock_steps(), 1, "a step before the first message");
 
-        rec.record_json_at(payload(2).as_bytes(), 1_900_000_000, 200_000_000, None);
+        rec.record_json_at(payload(1).as_bytes(), 2_150_000_000, 100_000_000, None);
         assert_eq!(rec.clock_steps(), 1);
+
+        rec.record_json_at(payload(2).as_bytes(), 2_050_000_000, 150_000_000, None);
+        assert_eq!(rec.clock_steps(), 2, "a step back between messages");
+
+        rec.record_json_at(payload(3).as_bytes(), 2_050_000_000, 200_000_000, None);
+        assert_eq!(rec.clock_steps(), 2, "50 ms between two clock reads is not a step");
     }
 
     #[test]

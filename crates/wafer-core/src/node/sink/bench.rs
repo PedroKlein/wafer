@@ -1211,6 +1211,7 @@ impl BenchSink {
         let window = serde_json::json!({
             "started_ns": started_ns,
             "finished_ns": finished_ns,
+            "wall_clock_step_ns": crate::util::wall_clock_step_ns(),
             "latency_clamps": {
                 "latency": self.latency_clamps,
                 "service": self.service_clamps,
@@ -1833,6 +1834,7 @@ mod tests {
             window["latency_clamps"]["latency"],
             serde_json::json!({"negative": 1, "above_highest": 1})
         );
+        assert!(window["wall_clock_step_ns"].as_i64().unwrap().abs() < 1_000_000);
         let intervals: serde_json::Value = serde_json::from_slice(
             &std::fs::read(dir.path().join("interval-latency.json")).unwrap(),
         )

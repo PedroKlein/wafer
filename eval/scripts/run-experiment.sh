@@ -618,7 +618,7 @@ fi
 
 NODE_METRICS="$OUT_DIR/per_node_metrics.csv"
 # A19 (thesis-hardening T4) closed: the runtime writes per_node_metrics.csv
-# via node_latency::NodeLatencyRecorder on graceful shutdown. Do NOT
+# on graceful shutdown. Do NOT
 # overwrite it here — the old header-only write was clobbering runtime
 # output. If the file already exists we keep it verbatim; otherwise we
 # emit a stub with the schema so downstream consumers don't crash on
