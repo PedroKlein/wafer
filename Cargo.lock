@@ -4605,6 +4605,7 @@ dependencies = [
  "tracing-subscriber",
  "uuid",
  "wafer-config",
+ "wafer-core",
  "wafer-types",
  "wasmtime",
  "wasmtime-wasi",

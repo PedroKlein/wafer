@@ -83,5 +83,5 @@ New/modified files span `runner/source.rs`, `runner/sink.rs`, `testing.rs`, `tes
 - The pass-through plugin was rewritten to the new WIT contracts and builds against the `transform-node` world.
 - The builder constructs all node instances (native I/O and Wasm) during the build phase; the orchestrator's `spawn_bundles()` invokes real runner loops.
 - The MQTT zero-copy fix eliminates the `to_vec()` allocation in the MQTT source.
-- E2E integration tests use `ChannelSource` / `ChannelSink` and are gated behind the `integration-tests` feature flag.
+- E2E integration tests use `ChannelSource` / `ChannelSink` from `wafer_core::testing`, which is compiled only for tests and benches (or with the `test-support` feature).
 - Code matches decisions; no divergence.

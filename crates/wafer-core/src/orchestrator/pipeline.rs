@@ -1108,18 +1108,6 @@ mod tests {
         }
     }
 
-    fn ensure_docker_host() {
-        if std::env::var_os("DOCKER_HOST").is_some() {
-            return;
-        }
-        let path =
-            format!("{}/.colima/default/docker.sock", std::env::var("HOME").unwrap_or_default());
-        if std::path::Path::new(&path).exists() {
-            // SAFETY: this test setup completes before testcontainers creates its Docker client.
-            unsafe { std::env::set_var("DOCKER_HOST", format!("unix://{path}")) };
-        }
-    }
-
     fn dlq_test_envelope(payload: &str) -> DlqEnvelope {
         let original = RuntimeEnvelope::from_string("source", payload);
         DlqEnvelope {
@@ -1339,12 +1327,12 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "needs a Docker daemon: mise run test-docker"]
     #[expect(
         clippy::panic_in_result_fn,
         reason = "the broker-backed delivery assertions must fail this integration test"
     )]
     async fn configured_mqtt_dlq_delivers_serialized_record() -> anyhow::Result<()> {
-        ensure_docker_host();
         let broker = Mosquitto::default().start().await?;
         let host = broker.get_host().await?;
         let port = broker.get_host_port_ipv4(1883).await?;

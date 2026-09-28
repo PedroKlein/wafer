@@ -944,7 +944,10 @@ to = "sink"
         );
         let router = root
             .join("plugins/content-router/target/wasm32-wasip2/release/wafer_content_router.wasm");
-        if !transform.exists() || !filter.exists() || !router.exists() {
+        if !crate::testing::artifact_available(&transform)
+            || !crate::testing::artifact_available(&filter)
+            || !crate::testing::artifact_available(&router)
+        {
             return;
         }
         let config: Config = toml::from_str(&format!(
@@ -1026,7 +1029,9 @@ port = "default"
         let filter = root.join(
             "plugins/threshold-filter/target/wasm32-wasip2/release/wafer_threshold_filter.wasm",
         );
-        if !transform.exists() || !filter.exists() {
+        if !crate::testing::artifact_available(&transform)
+            || !crate::testing::artifact_available(&filter)
+        {
             return;
         }
         let config: Config = toml::from_str(&format!(
@@ -1101,7 +1106,7 @@ to = "sink"
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let transform =
             root.join("plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm");
-        if !transform.exists() {
+        if !crate::testing::artifact_available(&transform) {
             return;
         }
         let config: Config = toml::from_str(&format!(

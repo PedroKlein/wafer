@@ -2,8 +2,7 @@
 //!
 //! Provides `PluginTestHarness` for integration tests that validate Wasm plugin
 //! behavior without the full pipeline machinery (no channels, no orchestrator).
-//! Feature-gated behind `integration-tests` because it requires pre-built .wasm
-//! artifacts on disk.
+//! Needs pre-built .wasm artifacts on disk; see [`super::artifact_available`].
 //!
 //! # Usage
 //!
@@ -204,8 +203,7 @@ mod tests {
 
     #[tokio::test]
     async fn pass_through_returns_same_payload() {
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built (run `just build-plugin pass-through`)");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
 
@@ -224,8 +222,7 @@ mod tests {
 
     #[tokio::test]
     async fn pass_through_preserves_source() {
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
 
@@ -243,8 +240,7 @@ mod tests {
 
     #[tokio::test]
     async fn pass_through_sustains_repeated_guest_calls() {
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
 
@@ -262,8 +258,7 @@ mod tests {
     /// sink cannot observe `bench.intended_ns` and records zero samples.
     #[tokio::test]
     async fn pass_through_propagates_metadata() {
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
 
@@ -294,8 +289,7 @@ mod tests {
     /// `cabi_realloc`) around iteration 100.
     #[tokio::test]
     async fn pass_through_survives_epoch_deadline_wraparound() {
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
 
@@ -325,8 +319,7 @@ mod tests {
 
     #[tokio::test]
     async fn delay_injector_smoke() {
-        if !Path::new(DELAY_INJECTOR_WASM).exists() {
-            eprintln!("SKIP: delay-injector.wasm not built");
+        if !crate::testing::artifact_available(DELAY_INJECTOR_WASM) {
             return;
         }
 
@@ -376,8 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn pass_through_v2_panics_traps_on_first_call() {
-        if !Path::new(PASS_THROUGH_V2_PANICS_WASM).exists() {
-            eprintln!("SKIP: pass-through-v2-panics.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_V2_PANICS_WASM) {
             return;
         }
 
@@ -421,8 +413,7 @@ mod tests {
     async fn pass_through_bench_shapes() {
         use bytes::Bytes;
 
-        if !Path::new(PASS_THROUGH_WASM).exists() {
-            eprintln!("SKIP: pass-through.wasm not built");
+        if !crate::testing::artifact_available(PASS_THROUGH_WASM) {
             return;
         }
         let harness = PluginTestHarness::new().unwrap();

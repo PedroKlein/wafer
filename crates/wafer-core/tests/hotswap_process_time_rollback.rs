@@ -1,5 +1,4 @@
 #![cfg(test)]
-#![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
 #![expect(
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
@@ -19,6 +18,7 @@ use std::time::Duration;
 
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::runner::{HotSwapError, HotSwapProgress};
+use wafer_core::testing::artifact_available;
 use wafer_types::config::Config;
 
 /// RAII guard to clean up the `WAFER_BENCH_OUTPUT_DIR` env var on test exit
@@ -139,12 +139,7 @@ to = "sink"
 /// 7. Assert: rollback metric >= 1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hotswap_process_time_rollback() {
-    if !Path::new(PASS_THROUGH_WASM).exists() {
-        eprintln!("SKIP: pass-through.wasm not built at {PASS_THROUGH_WASM}");
-        return;
-    }
-    if !Path::new(PASS_THROUGH_V2_PANICS_WASM).exists() {
-        eprintln!("SKIP: pass-through-v2-panics.wasm not built at {PASS_THROUGH_V2_PANICS_WASM}");
+    if !artifact_available(PASS_THROUGH_WASM) || !artifact_available(PASS_THROUGH_V2_PANICS_WASM) {
         return;
     }
 
@@ -256,8 +251,7 @@ const INFINITE_LOOP_WASM: &str = concat!(
 /// rolled back like one that traps.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hotswap_budget_trap_in_canary_window_rolls_back() {
-    if !Path::new(PASS_THROUGH_WASM).exists() || !Path::new(INFINITE_LOOP_WASM).exists() {
-        eprintln!("SKIP: pass-through or infinite-loop plugin not built");
+    if !artifact_available(PASS_THROUGH_WASM) || !artifact_available(INFINITE_LOOP_WASM) {
         return;
     }
     let tmp = tempfile::tempdir().expect("tmp dir");

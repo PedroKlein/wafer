@@ -63,7 +63,7 @@ Run all gates on one clean commit before creating the evaluation tag:
 
 ```sh
 cargo fmt --all -- --check
-WAFER_SKIP_DOCKER_TESTS=1 cargo test --workspace
+mise run test
 python3 -m pytest -q eval/scripts/tests
 cd eval/analysis
 uv sync

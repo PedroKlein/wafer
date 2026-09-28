@@ -15,7 +15,6 @@ path = "src/main.rs"
 [features]
 default = ["http-api", "ort-download"]
 http-api = ["wafer-core/http-api"]
-# Phase 2 integration tests (require WASM fixtures)
 # Enable CUDA for GPU acceleration on NVIDIA devices (e.g., Jetson)
 # Requires CUDA toolkit installed on the target system
 cuda = ["wafer-core/cuda"]
@@ -53,6 +52,7 @@ clap = { workspace = true }
 workspace = true
 
 [dev-dependencies]
+wafer-core = { workspace = true, features = ["test-support"] }
 tempfile = { workspace = true }
 reqwest = { workspace = true }
 serde_json = { workspace = true }

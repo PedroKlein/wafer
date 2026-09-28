@@ -223,10 +223,12 @@ mod tests {
         while let Ok(env) = rx.try_recv() {
             collected.push(env);
         }
-        // At minimum the 3 messages sent before delay should arrive;
-        // the "after-delay" message should also be drained
-        assert!(collected.len() >= 3);
-        assert!(collected.len() <= 4);
+        let payloads: Vec<&[u8]> = collected.iter().map(|env| &*env.payload).collect();
+        assert_eq!(
+            payloads,
+            [&b"cancel-0"[..], b"cancel-1", b"cancel-2", b"after-delay"],
+            "cancel must drain the message still queued when it fired"
+        );
     }
 
     struct CloseFailSink;
