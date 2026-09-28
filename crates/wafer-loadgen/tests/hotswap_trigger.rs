@@ -98,7 +98,7 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
         broker_port: broker.port(),
         topic: "wafer/bench/input".into(),
         rate: 100,
-        duration_secs: 3, // give the trigger time to fire (needs > swap_at + ~200ms drain)
+        duration_secs: 3, // give the trigger time to fire (needs > swap_at)
         payload_size: 128,
         payload_template: None,
         profile: "hotswap-trigger".into(),
