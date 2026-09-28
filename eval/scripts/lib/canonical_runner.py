@@ -211,6 +211,15 @@ SWAP4_PHASES = (
 )
 
 
+def _subscriber_latency_is_suspect(metadata: dict) -> bool:
+    return (
+        metadata.get("parse_errors") != 0
+        or metadata.get("negative_latency_count") != 0
+        or metadata.get("above_highest_latency_count", 0) != 0
+        or metadata.get("clock_steps", 0) != 0
+    )
+
+
 def analyze_capacity_scout_summary(
     publisher: dict, subscriber: dict, measurement_duration_ns: int
 ) -> dict:
@@ -230,8 +239,8 @@ def analyze_capacity_scout_summary(
         raise ValueError("capacity-scout counters must be non-negative")
     if intended != rejected + enqueued:
         raise ValueError("counter identity failed: intended = rejected + enqueued")
-    if subscriber.get("parse_errors") != 0 or subscriber.get("negative_latency_count") != 0:
-        raise ValueError("subscriber reported parse errors or negative latency")
+    if _subscriber_latency_is_suspect(subscriber):
+        raise ValueError("subscriber reported parse errors, clamped latency or a clock step")
     if int(subscriber.get("sequence", {}).get("total_received", -1)) != received_events:
         raise ValueError("subscriber received counters do not reconcile")
     if int(subscriber.get("total_messages", received_events)) != received_events:
@@ -471,7 +480,7 @@ def validate_capacity_run_result(result: dict) -> None:
         "lowest_ns": histogram.get("lowest_ns"),
         "highest_ns": histogram.get("highest_ns"),
         "significant_digits": histogram.get("significant_digits"),
-    } != {"lowest_ns": 1_000, "highest_ns": 10_000_000_000, "significant_digits": 3}:
+    } != {"lowest_ns": 1_000, "highest_ns": 3_600_000_000_000, "significant_digits": 3}:
         raise ValueError("capacity-run HDR precision differs from the frozen recorder")
     if result["thermal"].get("throttled") is not False:
         raise ValueError("capacity-run result is throttled")
@@ -3160,8 +3169,8 @@ def analyze_rate_sweep_traces(
             raise ValueError(f"latency mismatch for sequence {row['seq']}")
 
     metadata = json.loads(subscriber_metadata_path.read_text())
-    if metadata.get("parse_errors") != 0 or metadata.get("negative_latency_count") != 0:
-        raise ValueError("subscriber reported parse errors or negative latency")
+    if _subscriber_latency_is_suspect(metadata):
+        raise ValueError("subscriber reported parse errors, clamped latency or a clock step")
     if metadata.get("total_messages") != len(received) or metadata.get("total_recorded") != len(received):
         raise ValueError("subscriber metadata count differs from received trace")
     sequence = metadata.get("sequence", {})

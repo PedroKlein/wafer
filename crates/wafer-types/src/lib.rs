@@ -1,10 +1,12 @@
 //! Shared types for WAFER runtime control plane.
 //!
-//! This crate contains API types shared between wafer-core, wafer-runtime, and waferctl.
+//! This crate contains API types shared between wafer-core, wafer-runtime, waferctl and
+//! wafer-loadgen.
 
 pub mod config;
 mod control;
 mod events;
+pub mod latency;
 mod metrics;
 
 pub use control::*;

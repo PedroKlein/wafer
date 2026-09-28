@@ -15,11 +15,14 @@ use hdrhistogram::Histogram;
 use hdrhistogram::serialization::V2Serializer;
 use hdrhistogram::serialization::interval_log::IntervalLogWriterBuilder;
 use serde::Serialize;
+use wafer_types::latency::{
+    LATENCY_HIGHEST_NS, LATENCY_LOWEST_NS, LATENCY_SIG_DIGITS, LatencyClamps,
+};
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
 use crate::queue::RuntimeEnvelope;
-use crate::util::write_atomic;
+use crate::util::{monotonic_unix_ns, write_atomic};
 
 // =============================================================================
 // SequenceTracker
@@ -321,10 +324,6 @@ struct IntervalRecorder {
 }
 
 impl IntervalRecorder {
-    #[expect(
-        clippy::expect_used,
-        reason = "histogram bounds are compile-time constants proven by recorder tests"
-    )]
     fn new(measurement_start_unix_epoch_ns: u64, measurement_secs: u64) -> Self {
         let maximum_rows =
             usize::try_from(measurement_secs).unwrap_or(usize::MAX).saturating_add(2);
@@ -333,8 +332,7 @@ impl IntervalRecorder {
             declared_measurement_duration_ns: measurement_secs.saturating_mul(INTERVAL_WIDTH_NS),
             maximum_rows,
             current_bucket: 0,
-            histogram: Histogram::new_with_bounds(1_000, 10_000_000_000, 3)
-                .expect("valid histogram bounds"),
+            histogram: latency_histogram(),
             events: 0,
             unique: 0,
             duplicates: 0,
@@ -354,7 +352,7 @@ impl IntervalRecorder {
             return;
         }
         if let Some(latency_ns) = latency_ns {
-            self.histogram.saturating_record(latency_ns.clamp(1_000, 10_000_000_000));
+            self.histogram.saturating_record(latency_ns);
         }
         self.events = self.events.saturating_add(1);
         if duplicate {
@@ -781,7 +779,7 @@ impl BurstObservation {
 /// Evaluation-grade measurement sink.
 ///
 /// Records end-to-end latency (arrival minus the scheduled send time) into
-/// HdrHistogram (3 significant digits, 1µs–10s range). When the source also
+/// HdrHistogram (3 significant digits, 1 µs–1 h range, clamps counted). When the source also
 /// stamps when each message actually left it, the sink splits that latency
 /// into service time (arrival minus emit) and source lag (emit minus
 /// scheduled). Optionally tracks sequence gaps and hot-swap transitions.
@@ -792,6 +790,9 @@ pub struct BenchSink {
     histogram: Histogram<u64>,
     service_histogram: Histogram<u64>,
     source_lag_histogram: Histogram<u64>,
+    latency_clamps: LatencyClamps,
+    service_clamps: LatencyClamps,
+    source_lag_clamps: LatencyClamps,
     warmup_until: Option<Instant>,
     sequence_tracker: Option<SequenceTracker>,
     hotswap_recorder: Option<HotSwapRecorder>,
@@ -823,10 +824,6 @@ impl BenchSink {
     ///
     /// Panics if the internal histogram cannot be created (compile-time constant bounds; unreachable in practice).
     #[must_use]
-    #[expect(
-        clippy::expect_used,
-        reason = "Histogram bounds are compile-time constants (1µs–10s, 3 sig figs); cannot fail"
-    )]
     pub fn new(config: BenchSinkConfig) -> Self {
         let sequence_tracker = if config.track_sequences {
             Some(if config.warmup_secs == 0 {
@@ -840,16 +837,15 @@ impl BenchSink {
         let hotswap_recorder =
             if config.track_hotswap { Some(HotSwapRecorder::new()) } else { None };
 
-        let histogram = || {
-            Histogram::new_with_bounds(1_000, 10_000_000_000, 3).expect("valid histogram bounds")
-        };
-
         Self {
             id: "bench-sink".to_owned(),
             config,
-            histogram: histogram(),
-            service_histogram: histogram(),
-            source_lag_histogram: histogram(),
+            histogram: latency_histogram(),
+            service_histogram: latency_histogram(),
+            source_lag_histogram: latency_histogram(),
+            latency_clamps: LatencyClamps::default(),
+            service_clamps: LatencyClamps::default(),
+            source_lag_clamps: LatencyClamps::default(),
             warmup_until: None,
             sequence_tracker,
             hotswap_recorder,
@@ -1211,11 +1207,17 @@ impl BenchSink {
         let Some(started) = self.start_wall_time else { return Ok(()) };
         let started_ns =
             started.duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating);
-        let finished_ns = current_time_ns();
-        write_atomic(
-            &dir.join("measurement-window.json"),
-            format!("{{\"started_ns\":{started_ns},\"finished_ns\":{finished_ns}}}\n").as_bytes(),
-        )
+        let finished_ns = wall_clock_ns();
+        let window = serde_json::json!({
+            "started_ns": started_ns,
+            "finished_ns": finished_ns,
+            "latency_clamps": {
+                "latency": self.latency_clamps,
+                "service": self.service_clamps,
+                "source_lag": self.source_lag_clamps,
+            },
+        });
+        write_atomic(&dir.join("measurement-window.json"), format!("{window}\n").as_bytes())
     }
 
     fn write_swap_timeline(&self, dir: &Path) -> std::io::Result<()> {
@@ -1319,8 +1321,10 @@ impl BenchSink {
     }
 }
 
-/// Get current wall-clock time in nanoseconds since UNIX epoch.
-fn current_time_ns() -> u64 {
+/// Wall-clock nanoseconds since the Unix epoch, for the measurement window
+/// that other processes' telemetry is aligned to. Per-message timestamps use
+/// [`monotonic_unix_ns`] instead.
+fn wall_clock_ns() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, crate::util::duration_ns_saturating)
 }
 
@@ -1348,7 +1352,7 @@ impl Lifecycle for BenchSink {
     fn init(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
         if self.config.output_dir.is_some() {
             self.interval_recorder =
-                Some(IntervalRecorder::new(current_time_ns(), configured_measurement_secs()));
+                Some(IntervalRecorder::new(wall_clock_ns(), configured_measurement_secs()));
         }
         Box::pin(async { Ok(()) })
     }
@@ -1452,7 +1456,7 @@ impl Sink for BenchSink {
             self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
 
-        let arrival_unix_ns = current_time_ns();
+        let arrival_unix_ns = monotonic_unix_ns();
         let duplicate = self.record_sequence(&envelope);
         self.record_burst_bucket(&envelope, arrival_unix_ns, duplicate);
 
@@ -1462,12 +1466,23 @@ impl Sink for BenchSink {
         self.bucket_bytes = self.bucket_bytes.saturating_add(payload_len);
         self.flush_bucket_if_needed(now);
 
-        let latency_ns = intended_ns
-            .map(|intended| record_elapsed(&mut self.histogram, intended, arrival_unix_ns));
+        let latency_ns = intended_ns.map(|intended| {
+            record_elapsed(&mut self.histogram, &mut self.latency_clamps, intended, arrival_unix_ns)
+        });
         if let Some(emit) = emit_ns {
-            record_elapsed(&mut self.service_histogram, emit, arrival_unix_ns);
+            record_elapsed(
+                &mut self.service_histogram,
+                &mut self.service_clamps,
+                emit,
+                arrival_unix_ns,
+            );
             if let Some(intended) = intended_ns {
-                record_elapsed(&mut self.source_lag_histogram, intended, emit);
+                record_elapsed(
+                    &mut self.source_lag_histogram,
+                    &mut self.source_lag_clamps,
+                    intended,
+                    emit,
+                );
             }
         }
         if let (Some(start), Some(intervals)) =
@@ -1484,7 +1499,7 @@ impl Sink for BenchSink {
             && let Some((_, version)) =
                 envelope.header.metadata.iter().find(|(k, _)| k.as_ref() == "plugin.version")
         {
-            recorder.record(version.as_ref(), current_time_ns());
+            recorder.record(version.as_ref(), monotonic_unix_ns());
         }
 
         Box::pin(async { Ok(()) })
@@ -1500,16 +1515,23 @@ fn metadata_u64(envelope: &RuntimeEnvelope, key: &str) -> Option<u64> {
         .and_then(|(_, value)| value.parse::<u64>().ok())
 }
 
-/// Records `to - from`, floored at the histogram's 1 µs lower bound, and
-/// returns the recorded value. Values above the upper bound are dropped.
-#[expect(
-    clippy::let_underscore_must_use,
-    reason = "histogram record errors on out-of-range values: silently dropping is correct for latency sampling"
-)]
-fn record_elapsed(histogram: &mut Histogram<u64>, from: u64, to: u64) -> u64 {
-    let value = to.saturating_sub(from).max(1_000);
-    let _ = histogram.record(value);
+/// Records `to - from` within the shared latency bounds, counting clamped
+/// samples, and returns the recorded value.
+fn record_elapsed(
+    histogram: &mut Histogram<u64>,
+    clamps: &mut LatencyClamps,
+    from: u64,
+    to: u64,
+) -> u64 {
+    let value = clamps.bound(from, to);
+    histogram.saturating_record(value);
     value
+}
+
+#[expect(clippy::expect_used, reason = "the shared latency bounds are valid constants")]
+fn latency_histogram() -> Histogram<u64> {
+    Histogram::new_with_bounds(LATENCY_LOWEST_NS, LATENCY_HIGHEST_NS, LATENCY_SIG_DIGITS)
+        .expect("valid latency histogram bounds")
 }
 
 #[cfg(test)]
@@ -1522,7 +1544,7 @@ mod tests {
     use crate::queue::RuntimeEnvelope;
 
     fn make_bench_envelope(seq: u64) -> RuntimeEnvelope {
-        let now_ns = current_time_ns();
+        let now_ns = monotonic_unix_ns();
         // Subtract a known amount so latency is measurable
         let intended_ns = now_ns.saturating_sub(5_000); // 5µs ago
         RuntimeEnvelope::from_string("bench-source", "payload")
@@ -1740,7 +1762,7 @@ mod tests {
         let config = BenchSinkConfig::for_test().with_output_dir(dir.path());
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
-        let source_origin_beyond_interval_bound = current_time_ns() - 400_000_000_000;
+        let source_origin_beyond_interval_bound = monotonic_unix_ns() - 400_000_000_000;
         let envelope = make_bench_envelope(0).with_metadata(
             "bench.measurement_start_unix_ns",
             source_origin_beyond_interval_bound.to_string(),
@@ -1784,6 +1806,43 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latency_outside_the_old_ten_second_bound_is_recorded_and_clamps_are_counted() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sink = BenchSink::new(BenchSinkConfig::for_test().with_output_dir(dir.path()));
+        sink.init().await.unwrap();
+        let now = monotonic_unix_ns();
+        let scheduled =
+            [now - 20_000_000_000, now + 60_000_000_000, now - LATENCY_HIGHEST_NS - 1_000_000_000];
+        for (seq, intended) in (0_u64..).zip(scheduled) {
+            let envelope = RuntimeEnvelope::from_string("bench-source", "payload")
+                .with_metadata("bench.sequence", seq.to_string())
+                .with_metadata("bench.intended_ns", intended.to_string());
+            sink.collect(envelope).await.unwrap();
+        }
+        sink.close().await.unwrap();
+
+        assert_eq!(sink.recorded_count(), 3);
+        assert_eq!(sink.histogram.count_between(20_000_000_000, 21_000_000_000), 1);
+        assert_eq!(sink.histogram.count_at(LATENCY_LOWEST_NS), 1);
+        assert_eq!(sink.histogram.count_at(LATENCY_HIGHEST_NS), 1);
+        let window: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("measurement-window.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            window["latency_clamps"]["latency"],
+            serde_json::json!({"negative": 1, "above_highest": 1})
+        );
+        let intervals: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(dir.path().join("interval-latency.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(intervals["rows"][0]["latency_count"], 3);
+        let interval_p99 = intervals["rows"][0]["latency_p99_ns"].as_u64().unwrap();
+        assert!(sink.histogram.equivalent(interval_p99, LATENCY_HIGHEST_NS));
+    }
+
+    #[tokio::test]
     async fn bench_sink_warmup_exclusion() {
         let config = BenchSinkConfig {
             warmup_secs: 1,
@@ -1812,7 +1871,7 @@ mod tests {
         assert!(!tmp_dir.join("measurement-window.json").exists());
 
         tokio::time::sleep(Duration::from_millis(1_010)).await;
-        let before_measurement_ns = current_time_ns();
+        let before_measurement_ns = wall_clock_ns();
         sink.collect(make_bench_envelope(1)).await.unwrap();
         let tracker = sink.sequence_tracker().unwrap();
         assert_eq!(tracker.total_expected(), 1);
@@ -2100,7 +2159,7 @@ mod tests {
     async fn burst_artifact_for_source_offset(offset_ns: u64) -> serde_json::Value {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
-        let source_origin = current_time_ns().saturating_sub(offset_ns);
+        let source_origin = monotonic_unix_ns().saturating_sub(offset_ns);
         let envelope = make_bench_envelope(0)
             .with_metadata("bench.measurement_start_seq", "0")
             .with_metadata("bench.measurement_start_unix_ns", source_origin.to_string())
@@ -2162,7 +2221,7 @@ mod tests {
     async fn burst_metadata_writes_bounded_100ms_sink_buckets() {
         let mut sink = BenchSink::new(BenchSinkConfig::for_test());
         sink.init().await.unwrap();
-        let source_origin = current_time_ns();
+        let source_origin = monotonic_unix_ns();
         for (sequence, phase) in [(0, "before"), (1, "burst"), (2, "after")] {
             let envelope = make_bench_envelope(sequence)
                 .with_metadata("bench.measurement_start_seq", "0")
@@ -2218,7 +2277,7 @@ mod tests {
         let mut sink = BenchSink::new(config);
         sink.init().await.unwrap();
 
-        let before_measurement_ns = current_time_ns();
+        let before_measurement_ns = wall_clock_ns();
         for seq in 0..20 {
             let env = make_bench_envelope(seq);
             sink.collect(env).await.unwrap();
@@ -2253,7 +2312,7 @@ mod tests {
         let finished_ns = window["finished_ns"].as_u64().unwrap();
         assert!(started_ns >= before_measurement_ns);
         assert!(finished_ns > started_ns);
-        assert!(finished_ns <= current_time_ns());
+        assert!(finished_ns <= wall_clock_ns());
 
         let hdr_content = std::fs::read_to_string(&hdr_path).unwrap();
         assert!(hdr_content.contains("#[StartTime"));

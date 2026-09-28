@@ -62,10 +62,13 @@ pub fn run(args: &HdrSummaryArgs) -> Result<()> {
         .context("latency.hdr is not UTF-8 (interval logs are text-framed)")?;
 
     // Aggregate every interval entry into one histogram so tail
-    // percentiles reflect the whole post-warmup run. Bounds match the
-    // BenchSink + loadgen ceiling (1µs–10s).
-    let mut agg = Histogram::<u64>::new_with_bounds(1_000, 10_000_000_000, 3)
-        .map_err(|e| anyhow!("failed to create aggregator histogram: {e:?}"))?;
+    // percentiles reflect the whole post-warmup run.
+    let mut agg = Histogram::<u64>::new_with_bounds(
+        wafer_types::latency::LATENCY_LOWEST_NS,
+        wafer_types::latency::LATENCY_HIGHEST_NS,
+        wafer_types::latency::LATENCY_SIG_DIGITS,
+    )
+    .map_err(|e| anyhow!("failed to create aggregator histogram: {e:?}"))?;
     let mut deserializer = Deserializer::new();
     let mut intervals = 0_usize;
 
