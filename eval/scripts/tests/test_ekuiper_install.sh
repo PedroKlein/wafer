@@ -15,6 +15,10 @@ fake_uname aarch64
 plan="$(PATH="$TMP:$PATH" "$INSTALL" --dry-run)"
 grep -q '^artifact: kuiper-2.1.0-linux-arm64.deb$' <<<"$plan" || { echo "aarch64 did not select the arm64 package" >&2; exit 1; }
 
+fake_uname arm64
+plan="$(PATH="$TMP:$PATH" "$INSTALL" --dry-run)"
+grep -q '^artifact: kuiper-2.1.0-linux-arm64.deb$' <<<"$plan" || { echo "arm64 (macOS) did not select the arm64 package" >&2; exit 1; }
+
 fake_uname x86_64
 plan="$(PATH="$TMP:$PATH" "$INSTALL" --dry-run)"
 grep -q '^artifact: kuiper-2.1.0-linux-amd64.deb$' <<<"$plan" || { echo "x86_64 did not select the amd64 package" >&2; exit 1; }
