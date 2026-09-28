@@ -449,7 +449,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();
@@ -514,7 +514,7 @@ mod tests {
             memory: MemoryLimits { transform: MNIST_MEMORY, ..MemoryLimits::default() },
             ..EngineConfig::default()
         };
-        let engine = WaferEngine::from_engine_config(&config).expect("engine");
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
         engine.ensure_epoch_ticker();
         let node = inference_node(&engine).await.expect("inference node");
         let (progress, completion) = HotSwapProgress::channel();

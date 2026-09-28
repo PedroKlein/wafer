@@ -236,6 +236,8 @@ pub async fn hot_swap(
         (StatusCode::INTERNAL_SERVER_ERROR, format!("swap preparation failed: {e}"))
     })?;
 
+    let compile_cache =
+        timed_result.timeline.compile_cache.map(crate::engine::CacheOutcome::as_str);
     let progress = timed_result.payload.progress();
     let signal_at = std::time::Instant::now();
     timed_result.timeline.mark_signal_sent();
@@ -252,6 +254,7 @@ pub async fn hot_swap(
                 "node_id": id,
                 "status": "rolled_back",
                 "reason": reason,
+                "compile_cache": compile_cache,
                 "timeline": {
                     "compile_ns": timed_result.timeline.compile_duration_ns(),
                     "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -285,6 +288,7 @@ pub async fn hot_swap(
                     "node_id": id,
                     "replacement_adopted": adopted_at.is_some(),
                     "first_post_replacement_local_outcome": null,
+                    "compile_cache": compile_cache,
                     "timeline": {
                         "compile_ns": timed_result.timeline.compile_duration_ns(),
                         "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -323,6 +327,7 @@ pub async fn hot_swap(
             "disposition": report.first_post_replacement_local_outcome.as_str(),
             "after_adoption_ns": first_post_replacement_local_outcome_ns,
         },
+        "compile_cache": compile_cache,
         "timeline": {
             "compile_ns": timed_result.timeline.compile_duration_ns(),
             "instantiate_ns": timed_result.timeline.instantiate_duration_ns(),
@@ -476,9 +481,9 @@ pub async fn reconfigure(
                     "replacement_adopted": adopted_at.is_some(),
                     "first_post_replacement_local_outcome": null,
                     "timeline": {
-                        "compile_ns": 0u64,
-                        "instantiate_ns": 0u64,
-                        "signal_ns": 0u64,
+                        "compile_ns": null,
+                        "instantiate_ns": null,
+                        "signal_ns": null,
                         "replacement_adopted_ns": replacement_adopted_ns,
                         "first_post_replacement_local_outcome_ns": null,
                     }
@@ -505,9 +510,9 @@ pub async fn reconfigure(
             "after_adoption_ns": first_post_replacement_local_outcome_ns,
         },
         "timeline": {
-            "compile_ns": 0u64,
-            "instantiate_ns": 0u64,
-            "signal_ns": 0u64,
+            "compile_ns": null,
+            "instantiate_ns": null,
+            "signal_ns": null,
             "replacement_adopted_ns": replacement_adopted_ns,
             "first_post_replacement_local_outcome_ns": first_post_replacement_local_outcome_ns,
         }

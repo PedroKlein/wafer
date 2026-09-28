@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use wasmtime::{Engine, component::Component};
 
@@ -21,12 +21,33 @@ const fn wasmtime_version_major() -> &'static str {
     env!("CARGO_PKG_VERSION_MAJOR")
 }
 
+/// Where a component returned by [`ComponentCache::get_or_compile`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CacheOutcome {
+    MemoryHit,
+    DiskHit,
+    Compiled,
+}
+
+impl CacheOutcome {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MemoryHit => "memory_hit",
+            Self::DiskHit => "disk_hit",
+            Self::Compiled => "compiled",
+        }
+    }
+}
+
+type MemoryTier = HashMap<[u8; 32], Arc<Component>, foldhash::fast::FixedState>;
+
 /// Content-addressed cache for pre-compiled Wasm components.
 ///
 /// Cold-path only — all operations happen during pipeline setup or hot-swap prepare.
 pub struct ComponentCache {
     /// In-memory cache: blake3 hash → compiled component.
-    memory: HashMap<[u8; 32], Arc<Component>, foldhash::fast::FixedState>,
+    memory: Mutex<MemoryTier>,
     /// Optional disk cache directory for serialized `.cwasm` artifacts.
     disk_dir: Option<PathBuf>,
 }
@@ -37,7 +58,10 @@ impl ComponentCache {
     /// If `disk_dir` is `Some`, the directory will be created on first write.
     #[must_use]
     pub fn new(disk_dir: Option<PathBuf>) -> Self {
-        Self { memory: HashMap::with_hasher(foldhash::fast::FixedState::default()), disk_dir }
+        Self {
+            memory: Mutex::new(HashMap::with_hasher(foldhash::fast::FixedState::default())),
+            disk_dir,
+        }
     }
 
     /// Create a memory-only cache (no disk persistence).
@@ -48,56 +72,56 @@ impl ComponentCache {
 
     /// Look up or compile a component, caching the result.
     ///
-    /// Load path: memory → disk → compile + save to both tiers.
+    /// Load path: memory → disk → compile + save to both tiers. The memory
+    /// lock is not held while deserializing or compiling, so a slow compile
+    /// does not block lookups of other components.
     ///
     /// # Errors
     ///
     /// Returns `WaferError::ComponentLoad` if compilation fails.
-    pub fn get_or_compile(&mut self, engine: &Engine, wasm_bytes: &[u8]) -> Result<Arc<Component>> {
+    pub fn get_or_compile(
+        &self,
+        engine: &Engine,
+        wasm_bytes: &[u8],
+        name: &str,
+    ) -> Result<(Arc<Component>, CacheOutcome)> {
         let hash = blake3::hash(wasm_bytes);
         let hash_bytes = *hash.as_bytes();
 
-        if let Some(component) = self.memory.get(&hash_bytes) {
-            return Ok(Arc::clone(component));
+        if let Some(component) = self.memory().get(&hash_bytes) {
+            return Ok((Arc::clone(component), CacheOutcome::MemoryHit));
         }
 
-        if let Some(component) = self.try_load_from_disk(engine, &hash)? {
-            let arc = Arc::new(component);
-            self.memory.insert(hash_bytes, Arc::clone(&arc));
-            return Ok(arc);
-        }
-        let component = Component::new(engine, wasm_bytes).map_err(|source| {
-            WaferError::ComponentLoad { path: PathBuf::from("<bytes>"), source }
-        })?;
-        let arc = Arc::new(component);
-        self.memory.insert(hash_bytes, Arc::clone(&arc));
-        self.try_save_to_disk(engine, &hash, &arc);
-
-        Ok(arc)
-    }
-
-    /// Check if a component with the given bytes is already cached.
-    #[must_use]
-    pub fn contains(&self, wasm_bytes: &[u8]) -> bool {
-        let hash = blake3::hash(wasm_bytes);
-        self.memory.contains_key(hash.as_bytes())
+        let (component, outcome) = if let Some(component) =
+            self.try_load_from_disk(engine, &hash)?
+        {
+            (component, CacheOutcome::DiskHit)
+        } else {
+            let component = Component::new(engine, wasm_bytes).map_err(|source| {
+                WaferError::ComponentLoad { path: PathBuf::from(format!("<bytes:{name}>")), source }
+            })?;
+            self.try_save_to_disk(&hash, &component);
+            (component, CacheOutcome::Compiled)
+        };
+        let component =
+            Arc::clone(self.memory().entry(hash_bytes).or_insert_with(|| Arc::new(component)));
+        Ok((component, outcome))
     }
 
     /// Number of components in the memory cache.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.memory.len()
+        self.memory().len()
     }
 
     /// Returns `true` if the memory cache is empty.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.memory.is_empty()
+        self.memory().is_empty()
     }
 
-    /// Clear the in-memory cache (disk cache is unaffected).
-    pub fn clear(&mut self) {
-        self.memory.clear();
+    fn memory(&self) -> MutexGuard<'_, MemoryTier> {
+        self.memory.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Try to load a compiled component from the disk cache.
@@ -137,7 +161,7 @@ impl ComponentCache {
         clippy::let_underscore_must_use,
         reason = "cache I/O is best-effort: mkdir/write failure is non-fatal"
     )]
-    fn try_save_to_disk(&self, _engine: &Engine, hash: &blake3::Hash, component: &Component) {
+    fn try_save_to_disk(&self, hash: &blake3::Hash, component: &Component) {
         let Some(ref dir) = self.disk_dir else { return };
         let path = Self::artifact_path(dir, hash);
 
@@ -208,20 +232,6 @@ mod tests {
         let hash1 = blake3::hash(b"content A");
         let hash2 = blake3::hash(b"content B");
         assert_ne!(hash1, hash2);
-    }
-
-    #[test]
-    fn contains_false_for_unknown() {
-        let cache = ComponentCache::memory_only();
-        assert!(!cache.contains(b"nonexistent"));
-    }
-
-    #[test]
-    fn clear_empties_cache() {
-        let mut cache = ComponentCache::memory_only();
-        // No components to insert without valid wasm, just verify clear works
-        cache.clear();
-        assert!(cache.is_empty());
     }
 
     #[test]

@@ -724,7 +724,7 @@ async fn resolve_and_load_component(
     engine: &WaferEngine,
     registry: &WaferRegistry,
     config_path: Option<&Path>,
-) -> Result<(wasmtime::component::Component, String)> {
+) -> Result<(Arc<wasmtime::component::Component>, String)> {
     let plugin_path = wasm.plugin.wasm_path().ok_or_else(|| {
         WaferError::Runtime(format!(
             "resolve_and_load_component called on non-Wasm plugin for node '{node_id}'"
@@ -759,7 +759,9 @@ async fn resolve_and_load_component(
         }
     };
     let ResolvedPlugin { content: bytes, content_hash: plugin_hash, .. } = resolved;
-    let component = engine.load_component_from_bytes(&bytes, &source_tag)?;
+    // Through the cache, so a later hot-swap back to this binary reuses the
+    // compiled component instead of paying a second cold compile.
+    let (component, _) = engine.compile_cached(&bytes, &source_tag)?;
     Ok((component, plugin_hash))
 }
 

@@ -10,7 +10,7 @@ pub(crate) mod state;
 
 pub use bindings::WasmBindings;
 pub use buffer::WaferBuffer;
-pub use cache::ComponentCache;
+pub use cache::{CacheOutcome, ComponentCache};
 pub use capabilities::Capabilities;
 pub use loader::WaferEngine;
 pub use state::{LogEntry, LogLevel, WaferState};

@@ -18,7 +18,7 @@ use super::bindings::filter_node::FilterNodePre;
 use super::bindings::inference_node::InferenceNodePre;
 use super::bindings::router_node::RouterNodePre;
 use super::bindings::transform_node::TransformNodePre;
-use super::cache::ComponentCache;
+use super::cache::{CacheOutcome, ComponentCache};
 use super::state::WaferState;
 use crate::config::EngineConfig;
 use crate::error::{Result, WaferError};
@@ -35,7 +35,7 @@ pub struct WaferEngine {
     /// Epoch ticker is started lazily on first use.
     epoch_started: OnceLock<()>,
     /// Component compilation cache (optional disk tier).
-    cache: std::sync::Mutex<ComponentCache>,
+    cache: ComponentCache,
 }
 
 impl WaferEngine {
@@ -77,7 +77,7 @@ impl WaferEngine {
             epoch_deadline: engine_config.epoch_deadline,
             epoch_tick_ms: engine_config.epoch_tick_ms,
             epoch_started: OnceLock::new(),
-            cache: std::sync::Mutex::new(ComponentCache::memory_only()),
+            cache: ComponentCache::memory_only(),
         })
     }
 
@@ -91,7 +91,7 @@ impl WaferEngine {
         cache_dir: impl Into<std::path::PathBuf>,
     ) -> Result<Self> {
         let mut this = Self::from_engine_config(engine_config)?;
-        this.cache = std::sync::Mutex::new(ComponentCache::new(Some(cache_dir.into())));
+        this.cache = ComponentCache::new(Some(cache_dir.into()));
         Ok(this)
     }
 
@@ -157,14 +157,19 @@ impl WaferEngine {
 
     /// Compile a component from bytes, using the cache.
     ///
-    /// Returns a shared `Arc<Component>` that can be used to create `InstancePre`.
+    /// Returns a shared `Arc<Component>` that can be used to create `InstancePre`,
+    /// and whether it came from the cache. A miss runs Cranelift synchronously,
+    /// so async callers should call this from the blocking pool.
     ///
     /// # Errors
     ///
     /// Returns `WaferError::ComponentLoad` if compilation fails.
-    pub fn compile_cached(&self, wasm_bytes: &[u8]) -> Result<std::sync::Arc<Component>> {
-        let mut cache = self.cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        cache.get_or_compile(&self.engine, wasm_bytes)
+    pub fn compile_cached(
+        &self,
+        wasm_bytes: &[u8],
+        name: &str,
+    ) -> Result<(std::sync::Arc<Component>, CacheOutcome)> {
+        self.cache.get_or_compile(&self.engine, wasm_bytes, name)
     }
 
     /// Build a Linker pre-configured with WASI p2 and WAFER host traits.
@@ -425,7 +430,7 @@ mod tests {
     #[test]
     fn compile_cached_invalid_bytes() {
         let engine = WaferEngine::new().expect("Failed to create engine");
-        let _ = engine.compile_cached(b"not valid wasm").unwrap_err();
+        let _ = engine.compile_cached(b"not valid wasm", "invalid").unwrap_err();
     }
 
     #[test]
@@ -433,10 +438,27 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let cfg = EngineConfig::default();
         let engine = WaferEngine::with_cache_dir(&cfg, dir.path()).expect("engine");
-        // Cache should be empty initially
-        let cache = engine.cache.lock().unwrap();
-        assert!(cache.is_empty());
-        drop(cache);
+        assert!(engine.cache.is_empty());
+    }
+
+    const TRANSFORM_COMPONENT: &[u8] =
+        include_bytes!("../../tests/fixtures/transform-panics.component.bin");
+
+    #[test]
+    fn compile_cached_reports_where_the_component_came_from() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cfg = EngineConfig::default();
+
+        let engine = WaferEngine::with_cache_dir(&cfg, dir.path()).expect("engine");
+        let (first, outcome) = engine.compile_cached(TRANSFORM_COMPONENT, "t").expect("compile");
+        assert_eq!(outcome, CacheOutcome::Compiled);
+        let (second, outcome) = engine.compile_cached(TRANSFORM_COMPONENT, "t").expect("hit");
+        assert_eq!(outcome, CacheOutcome::MemoryHit);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+
+        let restarted = WaferEngine::with_cache_dir(&cfg, dir.path()).expect("engine");
+        let (_, outcome) = restarted.compile_cached(TRANSFORM_COMPONENT, "t").expect("disk");
+        assert_eq!(outcome, CacheOutcome::DiskHit);
     }
 
     #[test]
