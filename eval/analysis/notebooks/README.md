@@ -11,8 +11,6 @@ The notebooks consume one explicitly identified result batch. They never select 
 | `02-per-hop-overhead.ipynb` | E-Perf-4 | Payload-size boundary cost |
 | `03-memory-scaling.ipynb` | E-Perf-6 | Pipeline-depth RSS |
 | `04-cross-arch.ipynb` | E-Perf-5 | ARM64/x86 WAFER-to-native ratio, or an explicit no-claim result |
-| `04-metering-overhead.ipynb` | E-Perf-7 | Auxiliary metering view |
-| `04b-depth-scaling.ipynb` | E-Perf-8 | Auxiliary in-process depth view |
 | `05-hotswap-timeline.ipynb` | E-Swap | Internal HTTP duration and sink-observed output gap |
 | `06-fault-injection.ipynb` | E-Iso-4, E-Iso-7 | Epoch recovery and independent branch-A measurements |
 | `07-metering-decomp.ipynb` | E-Perf-7 | Fuel and epoch metering decomposition |

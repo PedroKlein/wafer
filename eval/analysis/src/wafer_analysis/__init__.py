@@ -23,7 +23,6 @@ from .focused import (
     pending_record,
     percentile_rows,
 )
-from .hdr_loader import load_csv_results, load_hdr_log
 from .paths import (
     analysis_evidence_status,
     find_canonical_batch,
@@ -33,8 +32,7 @@ from .paths import (
     resolve_result_batch,
 )
 from .plots import save_figure, setup_thesis_style
-from .stats import bootstrap_ci, cliffs_delta, mann_whitney_u, shapiro_wilk
-from .tables import results_to_latex
+from .stats import bootstrap_ci, cliffs_delta
 
 __all__ = [
     "FINAL_VISUAL_MANIFEST",
@@ -52,9 +50,6 @@ __all__ = [
     "failed_replacement_table",
     "evidence_label",
     "find_canonical_batch",
-    "load_csv_results",
-    "load_hdr_log",
-    "mann_whitney_u",
     "metering_table",
     "passed_artifacts",
     "pending_record",
@@ -63,10 +58,8 @@ __all__ = [
     "resolve_analysis_batch",
     "resolve_analysis_output",
     "resolve_result_batch",
-    "results_to_latex",
     "save_figure",
     "setup_thesis_style",
-    "shapiro_wilk",
     "swap3_table",
     "swap4_table",
     "target_latency_table",

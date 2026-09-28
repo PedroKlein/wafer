@@ -410,7 +410,7 @@ linear memory + Store overhead, not shared mappings).
 - **Shakedown**: `eval/results/e-perf-7/shakedown-macos-2026-07-22T18-01-09Z/`
 - **Configs**: `eval/configs/e-perf-7/pipeline-c-{fuel-only,epoch-only,neither,passthrough}.toml`
 - **Runs**: 4 configs × 30 runs = 120 clean runs.
-- **Notebook**: `eval/analysis/notebooks/04-metering-overhead.ipynb`
+- **Notebook**: `eval/analysis/notebooks/07-metering-decomp.ipynb`
 
 Shakedown numbers (median p50 across runs, µs, macOS M-series):
 
@@ -445,7 +445,7 @@ for `0 = unlimited`.
 - **Shakedown**: `eval/results/e-perf-8/shakedown-macos-2026-07-22T17-49-56Z/`
 - **Configs**: same as E-Perf-6 (`eval/configs/e-perf-6/pipeline-depth-{1,3,5,10}.toml`)
 - **Runs**: 4 depths × 30 runs = 120 clean runs.
-- **Notebook**: `eval/analysis/notebooks/04b-depth-scaling.ipynb`
+- **Notebook**: `eval/analysis/notebooks/08-depth-scaling.ipynb`
 
 Shakedown numbers (median across runs, µs, macOS M-series):
 
