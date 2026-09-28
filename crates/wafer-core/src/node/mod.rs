@@ -25,7 +25,7 @@ pub use source::{
 // (Full definition below in this module.)
 pub use kind::{Node, NodeKind};
 pub use metrics::{NodeMetrics, QueueMetrics};
-pub use state::{NodeStateTracker, ProcessingGuard};
+pub use state::NodeStateTracker;
 pub use traits::{
     ConfigParseError, Filter, FilterOutcome, Lifecycle, NodeConfig, ProcessError, ProcessResult,
     RouteOutcome, RouteResult, Router, Transform,
