@@ -236,12 +236,11 @@ def analyze_capacity_scout_summary(
         received_events = int(subscriber["total_recorded"])
         duplicates = int(subscriber["sequence"]["total_duplicates"])
         ignored_warmup = int(subscriber.get("ignored_sequence_count", 0))
-        unexpected = int(subscriber["unexpected_sequence_count"])
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("capacity-scout counters are missing or invalid") from error
     if min(
         intended, rejected, enqueued, acked, unacked_at_exit, connects,
-        received_events, duplicates, ignored_warmup, unexpected,
+        received_events, duplicates, ignored_warmup,
     ) < 0:
         raise ValueError("capacity-scout counters must be non-negative")
     if intended != rejected + enqueued:
@@ -277,7 +276,6 @@ def analyze_capacity_scout_summary(
             "downstream_lost": downstream_lost,
             "total_undelivered": total_undelivered,
             "duplicates": duplicates,
-            "unexpected": unexpected,
             "ignored_warmup": ignored_warmup,
         },
         "rates_msg_s": {
@@ -349,7 +347,6 @@ def validate_capacity_scout_result(result: dict) -> None:
             "total_recorded": result["messages"]["received_events"],
             "total_messages": result["messages"]["received_events"],
             "ignored_sequence_count": result["messages"]["ignored_warmup"],
-            "unexpected_sequence_count": result["messages"]["unexpected"],
             "parse_errors": 0,
             "negative_latency_count": 0,
             "above_highest_latency_count": 0,
@@ -378,8 +375,6 @@ def validate_capacity_scout_result(result: dict) -> None:
         raise ValueError("capacity-scout result is throttled")
     if int(result["thermal"].get("max_temperature_millicelsius", 0)) >= 75_000:
         raise ValueError("capacity-scout result reached the 75 C thermal stop")
-    if result["messages"]["unexpected"] != 0:
-        raise ValueError("capacity-scout result contains unexpected sequences")
     for receipt in (
         "latency_hdr", "process_audit", "config", "loadgen_profile", "provenance"
     ):
@@ -478,7 +473,6 @@ def validate_capacity_run_result(result: dict) -> None:
             "total_recorded": result["messages"]["received_events"],
             "total_messages": result["messages"]["received_events"],
             "ignored_sequence_count": result["messages"].get("ignored_warmup", 0),
-            "unexpected_sequence_count": result["messages"]["unexpected"],
             "parse_errors": 0,
             "negative_latency_count": 0,
             "above_highest_latency_count": 0,
@@ -514,8 +508,6 @@ def validate_capacity_run_result(result: dict) -> None:
         raise ValueError("capacity-run HDR precision differs from the frozen recorder")
     if result["thermal"].get("throttled") is not False:
         raise ValueError("capacity-run result is throttled")
-    if result["messages"]["unexpected"] != 0:
-        raise ValueError("capacity-run result contains unexpected sequences")
     for receipt in ("latency_hdr", "process_audit", "config", "loadgen_profile", "provenance"):
         if not re.fullmatch(r"[0-9a-f]{64}", str(result[receipt].get("sha256", ""))):
             raise ValueError(f"capacity-run {receipt} receipt has invalid sha256")

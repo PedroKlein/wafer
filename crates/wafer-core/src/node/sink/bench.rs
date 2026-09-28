@@ -24,117 +24,7 @@ use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
 use crate::queue::RuntimeEnvelope;
 use crate::util::{monotonic_unix_ns, write_atomic};
-
-// =============================================================================
-// SequenceTracker
-// =============================================================================
-
-/// Tracks message sequence numbers to detect gaps (lost messages) and duplicates.
-///
-/// Validates E-Swap-2: zero loss, zero duplication during hot-swap.
-#[derive(Debug)]
-pub struct SequenceTracker {
-    first_expected: Option<u64>,
-    expected_next: u64,
-    gaps: Vec<(u64, u64)>,
-    duplicates: u64,
-    total_received: u64,
-}
-
-impl SequenceTracker {
-    #[must_use]
-    pub const fn new() -> Self {
-        Self {
-            first_expected: Some(0),
-            expected_next: 0,
-            gaps: Vec::new(),
-            duplicates: 0,
-            total_received: 0,
-        }
-    }
-
-    #[must_use]
-    const fn from_first_observed() -> Self {
-        Self {
-            first_expected: None,
-            expected_next: 0,
-            gaps: Vec::new(),
-            duplicates: 0,
-            total_received: 0,
-        }
-    }
-
-    const fn anchor_at(&mut self, expected: u64) {
-        if self.first_expected.is_none() {
-            self.first_expected = Some(expected);
-            self.expected_next = expected;
-        }
-    }
-
-    /// Record a received sequence number. Returns whether it was a duplicate.
-    pub fn record(&mut self, seq: u64) -> bool {
-        self.anchor_at(seq);
-        self.total_received = self.total_received.saturating_add(1);
-
-        match seq.cmp(&self.expected_next) {
-            std::cmp::Ordering::Equal => {
-                self.expected_next = self.expected_next.saturating_add(1);
-                false
-            }
-            std::cmp::Ordering::Greater => {
-                self.gaps.push((self.expected_next, seq.saturating_sub(1)));
-                self.expected_next = seq.saturating_add(1);
-                false
-            }
-            std::cmp::Ordering::Less => {
-                self.duplicates = self.duplicates.saturating_add(1);
-                true
-            }
-        }
-    }
-
-    /// Number of sequence positions spanned since tracking began.
-    #[must_use]
-    pub fn total_expected(&self) -> u64 {
-        self.first_expected.map_or(0, |first| self.expected_next.saturating_sub(first))
-    }
-
-    /// Total number of missing message slots.
-    #[must_use]
-    pub fn total_gaps(&self) -> u64 {
-        self.gaps.iter().map(|(start, end)| end.saturating_sub(*start).saturating_add(1)).sum()
-    }
-
-    /// Whether any gaps exist.
-    #[must_use]
-    pub const fn has_gaps(&self) -> bool {
-        !self.gaps.is_empty()
-    }
-
-    /// Number of duplicate/out-of-order messages.
-    #[must_use]
-    pub const fn total_duplicates(&self) -> u64 {
-        self.duplicates
-    }
-
-    /// Total messages received (including warmup, duplicates).
-    #[must_use]
-    pub const fn total_received(&self) -> u64 {
-        self.total_received
-    }
-
-    /// Gap ranges for reporting.
-    #[must_use]
-    pub fn gaps(&self) -> &[(u64, u64)] {
-        &self.gaps
-    }
-}
-
-impl Default for SequenceTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use wafer_types::sequence::SequenceTracker;
 
 // =============================================================================
 // HotSwapRecorder
@@ -832,6 +722,7 @@ pub struct BenchSink {
     source_lag_clamps: LatencyClamps,
     warmup_until: Option<Instant>,
     sequence_tracker: Option<SequenceTracker>,
+    sequence_population_read: bool,
     hotswap_recorder: Option<HotSwapRecorder>,
     message_count: u64,
     started: bool,
@@ -855,15 +746,8 @@ impl BenchSink {
     /// Panics if the internal histogram cannot be created (compile-time constant bounds; unreachable in practice).
     #[must_use]
     pub fn new(config: BenchSinkConfig) -> Self {
-        let sequence_tracker = if config.track_sequences {
-            Some(if config.warmup_secs == 0 {
-                SequenceTracker::new()
-            } else {
-                SequenceTracker::from_first_observed()
-            })
-        } else {
-            None
-        };
+        let sequence_tracker =
+            config.track_sequences.then(|| SequenceTracker::unanchored().with_max_examples(0));
         let hotswap_recorder =
             if config.track_hotswap { Some(HotSwapRecorder::new()) } else { None };
 
@@ -878,6 +762,7 @@ impl BenchSink {
             source_lag_clamps: LatencyClamps::default(),
             warmup_until: None,
             sequence_tracker,
+            sequence_population_read: false,
             hotswap_recorder,
             message_count: 0,
             started: false,
@@ -1220,12 +1105,15 @@ impl BenchSink {
         // treats sequence.csv as conditional-on-configuration.
         let Some(tracker) = &self.sequence_tracker else { return Ok(()) };
         let csv = format!(
-            "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n{},{},{},{},{}\n",
-            tracker.total_expected(),
-            tracker.total_received(),
-            tracker.gaps().len(),
-            tracker.total_gaps(),
-            tracker.total_duplicates(),
+            "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count,out_of_order,out_of_range\n{},{},{},{},{},{},{},{}\n",
+            tracker.expected(),
+            tracker.received(),
+            tracker.received_unique(),
+            tracker.missing_ranges().total,
+            tracker.missing(),
+            tracker.duplicates(),
+            tracker.out_of_order(),
+            tracker.out_of_range(),
         );
         write_atomic(&dir.join("sequence.csv"), csv.as_bytes())
     }
@@ -1279,10 +1167,19 @@ impl BenchSink {
     fn record_sequence(&mut self, stamps: &BenchStamps<'_>) -> bool {
         let Some(tracker) = &mut self.sequence_tracker else { return false };
         let Some(seq) = stamps.sequence else { return false };
-        if let Some(start) = stamps.measurement_start_seq {
-            tracker.anchor_at(start);
+        // BenchSource stamps the measured population on every message; the
+        // first one is enough. A source that does not is measured from the
+        // first number seen to the highest.
+        if !self.sequence_population_read {
+            self.sequence_population_read = true;
+            if let Some(start) = stamps.measurement_start_seq {
+                tracker.anchor_start(start);
+            }
+            if let Some(end) = stamps.sequence_end {
+                tracker.anchor_end(end);
+            }
         }
-        tracker.record(seq)
+        tracker.record(seq).is_duplicate()
     }
 
     fn record_burst_bucket(
@@ -1318,6 +1215,7 @@ struct BenchStamps<'a> {
     emit_ns: Option<u64>,
     warmup: Option<bool>,
     measurement_start_seq: Option<u64>,
+    sequence_end: Option<u64>,
     measurement_start_unix_ns: Option<u64>,
     phase: Option<&'a str>,
     plugin_version: Option<&'a str>,
@@ -1335,6 +1233,7 @@ impl<'a> BenchStamps<'a> {
                 "bench.measurement_start_seq" => {
                     stamps.measurement_start_seq = value.parse().ok();
                 }
+                "bench.sequence_end" => stamps.sequence_end = value.parse().ok(),
                 "bench.measurement_start_unix_ns" => {
                     stamps.measurement_start_unix_ns = value.parse().ok();
                 }
@@ -1875,8 +1774,8 @@ mod tests {
         assert_eq!(sink.recorded_count(), 0);
         assert_eq!(sink.message_count(), 1);
         let tracker = sink.sequence_tracker().unwrap();
-        assert_eq!(tracker.total_received(), 0);
-        assert!(!tracker.has_gaps());
+        assert_eq!(tracker.received(), 0);
+        assert_eq!(tracker.missing(), 0);
 
         let tmp_dir =
             std::env::temp_dir().join(format!("wafer-warmup-window-{}", std::process::id()));
@@ -1888,13 +1787,13 @@ mod tests {
         let before_measurement_ns = wall_clock_ns();
         sink.collect(make_bench_envelope(1)).await.unwrap();
         let tracker = sink.sequence_tracker().unwrap();
-        assert_eq!(tracker.total_expected(), 1);
-        assert_eq!(tracker.total_received(), 1);
-        assert!(!tracker.has_gaps());
+        assert_eq!(tracker.expected(), 1);
+        assert_eq!(tracker.received(), 1);
+        assert_eq!(tracker.missing(), 0);
         sink.export_to_dir(&tmp_dir).unwrap();
 
         let sequence = std::fs::read_to_string(tmp_dir.join("sequence.csv")).unwrap();
-        assert!(sequence.contains("1,1,0,0,0"));
+        assert!(sequence.contains("1,1,1,0,0,0,0,0"));
 
         let window: serde_json::Value = serde_json::from_str(
             &std::fs::read_to_string(tmp_dir.join("measurement-window.json")).unwrap(),
@@ -1926,9 +1825,9 @@ mod tests {
             .unwrap();
 
         let tracker = sink.sequence_tracker().unwrap();
-        assert_eq!(tracker.total_expected(), 2);
-        assert_eq!(tracker.total_received(), 2);
-        assert!(!tracker.has_gaps());
+        assert_eq!(tracker.expected(), 2);
+        assert_eq!(tracker.received(), 2);
+        assert_eq!(tracker.missing(), 0);
         assert_eq!(sink.recorded_count(), 2);
     }
 
@@ -1952,10 +1851,53 @@ mod tests {
         .unwrap();
 
         let tracker = sink.sequence_tracker().unwrap();
-        assert_eq!(tracker.total_expected(), 2);
-        assert_eq!(tracker.total_received(), 1);
-        assert_eq!(tracker.total_gaps(), 1);
-        assert_eq!(tracker.gaps(), &[(30_000, 30_000)]);
+        assert_eq!(tracker.expected(), 2);
+        assert_eq!(tracker.received(), 1);
+        assert_eq!(tracker.missing(), 1);
+        assert_eq!(tracker.missing(), 1);
+    }
+
+    #[tokio::test]
+    async fn zero_warmup_window_still_anchors_at_the_source_population() {
+        let mut sink = BenchSink::new(BenchSinkConfig::for_test());
+        sink.init().await.unwrap();
+        for seq in 30_000..30_010_u64 {
+            sink.collect(
+                make_bench_envelope(seq)
+                    .with_metadata("bench.warmup", "false")
+                    .with_metadata("bench.measurement_start_seq", "30000")
+                    .with_metadata("bench.sequence_end", "30010"),
+            )
+            .await
+            .unwrap();
+        }
+        let tracker = sink.sequence_tracker().unwrap();
+        assert_eq!(tracker.expected(), 10);
+        assert_eq!(tracker.missing(), 0);
+    }
+
+    #[tokio::test]
+    async fn sequence_csv_counts_tail_loss_reorders_and_duplicates_exactly() {
+        let mut sink = BenchSink::new(BenchSinkConfig::for_test());
+        sink.init().await.unwrap();
+        for seq in [0_u64, 1, 3, 2, 3, 4] {
+            sink.collect(
+                make_bench_envelope(seq)
+                    .with_metadata("bench.measurement_start_seq", "0")
+                    .with_metadata("bench.sequence_end", "8"),
+            )
+            .await
+            .unwrap();
+        }
+        let dir = std::env::temp_dir().join(format!("wafer-sequence-csv-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        sink.export_to_dir(&dir).unwrap();
+        let csv = std::fs::read_to_string(dir.join("sequence.csv")).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(
+            csv,
+            "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count,out_of_order,out_of_range\n8,6,5,1,3,1,1,0\n"
+        );
     }
 
     #[tokio::test]
@@ -1973,55 +1915,6 @@ mod tests {
         assert_eq!(sink.recorded_count(), 10);
         assert!(sink.p50_ns() > 0);
         assert!(sink.p99_ns() >= sink.p50_ns());
-    }
-
-    #[test]
-    fn sequence_tracker_can_anchor_at_first_observed_value() {
-        let mut tracker = SequenceTracker::from_first_observed();
-        tracker.record(30_001);
-        tracker.record(30_002);
-
-        assert_eq!(tracker.total_expected(), 2);
-        assert_eq!(tracker.total_received(), 2);
-        assert!(!tracker.has_gaps());
-    }
-
-    #[tokio::test]
-    async fn sequence_tracker_detects_gap() {
-        let mut tracker = SequenceTracker::new();
-        tracker.record(0);
-        tracker.record(1);
-        tracker.record(2);
-        tracker.record(5); // Gap: 3, 4 missing
-
-        assert!(tracker.has_gaps());
-        assert_eq!(tracker.total_gaps(), 2);
-        assert_eq!(tracker.gaps(), &[(3, 4)]);
-        assert_eq!(tracker.total_received(), 4);
-    }
-
-    #[tokio::test]
-    async fn sequence_tracker_detects_duplicate() {
-        let mut tracker = SequenceTracker::new();
-        tracker.record(0);
-        tracker.record(1);
-        tracker.record(1); // Duplicate
-
-        assert_eq!(tracker.total_duplicates(), 1);
-        assert!(!tracker.has_gaps());
-    }
-
-    #[tokio::test]
-    async fn sequence_tracker_no_gaps() {
-        let mut tracker = SequenceTracker::new();
-        for i in 0..100 {
-            tracker.record(i);
-        }
-
-        assert!(!tracker.has_gaps());
-        assert_eq!(tracker.total_gaps(), 0);
-        assert_eq!(tracker.total_duplicates(), 0);
-        assert_eq!(tracker.total_received(), 100);
     }
 
     #[tokio::test]

@@ -410,7 +410,8 @@ impl Source for BenchSource {
                 .with_metadata(
                     "bench.measurement_start_seq",
                     self.config.warmup_messages.to_string(),
-                );
+                )
+                .with_metadata("bench.sequence_end", self.config.total_messages.to_string());
             if let Some(phase) = burst_phase
                 && let Some(name) = ["before", "burst", "after"].get(phase)
             {

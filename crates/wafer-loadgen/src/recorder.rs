@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use wafer_types::latency::{
     LATENCY_HIGHEST_NS, LATENCY_LOWEST_NS, LATENCY_SIG_DIGITS, LatencyClamps,
 };
+pub use wafer_types::sequence::SequenceTracker;
 
 pub(crate) const EVENT_BUCKET_WIDTH_NS: u64 = 100_000_000;
 pub(crate) const EVENT_BUCKET_COUNT: usize = 200;
@@ -528,124 +529,44 @@ pub enum RecordOutcome {
     IgnoredSequence { seq: u64 },
 }
 
-/// Tracks message sequence numbers to detect gaps (lost messages) and duplicates.
+/// Sequence accounting of a completed subscriber run.
 ///
-/// Standalone copy of `wafer_core::node::sink::SequenceTracker` — duplicated so
-/// `wafer-loadgen` does not need to depend on the wasmtime-heavy runtime crate.
-#[derive(Debug, Default)]
-pub struct SequenceTracker {
-    expected_next: u64,
-    gaps: Vec<(u64, u64)>,
-    duplicates: Vec<u64>,
-    total_received: u64,
-    total_gaps: u64,
-    total_duplicates: u64,
-    max_examples: Option<usize>,
-    examples_truncated: bool,
-}
-
-impl SequenceTracker {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    #[must_use]
-    pub(crate) fn with_max_examples(max_examples: usize) -> Self {
-        Self { max_examples: Some(max_examples), ..Self::default() }
-    }
-
-    fn can_store_example(&self, count: usize) -> bool {
-        self.max_examples.is_none_or(|limit| count < limit)
-    }
-
-    /// Record a received sequence number.
-    pub fn record(&mut self, seq: u64) -> bool {
-        self.total_received = self.total_received.saturating_add(1);
-        match seq.cmp(&self.expected_next) {
-            std::cmp::Ordering::Equal => {
-                self.expected_next = self.expected_next.saturating_add(1);
-                false
-            }
-            std::cmp::Ordering::Greater => {
-                // seq > expected_next, so subtraction cannot underflow
-                #[expect(
-                    clippy::arithmetic_side_effects,
-                    reason = "seq > expected_next checked by match arm; seq - 1 safe because seq > 0 (seq > expected_next >= 0)"
-                )]
-                {
-                    self.total_gaps =
-                        self.total_gaps.saturating_add(seq.saturating_sub(self.expected_next));
-                    if self.can_store_example(self.gaps.len()) {
-                        self.gaps.push((self.expected_next, seq - 1));
-                    } else {
-                        self.examples_truncated = true;
-                    }
-                    self.expected_next = seq + 1;
-                }
-                false
-            }
-            std::cmp::Ordering::Less => {
-                self.total_duplicates = self.total_duplicates.saturating_add(1);
-                if self.can_store_example(self.duplicates.len()) {
-                    self.duplicates.push(seq);
-                } else {
-                    self.examples_truncated = true;
-                }
-                true
-            }
-        }
-    }
-
-    #[must_use]
-    pub const fn total_gaps(&self) -> u64 {
-        self.total_gaps
-    }
-
-    #[must_use]
-    pub const fn total_duplicates(&self) -> u64 {
-        self.total_duplicates
-    }
-
-    #[must_use]
-    pub const fn total_received(&self) -> u64 {
-        self.total_received
-    }
-
-    #[must_use]
-    pub fn gaps(&self) -> &[(u64, u64)] {
-        &self.gaps
-    }
-
-    #[must_use]
-    pub fn duplicates(&self) -> &[u64] {
-        &self.duplicates
-    }
-}
-
-/// Snapshot of a completed subscriber run for post-hoc analysis.
-///
-/// Sequence-tracker report exposed via `SubscriberMetadata` for the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Exposed via `SubscriberMetadata` for the manifest. `total_gaps` is the
+/// missing count, tail included when `--sequence-end-exclusive` declared the
+/// population.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct SequenceReport {
+    #[serde(default)]
+    pub expected: u64,
     pub total_received: u64,
+    #[serde(default)]
+    pub received_unique: u64,
     pub total_gaps: u64,
     pub total_duplicates: u64,
+    #[serde(default)]
+    pub out_of_order: u64,
+    #[serde(default)]
+    pub out_of_range: u64,
     pub gap_ranges: Vec<(u64, u64)>,
     pub duplicate_seqs: Vec<u64>,
     #[serde(default)]
     pub examples_truncated: bool,
 }
 
-impl From<&SequenceTracker> for SequenceReport {
-    fn from(t: &SequenceTracker) -> Self {
+impl SequenceReport {
+    fn from_tracker(tracker: &SequenceTracker) -> Self {
+        let missing = tracker.missing_ranges();
         Self {
-            total_received: t.total_received(),
-            total_gaps: t.total_gaps(),
-            total_duplicates: t.total_duplicates(),
-            gap_ranges: t.gaps().to_vec(),
-            duplicate_seqs: t.duplicates().to_vec(),
-            examples_truncated: t.examples_truncated,
+            expected: tracker.expected(),
+            total_received: tracker.received(),
+            received_unique: tracker.received_unique(),
+            total_gaps: tracker.missing(),
+            total_duplicates: tracker.duplicates(),
+            out_of_order: tracker.out_of_order(),
+            out_of_range: tracker.out_of_range(),
+            examples_truncated: missing.truncated() || tracker.duplicates_truncated(),
+            gap_ranges: missing.ranges,
+            duplicate_seqs: tracker.duplicate_examples().to_vec(),
         }
     }
 }
@@ -679,9 +600,6 @@ pub struct SubscriberMetadata {
     /// Parsed warmup messages excluded because they were outside the measured range.
     #[serde(default)]
     pub ignored_sequence_count: u64,
-    /// Parsed measured messages outside the publisher's declared sequence range.
-    #[serde(default)]
-    pub unexpected_sequence_count: u64,
 
     // --- Measurement summary (also fully preserved in latency.hdr) ---
     pub total_recorded: u64,
@@ -723,6 +641,7 @@ pub struct LatencyRecorder {
     intervals: Option<IntervalRecorder>,
     interval_origin_elapsed_ns: Option<u64>,
     sequence: SequenceTracker,
+    sequence_end_exclusive: Option<u64>,
     total_messages: u64,
     parse_errors: u64,
     clamps: LatencyClamps,
@@ -756,8 +675,10 @@ impl LatencyRecorder {
             histogram,
             intervals: None,
             interval_origin_elapsed_ns: None,
-            sequence: max_examples
-                .map_or_else(SequenceTracker::new, SequenceTracker::with_max_examples),
+            sequence: max_examples.map_or_else(SequenceTracker::new, |limit| {
+                SequenceTracker::new().with_max_examples(limit)
+            }),
+            sequence_end_exclusive: None,
             total_messages: 0,
             parse_errors: 0,
             clamps: LatencyClamps::default(),
@@ -766,6 +687,18 @@ impl LatencyRecorder {
             last_record_duplicate: false,
             partial_reasons: Vec::new(),
         }
+    }
+
+    /// Declare the measured population `[0, end)`: numbers at or past `end`
+    /// are warmup traffic and are ignored, and numbers never received before
+    /// it count as missing.
+    #[must_use]
+    pub(crate) const fn with_sequence_end(mut self, end: Option<u64>) -> Self {
+        if let Some(end) = end {
+            self.sequence.anchor_end(end);
+        }
+        self.sequence_end_exclusive = end;
+        self
     }
 
     pub(crate) fn enable_intervals(
@@ -781,7 +714,17 @@ impl LatencyRecorder {
     /// Parse a JSON payload (with `ts` = intended-publish-ns and `seq` = u64)
     /// and record the observed latency against `receive_ns`.
     pub fn record_json(&mut self, payload: &[u8], receive_ns: u64) -> RecordOutcome {
-        self.record_json_with_sequence_end(payload, receive_ns, None)
+        let Ok(TimestampedMessage { ts, seq }) = serde_json::from_slice(payload) else {
+            self.total_messages = self.total_messages.saturating_add(1);
+            self.parse_errors = self.parse_errors.saturating_add(1);
+            return RecordOutcome::ParseError;
+        };
+        if self.sequence_end_exclusive.is_some_and(|end| seq >= end) {
+            self.ignored_sequences = self.ignored_sequences.saturating_add(1);
+            return RecordOutcome::IgnoredSequence { seq };
+        }
+        self.total_messages = self.total_messages.saturating_add(1);
+        self.record(ts, receive_ns, seq)
     }
 
     /// Like [`Self::record_json`], and also feeds the interval recorder when
@@ -792,11 +735,9 @@ impl LatencyRecorder {
         payload: &[u8],
         receive_ns: u64,
         elapsed_ns: u64,
-        sequence_end_exclusive: Option<u64>,
     ) -> RecordOutcome {
         self.clock_steps.observe(receive_ns, elapsed_ns);
-        let outcome =
-            self.record_json_with_sequence_end(payload, receive_ns, sequence_end_exclusive);
+        let outcome = self.record_json(payload, receive_ns);
         if let RecordOutcome::Recorded { latency_ns, .. } = outcome
             && let Some(intervals) = &mut self.intervals
         {
@@ -835,42 +776,12 @@ impl LatencyRecorder {
         &self.partial_reasons
     }
 
-    /// Record only messages whose sequence is below `sequence_end_exclusive`.
-    #[cfg(test)]
-    pub(crate) fn record_json_before(
-        &mut self,
-        payload: &[u8],
-        receive_ns: u64,
-        sequence_end_exclusive: u64,
-    ) -> RecordOutcome {
-        self.record_json_with_sequence_end(payload, receive_ns, Some(sequence_end_exclusive))
-    }
-
-    fn record_json_with_sequence_end(
-        &mut self,
-        payload: &[u8],
-        receive_ns: u64,
-        sequence_end_exclusive: Option<u64>,
-    ) -> RecordOutcome {
-        let Ok(TimestampedMessage { ts, seq }) = serde_json::from_slice(payload) else {
-            self.total_messages = self.total_messages.saturating_add(1);
-            self.parse_errors = self.parse_errors.saturating_add(1);
-            return RecordOutcome::ParseError;
-        };
-        if sequence_end_exclusive.is_some_and(|end| seq >= end) {
-            self.ignored_sequences = self.ignored_sequences.saturating_add(1);
-            return RecordOutcome::IgnoredSequence { seq };
-        }
-        self.total_messages = self.total_messages.saturating_add(1);
-        self.record(ts, receive_ns, seq)
-    }
-
     /// Record directly from timestamps. Public so tests can inject deterministic
     /// latencies without JSON round-tripping.
     pub fn record(&mut self, intended_publish_ns: u64, receive_ns: u64, seq: u64) -> RecordOutcome {
         let latency_ns = self.clamps.bound(intended_publish_ns, receive_ns);
         self.histogram.saturating_record(latency_ns);
-        self.last_record_duplicate = self.sequence.record(seq);
+        self.last_record_duplicate = self.sequence.record(seq).is_duplicate();
         RecordOutcome::Recorded { intended_ns: intended_publish_ns, latency_ns, seq }
     }
 
@@ -963,19 +874,21 @@ impl LatencyRecorder {
 
     /// Emit the per-event long-form CSV for gap/duplicate analysis.
     ///
-    /// Columns: `event_type,seq_start,seq_end,count`. If no gaps or duplicates
-    /// were observed, only the header row is emitted (still ADF/pandas-parseable).
+    /// Columns: `event_type,seq_start,seq_end,count`. Gap rows are the runs of
+    /// sequence numbers never received, tail included when the population end
+    /// is known; duplicate rows are the retained examples. A lossless run has
+    /// only the header row.
     #[must_use]
     pub fn sequence_csv(&self) -> String {
         use std::fmt::Write as _;
         let mut csv = String::from("event_type,seq_start,seq_end,count\n");
-        for (start, end) in self.sequence.gaps() {
-            let count = end.saturating_sub(*start).saturating_add(1);
+        for (start, end) in self.sequence.missing_ranges().ranges {
+            let count = end.saturating_sub(start).saturating_add(1);
             // writeln! into a String is infallible
             #[expect(clippy::unwrap_used, reason = "fmt::Write for String cannot fail")]
             writeln!(csv, "gap,{start},{end},{count}").unwrap();
         }
-        for seq in self.sequence.duplicates() {
+        for seq in self.sequence.duplicate_examples() {
             #[expect(clippy::unwrap_used, reason = "fmt::Write for String cannot fail")]
             writeln!(csv, "duplicate,{seq},{seq},1").unwrap();
         }
@@ -1057,7 +970,7 @@ impl LatencyRecorder {
         metadata.histogram_lowest_ns = LATENCY_LOWEST_NS;
         metadata.histogram_highest_ns = LATENCY_HIGHEST_NS;
         metadata.histogram_sig_digits = LATENCY_SIG_DIGITS;
-        metadata.sequence = SequenceReport::from(&self.sequence);
+        metadata.sequence = SequenceReport::from_tracker(&self.sequence);
         metadata.partial_reasons.clone_from(&self.partial_reasons);
         let status = if self.partial_reasons.is_empty() { "complete" } else { "partial" };
         status.clone_into(&mut metadata.status);
@@ -1181,25 +1094,26 @@ mod tests {
     }
 
     #[test]
-    fn record_json_before_sequence_ignores_delayed_warmup_messages() {
+    fn declared_sequence_end_ignores_delayed_warmup_messages() {
         let intended = 42_000_000_000_u64;
         let receive = intended + 250_000;
         let stale = format!(r#"{{"ts":{intended},"seq":60000}}"#);
         let measured = format!(r#"{{"ts":{intended},"seq":0}}"#);
-        let mut rec = LatencyRecorder::new();
+        let mut rec = LatencyRecorder::new().with_sequence_end(Some(60_000));
 
         assert_eq!(
-            rec.record_json_before(stale.as_bytes(), receive, 60_000),
+            rec.record_json(stale.as_bytes(), receive),
             RecordOutcome::IgnoredSequence { seq: 60_000 }
         );
         assert_eq!(
-            rec.record_json_before(measured.as_bytes(), receive, 60_000),
+            rec.record_json(measured.as_bytes(), receive),
             RecordOutcome::Recorded { intended_ns: intended, latency_ns: 250_000, seq: 0 }
         );
         assert_eq!(rec.ignored_sequences(), 1);
         assert_eq!(rec.total_messages(), 1);
         assert_eq!(rec.total_recorded(), 1);
-        assert_eq!(rec.sequence().total_gaps(), 0);
+        assert_eq!(rec.sequence().expected(), 60_000);
+        assert_eq!(rec.sequence().missing(), 59_999, "the declared population's tail is missing");
     }
 
     #[test]
@@ -1230,7 +1144,7 @@ mod tests {
             let receive = receive_origin + elapsed;
             let ts = u64::try_from(i128::from(receive) + ts_offset).unwrap();
             let payload = format!(r#"{{"ts":{ts},"seq":{seq}}}"#);
-            let outcome = rec.record_json_at(payload.as_bytes(), receive, elapsed, None);
+            let outcome = rec.record_json_at(payload.as_bytes(), receive, elapsed);
             assert_eq!(
                 outcome,
                 RecordOutcome::Recorded { intended_ns: ts, latency_ns: expected, seq }
@@ -1264,30 +1178,17 @@ mod tests {
         rec.anchor_clock(1_900_000_000);
         let payload = |seq: u64| format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
 
-        rec.record_json_at(payload(0).as_bytes(), 2_100_000_000, 50_000_000, None);
+        rec.record_json_at(payload(0).as_bytes(), 2_100_000_000, 50_000_000);
         assert_eq!(rec.clock_steps(), 1, "a step before the first message");
 
-        rec.record_json_at(payload(1).as_bytes(), 2_150_000_000, 100_000_000, None);
+        rec.record_json_at(payload(1).as_bytes(), 2_150_000_000, 100_000_000);
         assert_eq!(rec.clock_steps(), 1);
 
-        rec.record_json_at(payload(2).as_bytes(), 2_050_000_000, 150_000_000, None);
+        rec.record_json_at(payload(2).as_bytes(), 2_050_000_000, 150_000_000);
         assert_eq!(rec.clock_steps(), 2, "a step back between messages");
 
-        rec.record_json_at(payload(3).as_bytes(), 2_050_000_000, 200_000_000, None);
+        rec.record_json_at(payload(3).as_bytes(), 2_050_000_000, 200_000_000);
         assert_eq!(rec.clock_steps(), 2, "50 ms between two clock reads is not a step");
-    }
-
-    #[test]
-    fn sequence_tracker_detects_gap_and_duplicate() {
-        let mut t = SequenceTracker::new();
-        for s in [0_u64, 1, 2, 5, 5, 6] {
-            t.record(s);
-        }
-        assert_eq!(t.total_received(), 6);
-        assert_eq!(t.total_gaps(), 2); // 3 and 4
-        assert_eq!(t.gaps(), &[(3, 4)]);
-        assert_eq!(t.total_duplicates(), 1); // second 5
-        assert_eq!(t.duplicates(), &[5]);
     }
 
     /// AC2: `latency.hdr` begins with the [`HdrHistogram`] V2 cookie prefix. The
@@ -1312,17 +1213,39 @@ mod tests {
 
     #[test]
     fn sequence_examples_are_bounded_without_losing_totals() {
-        let mut tracker = SequenceTracker::with_max_examples(1_024);
+        let mut rec = LatencyRecorder::with_sequence_example_limit(Some(1_024));
         for seq in (1..=2_050).step_by(2) {
-            tracker.record(seq);
-            tracker.record(seq);
+            rec.record(0, 1_000_000, seq);
+            rec.record(0, 1_000_000, seq);
         }
-        let report = SequenceReport::from(&tracker);
+        let report = SequenceReport::from_tracker(rec.sequence());
         assert_eq!(report.total_gaps, 1_025);
         assert_eq!(report.total_duplicates, 1_025);
         assert_eq!(report.gap_ranges.len(), 1_024);
         assert_eq!(report.duplicate_seqs.len(), 1_024);
         assert!(report.examples_truncated);
+        assert_eq!(rec.sequence_csv().lines().count(), 2_049);
+    }
+
+    #[test]
+    fn declared_population_end_counts_tail_loss_and_reorders() {
+        let mut rec = LatencyRecorder::new().with_sequence_end(Some(6));
+        let payload = |seq: u64| format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
+        for seq in [0_u64, 1, 3, 2, 3] {
+            rec.record_json(payload(seq).as_bytes(), 1_001_000_000);
+        }
+        rec.record_json(payload(6).as_bytes(), 1_001_000_000);
+        let report = SequenceReport::from_tracker(rec.sequence());
+        assert_eq!(report.expected, 6);
+        assert_eq!(report.total_received, 5);
+        assert_eq!(report.received_unique, 4);
+        assert_eq!(report.total_gaps, 2);
+        assert_eq!(report.gap_ranges, vec![(4, 5)]);
+        assert_eq!(report.total_duplicates, 1);
+        assert_eq!(report.out_of_order, 1);
+        assert_eq!(report.out_of_range, 0);
+        assert_eq!(rec.ignored_sequences(), 1);
+        assert!(rec.sequence_csv().lines().any(|row| row == "gap,4,5,2"));
     }
 
     #[test]
@@ -1628,7 +1551,7 @@ mod tests {
         let mut recorder = LatencyRecorder::with_sequence_example_limit(Some(4));
         recorder.enable_intervals(1_000_000_000, 2).unwrap();
         let payload = br#"{"ts":1000000000,"seq":0}"#;
-        recorder.record_json_at(payload, 1_000_010_000, 500_000_000, None);
+        recorder.record_json_at(payload, 1_000_010_000, 500_000_000);
         let metadata = SubscriberMetadata {
             broker: "localhost:1883".into(),
             topic: "wafer/test".into(),
@@ -1641,7 +1564,6 @@ mod tests {
             host_tag: None,
             sequence_end_exclusive: None,
             ignored_sequence_count: 0,
-            unexpected_sequence_count: 0,
             total_recorded: 0,
             total_messages: 0,
             parse_errors: 0,
@@ -1658,14 +1580,7 @@ mod tests {
             histogram_lowest_ns: 0,
             histogram_highest_ns: 0,
             histogram_sig_digits: 0,
-            sequence: SequenceReport {
-                total_received: 0,
-                total_gaps: 0,
-                total_duplicates: 0,
-                gap_ranges: vec![],
-                duplicate_seqs: vec![],
-                examples_truncated: false,
-            },
+            sequence: SequenceReport::default(),
         };
         recorder.finalize_intervals(2_000_000_000);
         recorder.write_artifacts(dir.path(), metadata).unwrap();
@@ -1684,7 +1599,7 @@ mod tests {
         recorder.enable_intervals(1_000_000_000, 1).unwrap();
         for (seq, elapsed_ns) in [(0, 0), (1, 5_000_000_000), (2, 5_100_000_000)] {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
-            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns, None);
+            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns);
         }
         recorder.finalize_intervals(6_000_000_000);
         let metadata: SubscriberMetadata = serde_json::from_value(serde_json::json!({
@@ -1722,7 +1637,7 @@ mod tests {
         recorder.enable_intervals(1_000_000_000, 5).unwrap();
         for (seq, elapsed_ns) in [(0, 0), (1, 1_500_000_000), (2, 500_000_000)] {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
-            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns, None);
+            recorder.record_json_at(payload.as_bytes(), 1_000_010_000, elapsed_ns);
         }
         recorder.finalize_intervals(2_000_000_000);
 
@@ -1771,7 +1686,7 @@ mod tests {
             let payload = format!(r#"{{"ts":1000000000,"seq":{seq}}}"#);
             let elapsed = seq * 100_000_000;
             baseline.record_json(payload.as_bytes(), 1_000_010_000 + elapsed);
-            interval.record_json_at(payload.as_bytes(), 1_000_010_000 + elapsed, elapsed, None);
+            interval.record_json_at(payload.as_bytes(), 1_000_010_000 + elapsed, elapsed);
         }
         let metadata = SubscriberMetadata {
             broker: "localhost:1883".into(),
@@ -1785,7 +1700,6 @@ mod tests {
             host_tag: None,
             sequence_end_exclusive: None,
             ignored_sequence_count: 0,
-            unexpected_sequence_count: 0,
             total_recorded: 0,
             total_messages: 0,
             parse_errors: 0,
@@ -1802,14 +1716,7 @@ mod tests {
             histogram_lowest_ns: 0,
             histogram_highest_ns: 0,
             histogram_sig_digits: 0,
-            sequence: SequenceReport {
-                total_received: 0,
-                total_gaps: 0,
-                total_duplicates: 0,
-                gap_ranges: vec![],
-                duplicate_seqs: vec![],
-                examples_truncated: false,
-            },
+            sequence: SequenceReport::default(),
         };
         baseline.write_artifacts(baseline_dir.path(), metadata.clone()).unwrap();
         interval.finalize_intervals(1_000_000_000);
@@ -1843,7 +1750,6 @@ mod tests {
             host_tag: Some("shakedown-macos".into()),
             sequence_end_exclusive: None,
             ignored_sequence_count: 0,
-            unexpected_sequence_count: 0,
             total_recorded: 0,
             total_messages: 0,
             parse_errors: 0,
@@ -1860,14 +1766,7 @@ mod tests {
             histogram_lowest_ns: 0,
             histogram_highest_ns: 0,
             histogram_sig_digits: 0,
-            sequence: SequenceReport {
-                total_received: 0,
-                total_gaps: 0,
-                total_duplicates: 0,
-                gap_ranges: vec![],
-                duplicate_seqs: vec![],
-                examples_truncated: false,
-            },
+            sequence: SequenceReport::default(),
         };
         rec.write_artifacts(dir.path(), meta).unwrap();
 

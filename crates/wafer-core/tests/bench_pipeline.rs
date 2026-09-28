@@ -48,9 +48,9 @@ async fn test_native_bench_pipeline() {
 
     // Sequence tracking: no gaps since we processed all in order
     let tracker = sink.sequence_tracker().unwrap();
-    assert!(!tracker.has_gaps(), "should have no sequence gaps");
-    assert_eq!(tracker.total_duplicates(), 0);
-    assert_eq!(tracker.total_received(), total);
+    assert_eq!(tracker.missing(), 0, "should have no sequence gaps");
+    assert_eq!(tracker.duplicates(), 0);
+    assert_eq!(tracker.received(), total);
 
     // Close nodes
     source.close().await.unwrap();
@@ -137,9 +137,9 @@ async fn burst_source_and_sink_preserve_phases_and_sequence_continuity() {
     sink.close().await.unwrap();
 
     let tracker = sink.sequence_tracker().unwrap();
-    assert_eq!(tracker.total_received(), 40);
-    assert_eq!(tracker.total_gaps(), 0);
-    assert_eq!(tracker.total_duplicates(), 0);
+    assert_eq!(tracker.received(), 40);
+    assert_eq!(tracker.missing(), 0);
+    assert_eq!(tracker.duplicates(), 0);
     let source_summary: serde_json::Value = serde_json::from_str(
         &std::fs::read_to_string(dir.path().join("burst-source-summary.json")).unwrap(),
     )
