@@ -4,7 +4,7 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 
 ## Prerequisites
 
-- Rust toolchain (1.85+, wasm32-wasip2 target)
+- Rust toolchain pinned by `rust-toolchain.toml` (with the wasm32-wasip2 target). The first build downloads a pinned ONNX Runtime; for offline builds see [ONNX Runtime](../docs/operations/dependencies.md#onnx-runtime)
 - UV (Python package manager) — for analysis notebooks
 - Mosquitto MQTT broker — for E2E experiments (E-Perf-1/2, E-Swap-*)
 - Raspberry Pi 5 with 4 GB RAM — canonical measurement host
@@ -43,9 +43,11 @@ cd eval && mise run :e-perf-4
 
 Results are stored in `eval/results/<experiment>/<timestamp>/` and include:
 - `config.toml` — exact configuration used
-- `latency.hdr` — HdrHistogram interval log
-- `throughput.csv` — periodic throughput samples
+- `latency.hdr` — HdrHistogram of latency from each message's scheduled send time
+- `throughput.csv` — throughput (per-second buckets in-process, one summary row end to end)
 - `metadata.json` — hardware, versions, git SHA
+
+`RESULT-CONTRACT.md` defines every artifact and its exact schema.
 
 ## Analysis
 

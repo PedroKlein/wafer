@@ -107,7 +107,7 @@ sequenceDiagram
 
     Note over API: POST /api/v1/nodes/{id}/hot-swap<br/>body: { wasm_path: "..." }
     API->>API: Read Wasm bytes from disk
-    API->>API: prepare_transform_swap_timed:<br/>  1. Compile component (AOT)<br/>  2. Pre-instantiate (InstancePre)
+    API->>API: prepare_transform_swap_timed:<br/>  1. Compile via ComponentCache + link (spawn_blocking)<br/>  2. Instantiate into a new Store
     API->>Orch: send_swap(node_id, SwapPayload)
     Orch->>Watch: watch_tx.send(Some(payload))
 
@@ -132,7 +132,8 @@ sequenceDiagram
   mid-execution. It observes the swap signal only at the top of the next
   loop iteration — after the current message completes (if any) and before
   the next one is dequeued from the `select!` branch.
-- **Preparation off the message path.** Compilation and typed instantiation happen before signalling. The runner installs the prepared values and runs guest validation/initialization before marking replacement adoption.
+- **Preparation off the message path.** Compilation and linking run on a blocking thread through the engine's component cache (the response reports `compile_cache` as `memory_hit`, `disk_hit`, or `compiled`), and typed instantiation happens before signalling. The runner installs the prepared values and runs guest validation/initialization before marking replacement adoption.
+- **Stateless replacement.** The replacement starts from a fresh Store and its own `init`; guest state in the old instance is discarded, and the old guest's `close` export is not called.
 - **Retry buffer flush.** Outstanding retry entries are sent to the DLQ
   with `DlqReason::HotSwapDrain` because the new plugin version may have
   incompatible semantics. No retries survive the boundary.
@@ -158,14 +159,24 @@ applies the configured policy.
 | `bad-input(msg)` | `BadInput` | → DLQ immediately |
 | `dependency-failed(msg)` | `DependencyFailed` | → Retry (3×, 100 ms backoff, then DLQ) |
 | `processing-failed(msg)` | `ProcessingFailed` | → Retry (2×, 100 ms backoff, then DLQ) |
-| `timed-out`, epoch interruption or fuel exhaustion | `TimedOut` | → Skip (drop message, increment metric); after a trap the Store is also replaced |
-| `unrecoverable(msg)` or any other trap (panic, out-of-bounds access, memory limit) | `Unrecoverable` | → Teardown node → `Recovering` state |
+| `timed-out` returned by the guest, epoch interruption or fuel exhaustion | `TimedOut` | → Skip (drop message, increment metric); after an epoch or fuel trap the Store is also replaced, while a guest-returned `timed-out` keeps its instance |
+| `unrecoverable(msg)` or any other trap (panic, out-of-bounds access, memory limit) | `Unrecoverable` | → Drop the message (`dropped_on_recovery`) and re-instantiate from the cached `InstancePre` (`Recovering` state); not configurable |
+
+The `timed_out` action applies to epoch and fuel traps as well as to the guest's own `timed-out` return. An epoch or fuel trap inside a Transform canary window is treated like any other trap there and triggers the process-time rollback.
 
 ### Retry buffer
 
 Retryable errors (`dependency-failed`, `processing-failed`) enter a bounded `VecDeque` (default capacity 1000). The first retry waits exactly `backoff_ms`; later waits double to the 30-second cap. The runner selects the earliest due entry across the buffer and wakes for that deadline even when upstream input is idle.
 
-`retry_count` is stored on `RuntimeEnvelope` and survives requeue and DLQ serialization. Once the retry budget is spent, the configured terminal action is honored: `ExhaustedSkip` is counted, `dlq` preserves `RetriesExhausted`, and `teardown` enters recovery. DLQ-full and DLQ-closed remain distinguishable and never requeue an exhausted envelope.
+`retry_count` is stored on `RuntimeEnvelope` and survives requeue and DLQ serialization. Once the retry budget is spent, the configured terminal action is honored: `skip` is counted as `retry_exhausted_skips`, `dlq` preserves `RetriesExhausted`, and `teardown` stops the node (see below). DLQ-full and DLQ-closed remain distinguishable and never requeue an exhausted envelope.
+
+### `teardown` is a one-way stop
+
+The configurable `teardown` action (for `bad_input`, `timed_out`, or a retry config's `exhausted`) counts the message as `dropped_on_teardown` and ends that node's runner loop. It does not enter `Recovering` and does not re-instantiate: the node stays stopped for the rest of the run, its input queue is no longer read, and upstream edges then see a closed destination. Its reported node state is not changed. Only the built-in `Unrecoverable` path below recovers.
+
+### DLQ actions without a `[dead_letter]` sink
+
+`bad_input`, `dependency_failed.exhausted`, and `processing_failed.exhausted` default to `dlq`. The validator requires a `[dead_letter]` section only when an edge uses `overflow = "dead-letter"`; it does not check error-policy `dlq` actions. When no DLQ sink is configured, a `dlq` action logs a warning, counts the message as `dlq_lost`, and drops it. Pipelines that must keep failed messages should configure `[dead_letter]` explicitly.
 
 ### DLQ envelope
 
@@ -176,14 +187,26 @@ replay), and tracing correlation IDs (`trace_id`, `parent_id`).
 
 ### Recovery from `Unrecoverable`
 
-When an action requests teardown or an unrecoverable error occurs, the runner enters `Recovering`, creates a fresh Store from the cached `InstancePre`, reapplies limits, and runs lifecycle validation and initialization. Success returns to `Running`; failure ends that node loop. Transform may first attempt its bounded process-time canary rollback when one is active.
+When a guest returns `unrecoverable` or the host traps the call (other than an epoch or fuel trap handled by the `timed_out` action), the runner drops the message, enters `Recovering`, creates a fresh Store from the cached `InstancePre`, reapplies limits, and runs lifecycle validation and initialization. Success returns to `Running`; failure ends that node loop. Transform may first attempt its process-time canary rollback (once per swap) when one is active. Guest state does not survive recovery.
 
-### Graceful shutdown
+**Node state reporting.** Every `NodeStateTracker` starts in `Starting`. The Wasm Transform, Filter, and Router runner loops do not move a healthy node to `Running` after startup; only the recovery path above (and the native passthrough loop) does. A Wasm node that has never failed therefore reports `Starting` through `GET /api/v1/nodes` while it processes messages normally, and `Running` appears only after a recovery. Do not use `Running` as a startup-health signal in the current build.
 
-On `POST /api/v1/pipeline/shutdown` or SIGINT, every runner flushes its
-retry buffer to the DLQ with `DlqReason::Shutdown`, then drops its
-`Store` and exits. Sources stop producing first so the pipeline drains
-naturally through the DAG before Wasm nodes shut down.
+### Shutdown (cancel-all)
+
+Shutdown is cancel-all. On `POST /api/v1/pipeline/shutdown`, SIGINT, or
+SIGTERM, one cancellation token fires for every node at once; sources are
+not stopped first and messages still queued on edges are not drained
+through the DAG. Each Wasm runner leaves its loop at the next input wait,
+flushes its retry buffer to the DLQ with `DlqReason::Shutdown`, and drops
+its `Store`; the guest `close()` export is not called. Sinks consume the
+messages already buffered in their own queue, then run `flush()` and
+`close()`. The orchestrator waits up to 5 s for all
+node tasks and aborts any still running at that deadline, which fails the
+run (exit status 3). A second SIGINT or SIGTERM exits immediately (130 / 143).
+
+A finite pipeline (for example a `bench-source` with `total_messages`)
+ends differently: the source exits, channels close in topological order,
+and every node drains its queue before exiting.
 
 ---
 

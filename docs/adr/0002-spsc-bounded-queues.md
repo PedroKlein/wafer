@@ -11,6 +11,11 @@
 > destinations and DLQ-full/DLQ-closed outcomes are counted separately. Tokio
 > provides no fairness or cross-producer ordering guarantee.
 >
+> Edge wiring calls `tokio::sync::mpsc::channel` directly. The older
+> `BoundedQueue` wrapper still exists in `crates/wafer-core/src/queue/bounded.rs`
+> and is exported, but only the `throughput` benchmark uses it; no runtime
+> edge goes through it.
+>
 > The original decision and 2026-07-12 amendment below are historical context.
 
 <!-- historical-design-below -->
@@ -124,17 +129,18 @@ This decision relates to the pre-refactor SPEC.md (retired) Section 18.2:
 
 RFC-003 (Session 3) eliminated the Joiner node entirely — fan-in is expressed
 as multiple producers sharing the receiver's single `mpsc` channel end. RFC-005
-(Session 5) confirmed the runtime uses `tokio::sync::mpsc::channel` directly,
-removing the `BoundedQueue` wrapper crate that previously imposed SPSC
-semantics on top of the underlying mpsc primitive.
+(Session 5) confirmed the runtime uses `tokio::sync::mpsc::channel` directly
+instead of the `BoundedQueue` wrapper that previously imposed SPSC semantics
+on top of the underlying mpsc primitive.
 
 ### What changed
 
 1. **SPSC → mpsc.** Each edge is still one `Sender` clone, but merge edges
    share the same `Receiver` via sender clones. The queue is bounded mpsc, not
    bounded SPSC.
-2. **BoundedQueue removed.** The runtime calls `tokio::sync::mpsc::channel`
-   directly. Queue wiring uses a receiver-keyed map: one channel per
+2. **BoundedQueue no longer used for edges.** The runtime calls
+   `tokio::sync::mpsc::channel` directly. The wrapper type is still defined
+   in `queue/bounded.rs` and used by the `throughput` benchmark only. Queue wiring uses a receiver-keyed map: one channel per
    destination node (each node has a single default input port), with
    sender clones for merge edges.
 3. **Joiner node removed.** Fan-in is implicit multi-producer on the

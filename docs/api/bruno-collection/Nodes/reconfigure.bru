@@ -24,10 +24,12 @@ vars:pre-request {
 
 docs {
   Re-instantiates an eligible loaded Wasm node from its cached component with
-  new JSON configuration. The optional expected_plugin_hash field guards
-  against reconfiguring a different component after a successful hot-swap.
+  new JSON configuration. The optional expected_plugin_hash field is compared
+  with the SHA-256 of the plugin loaded on the node (recorded at launch and on
+  every hot-swap); a mismatch returns 409. compile_ns, instantiate_ns and
+  signal_ns are always null, and there is no compile_cache.
 }
 
 assert {
-  res.status: in [200, 404, 409, 500, 504]
+  res.status: in [200, 202, 400, 404, 409, 500, 504]
 }

@@ -21,13 +21,19 @@ arc42-lite framework, split into subdirectories by reader intent.
 - **Investigating a design decision?** →
   [`rfcs/`](rfcs/) for long-form and [`adr/`](adr/) for short summaries.
 - **Checking what is implemented today?** →
-  [`status/implementation-status.md`](status/implementation-status.md).
+  [`status/implementation-status.md`](status/implementation-status.md)
+  and the drift ledger
+  [`status/implementation-gaps.md`](status/implementation-gaps.md).
+- **Learning the code from source?** →
+  [`learn/README.md`](learn/README.md).
 
 ## Directory tree
 
 ```
 docs/
+├── README.md             This navigator
 ├── architecture/         arc42 §1–8 + comparators (Explanation)
+│   ├── README.md
 │   ├── 00-vision.md
 │   ├── 01-goals-and-constraints.md
 │   ├── 02-solution-strategy.md
@@ -39,32 +45,65 @@ docs/
 │   ├── 08-risks.md
 │   └── 09-comparators.md
 ├── requirements/         Functional + non-functional (Reference)
+│   ├── README.md
 │   ├── functional.md
 │   └── non-functional.md
 ├── interfaces/           WIT / HTTP / TOML / SDK (Reference)
+│   ├── README.md
 │   ├── wit-contracts.md
 │   ├── http-api.md
 │   ├── config-schema.md
 │   └── plugin-sdk.md
-├── adr/                  Nygard-format decision records
-├── rfcs/                 Long-form design records
+├── learn/                Source-guided learning path (Tutorial / Explanation)
+│   ├── README.md
+│   ├── workspace-map.md
+│   ├── reading-paths.md
+│   ├── rust-in-context.md
+│   ├── config-to-running-pipeline.md
+│   ├── message-through-wasm.md
+│   ├── plugin-boundary.md
+│   ├── stateless-hot-swap.md
+│   ├── shutdown-and-failure.md
+│   └── evaluation-harness.md
+├── adr/                  Nygard-format decision records (0001–0018)
+├── rfcs/                 Long-form design records (RFC-001–012, source-decisions/)
 ├── operations/           Task-oriented how-tos (How-to)
+│   ├── README.md
 │   ├── getting-started.md          (Tutorial)
 │   ├── configuration.md
 │   ├── mqtt-setup.md
 │   ├── registry.md
 │   ├── observability.md
 │   └── dependencies.md
+├── eval/                 Evaluation host setup and runbooks (How-to)
+│   ├── pi5-host-setup.md
+│   ├── pi5-experiment-runbook.md
+│   └── cross-compile.md
 ├── status/               Current state of the world (Reference)
+│   ├── README.md
 │   ├── implementation-status.md
-│   └── evaluation-progress.md
+│   ├── implementation-gaps.md
+│   ├── evaluation-progress.md
+│   ├── canonical-readiness.md
+│   ├── rpi5-canonical-transition.md
+│   └── migration-audit.md
 ├── benchmarks/           Measurement reports
-│   └── hot-swap.md
+│   ├── README.md
+│   ├── rq-summary.md
+│   ├── hot-swap.md
+│   ├── rq2-attacks.md
+│   ├── binary-sizes.md
+│   ├── methodology-validation.md
+│   ├── ekuiper-comparator.md
+│   ├── ekuiper-profile-diagnostic.md
+│   └── ekuiper-tail-diagnostic.md
 ├── workflows/            Session recipes (Explanation)
+│   ├── README.md
 │   ├── discussion-session.md
 │   ├── implementation-session.md
 │   └── planning-session.md
 ├── api/                  Machine-readable API artefacts
+│   ├── README.md
 │   ├── openapi.yaml
 │   └── bruno-collection/
 └── history/plans/        Archived planning scratchpads (Historical)

@@ -25,9 +25,11 @@ docs {
   Replaces an eligible loaded Wasm Transform, Filter, or Router between messages.
   A successful response reports replacement_adopted and the first runner-local
   outcome. It does not prove sink convergence. A Transform can instead report
-  status=rolled_back when its process-time canary traps.
+  status=rolled_back when its process-time canary traps. The response also
+  carries compile_cache (compiled, memory_hit or disk_hit). A 202 means no
+  runner-local outcome arrived within five seconds.
 }
 
 assert {
-  res.status: in [200, 400, 404, 409, 500, 504]
+  res.status: in [200, 202, 400, 404, 409, 500, 504]
 }

@@ -81,7 +81,7 @@ Successful local adoption response:
   "node_id": "parse",
   "replacement_adopted": true,
   "first_post_replacement_local_outcome": {
-    "disposition": "forwarded-enqueued",
+    "disposition": "forwarded/enqueued",
     "after_adoption_ns": 68042
   },
   "compile_cache": "compiled",
@@ -101,8 +101,8 @@ previous swap, or the component loaded at launch), or `disk_hit` when an
 on-disk cache is configured and holds the component. Compilation and linking
 run on tokio's blocking pool, not on the workers that drive pipeline nodes.
 
-The disposition is one of `forwarded-enqueued`, `filter-dropped`, or
-`router-no-route`. This response proves replacement adoption and one local
+The disposition is one of `forwarded/enqueued`, `filter-dropped`, or
+`router-dropped`. This response proves replacement adoption and one local
 runner outcome. It is not sink convergence, sequence continuity, loss, or
 throughput evidence; those claims require sink-owned evaluation artifacts.
 
@@ -162,9 +162,13 @@ Reconfiguration uses the loaded component's cached `InstancePre`, validates and
 initializes a fresh instance, and uses the same per-node mutation guard and
 runner-local response contract as hot-swap. Nothing is compiled or signalled
 through the hot-swap preparation path, so `compile_ns`, `instantiate_ns`, and
-`signal_ns` are null and there is no `compile_cache`. A non-empty `expected_plugin_hash` mismatch
-returns HTTP 409. Initial launch does not populate that hash registry; callers
-that require the guard must first complete a successful hot-swap.
+`signal_ns` are null and there is no `compile_cache`. A rollback response carries
+only `timeline.rollback_ns`.
+
+A non-empty `expected_plugin_hash` is compared with the SHA-256 (hex) of the
+plugin currently loaded on the node and a mismatch returns HTTP 409. The
+launcher records that hash for every Wasm node it loads, and each successful
+hot-swap replaces it, so the guard applies from process start.
 
 ## `POST /api/v1/pipeline/shutdown`
 

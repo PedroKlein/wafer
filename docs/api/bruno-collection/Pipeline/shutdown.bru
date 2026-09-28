@@ -11,10 +11,11 @@ post {
 }
 
 docs {
-  Graceful shutdown — cancels the pipeline supervisor. In-flight messages
-  complete their current node call before the task exits.
+  Signals cancellation of every node task and returns 200. Cleanup is
+  cooperative and bounded by a 5 s shutdown deadline; the response does not
+  prove every in-flight message reached a sink. Watch the process exit.
 }
 
 assert {
-  res.status: in [200, 500]
+  res.status: eq 200
 }

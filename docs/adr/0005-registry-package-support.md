@@ -4,6 +4,27 @@
 
 Accepted (Updated: 2026-02-17)
 
+> **Current amendment.** Several parts of the configuration and cache
+> behavior below were designed but are not applied by the current code:
+>
+> - The pipeline `[registry]` table accepts only `cache_dir`. Unknown keys
+>   are rejected at parse time, so `cache_ttl_hours` in a pipeline TOML is a
+>   configuration error. The registry client's cache TTL is fixed at its
+>   built-in default of 24 hours.
+> - `wafer-runtime --no-cache` is accepted on the command line but is not
+>   passed to the registry client, so it has no effect; cached entries within
+>   the TTL are still used.
+> - There is no stale-cache fallback. The cache is consulted only before a
+>   fetch; if the fetch fails, the error is returned (step 5 under "Cache
+>   behavior" is not implemented).
+> - No cosign or other signature verification is performed on pulled
+>   components.
+> - Plugins are selected with the single `plugin` field (see the amendment at
+>   the end); the `plugin_path` / `oci` keys and `[[nodes]]` examples below
+>   are the original proposal.
+>
+> The evaluation configurations use local plugin paths only.
+
 ## Context
 
 WAFER needs to support loading transform plugins from OCI registries (like ghcr.io) 
@@ -185,8 +206,8 @@ wafer --config pipeline.toml
 
 ## Related
 
-- ADR-0001: Wasmtime Runtime
-- ADR-0003: Drain and Flip Hot-swap (future: hot-swap with registry packages)
+- [ADR-0001](0001-wasmtime-runtime.md): Use Wasmtime as WASM Runtime
+- [ADR-0003](0003-hot-swap-mechanism.md): Watch-Channel Between-Messages Hot-Swap
 
 ## Amendment (2026-07-06 — `plugin_path` → single `plugin` field)
 

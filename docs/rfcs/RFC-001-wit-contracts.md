@@ -111,7 +111,7 @@ Four packages adopted:
 
 ## Implementation Notes
 
-- **Package structure:** Fully implemented across four WIT files: `wit/pipeline-types.wit`, `wit/pipeline-node.wit`, `wit/pipeline-routing.wit`, `wit/pipeline-host.wit`.
+- **Package structure:** Implemented as one `wafer:pipeline@0.1.0` package across five WIT files: `wit/pipeline-types.wit`, `wit/pipeline-node.wit`, `wit/pipeline-routing.wit`, `wit/pipeline-host.wit`, and `wit/worlds.wit` (the `transform-node`, `filter-node`, `router-node`, and `inference-node` worlds).
 - **Decision 1 (envelope shape):** Implemented verbatim — `message` with `borrow<buffer>` and `output-message` with `list<u8>` in `wit/pipeline-types.wit`.
 - **Decision 2 (return type):** Amended by RFC-003 §A2. Current implementation: `process: func(input: message) -> result<output-message, process-error>` (no `process-outcome` wrapper). See `wit/pipeline-node.wit`.
 - **Decision 3 (router):** Implemented verbatim in `wit/pipeline-routing.wit`. `route(input: message) -> result<list<port-id>, process-error>`.
@@ -121,5 +121,5 @@ Four packages adopted:
 - **Decision 8 (filter):** Implemented verbatim — `evaluate(input: message) -> result<bool, process-error>` in `wit/pipeline-node.wit`.
 - **F2 (error categories):** Implemented verbatim — five-variant `process-error` in `wit/pipeline-types.wit`.
 - **F7 (init config):** Implemented verbatim — `node-config { id: string, config: string }` in `wit/pipeline-node.wit`.
-- **F9 (host imports):** Implemented — `pipeline:host/logging` with `log(level: log-level, message: string)` in `wit/pipeline-host.wit`.
+- **F9 (host imports):** Implemented — `wafer:pipeline/logging` with `log(level: log-level, message: string)` in `wit/pipeline-host.wit`.
 - **F10 (inference node):** Restored after the single-package regression — `inference-node` in `wit/worlds.wit` exports current lifecycle/transform interfaces and imports the pinned `wasi:nn` package. The host registers those imports only for a Wasm Transform with `allow_inference=true`.

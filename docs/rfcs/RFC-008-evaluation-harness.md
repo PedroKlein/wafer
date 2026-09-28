@@ -32,7 +32,7 @@ WAFER uses the Wasm threshold-filter component, Native uses the equivalent Rust 
 
 ### In-process path
 
-`BenchSource` and `BenchSink` support boundary, depth, memory, containment, and hot-swap experiments. `BenchSource` uses open-loop intended timestamps. `BenchSink` records latency, throughput, sequence continuity, and version transitions without replacing the production orchestrator.
+`BenchSource` and `BenchSink` support boundary, depth, memory, containment, and hot-swap experiments. `BenchSource` paces an open-loop schedule from an OS thread and stamps each message with its scheduled time (`bench.intended_ns`) and actual emit time (`bench.emit_ns`). `BenchSink` records latency (arrival minus scheduled), service time, source lag, throughput, sequence continuity, and version transitions without replacing the production orchestrator. [ADR-0017](../adr/0017-loadgen-measurement-design.md) records the measurement design for both recording paths.
 
 E-Swap-4 adds one deterministic source schedule after a 30-second warmup:
 
@@ -47,7 +47,7 @@ Each of 30 independent runs contains one stateless swap and contributes one sink
 
 ### External MQTT path
 
-`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Final capacity runs do not require per-message CSV traces.
+`wafer-loadgen publish` and `wafer-loadgen subscribe` drive E-Perf-1, E-Perf-2, E-Perf-10, and E-Swap-3 through the same native Mosquitto broker. The publisher stamps each payload with its scheduled send time, reports how late messages left as `source_lag_ns`, and distinguishes intended offers, client-queue rejection, and successful enqueue. The subscriber records bounded sequence and HDR summaries. Final capacity runs do not require per-message CSV traces.
 
 ## Canonical metering
 

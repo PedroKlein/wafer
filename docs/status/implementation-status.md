@@ -109,7 +109,10 @@ Each sender retains its edge policy:
 - `dead-letter` attempts non-blocking delivery to the configured file or MQTT DLQ.
 
 Destination closed, dropped, dead-lettered, DLQ full, and DLQ closed are
-distinct counters. Zero queue, retry-buffer, and DLQ capacities fail validation
+distinct per-edge counters. They are not on `/metrics`; `QueueDepthRecorder`
+samples them with queue depth into `queue-depth.csv` when
+`WAFER_QUEUE_DEPTH_OUTPUT` is set (the evaluation harness sets it only for
+E-Backpressure). Zero queue, retry-buffer, and DLQ capacities fail validation
 before channel construction.
 
 ## Error policy
@@ -121,13 +124,36 @@ later waits double to 30 seconds, and the bounded buffer selects the earliest
 due entry even while upstream is idle.
 
 Exhaustion honors the configured `skip`, `dlq`, or `teardown` action and
-exhausted messages are not requeued. Unrecoverable errors re-instantiate from
-cached `InstancePre`.
+exhausted messages are not requeued. Unrecoverable errors and traps
+re-instantiate from cached `InstancePre`. Epoch interruption and fuel
+exhaustion instead follow the `timed_out` action (default `skip`), and the
+trapped instance is replaced; inside a Transform canary window they roll back
+like any other trap. The `teardown` action stops that node's runner for the
+rest of the run; it does not recover the node.
+
+By default bad input and exhausted retries go to the DLQ, but a `[dead_letter]`
+section is not required. Without one, those messages are dropped with a
+warning and counted as `dlq_lost`. Of the evaluation configs under
+`eval/configs/`, only `e-backpressure/pipeline-dead-letter.toml` configures a
+DLQ, so in every other experiment such a message leaves no copy; it shows up
+only in the `dlq_lost` column and, where sequences are tracked, as a gap.
 
 Every error-policy outcome has its own per-node counter (retried, DLQ sent, DLQ
 lost, skipped, exhausted skip), traps are counted by kind apart from errors the
 guest returned, and filter drops are not counted as processed. At shutdown each
 node's dequeued messages equal the sum of their fates.
+
+`GET /metrics` is rendered in `crates/wafer-core/src/api/handlers.rs` from
+these per-node counters (`wafer_node_*_total`, traps by kind, guest errors by
+category), the `hot_swap_phase_ns` histogram, and the
+`wafer_node_recovery_duration_ms` summary. The `MetricsRegistry` and snapshot
+builder in `wafer-core`'s `metrics` module are not wired into the runtime, and
+their families (for example `wafer_queue_depth`) are not served.
+
+Containment limits: the per-node memory limit bounds guest linear memory and
+tables, not host-side WASI resources a guest creates. Epochs and fuel bound
+time spent running Wasm; a guest blocked inside a host import is not
+time-bounded by them.
 
 ## Replacement and reconfiguration
 
@@ -137,7 +163,7 @@ or migrate guest state.
 
 A successful API response separates `replacement_adopted` from
 `first_post_replacement_local_outcome`. The local outcome can be forwarded and
-enqueued, filter-dropped, or router-no-route. It is not sink convergence,
+enqueued, filter-dropped, or router-dropped. It is not sink convergence,
 sequence continuity, throughput, or loss evidence. Sink-owned evaluation
 artifacts supply those claims.
 

@@ -82,10 +82,12 @@ Capabilities are static per node and retained across recovery, reconfigure, hot-
 
 Two independent mechanisms bound untrusted guest execution:
 
-- **Fuel** is a Wasmtime counter that decrements during guest execution. A guest that exceeds a configured budget traps as `WasmProcessError::TimedOut`. Runtime fuel defaults are `None` for Transform, Filter, and Router. A positive `[engine.fuel]` value enables the mechanism; a per-node value overrides it.
-- **Epoch** is an optional wall-clock deadline. A named OS thread ticks the engine every `[engine].epoch_tick_ms` (default 10 ms). Runtime `epoch_deadline` defaults to `None`, so ticking alone does not interrupt a call.
+- **Fuel** is a Wasmtime counter that decrements during guest execution. A guest that exceeds its budget traps with `Trap::OutOfFuel` (`WasmProcessError::Trapped`), which the runner handles with the `timed_out` action. Runtime fuel defaults are `None` for Transform, Filter, and Router. Any positive `[engine.fuel]` or per-node `fuel` value turns metering on for the whole engine; a per-node value overrides the role budget, and a Wasm node with neither runs with an effectively unlimited budget (`u64::MAX`) while metering is on.
+- **Epoch** is an optional wall-clock deadline. A named OS thread ticks the engine every `[engine].epoch_tick_ms` (default 10 ms). Runtime `epoch_deadline` defaults to `None`, so ticking alone does not interrupt a call. An interrupted guest traps with `Trap::Interrupt` and is handled like fuel exhaustion.
 
-Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, and an epoch deadline of 100 ticks, except for declared E-Perf-7 ablations and attack stimuli. E-Perf-7 creates its four modes by omitting the disabled field, not by using a numeric sentinel. Each guest also has a `StoreLimits` cap on memory allocation: Transform nodes get 64 MiB by default, and Filter and Router nodes get 16 MiB. See
+Both mechanisms bound Wasm CPU time only. A guest blocked inside a host import (for example an outbound `wasi:http` call) is not interrupted by fuel or epochs while it waits, so time isolation does not cover that case in this build.
+
+Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, and an epoch deadline of 100 ticks, except for declared E-Perf-7 ablations and attack stimuli. E-Perf-7 creates its four modes by omitting the disabled field, not by using a numeric sentinel. Each guest also has a `StoreLimits` cap on memory allocation: Transform nodes get 64 MiB by default, and Filter and Router nodes get 16 MiB. This OOM containment covers guest linear memory and tables; host-side WASI resources a guest creates (resource-table entries, streams, outbound requests) are not bounded by it in this build. See
 [ADR-0013](../adr/0013-aot-cache-and-metering.md) and [RFC-007
 §D1/§D8](../rfcs/RFC-007-performance-optimizations.md).
 
@@ -99,10 +101,17 @@ Every host-observable guest failure is classified into one of five
   retry 3× with 100 ms backoff, then DLQ.
 - `processing-failed`: internal plugin logic failed. Default: retry
   2× with 100 ms backoff, then DLQ.
-- `timed-out`: fuel or epoch deadline exceeded. Default: skip.
-- `unrecoverable`: panic / capability violation / `StoreLimits`
-  breach. Hard-wired: teardown the node and re-instantiate from the
-  cached `InstancePre`.
+- `timed-out`: returned by the guest, or fuel or epoch deadline
+  exceeded. Default: skip. After a fuel or epoch trap the Store is also
+  replaced; a guest-returned `timed-out` keeps its instance.
+- `unrecoverable`: returned by the guest, or any other trap (panic,
+  out-of-bounds access, `StoreLimits` breach). Hard-wired: drop the
+  message and re-instantiate from the cached `InstancePre`.
+
+Traps are classified by their wasmtime trap code and counted per kind in
+`per_node_metrics.csv` (`traps_total` counts real traps only; guest-returned
+errors are counted separately as `guest_*`). Guest state does not survive
+re-instantiation.
 
 The policy engine (`ErrorPolicyExecutor` in
 `crates/wafer-core/src/runner/error_policy.rs`) is a per-node struct. A present
@@ -110,8 +119,13 @@ node policy replaces the pipeline table. Its bounded retry buffer defaults to
 1000 entries, selects the earliest due retry, waits `backoff_ms` before the
 first attempt, doubles later delays to a 30-second cap, and preserves retry
 count through requeue and DLQ serialization. Exhaustion honors `skip`, `dlq`,
-or `teardown`; DLQ-full and DLQ-closed remain distinct outcomes. Buffered
-retries are flushed with `HotSwapDrain` on replacement and `Shutdown` on exit.
+or `teardown`; DLQ-full and DLQ-closed remain distinct outcomes. The
+configurable `teardown` action is a one-way stop: it ends the node's runner
+loop without recovery. A `dlq` action with no `[dead_letter]` sink configured
+drops the message and counts it as `dlq_lost`; the validator does not require
+`[dead_letter]` for error-policy DLQ actions, only for `overflow =
+"dead-letter"` edges. Buffered retries are flushed with `HotSwapDrain` on
+replacement and `Shutdown` on exit.
 See
 [ADR-0008](../adr/0008-error-policy-engine.md) and [RFC-002
 §D4](../rfcs/RFC-002-host-runtime.md).

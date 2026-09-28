@@ -21,7 +21,7 @@ E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each poli
 
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
-| NFR-ISO-1 | Adversarial components are contained. | All six attacks trap without a process-wide failure. | E-Iso-1 through E-Iso-6 |
+| NFR-ISO-1 | Adversarial components are contained. | All six attacks are stopped by their expected mechanism (a trap, the memory limit, or the file-system denial for E-Iso-3) without a process-wide failure. | E-Iso-1 through E-Iso-6 |
 | NFR-ISO-2 | A fault does not materially affect an independently sourced healthy branch. | Branch-A throughput drop < 1 percent. | E-Iso-7 |
 | NFR-ISO-3 | Guest memory is bounded per store. | 64 MiB Transform and 16 MiB Filter/Router defaults unless overridden. | E-Iso-5 |
 | NFR-ISO-4 | Infinite execution is interrupted by the declared mechanism. | Trap and recovery evidence matches the matrix-declared epoch stimulus. | E-Iso-4, E-Iso-8 |

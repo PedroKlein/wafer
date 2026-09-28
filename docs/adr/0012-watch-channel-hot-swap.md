@@ -11,6 +11,18 @@
 > are not. The API reports replacement adoption plus the first runner-local
 > outcome, not sink convergence. Process-time canary rollback is Transform-only.
 >
+> The runner does not call the old instance's guest `close()` on replacement;
+> the old Store is simply dropped. Guest state therefore resets on every swap:
+> the replacement starts from its own `init()` in a new Store. An idle node
+> adopts a swap without waiting for a new input message, because the input
+> wait also wakes on the watch channel.
+>
+> The `NodeState` type in `wafer-types` still has `Draining` and `Retired`
+> variants (and `NodeStateTracker` still has transitions into them) from the
+> drain-and-flip design. No runner calls those transitions, so the control
+> plane never reports either state for a node under the watch-channel
+> mechanism.
+>
 > The remainder is the historical mechanism record; ACK/convergence names below
 > are superseded by the current response vocabulary.
 
@@ -30,7 +42,7 @@ We use a per-node `tokio::sync::watch` channel to deliver hot-swap payloads to e
 
 The hot-swap sequence becomes:
 
-1. **PREPARE** — The orchestrator compiles the new `.wasm` component and pre-instantiates it (`InstancePre`) on tokio's blocking pool, so a Cranelift compile never occupies a worker that drives pipeline nodes, then creates a fresh `Store` with fuel/epoch configuration, and packages everything into a typed `SwapPayload` variant (`Transform`, `Filter`, or `Router`). Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` (`prepare_transform_swap`, `prepare_filter_swap`, `prepare_router_swap`).
+1. **PREPARE** — The orchestrator compiles the new `.wasm` component and pre-instantiates it (`InstancePre`) on tokio's blocking pool, so a Cranelift compile never occupies a worker that drives pipeline nodes, then creates a fresh `Store` with fuel/epoch configuration, and packages everything into a typed `SwapPayload` variant (`Transform`, `Filter`, or `Router`). Implementation: `crates/wafer-core/src/orchestrator/hotswap.rs` (`prepare_transform_swap_timed`, `prepare_filter_swap_timed`, `prepare_router_swap_timed`).
 
 2. **SIGNAL** — The orchestrator sends `Some(payload)` via the `watch::Sender`. This is a single atomic pointer swap inside the watch channel; it does not block.
 
@@ -40,10 +52,12 @@ The hot-swap sequence becomes:
 
 There is **no explicit drain phase**. The check happens between messages — after the previous Wasm call has returned and before the next `receiver.recv()` call. Because a Wasm call runs to completion (it is never cancelled mid-flight), there is zero in-flight work at the swap point. "Drain time" equals the time to finish processing the current message, which at 1000 msg/s is typically < 1 ms.
 
-This is implemented in all three runner loops:
-- `crates/wafer-core/src/runner/transform.rs` — lines 39–47
-- `crates/wafer-core/src/runner/filter.rs` — lines 39–47
-- `crates/wafer-core/src/runner/router.rs` — lines 39–47
+This is implemented in all three runner loops (`take_pending_swap` at the
+top of each loop, and `next_input` / `recv_next_or_retry` in
+`crates/wafer-core/src/runner/mod.rs` for the input wait):
+- `crates/wafer-core/src/runner/transform.rs`
+- `crates/wafer-core/src/runner/filter.rs`
+- `crates/wafer-core/src/runner/router.rs`
 
 The builder (`crates/wafer-core/src/orchestrator/builder.rs`) creates one `watch::channel(None)` per Wasm node, stores the sender in `watch_senders: HashMap<Box<str>, watch::Sender<Option<SwapPayload>>>`, and threads the receiver into each node's runner bundle via the `swap_rx` field.
 
@@ -76,6 +90,6 @@ The builder (`crates/wafer-core/src/orchestrator/builder.rs`) creates one `watch
 - [RFC-005 — Orchestrator & Runtime Simplification](../rfcs/RFC-005-orchestrator.md) — the long-form decision (§D6) that this ADR summarises.
 - [ADR-0003 — Hot-Swap Mechanism](0003-hot-swap-mechanism.md) — the original drain-and-flip mechanism that this ADR's watch-channel model supersedes (specifically the DRAIN phase and `RoutingController`).
 - [RFC-002 — Host-Side Runtime Architecture](../rfcs/RFC-002-host-runtime.md) — defines the Store-poisoning concern that motivates never cancelling a Wasm call mid-flight.
-- `crates/wafer-core/src/orchestrator/hotswap.rs` — `prepare_*_swap` functions and `SwapTimeline`.
+- `crates/wafer-core/src/orchestrator/hotswap.rs` — `prepare_*_swap_timed` functions and `SwapTimeline`.
 - `crates/wafer-core/src/orchestrator/builder.rs` — watch channel creation and wiring.
 - `crates/wafer-core/src/runner/transform.rs` — canonical runner loop showing the between-messages swap check.

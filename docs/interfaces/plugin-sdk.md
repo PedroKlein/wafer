@@ -19,7 +19,7 @@ plugins stay dependency-light and fast to build), no unsafe, and no
 - **Payload accessors** — `payload_bytes!` and `payload_as_str!` on
   the `borrow<buffer>` handle.
 - **Log helpers** — `log_info!`, `log_warn!`, `log_error!` that route
-  to `pipeline:host/logging`.
+  to `wafer:pipeline/logging`.
 - **`parse_config`** — a plain function that deserialises the JSON
   `node-config.config` string into a typed struct (feature-gated on
   `serde`).
@@ -146,28 +146,51 @@ plain function (not a macro) so type inference from the annotation
 `serde` so plugins that do not need JSON parsing can avoid pulling in
 `serde_json`.
 
-## Minimal `pass-through` transform in full
+## Minimal pass-through transform in full
+
+A complete `src/lib.rs` for a plugin crate under `plugins/<name>/` (with
+`crate-type = ["cdylib"]`, a `wit-bindgen` dependency and a path dependency
+on `wafer-plugin`). `wit_bindgen::generate!` creates the WIT types and the
+`Guest` traits, and `export!` registers the component's exports; the SDK
+macros work on the generated types.
 
 ```rust
-use wafer_plugin::*;
-// wit-bindgen generates: NodeConfig, Message, OutputMessage,
-// ProcessError, LogLevel, and the pipeline::host bindings.
+wit_bindgen::generate!({
+    path: "../../wit",
+    world: "transform-node",
+    generate_all,
+});
 
-fn validate(_cfg: NodeConfig) -> Option<String> {
-    None
+use exports::wafer::pipeline::lifecycle::{self, NodeConfig};
+use exports::wafer::pipeline::transform::{self, Message, OutputMessage, ProcessError};
+use wafer_plugin::{output_from, payload_bytes};
+
+struct PassThrough;
+
+impl lifecycle::Guest for PassThrough {
+    fn validate(_config: NodeConfig) -> Option<String> {
+        None
+    }
+
+    fn init(_config: NodeConfig) -> Result<(), lifecycle::ProcessError> {
+        Ok(())
+    }
+
+    fn close() {}
 }
 
-fn init(_cfg: NodeConfig) -> Result<(), ProcessError> {
-    Ok(())
+impl transform::Guest for PassThrough {
+    fn process(input: Message) -> Result<OutputMessage, ProcessError> {
+        let bytes = payload_bytes!(input);
+        Ok(output_from!(input, bytes))
+    }
 }
 
-fn process(input: Message) -> Result<OutputMessage, ProcessError> {
-    let bytes = payload_bytes!(input);
-    Ok(output_from!(input, bytes))
-}
-
-fn close() {}
+export!(PassThrough);
 ```
+
+`plugins/pass-through/src/lib.rs` is the same plugin written without the
+SDK macros.
 
 ## What is not in the SDK (intentional)
 

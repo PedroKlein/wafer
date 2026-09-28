@@ -26,7 +26,7 @@ The WIT interface (`pipeline:node/filter@0.1.0`) exposes `evaluate: func(input: 
 
 - **Positive — clear pipeline composition semantics.** Pipeline authors place Filter nodes upstream of Transform or Sink nodes to validate or gate messages. Transform is strict 1:1 — it cannot "skip" — so the filter-then-transform pattern is the only way to discard. This makes data-flow reasoning local: a Transform always emits, a Filter may drop, a Router may fan-out.
 
-- **Positive — independent hot-swap.** Because filter and transform are separate `bindgen!` worlds (`filter_world`, `transform_world` in `crates/wafer-core/src/engine/bindings.rs`), each filter node has its own `InstancePre` and can be hot-swapped independently without affecting sibling transforms in the same pipeline.
+- **Positive — independent hot-swap.** Because filter and transform are separate `bindgen!` worlds (`filter_node`, `transform_node` modules in `crates/wafer-core/src/engine/bindings.rs`), each filter node has its own `InstancePre` and can be hot-swapped independently without affecting sibling transforms in the same pipeline.
 
 - **Negative — two runner-loop implementations.** The host must maintain separate runner loops for Transform and Filter (and Router). This adds implementation surface (~100 extra lines per loop) compared to a single polymorphic loop. The trade-off is acceptable because the loops are small and the performance difference is measurable.
 
@@ -42,4 +42,4 @@ The WIT interface (`pipeline:node/filter@0.1.0`) exposes `evaluate: func(input: 
 - [RFC-001](../rfcs/RFC-001-wit-contracts.md) — original WIT contracts defining the `filter` interface and `filter-node` world.
 - [RFC-002](../rfcs/RFC-002-host-runtime.md) — host runtime architecture, including the RuntimeEnvelope design (amended by RFC-003 §A3 to use `Arc<EnvelopeHeader>` + `Bytes`).
 - `wit/pipeline-node.wit` — the `filter` interface and `filter-node` world definition.
-- `crates/wafer-core/src/engine/bindings.rs` — `filter_world` bindgen module and `WasmBindings::Filter` variant.
+- `crates/wafer-core/src/engine/bindings.rs` — `filter_node` bindgen module and `WasmBindings::Filter` variant.

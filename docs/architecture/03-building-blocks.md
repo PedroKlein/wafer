@@ -64,16 +64,19 @@ flowchart TD
 
     RT --> CORE
     RT --> CFG
+    RT --> TYPES
     CTL --> TYPES
     LG --> TYPES
-    CORE --> CFG
     CORE --> TYPES
     CFG --> TYPES
-    PLUGIN -.->|"guest-side only"| TYPES
+    CORE -.->|"dev-dependency only"| CFG
 ```
 
-`wafer-plugin` is a path dependency used by plugin crates compiled to
-`wasm32-wasip2`. It never links into the host process.
+`wafer-core` uses `wafer-config` only in its tests; production graph
+construction uses the core crate's own `DagGraph`. `wafer-plugin` has no
+workspace dependencies (only optional `serde` / `serde_json`), so the
+`wasm32-wasip2` guest build does not pull in host crates. It is a path
+dependency of plugin crates and never links into the host process.
 
 ---
 
@@ -99,11 +102,17 @@ Stateless library that turns raw TOML bytes into a validated, graph-ready
 representation:
 
 1. `load_config` — deserialise TOML into `Config` (via `wafer-types`).
-2. `validate` — semantic checks: unique node IDs, edge endpoints exist,
-   router port declarations match edges, cycle detection via topological
-   sort. Accumulates `ValidationError` variants.
-3. `DagGraph` — petgraph `DiGraph` built from the validated config, used
-   by the orchestrator to determine execution order and wiring.
+   Unknown keys are rejected everywhere except inside a plugin's opaque
+   `config` table.
+2. `validate` — semantic checks: edge endpoints exist, source/sink
+   direction, router edges carry a `port` and non-router edges do not, no
+   duplicate edges, every processing node has an input and an output,
+   `[dead_letter]` present when an edge uses `overflow = "dead-letter"`,
+   non-zero queue capacities and `epoch_tick_ms`, orphan and cycle
+   detection. Accumulates `ValidationError` values.
+3. `DagGraph` — a petgraph `DiGraph` built from the config. The runtime
+   orchestrator does not use this type; `wafer-core` builds its own
+   `dag::graph::DagGraph` and re-checks the structure.
 
 ### `wafer-core`
 
@@ -118,11 +127,11 @@ The largest crate. Contains all runtime logic grouped into modules:
 | `queue` | `bounded.rs` tracking wrappers and `envelope.rs` (`RuntimeEnvelope` with `Arc<EnvelopeHeader>`, `Bytes` payload, `Lineage`, and host retry count). |
 | `node` | Abstractions: `ProcessNode` trait, `NodeState` FSM, native vs Wasm implementations, per-node metrics. |
 | `dlq` | Dead-letter queue writer — routes `DlqEnvelope` to the configured MQTT topic or file. |
-| `metrics` | `MetricsRegistry`, atomic counters on the hot path, Prometheus snapshot builder for the scrape endpoint. |
-| `bench` | Measurement helpers: per-hop HdrHistogram tap, memory sampler. |
+| `metrics` | Hot-swap phase and recovery histograms (`HotSwapMetrics`). `GET /metrics` is rendered in `api` from per-node `NodeMetrics` counters and those histograms. `MetricsRegistry` and its snapshot builder are not wired into the runtime, so families such as `wafer_queue_depth` do not appear on the live endpoint. |
+| `bench` | Measurement helpers: `MemoryRecorder` (RSS from `/proc/self/statm`) and `QueueDepthRecorder`, which writes `queue-depth.csv` when `WAFER_QUEUE_DEPTH_OUTPUT` is set. |
 | `config` | Re-exports the shared `wafer-types` configuration surface for core consumers. |
 | `testing` | `TestPipeline` harness shared by unit tests, integration tests, and benchmarks. |
-| `api` | Axum HTTP server: route wiring, handlers (health, ready, list-nodes, get-node, hot-swap, shutdown, metrics scrape). |
+| `api` | Axum HTTP server: route wiring, handlers (health, ready, list-nodes, get-node, hot-swap, reconfigure, shutdown, metrics scrape). |
 | `error` | `WaferError`, `RegistryError`, top-level `Result` alias. |
 
 ### `wafer-plugin`
@@ -132,20 +141,22 @@ binary. Provides:
 
 - `output_from!` / `output_with_type!` macros for constructing `output-message`.
 - `parse_config` — JSON string → typed struct via serde.
-- Five error constructors matching `pipeline:types.process-error` variants.
-- Thread-local state helpers (`RefCell`-based) for stateful plugins.
+- `payload_bytes!` / `payload_as_str!` payload readers and `log_info!` / `log_warn!` / `log_error!` logging macros.
+- Five error constructors matching the `process-error` variants of `wafer:pipeline/types`.
+- Thread-local state helpers (`RefCell`-based) for stateful plugins. This state lives in the guest instance and is reset whenever the host replaces the instance (hot-swap, recovery, rollback).
 
 The SDK provides no proc macros, networking abstraction, or filesystem abstraction. Plugins declare it as a workspace path dependency in their `Cargo.toml`. A component may import P2 `wasi:http` directly when its node receives an explicit `outbound_http` grant; the SDK does not wrap that interface.
 
 ### `wafer-runtime`
 
-Single-file binary (`main.rs`). Performs four things in sequence:
+Binary `wafer` (`main.rs`, plus `startup.rs` and `metadata.rs` for evaluation artifacts). Performs four things in sequence:
 
 1. Parse CLI arguments (config path, optional overrides).
 2. Load and validate the pipeline TOML via `wafer-config`.
 3. Build and launch the pipeline via `wafer_core::orchestrator::Pipeline`.
-4. Start the axum control plane and block until shutdown signal (SIGINT or
-   API-triggered cancel).
+4. Start the axum control plane and block until the pipeline completes or a
+   shutdown signal arrives (SIGINT, SIGTERM, or API-triggered cancel). A
+   failed run exits non-zero.
 
 ### `waferctl`
 
@@ -231,7 +242,7 @@ flowchart LR
 | Observability | `metrics` module (counters), `api::metrics` (scrape), `tracing` spans emitted from every runner loop and host function. |
 | Error handling | Stratified: `thiserror` in library boundaries, five-category WIT `process-error` at the guest–host edge, `anyhow` only in binaries. |
 | Backpressure | Bounded `tokio::mpsc` channels on every edge; overflow policy configurable per-edge (slow / drop / dead-letter). |
-| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits`, optional fuel/epoch bounds, and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend; Wasm processing nodes receive network authority only through exact-destination `outbound_http` grants. |
+| Isolation | One `wasmtime::Store` per Wasm node, per-node `StoreLimits` (linear memory and tables; host-side WASI resources are not bounded), optional fuel/epoch bounds on Wasm CPU time (not on time blocked in a host import), and deny-by-default WASI capability scoping. Only a granted Wasm Transform receives the inference linker and ONNX backend; Wasm processing nodes receive network authority only through exact-destination `outbound_http` grants. |
 | Hot-swap | Watch-channel signal from orchestrator → runner; between-messages replacement of `Store` + `Instance`. See [ADR-0012](../adr/0012-watch-channel-hot-swap.md). |
 
 ## Related documents

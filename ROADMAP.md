@@ -19,8 +19,9 @@ The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/st
 Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 
 - A17 process-time hot-swap rollback IMPLEMENTED with polish pass
-  (canary window + bounded retry + `HotSwapError::RolledBack` API +
-  fuel-on-recover).
+  (canary window + `HotSwapError::RolledBack` API + fuel-on-recover).
+  The original rollback-retry budget (`max_rollback_retries`) was later
+  removed; a canary now rolls back at most once per swap.
 - A19 runtime-side memory sampler + per-node metrics emitter LANDED.
 - aarch64-linux cross-compile SHIPPED (`mise run cross-build-pi`;
   cross-arch CI workflow guards the recipe on every PR).
@@ -35,11 +36,13 @@ Remaining work for thesis-grade numbers:
 - Complete the isolated P3 PoC and decide whether the first release migrates to
   a new WIT package version or retains the verified P2 contract. Any migration
   happens before canonical runs; P2 evidence is not relabeled as P3 evidence.
-- Pi 5 hardware setup (`isolcpus=1-3`, CPU 0 for OS/Mosquitto/loadgen,
-  CPUs 1–3 for the active SUT, performance governor).
-- Native eKuiper 2.1.0 comparator setup and Pi smoke validation.
-- Run canonical experiments (60 s runs, 30 s warmup, N=30) via
-  `docs/history/plans/canonical-runs.md`.
+- Run the frozen canonical experiment matrix (N=30, 30 s warmup,
+  experiment-specific windows) on the already provisioned Pi 5 host via
+  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md).
+  Pi 5 host setup (`isolcpus=1-3`, performance governor) and the native
+  eKuiper 2.1.0 install and smoke path are done; see
+  [`docs/status/rpi5-canonical-transition.md`](docs/status/rpi5-canonical-transition.md).
+  Dedicated canonical eKuiper comparator wrappers are still pending.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 

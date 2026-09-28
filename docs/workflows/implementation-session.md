@@ -99,8 +99,8 @@ For each subtask:
 
 ### Phase C: Verification & Close (5-10 minutes)
 
-1. Run full test suite: `cargo test --workspace`
-2. Run clippy: `cargo clippy --workspace -- -D warnings`
+1. Run full test suite: `cargo test --workspace` (some integration tests need the plugins built with `plugins/build-plugins.sh` and Docker for MQTT)
+2. Run the CI lint gates: `cargo fmt --all --check` and `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 3. Verify against decision doc: does the code match the spec?
 4. Update plan_tasks: mark completed tasks
 5. Note any deviations or decisions made during implementation

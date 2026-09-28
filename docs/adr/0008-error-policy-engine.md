@@ -21,6 +21,29 @@
 > DLQ-full, and DLQ-closed are distinct runner outcomes. A present per-node
 > policy replaces the pipeline policy table rather than merging field by field.
 >
+> **Two different recoveries share the word "teardown".** The configurable
+> `teardown` action (for `bad_input`, `timed_out`, or a retry's `exhausted`)
+> stops that node's runner permanently: the message is counted as
+> `dropped_on_teardown`, the loop exits, and there is no transition to
+> `Recovering` and no re-instantiation. The rest of the pipeline keeps
+> running without that node. Re-instantiation from the cached `InstancePre`
+> is a separate, non-configurable path: it runs for host-detected traps
+> (`WasmProcessError::Trapped`, classified by Wasmtime trap code) and for a
+> guest that returns `unrecoverable`. Fuel exhaustion and epoch interrupts
+> are budget traps: they follow the node's `timed_out` action and, unless
+> that action is `teardown`, the Store is replaced before the next message.
+> A guest that itself returns `timed-out` follows the same action but keeps
+> its instance. A trap inside a Transform's canary window after a hot-swap
+> rolls back to the previous version instead.
+>
+> **DLQ without a dead-letter sink.** The validator requires `[dead_letter]`
+> only when an edge uses `overflow = "dead-letter"`. It does not check
+> error-policy actions, although `bad_input` and retry `exhausted` default to
+> `dlq`. When a policy resolves to `dlq` and no `[dead_letter]` is configured,
+> the message is dropped with a warning and counted as `dlq_lost`; it is not
+> recorded anywhere else. The "validator rejects" requirement under
+> Consequences below was never implemented.
+>
 > The remainder is the historical design record.
 
 <!-- historical-design-below -->

@@ -11,6 +11,13 @@
 >
 > See [`docs/status/canonical-readiness.md`](../status/canonical-readiness.md)
 > for the per-experiment gap analysis.
+>
+> These are pre-fix diagnostic numbers. They predate latency measured from
+> each message's scheduled send time (open loop), the 1 µs to 1 h histogram
+> range, the fixed one-second `throughput.csv` grid, trap classification by
+> trap code with containment judged by the expected mechanism, and the pinned
+> release profile (thin LTO, one codegen unit). Do not compare them with runs
+> of the current build.
 
 ## RQ1 — Performance Viability
 
@@ -54,13 +61,27 @@ healthy branches; sub-ms recovery.
 
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
-| Attack containment (6 scenarios) | 6/6 contained | ✅ | buffer-overflow, cross-read, fs-access, infinite-loop, memory-exhaust, panic | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Attack containment (6 scenarios) | 6/6 contained | ✅ | buffer-overflow, cross-read, fs-access, infinite-loop, memory-exhaust, panic. Judged by the old rule (any failure on the attack node); see the note below | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 | Branch isolation (E-Iso-7) | Corrected independent-population Pi rerun pending | ⏳ | Earlier shared-source result cannot isolate fault-branch backpressure | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 | Recovery time (E-Iso-8) | ~0.136 ms | ✅ sub-ms | InstancePre cache enables instant re-instantiation | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 | Source throughput under attack | 100% across all 6 | ✅ | Channel buffer absorbs trap delay | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 
+**Containment verdict now.** The shakedown row above counted an attack as
+contained when the attack node failed at all. The current verdict
+(`eval/scripts/lib/containment.py`) requires the attack's expected mechanism:
+an out-of-bounds trap for buffer-overflow and cross-read, an epoch interrupt
+for infinite-loop, the memory-limit trap for memory-exhaust, an unreachable
+trap for panic, and for fs-access the guest's own report that the file read
+was denied (`fs-read-denied` in the attack-evidence receipt, counted as
+`guest_unrecoverable`), with no other failure and no forwarded message on that
+node. `traps_total` counts only real traps.
+The E-Iso-7 control condition has no attack, so its `contained` is null. The
+shakedown numbers have not been re-judged under this rule.
+
 **Current finding**: wasmtime's per-Store memory isolation and epoch-based
-preemption contain memory and execution faults. The stronger claim that a
+preemption contain memory and execution faults. The memory cap covers guest
+linear memory and tables, not host-side WASI resources, and epochs and fuel do
+not bound a guest blocked inside a host import. The stronger claim that a
 trapping node does not reduce a healthy branch's throughput remains pending a
 fresh E-Iso-7 run with independent source and sink populations; bounded
 backpressure in the earlier shared-source topology coupled the branches.
@@ -76,17 +97,17 @@ duplication; dip <5% vs full-restart.
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
 | Pause duration (p95) | 1.33 ms | ✅ <100 ms | watch-channel + InstancePre = fast swap | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Message loss | 0 across 51 swaps | ✅ | Drain-and-flip ensures no in-flight loss | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Message loss | 0 across 51 swaps | ✅ | Watch-channel swap between messages; no queue drain, and a message dequeued after the signal goes to the new instance | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | Duplicates | 0 across 51 swaps | ✅ | Single-writer channel semantics | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | Burst swap (2×) pause p95 | 1.17 ms | ✅ | Bounded channels absorb burst | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + bounded retry + `HotSwapError::RolledBack` API surface | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + one rollback per swap + `HotSwapError::RolledBack` API surface | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | Rollback time (E-Swap-5) | p50=74 µs, p99=98 µs, max=96 µs (n=12, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T22-11-06Z/`. Every swap returned HTTP 200 `status=rolled_back` (was `swap_converged` pre-B1). | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 | Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 
-**Key finding**: The watch-channel algorithm achieves provably lossless
-hot-swap at sub-2ms pause. The InstancePre cache makes compilation a
+**Key finding**: The watch-channel algorithm lost no messages across the
+51 shakedown swaps, at sub-2ms pause. The InstancePre cache makes compilation a
 one-time cost. Process-time rollback (A17) restores v1 within the canary
 window when a new plugin passes `init()` but traps during `process()`.
 A follow-up review (commit `78519ea`) tightened four polish gaps: the

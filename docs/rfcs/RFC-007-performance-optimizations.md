@@ -1,11 +1,19 @@
 # RFC-007: Performance Optimizations
 
-- **Status:** Partially implemented — the compiled-component cache exists but is not wired into runtime startup; the epoch ticker, code-quality optimizations, per-type fuel, and `StoreLimits` are wired in the launcher, and criterion benchmarks run against the production Wasm path.
+- **Status:** Partially implemented — the compiled-component cache runs memory-only (its disk tier is not wired into runtime startup) and plugins compile sequentially (Decision 10 is not implemented); the epoch ticker, code-quality optimizations, per-type fuel, and `StoreLimits` are wired in the launcher, and criterion benchmarks run against the production Wasm path.
 - **Original session date:** 2026-07-12
 - **Amends:** RFC-002 (WaferState gains `limits: StoreLimits` field), RFC-004 (`[engine]` section gains fuel/epoch toggles)
 
 > **Implementation notes.** The compiled-component cache implementation exists,
-> but production startup constructs a memory-only cache. The epoch OS-thread
+> but production startup constructs a memory-only cache: launch compiles each
+> plugin through it, so a later hot-swap back to the same binary is a memory
+> hit, while the disk tier is never used. Plugins are compiled one at a time
+> during launch; the parallel compilation of Decision 10 was not implemented.
+> Hot-swap compile and link run on tokio's blocking pool. Fuel and epoch
+> metering have no boolean flags (see the Decision 6 note below), and the
+> default `slow` overflow path now sends through `Sender::reserve` (see the
+> Decision 7 note). The `BoundedQueue` wrapper of Decision 3 still exists but
+> only the throughput benchmark uses it. The epoch OS-thread
 > ticker and code-quality optimizations are live. `[engine.fuel]` and
 > `[engine.memory]` per-node-kind budgets are honored by the launcher
 > (A8). `benches/throughput.rs` and `benches/hot_swap.rs` exercise the
@@ -48,6 +56,11 @@ Do NOT implement filter chain fusion. Post-refactor filters cost ~0.5-1µs per h
 Do NOT implement host-native expression evaluation. A Wasm filter inspecting metadata costs ~0.5-1µs — already competitive with eKuiper's Go-based SQL WHERE clause (~1M msg/s theoretical on single core, 80× the eKuiper comparison target). Bypassing Wasm undermines the thesis argument that Wasm isolation is viable for ALL pipeline stages.
 
 ### Decision 6: Fuel & Epoch — Keep Both, Independent Boolean Flags
+
+> As implemented there are no boolean flags: each mechanism is on when its
+> values are present (`[engine.fuel]` budgets or a node `fuel` for fuel,
+> `epoch_deadline` for epochs) and off when they are omitted. Unknown
+> `[engine]` keys such as `fuel = true` are rejected at parse time.
 
 Keep both fuel metering and epoch interruption, each independently configurable via boolean flags in `[engine]` (both default `true`). This enables four measurement configurations for thesis decomposition: (A) both enabled (production), (B) fuel-only, (C) epoch-only, (D) neither (pure Wasm boundary cost). Fuel provides deterministic instruction budgets; epoch provides wall-clock timeout for host-import hangs and WASI blocking. Per-type fuel budgets: transform 10M, filter 500K, router 500K.
 
@@ -102,11 +115,14 @@ Replace manual `set_processing(true)` / `set_processing(false)` with a Drop guar
 
 ## Implementation Notes
 
-- **Decision 1 (compiled cache):** The two-tier implementation exists in `crates/wafer-core/src/engine/cache.rs`, but `launch_pipeline` constructs `WaferEngine::from_engine_config`, so the disk tier is not active in production startup. E-Perf-9 must not claim a compiled-cache hit until that wiring and artifact provenance exist.
+- **Decision 1 (compiled cache):** The two-tier implementation exists in `crates/wafer-core/src/engine/cache.rs`, but `launch_pipeline` constructs `WaferEngine::for_pipeline`, which builds `ComponentCache::memory_only()`, so the disk tier is not active in production startup. E-Perf-9 must not claim a compiled-cache hit until that wiring and artifact provenance exist.
 - **Decision 6 (fuel/epoch flags):** Implemented without boolean flags in `crates/wafer-types/src/config/engine.rs`: fuel metering is on when any `[engine.fuel]` budget or node `fuel` is set, and epoch interruption is on when `epoch_deadline` is set. `EngineConfig` holds `epoch_tick_ms`, `epoch_deadline`, and the `FuelBudgets` sub-struct.
 - **Decision 9 (StoreLimits):** Implemented via `StoreLimitsBuilder` in the Store constructor per-node, with `trap_on_grow_failure(true)`.
 - **Decision C1 (epoch OS thread):** Implemented in the engine/orchestrator startup path using `std::thread::Builder::new().name("wafer-epoch-ticker")`.
 - **Decision C2 (Box<str>):** Applied to `EnvelopeHeader` fields and `node_id` in `WaferState`.
 - **Decision C3 (foldhash):** Applied to cold-path internal maps.
 - **Decision C4 (RAII guard):** `ProcessingGuard` type used in node loops.
-- **Decisions 2, 4, 5, 7 (deferred/skipped):** Not implemented; documented as future work with thesis-defense rationale.
+- **Decision 3 (BoundedQueue):** Edge wiring in `orchestrator/builder.rs` calls `mpsc::channel` directly. The wrapper types are still defined in `crates/wafer-core/src/queue/bounded.rs` and exported, and `benches/throughput.rs` still uses `BoundedQueue`; nothing on the runtime path does.
+- **Decision 7 (`Sender::reserve`):** Reversed in code. `send_one` in `crates/wafer-core/src/runner/mod.rs` uses `sender.reserve().await` for the default `slow` overflow policy, so an enqueue is counted only after a permit is held and a closed destination is counted separately. The send still runs after the Wasm call returns and outside any `select!`, so the cancel-safety argument above is unchanged.
+- **Decision 10 (parallel compilation):** Not implemented. `launch_pipeline` loads and compiles Wasm nodes one after another.
+- **Decisions 2, 4, 5 (deferred/skipped):** Not implemented; documented as future work.

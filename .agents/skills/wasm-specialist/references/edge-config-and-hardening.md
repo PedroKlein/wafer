@@ -117,7 +117,7 @@ With this, you get clear errors: "plugin does not export interface `pipeline:tra
 
 **Use cases**:
 - Plugin catalogue: introspect any .wasm to show its capabilities
-- Hot-swap safety: verify new plugin is interface-compatible before draining
+- Hot-swap safety: verify new plugin is interface-compatible before signalling the swap
 - Error messages: "expected transform-node world, got router-node world"
 
 ---

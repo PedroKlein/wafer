@@ -116,7 +116,7 @@ mise run //plugins:build-plugin json-parse
 curl -X POST http://127.0.0.1:9090/api/v1/nodes/upper/hot-swap \
      -H 'content-type: application/json' \
      -d '{"wasm_path":"./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"}'
-# {"node_id":"upper","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded-enqueued","after_adoption_ns":...},"timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
+# {"node_id":"upper","replacement_adopted":true,"first_post_replacement_local_outcome":{"disposition":"forwarded/enqueued","after_adoption_ns":...},"compile_cache":"compiled","timeline":{"compile_ns":...,"instantiate_ns":...,"signal_ns":...,"replacement_adopted_ns":...,"first_post_replacement_local_outcome_ns":...}}
 ```
 
 The response proves adoption and a runner-local outcome, not sink convergence.
@@ -167,7 +167,8 @@ in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#runtime-exit-status
 - **Plugin build hangs or fails with `wasm32-wasip2` unknown target**
   — run `rustup target add wasm32-wasip2` and retry.
 - **Port 9090 already in use** — set `[api].bind = "127.0.0.1:PORT"`
-  in the pipeline TOML or export `WAFER_API_BIND=...`.
+  in the pipeline TOML, or pass `--api-bind 127.0.0.1:PORT` on the command
+  line (`cargo run -p wafer-runtime -- --config <path> --api-bind 127.0.0.1:PORT`).
 - **Hot-swap 404 for a node that exists** — make sure the target node
   is a loaded Wasm node (Transform / Filter / Router). Native processing
   baselines and native Source/Sink nodes report `replacement_eligible = false` on

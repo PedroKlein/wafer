@@ -40,7 +40,7 @@ See [canonical readiness](canonical-readiness.md), [RFC-008](../rfcs/RFC-008-eva
 
 <!-- historical-diagnostic-below -->
 
-The macOS shakedown program and Raspberry Pi pilot/scout batches validated implementation paths and exposed method defects. Those results remain in immutable result trees and historical reports. They are not pooled with the final batch and do not supply final RQ verdicts.
+The macOS shakedown program and Raspberry Pi pilot/scout batches validated implementation paths and exposed method defects. Those results remain in immutable result trees and historical reports. They are not pooled with the final batch and do not supply final RQ verdicts. They also came from earlier builds: the release profile is now pinned (thin LTO, one codegen unit), latency is measured open loop from each message's scheduled send time with a 1 µs to 1 h histogram range, and `throughput.csv` uses a fixed one-second grid, so their timings are not comparable with runs of the current build.
 
 Closed implementation findings include the WASI async path, process-time rollback, native filter parity, runtime-owned memory sampling, explicit eKuiper QoS, true metering ablation, trace-free capacity capture, event-aligned restart evidence, and true-burst scheduling.
 

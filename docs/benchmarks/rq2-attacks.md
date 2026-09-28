@@ -39,7 +39,10 @@ The containment invariant proved here has three parts:
    the exact signal the three runners (`transform/filter/router`)
    consume to drive `NodeStateTracker::transition_to_error` and,
    subsequently, `transition_recovering_to_running_timed()` (see
-   `crates/wafer-core/src/runner/transform.rs:112-124` and P0.11).
+   `run_transform_loop` in `crates/wafer-core/src/runner/transform.rs`
+   and P0.11). For S3 the runner applies the `timed_out` action and
+   replaces the interrupted instance; the other scenarios take the
+   recovery path.
 
 ## Scenarios
 
@@ -48,7 +51,7 @@ The containment invariant proved here has three parts:
 | S1 | `buffer-overflow` | Volatile write one byte past the end of linear memory | Trap `MemoryOutOfBounds` |
 | S2 | `cross-read` | Volatile read from the fabricated address `0xDEAD_BEEF` | Trap `MemoryOutOfBounds` |
 | S3 | `infinite-loop` | `loop {}` | Trap `Interrupt` (epoch deadline) |
-| S4 | `memory-exhaust` | Allocate 1 MiB chunks until `StoreLimits` blocks | `StoreLimits` trap on the refused `memory.grow` |
+| S4 | `memory-exhaust` | Allocate 1 MiB chunks until `StoreLimits` blocks | `StoreLimits` trap on the refused `memory.grow` (no trap code) |
 | S5 | `fs-access` | `std::fs::read_to_string("/etc/passwd")` | Read fails (no WASI preopen); guest reports the denial as `unrecoverable` |
 | S6 | `panic` | `panic!("malicious payload triggers panic")` | Trap `UnreachableCodeReached` (panic aborts under wasm32-wasip2) |
 
@@ -65,6 +68,14 @@ For each scenario the test asserts, in order:
    plugins' `NOT CONTAINED` `ProcessingFailed(_)`) fails the test.
 3. **Post-attack:** the same healthy transform processes `"post-attack"`
    and echoes it back. This is the isolation invariant.
+
+`mise run mandatory-attack-evidence` writes the same six checks as a
+receipt. Each scenario records its `outcome` (`buffer-overflow-trap`,
+`cross-read-trap`, `epoch-timeout`, `memory-limit-trap`,
+`fs-read-denied`, `guest-panic-trap`), `contained_as` (`trap`,
+`memory_limit` or `fs_denied`) and `trap_code` (the wasmtime trap code
+for `trap`, null for S4 and S5), plus the healthy reference before and
+after it.
 
 ### Additional evidence for S4 (memory-exhaust)
 
@@ -83,10 +94,11 @@ any OS-level OOM could occur.
   WASI boundary. The plugin reports the denial as an `unrecoverable`
   error carrying `fs access denied as expected`; a successful read
   returns `NOT CONTAINED` instead.
-- **CPU quota (S3).** `WaferEngine`'s epoch ticker (default
-  `epoch_tick_ms = 10 ms`, `epoch_deadline = 100 ticks`) preempts an
-  infinite loop within ~1 s. The harness does not meter fuel, so the
-  test expects the `Interrupt` trap.
+- **CPU quota (S3).** The harness sets `epoch_deadline = 100 ticks` at
+  the default `epoch_tick_ms = 10 ms`, so an infinite loop is preempted
+  within ~1 s. The harness does not meter fuel, so the test expects the
+  `Interrupt` trap. In a pipeline, fuel exhaustion is handled like an
+  epoch interrupt (the `timed_out` action).
 - **Memory quota (S4).** `Store::limiter` bound to
   `WaferState::limits_mut()` enforces the per-store cap regardless
   of guest allocator (dlmalloc in std wasm32-wasip2).
@@ -96,6 +108,14 @@ any OS-level OOM could occur.
 - **Unreachable-as-abort (S6).** Rust's `panic!` under
   `wasm32-wasip2` lowers to `unreachable`, which wasmtime treats as
   a trap.
+
+What these properties do not cover:
+
+- The memory cap bounds guest linear memory and tables. Host-side WASI
+  resources a guest creates (for example resource-table entries) are not
+  counted against it.
+- Epochs and fuel bound time spent executing Wasm. A guest blocked
+  inside a host import is not interrupted by either.
 
 ## Pipeline runs (E-Iso-1..8)
 
@@ -118,6 +138,11 @@ E-Iso-3 is the one scenario the host does not see: with no preopened
 directory, wasi-libc fails the open inside the guest, so the evidence is the
 guest's own `unrecoverable` report. The plugin reports a successful read
 as `processing_failed`, which fails the verdict.
+
+`traps_total` and the `traps_*` columns count only calls the host aborted;
+errors the guest returned are in the `guest_*` columns, and
+`attempts_failed` counts both. `containment.json` records `contained` as
+null for conditions without an attack, such as the E-Iso-7 control run.
 
 ## Reproduction
 

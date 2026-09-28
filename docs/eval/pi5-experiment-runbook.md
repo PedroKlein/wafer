@@ -73,6 +73,8 @@ python3 eval/scripts/check-current-docs.py
 python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
 ```
 
+The first `cargo test` downloads the pinned ONNX Runtime archive (default `ort-download` feature). Without network access, set `ORT_LIB_LOCATION` to a local ONNX Runtime build first; see [ONNX Runtime](../operations/dependencies.md#onnx-runtime).
+
 Create the release receipt only after both repository revisions are clean. Any source, config, or documentation change after the tag requires a new tag and receipt.
 
 ## Deploy and run smoke checks

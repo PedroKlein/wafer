@@ -38,6 +38,28 @@ router    =    500_000
 
 With both fields present, `epoch_deadline * epoch_tick_ms` is the nominal wall-clock cap per Wasm call. A positive `[nodes.NAME].fuel` value overrides the category value for one node. Zero is invalid. The values above are the protected final-evaluation policy, not runtime defaults.
 
+Linear-memory limits default to 64 MiB for Transforms and 16 MiB for Filters and Routers. Change them per category, or for one node with `memory_limit` (bytes):
+
+```toml
+[engine.memory]
+transform = 67_108_864
+filter    = 16_777_216
+router    = 16_777_216
+
+[nodes.parse]
+type         = "transform"
+plugin       = "./plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm"
+memory_limit = 33_554_432            # overrides [engine.memory].transform
+```
+
+After a Transform hot-swap, the previous component is kept for a rollback window that closes after `canary_success_count` successful calls or `canary_window_ms` milliseconds, whichever comes first. A trap inside the window (including a fuel or epoch budget trap), or an `unrecoverable` error, restores the previous component once. These are the defaults:
+
+```toml
+[engine.hot_swap]
+canary_success_count = 32
+canary_window_ms     = 10_000
+```
+
 ## Configure the error policy (`[error_policy]`)
 
 The five error categories from the WIT `process-error` variant map to
@@ -97,7 +119,7 @@ Nodes are a **map** keyed by id; the `type` field discriminates the variant. Tra
 [nodes.mqtt-in]
 type   = "source"
 kind   = "mqtt"
-broker = "mqtt://localhost"
+broker = "localhost"
 topic  = "sensors/#"
 qos    = 1
 
@@ -137,7 +159,7 @@ field = "level"
 [nodes.alert-sink]
 type   = "sink"
 kind   = "mqtt"
-broker = "mqtt://localhost"
+broker = "localhost"
 topic  = "alerts"
 
 [nodes.log-sink]
@@ -209,7 +231,7 @@ bind    = "127.0.0.1:9090"
 
 [metrics]
 enabled = true
-path    = "/metrics"        # informational; the wired path is /metrics
+path    = "/metrics"        # used only by a separate --metrics-bind listener
 ```
 
 Metrics can be served on the same axum port as the API (default) or
@@ -224,12 +246,11 @@ Optional; only relevant when a `plugin` field is an OCI reference.
 cache_dir = "/var/cache/wafer/oci"
 ```
 
-See [`registry.md`](registry.md) for publishing, pulling, and cosign
-verification.
+See [`registry.md`](registry.md) for publishing, pulling, and caching.
 
 ## Validate before you run
 
-Every config is validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, zero capacity, an inference grant on an ineligible role, or an invalid outbound HTTP destination. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`. Non-empty `outbound_http` lists are accepted only for Wasm processing nodes.
+Parsing rejects unknown keys in every section, node and edge (only a node's `config` table is free-form), so a misspelled key fails startup instead of falling back to a default. Every config is then validated by `wafer_config::validate` before plugin loading or pipeline construction. Failures include a missing referenced node id, graph cycle, router edge without `port`, `port` on an edge that does not leave a router, a duplicated edge, a transform, filter or router without both an inbound and an outbound edge, zero capacity or `epoch_tick_ms`, an inference grant on an ineligible role, or an invalid outbound HTTP destination. `allow_inference = true` is accepted only for a Wasm Transform; native Transforms, Filters, and Routers fail with `allow_inference=true is supported only for Wasm Transform nodes`. Non-empty `outbound_http` lists are accepted only for Wasm processing nodes.
 
 The runtime has no standalone `--check` flag. Repository examples and evaluation configs are validated by the `wafer-config` test suites; starting `wafer-runtime --config <path>` also validates before launch.
 

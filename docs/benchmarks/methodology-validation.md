@@ -24,6 +24,11 @@ latency and every downstream RQ1 / RQ2 / RQ3 number is suspect.
 
 Evidence: `eval/results/e-val-1/shakedown-macos-2026-07-22T16-19-29Z/`.
 
+These are pre-fix diagnostic numbers: they predate the open-loop schedule
+(latency from each message's scheduled send time, origin at the source's first
+poll), the 1 µs to 1 h histogram range, and the pinned release profile (thin
+LTO, one codegen unit). They are not comparable with runs of the current build.
+
 ## Overhead attribution
 
 The ~2.2 ms gap between injected 50 ms and observed p50 52.2 ms decomposes
@@ -63,10 +68,12 @@ For the canonical Pi run:
 1. **Rate/delay ratio must hold.** Source rate < 1000/delay_ms always.
    If canonical Pi tightens the window (e.g. [48, 52]), the rate ceiling
    scales the same way — nothing to change here.
-2. **Epoch deadline.** Default `EngineConfig.epoch_deadline = 200 × 20 ms
-   = 4 s`. A 50 ms sleep needs ~2.5 epoch ticks; well within budget. If
-   canonical Pi wants tighter tail bounds, `epoch_deadline` could be
-   dropped to `100 × 20 ms = 2 s` without affecting this experiment.
+2. **Epoch deadline.** The runtime default is unmetered
+   (`EngineConfig.epoch_deadline` unset; ticks every `epoch_tick_ms = 10`
+   ms). A configured deadline counts those ticks; a 50 ms sleep needs ~5
+   of them, so any deadline of a second or more leaves this experiment
+   unaffected. The sleep itself is a host call (`wasi:io/poll`), and time
+   spent blocked in a host import is not interrupted by epochs.
 3. **CPU affinity / isolcpus.** macOS shakedown numbers include OS jitter.
    On Pi, `isolcpus` + `taskset` on the runtime process are expected to
    narrow p99 further (macOS observed range was 0.36 ms wide; expect

@@ -5,6 +5,35 @@
 - **Amends:** —
 - **Amended by:** —
 
+> **Current layout.** The crate split (D1-D3, D5) matches the code. Several
+> file-level details below do not:
+>
+> - `RuntimeEnvelope`, `EnvelopeHeader`, and `Lineage` live in
+>   `crates/wafer-core/src/queue/envelope.rs`, not a top-level `envelope.rs`.
+>   The `queue/` module was kept as their home. It also still holds the
+>   `BoundedQueue` / `QueueSender` / `QueueReceiver` wrapper
+>   (`queue/bounded.rs`), which only the throughput benchmark uses.
+> - `crates/wafer-core/src/dlq/mod.rs` still exists and defines `DlqReason`
+>   and the DLQ envelope types.
+> - `wafer-core` keeps small `config/` (re-exports `wafer_types::config` plus
+>   runtime constants) and `dag/` (the `DagGraph` the builder uses) modules;
+>   `wafer-config` has its own `dag.rs` for standalone validation. There is no
+>   config `diff` module in `wafer-config`.
+> - `metrics` and `registry` are directories (`metrics/`, `registry/`), and
+>   `engine/bindings.rs` has four bindgen modules (`transform_node`,
+>   `filter_node`, `router_node`, `inference_node`).
+> - Plugins are not one Cargo workspace: each plugin under `plugins/` is its
+>   own crate with a committed lockfile, excluded from the root workspace and
+>   built by `plugins/build-plugins.sh` through `plugins/mise.toml`. WIT lives
+>   in the root `wit/` directory as one `wafer:pipeline@0.1.0` package split
+>   over five files. Build tasks for plugins and `eval/` are mise tasks
+>   (`plugins/mise.toml`, `eval/mise.toml`), not Makefiles.
+> - `wafer-loadgen` is a library and binary crate.
+> - The other D12 targets (`node/joiner.rs`, `orchestrator/routing.rs`,
+>   `runner/result_handler.rs`, `runner/metrics_helper.rs`,
+>   `runner/dlq_handlers.rs`, `runner/sink_helpers.rs`, `runner/overflow.rs`,
+>   `plugins/merge-joiner/`) are gone.
+
 ## Abstract
 
 This RFC defines the physical code structure that maps the eight Phase 0 design sessions into Rust workspace crates and modules. The workspace splits into seven host crates (`wafer-types`, `wafer-config`, `wafer-core`, `wafer-runtime`, `wafer-loadgen`, `waferctl`, `wafer-plugin`) with a strict one-way dependency graph, plus a separate `plugins/` workspace targeting `wasm32-wasip2`. Each crate has a clear responsibility boundary: `wafer-types` carries passive domain vocabulary with zero heavy dependencies, `wafer-config` owns parsing and DAG validation, `wafer-core` owns all runtime behavior (engine, orchestrator, runner loops, nodes, metrics, HTTP API), and `wafer-plugin` is the standalone guest SDK. This separation yields sub-2-second incremental compiles for config schema changes without rebuilding wasmtime, and enables three levels of testing (unit, plugin integration via `PluginTestHarness`, and E2E via `TestPipeline`) plus criterion benchmarks. The evaluation harness (`eval/` + `wafer-loadgen`) lives alongside the runtime for measurement without coupling to it.
@@ -106,7 +135,7 @@ When implementing a new piece: domain enums/config structs → `wafer-types`; pa
 
 ## Related RFCs
 
-- **RFC-001** — Defines the 4-package WIT contract structure that D4's `engine/bindings.rs` implements.
+- **RFC-001** — Defines the WIT contract (now one `wafer:pipeline@0.1.0` package) that D4's `engine/bindings.rs` implements.
 - **RFC-002** — Specifies `RuntimeEnvelope`, `WaferState`, and buffer lifecycle mapped to `engine/state.rs` and `envelope.rs`.
 - **RFC-003** — Specifies the node types and trait signatures in `node/traits.rs`; confirms Joiner removal and merge-as-topology.
 - **RFC-004** — Specifies the config schema that lives in `wafer-types` and the validation logic in `wafer-config`.
@@ -117,14 +146,14 @@ When implementing a new piece: domain enums/config structs → `wafer-types`; pa
 
 ## Implementation Notes
 
-Code matches decisions; no divergence. The workspace structure is fully implemented as specified:
+The crate structure is implemented as specified; the module-level differences are listed in the banner at the top of this RFC.
 
 - `crates/wafer-types/` contains all config data structs and domain enums per D2.
 - `crates/wafer-config/` contains `loader.rs`, `validation.rs`, `dag.rs`, `error.rs` per D3.
-- `crates/wafer-core/src/` matches the internal module layout specified in D4 (engine/, node/, runner/, orchestrator/, envelope.rs, metrics.rs, registry.rs, api/).
+- `crates/wafer-core/src/` has the D4 areas as `engine/`, `node/`, `runner/`, `orchestrator/`, `queue/` (including `envelope.rs`), `metrics/`, `registry/`, `dlq/`, `bench/`, `testing/`, and `api/`, plus the small `config/` and `dag/` modules.
 - `crates/wafer-plugin/` is a standalone SDK crate targeting `wasm32-wasip2` per D5.
-- `plugins/` is a separate workspace with `.cargo/config.toml` targeting `wasm32-wasip2` per D8.
+- `plugins/` holds standalone plugin crates built for `wasm32-wasip2` by `plugins/build-plugins.sh`; the root workspace excludes them.
 - `eval/` contains configs, scripts, and a UV-managed Python analysis package per D9.
 - `crates/wafer-loadgen/` provides the external MQTT load generator per D9.
 - Per-type runner loops are separate files (`runner/transform.rs`, `runner/filter.rs`, `runner/router.rs`, `runner/source.rs`, `runner/sink.rs`) per D6.
-- The deleted files listed in D12 no longer exist in the current codebase.
+- Of the D12 deletion list, `queue/bounded.rs`, the `queue/` module, and `dlq/mod.rs` still exist (see the banner); the remaining files are gone, and `config/` and `dag/` were reduced rather than removed.

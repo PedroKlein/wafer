@@ -30,7 +30,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Mitigation:** Each attack has a dedicated component and semantic checks. E-Iso-7 uses independent source and sink populations so fault-branch backpressure does not enter the healthy-branch baseline.
 
-**Residual:** Side channels, covert channels, and hostile native adapters remain outside the isolation claim.
+**Residual:** Side channels, covert channels, and hostile native adapters remain outside the isolation claim. So do host-side WASI resources a guest creates (the memory limit covers linear memory and tables only) and time a guest spends blocked in a host import (epochs and fuel bound Wasm CPU time only).
 
 ## R4: hot-swap evidence confuses internal and observed timing
 
