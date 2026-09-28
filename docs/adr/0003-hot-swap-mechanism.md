@@ -30,8 +30,8 @@
 > swap; nothing carries over from v1. Compilation and linking for a swap run
 > on a blocking thread (`spawn_blocking`) through the shared compiled-component
 > cache, and the swap response reports which cache tier served it.
-> `NodeState` still carries `Draining` and `Retired` variants from the
-> drain-and-flip design; no runner enters them (see ADR-0012).
+> The drain-and-flip node states (`Draining`, `Retired`) have been removed
+> from `NodeState`.
 >
 > The remainder is the historical design record; old ACK/convergence names are
 > preserved only as prior terminology.

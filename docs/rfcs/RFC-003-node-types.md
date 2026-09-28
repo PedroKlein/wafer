@@ -10,7 +10,10 @@
 > Filter, and Router can select Wasm or bounded native evaluation implementations; replacement
 > eligibility is based on the loaded Wasm implementation, not the category name.
 > Fan-in shares one destination receiver and has no fairness or cross-producer
-> ordering guarantee.
+> ordering guarantee. `NodeState` is `Starting`, `Running`, `Error` or
+> `Recovering`; the `Draining`/`Retired` states of Decision 5 were removed with
+> drain-and-flip, and `Error` is not terminal: a recovering node leaves it
+> through `Recovering`.
 >
 > The remainder is the historical design record and may use superseded type or
 > package names.

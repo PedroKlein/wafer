@@ -117,7 +117,7 @@ Drain semantics simplified: there is no separate "drain" phase. The watch is che
 
 ### Decision 7: Recovering State Machine
 
-When `unrecoverable` fires, the loop transitions to `Recovering`, pauses receiving, re-instantiates from cached `InstancePre` (~5µs), calls `init()`, transitions back to `Running`, and resumes. Messages in the queue are NOT lost; the retry buffer is flushed; during Recovering, `is_drain_ready()` returns false.
+When `unrecoverable` fires, the loop transitions to `Recovering`, pauses receiving, re-instantiates from cached `InstancePre` (~5µs), calls `init()`, transitions back to `Running`, and resumes. Messages in the queue are NOT lost; the retry buffer is flushed.
 
 ### Decision 8: DLQ Envelope Format
 

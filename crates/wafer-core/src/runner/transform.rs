@@ -12,7 +12,7 @@ use std::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::node::TransformNode;
-use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard};
+use crate::node::{NodeMetrics, NodeStateTracker};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
@@ -48,6 +48,7 @@ async fn recover_after_timeout(
             true
         }
         Err(error) => {
+            state.transition_to_error();
             tracing::error!(node = transform.node_id(), %error, "recovery failed");
             false
         }
@@ -61,7 +62,6 @@ async fn recover_after_timeout(
 /// The Wasm call (`transform.process()`) runs OUTSIDE the `select!` block.
 /// The `select!` in `next_input` waits only on cancel-safe futures: input
 /// `recv()`, the retry timer, the swap watch channel and cancellation.
-/// `ProcessingGuard` ensures the processing flag is always cleared via RAII.
 #[expect(
     clippy::too_many_arguments,
     reason = "Runner loop needs all pipeline wiring: node + channel + senders + cancel + swap + state + metrics"
@@ -110,6 +110,7 @@ pub async fn run_transform_loop_with_config(
     metrics: Arc<NodeMetrics>,
     hot_swap_config: HotSwapConfig,
 ) {
+    state.transition_to_running();
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut canary: Option<TransformCanaryState> = None;
@@ -195,10 +196,8 @@ pub async fn run_transform_loop_with_config(
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();
-        let guard = ProcessingGuard::enter(&state);
         let result = transform.process(envelope).await;
         let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
-        drop(guard);
 
         // 5. Dispatch result
         match result {
@@ -312,6 +311,7 @@ pub async fn run_transform_loop_with_config(
                         }
                     }
                     Err(error) => {
+                        state.transition_to_error();
                         tracing::error!(node = transform.node_id(), %error, "recovery failed");
                         break;
                     }
@@ -626,7 +626,7 @@ mod tests {
             _swap_rx,
             _policy,
             cancel,
-            state,
+            _state,
             metrics,
         ) = setup_transform_test();
 
@@ -639,8 +639,6 @@ mod tests {
         // The loop will select cancel before any message arrives.
         // This tests the shutdown path.
 
-        // Verify state is correct for a freshly created tracker
-        assert!(!state.is_processing());
         assert_eq!(metrics.processed(), 0);
     }
 

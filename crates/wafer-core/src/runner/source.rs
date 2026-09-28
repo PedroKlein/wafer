@@ -42,6 +42,7 @@ pub async fn run_source_loop(
     state: Arc<NodeStateTracker>,
     metrics: Arc<NodeMetrics>,
 ) -> Result<()> {
+    state.transition_to_running();
     let mut consecutive_errors: u32 = 0;
     let mut outcome = Ok(());
     loop {
