@@ -91,8 +91,10 @@ Hot-swap replaces a running Wasm node's `Store` and `Instance` with a
 pre-compiled replacement **between messages**. The control plane sends the
 new payload through a `watch::Sender<Option<SwapPayload>>`. Each runner
 loop polls `swap_rx.has_changed()` at the top of every iteration —
-**before** `select!`ing on cancellation vs the input channel — and applies
-the new payload before dequeuing the next message.
+**before** `select!`ing on cancellation, the swap signal and the input
+channel — and applies the new payload before dequeuing the next message.
+Because `swap_rx.changed()` is one of the `select!` branches, an idle runner
+wakes for a swap immediately.
 
 ```mermaid
 sequenceDiagram
@@ -109,9 +111,9 @@ sequenceDiagram
     API->>Orch: send_swap(node_id, SwapPayload)
     Orch->>Watch: watch_tx.send(Some(payload))
 
-    Note over Runner: Runner loop iteration:<br/>  1. swap_rx.has_changed()? — apply if yes<br/>  2. select! { cancel | input_rx.recv() }
+    Note over Runner: Runner loop iteration:<br/>  1. swap_rx.has_changed()? — apply if yes<br/>  2. select! { cancel | swap_rx.changed() | input_rx.recv() }
 
-    Watch-->>Runner: swap_rx.has_changed() returns true on next iteration
+    Watch-->>Runner: swap_rx.changed() wakes the runner (or has_changed() on next iteration)
     activate Runner
     Runner->>Runner: Finish current message (if in-flight)
     Runner->>Runner: Flush retry buffer → DLQ (reason: HotSwapDrain)

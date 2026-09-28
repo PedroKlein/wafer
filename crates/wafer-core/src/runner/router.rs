@@ -15,8 +15,8 @@ use crate::node::{NodeMetrics, NodeStateTracker, ProcessingGuard, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
-    DownstreamSender, HotSwapProgress, SwapPayload, TrackedReceiver, continue_after_policy_action,
-    fan_out, recv_next_or_retry,
+    DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
+    continue_after_policy_action, fan_out, next_input, take_pending_swap,
 };
 
 async fn dispatch_route_outcome(
@@ -97,7 +97,7 @@ pub async fn run_router_loop(
     mut router: WasmRouterNode,
     receiver: impl Into<TrackedReceiver>,
     senders: Vec<DownstreamSender>,
-    mut swap_rx: tokio::sync::watch::Receiver<Option<SwapPayload>>,
+    mut swap_rx: SwapReceiver,
     mut policy: ErrorPolicyExecutor,
     cancel: CancellationToken,
     state: Arc<NodeStateTracker>,
@@ -105,45 +105,46 @@ pub async fn run_router_loop(
 ) {
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
+    let mut held = None;
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
-        if swap_rx.has_changed().unwrap_or(false) {
-            let swap_value = swap_rx.borrow_and_update().clone();
-            if let Some(payload) = swap_value {
-                policy.flush_to_dlq("hot_swap_drain");
-                let progress = payload.progress();
-                let result = match payload {
-                    SwapPayload::Reconfigure { ref new_config_json, .. } => {
-                        router.try_reconfigure(new_config_json).await
-                    }
-                    SwapPayload::Router { .. } => payload.try_apply_router(&mut router).await,
-                    _ => Err(crate::error::WaferError::Runtime(
-                        "router node received non-router swap payload".to_string(),
-                    )),
-                };
-                match result {
-                    Ok(()) => {
-                        progress.mark_replacement_adopted();
-                        pending_swap_progress = Some(progress);
-                        metrics.record_swap();
-                    }
-                    Err(err) => {
-                        tracing::error!(
-                            node = router.node_id(),
-                            %err,
-                            "hot-swap init failed; keeping v1"
-                        );
-                        progress.report_init_failed(err.to_string());
-                    }
+        if let Some(payload) = take_pending_swap(&mut swap_rx) {
+            policy.flush_to_dlq("hot_swap_drain");
+            let progress = payload.progress();
+            let result = match payload {
+                SwapPayload::Reconfigure { ref new_config_json, .. } => {
+                    router.try_reconfigure(new_config_json).await
                 }
-                continue;
+                SwapPayload::Router { .. } => payload.try_apply_router(&mut router).await,
+                _ => Err(crate::error::WaferError::Runtime(
+                    "router node received non-router swap payload".to_string(),
+                )),
+            };
+            match result {
+                Ok(()) => {
+                    progress.mark_replacement_adopted();
+                    pending_swap_progress = Some(progress);
+                    metrics.record_swap();
+                }
+                Err(err) => {
+                    tracing::error!(
+                        node = router.node_id(),
+                        %err,
+                        "hot-swap init failed; keeping v1"
+                    );
+                    progress.report_init_failed(err.to_string());
+                }
             }
+            continue;
         }
 
         // 2. Retry buffer priority
-        let Some(envelope) = recv_next_or_retry(&mut receiver, &mut policy, &cancel).await else {
-            break;
-        };
+        let envelope =
+            match next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await {
+                NextInput::Envelope(envelope) => envelope,
+                NextInput::Swap => continue,
+                NextInput::Closed => break,
+            };
 
         // 4. Wasm call OUTSIDE select! — runs to completion, never cancelled.
         let start = Instant::now();

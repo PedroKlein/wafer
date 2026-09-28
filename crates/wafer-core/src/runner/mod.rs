@@ -13,7 +13,7 @@ pub mod sink;
 pub mod source;
 pub mod transform;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio_util::sync::CancellationToken;
 use wasmtime::Store;
 
@@ -25,6 +25,7 @@ use crate::node::{NodeMetrics, QueueMetrics};
 use crate::queue::RuntimeEnvelope;
 use crate::runner::error_policy::{ErrorPolicyAction, ErrorPolicyExecutor};
 
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -103,10 +104,20 @@ pub struct HotSwapReport {
 #[derive(Debug)]
 pub struct HotSwapProgress {
     replacement_adopted: OnceLock<std::time::Instant>,
+    /// Wakes an API caller waiting on adoption alone (see
+    /// [`Self::replacement_adopted`]).
+    adopted: tokio::sync::Notify,
     first_post_replacement_local_outcome:
         OnceLock<(std::time::Instant, FirstPostReplacementLocalOutcome)>,
     tx: Mutex<Option<oneshot::Sender<HotSwapOutcome>>>,
+    /// Who owns the payload: still pending, taken by the runner, or withdrawn
+    /// by the API after a timeout. Exactly one side wins the transition.
+    claim: AtomicU8,
 }
+
+const CLAIM_PENDING: u8 = 0;
+const CLAIM_RUNNER: u8 = 1;
+const CLAIM_WITHDRAWN: u8 = 2;
 
 #[expect(
     clippy::let_underscore_must_use,
@@ -119,15 +130,54 @@ impl HotSwapProgress {
         let (tx, rx) = oneshot::channel();
         let progress = Arc::new(Self {
             replacement_adopted: OnceLock::new(),
+            adopted: tokio::sync::Notify::new(),
             first_post_replacement_local_outcome: OnceLock::new(),
             tx: Mutex::new(Some(tx)),
+            claim: AtomicU8::new(CLAIM_PENDING),
         });
         (progress, rx)
+    }
+
+    /// Called by the runner before it applies the payload. Returns `false`
+    /// when the API already withdrew the request, in which case the runner
+    /// must ignore the payload.
+    #[must_use]
+    pub fn try_claim(&self) -> bool {
+        self.claim
+            .compare_exchange(CLAIM_PENDING, CLAIM_RUNNER, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// Called by the API when it stops waiting. Returns `true` when the runner
+    /// had not taken the payload yet, which guarantees it never will; `false`
+    /// when the runner already claimed it and adoption is underway or done.
+    #[must_use]
+    pub fn try_withdraw(&self) -> bool {
+        self.claim
+            .compare_exchange(CLAIM_PENDING, CLAIM_WITHDRAWN, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    /// When the runner adopted the replacement, if it has.
+    #[must_use]
+    pub fn replacement_adopted_at(&self) -> Option<std::time::Instant> {
+        self.replacement_adopted.get().copied()
+    }
+
+    /// Wait until the runner adopts the replacement.
+    pub async fn replacement_adopted(&self) -> std::time::Instant {
+        loop {
+            if let Some(at) = self.replacement_adopted_at() {
+                return at;
+            }
+            self.adopted.notified().await;
+        }
     }
 
     /// Called after the replacement instance validates and initializes.
     pub fn mark_replacement_adopted(&self) {
         let _ = self.replacement_adopted.set(std::time::Instant::now());
+        self.adopted.notify_one();
         self.try_complete();
     }
 
@@ -409,34 +459,120 @@ pub(crate) fn continue_after_policy_action(
     }
 }
 
+/// Receiving end of a node's hot-swap watch channel.
+pub type SwapReceiver = watch::Receiver<Option<SwapPayload>>;
+
+/// What woke a runner that was waiting for input.
+pub(crate) enum NextInput {
+    Envelope(RuntimeEnvelope),
+    /// A swap was published. The version is left unseen so
+    /// [`take_pending_swap`] picks it up on the next loop iteration.
+    Swap,
+    Closed,
+}
+
+/// Whether the watch slot holds a version the runner has not seen.
+///
+/// `has_changed` reports an error once the sender is dropped, even when an
+/// unseen version is still in the slot, so that case falls back to the
+/// version comparison held by `borrow`. Without it a runner woken by
+/// `changed()` on a closed channel would re-arm the version forever without
+/// ever consuming it.
+fn swap_pending(swap_rx: &SwapReceiver) -> bool {
+    swap_rx.has_changed().unwrap_or_else(|_| swap_rx.borrow().has_changed())
+}
+
+/// Take the swap payload waiting in the watch slot, if the runner has not
+/// seen it yet and the API has not withdrawn it.
+pub(crate) fn take_pending_swap(swap_rx: &mut SwapReceiver) -> Option<SwapPayload> {
+    if !swap_pending(swap_rx) {
+        return None;
+    }
+    let payload = swap_rx.borrow_and_update().clone()?;
+    if payload.progress().try_claim() {
+        Some(payload)
+    } else {
+        tracing::debug!("ignoring hot-swap payload withdrawn by the API");
+        None
+    }
+}
+
+/// Next envelope to process, or why there is none.
+///
+/// An envelope held from an earlier call comes first. If a swap arrives
+/// after an envelope is dequeued, the envelope is held and `Swap` returned,
+/// so the replacement processes it and the old instance never sees a message
+/// dequeued after the signal.
+pub(crate) async fn next_input(
+    held: &mut Option<RuntimeEnvelope>,
+    receiver: &mut TrackedReceiver,
+    policy: &mut ErrorPolicyExecutor,
+    swap_rx: &mut SwapReceiver,
+    cancel: &CancellationToken,
+) -> NextInput {
+    if let Some(envelope) = held.take() {
+        return NextInput::Envelope(envelope);
+    }
+    match recv_next_or_retry(receiver, policy, swap_rx, cancel).await {
+        NextInput::Envelope(envelope) if swap_pending(swap_rx) => {
+            *held = Some(envelope);
+            NextInput::Swap
+        }
+        next => next,
+    }
+}
+
+/// Wait for the next retry, input message, swap signal or cancellation.
+///
+/// The swap signal is a wake-up source so an idle node adopts a replacement
+/// without waiting for its next input message.
 pub(crate) async fn recv_next_or_retry(
     receiver: &mut TrackedReceiver,
     policy: &mut ErrorPolicyExecutor,
+    swap_rx: &mut SwapReceiver,
     cancel: &CancellationToken,
-) -> Option<RuntimeEnvelope> {
+) -> NextInput {
     loop {
+        // A pending swap drains buffered retries to the DLQ, so none may be
+        // handed out once the signal is in the slot.
+        if swap_pending(swap_rx) {
+            return NextInput::Swap;
+        }
         if let Some(retry) = policy.next_ready_retry() {
-            return Some(retry);
+            return NextInput::Envelope(retry);
         }
 
-        let incoming = match policy.next_retry_deadline() {
-            Some(deadline) => {
-                tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => return None,
-                    message = receiver.recv() => message,
-                    () = tokio::time::sleep_until(deadline) => continue,
-                }
+        // Input is polled before the swap signal so a ready message never
+        // registers a swap waker; `next_input` still holds a message that
+        // arrived with a pending swap for the replacement. `changed()` is
+        // cancel-safe, and a closed swap channel only disables its branch.
+        // The deadline gets its own `select!` so the idle wait does not
+        // build a timer it never polls.
+        let woke = if let Some(deadline) = policy.next_retry_deadline() {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return NextInput::Closed,
+                message = receiver.recv() => Some(message),
+                Ok(()) = swap_rx.changed() => None,
+                () = tokio::time::sleep_until(deadline) => continue,
             }
-            None => {
-                tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => return None,
-                    message = receiver.recv() => message,
-                }
+        } else {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return NextInput::Closed,
+                message = receiver.recv() => Some(message),
+                Ok(()) = swap_rx.changed() => None,
             }
         };
-        return incoming;
+        return match woke {
+            None => {
+                // `changed()` marked the version seen; re-arm it for the loop top.
+                swap_rx.mark_changed();
+                NextInput::Swap
+            }
+            Some(Some(envelope)) => NextInput::Envelope(envelope),
+            Some(None) => NextInput::Closed,
+        };
     }
 }
 
@@ -1272,12 +1408,13 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async move {
             let mut receiver = TrackedReceiver::from(input_rx);
-            recv_next_or_retry(&mut receiver, &mut policy, &cancel).await
+            let (_swap_tx, mut swap_rx) = watch::channel(None);
+            recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await
         });
 
         tokio::task::yield_now().await;
         tokio::time::advance(std::time::Duration::from_millis(100)).await;
-        let envelope = task.await.expect("retry task").expect("due retry");
+        let envelope = expect_envelope(task.await.expect("retry task"));
         assert_eq!(envelope.payload_as_string(), "short");
         drop(input_tx);
     }
@@ -1307,7 +1444,8 @@ mod tests {
         let cancel = CancellationToken::new();
         let task = tokio::spawn(async move {
             let mut receiver = TrackedReceiver::from(input_rx);
-            recv_next_or_retry(&mut receiver, &mut policy, &cancel).await
+            let (_swap_tx, mut swap_rx) = watch::channel(None);
+            recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await
         });
 
         tokio::task::yield_now().await;
@@ -1315,8 +1453,137 @@ mod tests {
         assert!(!task.is_finished(), "retry must not run before backoff_ms");
         tokio::time::advance(std::time::Duration::from_millis(1)).await;
 
-        let envelope = task.await.expect("retry task").expect("due retry");
+        let envelope = expect_envelope(task.await.expect("retry task"));
         assert_eq!(envelope.payload_as_string(), "retry");
         drop(input_tx);
+    }
+
+    fn expect_envelope(next: NextInput) -> RuntimeEnvelope {
+        match next {
+            NextInput::Envelope(envelope) => envelope,
+            NextInput::Swap => panic!("expected an envelope, got a swap wake-up"),
+            NextInput::Closed => panic!("expected an envelope, got closed"),
+        }
+    }
+
+    fn idle_policy() -> ErrorPolicyExecutor {
+        ErrorPolicyExecutor::new(error_policy::ResolvedErrorPolicy::default(), None, "node")
+    }
+
+    fn reconfigure_payload() -> (SwapPayload, Arc<HotSwapProgress>) {
+        let (progress, _rx) = HotSwapProgress::channel();
+        let payload =
+            SwapPayload::Reconfigure { new_config_json: "{}".into(), progress: progress.clone() };
+        (payload, progress)
+    }
+
+    // A swap published while the input queue is empty must wake the
+    // runner instead of waiting for the next message.
+    #[tokio::test(start_paused = true)]
+    async fn swap_wakes_runner_while_input_is_idle() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (swap_tx, mut swap_rx) = watch::channel(None);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(async move {
+            let mut receiver = TrackedReceiver::from(input_rx);
+            let mut policy = idle_policy();
+            let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+            (next, swap_rx)
+        });
+
+        tokio::task::yield_now().await;
+        assert!(!task.is_finished(), "runner must wait while input and swap slot are idle");
+        let (payload, progress) = reconfigure_payload();
+        swap_tx.send(Some(payload)).expect("runner holds the swap receiver");
+
+        let (next, mut swap_rx) = tokio::time::timeout(std::time::Duration::from_millis(1), task)
+            .await
+            .expect("swap must wake the idle runner")
+            .expect("runner task");
+        assert!(matches!(next, NextInput::Swap), "idle runner must wake for the swap");
+        let taken = take_pending_swap(&mut swap_rx).expect("swap stays pending for the loop top");
+        assert!(Arc::ptr_eq(&taken.progress(), &progress));
+        assert!(take_pending_swap(&mut swap_rx).is_none(), "a swap is taken once");
+        drop(input_tx);
+    }
+
+    // With a message and a swap both ready, the swap is adopted first and the
+    // message is held for the replacement.
+    #[tokio::test]
+    async fn swap_is_taken_before_queued_input() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        input_tx.try_send(RuntimeEnvelope::from_string("source", "queued")).expect("queue input");
+        let (swap_tx, mut swap_rx) = watch::channel(None);
+        let (payload, _progress) = reconfigure_payload();
+        swap_tx.send(Some(payload)).expect("send swap");
+
+        let mut receiver = TrackedReceiver::from(input_rx);
+        let mut policy = idle_policy();
+        let cancel = CancellationToken::new();
+        let mut held = None;
+        let next = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert!(matches!(next, NextInput::Swap));
+        assert!(take_pending_swap(&mut swap_rx).is_some());
+        let next = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert_eq!(expect_envelope(next).payload_as_string(), "queued");
+    }
+
+    // Once the API withdraws a payload the runner must never apply it,
+    // and once the runner claims it the API can no longer withdraw it.
+    #[test]
+    fn withdrawn_swap_is_never_taken() {
+        let (swap_tx, mut swap_rx) = watch::channel(None);
+        let (payload, progress) = reconfigure_payload();
+        swap_tx.send(Some(payload)).expect("send swap");
+        assert!(progress.try_withdraw());
+        assert!(take_pending_swap(&mut swap_rx).is_none(), "withdrawn payload was applied");
+
+        let (payload, progress) = reconfigure_payload();
+        swap_tx.send(Some(payload)).expect("send swap");
+        assert!(take_pending_swap(&mut swap_rx).is_some());
+        assert!(!progress.try_withdraw(), "claimed payload cannot be withdrawn");
+    }
+
+    #[tokio::test]
+    async fn closed_swap_channel_does_not_end_the_wait() {
+        let (input_tx, input_rx) = mpsc::channel(1);
+        let (swap_tx, mut swap_rx) = watch::channel::<Option<SwapPayload>>(None);
+        drop(swap_tx);
+        input_tx.try_send(RuntimeEnvelope::from_string("source", "after")).expect("queue input");
+
+        let mut receiver = TrackedReceiver::from(input_rx);
+        let mut policy = idle_policy();
+        let cancel = CancellationToken::new();
+        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert_eq!(expect_envelope(next).payload_as_string(), "after");
+        drop(input_tx);
+        let next = recv_next_or_retry(&mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert!(matches!(next, NextInput::Closed));
+    }
+
+    // A swap left unseen when the sender is dropped is still taken once,
+    // after which the idle runner waits again instead of spinning on the
+    // closed channel.
+    #[tokio::test(start_paused = true)]
+    async fn unseen_swap_on_closed_channel_is_taken_once() {
+        let (_input_tx, input_rx) = mpsc::channel(1);
+        let (swap_tx, mut swap_rx) = watch::channel(None);
+        let (payload, progress) = reconfigure_payload();
+        swap_tx.send(Some(payload)).expect("send swap");
+        drop(swap_tx);
+
+        let mut receiver = TrackedReceiver::from(input_rx);
+        let mut policy = idle_policy();
+        let cancel = CancellationToken::new();
+        let mut held = None;
+        let next = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await;
+        assert!(matches!(next, NextInput::Swap));
+        assert!(take_pending_swap(&mut swap_rx).is_some());
+        assert!(!progress.try_withdraw(), "the runner claimed the payload");
+        assert!(take_pending_swap(&mut swap_rx).is_none());
+
+        let wait = next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel);
+        let waited = tokio::time::timeout(std::time::Duration::from_secs(1), wait).await;
+        assert!(waited.is_err(), "an idle runner must keep waiting for input");
     }
 }
