@@ -285,9 +285,10 @@ fn current_time_ns() -> u64 {
 }
 
 fn write_json_atomic(path: &Path, value: &serde_json::Value) -> std::io::Result<()> {
-    let temporary = path.with_extension("tmp");
-    std::fs::write(&temporary, format!("{}\n", serde_json::to_string_pretty(value)?))?;
-    std::fs::rename(temporary, path)
+    crate::util::write_atomic(
+        path,
+        format!("{}\n", serde_json::to_string_pretty(value)?).as_bytes(),
+    )
 }
 
 impl From<BenchSourceConfig> for BenchSource {

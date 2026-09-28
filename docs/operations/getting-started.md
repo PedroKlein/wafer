@@ -128,7 +128,10 @@ curl -X POST http://127.0.0.1:9090/api/v1/pipeline/shutdown
 
 Or press `Ctrl-C`. Cleanup is cooperative and bounded: sources close,
 processing loops flush retries, sinks drain their current receiver buffers,
-and remaining tasks may be aborted after the shutdown deadline.
+and remaining tasks may be aborted after the 5 s shutdown deadline. If that
+still hangs, for example on a guest running with no fuel or epoch limit, press
+`Ctrl-C` again: a second signal exits at once with `130` (SIGINT) or `143`
+(SIGTERM), without flushing.
 
 The process exit code says whether the run succeeded: `0` when every node
 exited cleanly, `2` for an invalid configuration (nothing is started), `3`

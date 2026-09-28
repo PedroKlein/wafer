@@ -1,5 +1,8 @@
 //! Small utilities shared across the crate.
 
+use std::ffi::OsString;
+use std::io::Write;
+use std::path::Path;
 use std::time::Duration;
 
 /// Convert a [`Duration`] to nanoseconds, saturating at `u64::MAX`.
@@ -31,4 +34,26 @@ pub fn duration_ms_saturating(d: Duration) -> u64 {
 )]
 pub const fn usize_as_u64(n: usize) -> u64 {
     n as u64
+}
+
+/// Write `bytes` to a temporary file beside `path`, sync it, then rename it
+/// over `path`, so an interrupted run never leaves a truncated artifact.
+///
+/// # Errors
+/// Any create, write, sync or rename failure, or a `path` without a file name.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "artifact path has no file name")
+    })?;
+    let mut temporary_name = OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(".tmp");
+    let temporary = path.with_file_name(temporary_name);
+    let result = std::fs::File::create(&temporary)
+        .and_then(|mut file| file.write_all(bytes).and_then(|()| file.sync_all()))
+        .and_then(|()| std::fs::rename(&temporary, path));
+    if result.is_err() {
+        drop(std::fs::remove_file(&temporary));
+    }
+    result
 }

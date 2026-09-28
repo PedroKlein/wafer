@@ -11,6 +11,7 @@ pub mod payload;
 pub mod profile;
 pub mod publish;
 pub mod recorder;
+mod stop_signal;
 pub mod sub;
 
 pub use hdr_summary::{HdrSummaryArgs, run as run_hdr_summary};

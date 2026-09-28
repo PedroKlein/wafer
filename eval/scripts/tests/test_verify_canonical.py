@@ -128,6 +128,58 @@ def test_interval_fragment_without_composed_output_is_rejected(tmp_path: Path) -
     assert any("lacks composed interval-metrics" in item for item in violations)
 
 
+def test_bench_export_errors_reject_the_leaf(tmp_path: Path) -> None:
+    leaf = tmp_path / "e-perf-1/run-01"
+    (leaf / "branch-a").mkdir(parents=True)
+    for name in ("config.toml", "metadata.json", "stdout.log"):
+        (leaf / name).write_text("{}\n")
+    (leaf / "branch-a/export-errors.json").write_text(
+        '{"schema_version":1,"errors":[{"artifact":"interval-latency.json","error":"x"}]}\n'
+    )
+
+    violations, _ = CONTRACT.check_leaf(leaf, "e-perf-1")
+
+    assert any("branch-a/export-errors.json" in item for item in violations)
+
+
+def test_partial_subscriber_run_is_rejected(tmp_path: Path) -> None:
+    path = tmp_path / "subscriber-metadata.json"
+    path.write_text(
+        json.dumps(
+            {
+                "started_at_ns": 1,
+                "ended_at_ns": 2,
+                "exit_reason": "sigterm",
+                "status": "partial",
+                "partial_reasons": ["interval-latency.json: interval row limit exceeded (3)"],
+                "git_sha": "1" * 40,
+                "host_tag": "rpi5",
+                "sequence_end_exclusive": None,
+                "ignored_sequence_count": 0,
+                "unexpected_sequence_count": 0,
+                "total_recorded": 3,
+                "total_messages": 3,
+                "parse_errors": 0,
+                "negative_latency_count": 0,
+                "latency_p50_ns": 1,
+                "latency_p95_ns": 2,
+                "latency_p99_ns": 3,
+                "histogram_lowest_ns": 1_000,
+                "histogram_highest_ns": 10_000_000_000,
+                "histogram_sig_digits": 3,
+                "sequence": {"total_received": 3, "total_gaps": 0, "total_duplicates": 0},
+            }
+        )
+    )
+
+    violations = CONTRACT.check_subscriber_metadata(path)
+
+    assert violations == [
+        "subscriber-metadata.json run is partial: "
+        "interval-latency.json: interval row limit exceeded (3)"
+    ]
+
+
 def test_invalid_composed_interval_is_rejected(tmp_path: Path) -> None:
     leaf = tmp_path / "e-perf-1/run-01"
     leaf.mkdir(parents=True)
@@ -1004,6 +1056,12 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         publisher["enqueued"] += 1
         path.write_text(json.dumps(publisher))
         assert "counters do not reconcile" in " ".join(CONTRACT.check_publisher_summary(path))
+        publisher["enqueued"] -= 1
+        publisher["exit_reason"] = "sigterm"
+        path.write_text(json.dumps(publisher))
+        assert CONTRACT.check_publisher_summary(path) == [
+            "publisher-summary.json run stopped early: sigterm"
+        ]
 
         subscriber = {
             "started_at_ns": 1,

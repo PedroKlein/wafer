@@ -34,7 +34,11 @@ use crate::runner::{HotSwapProgress, SwapPayload};
 use wafer_types::NodeState;
 
 /// Default timeout for graceful shutdown (waiting for tasks to exit).
-const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+///
+/// Kept well below the stop deadlines of the evaluation scripts
+/// (`run-experiment.sh` waits 12 s after SIGTERM, the canonical runner 10 s),
+/// so the bench artifacts written after the drain are not lost to a SIGKILL.
+const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Exit value of one supervised node task: `Err` means the node failed before
 /// or while running (for example a source/sink `init()` error), which fails
@@ -1267,7 +1271,9 @@ mod tests {
         let err = orch.shutdown().await.expect_err("an aborted node must fail the shutdown");
 
         let err = err.to_string();
-        assert!(err.contains("node(s) 'sink' did not stop within 10s"), "{err}");
+        let expected =
+            format!("node(s) 'sink' did not stop within {}s", SHUTDOWN_TIMEOUT.as_secs());
+        assert!(err.contains(&expected), "{err}");
         assert!(!orch.is_running());
     }
 

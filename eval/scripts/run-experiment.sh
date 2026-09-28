@@ -386,7 +386,9 @@ _stop_runtime() {
     if kill -0 "$RUNTIME_PID" 2>/dev/null; then
         _log "sending SIGTERM to wafer-runtime pid=$RUNTIME_PID"
         kill -TERM "$RUNTIME_PID" 2>/dev/null || true
-        for _ in $(seq 1 30); do
+        # Longer than the runtime's 5 s drain timeout, its 5 s dead-letter
+        # sink wait, and the artifact flush.
+        for _ in $(seq 1 120); do
             kill -0 "$RUNTIME_PID" 2>/dev/null || break
             sleep 0.1
         done
