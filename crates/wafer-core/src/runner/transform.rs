@@ -155,7 +155,7 @@ pub async fn run_transform_loop_with_config(
                     // and its pending retries.
                     policy.flush_to_dlq(&DlqReason::HotSwapDrain, &metrics);
                     progress.mark_replacement_adopted();
-                    pending_swap_progress = Some(progress);
+                    pending_swap_progress = Some(Arc::clone(&progress));
                     metrics.record_swap();
                     // Install canary snapshot for process-time rollback (A17).
                     //
@@ -171,7 +171,8 @@ pub async fn run_transform_loop_with_config(
                     if is_reconfigure {
                         canary = None;
                     } else if let Some(pre) = v1_pre {
-                        canary = Some(TransformCanaryState::new(pre, hot_swap_config.clone()));
+                        canary =
+                            Some(TransformCanaryState::new(pre, hot_swap_config.clone(), progress));
                     }
                 }
                 Err(err) => {
@@ -262,6 +263,7 @@ pub async fn run_transform_loop_with_config(
                     if let Some(wasm) = transform.as_wasm_mut() {
                         wasm.set_cached_pre(c.snapshot.pre);
                     }
+                    c.swap.restore_replaced_plugin_hash();
                     let rollback_start = Instant::now();
                     match transform.recover_from_cached_pre().await {
                         Ok(()) => {
@@ -644,6 +646,89 @@ mod tests {
         assert!(error.to_string().contains("recovery failed"), "{error}");
         assert_eq!(state.state(), wafer_types::NodeState::Error);
         assert_eq!(metrics.recovery_count(), 0);
+    }
+
+    /// A replacement that handles a message and then traps inside the canary
+    /// window is rolled back after its outcome was reported. The node's
+    /// recorded plugin hash follows the plugin that is loaded again.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn late_canary_rollback_restores_the_replaced_plugin_hash() {
+        const UPPERCASE_WASM: &str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm"
+        );
+        if !crate::testing::artifact_available(UPPERCASE_WASM) {
+            return;
+        }
+        let wasm = std::fs::read(UPPERCASE_WASM).expect("uppercase plugin");
+        let fuel = NonZeroU64::new(1_000_000);
+        let config = EngineConfig {
+            fuel: FuelBudgets { transform: fuel, ..FuelBudgets::default() },
+            ..EngineConfig::default()
+        };
+        let engine = Arc::new(WaferEngine::from_engine_config(&config).expect("engine"));
+        let component = engine.load_component_from_bytes(&wasm, "upper").expect("component");
+        let pre = Arc::new(engine.pre_instantiate_transform(&component).expect("pre"));
+        let mut store =
+            Store::new(engine.inner(), WaferState::new("upper", Capabilities::sandbox()));
+        store.limiter(|state| state.limits_mut());
+        store.set_fuel(fuel.expect("fuel").get()).expect("v1 fuel");
+        let bindings = pre.instantiate_async(&mut store).await.expect("instantiate v1");
+        let mut v1 = WasmTransformNode::new(store, bindings, pre, fuel);
+        v1.validate_and_init("{}").await.expect("v1 init");
+
+        let hashes: crate::runner::PluginHashes = Arc::default();
+        hashes.write().expect("hashes").insert("upper".into(), "v1-hash".into());
+        let (progress, completion) = HotSwapProgress::channel();
+        progress.track_plugin_hash(Arc::clone(&hashes), "upper", "v2-hash".into());
+        let replacement = crate::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel(
+            &engine,
+            &wasm,
+            "upper",
+            Capabilities::sandbox(),
+            16 * 1024 * 1024,
+            fuel,
+            progress,
+        )
+        .await
+        .expect("v2");
+
+        let (input_tx, input_rx) = mpsc::channel(2);
+        let (output_tx, mut output_rx) = mpsc::channel(2);
+        let (swap_tx, swap_rx) = watch::channel(None);
+        let metrics = Arc::new(NodeMetrics::new());
+        swap_tx.send(Some(replacement.payload)).expect("replacement signal");
+        input_tx.send(RuntimeEnvelope::from_string("source", "ok")).await.expect("input");
+        let runner = tokio::spawn(run_transform_loop_with_config(
+            v1.into(),
+            input_rx,
+            vec![DownstreamSender::slow(output_tx, "default", None)],
+            swap_rx,
+            ErrorPolicyExecutor::new(ResolvedErrorPolicy::default(), None, "upper"),
+            CancellationToken::new(),
+            Arc::new(NodeStateTracker::running()),
+            Arc::clone(&metrics),
+            HotSwapConfig::default(),
+        ));
+
+        completion.await.expect("swap outcome").expect("v2 handles its first message");
+        output_rx.recv().await.expect("v2 output");
+        assert_eq!(
+            hashes.read().expect("hashes").get("upper").map(String::as_str),
+            Some("v2-hash")
+        );
+
+        // Uppercasing this payload needs far more fuel than the budget.
+        let oversized = "a".repeat(4 * 1024 * 1024);
+        input_tx.send(RuntimeEnvelope::from_string("source", oversized)).await.expect("input");
+        drop(input_tx);
+        runner.await.expect("runner task").expect("runner exit");
+
+        assert_eq!(metrics.rollbacks(), 1, "the trap inside the canary window rolls back");
+        assert_eq!(
+            hashes.read().expect("hashes").get("upper").map(String::as_str),
+            Some("v1-hash")
+        );
     }
 
     /// Creates test infrastructure for the transform loop.

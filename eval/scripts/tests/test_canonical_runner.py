@@ -806,6 +806,7 @@ def test_candidate_swap_evidence_labels_first_use_and_cached_events() -> None:
             "request_duration_clock": "monotonic",
             "http_status": 200,
             "body": {
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
                 "timeline": {
                     "compile_ns": 10 + index,
                     "instantiate_ns": 20 + index,
@@ -857,6 +858,7 @@ def test_candidate_rollback_evidence_requires_fifty_lossless_events() -> None:
             "http_status": 200,
             "body": {
                 "status": "rolled_back",
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
                 "timeline": {
                     "compile_ns": 10 + index,
                     "instantiate_ns": 20 + index,
@@ -890,6 +892,43 @@ def test_candidate_rollback_evidence_requires_fifty_lossless_events() -> None:
     assert evidence["events"][0]["rollback_ns"] == 40
     with pytest.raises(ValueError, match="exactly 50"):
         runner.build_candidate_rollback_evidence(requests[:-1], item, "raw/test", sequence)
+
+
+@pytest.mark.parametrize(
+    ("event_index", "compile_cache"),
+    [(0, "disk_hit"), (0, "memory_hit"), (7, "compiled"), (7, None)],
+)
+def test_candidate_swap_evidence_labels_events_from_the_reported_cache(
+    event_index: int, compile_cache: str | None
+) -> None:
+    requests = [
+        {
+            "event_index": index,
+            "plugin": "wafer_pass_through_v2_panics.wasm",
+            "request_duration_ns": 100,
+            "http_status": 200,
+            "body": {
+                "status": "rolled_back",
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
+                "timeline": {"compile_ns": 1, "instantiate_ns": 2, "signal_ns": 3, "rollback_ns": 4},
+            },
+        }
+        for index in range(50)
+    ]
+    item = RunItem(
+        experiment=runner.ROLLBACK_SESSIONS_EXPERIMENT,
+        condition="process-trap-rollback",
+        run_index=1,
+        config="eval/configs/e-swap/pipeline-hotswap-rollback.toml",
+        warmup_secs=30,
+        measurement_secs=300,
+        events_per_run=50,
+    )
+    sequence = {"expected": 300_000, "received": 300_000, "gaps": 0, "duplicates": 0}
+    requests[event_index]["body"]["compile_cache"] = compile_cache
+
+    with pytest.raises(ValueError, match=f"event {event_index} .*compile_cache"):
+        runner.build_candidate_rollback_evidence(requests, item, "raw/test", sequence)
 
 
 def swap5_requests_fixture() -> list[dict]:
