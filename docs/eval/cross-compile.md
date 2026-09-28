@@ -58,10 +58,19 @@ mise run glibc-floor -- target/docker-aarch64-linux/release/wafer
 mise run glibc-floor -- --max 2.35 target/docker-aarch64-linux/release/wafer
 ```
 
-`cross-build-pi` and both CI jobs print the report after every build. For a
-Jetson, build natively on the device (install Rust with rustup; the
-toolchain comes from `rust-toolchain.toml`) so the binaries link against the
-device's own glibc 2.35.
+`cross-build-pi` and both CI jobs print the report after every build. The
+first CI report (2026-09-28, `ubuntu-24.04-arm`) was `wafer: glibc 2.39`,
+`wafer-loadgen: glibc 2.34`, `waferctl: glibc 2.34`: the Rust code itself
+needs only 2.34, and the extra requirement in `wafer` comes from the C and
+C++ objects linked into it (the prebuilt ONNX Runtime and the crates that
+compile C on the build host). So the CI aarch64 `wafer` does not start on a
+Jetson. For a Jetson, build natively on the device (install Rust with
+rustup; the toolchain comes from `rust-toolchain.toml`) so those objects link
+against the device's own glibc 2.35, then run the check with `--max 2.35`.
+If `wafer` still needs a newer glibc after a native build, the prebuilt ONNX
+Runtime is the remaining source and the build needs `ORT_LIB_LOCATION`
+pointing at an ONNX Runtime built on the device (see
+[ONNX Runtime](../operations/dependencies.md#onnx-runtime)).
 
 ## x86_64 Linux
 
