@@ -36,9 +36,9 @@ use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
 use wafer_core::config::NodeDef;
 use wafer_core::engine::Capabilities;
 use wafer_core::error::WaferError;
-use wafer_core::orchestrator::PipelineOrchestrator;
 use wafer_core::orchestrator::hotswap::prepare_transform_swap_timed_with_fuel;
 use wafer_core::orchestrator::launch_pipeline_timed;
+use wafer_core::orchestrator::{PipelineHandle, PipelineOrchestrator};
 
 mod metadata;
 mod startup;
@@ -135,13 +135,20 @@ struct Args {
     swap_output_dir: Option<PathBuf>,
 }
 
-#[tokio::main]
+/// Stamps process entry before the tokio runtime exists, then runs the async
+/// boot sequence on the same multi-thread runtime `#[tokio::main]` builds.
 #[expect(
     clippy::print_stderr,
     reason = "keeps the `Error: {e:?}` stderr report that returning `Err` from main used to print"
 )]
-async fn main() -> ExitCode {
-    match Box::pin(run()).await {
+fn main() -> ExitCode {
+    let process_entry = startup::ProcessEntry::capture();
+    let result = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("Failed to build tokio runtime")
+        .and_then(|runtime| runtime.block_on(Box::pin(run(process_entry))));
+    match result {
         Ok(code) => code,
         Err(e) => {
             error!(error = format!("{e:#}"), "WAFER Runtime failed to start");
@@ -167,7 +174,7 @@ async fn main() -> ExitCode {
     clippy::large_futures,
     reason = "main() awaits launch_pipeline which holds WASM Store/Component; only one instance at startup"
 )]
-async fn run() -> Result<ExitCode> {
+async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     let process_started = Instant::now();
     let args = Args::parse();
 
@@ -208,6 +215,14 @@ async fn run() -> Result<ExitCode> {
         .transpose()
         .context(ConfigInvalid)?;
 
+    // Resolved before launch so none of this runs inside `first_process`.
+    let provenance = metadata::resolve_output_path().map(|path| ProvenanceSink {
+        path,
+        config_path: args.config.clone(),
+        config: config.clone(),
+    });
+    let startup_output = startup::resolve_output_path();
+
     let launch_started = Instant::now();
     let launched = launch_pipeline_timed(config.clone(), Some(&args.config))
         .await
@@ -222,15 +237,13 @@ async fn run() -> Result<ExitCode> {
     );
 
     // Emit runtime provenance BEFORE the run loop so the file exists even if
-    // the runtime traps mid-run — canonical-runs reproducibility depends on
-    // seeing which wasmtime + rustc + plugin bytes were live at launch.
-    if let Some(provenance_path) = metadata::resolve_output_path() {
-        match metadata::write_provenance(&provenance_path, &orchestrator, &args.config, &config) {
-            Ok(()) => info!(path = %provenance_path.display(), "Runtime provenance written"),
-            Err(e) => {
-                warn!(path = %provenance_path.display(), error = %e, "provenance write failed");
-            }
-        }
+    // the runtime dies mid-run. The binary hash is deferred to the shutdown
+    // write. The E-Perf-9 startup probe skips this write entirely: it runs
+    // inside the `first_process` window, and the probe reaches shutdown.
+    if let Some(sink) = &provenance
+        && startup_output.is_none()
+    {
+        sink.write(&orchestrator.handle(), metadata::WrittenAt::Launch, None);
     }
 
     // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set (A19).
@@ -312,7 +325,7 @@ async fn run() -> Result<ExitCode> {
                 }
             };
 
-            let (progress, _completion_rx) = wafer_core::runner::HotSwapProgress::channel();
+            let (progress, completion) = wafer_core::runner::HotSwapProgress::channel();
             let result = prepare_transform_swap_timed_with_fuel(
                 &engine,
                 &wasm_bytes,
@@ -343,7 +356,12 @@ async fn run() -> Result<ExitCode> {
                         }
                     }
 
-                    let _ = tx.send(Ok((node_id, timed.payload)));
+                    let _ = tx.send(Ok(PreparedSwap {
+                        node_id,
+                        payload: timed.payload,
+                        wasm_bytes,
+                        completion,
+                    }));
                 }
                 Err(e) => {
                     error!(error = %e, "Swap preparation failed");
@@ -361,8 +379,10 @@ async fn run() -> Result<ExitCode> {
         });
 
         // Custom run loop that also handles swap delivery
-        let run_result = run_with_swap(&mut orchestrator, rx).await;
+        let run_result = run_with_swap(&mut orchestrator, rx, provenance.clone()).await;
+        let binary_hash = spawn_binary_hash(provenance.as_ref());
         flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
+        write_shutdown_provenance(&orchestrator, provenance.as_ref(), binary_hash).await;
         orchestrator.cancel();
         wait_control_plane(control_plane_tasks).await;
 
@@ -381,10 +401,11 @@ async fn run() -> Result<ExitCode> {
     let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
     log_run_result(&run_result);
 
-    let startup_written = startup::resolve_output_path().map_or(Ok(()), |path| {
+    let startup_written = startup_output.map_or(Ok(()), |path| {
         startup::write_startup(
             &path,
             &orchestrator,
+            process_entry,
             process_started,
             launch_started,
             launch_completed,
@@ -393,7 +414,9 @@ async fn run() -> Result<ExitCode> {
         .inspect(|()| info!(path = %path.display(), "Startup phases written"))
     });
 
+    let binary_hash = spawn_binary_hash(provenance.as_ref());
     flush_bench_artifacts(&orchestrator, &bench_cancel, &mut bench_tasks).await;
+    write_shutdown_provenance(&orchestrator, provenance.as_ref(), binary_hash).await;
     orchestrator.cancel();
     wait_control_plane(control_plane_tasks).await;
 
@@ -458,6 +481,80 @@ fn pipeline_exit_code(run_result: &Result<()>) -> ExitCode {
     }
 }
 
+/// Where and from what the runtime writes `runtime-provenance.json`.
+#[derive(Clone)]
+struct ProvenanceSink {
+    path: PathBuf,
+    config_path: PathBuf,
+    config: wafer_types::config::Config,
+}
+
+impl ProvenanceSink {
+    fn write(
+        &self,
+        handle: &PipelineHandle,
+        written_at: metadata::WrittenAt,
+        runtime_sha256: Option<&str>,
+    ) {
+        match metadata::write_provenance(
+            &self.path,
+            handle,
+            &self.config_path,
+            &self.config,
+            written_at,
+            runtime_sha256,
+        ) {
+            Ok(()) => {
+                info!(path = %self.path.display(), ?written_at, "Runtime provenance written");
+            }
+            Err(e) => {
+                warn!(path = %self.path.display(), error = %e, "provenance write failed");
+            }
+        }
+    }
+}
+
+/// A timed swap prepared off the run loop, ready to dispatch.
+struct PreparedSwap {
+    node_id: String,
+    payload: wafer_core::runner::SwapPayload,
+    wasm_bytes: Vec<u8>,
+    completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
+}
+
+/// Hash the runtime binary on the blocking pool once the run is over, so the
+/// O(100 MB) read overlaps result export instead of any measured window.
+fn spawn_binary_hash(
+    provenance: Option<&ProvenanceSink>,
+) -> Option<JoinHandle<std::io::Result<String>>> {
+    provenance.map(|_| tokio::task::spawn_blocking(metadata::runtime_binary_sha256))
+}
+
+async fn write_shutdown_provenance(
+    orchestrator: &PipelineOrchestrator,
+    provenance: Option<&ProvenanceSink>,
+    binary_hash: Option<JoinHandle<std::io::Result<String>>>,
+) {
+    let Some(sink) = provenance else {
+        return;
+    };
+    let runtime_sha256 = match binary_hash {
+        Some(task) => match task.await {
+            Ok(Ok(hash)) => Some(hash),
+            Ok(Err(error)) => {
+                warn!(%error, "runtime binary hash failed");
+                None
+            }
+            Err(error) => {
+                warn!(%error, "runtime binary hash task failed");
+                None
+            }
+        },
+        None => None,
+    };
+    sink.write(&orchestrator.handle(), metadata::WrittenAt::Shutdown, runtime_sha256.as_deref());
+}
+
 /// Run the pipeline while also watching for a swap payload delivery.
 ///
 /// This integrates the timed swap trigger into the pipeline run loop.
@@ -465,29 +562,45 @@ fn pipeline_exit_code(run_result: &Result<()>) -> ExitCode {
 /// via `send_swap()`, then we continue waiting for pipeline completion.
 /// A swap that could not be prepared or dispatched fails the run: a
 /// swap benchmark in which no swap happened is not a valid sample.
+/// Once the runner reports the replacement adopted, the v2 plugin hash is
+/// recorded and provenance re-written, so a swap run names the live binary.
 async fn run_with_swap(
     orchestrator: &mut PipelineOrchestrator,
-    rx: tokio::sync::oneshot::Receiver<
-        std::result::Result<(String, wafer_core::runner::SwapPayload), String>,
-    >,
+    rx: tokio::sync::oneshot::Receiver<std::result::Result<PreparedSwap, String>>,
+    provenance: Option<ProvenanceSink>,
 ) -> Result<()> {
     // Race the cancel signal against the swap oneshot. Either way we fall
     // through to run_until_complete, which drains on cancellation and reports
     // any node failure.
     let cancel = orchestrator.cancel_token().clone();
     let mut swap_failure = None;
+    let mut adoption = None;
+    let run_done = tokio_util::sync::CancellationToken::new();
 
     tokio::select! {
         biased;
         () = cancel.cancelled() => {}
         result = rx => match result {
-            Ok(Ok((node_id, payload))) => match orchestrator.send_swap(&node_id, payload) {
-                Ok(()) => info!(node = %node_id, "Hot-swap dispatched"),
-                Err(e) => {
-                    error!(error = %e, "Hot-swap dispatch failed");
-                    swap_failure = Some(format!("hot-swap dispatch to '{node_id}' failed: {e}"));
+            Ok(Ok(PreparedSwap { node_id, payload, wasm_bytes, completion })) => {
+                match orchestrator.send_swap(&node_id, payload) {
+                    Ok(()) => {
+                        info!(node = %node_id, "Hot-swap dispatched");
+                        adoption = Some(tokio::spawn(record_adopted_swap(
+                            orchestrator.handle(),
+                            node_id,
+                            wasm_bytes,
+                            completion,
+                            provenance,
+                            run_done.clone(),
+                        )));
+                    }
+                    Err(e) => {
+                        error!(error = %e, "Hot-swap dispatch failed");
+                        swap_failure =
+                            Some(format!("hot-swap dispatch to '{node_id}' failed: {e}"));
+                    }
                 }
-            },
+            }
             Ok(Err(e)) => swap_failure = Some(e),
             // The trigger task ended without a result. On cancel that is
             // expected; otherwise it panicked and no swap happened.
@@ -501,10 +614,50 @@ async fn run_with_swap(
 
     let run_result = orchestrator.run_until_complete().await.map_err(anyhow::Error::from);
     log_run_result(&run_result);
+
+    // The runners have exited, so any outcome they will ever report is already
+    // in the channel. The swap payload (and with it the sender) stays alive in
+    // the orchestrator, so tell the task to stop waiting instead of relying on
+    // the channel closing. Awaiting keeps the swap write ahead of shutdown's.
+    run_done.cancel();
+    if let Some(task) = adoption
+        && let Err(error) = task.await
+    {
+        warn!(%error, "swap provenance task failed");
+    }
+
     match (swap_failure, run_result) {
         (None, run_result) => run_result,
         (Some(swap), Ok(())) => Err(anyhow::anyhow!(swap)),
         (Some(swap), Err(run)) => Err(run.context(swap)),
+    }
+}
+
+async fn record_adopted_swap(
+    handle: PipelineHandle,
+    node_id: String,
+    wasm_bytes: Vec<u8>,
+    completion: tokio::sync::oneshot::Receiver<wafer_core::runner::HotSwapOutcome>,
+    provenance: Option<ProvenanceSink>,
+    run_done: tokio_util::sync::CancellationToken,
+) {
+    let mut completion = completion;
+    let outcome = tokio::select! {
+        biased;
+        outcome = &mut completion => outcome.ok(),
+        () = run_done.cancelled() => completion.try_recv().ok(),
+    };
+    match outcome {
+        Some(Ok(_report)) => {
+            handle.record_plugin_hash(&node_id, wafer_core::registry::compute_hash(&wasm_bytes));
+            if let Some(sink) = &provenance {
+                sink.write(&handle, metadata::WrittenAt::Swap, None);
+            }
+        }
+        Some(Err(e)) => warn!(node = %node_id, error = %e, "Hot-swap not adopted; v1 hash kept"),
+        None => {
+            warn!(node = %node_id, "Hot-swap not reported complete before shutdown; v1 hash kept");
+        }
     }
 }
 

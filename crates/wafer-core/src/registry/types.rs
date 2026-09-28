@@ -99,18 +99,35 @@ impl PluginSource {
     }
 }
 
-/// A resolved plugin with its source, content hash, and path to the WASM file.
-#[derive(Debug, Clone)]
+/// A resolved plugin: source, content hash, WASM path and the hashed bytes.
+///
+/// Carrying the bytes lets the launcher load
+/// the component without a second read and hash inside the E-Perf-9
+/// `component_load_compile` phase.
+#[derive(Clone)]
 pub struct ResolvedPlugin {
     pub source: PluginSource,
     pub content_hash: String,
     pub wasm_path: PathBuf,
+    pub content: Vec<u8>,
 }
 
 impl ResolvedPlugin {
     #[must_use]
-    pub const fn new(source: PluginSource, content_hash: String, wasm_path: PathBuf) -> Self {
-        Self { source, content_hash, wasm_path }
+    pub fn new(source: PluginSource, content: Vec<u8>, wasm_path: PathBuf) -> Self {
+        let content_hash = super::cache::compute_hash(&content);
+        Self { source, content_hash, wasm_path, content }
+    }
+}
+
+impl std::fmt::Debug for ResolvedPlugin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ResolvedPlugin")
+            .field("source", &self.source)
+            .field("content_hash", &self.content_hash)
+            .field("wasm_path", &self.wasm_path)
+            .field("content_len", &self.content.len())
+            .finish()
     }
 }
 

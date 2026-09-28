@@ -1,7 +1,7 @@
 //! Registry client for fetching WASM components from OCI registries.
 
 use crate::error::RegistryError;
-use crate::registry::cache::{PackageCache, compute_hash};
+use crate::registry::cache::PackageCache;
 use crate::registry::types::{OciReference, PluginSource, RegistryConfig, ResolvedPlugin};
 use docker_credential::{CredentialRetrievalError, DockerCredential};
 use oci_client::secrets::RegistryAuth;
@@ -75,11 +75,9 @@ impl WaferRegistry {
             message: e.to_string(),
         })?;
 
-        let content_hash = compute_hash(&content);
-
         Ok(ResolvedPlugin::new(
             PluginSource::Local(path.to_path_buf()),
-            content_hash,
+            content,
             path.to_path_buf(),
         ))
     }
@@ -101,18 +99,16 @@ impl WaferRegistry {
 
             return Ok(ResolvedPlugin::new(
                 PluginSource::Oci(oci_ref.clone()),
-                compute_hash(&content),
+                content,
                 entry.path,
             ));
         }
 
         let content = self.fetch_oci(oci_ref).await?;
-        let content_hash = compute_hash(&content);
-
         let cache_path =
             self.cache.put(&oci_ref.registry, &oci_ref.repository, &cache_key, &content)?;
 
-        Ok(ResolvedPlugin::new(PluginSource::Oci(oci_ref.clone()), content_hash, cache_path))
+        Ok(ResolvedPlugin::new(PluginSource::Oci(oci_ref.clone()), content, cache_path))
     }
 
     #[expect(
