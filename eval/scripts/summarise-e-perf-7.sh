@@ -13,7 +13,7 @@ SHAKE_DIR="${1:?Usage: summarise-e-perf-7.sh <shakedown-dir>}"
 [ -d "$SHAKE_DIR" ] || { printf 'no such directory: %s\n' "$SHAKE_DIR" >&2; exit 2; }
 
 WAFER_LOADGEN="$REPO_ROOT/target/release/wafer-loadgen"
-[ -x "$WAFER_LOADGEN" ] || { printf 'wafer-loadgen missing (cargo build --release -p wafer-loadgen)\n' >&2; exit 3; }
+[ -x "$WAFER_LOADGEN" ] || { printf 'wafer-loadgen missing (cargo build --locked --release -p wafer-loadgen)\n' >&2; exit 3; }
 
 for config_dir in "$SHAKE_DIR"/{fuel-only,epoch-only,neither,passthrough}; do
     [ -d "$config_dir" ] || continue

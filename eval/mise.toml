@@ -8,13 +8,7 @@
 
 [tasks.build-plugins-eval]
 description = "Build the three plugins consumed by the E-* experiments"
-run = '''
-set -euo pipefail
-for p in pass-through uppercase threshold-filter; do
-  echo "Building plugin: $p"
-  cargo build --release --manifest-path "../plugins/$p/Cargo.toml" --target wasm32-wasip2
-done
-'''
+run = "../plugins/build-plugins.sh pass-through uppercase threshold-filter"
 
 # =============================================================================
 # Canonical experiments (RQ1 / RQ2 / RQ3)

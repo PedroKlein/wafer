@@ -18,7 +18,7 @@ The workspace contains seven members:
 | `wafer-loadgen` | Open-loop publication, subscription, sequence, latency, and summary tooling. |
 | `waferctl` | Operator client for the implemented HTTP routes. |
 
-Rust is pinned to `1.98.1` with workspace MSRV `1.95`. Wasmtime `48.0.2`
+Rust is pinned to `1.98.1`; the workspace `rust-version` is `1.98`. Wasmtime `48.0.2`
 resolves at revision `e9f1ea232fd245aea338ab3eb7d73487ae75cab1`.
 
 ## WIT surface

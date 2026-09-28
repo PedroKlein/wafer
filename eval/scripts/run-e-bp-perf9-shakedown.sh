@@ -75,7 +75,7 @@ WAFER_BIN="$REPO_ROOT/target/release/wafer"
 LOADGEN_BIN="$REPO_ROOT/target/release/wafer-loadgen"
 if [ "$skip_build" -eq 0 ]; then
     _log "building wafer-runtime + wafer-loadgen (release)"
-    cargo build --release -p wafer-runtime -p wafer-loadgen >&2
+    cargo build --locked --release -p wafer-runtime -p wafer-loadgen >&2
 fi
 [ -x "$WAFER_BIN" ]   || { _log "wafer binary missing"; exit 3; }
 [ -x "$LOADGEN_BIN" ] || { _log "wafer-loadgen binary missing"; exit 3; }
@@ -298,7 +298,7 @@ if [ "$skip_perf9" -eq 0 ]; then
 
         # --- Cold runs: rebuild runtime to clear wasmtime's native code cache ---
         _log "  cold runs (rebuilding runtime to invalidate native cache)"
-        cargo build --release -p wafer-runtime >&2 2>/dev/null
+        cargo build --locked --release -p wafer-runtime >&2 2>/dev/null
 
         for i in $(seq 1 "$perf9_runs"); do
             run_label="run-$(printf '%02d' "$i")"

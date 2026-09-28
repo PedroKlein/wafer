@@ -1,7 +1,7 @@
 # Cross-compile for aarch64-linux (Pi / Jetson / ARM64 servers)
 
 > **Status: shipped.** Path chosen: `docker run --platform linux/arm64` with
-> a native `rust:1-slim-bookworm` image. Reproduced on macOS aarch64
+> a native `rust:<toolchain>-slim-bookworm` image. Reproduced on macOS aarch64
 > (M-series) host. Verified 2026-08-02.
 
 The canonical Pi runs described in RFC-008 require WAFER binaries built
@@ -15,8 +15,9 @@ mise run cross-build-pi         # builds wafer, wafer-loadgen, waferctl
 mise run cross-build-pi-check   # confirms `file` reports ARM aarch64
 ```
 
-Under the hood the task runs a `linux/arm64` `rust:1-slim-bookworm`
-container with the workspace bind-mounted at `/work` and an isolated
+Under the hood the task runs a `linux/arm64` `rust:1.98.1-slim-bookworm`
+container (the tag is read from `rust-toolchain.toml`, so the image always
+matches the pinned toolchain) with the workspace bind-mounted at `/work` and an isolated
 target directory at `target/docker-aarch64-linux/`. Because macOS
 aarch64 hosts (M-series) support the `arm64` architecture natively,
 Docker Desktop does NOT use qemu emulation — the container executes on
@@ -25,7 +26,7 @@ bare-metal Pi.
 
 The container installs `pkg-config`, `libssl-dev`, and `g++` (required
 for `rustls_platform_verifier` and `-lstdc++` at link time), then runs
-`cargo build --release -p wafer-runtime -p wafer-loadgen -p waferctl`
+`cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl`
 against the workspace as-is (no `Cross.toml`, no `rustup target add`).
 
 Binary outputs land at:
@@ -99,8 +100,9 @@ Why we ship this over `cross`:
   recipe is entirely inline in `mise.toml` and reads self-explanatory
   in a fresh clone.
 - **Zero host toolchain state.** The rustup + rust-toolchain.toml on
-  the host are not consulted; the container has its own copy of
-  `rust:1-slim-bookworm` (rustc 1.97.1 as of 2026-08-02).
+  the host are not consulted; the container image carries the toolchain
+  pinned in `rust-toolchain.toml`. (Until 2026-09 the task used the floating
+  `rust:1-slim-bookworm` tag, which resolved to rustc 1.97.1 on 2026-08-02.)
 - **Native perf on aarch64 hosts.** No qemu tax.
 - **CI portability.** The same command works on GitHub Actions
   `ubuntu-latest` runners via `docker buildx` (linux/amd64 → linux/arm64
@@ -109,7 +111,7 @@ Why we ship this over `cross`:
 ## CI integration (T10, thesis-hardening)
 
 `.github/workflows/cross-arch.yml` builds the same three binaries with
-`cargo build --release` on a native `ubuntu-24.04-arm` runner, with a
+`cargo build --locked --release` on a native `ubuntu-24.04-arm` runner, with a
 cached cargo target, on every push to `main` and on pull requests that
 touch Rust code. It does not use the Docker recipe: emulating arm64 with
 QEMU made a cold build take most of the job's time budget. The job is not
@@ -118,10 +120,11 @@ a required check.
 ## Known non-issues
 
 - **`ort` crate downloads onnxruntime binaries into
-  `/root/.cache/ort.pyke.io/`.** Happens once at build time; the
-  cached blobs are large (~50 MB) but not embedded in the final
-  binary. Isolated inside the Docker container, does not pollute
-  the host cache.
+  `/root/.cache/ort.pyke.io/`.** Happens once at build time; the archive
+  is pinned and hash-checked (see
+  [ONNX Runtime](../operations/dependencies.md#onnx-runtime)) and linked
+  statically into `wafer`. The cache lives inside the Docker container and
+  does not pollute the host cache.
 - **First build is slow (~11 minutes).** Subsequent builds reuse
   `target/docker-aarch64-linux/` and complete in under a minute for
   code-only changes.

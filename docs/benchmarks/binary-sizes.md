@@ -16,11 +16,12 @@ worker, not what production teams actually ship.
 
 ## Methodology
 
-1. Every first-party plugin is compiled for `wasm32-wasip2` with the
-   workspace release profile.
+1. Every first-party plugin is compiled for `wasm32-wasip2` with its own
+   release profile (`opt-level = "s"`, `lto = true`,
+   `strip = "debuginfo"`) by `plugins/build-plugins.sh`.
 2. `stat` reports the on-disk byte count of the resulting `.wasm`
    component. No `wasm-opt` is applied for this table so numbers are
-   reproducible from `cargo build --release` alone.
+   reproducible from `plugins/build-plugins.sh` alone.
 3. Container floors are computed as
    `min_realistic_image_MiB × 1024² ÷ wasm_bytes` and reported as `ratio_min`.
    The floor image is `alpine (~7 MB) + statically-linked Rust worker +
