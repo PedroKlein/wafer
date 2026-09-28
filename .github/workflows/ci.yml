@@ -36,6 +36,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check docs against Cargo.lock and crates/ paths
+        run: scripts/check-docs.sh
+
       - name: Install Rust toolchain from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
