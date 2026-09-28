@@ -6,7 +6,6 @@
 //! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -24,11 +23,10 @@ async fn dispatch_filter_outcome(
     senders: &[DownstreamSender],
     envelope: RuntimeEnvelope,
     pending_swap_progress: &mut Option<Arc<HotSwapProgress>>,
-    duration_ns: u64,
 ) {
     match outcome {
         FilterOutcome::Forward => {
-            metrics.record_processed(duration_ns);
+            metrics.record_processed();
             send_downstream(senders, envelope).await;
             if let Some(progress) = pending_swap_progress.take() {
                 progress.mark_first_post_replacement_local_outcome(
@@ -37,7 +35,7 @@ async fn dispatch_filter_outcome(
             }
         }
         FilterOutcome::Drop => {
-            metrics.record_filtered_out(duration_ns);
+            metrics.record_filtered_out();
             if let Some(progress) = pending_swap_progress.take() {
                 progress.mark_first_post_replacement_local_outcome(
                     crate::runner::FirstPostReplacementLocalOutcome::FilterDropped,
@@ -108,6 +106,8 @@ pub async fn run_filter_loop(
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
@@ -137,18 +137,23 @@ pub async fn run_filter_loop(
             continue;
         }
 
-        let envelope =
-            match next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await {
-                NextInput::Envelope(envelope) => envelope,
-                NextInput::Swap => continue,
-                NextInput::Closed => break,
-            };
+        let envelope = match next_input(
+            &mut held,
+            &mut receiver,
+            &mut policy,
+            &mut swap_rx,
+            cancelled.as_mut(),
+        )
+        .await
+        {
+            NextInput::Envelope(envelope) => envelope,
+            NextInput::Swap => continue,
+            NextInput::Closed => break,
+        };
 
         // 2. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
         let result = filter.evaluate(&envelope).await;
-        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
 
         match result {
@@ -159,7 +164,6 @@ pub async fn run_filter_loop(
                     &senders,
                     envelope,
                     &mut pending_swap_progress,
-                    duration_ns,
                 )
                 .await;
             }
@@ -233,7 +237,6 @@ mod tests {
             &[],
             RuntimeEnvelope::from_string("source", "dropped"),
             &mut pending_swap_progress,
-            0,
         )
         .await;
 

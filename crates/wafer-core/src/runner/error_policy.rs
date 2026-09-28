@@ -241,6 +241,9 @@ impl RetryBuffer {
     }
 
     fn next_ready(&mut self) -> Option<RuntimeEnvelope> {
+        if self.entries.is_empty() {
+            return None;
+        }
         let now = Instant::now();
         let due = self
             .entries

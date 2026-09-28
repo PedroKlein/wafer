@@ -186,8 +186,6 @@ pub struct NodeMetrics {
     attempts_failed: AtomicU64,
     traps: TrapCounters,
     guest_errors: GuestErrorCounters,
-    /// Cumulative processing time in nanoseconds.
-    process_ns: AtomicU64,
     /// Failed messages queued for another attempt.
     retries: AtomicU64,
     /// Messages the error policy handed to the dead-letter queue.
@@ -236,7 +234,6 @@ impl NodeMetrics {
             attempts_failed: AtomicU64::new(0),
             traps: TrapCounters::new(),
             guest_errors: GuestErrorCounters::new(),
-            process_ns: AtomicU64::new(0),
             retries: AtomicU64::new(0),
             dlq_sent: AtomicU64::new(0),
             dlq_lost: AtomicU64::new(0),
@@ -255,19 +252,17 @@ impl NodeMetrics {
 
     /// Record a successful message processing.
     #[inline]
-    pub fn record_processed(&self, duration_ns: u64) {
+    pub fn record_processed(&self) {
         if self.processed.fetch_add(1, Ordering::Relaxed) == 0 {
             let inserted = self.first_processed_at.set(Instant::now()).is_ok();
             debug_assert!(inserted, "first processed timestamp is set once");
         }
-        self.process_ns.fetch_add(duration_ns, Ordering::Relaxed);
     }
 
     /// Record a message a filter evaluated and dropped.
     #[inline]
-    pub fn record_filtered_out(&self, duration_ns: u64) {
+    pub fn record_filtered_out(&self) {
         self.filtered_out.fetch_add(1, Ordering::Relaxed);
-        self.process_ns.fetch_add(duration_ns, Ordering::Relaxed);
     }
 
     /// Record a failed call of a native source or sink.
@@ -438,29 +433,6 @@ impl NodeMetrics {
         self.guest_errors.get(category).load(Ordering::Relaxed)
     }
 
-    /// Cumulative processing time in nanoseconds.
-    #[inline]
-    pub fn process_ns(&self) -> u64 {
-        self.process_ns.load(Ordering::Relaxed)
-    }
-
-    /// Average processing time per message in nanoseconds.
-    /// Returns 0 if no messages have been processed.
-    #[inline]
-    pub fn avg_process_ns(&self) -> u64 {
-        let total = self.processed().saturating_add(self.filtered_out());
-        if total == 0 {
-            return 0;
-        }
-        #[expect(
-            clippy::arithmetic_side_effects,
-            reason = "division by zero guarded by the check above"
-        )]
-        {
-            self.process_ns() / total
-        }
-    }
-
     /// Total retry attempts.
     #[inline]
     pub fn retries(&self) -> u64 {
@@ -537,7 +509,6 @@ mod tests {
         assert_eq!(m.processed(), 0);
         assert_eq!(m.attempts_failed(), 0);
         assert_eq!(m.traps_total(), 0);
-        assert_eq!(m.process_ns(), 0);
         assert_eq!(m.retries(), 0);
         assert_eq!(m.dlq_sent(), 0);
         assert_eq!(m.exhausted_skips(), 0);
@@ -548,13 +519,11 @@ mod tests {
     fn record_processed() {
         let m = NodeMetrics::new();
         assert!(m.first_processed_at().is_none());
-        m.record_processed(1000);
+        m.record_processed();
         let first = m.first_processed_at().expect("first processed timestamp");
-        m.record_processed(2000);
+        m.record_processed();
         assert_eq!(m.processed(), 2);
         assert_eq!(m.first_processed_at(), Some(first));
-        assert_eq!(m.process_ns(), 3000);
-        assert_eq!(m.avg_process_ns(), 1500);
     }
 
     #[test]
@@ -594,11 +563,10 @@ mod tests {
     #[test]
     fn filter_drops_are_not_processed() {
         let m = NodeMetrics::new();
-        m.record_processed(1000);
-        m.record_filtered_out(3000);
+        m.record_processed();
+        m.record_filtered_out();
         assert_eq!(m.processed(), 1);
         assert_eq!(m.filtered_out(), 1);
-        assert_eq!(m.avg_process_ns(), 2000);
     }
 
     #[test]
@@ -606,13 +574,6 @@ mod tests {
         let m = NodeMetrics::new();
         m.record_swap();
         assert_eq!(m.swaps(), 1);
-    }
-
-    #[test]
-    fn avg_process_ns_zero_division() {
-        let m = NodeMetrics::new();
-        // No messages processed — should return 0, not panic
-        assert_eq!(m.avg_process_ns(), 0);
     }
 
     #[test]
@@ -634,7 +595,7 @@ mod tests {
                 let m = Arc::clone(&m);
                 thread::spawn(move || {
                     for _ in 0..1000 {
-                        m.record_processed(100);
+                        m.record_processed();
                     }
                 })
             })
@@ -645,6 +606,5 @@ mod tests {
         }
 
         assert_eq!(m.processed(), 8000);
-        assert_eq!(m.process_ns(), 800_000);
     }
 }

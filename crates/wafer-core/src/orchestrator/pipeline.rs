@@ -959,27 +959,26 @@ async fn run_passthrough_loop(
     metrics: Arc<NodeMetrics>,
 ) {
     use crate::node::ProcessingGuard;
-    use std::time::Instant;
 
     state.transition_to_running();
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
 
     loop {
         let envelope = tokio::select! {
             biased;
-            () = cancel.cancelled() => break,
+            () = &mut cancelled => break,
             msg = receiver.recv() => match msg {
                 Some(e) => e,
                 None => break,
             },
         };
 
-        let start = Instant::now();
         let guard = ProcessingGuard::enter(&state);
         // Identity: forward unchanged
         send_downstream(&senders, envelope).await;
-        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
         drop(guard);
-        metrics.record_processed(duration_ns);
+        metrics.record_processed();
     }
 }
 

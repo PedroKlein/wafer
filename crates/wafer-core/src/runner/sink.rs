@@ -22,6 +22,8 @@ use crate::runner::TrackedReceiver;
 /// # Shutdown semantics
 ///
 /// 1. `cancel.cancelled()` OR `receiver.recv() = None` → break from loop
+///    (a message already queued is taken before cancellation is checked;
+///    step 2 delivers the rest either way)
 /// 2. Drain remaining messages from channel buffer via `try_recv()`
 /// 3. Call `flush()` (ensures batched data is written)
 /// 4. Call `close()` (cleanup resources)
@@ -42,17 +44,21 @@ pub async fn run_sink_loop(
 ) -> Result<()> {
     let mut receiver = receiver.into();
     let batch_timeout = sink.batch_timeout();
+    // Buffered messages are drained after the loop, so a ready message may
+    // win over cancellation without changing what the sink delivers.
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
 
     loop {
         let envelope = if let Some(timeout) = batch_timeout {
             // Batching mode: recv with timeout; flush when input goes idle
             tokio::select! {
                 biased;
-                () = cancel.cancelled() => break,
                 msg = receiver.recv() => match msg {
                     Some(e) => Some(e),
                     None => break, // All senders dropped — upstream exited
                 },
+                () = &mut cancelled => break,
                 () = tokio::time::sleep(timeout) => {
                     if let Err(e) = sink.flush().await {
                         tracing::warn!(sink = sink.id(), error = %e, "batch flush error");
@@ -64,17 +70,17 @@ pub async fn run_sink_loop(
             // No batching: simple recv with cancel
             tokio::select! {
                 biased;
-                () = cancel.cancelled() => break,
                 msg = receiver.recv() => match msg {
                     Some(e) => Some(e),
                     None => break, // All senders dropped — upstream exited
                 },
+                () = &mut cancelled => break,
             }
         };
 
         if let Some(envelope) = envelope {
             match sink.collect(envelope).await {
-                Ok(()) => metrics.record_processed(0),
+                Ok(()) => metrics.record_processed(),
                 Err(e) => {
                     metrics.record_failed();
                     tracing::warn!(sink = sink.id(), error = %e, "sink collect error");
