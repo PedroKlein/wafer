@@ -4,6 +4,10 @@
 name = "rpi5-smoke"
 description = "Short Pi 5 deployment and result-contract check"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

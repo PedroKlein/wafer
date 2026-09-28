@@ -9,6 +9,10 @@
 name = "test-native-passthrough"
 description = "Native passthrough placeholder — P0.4 will replace the transform"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

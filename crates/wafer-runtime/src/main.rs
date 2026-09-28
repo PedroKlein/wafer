@@ -34,7 +34,7 @@ use tracing_subscriber::{EnvFilter, fmt, prelude::*};
 use wafer_config::{load_config, validate};
 use wafer_core::api::{ApiConfig as CoreApiConfig, ApiServer, MetricsServer, MetricsServerConfig};
 use wafer_core::bench::{MemoryRecorder, QueueDepthRecorder};
-use wafer_core::config::NodeDef;
+use wafer_core::config::{DeadLetterConfig, NodeDef};
 use wafer_core::engine::Capabilities;
 use wafer_core::error::WaferError;
 use wafer_core::node::NodeKind;
@@ -194,7 +194,7 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     info!("WAFER Runtime starting...");
     info!(config = %args.config.display(), "Loading configuration");
 
-    let config =
+    let mut config =
         load_config(&args.config).context("Failed to load configuration").context(ConfigInvalid)?;
     validate(&config)
         .map_err(|errors| {
@@ -209,6 +209,16 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
         .and_then(|pipeline| pipeline.name.as_deref())
         .unwrap_or("wafer-pipeline");
     info!(pipeline = %pipeline_name, "Configuration loaded");
+
+    // A relative dead-letter file lands next to the other bench artefacts, so
+    // one config serves every run.
+    let bench_output_dir = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from);
+    if let (Some(dir), Some(DeadLetterConfig::File { path, .. })) =
+        (&bench_output_dir, &mut config.dead_letter)
+        && std::path::Path::new(path.as_str()).is_relative()
+    {
+        *path = dir.join(path.as_str()).to_string_lossy().into_owned();
+    }
 
     // Check the timed-swap arguments before any node starts.
     let swap_plan = args
@@ -249,7 +259,6 @@ async fn run(process_entry: startup::ProcessEntry) -> Result<ExitCode> {
     }
 
     // Spawn memory sampler if WAFER_BENCH_OUTPUT_DIR is set (A19).
-    let bench_output_dir = std::env::var("WAFER_BENCH_OUTPUT_DIR").ok().map(PathBuf::from);
     let bench_cancel = tokio_util::sync::CancellationToken::new();
     let mut bench_tasks = Vec::new();
     if bench_output_dir.is_some() {

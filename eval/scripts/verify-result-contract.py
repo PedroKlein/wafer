@@ -1326,6 +1326,7 @@ def check_focused_leaf(
                     )
                 if result.get("runtime_panic") is not False:
                     violations.append("containment evidence recorded a runtime panic")
+                violations.extend(check_dlq_evidence(leaf, result))
                 if experiment == "e-iso-4" and recoveries != traps:
                     violations.append(f"epoch recovery count differs from traps: {recoveries} != {traps}")
         if experiment == "e-iso-4":
@@ -2245,6 +2246,22 @@ def check_leaf(
         if f in files:
             violations.append(f"unexpected artefact for {experiment}: {f}")
     return violations, warnings
+
+
+def check_dlq_evidence(leaf: Path, containment: dict) -> list[str]:
+    """The dead-letter file must hold one record per message the nodes sent it."""
+    dlq_path = leaf / "dlq.jsonl"
+    if not dlq_path.is_file():
+        return []
+    try:
+        with dlq_path.open(encoding="utf-8") as stream:
+            records = sum(1 for line in stream if line.strip())
+        sent = sum(int(node.get("dlq_sent", 0)) for node in containment.get("nodes", []))
+    except (OSError, TypeError, ValueError):
+        return ["dlq.jsonl or containment dlq_sent counters are unreadable"]
+    if records != sent:
+        return [f"dlq.jsonl holds {records} records but nodes sent {sent} to the dead-letter queue"]
+    return []
 
 
 def main() -> int:

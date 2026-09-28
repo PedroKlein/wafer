@@ -42,7 +42,12 @@ to = "t1"
 [[edges]]
 from = "t1"
 to = "sink"
-"#
+
+[dead_letter]
+kind = "file"
+path = "{dlq}"
+"#,
+        dlq = dir.join("dlq.jsonl").display()
     );
     std::fs::write(&path, config).expect("write config");
     path

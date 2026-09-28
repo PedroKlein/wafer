@@ -73,8 +73,13 @@ to = "spin"
 [[edges]]
 from = "spin"
 to = "sink"
+
+[dead_letter]
+kind = "file"
+path = "{}"
 "#,
-            plugin.display()
+            plugin.display(),
+            dir.path().join("dlq.jsonl").display()
         ),
     )
     .unwrap();

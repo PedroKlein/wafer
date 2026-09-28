@@ -8,6 +8,10 @@ description = "Passthrough with epoch metering only (fuel effectively disabled)"
 epoch_deadline = 100
 epoch_tick_ms = 10
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

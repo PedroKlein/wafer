@@ -7,6 +7,10 @@
 name = "e-perf-6-depth-5"
 description = "5 pass-through hops — shakedown density"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

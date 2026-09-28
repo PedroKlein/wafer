@@ -8,6 +8,10 @@
 name = "bench-telemetry"
 description = "Pipeline A: MQTT → json-parse → threshold-filter → MQTT (E-Perf-1, E-Perf-2)"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.mqtt-in]
 type = "source"
 kind = "mqtt"

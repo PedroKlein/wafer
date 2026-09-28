@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::node::wasm::WasmRouterNode;
 use crate::node::{NodeMetrics, NodeStateTracker, RouteOutcome};
 use crate::queue::RuntimeEnvelope;
-use crate::runner::error_policy::{ErrorPolicyExecutor, WasmProcessError};
+use crate::runner::error_policy::{DlqReason, ErrorPolicyExecutor, WasmProcessError};
 use crate::runner::{
     DownstreamSender, HotSwapProgress, NextInput, SwapPayload, SwapReceiver, TrackedReceiver,
     continue_after_policy_action, fan_out, next_input, take_pending_swap,
@@ -74,6 +74,7 @@ async fn recover_after_timeout(
         Err(error) => {
             state.transition_to_error();
             tracing::error!(node = router.node_id(), %error, "recovery failed");
+            policy.flush_to_dlq(&DlqReason::RecoveryFailed, metrics);
             false
         }
     }
@@ -111,7 +112,6 @@ pub async fn run_router_loop(
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
-            policy.flush_to_dlq("hot_swap_drain", &metrics);
             let progress = payload.progress();
             let result = match payload {
                 SwapPayload::Reconfigure { ref new_config_json, .. } => {
@@ -121,6 +121,7 @@ pub async fn run_router_loop(
             };
             match result {
                 Ok(()) => {
+                    policy.flush_to_dlq(&DlqReason::HotSwapDrain, &metrics);
                     progress.mark_replacement_adopted();
                     pending_swap_progress = Some(progress);
                     metrics.record_swap();
@@ -190,7 +191,7 @@ pub async fn run_router_loop(
                 ref error @ (WasmProcessError::Trapped { .. } | WasmProcessError::Unrecoverable(_)),
             ) => {
                 metrics.record_error(error);
-                metrics.record_dropped_on_recovery();
+                policy.record_condemned(envelope, error, &metrics);
                 let msg = error.to_string();
                 tracing::error!(
                     node = router.node_id(),
@@ -208,6 +209,7 @@ pub async fn run_router_loop(
                     Err(error) => {
                         state.transition_to_error();
                         tracing::error!(node = router.node_id(), %error, "recovery failed");
+                        policy.flush_to_dlq(&DlqReason::RecoveryFailed, &metrics);
                         break;
                     }
                 }
@@ -221,7 +223,7 @@ pub async fn run_router_loop(
         }
     }
 
-    policy.flush_to_dlq("shutdown", &metrics);
+    policy.flush_to_dlq(&DlqReason::Shutdown, &metrics);
 }
 
 #[cfg(test)]

@@ -35,7 +35,7 @@ The handler in `crates/wafer-core/src/api/handlers.rs` currently emits:
 | `wafer_node_filtered_out_total` | `node` | Messages a filter dropped (not counted as processed). |
 | `wafer_node_retries_total` | `node` | Failed messages queued for another attempt. |
 | `wafer_node_dlq_sent_total` | `node` | Messages the error policy handed to the dead-letter queue. |
-| `wafer_node_dlq_lost_total` | `node` | Messages meant for the dead-letter queue while it was full, closed, or not configured. |
+| `wafer_node_dlq_lost_total` | `node` | Messages meant for the dead-letter queue while it was full or closed. |
 | `wafer_node_skipped_total` | `node` | Messages discarded by a `skip` action for `bad_input` or `timed_out`. |
 | `wafer_node_retry_exhausted_skip_total` | `node` | Retry exhaustion consumed by configured skip. |
 | `wafer_node_dropped_on_recovery_total` | `node` | Messages discarded while a trapped (or `unrecoverable`) instance was rebuilt. |

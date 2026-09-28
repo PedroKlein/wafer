@@ -548,8 +548,8 @@ def validate_matrix(matrix: dict) -> list[str]:
             continue
         if len(measured_edges) != 1 or measured_edges[0].get("overflow", "slow") != policy:
             errors.append(f"e-backpressure {policy} config has the wrong overflow policy")
-        if ("dead_letter" in config) != (policy == "dead-letter"):
-            errors.append(f"e-backpressure {policy} config has the wrong DLQ declaration")
+        if config.get("dead_letter", {}).get("kind") != "file":
+            errors.append(f"e-backpressure {policy} config has no file DLQ declaration")
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")

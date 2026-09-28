@@ -11,6 +11,10 @@
 name = "bench-native-baseline"
 description = "Native Rust baseline for RQ1 (P0.4 AC2)."
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

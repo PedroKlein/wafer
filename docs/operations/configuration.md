@@ -111,6 +111,11 @@ path          = "/var/log/wafer/dlq.jsonl"
 queue_capacity = 5000
 ```
 
+A pipeline with a Transform, Filter or Router needs this section unless every
+`dlq` action in its error policy is replaced by `skip` or `teardown`. A relative
+file path is resolved against the working directory, or against
+`WAFER_BENCH_OUTPUT_DIR` when that variable is set.
+
 ## Define nodes (`[nodes.NAME]`)
 
 Nodes are a **map** keyed by id; the `type` field discriminates the variant. Transform, Filter, and Router use one `plugin` field. A string selects a local path or OCI reference; `{ kind = "native", function = "..." }` selects a built-in evaluation baseline. Only loaded Wasm implementations are replacement-eligible.
