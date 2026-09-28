@@ -3,6 +3,8 @@
 #
 #   build-plugins.sh            build all plugins and rewrite ARTIFACTS.sha256
 #   build-plugins.sh --check    build all plugins and verify ARTIFACTS.sha256
+#   build-plugins.sh --no-record
+#                               build all plugins; ARTIFACTS.sha256 is left alone
 #   build-plugins.sh NAME...    build only the named plugins (e.g. pass-through,
 #                               attacks/panic); ARTIFACTS.sha256 is left alone
 #
@@ -19,14 +21,14 @@ sha256() {
 }
 
 mode=write
-if [ "${1:-}" = "--check" ]; then
-  mode=check
-  shift
-fi
+case "${1:-}" in
+  --check) mode=check; shift ;;
+  --no-record) mode=subset; shift ;;
+esac
 
 if [ $# -gt 0 ]; then
   if [ "$mode" = check ]; then
-    echo "usage: build-plugins.sh [--check | NAME...]" >&2
+    echo "usage: build-plugins.sh [--check | --no-record | NAME...]" >&2
     exit 2
   fi
   mode=subset

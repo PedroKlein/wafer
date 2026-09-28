@@ -1,18 +1,17 @@
 #![cfg(test)]
 #![cfg(feature = "http-api")]
-#![expect(clippy::print_stderr, reason = "integration test diagnostic output")]
 #![expect(
     clippy::large_futures,
     reason = "test: launch_pipeline future is large due to WASM Store/Component loading"
 )]
 //! `GET /api/v1/nodes` reports every started node as `running`.
 
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wafer_core::api::{ApiConfig, ApiServer};
 use wafer_core::orchestrator::launch_pipeline;
+use wafer_core::testing::artifact_available;
 use wafer_types::config::Config;
 
 const PASS_THROUGH_WASM: &str = concat!(
@@ -61,8 +60,7 @@ async fn get_json(url: &str) -> serde_json::Value {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn started_nodes_report_running_in_id_order() {
-    if !Path::new(PASS_THROUGH_WASM).exists() {
-        eprintln!("SKIP: pass-through.wasm not built at {PASS_THROUGH_WASM}");
+    if !artifact_available(PASS_THROUGH_WASM) {
         return;
     }
 

@@ -79,9 +79,16 @@ jobs:
       - name: Build Wasm plugins
         run: plugins/build-plugins.sh
 
-      - name: Build release wafer-loadgen
-        # wasi_async_runner reads HDR summaries through the release binary.
-        run: cargo build --locked --release -p wafer-loadgen
-
       - name: cargo test
+        # Mirrors `mise run test`: a plugin-backed test fails instead of
+        # skipping when its artifact is missing.
+        env:
+          WAFER_REQUIRE_PLUGINS: "1"
         run: cargo test --locked --workspace
+
+      - name: Docker-backed tests
+        # Mirrors `mise run test-docker`; the runner has a Docker daemon.
+        run: |
+          cargo test --locked -p wafer-core --lib -- --ignored configured_mqtt_dlq_delivers_serialized_record
+          cargo test --locked -p wafer-core --test mqtt_source_reconnect -- --ignored
+          cargo test --locked -p wafer-loadgen --test roundtrip -- --ignored

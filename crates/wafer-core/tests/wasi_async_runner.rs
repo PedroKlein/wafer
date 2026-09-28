@@ -1,9 +1,5 @@
 #![cfg(test)]
-#![expect(
-    clippy::print_stderr,
-    clippy::large_futures,
-    reason = "integration test: diagnostic output and large launch_pipeline future"
-)]
+#![expect(clippy::large_futures, reason = "integration test: large launch_pipeline future")]
 //! P0.14 regression: WASI async host calls (`std::thread::sleep` in guest,
 //! `wasi:clocks/monotonic-clock.subscribe-duration` on the wire) must NOT
 //! panic when invoked from a Tokio worker thread.
@@ -20,8 +16,13 @@
 //! See docs/status/implementation-gaps.md §A16.
 
 use std::num::NonZeroU64;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use base64::Engine as _;
+use hdrhistogram::Histogram;
+use hdrhistogram::serialization::Deserializer;
+use hdrhistogram::serialization::interval_log::{IntervalLogIterator, LogEntry};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -29,11 +30,9 @@ use bytes::Bytes;
 use wafer_core::orchestrator::launch_pipeline;
 use wafer_core::queue::RuntimeEnvelope;
 use wafer_core::runner::error_policy::WasmProcessError;
-use wafer_core::testing::PluginTestHarness;
+use wafer_core::testing::{PluginTestHarness, artifact_available};
 use wafer_types::config::{Config, EngineConfig, FuelBudgets};
 
-/// Delay-injector artefact path. Missing artefact skips the test (matches
-/// the pattern in `tests/attack_containment.rs`).
 const DELAY_WASM: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
@@ -160,34 +159,29 @@ to = "sink_b"
     .expect("active-call config must parse")
 }
 
+/// Median of the single interval `BenchSink` writes to `latency.hdr`.
 fn p50_ns_from(bench_dir: &Path) -> u64 {
-    let hdr = bench_dir.join("latency.hdr");
-    assert!(hdr.exists(), "latency.hdr missing at {hdr:?}");
-
-    let loadgen =
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/release/wafer-loadgen");
-    assert!(
-        loadgen.exists(),
-        "wafer-loadgen binary missing at {loadgen:?} — run `cargo build --release -p wafer-loadgen`"
-    );
-
-    let out = std::process::Command::new(&loadgen)
-        .arg("hdr-summary")
-        .arg("--hdr")
-        .arg(&hdr)
-        .output()
-        .expect("hdr-summary invocation");
-    assert!(out.status.success(), "hdr-summary failed: {out:?}");
-    let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
-    let count = json["total_count"].as_u64().unwrap_or(0);
-    assert!(count > 0, "empty histogram — runner never recorded a sample: {json}");
-    json["p50_ns"].as_u64().unwrap()
+    let log = std::fs::read(bench_dir.join("latency.hdr")).expect("read latency.hdr");
+    let mut deserializer = Deserializer::new();
+    let mut histogram: Histogram<u64> = Histogram::new(3).expect("histogram");
+    for entry in IntervalLogIterator::new(&log) {
+        if let LogEntry::Interval(interval) = entry.expect("well-formed interval log") {
+            let encoded = interval.encoded_histogram();
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .expect("base64 histogram");
+            let decoded: Histogram<u64> =
+                deserializer.deserialize(&mut &bytes[..]).expect("V2 histogram");
+            histogram.add(&decoded).expect("merge interval");
+        }
+    }
+    assert!(!histogram.is_empty(), "empty histogram: the runner never recorded a sample");
+    histogram.value_at_quantile(0.5)
 }
 
 #[tokio::test]
 async fn repeated_success_and_guest_error_reset_per_call_state() {
-    if !Path::new(UPPERCASE_WASM).exists() {
-        eprintln!("SKIP: uppercase.wasm not built at {UPPERCASE_WASM}");
+    if !artifact_available(UPPERCASE_WASM) {
         return;
     }
 
@@ -329,8 +323,7 @@ async fn active_wasi_calls_finish_before_small_runtime_shutdown_child() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn delay_injector_runs_without_wasi_runtime_panic() {
-    if !Path::new(DELAY_WASM).exists() {
-        eprintln!("SKIP: delay-injector.wasm not built at {DELAY_WASM}");
+    if !artifact_available(DELAY_WASM) {
         return;
     }
 
