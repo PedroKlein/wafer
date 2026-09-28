@@ -110,6 +110,9 @@ def test_merge_without_sidecar_keeps_harness_values() -> None:
         assert key in meta and meta[key] not in ("", None), (
             f"harness-side fallback missing/empty for {key}: {meta.get(key)!r}"
         )
+    for key in ("cpu_model", "physical_cores", "online_cpus", "smt", "turbo",
+                "cpufreq_driver", "os_release", "glibc_version", "power_mode"):
+        assert key in meta, f"platform fact missing from metadata.json: {key}"
     # Sidecar-only keys must NOT be present when the sidecar was absent —
     # otherwise a stale merge would silently claim runtime-verified data.
     for key in ("wasmtime_version", "wafer_runtime_version",
