@@ -6,7 +6,11 @@ install_output="$("$ROOT/eval/ekuiper/install-native.sh" --dry-run)"
 seed_output="$("$ROOT/eval/ekuiper/seed-pipeline-a.sh" --dry-run)"
 smoke_output="$("$ROOT/eval/ekuiper/smoke-test.sh" --dry-run)"
 
-grep -q 'artifact: kuiper-2.1.0-linux-arm64.deb' <<<"$install_output"
+case "$(uname -m)" in
+    x86_64) package_arch=amd64 ;;
+    *) package_arch=arm64 ;;
+esac
+grep -q "artifact: kuiper-2.1.0-linux-$package_arch.deb" <<<"$install_output"
 grep -q 'checksum_url: .*\.sha256' <<<"$install_output"
 grep -q 'install_root: /usr/lib/kuiper' <<<"$install_output"
 grep -q 'mqtt_source_config: /etc/kuiper/mqtt_source.yaml' <<<"$install_output"
