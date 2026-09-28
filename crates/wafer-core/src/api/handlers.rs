@@ -178,9 +178,15 @@ pub async fn hot_swap(
     let memory_limit = wasm.memory_limit.unwrap_or(memory_limit);
     let fuel_limit = engine.fuel_budget(node_kind, wasm.fuel);
 
-    let wasm_bytes = tokio::fs::read(&body.wasm_path)
+    let wasm_bytes: Arc<[u8]> = tokio::fs::read(&body.wasm_path)
         .await
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}")))?;
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("failed to read wasm file: {e}")))?
+        .into();
+    // Hashed alongside preparation so it adds nothing to the request time.
+    let plugin_hash = tokio::task::spawn_blocking({
+        let wasm_bytes = Arc::clone(&wasm_bytes);
+        move || crate::registry::compute_hash(&wasm_bytes)
+    });
 
     let (progress, mut completion_rx) = HotSwapProgress::channel();
     let timed_result = match kind {
@@ -228,6 +234,10 @@ pub async fn hot_swap(
     let compile_cache =
         timed_result.timeline.compile_cache.map(crate::engine::CacheOutcome::as_str);
     let progress = timed_result.payload.progress();
+    let plugin_hash = plugin_hash.await.map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, format!("plugin hash task failed: {e}"))
+    })?;
+    orch.track_swap_plugin_hash(&id, &progress, plugin_hash);
     let signal_at = std::time::Instant::now();
     timed_result.timeline.mark_signal_sent();
     orch.send_swap(&id, timed_result.payload)
@@ -268,7 +278,6 @@ pub async fn hot_swap(
             let replacement_adopted_ns = adopted_at.map(|at| {
                 let ns = crate::util::duration_ns_saturating(at.duration_since(signal_at));
                 orch.record_hotswap_phase("replacement_adopted", &id, ns);
-                record_wasm_hash(&orch, &id, &wasm_bytes);
                 ns
             });
             return Ok((
@@ -307,8 +316,6 @@ pub async fn hot_swap(
         first_post_replacement_local_outcome_ns,
     );
 
-    record_wasm_hash(&orch, &id, &wasm_bytes);
-
     Ok(Json(serde_json::json!({
         "node_id": id,
         "replacement_adopted": true,
@@ -345,11 +352,6 @@ fn record_preparation_phases(
     orch.record_hotswap_phase("compile", id, timeline.compile_duration_ns().unwrap_or(0));
     orch.record_hotswap_phase("instantiate", id, timeline.instantiate_duration_ns().unwrap_or(0));
     orch.record_hotswap_phase("signal", id, timeline.signal_duration_ns().unwrap_or(0));
-}
-
-fn record_wasm_hash(orch: &PipelineHandle, id: &str, wasm_bytes: &[u8]) {
-    use sha2::{Digest, Sha256};
-    orch.record_plugin_hash(id, hex::encode(Sha256::digest(wasm_bytes)));
 }
 
 /// Settle a replacement whose runner-local outcome did not arrive in time.

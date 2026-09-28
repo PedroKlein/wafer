@@ -198,12 +198,23 @@ impl PipelineHandle {
 
     /// P0.12 (A5 residual): register the SHA-256 (hex) of the plugin bytes
     /// currently loaded on `node_id`. Called by the launcher for every Wasm
-    /// plugin at initial load, and by the API handler on every successful
-    /// hot-swap. Shared with F2 provenance emission.
+    /// plugin at initial load. Shared with F2 provenance emission.
     pub fn record_plugin_hash(&self, node_id: &str, hex_hash: impl Into<String>) {
         if let Ok(mut guard) = self.plugin_hashes.write() {
             guard.insert(node_id.into(), hex_hash.into());
         }
+    }
+
+    /// Have the runner record `hex_hash` for `node_id` when it adopts the
+    /// swap behind `progress`, and restore the replaced hash if it rolls the
+    /// swap back. Call before sending the swap.
+    pub fn track_swap_plugin_hash(
+        &self,
+        node_id: &str,
+        progress: &HotSwapProgress,
+        hex_hash: impl Into<String>,
+    ) {
+        progress.track_plugin_hash(Arc::clone(&self.plugin_hashes), node_id, hex_hash.into());
     }
 
     /// Snapshot of `node_id -> sha256_hex` for every Wasm plugin currently
