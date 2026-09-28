@@ -1,8 +1,12 @@
 name: cross-arch
 
-# Builds wafer, wafer-loadgen and waferctl for aarch64-unknown-linux-gnu on
-# every push to main and every PR that touches Rust code, so the Raspberry Pi
-# build cannot regress silently. See docs/eval/cross-compile.md.
+# Builds wafer, wafer-loadgen and waferctl for aarch64-unknown-linux-gnu and
+# x86_64-unknown-linux-gnu on every push to main and every PR that touches
+# Rust code, so neither release build can regress silently. Each job prints
+# the glibc version its binaries require; deploy targets older than the
+# runner (a Jetson on Ubuntu 22.04 has glibc 2.35) must build natively or
+# check the artifact with `mise run glibc-floor -- --max <version>`.
+# See docs/eval/cross-compile.md.
 #
 # Runs on a native arm64 runner (`ubuntu-24.04-arm`) with a cached cargo
 # target. The local `mise run cross-build-pi` task keeps the Docker recipe for
@@ -20,6 +24,7 @@ on:
       - "rust-toolchain.toml"
       - "mise.toml"
       - "crates/**"
+      - "scripts/glibc-floor.sh"
       - ".github/workflows/cross-arch.yml"
   pull_request:
     branches: [main]
@@ -29,6 +34,7 @@ on:
       - "rust-toolchain.toml"
       - "mise.toml"
       - "crates/**"
+      - "scripts/glibc-floor.sh"
       - ".github/workflows/cross-arch.yml"
   workflow_dispatch: {}
 
@@ -63,10 +69,53 @@ jobs:
             echo "  $b: $(du -h "$f" | cut -f1)"
           done
 
+      - name: Report the glibc version the binaries require
+        run: scripts/glibc-floor.sh target/release/wafer target/release/wafer-loadgen target/release/waferctl
+
       - name: Upload aarch64-linux binaries as artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wafer-aarch64-linux-${{ github.sha }}
+          path: |
+            target/release/wafer
+            target/release/wafer-loadgen
+            target/release/waferctl
+          if-no-files-found: error
+          retention-days: 14
+
+  build-x86:
+    name: build-x86 (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain from rust-toolchain.toml
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache-shared-key: cross-arch-x86_64
+
+      - name: Build wafer, wafer-loadgen, waferctl (x86_64-linux)
+        run: cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl
+
+      - name: Verify outputs are x86-64 ELF binaries
+        run: |
+          for b in wafer wafer-loadgen waferctl; do
+            f=target/release/$b
+            file "$f"
+            file "$f" | grep -q "x86-64"
+            echo "  $b: $(du -h "$f" | cut -f1)"
+          done
+
+      - name: Report the glibc version the binaries require
+        run: scripts/glibc-floor.sh target/release/wafer target/release/wafer-loadgen target/release/waferctl
+
+      - name: Upload x86_64-linux binaries as artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: wafer-x86_64-linux-${{ github.sha }}
           path: |
             target/release/wafer
             target/release/wafer-loadgen
