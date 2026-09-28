@@ -13,7 +13,7 @@ router = 500000
 
 [dead_letter]
 kind = "file"
-path = "/tmp/wafer-e-backpressure-dlq.jsonl"
+path = "dlq.jsonl"
 queue_capacity = 1000
 
 [nodes.source]

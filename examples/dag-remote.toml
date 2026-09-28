@@ -4,6 +4,10 @@
 [registry]
 cache_dir = "/tmp/wafer-oci-cache"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "stdin"

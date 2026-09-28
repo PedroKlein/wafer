@@ -5,6 +5,10 @@
 name = "bench-depth-2"
 description = "2 pass-through transforms between bench source and bench sink"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

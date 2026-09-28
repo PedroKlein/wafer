@@ -596,10 +596,10 @@ of the 51 hot-swap events.
 | Post-warmup received | 114,999 |
 
 The sink gap count is the loss check, and it covers error-policy losses too.
-The current swap pipeline (`eval/configs/e-swap/pipeline-hotswap.toml`) has no
-`[dead_letter]` section, so a message the error policy sends to the DLQ is
-dropped and counted as `dlq_lost`; inside the measurement window it shows up
-as a gap.
+The swap pipeline (`eval/configs/e-swap/pipeline-hotswap.toml`) writes a file
+DLQ (`dlq.jsonl` in the result directory), so a message the error policy
+removes is counted as `dlq_sent` and its record names the reason; inside the
+measurement window it also shows up as a gap.
 
 ### E-Swap-4 — swap under 2× burst (P5.5)
 

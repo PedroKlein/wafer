@@ -4,6 +4,10 @@
 [engine]
 default_queue_capacity = 1024
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.mqtt-source]
 type = "source"
 kind = "mqtt"

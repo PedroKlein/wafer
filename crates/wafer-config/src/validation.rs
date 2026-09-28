@@ -32,6 +32,7 @@ pub fn validate(config: &Config) -> Result<(), Vec<ValidationError>> {
     check_stdin_singleton(config, &mut errors);
     check_stdout_singleton(config, &mut errors);
     check_dead_letter_required_for_overflow(config, &mut errors);
+    check_dead_letter_required_for_error_policy(config, &mut errors);
     check_queue_capacities(config, &mut errors);
     check_epoch_tick(config, &mut errors);
     check_outbound_http(config, &mut errors);
@@ -238,6 +239,26 @@ fn check_stdout_singleton(config: &Config, errors: &mut Vec<ValidationError>) {
     }
 }
 
+/// A node whose effective error policy sends messages to the DLQ needs a
+/// `[dead_letter]` sink, or those messages are dropped.
+fn check_dead_letter_required_for_error_policy(config: &Config, errors: &mut Vec<ValidationError>) {
+    if config.dead_letter.is_some() {
+        return;
+    }
+    let mut node_ids: Vec<&String> = config.nodes.keys().collect();
+    node_ids.sort();
+    for node_id in node_ids {
+        let Some(policy) = config.effective_error_policy(node_id) else { continue };
+        let actions = policy.dlq_actions();
+        if !actions.is_empty() {
+            errors.push(ValidationError::new(format!(
+                "node '{node_id}' sends {} to the dead-letter queue but no [dead_letter] sink is configured; add one or set the action to \"skip\" or \"teardown\"",
+                actions.join(", ")
+            )));
+        }
+    }
+}
+
 /// If any edge uses `overflow = "dead-letter"`, `[dead_letter]` must be configured.
 fn check_dead_letter_required_for_overflow(config: &Config, errors: &mut Vec<ValidationError>) {
     let has_dead_letter_edge =
@@ -391,8 +412,8 @@ mod tests {
     use super::*;
     use wafer_types::config::{
         Capabilities, Config, EdgeDef, HttpScheme, NodeDef, OutboundHttpDestination,
-        OverflowPolicy, PluginSpec, PluginSpecStructured, SinkDef, SourceDef, StdinSourceConfig,
-        StdoutSinkConfig, WasmNodeDef,
+        OverflowPolicy, PluginSpec, PluginSpecStructured, SimpleAction, SinkDef, SourceDef,
+        StdinSourceConfig, StdoutSinkConfig, WasmNodeDef,
     };
 
     // -------------------------------------------------------------------------
@@ -484,8 +505,23 @@ mod tests {
         Config {
             nodes: nodes.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
             edges,
+            dead_letter: Some(file_dlq()),
             ..Default::default()
         }
+    }
+
+    fn file_dlq() -> wafer_types::config::DeadLetterConfig {
+        wafer_types::config::DeadLetterConfig::File {
+            path: "dlq.jsonl".to_string(),
+            queue_capacity: 1,
+        }
+    }
+
+    fn linear_transform_config() -> Config {
+        simple_config(
+            vec![("in", stdin_source()), ("t", transform("t.wasm")), ("out", stdout_sink())],
+            vec![edge("in", "t"), edge("t", "out")],
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -930,10 +966,11 @@ outbound_http = [{ scheme = "https", host = "*.example.com" }]
 
     #[test]
     fn test_dlq_required_for_dead_letter_overflow() {
-        let config = simple_config(
+        let mut config = simple_config(
             vec![("in", stdin_source()), ("out", stdout_sink())],
             vec![edge_with_overflow("in", "out", OverflowPolicy::DeadLetter)],
         );
+        config.dead_letter = None;
         let result = validate(&config);
         let errors = result.unwrap_err();
         assert!(
@@ -941,6 +978,72 @@ outbound_http = [{ scheme = "https", host = "*.example.com" }]
                 .iter()
                 .any(|e| e.message.contains("dead-letter") || e.message.contains("dead_letter"))
         );
+    }
+
+    #[test]
+    fn default_dlq_actions_require_a_dead_letter_sink() {
+        let mut config = linear_transform_config();
+        config.dead_letter = None;
+
+        let errors = validate(&config).expect_err("default dlq actions need a sink");
+        let messages: Vec<_> = errors.iter().map(|e| e.message.as_str()).collect();
+        assert_eq!(messages.len(), 1, "{messages:?}");
+        assert!(
+            messages[0].contains("node 't' sends bad_input, dependency_failed.exhausted, processing_failed.exhausted to the dead-letter queue"),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn pipelines_without_dlq_actions_need_no_sink() {
+        let mut config = linear_transform_config();
+        config.dead_letter = None;
+        config.error_policy.bad_input = SimpleAction::Skip;
+        config.error_policy.dependency_failed.exhausted = SimpleAction::Teardown;
+        config.error_policy.processing_failed.exhausted = SimpleAction::Skip;
+
+        validate(&config).expect("no dlq action, so no sink required");
+
+        let mut native_only = simple_config(
+            vec![("in", stdin_source()), ("out", stdout_sink())],
+            vec![edge("in", "out")],
+        );
+        native_only.dead_letter = None;
+        validate(&native_only).expect("sources and sinks have no error policy");
+    }
+
+    #[test]
+    fn per_node_policy_decides_whether_a_sink_is_required() {
+        let mut config = linear_transform_config();
+        config.dead_letter = None;
+        config.error_policy.bad_input = SimpleAction::Skip;
+        config.error_policy.dependency_failed.exhausted = SimpleAction::Skip;
+        config.error_policy.processing_failed.exhausted = SimpleAction::Skip;
+        let node_policy = wafer_types::config::ErrorPolicyConfig {
+            timed_out: SimpleAction::Dlq,
+            bad_input: SimpleAction::Skip,
+            dependency_failed: wafer_types::config::RetryConfig {
+                exhausted: SimpleAction::Skip,
+                ..Default::default()
+            },
+            processing_failed: wafer_types::config::RetryConfig {
+                exhausted: SimpleAction::Skip,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        if let Some(NodeDef::Transform(node)) = config.nodes.get_mut("t") {
+            node.error_policy = Some(node_policy);
+        }
+
+        let errors = validate(&config).expect_err("node override with dlq needs a sink");
+        assert!(
+            errors.iter().any(|e| e.message.contains("node 't' sends timed_out")),
+            "{errors:?}"
+        );
+
+        config.dead_letter = Some(file_dlq());
+        validate(&config).expect("configured sink satisfies the node override");
     }
 
     #[test]

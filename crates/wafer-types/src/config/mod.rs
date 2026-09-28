@@ -226,6 +226,38 @@ pub struct WasmNodeDef {
     pub plugin_version: Option<String>,
 }
 
+impl Config {
+    /// Error policy a processing node runs with: its own table when present,
+    /// otherwise the pipeline table. Sources and sinks have no error policy.
+    #[must_use]
+    pub fn effective_error_policy(&self, node_id: &str) -> Option<&ErrorPolicyConfig> {
+        match self.nodes.get(node_id)? {
+            NodeDef::Transform(node) | NodeDef::Filter(node) | NodeDef::Router(node) => {
+                Some(node.error_policy.as_ref().unwrap_or(&self.error_policy))
+            }
+            NodeDef::Source(_) | NodeDef::Sink(_) => None,
+        }
+    }
+}
+
+impl ErrorPolicyConfig {
+    /// Actions that route a message to the dead-letter queue, named by the
+    /// field that sets them.
+    #[must_use]
+    pub fn dlq_actions(&self) -> Vec<&'static str> {
+        [
+            ("bad_input", self.bad_input),
+            ("timed_out", self.timed_out),
+            ("dependency_failed.exhausted", self.dependency_failed.exhausted),
+            ("processing_failed.exhausted", self.processing_failed.exhausted),
+        ]
+        .into_iter()
+        .filter(|(_, action)| *action == SimpleAction::Dlq)
+        .map(|(field, _)| field)
+        .collect()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EdgeDef {

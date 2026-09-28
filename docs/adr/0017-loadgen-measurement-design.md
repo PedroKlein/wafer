@@ -67,7 +67,11 @@ How late each message was actually handed off is recorded separately:
 - the publisher records the lag after each successful enqueue into a
   histogram and reports it as `source_lag_ns` (count, p50, p99, p999, max) in
   `publisher-summary.json`, together with `deadline_misses`, `intended`,
-  `rejected`, and `enqueued` counts;
+  `rejected`, `enqueued`, `acked`, `unacked_at_exit`, and `connects` counts.
+  The clock starts only after the broker's CONNACK, `acked` counts PUBACKs,
+  and the publisher waits (bounded) for outstanding acknowledgements before
+  it disconnects, so loss inside the publisher is reported rather than
+  attributed to the system under test;
 - `BenchSink` splits end-to-end latency into `service.hdr` (arrival minus
   emit) and `source-lag.hdr` (emit minus scheduled), next to `latency.hdr`
   (arrival minus scheduled).

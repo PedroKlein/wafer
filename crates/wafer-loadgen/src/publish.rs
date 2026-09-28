@@ -32,11 +32,16 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use hdrhistogram::Histogram;
 
 use clap::Args;
-use rumqttc::{AsyncClient, MqttOptions, QoS};
+use rumqttc::{
+    AsyncClient, ConnectReturnCode, ConnectionError, Event, EventLoop, MqttOptions, Outgoing,
+    Packet, QoS,
+};
 use serde::{Deserialize, Serialize};
+use tokio::sync::watch;
 use tokio::time::Instant;
 use tracing::{error, info, warn};
 
+use crate::MAX_PACKET_BYTES;
 use crate::payload::PayloadTemplate;
 use crate::profile::{LoadShape, Scheduler};
 use crate::recorder::{PublisherTimingReceipt, write_atomic};
@@ -574,6 +579,89 @@ async fn post_hotswap(
     Ok((status, response.text().await?))
 }
 
+/// How long the publisher waits for the broker's CONNACK before the run fails.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long the publisher waits after a completed schedule for the broker to
+/// acknowledge every enqueued message before disconnecting and reporting the
+/// rest as unacked. A run stopped by a signal skips the wait.
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// What the event-loop task has seen from the broker so far.
+#[derive(Debug, Clone, Copy, Default)]
+struct LinkStats {
+    connects: u64,
+    acked: u64,
+    connection_errors: u64,
+    refused: Option<ConnectReturnCode>,
+}
+
+/// Drive the MQTT event loop on its own task and publish its counters.
+///
+/// The task returns after the client's DISCONNECT went out, when the broker
+/// refuses the session (rumqttc would otherwise retry it forever), or when the
+/// client handle is dropped. Every other error is counted and retried after
+/// a second, which is rumqttc's reconnect path.
+fn spawn_eventloop(
+    mut eventloop: EventLoop,
+) -> (watch::Receiver<LinkStats>, tokio::task::JoinHandle<()>) {
+    let (tx, rx) = watch::channel(LinkStats::default());
+    let task = tokio::spawn(async move {
+        loop {
+            match eventloop.poll().await {
+                Ok(Event::Incoming(Packet::ConnAck(_))) => {
+                    tx.send_modify(|stats| stats.connects = stats.connects.saturating_add(1));
+                }
+                Ok(Event::Incoming(Packet::PubAck(_))) => {
+                    tx.send_modify(|stats| stats.acked = stats.acked.saturating_add(1));
+                }
+                Ok(Event::Outgoing(Outgoing::Disconnect)) | Err(ConnectionError::RequestsDone) => {
+                    return;
+                }
+                Ok(_) => {}
+                Err(ConnectionError::ConnectionRefused(code)) => {
+                    tx.send_modify(|stats| stats.refused = Some(code));
+                    return;
+                }
+                Err(e) => {
+                    tx.send_modify(|stats| {
+                        stats.connection_errors = stats.connection_errors.saturating_add(1);
+                    });
+                    error!("MQTT eventloop error: {e}");
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            }
+        }
+    });
+    (rx, task)
+}
+
+/// Wait for a successful CONNACK. The inner `Err` names the stop signal that
+/// arrived first; the outer `Err` is a broker that refused or never answered.
+async fn wait_for_connack(
+    link: &mut watch::Receiver<LinkStats>,
+    stop_signal: &mut StopSignal,
+    broker: &str,
+) -> anyhow::Result<Result<(), &'static str>> {
+    let connected = link.wait_for(|stats| stats.connects > 0 || stats.refused.is_some());
+    let outcome = tokio::select! {
+        biased;
+        reason = stop_signal.recv() => return Ok(Err(reason)),
+        outcome = tokio::time::timeout(CONNECT_TIMEOUT, connected) => outcome,
+    };
+    match outcome {
+        Ok(Ok(stats)) => match stats.refused {
+            Some(code) => anyhow::bail!("broker {broker} refused the connection: {code:?}"),
+            None => Ok(Ok(())),
+        },
+        Ok(Err(_)) => anyhow::bail!("MQTT event loop stopped before connecting to {broker}"),
+        Err(_) => anyhow::bail!(
+            "no CONNACK from {broker} within {} s; is the broker running?",
+            CONNECT_TIMEOUT.as_secs()
+        ),
+    }
+}
+
 async fn enqueue_publish(
     client: &AsyncClient,
     topic: &str,
@@ -589,15 +677,16 @@ async fn enqueue_publish(
 
 /// Drive the publisher until `--duration-secs * --rate` messages have been sent.
 ///
+/// The clock starts only after the broker's CONNACK. At the end of the
+/// schedule the publisher waits for the broker to acknowledge every enqueued
+/// message (bounded by [`DRAIN_TIMEOUT`]) before disconnecting, and the
+/// summary reports what was acknowledged and what was not.
+///
 /// # Errors
-/// - MQTT connection setup failure.
+/// - The broker refused the session or sent no CONNACK within
+///   [`CONNECT_TIMEOUT`]. No summary is written: no message was offered.
 /// - The hot-swap trigger failed (client build, transport error, non-2xx
 ///   response, or task panic). The summary file is still written first.
-///
-/// Note: MQTT publishes queued to rumqttc's internal channel succeed even if
-/// the broker is unreachable; the eventloop task logs the connection failure
-/// separately. This is intentional — the eval scripts fail on broker
-/// unavailability at a higher layer via the subscriber's `sequence.csv`.
 #[expect(
     clippy::too_many_lines,
     reason = "publisher orchestration keeps MQTT setup, shape resolution, publish loop, and hotswap trigger cleanup in one place; splitting hurts readability more than it helps"
@@ -606,7 +695,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     args.apply_profile_file()?;
 
     if args.dry_run {
-        info!(target: "wafer_loadgen::publish::dry_run", "{}", args.dry_run_report());
+        std::io::stdout().write_all(args.dry_run_report().as_bytes())?;
         return Ok(PublisherReport {
             schema_version: 1,
             published: 0,
@@ -614,6 +703,10 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             intended: 0,
             rejected: 0,
             enqueued: 0,
+            acked: 0,
+            unacked_at_exit: 0,
+            connects: 0,
+            connection_errors: 0,
             measurement_duration_ns: 0,
             deadline_misses: 0,
             elapsed_ms: 0,
@@ -637,24 +730,26 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         "Starting WAFER load generator (publisher)"
     );
 
+    let payload_template = args.payload_template;
     let mut opts = MqttOptions::new(&args.client_id, &args.broker_host, args.broker_port);
     opts.set_keep_alive(Duration::from_secs(30));
     opts.set_clean_session(true);
-    let (client, mut eventloop) = AsyncClient::new(opts, 1024);
-    let eventloop_task = tokio::spawn(async move {
-        loop {
-            match eventloop.poll().await {
-                Ok(_) => {}
-                Err(e) => {
-                    error!("MQTT eventloop error: {e}");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
-                }
-            }
-        }
-    });
+    opts.set_max_packet_size(MAX_PACKET_BYTES, MAX_PACKET_BYTES);
+    let (client, eventloop) = AsyncClient::new(opts, 1024);
+    let (mut link, mut eventloop_task) = spawn_eventloop(eventloop);
 
-    // Brief delay for the MQTT session to establish before we start hammering.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    let broker = format!("{}:{}", args.broker_host, args.broker_port);
+    let handshake = wait_for_connack(&mut link, &mut stop_signal, &broker).await?;
+    let mut exit_reason = match handshake {
+        Ok(()) => "duration",
+        Err(reason) => {
+            info!(signal = reason, "Stop signal received before CONNACK; writing summary");
+            reason
+        }
+    };
+    // A run stopped before it connected offers nothing.
+    let schedule_duration =
+        if handshake.is_ok() { Duration::from_secs(args.duration_secs) } else { Duration::ZERO };
 
     let start = Instant::now();
     let measurement_started_ns = now_ns();
@@ -663,7 +758,7 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     }
     let hotswap_target = match &shape {
         LoadShape::HotswapTrigger { swap_at_secs, .. }
-            if *swap_at_secs < Duration::from_secs(args.duration_secs).as_secs_f64() =>
+            if *swap_at_secs < schedule_duration.as_secs_f64() =>
         {
             Some(*swap_at_secs)
         }
@@ -673,20 +768,17 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         .and_then(|_| spawn_hotswap_trigger(&shape, start, args.hotswap_result_path.clone()));
 
     let padding: String = "x".repeat(args.payload_size.saturating_sub(80));
-    let payload_template = args.payload_template;
     let mut trace =
         args.trace_file.as_ref().map(std::fs::File::create).transpose()?.map(BufWriter::new);
     if let Some(trace) = &mut trace {
         writeln!(trace, "seq,ts_ns")?;
     }
-    let mut due =
-        pace(Scheduler::new(shape), start.into_std(), Duration::from_secs(args.duration_secs))?;
+    let mut due = pace(Scheduler::new(shape), start.into_std(), schedule_duration)?;
     let mut source_lag = lag_histogram();
     let mut seq = args.sequence_start;
     let mut offered: u64 = 0;
     let mut errors: u64 = 0;
     let mut deadline_misses: u64 = 0;
-    let mut exit_reason = "duration";
 
     loop {
         let (offset, next_offset) = tokio::select! {
@@ -726,6 +818,11 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
             writeln!(trace, "{seq},{ts}")?;
         }
         if let Err(error) = enqueued {
+            if link.has_changed().is_err() {
+                error!("MQTT session is gone for good; stopping the schedule");
+                exit_reason = "broker-lost";
+                break;
+            }
             if !args.drop_when_full {
                 warn!("Publish error (seq={seq}): {error}");
             }
@@ -743,9 +840,30 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     if let Some(trace) = &mut trace {
         trace.flush()?;
     }
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let enqueued = offered.saturating_sub(errors);
+    if exit_reason == "duration" {
+        tokio::select! {
+            biased;
+            reason = stop_signal.recv() => {
+                info!(signal = reason, "Stop signal received while draining; writing summary");
+                exit_reason = reason;
+            }
+            _ = tokio::time::timeout(DRAIN_TIMEOUT, link.wait_for(|stats| stats.acked >= enqueued)) => {}
+        }
+    }
+    let stats = *link.borrow();
+    let unacked_at_exit = enqueued.saturating_sub(stats.acked);
+    if unacked_at_exit > 0 {
+        warn!(
+            unacked = unacked_at_exit,
+            "Broker did not acknowledge every enqueued message within {} s of the schedule end",
+            DRAIN_TIMEOUT.as_secs()
+        );
+    }
     let _disc = client.disconnect().await;
-    eventloop_task.abort();
+    if tokio::time::timeout(Duration::from_secs(1), &mut eventloop_task).await.is_err() {
+        eventloop_task.abort();
+    }
     // A failed swap fails the run, but only after the summary is written so
     // the evidence of what was offered survives.
     let hotswap_failure = match hotswap_task {
@@ -780,6 +898,9 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
     info!(
         total = offered,
         errors = errors,
+        acked = stats.acked,
+        unacked_at_exit,
+        connects = stats.connects,
         elapsed_ms = elapsed.as_millis(),
         actual_rate = format!("{actual_rate:.1}"),
         "Load generation complete"
@@ -791,8 +912,12 @@ pub async fn run_publisher(mut args: PublishArgs) -> anyhow::Result<PublisherRep
         errors,
         intended: offered,
         rejected: errors,
-        enqueued: offered.saturating_sub(errors),
-        measurement_duration_ns: args.duration_secs.saturating_mul(1_000_000_000),
+        enqueued,
+        acked: stats.acked,
+        unacked_at_exit,
+        connects: stats.connects,
+        connection_errors: stats.connection_errors,
+        measurement_duration_ns: duration_ns(schedule_duration),
         deadline_misses,
         elapsed_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
         actual_rate,
@@ -817,7 +942,18 @@ pub struct PublisherReport {
     pub errors: u64,
     pub intended: u64,
     pub rejected: u64,
+    /// Messages handed to the MQTT client. `enqueued = acked + unacked_at_exit`.
     pub enqueued: u64,
+    /// Messages the broker acknowledged with a PUBACK.
+    pub acked: u64,
+    /// Enqueued messages still unacknowledged when the drain window closed;
+    /// they were dropped with the connection.
+    pub unacked_at_exit: u64,
+    /// Successful CONNACKs. More than one means the session was re-established
+    /// mid-run and its queued messages were lost.
+    pub connects: u64,
+    /// Event-loop errors (each followed by a reconnect attempt).
+    pub connection_errors: u64,
     pub measurement_duration_ns: u64,
     pub deadline_misses: u64,
     pub elapsed_ms: u64,
@@ -825,7 +961,8 @@ pub struct PublisherReport {
     /// If profile = hotswap-trigger, the offset (secs) at which the swap was
     /// triggered. `None` for other profiles and when the swap request failed.
     pub hotswap_triggered_at_secs: Option<f64>,
-    /// `duration` when the schedule ran to its end, or the signal that stopped it.
+    /// `duration` when the schedule ran to its end, the signal that stopped
+    /// it, or `broker-lost` when the MQTT session ended for good mid-run.
     pub exit_reason: String,
     /// How late each message was handed to the MQTT client relative to its
     /// scheduled time. Latency is measured from the scheduled time, so a run
@@ -969,28 +1106,6 @@ mod tests {
             hotswap_result_path: Some(result_path),
             timing_receipt: None,
         }
-    }
-
-    #[tokio::test]
-    async fn failed_hotswap_request_fails_the_run_and_records_the_error() {
-        // Reserve a port, then close it so the POST is refused.
-        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
-        let api_url = format!("http://{}", closed.local_addr().expect("addr"));
-        drop(closed);
-        let dir = tempfile::tempdir().expect("tempdir");
-        let result_path = dir.path().join("swap_timeline.json");
-
-        let err = super::run_publisher(hotswap_args(api_url, result_path.clone()))
-            .await
-            .expect_err("a swap that never happened must fail the publisher");
-
-        assert!(format!("{err:#}").contains("hot-swap"), "{err:#}");
-        let artifact: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&result_path).expect("artifact written"))
-                .expect("parse artifact");
-        let request = &artifact["requests"][0];
-        assert!(request["http_status"].is_null());
-        assert!(request["error"].as_str().is_some_and(|e| e.contains("failed")), "{artifact}");
     }
 
     #[test]

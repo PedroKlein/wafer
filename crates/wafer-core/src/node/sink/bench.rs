@@ -9,6 +9,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use hdrhistogram::Histogram;
@@ -21,7 +22,7 @@ use wafer_types::latency::{
 
 use crate::error::Result;
 use crate::node::{Lifecycle, Sink};
-use crate::queue::RuntimeEnvelope;
+use crate::queue::{BenchStamps, RuntimeEnvelope};
 use crate::util::{monotonic_unix_ns, write_atomic};
 
 // =============================================================================
@@ -1275,22 +1276,20 @@ impl BenchSink {
         write_atomic(&dir.join("swap_timeline.json"), json.as_bytes())
     }
 
-    fn record_sequence(&mut self, envelope: &RuntimeEnvelope) -> bool {
+    fn record_sequence(&mut self, stamps: Option<BenchStamps>) -> bool {
         let Some(tracker) = &mut self.sequence_tracker else { return false };
-        let Some(stamps) = envelope.header.bench else { return false };
+        let Some(stamps) = stamps else { return false };
         tracker.anchor_at(stamps.measurement_start_seq);
         tracker.record(stamps.sequence)
     }
 
     fn record_burst_bucket(
         &mut self,
-        envelope: &RuntimeEnvelope,
+        stamps: Option<BenchStamps>,
         arrival_unix_ns: u64,
         duplicate: bool,
     ) {
-        let Some(burst) = envelope.header.bench.and_then(|stamps| stamps.burst) else {
-            return;
-        };
+        let Some(burst) = stamps.and_then(|stamps| stamps.burst) else { return };
         if let Some(source_origin_ns) = burst.measurement_start_unix_ns {
             self.burst_observation
                 .get_or_insert_with(|| Box::new(BurstObservation::new(source_origin_ns)))
@@ -1302,6 +1301,22 @@ impl BenchSink {
             *count = count.saturating_add(1);
         }
     }
+}
+
+/// A completed `Ok(())` with no heap allocation: `Box::pin` of a zero-sized
+/// future does not allocate, unlike `Box::pin(async { Ok(()) })`.
+struct Done;
+
+impl Future for Done {
+    type Output = Result<()>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Ready(Ok(()))
+    }
+}
+
+fn done() -> Pin<Box<dyn Future<Output = Result<()>> + Send>> {
+    Box::pin(Done)
 }
 
 /// Wall-clock nanoseconds since the Unix epoch, for the measurement window
@@ -1337,7 +1352,7 @@ impl Lifecycle for BenchSink {
             self.interval_recorder =
                 Some(IntervalRecorder::new(wall_clock_ns(), configured_measurement_secs()));
         }
-        Box::pin(async { Ok(()) })
+        done()
     }
 
     fn close(&mut self) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
@@ -1376,6 +1391,11 @@ impl Sink for BenchSink {
         &mut self,
         envelope: RuntimeEnvelope,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + '_>> {
+        // The arrival stamp comes before any other work so the measured
+        // latency excludes the sink's own bookkeeping.
+        let arrival_unix_ns = monotonic_unix_ns();
+        let now = Instant::now();
+
         // Initialize warmup timer on first message
         if !self.started {
             self.started = true;
@@ -1384,22 +1404,23 @@ impl Sink for BenchSink {
                     clippy::arithmetic_side_effects,
                     reason = "Instant + Duration cannot overflow for realistic warmup values"
                 )]
-                let deadline =
-                    Instant::now() + std::time::Duration::from_secs(self.config.warmup_secs);
+                let deadline = now + std::time::Duration::from_secs(self.config.warmup_secs);
                 self.warmup_until = Some(deadline);
             }
         }
 
         self.message_count = self.message_count.saturating_add(1);
 
+        let stamps = envelope.header.bench;
+
         // BenchSource marks the exact warmup population. Other sources retain
         // the wall-clock fallback because they do not know the benchmark phase.
-        let stamps = envelope.header.bench;
-        let warmup_marker = stamps.map(|stamps| stamps.warmup);
-        let in_warmup = warmup_marker
-            .unwrap_or_else(|| self.warmup_until.is_some_and(|until| Instant::now() < until));
+        let in_warmup = stamps.map_or_else(
+            || self.warmup_until.is_some_and(|until| now < until),
+            |stamps| stamps.warmup,
+        );
         if in_warmup {
-            return Box::pin(async { Ok(()) });
+            return done();
         }
 
         let intended_ns = stamps.map(|stamps| stamps.intended_ns);
@@ -1408,7 +1429,6 @@ impl Sink for BenchSink {
             .and_then(|stamps| stamps.burst)
             .and_then(|burst| burst.measurement_start_unix_ns);
 
-        let now = Instant::now();
         if self.measurement_start.is_none() {
             self.measurement_start = Some(now);
             let start_wall_time = SystemTime::now();
@@ -1422,9 +1442,8 @@ impl Sink for BenchSink {
             self.interval_recorder = Some(IntervalRecorder::new(start_unix_ns, measurement_secs));
         }
 
-        let arrival_unix_ns = monotonic_unix_ns();
-        let duplicate = self.record_sequence(&envelope);
-        self.record_burst_bucket(&envelope, arrival_unix_ns, duplicate);
+        let duplicate = self.record_sequence(stamps);
+        self.record_burst_bucket(stamps, arrival_unix_ns, duplicate);
 
         let since_start = self
             .measurement_start
@@ -1459,15 +1478,14 @@ impl Sink for BenchSink {
             intervals.record(elapsed_ns, latency_ns, duplicate);
         }
 
-        // Hot-swap version tracking
         if let Some(ref mut recorder) = self.hotswap_recorder
             && let Some((_, version)) =
-                envelope.header.metadata.iter().find(|(k, _)| k.as_ref() == "plugin.version")
+                envelope.header.metadata.iter().find(|(key, _)| key.as_ref() == "plugin.version")
         {
-            recorder.record(version.as_ref(), monotonic_unix_ns());
+            recorder.record(version.as_ref(), arrival_unix_ns);
         }
 
-        Box::pin(async { Ok(()) })
+        done()
     }
 }
 

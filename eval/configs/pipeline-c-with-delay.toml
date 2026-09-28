@@ -11,6 +11,10 @@
 name = "e-val-1-methodology"
 description = "50 ms injected delay + honest p99 gate"
 
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
 [nodes.source]
 type = "source"
 kind = "bench-source"

@@ -113,7 +113,8 @@ impl RuntimeEnvelope {
     }
 
     /// Create the output of a transform guest for `input`. The guest supplies
-    /// the header strings and payload; host-only state comes from `input`.
+    /// the header strings and payload; lineage and bench stamps come from
+    /// `input`. Retries are spent per node, so the count starts at zero.
     pub(crate) fn from_guest_output(
         input: Self,
         id: Box<str>,
@@ -134,7 +135,7 @@ impl RuntimeEnvelope {
             }),
             payload,
             lineage: input.lineage,
-            retry_count: input.retry_count,
+            retry_count: 0,
         }
     }
 
