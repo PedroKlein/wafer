@@ -123,3 +123,7 @@ harness = false
 [[bench]]
 name = "overhead_of_memory_sampling"
 harness = false
+
+[[bench]]
+name = "hot_path"
+harness = false

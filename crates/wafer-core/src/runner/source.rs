@@ -45,17 +45,18 @@ pub async fn run_source_loop(
     state.transition_to_running();
     let mut consecutive_errors: u32 = 0;
     let mut outcome = Ok(());
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
     loop {
         tokio::select! {
             biased;
-            () = cancel.cancelled() => break,
+            () = &mut cancelled => break,
             result = source.poll() => {
                 match result {
                     Ok(Some(mut envelope)) => {
                         consecutive_errors = 0;
                         envelope.ensure_trace_id();
-                        // Sources don't "process" — 0ns duration
-                        metrics.record_processed(0);
+                        metrics.record_processed();
                         send_downstream(&senders, envelope).await;
                     }
                     Ok(None) => break, // EOF — source exhausted
@@ -86,7 +87,7 @@ pub async fn run_source_loop(
                         );
                         tokio::select! {
                             biased;
-                            () = cancel.cancelled() => break,
+                            () = &mut cancelled => break,
                             () = tokio::time::sleep(backoff) => {}
                         }
                     }

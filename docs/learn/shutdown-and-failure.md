@@ -90,7 +90,7 @@ The parent token creates child tokens for node bundles. Cancelling the parent wa
 
 ### `tokio::select!` protects cancellable waits
 
-Queue receive and native source polling are cancellation points. The `biased` order checks cancellation before another ready branch. Guest calls remain outside the macro because dropping a future that owns mutable Wasmtime state midway through a call is not accepted as safe here.
+Queue receive and native source polling are cancellation points. The `biased` order checks cancellation before another ready branch in the source and processing loops; the sink loop takes a queued message first, since it drains the remaining buffer after cancellation anyway. Each loop pins one cancellation future for its lifetime rather than building one per message. Guest calls remain outside the macro because dropping a future that owns mutable Wasmtime state midway through a call is not accepted as safe here.
 
 ### `JoinSet` owns task lifetimes
 

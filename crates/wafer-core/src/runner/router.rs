@@ -6,7 +6,6 @@
 //! See docs/rfcs/RFC-005-orchestrator.md D3.
 
 use std::sync::Arc;
-use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -25,10 +24,9 @@ async fn dispatch_route_outcome(
     senders: &[DownstreamSender],
     envelope: RuntimeEnvelope,
     pending_swap_progress: &mut Option<Arc<HotSwapProgress>>,
-    duration_ns: u64,
 ) {
     if ports.is_empty() {
-        metrics.record_processed(duration_ns);
+        metrics.record_processed();
         if let Some(progress) = pending_swap_progress.take() {
             progress.mark_first_post_replacement_local_outcome(
                 crate::runner::FirstPostReplacementLocalOutcome::RouterDropped,
@@ -37,7 +35,7 @@ async fn dispatch_route_outcome(
         return;
     }
 
-    metrics.record_processed(duration_ns);
+    metrics.record_processed();
     fan_out(&ports, envelope, senders).await;
     if let Some(progress) = pending_swap_progress.take() {
         progress.mark_first_post_replacement_local_outcome(
@@ -109,6 +107,8 @@ pub async fn run_router_loop(
     let mut receiver = receiver.into();
     let mut pending_swap_progress: Option<Arc<HotSwapProgress>> = None;
     let mut held = None;
+    let cancelled = cancel.cancelled();
+    tokio::pin!(cancelled);
     loop {
         // 1. Hot-swap check (non-blocking, between messages)
         if let Some(payload) = take_pending_swap(&mut swap_rx) {
@@ -139,17 +139,22 @@ pub async fn run_router_loop(
         }
 
         // 2. Retry buffer priority
-        let envelope =
-            match next_input(&mut held, &mut receiver, &mut policy, &mut swap_rx, &cancel).await {
-                NextInput::Envelope(envelope) => envelope,
-                NextInput::Swap => continue,
-                NextInput::Closed => break,
-            };
+        let envelope = match next_input(
+            &mut held,
+            &mut receiver,
+            &mut policy,
+            &mut swap_rx,
+            cancelled.as_mut(),
+        )
+        .await
+        {
+            NextInput::Envelope(envelope) => envelope,
+            NextInput::Swap => continue,
+            NextInput::Closed => break,
+        };
 
         // 3. Wasm call OUTSIDE select! — runs to completion, never cancelled.
-        let start = Instant::now();
         let result = router.route(&envelope).await;
-        let duration_ns = crate::util::duration_ns_saturating(start.elapsed());
 
         // 4. Dispatch result
         match result {
@@ -168,7 +173,6 @@ pub async fn run_router_loop(
                     &senders,
                     envelope,
                     &mut pending_swap_progress,
-                    duration_ns,
                 )
                 .await;
             }
@@ -245,7 +249,6 @@ mod tests {
             &[],
             RuntimeEnvelope::from_string("source", "dropped"),
             &mut pending_swap_progress,
-            0,
         )
         .await;
 
