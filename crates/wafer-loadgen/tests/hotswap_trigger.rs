@@ -1,10 +1,11 @@
 //! Integration test for the hotswap-trigger load profile (P0.3 AC3).
 //!
 //! Spins up a mock HTTP server via `axum` that records the wall-clock
-//! timestamp of any POST to `/api/v1/nodes/:id/hot-swap`. The publisher runs
-//! in a mode that does NOT connect to a broker (broker connect is bypassed by
-//! pointing at a dead port; publish errors are logged but not fatal). The
-//! trigger task must POST exactly once, ±100 ms of the target offset.
+//! timestamp of any POST to `/api/v1/nodes/:id/hot-swap`, and an in-process
+//! fake broker so the publisher's connection handshake succeeds. The trigger
+//! task must POST exactly once, ±100 ms of the target offset.
+
+mod common;
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -20,6 +21,7 @@ use axum::{
 };
 use tokio::net::TcpListener;
 
+use common::FakeBroker;
 use wafer_loadgen::{PublishArgs, run_publisher};
 
 /// Server state: records the elapsed ms from `start` when the POST arrived.
@@ -84,16 +86,16 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
         let _ok = axum::serve(listener, app).await;
     });
 
-    // Publisher: hotswap-trigger profile, swap at 1.0s. Point at a dead broker
-    // port so we don't need mosquitto — the publish() failures are counted as
-    // errors but do not stop the run. What we care about is the trigger POST.
+    // Publisher: hotswap-trigger profile, swap at 1.0s. What we care about is
+    // the trigger POST; the fake broker only has to acknowledge the session.
+    let broker = FakeBroker::start().await;
     let target_offset_secs = 1.0_f64;
     let output = tempfile::tempdir()?;
     let result_path = output.path().join("swap_timeline.json");
     let timing_path = output.path().join("publisher-timing.json");
     let args = PublishArgs {
-        broker_host: "127.0.0.1".into(),
-        broker_port: 1, // dead port; publishes will fail, that's fine
+        broker_host: broker.host(),
+        broker_port: broker.port(),
         topic: "wafer/bench/input".into(),
         rate: 100,
         duration_secs: 3, // give the trigger time to fire (needs > swap_at + ~200ms drain)
@@ -134,9 +136,8 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
     let recorded_ms = state.recorded_ms.load(Ordering::Acquire);
     assert!(recorded_ms >= 0, "no POST recorded (marker still -1)");
 
-    // ±100 ms tolerance around the target offset (measured from publisher start,
-    // which is slightly after test start — allow +500ms slack for the MQTT
-    // setup delay in run_publisher).
+    // ±100 ms tolerance around the target offset, measured from the publisher's
+    // own start (taken after the broker's CONNACK).
     #[expect(
         clippy::cast_possible_truncation,
         clippy::as_conversions,
@@ -144,17 +145,12 @@ async fn hotswap_trigger_posts_once_within_100ms_of_scheduled_offset() -> anyhow
     )]
     let target_ms = (target_offset_secs * 1000.0) as i64;
     let delta_ms = (recorded_ms - target_ms).abs();
-    // The 500ms mqtt-setup delay is bundled into the "start". run_publisher
-    // starts the shared `start` Instant AFTER the MQTT setup delay, so the
-    // trigger is offset-aligned to the publish loop start. But this test's
-    // AtomicI64 captures elapsed from the *outer* test-start Instant, so we
-    // expect a delta of ~500 ms + target_offset. Tolerance is ±150ms to
-    // absorb Instant/tokio-timer skew on cold macOS.
-    let outer_target_ms = target_ms + 500 + 50; // + init sleep
-    let delta_outer_ms = (recorded_ms - outer_target_ms).abs();
+    // This test's AtomicI64 captures elapsed from the *outer* test-start
+    // Instant, which precedes the handshake and the init sleep, so the
+    // recorded offset may run a little past the target but never before it.
     assert!(
-        delta_ms <= 200 || delta_outer_ms <= 200,
-        "POST timing outside tolerance: recorded={recorded_ms}ms, target={target_ms}ms (inner) or {outer_target_ms}ms (outer), delta={delta_ms}ms / {delta_outer_ms}ms"
+        (0..=200).contains(&(recorded_ms - target_ms)),
+        "POST timing outside tolerance: recorded={recorded_ms}ms, target={target_ms}ms, delta={delta_ms}ms"
     );
 
     // Verify the payload has a JSON body with the wasm_path.
