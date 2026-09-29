@@ -1436,9 +1436,10 @@ def startup_records(runs: int = 30, conditions: tuple[str, ...] | None = None) -
 def test_startup_table_contrasts_cold_with_warm_per_tier() -> None:
     table = startup_table(startup_records()).set_index("condition")
     assert len(table) == 6
-    assert table.loc["large-cold", "cold_minus_warm_ns"] == pytest.approx(240_000_000)
+    assert table.loc["large-cold", "median_cold_minus_warm_ns"] == pytest.approx(240_000_000)
+    assert table.loc["large-cold", "N_pairs"] == 30
     assert table.loc["large-cold", "cliffs_delta_vs_warm"] == 1.0
-    assert pd.isna(table.loc["small-warm", "cold_minus_warm_ns"])
+    assert pd.isna(table.loc["small-warm", "median_cold_minus_warm_ns"])
     assert table["median_unmeasured_ns"].eq(1_000_000).all()
     assert table["compiled_cache_hits"].eq(0).all()
     assert "no compiled-cache claim" in table.loc["small-cold", "claim_boundary"]
@@ -1448,4 +1449,16 @@ def test_startup_table_requires_full_n_unless_diagnostic() -> None:
     with pytest.raises(ValueError, match="30 independent runs"):
         startup_table(startup_records(conditions=("small-cold", "small-warm")))
     table = startup_table(startup_records(runs=2, conditions=("small-cold",)), canonical=False)
-    assert len(table) == 1 and pd.isna(table["cold_minus_warm_ns"].iloc[0])
+    assert len(table) == 1 and pd.isna(table["median_cold_minus_warm_ns"].iloc[0])
+
+
+def test_startup_cold_minus_warm_pairs_runs_by_index() -> None:
+    records = startup_records()
+    for record in records:
+        if record["condition"] in {"small-cold", "small-warm"}:
+            cold_penalty = 5_000_000 if record["condition"] == "small-cold" else 0
+            record["total_wall_duration_ns"] = 40_000_000 + record["run_index"] * 1_000_000 + cold_penalty
+    row = startup_table(records).set_index("condition").loc["small-cold"]
+    assert row["median_cold_minus_warm_ns"] == pytest.approx(5_000_000)
+    assert (row["difference_ci95_low_ns"], row["difference_ci95_high_ns"]) == pytest.approx((5_000_000, 5_000_000))
+    assert row["hodges_lehmann_shift_ns"] == pytest.approx(5_000_000)

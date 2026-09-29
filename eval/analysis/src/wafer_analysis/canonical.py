@@ -658,7 +658,7 @@ STARTUP_PHASES = ("process_config", "component_load_compile", "instantiation", "
 
 
 def startup_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
-    """Startup phases per tier and page-cache state, with the cold minus warm difference.
+    """Startup phases per tier and page-cache state, with the paired cold minus warm difference.
 
     Each record is one run's ``startup.json`` with its ``condition`` and ``run_index``.
     """
@@ -690,28 +690,33 @@ def startup_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
             **{f"median_{phase}_ns": float(np.median(values)) for phase, values in phases.items()},
             "median_unmeasured_ns": float(np.median(unmeasured)),
             "compiled_cache_hits": sum(bool(run["compiled_component_cache"]["hit"]) for run in runs),
-            **dict.fromkeys(("cold_minus_warm_ns", "difference_ci95_low_ns", "difference_ci95_high_ns", "cliffs_delta_vs_warm", "cliffs_delta_ci95_low", "cliffs_delta_ci95_high", "effect_magnitude")),
+            **dict.fromkeys(("N_pairs", "median_cold_minus_warm_ns", "difference_ci95_low_ns", "difference_ci95_high_ns", "hodges_lehmann_shift_ns", "shift_ci95_low_ns", "shift_ci95_high_ns", "cliffs_delta_vs_warm", "effect_magnitude")),
         }
-        warm = totals[f"{tier}-warm"]
-        if state == "cold" and len(warm):
-            difference, difference_low, difference_high = median_shift_ci(totals[condition], warm)
-            delta, magnitude = cliffs_delta(totals[condition], warm)
-            delta_low, delta_high = cliffs_delta_ci(totals[condition], warm)
+        warm_by_run = {run["run_index"]: run["total_wall_duration_ns"] for run in grouped[f"{tier}-warm"]}
+        pairs = [(run["total_wall_duration_ns"], warm_by_run[run["run_index"]]) for run in runs if run["run_index"] in warm_by_run]
+        if state == "cold" and pairs:
+            cold, warm = (np.asarray(side, dtype=float) for side in zip(*pairs))
+            differences = cold - warm
+            difference_low, difference_high = bootstrap_ci(differences)
+            shift, shift_low, shift_high = hodges_lehmann(differences)
+            delta, magnitude = cliffs_delta(cold, warm)
             row.update(
                 {
-                    "cold_minus_warm_ns": difference,
+                    "N_pairs": len(pairs),
+                    "median_cold_minus_warm_ns": float(np.median(differences)),
                     "difference_ci95_low_ns": difference_low,
                     "difference_ci95_high_ns": difference_high,
+                    "hodges_lehmann_shift_ns": shift,
+                    "shift_ci95_low_ns": shift_low,
+                    "shift_ci95_high_ns": shift_high,
                     "cliffs_delta_vs_warm": delta,
-                    "cliffs_delta_ci95_low": delta_low,
-                    "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
                 }
             )
         row.update(
             {
                 "units": "nanoseconds, runs",
-                "estimator": "median run total with bootstrap 95% CI; phase medians are descriptive and need not sum to the median total; cold minus warm median with a two-group bootstrap 95% CI and Cliff's delta with bootstrap 95% CI",
+                "estimator": "median run total with bootstrap 95% CI; phase medians are descriptive and need not sum to the median total; cold minus warm paired by run index, because each warm start follows its cold start: median paired difference with bootstrap 95% CI and Hodges-Lehmann shift with bootstrap 95% CI; Cliff's delta is descriptive",
                 "claim_boundary": "Linux page-cache state only; the compiled-component cache is disabled, so no compiled-cache claim",
                 "thesis_evidence": canonical,
             }
