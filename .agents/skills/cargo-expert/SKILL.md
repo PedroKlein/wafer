@@ -4,7 +4,7 @@ description: >
   Cargo workspace configuration and build system patterns for WAFER's multi-crate Rust project
   with WASM plugin targets. Covers workspace dependency management with git-pinned wasmtime,
   wasm32-wasip2 build configuration, plugin release profiles for size optimization, cross-compilation
-  for ARM edge targets (RPi 4, Jetson), feature flags for optional capabilities (cuda, http-api),
+  for ARM edge targets (Raspberry Pi 5, Jetson), feature flags for optional capabilities (cuda, http-api),
   and CI build matrix design. Use when modifying Cargo.toml, adding dependencies, configuring
   build targets, troubleshooting compilation errors, setting up cross-compilation, or optimizing
   binary size. Triggers on: Cargo.toml, dependency, workspace, feature flag, build profile,
@@ -55,7 +55,7 @@ wasmtime-wasi-nn = { git = "https://github.com/bytecodealliance/wasmtime", featu
 
 **Why `exclude = ["plugins/*"]`?** Plugins target `wasm32-wasip2`. Including them in the
 workspace means `cargo build --workspace` tries to build them for the host target and fails.
-Plugins are built separately via `mise run build-plugins`.
+Plugins are built separately via `mise run //plugins:build-plugins`.
 
 **Why git dependency for wasmtime?** The released crate often lags behind async Component Model
 fixes. Once wasmtime publishes a stable release with full async CM support, switch to crates.io.
@@ -83,7 +83,7 @@ wasmtime = { git = "...", features = [
 ```
 
 **Binary size impact**: Each disabled feature saves 100KB-1MB in final binary.
-On Pi4 with limited storage, this matters.
+On Pi 5 with limited storage, this matters.
 
 ### Feature-Gating Unsafe Operations (from Spin)
 
@@ -167,32 +167,20 @@ cuda = ["wafer-core/cuda"]         # Forward to core
 
 ## Cross-Compilation for Edge Targets
 
-### Raspberry Pi 4 (aarch64-unknown-linux-gnu)
+### Raspberry Pi 5 (aarch64 Linux)
+
+The repository builds Pi binaries in a Docker `linux/arm64` container, not with
+a cross-linker or the `cross` crate:
 
 ```bash
-# Install target
-rustup target add aarch64-unknown-linux-gnu
-
-# Install cross-linker
-# macOS: brew install aarch64-unknown-linux-gnu
-# Ubuntu: apt install gcc-aarch64-linux-gnu
-
-# Build
-cargo build --release --target aarch64-unknown-linux-gnu
+mise run cross-build-pi        # target/docker-aarch64-linux/release/{wafer,wafer-loadgen,waferctl}
+mise run cross-build-pi-check  # confirm the three are aarch64 ELF
+mise run glibc-floor -- --max 2.36 target/docker-aarch64-linux/release/wafer
 ```
 
-`.cargo/config.toml` (workspace root):
-```toml
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
-```
-
-### Alternative: `cross` tool (Docker-based)
-
-```bash
-cargo install cross
-cross build --release --target aarch64-unknown-linux-gnu
-```
+Jetson (L4T, older glibc) and x86 hosts build on the host itself
+(`cargo build --locked --release ...` or `mise run build-release-x86`). See
+`docs/eval/cross-compile.md` for the rationale and the glibc each binary needs.
 
 **When to cross-compile vs build on target**: Cross-compile for CI and quick iteration.
 Build on target for final benchmarks (ensures matching LLVM codegen for the actual CPU).
@@ -236,11 +224,11 @@ jobs:
     - cargo test --workspace
   
   build-plugins:
-    - mise run build-plugins  # Builds all plugins for wasm32-wasip2
+    - mise run //plugins:build-plugins  # Builds all plugins for wasm32-wasip2
     - wasm-tools validate plugins/*/target/wasm32-wasip2/release/*.wasm
 
-  cross:  # Only on release/main
-    - cross build --release --target aarch64-unknown-linux-gnu
+  cross-arch:  # native arm64 runner, see .github/workflows/cross-arch.yml
+    - cargo build --release -p wafer-runtime -p wafer-loadgen -p waferctl
 ```
 
 ---

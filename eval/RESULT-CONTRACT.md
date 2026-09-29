@@ -202,7 +202,7 @@ before reading. The matrix below is authoritative:
   E-Swap `swap_requests.json` and `hotswap-analysis.json`, final E-Swap-5
   `rollback.json` and `post-rollback-continuity.json`, plus E-Iso-7
   `branch-isolation.json` and the batch-level branch-A impact summary.
-- `run-experiment.sh` and the per-experiment shakedown scripts own
+- `run-experiment.sh` owns
   `metadata.json`, `config.toml`, `stdout.log`, the E2E `throughput.csv`, and E-Perf-9
   `startup-preparation.json`.
 - `eval/scripts/lib/pi_telemetry.py` owns `pi-telemetry.csv`, `pmic-rails.csv`

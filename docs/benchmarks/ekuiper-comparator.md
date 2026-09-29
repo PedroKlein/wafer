@@ -1,6 +1,6 @@
 # eKuiper comparator setup
 
-**Version pin.** Native eKuiper `2.1.0` Linux ARM64 package. The Raspberry Pi 5 canonical evaluation does not use Docker. The old Compose file remains solely for reproducing historical macOS shakedowns.
+**Version pin.** Native eKuiper `2.1.0` Linux ARM64 package. The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
 
 **Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
@@ -27,7 +27,7 @@ Register and test Pipeline A:
 
 ## Historical macOS setup
 
-Historical shakedowns used `eval/ekuiper/docker-compose.yml` because eKuiper needed a Linux guest on macOS. Those measurements remain informational and are not mixed with Pi 5 results.
+Historical shakedowns ran eKuiper under Docker Compose because it needed a Linux guest on macOS. That Compose file has been removed. Those measurements remain informational and are not mixed with Pi 5 results.
 
 ## Pipeline A
 

@@ -76,7 +76,7 @@ Store `HashMap<ContentHash, Arc<InstancePre<WaferState>>>` keyed by component co
 
 **For hot-swap** (optimal sequence):
 ```rust
-// 1. Compile new Component on the blocking pool (slow: 10-100ms on Pi4) — WHILE old node still runs
+// 1. Compile new Component on the blocking pool (slow: 10-100ms on Pi 5) — WHILE old node still runs
 // 2. linker.instantiate_pre(new_component) → InstancePre (fast: μs)
 // 3. new_store = Store::new(engine, state); instance_pre.instantiate_async(&mut new_store)
 // 4. Publish the payload on the node's watch channel
@@ -91,7 +91,7 @@ Store `HashMap<ContentHash, Arc<InstancePre<WaferState>>>` keyed by component co
 
 All four elements are mandatory:
 - **content hash**: blake3 or SHA-256 of source .wasm bytes (content identity)
-- **os + arch**: target triple (platform identity — Pi4 .cwasm won't run on x86)
+- **os + arch**: target triple (platform identity — a Pi 5 .cwasm won't run on x86)
 - **wasmtime version**: major version of the compiler (compiler identity — codegen changes between versions)
 
 ```rust
@@ -110,11 +110,11 @@ let component = unsafe { Component::deserialize(&engine, &cached_bytes)? };
 // ONLY use with files YOU wrote to disk. NEVER with user-provided bytes.
 ```
 
-**When to pre-compile**: Always in production. Compilation is 50-200ms per plugin on RPi 4.
+**When to pre-compile**: Always in production. Compilation is 50-200ms per plugin on a Pi-class ARM core.
 Pre-compilation reduces node init to <5ms (just instantiation, no compilation).
 
 **Cross-compilation for edge** (flow-like pattern): Compile .wasm → .cwasm for each target triple
-on CI/build machine, ship the .cwasm to Pi4. The Pi4 only deserializes — no Cranelift needed at runtime.
+on CI/build machine, ship the .cwasm to the Pi 5. The Pi 5 only deserializes — no Cranelift needed at runtime.
 
 **Inject pattern** (flow-like): `aot_cache.inject_module(hash, bytes)` enables server-pushed
 pre-compiled artifacts — CI compiles for all targets, pushes .cwasm to device.
@@ -331,7 +331,7 @@ without a grant gets a WASI trap — immediately, not a silent failure.
 
 ## Edge Configuration & Production Hardening
 
-Key tuning decisions for Pi4/Jetson (details in reference file):
+Key tuning decisions for Pi 5/Jetson (details in reference file):
 
 | Setting | Value | Why |
 |---------|-------|-----|
@@ -352,7 +352,7 @@ For full configuration code and rationale → load [references/edge-config-and-h
 | Store shared between nodes | `Send` violation at compile time | One Store per node, on its own task |
 | No InstancePre | Re-links on every instantiation | Store InstancePre per component hash |
 | No fuel limit | Infinite loop hangs pipeline forever | Always `set_fuel()` for untrusted plugins |
-| Default async_stack_size (2MB) | 1.5MB wasted per node on Pi4 | Set `async_stack_size(512 * 1024)` |
+| Default async_stack_size (2MB) | 1.5MB wasted per node on Pi 5 | Set `async_stack_size(512 * 1024)` |
 | Epoch ticker on tokio::spawn | May not fire under Tokio saturation | Use `std::thread::spawn` |
 | No ResourceLimiter | One node OOM kills pipeline | Set per-node memory budgets |
 | Debug builds in production | 3MB+ per plugin, 10x slower | Always `--release` for wasm32-wasip2 |
@@ -403,7 +403,7 @@ WAFER correctly uses host async (fibers). Guest async is the future path.
   JSON has no business accessing the filesystem or network
 - **NEVER ship debug-build WASM plugins** — 3MB+ vs 16KB; 10-100x slower execution;
   benchmark results are meaningless with debug builds
-- **NEVER assume compilation cost is negligible** — 50-200ms per plugin on RPi 4;
+- **NEVER assume compilation cost is negligible** — 50-200ms per plugin on a Pi-class ARM core;
   use pre-compilation in production; measure without compilation in benchmarks
 - **NEVER use tokio::spawn for epoch ticker** — if all Tokio workers are blocked in Wasm,
   the ticker task won't get scheduled; use `std::thread::spawn` (Spin's pattern)

@@ -54,7 +54,7 @@ let state: tokio::sync::Mutex<PipelineState> = ...;
 
 ## Zero-Allocation Hot Path (Microsoft M-MEM-REUSE, M-HOTPATH)
 
-At 100K msg/s on RPi 4, each allocation is ~50ns. 3 allocations per message = 15ms/s of
+At 100K msg/s on a Pi-class ARM core, each allocation is ~50ns. 3 allocations per message = 15ms/s of
 pure allocator overhead. The hot path (per-message processing) must not allocate.
 
 ### Pre-allocate, Reuse, Clear

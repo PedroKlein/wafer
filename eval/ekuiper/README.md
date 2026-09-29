@@ -1,6 +1,6 @@
 # Native eKuiper comparator
 
-The Raspberry Pi 5 evaluation runs eKuiper 2.1.0 directly from its official Linux ARM64 Debian package. Docker Compose remains only as a historical laptop-shakedown fixture; it is not used for Pi 5 results.
+The evaluation hosts run eKuiper 2.1.0 directly from its official Linux Debian package (`install-native.sh` picks the ARM64 or amd64 build). No evaluation path uses Docker.
 
 ## Install on the Pi
 

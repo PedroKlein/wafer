@@ -218,7 +218,7 @@ see channel close when upstream tasks finish, propagating clean shutdown through
 remains fixed. `DiGraph` is correct; `StableGraph` is unnecessary overhead.
 
 **Optimization**: `Ix = u16` type parameter halves index memory. For WAFER's edge IoT targets
-(Pi4, Jetson) with pipelines of <100 nodes, this is free optimization.
+(Pi 5, Jetson) with pipelines of <100 nodes, this is free optimization.
 
 ### Useful Algorithms Not Yet Used
 

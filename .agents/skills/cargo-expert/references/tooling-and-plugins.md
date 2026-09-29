@@ -277,7 +277,7 @@ cargo test --workspace
 cargo build --workspace --release
 
 # 5. Build plugins
-mise run build-plugins
+mise run //plugins:build-plugins
 
 # 6. Security audit
 cargo deny check

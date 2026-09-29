@@ -28,7 +28,7 @@ The overhead comes from three sources:
 3. Field formatting (even if level is disabled — unless guarded)
 
 **Rule**: The decision about WHAT to trace is a performance decision, not just a
-debugging decision. On WAFER's target hardware (Pi 4), 20ms/s is 2% of a core.
+debugging decision. On WAFER's target hardware (a Raspberry Pi 5 core), 20ms/s is 2% of a core.
 
 ---
 
@@ -209,7 +209,7 @@ Rules: `wafer_` prefix, `_total` for counters, `_seconds` for durations (not ms!
 
 ### Histogram Buckets for WASM Latency (Thesis RQ1)
 
-RQ1 pass criterion: <50µs per WIT boundary crossing on RPi 4.
+RQ1 reports per-hop boundary cost against a predeclared 50 µs reference on the Raspberry Pi 5 (a reference, not a pass criterion).
 Buckets should reveal whether overhead is fixed (call boundary) or proportional (serialization).
 
 ```rust
@@ -267,7 +267,7 @@ The possible reordering across metrics is irrelevant for monitoring dashboards.
 - **NEVER use message IDs, payloads, or MQTT topics as metric labels** — creates unbounded
   cardinality; each unique value is a time series stored forever in Prometheus
 - **NEVER instrument per-message hot paths with `#[instrument]`** — 200ns span creation
-  overhead at 100K msg/s = 2% CPU on Pi 4; use `enabled!` guard or atomic counters
+  overhead at 100K msg/s = 2% CPU on a Pi-class core; use `enabled!` guard or atomic counters
 - **NEVER use `tracing::info!` in tight loops even when "filtered"** — the format arguments
   are evaluated before the subscriber checks the level; only `enabled!` prevents this
 - **NEVER interpolate variable data into metric label values** — "connection refused to
