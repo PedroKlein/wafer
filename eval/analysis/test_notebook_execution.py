@@ -66,6 +66,13 @@ def capacity_envelope_fixture() -> dict:
     }
 
 
+def rate_buckets(start_ns: int, count: int, width_ns: int, rate) -> list[dict]:
+    return [
+        {"start_offset_ns": start_ns + index * width_ns, "end_offset_ns": start_ns + (index + 1) * width_ns, "rate_msg_s": rate(start_ns + index * width_ns)}
+        for index in range(count)
+    ]
+
+
 def write_swap5_fixture(leaf: Path) -> None:
     started = 1_700_000_000_000_000_000
     requests = [
@@ -221,7 +228,24 @@ def build_complete_fixture(root: Path) -> None:
             },
         },
     )
+    swap4_leaf = root / "e-swap-4" / "burst-2x" / "run-01"
+    (swap4_leaf / "throughput-buckets.json").write_text(
+        json.dumps(
+            {
+                "primary_buckets": rate_buckets(0, 1_200, 100_000_000, lambda start: 2_000.0 if 55e9 <= start < 65e9 else 1_000.0),
+                "drain_buckets": rate_buckets(120_000_000_000, 100, 100_000_000, lambda start: 10.0 if start < 120.5e9 else 0.0),
+            }
+        )
+    )
     for strategy in ("wafer-hotswap", "wafer-restart", "ekuiper-restart"):
+        leaf = root / "e-swap-3" / strategy / "run-01"
+        leaf.mkdir(parents=True, exist_ok=True)
+        (leaf / "throughput-buckets.json").write_text(
+            json.dumps({"buckets": rate_buckets(-10_000_000_000, 200, 100_000_000, lambda start: 980.0 if 0 <= start < 1e8 else 1_000.0)})
+        )
+        (leaf / "throughput-buckets-10ms.json").write_text(
+            json.dumps({"buckets": rate_buckets(-2_000_000_000, 400, 10_000_000, lambda start: 500.0 if 0 <= start < 3e7 else 1_000.0)})
+        )
         write_passed_artifact(
             root / "e-swap-3" / strategy / "run-01",
             "disruption-analysis.json",
@@ -509,6 +533,9 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq3/swap-phases.pdf").stat().st_size > 1_000
     assert (rendered / "rq3-swap-phases.csv").is_file()
     assert (rendered / "rq3/rollback.pdf").stat().st_size > 1_000
+    assert (rendered / "rq3/disruption-timeline.pdf").stat().st_size > 1_000
+    assert (rendered / "rq3/swap-fine-timeline.pdf").stat().st_size > 1_000
+    assert (rendered / "rq3/burst-timeline.pdf").stat().st_size > 1_000
     assert (rendered / "rq3-rollback.csv").is_file()
     assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-validation-gate.csv").is_file()
