@@ -116,6 +116,7 @@ class ValidationGate:
 
 RATE_SWEEP_SYSTEMS = ("mqtt-loopback", "native", "wafer", "ekuiper")
 CANONICAL_MATRIX_PATH = EVAL_ROOT / "canonical-matrix.json"
+FINAL_EXPERIMENTS = frozenset(json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"])
 RATE_SWEEP_DEFINITION = json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"]["e-perf-10"]
 RATE_SWEEP_RATES = tuple(RATE_SWEEP_DEFINITION["rate_points_msg_s"])
 RATE_SWEEP_REPETITIONS = int(RATE_SWEEP_DEFINITION["repetitions"])
@@ -5924,6 +5925,9 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     metadata["condition"] = item.condition
     metadata["run_index"] = item.run_index
     metadata["config_path"] = item.config
+    if item.experiment in FINAL_EXPERIMENTS:
+        metadata["evidence_class"] = "final"
+        metadata["thesis_evidence"] = True
     if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT}:
         metadata["thesis_evidence"] = item.experiment == "e-perf-10"
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
