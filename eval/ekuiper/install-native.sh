@@ -2,7 +2,12 @@
 set -euo pipefail
 
 VERSION="2.1.0"
-ARCHIVE="kuiper-${VERSION}-linux-arm64.deb"
+case "$(uname -m)" in
+    aarch64 | arm64) PACKAGE_ARCH="arm64" ;;
+    x86_64) PACKAGE_ARCH="amd64" ;;
+    *) echo "error: no native eKuiper package for $(uname -m)" >&2; exit 1 ;;
+esac
+ARCHIVE="kuiper-${VERSION}-linux-${PACKAGE_ARCH}.deb"
 BASE_URL="https://github.com/lf-edge/ekuiper/releases/download/v${VERSION}"
 INSTALL_ROOT="/usr/lib/kuiper"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +54,6 @@ if [ "$dry_run" -eq 1 ]; then
     render_service_override
     exit 0
 fi
-[ "$(uname -m)" = "aarch64" ] || { echo "error: native eKuiper package requires aarch64" >&2; exit 1; }
 command -v curl >/dev/null || { echo "error: curl is required" >&2; exit 1; }
 command -v sha256sum >/dev/null || { echo "error: sha256sum is required" >&2; exit 1; }
 

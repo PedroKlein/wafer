@@ -6,7 +6,9 @@
 
 ## Raspberry Pi 5 setup
 
-Install the pinned package and verify its published checksum:
+Install the pinned package and verify its published checksum. The script
+picks the `arm64` or `amd64` package from `uname -m`, so the same pin serves
+aarch64 and x86_64 hosts:
 
 ```sh
 ./eval/ekuiper/install-native.sh --dry-run
