@@ -1,6 +1,6 @@
 # eKuiper comparator setup
 
-**Version pin.** Native eKuiper `2.1.0` Linux ARM64 package. The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
+**Version pin.** Native eKuiper `2.1.0` Linux package (ARM64, or amd64 on the x86 host). The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
 
 **Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 

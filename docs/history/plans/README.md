@@ -1,5 +1,9 @@
 # Historical planning scratchpads
 
+> **Archived, not current.** Planning scratchpads from the implementation phase.
+> Kept as a historical record only. Do not use them for decisions, commands,
+> paths or numbers. Current source: [docs/README.md](../../README.md).
+
 These files are archived planning notes from the thesis implementation
 phase. They are frozen documents that capture the state of the plans at
 the point they closed, not living guidance.
