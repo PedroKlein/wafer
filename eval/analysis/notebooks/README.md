@@ -144,7 +144,9 @@ uv run jupyter nbconvert --execute --to notebook --output-dir executed \
 
 `WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the approval decision and batch identity, Raspberry Pi 5 provenance, final-evidence labeling, a clean tagged source, zero throttling, passed completion receipts, one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
 
-The analysis gate consumes a minimal approval subset: `schema_version=1`, `decision=APPROVE`, `batch_id`, `wafer_git_sha`, and `canonical_matrix_sha256`. The T14 launch receipt is a strict superset and additionally records its timestamp, release tag, tcc-doc SHA, schedule hash, binary/plugin receipts, targeted-pilot ID, runtime/storage estimates, and `campaign_started=false`. Explicit diagnostic paths never consume or satisfy the approval gate.
+`WAFER_EVAL_BATCH_ID=jetson-<batch-id>` or `x86-<batch-id>` selects that host's batch instead. Each host batch has its own approval receipt at `.plans/<host>-final-experiment-readiness/full-run-approval.json` (or `WAFER_FULL_RUN_APPROVAL_JETSON` / `WAFER_FULL_RUN_APPROVAL_X86`), and every leaf must carry that host's `host_tag`. A batch is never validated against another host's receipt, and `require_cross_architecture` checks the Pi and x86 E-Perf-5 batches each against their own. Power reports take their label from each leaf's `power-boundary.json` and refuse to mix hosts or measurements in one figure.
+
+The analysis gate consumes a minimal approval subset: `schema_version=1`, `decision=APPROVE`, `batch_id`, `wafer_git_sha`, and `canonical_matrix_sha256`, plus `host_tag` for a receipt that is not the Pi's (a missing `host_tag` means `rpi5`). The T14 launch receipt is a strict superset and additionally records its timestamp, release tag, tcc-doc SHA, schedule hash, binary/plugin receipts, targeted-pilot ID, runtime/storage estimates, and `campaign_started=false`. Explicit diagnostic paths never consume or satisfy the approval gate.
 
 ## Run an explicit diagnostic directory
 

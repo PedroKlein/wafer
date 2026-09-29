@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 MEASUREMENT_LABEL = "Raspberry Pi 5 PMIC internal-rail proxy"
+MEASUREMENT_LABELS = {
+    "rpi5-pmic-internal-rail-proxy": MEASUREMENT_LABEL,
+    "jetson-ina3221-rail-proxy": "Jetson INA3221 rail proxy",
+    "x86-rapl-package-energy": "x86 RAPL package power",
+}
+
+
+def measurement_label(leaf: Path) -> str:
+    """The human label of the power quantity `power-boundary.json` declares for a leaf."""
+    path = leaf / "power-boundary.json"
+    try:
+        measurement = json.loads(path.read_text())["measurement"]
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise ValueError(f"malformed power boundary: {path}: {error}") from error
+    if measurement not in MEASUREMENT_LABELS:
+        raise ValueError(f"no power measurement in {path}: {measurement}")
+    return MEASUREMENT_LABELS[measurement]
 
 
 def load_telemetry(path: Path) -> list[dict[str, float | int | str]]:
@@ -76,6 +94,7 @@ def summarize_power(
     samples: list[dict[str, float | int | str]],
     idle_watts: float = 0.0,
     messages: int | None = None,
+    measurement: str = MEASUREMENT_LABEL,
 ) -> dict[str, float | int | str | bool | None]:
     if not samples:
         raise ValueError("power telemetry contains no samples")
@@ -90,7 +109,7 @@ def summarize_power(
     adjusted_watts = max(0.0, mean_watts - idle_watts)
     adjusted_energy_j = adjusted_watts * duration_s
     return {
-        "measurement": MEASUREMENT_LABEL,
+        "measurement": measurement,
         "is_total_input_power": False,
         "samples": len(ordered),
         "duration_s": duration_s,
