@@ -52,6 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from containment import assess_containment
 from interval_metrics import validate_interval_metrics
 from latency_evidence import latency_evidence_violations
+from provenance_match import provenance_mismatches
 from host_profiles import host_profiles
 
 # The split contract (RESULT-CONTRACT.md source of truth).
@@ -2336,6 +2337,16 @@ def main() -> int:
         help="enforce the frozen focused-pilot selection and semantic invariants",
     )
     parser.add_argument("--matrix", type=Path, default=CANONICAL_MATRIX)
+    parser.add_argument(
+        "--match",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="DIR",
+        help="also require the leaves under DIR (another host's batch, say) to share "
+        "the source SHA and plugin hashes of the verified leaves, without checking "
+        "their contract",
+    )
     parser.add_argument("dirs", nargs="+", type=Path)
     args = parser.parse_args()
 
@@ -2361,7 +2372,7 @@ def main() -> int:
 
     all_violations: list[tuple[Path, str]] = []
     all_warnings: list[tuple[Path, str]] = []
-    canonical_shas: set[str] = set()
+    provenance_leaves: list[Path] = []
     checked = 0
 
     for root in args.dirs:
@@ -2398,6 +2409,7 @@ def main() -> int:
                 continue
         for leaf, experiment in roots:
             checked += 1
+            provenance_leaves.append(leaf)
             violations, warnings = check_leaf(
                 leaf,
                 experiment,
@@ -2406,22 +2418,20 @@ def main() -> int:
                 focused=args.focused,
                 matrix_sha256=matrix_sha256,
             )
-            if args.canonical:
-                try:
-                    metadata = json.loads((leaf / "metadata.json").read_text())
-                    sha = metadata.get("git_sha")
-                    if isinstance(sha, str):
-                        canonical_shas.add(sha)
-                except (OSError, ValueError):
-                    pass
             for v in violations:
                 all_violations.append((leaf, v))
             for w in warnings:
                 all_warnings.append((leaf, w))
 
-    if args.canonical and len(canonical_shas) > 1:
-        all_violations.append(
-            (Path("<batch>"), f"canonical inputs mix source SHAs: {sorted(canonical_shas)}")
+    matched_leaves: list[Path] = []
+    for other in args.match:
+        found = sorted(find_leaf_dirs(other)) if other.is_dir() else []
+        if not found:
+            all_violations.append((other, "--match directory has no leaf run dirs"))
+        matched_leaves.extend(found)
+    if args.canonical or matched_leaves:
+        all_violations.extend(
+            provenance_mismatches(sorted(provenance_leaves) + matched_leaves)
         )
     if args.focused and canonical_matrix is not None:
         all_violations.extend(

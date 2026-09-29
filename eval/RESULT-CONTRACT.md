@@ -680,10 +680,24 @@ response arrived) and the summary file, with `hotswap_triggered_at_secs: null`, 
 
 For final WAFER leaves, the verifier compares these effective metering fields with the condition in `canonical-matrix.json`. E-Perf-7 uses its four-way `metering_modes` table; declared attack stimuli use their condition-specific exceptions; all other WAFER conditions use `final_campaign.canonical_metering`. A missing or mismatched value is a contract violation.
 
-Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the Pi 5 host fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
+Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the host profile fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
 
 ```sh
 python3 eval/scripts/verify-result-contract.py --canonical <result-dir>
+```
+
+Every leaf checked in one invocation must come from a clean tree
+(`git_dirty: false`) at one `git_sha`, and leaves of the same experiment and
+condition must carry the same `wafer_plugin_hashes` (keyed by node id, the
+same node ids on every leaf); the verifier names the first leaf that differs
+and the leaf it differs from. The matrix is part of the source tree, so an
+equal clean `git_sha` also means an equal `canonical-matrix.json`. Before the
+same experiment from two hosts is compared, pass the other host's batch with
+`--match` (repeatable): its leaves join this comparison without the rest of
+their contract being checked.
+
+```sh
+python3 eval/scripts/verify-result-contract.py --canonical <pi-batch> --match <jetson-batch> --match <x86-batch>
 ```
 
 ### Host profile fields
@@ -692,7 +706,7 @@ The `hosts` map of `eval/canonical-matrix.json` (schema version 2) holds one
 profile per host tag: `rpi5` is the canonical host, `jetson` and `x86` are
 replication hosts with their own batches, never pooled with the Pi's. The
 canonical runner (`--host`), `validate-canonical.py` (`--host`) and the
-verifier (by each leaf's `host_tag`) check a leaf only against its own
+verifier (by the leaf's `<host>-` batch directory) check a leaf only against its own
 profile:
 
 | Field | Source | `rpi5` | `jetson` | `x86` |
