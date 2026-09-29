@@ -174,6 +174,30 @@ def build_complete_fixture(root: Path) -> None:
         "json-parse,180000,175.8,alpine + static Rust binary + serde_json,60,349,serde_json\n"
     )
 
+    for system in ("wafer", "native"):
+        for rate in (1_000, 4_000):
+            leaf = root / "e-perf-10" / system / f"rate-{rate:05d}" / "run-01-attempt-01"
+            write_passed_artifact(leaf, "host-sidecar.json", {"sut_cpus": "1-3"})
+            busy = rate // 100
+            (leaf / "cpu-cores.csv").write_text(
+                "timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz\n"
+                + "".join(
+                    f"{stamp},{cpu},{stamp * (busy if cpu else 2 * busy)},0,0,{stamp * 100},0,0,0,0,2400000000\n"
+                    for stamp in (1, 2)
+                    for cpu in range(4)
+                )
+            )
+    (root / "progress.jsonl").write_text(
+        "".join(
+            json.dumps(entry) + "\n"
+            for index, experiment in enumerate(("e-val-1", "e-perf-1", "e-perf-1"))
+            for entry in (
+                {"timestamp": f"2026-10-01T0{index}:00:00Z", "event": "item-started", "item": f"{experiment}/c/run-0{index}", "failures": 0},
+                {"timestamp": f"2026-10-01T0{index}:30:00Z", "event": "item-finished", "item": f"{experiment}/c/run-0{index}", "failures": 0, "temperature_c": 50.0 + index},
+            )
+        )
+    )
+
     hotswap_events = [
         {
             "event_index": index,
@@ -447,6 +471,7 @@ def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBO
         (fixture / experiment).mkdir(parents=True, exist_ok=True)
         monkeypatch.setenv(name, str(fixture / experiment))
     monkeypatch.setenv("WAFER_SUMMARY_DIR", str(fixture))
+    monkeypatch.setenv("WAFER_PROGRESS_JSONL", str(fixture / "progress.jsonl"))
     monkeypatch.setenv("WAFER_ANALYSIS_OUTPUT_DIR", str(fixture / "rendered"))
     monkeypatch.delenv("WAFER_EVAL_BATCH_ID", raising=False)
 
@@ -541,6 +566,11 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq1-validation-gate.csv").is_file()
     assert (rendered / "rq1/density.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-density.csv").is_file()
+    assert (rendered / "rq1/core-utilisation.pdf").stat().st_size > 1_000
+    assert (rendered / "e-perf-10-core-utilisation.csv").is_file()
+    assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000
+    assert (rendered / "campaign-attempts.csv").is_file()
+    assert (rendered / "campaign-timing.csv").is_file()
     assert (rendered / "e-backpressure-queue-pressure.csv").is_file()
 
     for name in (
