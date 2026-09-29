@@ -40,16 +40,16 @@ def capacity_envelope_fixture() -> dict:
                     "run_summary": {
                         "achieved_rate_msg_s": {
                             "median": rate,
-                            "bootstrap_median_ci95": [rate * 0.99, rate],
+                            "values": [rate * (0.98 + index / 1_500) for index in range(30)],
                         },
                         "p99_ns": {
                             "median": 100_000 + rate,
-                            "bootstrap_median_ci95": [99_000, 101_000],
+                            "values": [90_000 + 1_000 * index for index in range(30)],
                         },
                     },
                     "normalized_p99": {
                         "median": 1.0 if rate < 8_000 else 2.1,
-                        "bootstrap_median_ci95": [0.9, 2.2],
+                        "values": [0.9 + 0.05 * index for index in range(30)],
                     },
                 }
                 for rate in (1_000, 4_000, 8_000, 15_000, 16_000)

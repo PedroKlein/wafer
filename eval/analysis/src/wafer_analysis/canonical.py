@@ -1553,11 +1553,15 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
             try:
                 achieved = run_summary["achieved_rate_msg_s"]
                 p99 = run_summary["p99_ns"]
-                achieved_ci = achieved["bootstrap_median_ci95"]
-                p99_ci = p99["bootstrap_median_ci95"]
-                normalized_ci = normalized["bootstrap_median_ci95"]
-            except (KeyError, TypeError) as error:
+                samples = [
+                    [float(value) for value in item["values"]]
+                    for item in (achieved, p99, normalized)
+                ]
+            except (KeyError, TypeError, ValueError) as error:
                 raise ValueError(f"{system} rate summary is malformed") from error
+            if any(len(values) != 30 for values in samples):
+                raise ValueError(f"{system} rate summary needs 30 run values per metric")
+            achieved_ci, p99_ci, normalized_ci = (_ci(values) for values in samples)
             classification = rate.get("classification")
             if classification not in {
                 "good",
