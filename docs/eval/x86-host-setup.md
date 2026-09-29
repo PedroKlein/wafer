@@ -20,3 +20,15 @@ Deploy the evaluation tree with
 `./eval/scripts/deploy-pi5.sh --host user@box --bin-dir target/release` from
 a checkout on the machine, or run from the checkout directly with
 `WAFER_PI_ROOT` pointing at it.
+
+## Telemetry
+
+`eval/scripts/lib/pi_telemetry.py` picks its `x86` backend on an `x86_64`
+host without `vcgencmd`. Power comes from RAPL package energy under
+`/sys/class/powercap/intel-rapl:*` (readable by root, or after
+`chmod a+r .../energy_uj`), so the first sample of each run has no power
+reading and a host without RAPL records power as unavailable. The temperature
+is the `x86_pkg_temp` zone, or `k10temp`/`coretemp` through hwmon, and the
+throttle signal is a core below 95% of its pinned clock or a moved
+`thermal_throttle/core_throttle_count`. `power-boundary.json` records
+`x86-rapl-package-energy` or `unavailable`.

@@ -27,3 +27,14 @@ from a checkout on the Jetson, or copy the same `.wasm` files the Pi uses.
 
 The GPU is not used: the campaign build has no `cuda` feature and every
 inference node runs on the CPU execution target, the same as on the Pi.
+
+## Telemetry
+
+`eval/scripts/lib/pi_telemetry.py` picks its `jetson` backend when
+`/etc/nv_tegra_release` exists and no `vcgencmd` is on the path. It writes the
+same `pi-telemetry.csv`, `pmic-rails.csv` and `power-boundary.json` as on the
+Pi, with the INA3221 rails from `/sys/class/hwmon` as the power source, the
+`cpu-thermal` zone as the temperature and a core running below 95% of its
+pinned clock as the throttle signal. `power-boundary.json` records
+`jetson-ina3221-rail-proxy`, so these watts are never compared with Pi PMIC
+watts.
