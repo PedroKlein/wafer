@@ -28,7 +28,7 @@ def write_leaf(root: Path, arm: str, pair: int, p95_us: float, received: int = 6
                 "latency_p95_ns": int(p95_us * 1000),
                 "latency_p99_ns": int(p95_us * 2000),
                 "total_recorded": received,
-                "sequence": {"total_gaps": gaps, "total_duplicates": 0},
+                "sequence": {"received_unique": received - gaps, "total_gaps": gaps, "total_duplicates": 0},
             }
         )
     )
@@ -114,3 +114,23 @@ def test_runner_dry_run_alternates_arm_order() -> None:
 def test_run_experiment_skips_sidecars_when_switched_off() -> None:
     script = (ROOT / "eval/scripts/run-experiment.sh").read_text()
     assert '[ "${WAFER_HOST_SIDECARS:-on}" != "off" ] || return 0' in script
+
+
+def test_messages_missing_at_the_tail_count_as_loss(tmp_path: Path) -> None:
+    for pair in range(1, 3):
+        write_leaf(tmp_path, "on", pair, 800, received=59_500 if pair == 2 else 60_000)
+        write_leaf(tmp_path, "off", pair, 800)
+    result = analyze_instrument_ab.analyze(tmp_path)
+    assert result["per_pair"][1]["on"]["lost"] == 500
+    assert result["lossless"] is False
+    assert result["negligible"] is False
+
+
+def test_an_empty_run_rejects_only_its_pair(tmp_path: Path) -> None:
+    for pair in range(1, 4):
+        write_leaf(tmp_path, "on", pair, 800)
+        write_leaf(tmp_path, "off", pair, 0 if pair == 3 else 800, received=0 if pair == 3 else 60_000)
+    result = analyze_instrument_ab.analyze(tmp_path)
+    assert result["pairs"] == 2
+    assert result["rejected_pairs"][0]["pair"] == "pair-03"
+    assert result["negligible"] is False

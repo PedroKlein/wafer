@@ -67,7 +67,7 @@ for pair in $(seq -f '%02g' 1 "$pairs"); do
         leaf="$output/$arm/pair-$pair"
         sidecars=on
         [ "$arm" = "on" ] || sidecars=off
-        WAFER_HOST_SIDECARS="$sidecars" \
+        if ! WAFER_HOST_SIDECARS="$sidecars" \
         WAFER_RUNTIME_CPUSET="$sut_cpus" \
         WAFER_LOADGEN_CPUSET="$support_cpus" \
             "$ROOT/eval/scripts/run-experiment.sh" \
@@ -83,12 +83,17 @@ for pair in $(seq -f '%02g' 1 "$pairs"); do
                 --measurement-secs 60 \
                 --duration 120 \
                 --total-messages 60000 \
-                --output-dir "$leaf"
+                --output-dir "$leaf"; then
+            echo "pair-$pair $arm failed; the analyzer will reject this pair" >&2
+            mkdir -p "$leaf"
+        fi
         printf '{"experiment":"instrument-ab","evidence_class":"diagnostic","thesis_evidence":false,"arm":"%s","pair":%d}\n' \
             "$arm" "$((10#$pair))" >"$leaf/instrument-ab.json"
         echo "pair-$pair $arm done"
     done
 done
 
-python3 "$ROOT/eval/scripts/analyze-instrument-ab.py" "$output"
+status=0
+python3 "$ROOT/eval/scripts/analyze-instrument-ab.py" "$output" || status=$?
 printf 'instrument A/B: %s\n' "$output"
+exit "$status"

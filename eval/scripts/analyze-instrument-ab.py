@@ -21,21 +21,24 @@ TOLERANCE_PERCENT = 5.0
 MAX_SAMPLER_CORE_FRACTION = 0.01
 BOOTSTRAP_RESAMPLES = 10_000
 BOOTSTRAP_SEED = 1729
+EXPECTED_MESSAGES = 60_000
 
 
 def leaf_metrics(leaf: Path) -> dict[str, float]:
+    """Loss is counted against the 60,000 messages the run offers after warmup,
+    so messages missing at the start or end of the run count, not only gaps."""
     subscriber = json.loads((leaf / "subscriber-metadata.json").read_text())
     window = json.loads((leaf / "measurement-window.json").read_text())
     seconds = (int(window["finished_ns"]) - int(window["started_ns"])) / 1e9
-    if seconds <= 0:
-        raise ValueError(f"{leaf}: empty measurement window")
     sequence = subscriber.get("sequence", {})
+    received_unique = int(sequence.get("received_unique", subscriber["total_recorded"]))
     metrics: dict[str, float] = {
         "p50_ns": float(subscriber["latency_p50_ns"]),
         "p95_ns": float(subscriber["latency_p95_ns"]),
         "p99_ns": float(subscriber["latency_p99_ns"]),
-        "achieved_msg_s": int(subscriber["total_recorded"]) / seconds,
-        "lost": float(sequence.get("total_gaps", 0)),
+        "achieved_msg_s": int(subscriber["total_recorded"]) / seconds if seconds > 0 else 0.0,
+        "received_unique": float(received_unique),
+        "lost": float(max(0, EXPECTED_MESSAGES - received_unique)),
         "duplicates": float(sequence.get("total_duplicates", 0)),
     }
     sidecar = leaf / "host-sidecar.json"
@@ -82,6 +85,10 @@ def analyze(root: Path) -> dict[str, object]:
             continue
         on = leaf_metrics(leaves["on"])
         off = leaf_metrics(leaves["off"])
+        empty = [f"{arm}: {metric} is zero" for arm, values in (("on", on), ("off", off)) for metric in METRICS if values[metric] <= 0]
+        if empty:
+            rejected.append({"pair": name, "problems": empty})
+            continue
         pairs.append(
             {
                 "pair": name,
