@@ -18,7 +18,7 @@ The notebooks consume one explicitly identified result batch. They never select 
 | `09-backpressure.ipynb` | E-Backpressure | Bounded-channel occupancy and flow rates |
 | `09-saturation.ipynb` | E-Perf-10 | Offered-load sweep; E-Perf-1 remains target-load evidence |
 | `10-aot-startup.ipynb` | E-Perf-9 | Filesystem and compiled-component cache state by startup phase |
-| `10-summary-stats.ipynb` | Focused set | Artifact availability inventory without repeated headline claims |
+| `10-summary-stats.ipynb` | E-Density-1; whole batch | Release component sizes; attempts, wall time and peak temperature per experiment |
 
 Tables remain inline. Final figures are also written as PDF and PNG, and final tables as CSV and LaTeX, when `WAFER_ANALYSIS_OUTPUT_DIR` is set. Every output labels the independent run count, units, estimator, evidence status, uncertainty, and claim boundary. Explicit diagnostic inputs are always forced to `thesis_evidence=false` with descriptive uncertainty, regardless of labels inside historical metadata. Power values, when present, are labelled **Raspberry Pi 5 PMIC internal-rail proxy** rather than total board power.
 
@@ -37,20 +37,6 @@ Missing and failed diagnostic conditions remain `PENDING` with a null value. The
 
 Percentile summaries are never presented as an empirical CDF.
 
-## Focused-pilot artifact inventory
-
-| Follow-up question | Notebook | Primary artifact |
-|---|---|---|
-| eKuiper latency tail | `09-saturation.ipynb` | `rate-sweep.json` |
-| target load versus saturation | `09-saturation.ipynb` | `rate-sweep-summary.json` |
-| branch-A throughput and latency | `06-fault-injection.ipynb` | `branch-isolation.json` |
-| epoch recovery | `06-fault-injection.ipynb` | `containment.json` |
-| startup cache state | `10-aot-startup.ipynb` | `startup.json` |
-| bounded queue pressure | `09-backpressure.ipynb` | `backpressure.json` |
-| internal and sink-observed hot-swap timing | `05-hotswap-timeline.ipynb` | `hotswap-analysis.json` |
-
-The machine-readable inventory is `wafer_analysis.focused.artifact_inventory`.
-
 ## Visual review checklist
 
 The complete and missing-leaf synthetic executions are reviewed for these properties:
@@ -64,7 +50,7 @@ The complete and missing-leaf synthetic executions are reviewed for these proper
 - [x] Queue output separates offered, accepted, processed, and drained rates.
 - [x] Power wording says PMIC internal-rail proxy, not total-board power.
 
-`test_notebook_execution.py` executes every notebook against both fixture states; `test_focused.py` checks labels and inventory coverage.
+`test_notebook_execution.py` executes every notebook against both fixture states; `test_focused.py` checks labels.
 
 ## Run an explicit canonical batch
 

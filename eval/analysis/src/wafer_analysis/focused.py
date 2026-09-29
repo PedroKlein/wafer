@@ -1,4 +1,4 @@
-"""Focused-pilot presentation labels and artifact inventory."""
+"""Presentation labels and passed-leaf readers for the analysis notebooks."""
 
 from __future__ import annotations
 
@@ -8,25 +8,6 @@ import re
 from pathlib import Path
 
 import pandas as pd
-
-FOLLOWUP_ARTIFACTS = (
-    ("eKuiper latency tail", "09-saturation.ipynb", "rate-sweep.json"),
-    ("target load versus saturation", "09-saturation.ipynb", "rate-sweep-summary.json"),
-    (
-        "branch-A throughput and latency",
-        "06-fault-injection.ipynb",
-        "branch-isolation.json",
-    ),
-    ("epoch recovery", "06-fault-injection.ipynb", "containment.json"),
-    ("startup cache state", "10-aot-startup.ipynb", "startup.json"),
-    ("bounded queue pressure", "09-backpressure.ipynb", "backpressure.json"),
-    (
-        "internal and sink-observed hot-swap timing",
-        "05-hotswap-timeline.ipynb",
-        "hotswap-analysis.json",
-    ),
-)
-
 
 def evidence_label(sample_count: int, units: str, thesis_evidence: bool) -> str:
     evidence = "thesis" if thesis_evidence else "diagnostic"
@@ -147,22 +128,6 @@ def target_load_rows(
                 "achieved_rate_msg_s": received_unique / measurement_secs,
                 "achieved_ratio": received_unique / intended,
                 "duplicates": duplicates,
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def artifact_inventory(available: set[str] | None = None) -> pd.DataFrame:
-    available = available or set()
-    rows = []
-    for question, notebook, artifact in FOLLOWUP_ARTIFACTS:
-        rows.append(
-            {
-                "question": question,
-                "notebook": notebook,
-                "artifact": artifact,
-                "status": "READY" if artifact in available else "PENDING",
-                "thesis_evidence": False,
             }
         )
     return pd.DataFrame(rows)

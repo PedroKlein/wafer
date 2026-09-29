@@ -497,7 +497,7 @@ def raw_hashes(root: Path) -> dict[str, str]:
     }
 
 
-def test_all_notebooks_execute_against_complete_focused_fixture(
+def test_all_notebooks_execute_against_complete_fixture(
     tmp_path, monkeypatch
 ) -> None:
     # A run-like name above the run directories must not be read as a run index.

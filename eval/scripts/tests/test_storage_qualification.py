@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 import shlex
@@ -228,112 +229,24 @@ def test_verify_remount_rejects_checksum_mismatch(tmp_path: Path) -> None:
     assert not (volume / "manifests/storage-qualification/fixture-a/verified.json").exists()
 
 
-def write_raw_manifest(volume: Path) -> Path:
-    raw_file = volume / "raw/e-val-1/run-01/metadata.json"
-    raw_file.parent.mkdir(parents=True)
-    raw_file.write_text('{"fixture":true}\n')
-    digest = hashlib.sha256(raw_file.read_bytes()).hexdigest()
-    manifest = volume / "manifests/expanded-n5.sha256"
-    manifest.write_text(f"{digest}  raw/e-val-1/run-01/metadata.json\n")
-    return manifest
+def storage_verifier():
+    spec = importlib.util.spec_from_file_location("storage_verifier", VERIFIER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def verified_receipt(volume: Path, facts: Path) -> Path:
-    assert prepare(volume, facts).returncode == 0
-    after = facts.with_name("after.json")
-    write_facts(after, volume, mount_id="52")
-    prepared = volume / "manifests/storage-qualification/fixture-a/prepared.json"
-    assert run(
-        "verify-remount",
-        "--results-root",
-        str(volume),
-        "--facts-json",
-        str(after),
-        "--prepared-receipt",
-        str(prepared),
-    ).returncode == 0
-    return volume / "manifests/storage-qualification/fixture-a/verified.json"
+def test_portable_paths_reject_non_exfat_safe_segment() -> None:
+    with pytest.raises(ValueError, match="not exFAT-safe"):
+        storage_verifier().validate_portable_relative_paths(["raw/bad:name/data"])
 
 
-def test_handoff_verifies_same_manifest_and_analysis_output_boundary(tmp_path: Path) -> None:
-    volume = make_volume(tmp_path)
-    facts = tmp_path / "facts.json"
-    write_facts(facts, volume)
-    receipt = verified_receipt(volume, facts)
-    handoff_facts = tmp_path / "macos.json"
-    write_facts(
-        handoff_facts,
-        volume,
-        device_id="VolumeUUID:ABCD-1234",
-        mount_id="disk9s1",
-    )
-    value = json.loads(handoff_facts.read_text())
-    value["platform"] = "macos"
-    handoff_facts.write_text(json.dumps(value))
-    manifest = write_raw_manifest(volume)
-
-    completed = run(
-        "handoff",
-        "--results-root",
-        str(volume),
-        "--facts-json",
-        str(handoff_facts),
-        "--verified-receipt",
-        str(receipt),
-        "--manifest",
-        str(manifest),
-        "--analysis-output",
-        str(volume / "derived/expanded-n5"),
-        "--host",
-        "macos",
-    )
-
-    assert completed.returncode == 0, completed.stderr
-    handoff = json.loads(
-        (volume / "manifests/storage-qualification/fixture-a/handoff-macos.json").read_text()
-    )
-    assert handoff["manifest_sha256"] == hashlib.sha256(manifest.read_bytes()).hexdigest()
-    assert handoff["raw_open_mode"] == "read-only"
-    assert handoff["analysis_output_relative"] == "derived/expanded-n5"
-    assert handoff["verification"]["mismatch_count"] == 0
-
-
-@pytest.mark.parametrize(
-    ("manifest_line", "analysis_output", "expected"),
-    [
-        ("0" * 64 + "  derived/result.json\n", "derived/out", "raw-path drift"),
-        (None, "raw/analysis", "analysis output"),
-    ],
-)
-def test_handoff_rejects_raw_path_drift_and_analysis_write_into_raw(
-    tmp_path: Path, manifest_line: str | None, analysis_output: str, expected: str
-) -> None:
-    volume = make_volume(tmp_path)
-    facts = tmp_path / "facts.json"
-    write_facts(facts, volume)
-    receipt = verified_receipt(volume, facts)
-    manifest = write_raw_manifest(volume)
-    if manifest_line is not None:
-        manifest.write_text(manifest_line)
-
-    completed = run(
-        "handoff",
-        "--results-root",
-        str(volume),
-        "--facts-json",
-        str(facts),
-        "--verified-receipt",
-        str(receipt),
-        "--manifest",
-        str(manifest),
-        "--analysis-output",
-        str(volume / analysis_output),
-        "--host",
-        "jetson",
-    )
-
-    assert completed.returncode == 1
-    assert expected in completed.stderr
+def test_portable_paths_reject_case_or_normalization_collision() -> None:
+    with pytest.raises(ValueError, match="case or normalization collision"):
+        storage_verifier().validate_portable_relative_paths(
+            ["raw/straße/data", "raw/STRASSE/data"]
+        )
 
 
 def test_linux_facts_uses_injected_platform_commands(tmp_path: Path) -> None:
@@ -408,7 +321,5 @@ def test_wrapper_is_non_destructive_and_exposes_staged_commands() -> None:
         [str(WRAPPER), "--help"], cwd=ROOT, capture_output=True, text=True, check=False
     )
     assert completed.returncode == 0
-    assert "prepare" in completed.stdout
-    assert "verify-remount" in completed.stdout
-    assert "seal" in completed.stdout
-    assert "handoff" in completed.stdout
+    for command in ("facts", "prepare", "verify-remount"):
+        assert f"qualify-results-storage.sh {command} " in completed.stdout

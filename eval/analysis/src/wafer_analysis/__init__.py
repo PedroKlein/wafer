@@ -17,7 +17,6 @@ from .canonical import (
     validate_visual_manifest,
 )
 from .focused import (
-    artifact_inventory,
     evidence_label,
     passed_artifacts,
     pending_record,
@@ -37,7 +36,6 @@ from .stats import bootstrap_ci, cliffs_delta
 __all__ = [
     "FINAL_VISUAL_MANIFEST",
     "analysis_evidence_status",
-    "artifact_inventory",
     "bootstrap_ci",
     "candidate_capacity_table",
     "candidate_depth_table",
