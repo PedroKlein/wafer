@@ -44,6 +44,7 @@ from results_layout import (
 from containment import assess_containment
 from host_facts import PLATFORM_KEYS
 from interval_metrics import compose_interval_metrics
+import pi_telemetry
 from latency_evidence import latency_evidence_violations
 from write_metadata import merge_metadata
 
@@ -3806,12 +3807,7 @@ def write_progress(
     failures: int = 0,
     **details: object,
 ) -> None:
-    try:
-        temperature_c = int(
-            Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
-        ) / 1000
-    except (OSError, ValueError):
-        temperature_c = None
+    temperature_c = pi_telemetry.read_temperature_millicelsius() / 1000 or None
     entry = {
         "timestamp": utc_now(),
         "event": event,
@@ -7026,17 +7022,30 @@ def capacity_scout_source_state(root: Path) -> dict:
     return {"git_sha": state["git_sha"], "git_dirty": state["git_dirty"], "git_tags": tags}
 
 
+_scout_backend: pi_telemetry.PiBackend | pi_telemetry.JetsonBackend | pi_telemetry.X86Backend | None = None
+
+
+def scout_telemetry_backend() -> pi_telemetry.PiBackend | pi_telemetry.JetsonBackend | pi_telemetry.X86Backend:
+    """One backend per process, so counters that need a previous sample keep it."""
+    global _scout_backend
+    if _scout_backend is None:
+        _scout_backend = pi_telemetry.make_backend("auto")
+    return _scout_backend
+
+
 def capacity_scout_current_snapshot(
     root: Path, ledger: Path, batch_started_epoch: float, evidence_root: Path | None = None
 ) -> dict:
     telemetry_available = True
     try:
-        temperature = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text())
-        throttle_text = subprocess.check_output(
-            ["vcgencmd", "get_throttled"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        throttled = throttle_text != "throttled=0x0"
-    except (OSError, ValueError, subprocess.CalledProcessError):
+        backend = scout_telemetry_backend()
+        temperature = pi_telemetry.read_temperature_millicelsius(
+            backend.sysroot, backend.zone_types, backend.hwmon_names
+        )
+        if temperature <= 0:
+            raise OSError("no readable thermal zone")
+        throttled = backend.throttled() != pi_telemetry.NOT_THROTTLED
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
         telemetry_available = False
         temperature = 0
         throttled = False
