@@ -91,6 +91,14 @@ Deploy the tagged release using the reviewed deployment command in the release r
 
 Do not continue if preflight reports a dirty or untagged source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
+Before the final batch, also measure what the host telemetry sidecars cost on the Pi:
+
+```sh
+./eval/scripts/run-rpi5-instrument-ab.sh
+```
+
+It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measurement, 60,000 messages, same cpusets), one with the Pi and `/proc` sidecars on and one with them off (`WAFER_HOST_SIDECARS=off`), alternating which goes first and pausing 60 s between runs, with eKuiper stopped in both arms. `analyze-instrument-ab.py` writes `instrument-ab.json` with the paired on-minus-off differences of p50, p95, p99 and achieved rate and the `/proc` sampler's CPU share, and exits non-zero unless the median p95 and achieved-rate differences are within 5%, every run is lossless and the sampler used at most 1% of one core. The pairs are diagnostic and never pooled with the final batch. About 25 minutes of Pi time.
+
 ## Run the targeted pre-final pilot
 
 The targeted pilot is a new diagnostic batch declared before launch. It covers:
