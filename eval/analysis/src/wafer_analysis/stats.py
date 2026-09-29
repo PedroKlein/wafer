@@ -1,22 +1,11 @@
 """Statistical analysis functions for WAFER evaluation."""
 
 import numpy as np
-from scipy import stats as scipy_stats
 
 
 def _require_samples(*samples: np.ndarray) -> None:
     if any(len(sample) == 0 for sample in samples):
         raise ValueError("statistical estimators require non-empty samples")
-
-
-def mann_whitney_u(a: np.ndarray, b: np.ndarray) -> tuple[float, float]:
-    """Mann-Whitney U test for non-normal distributions.
-
-    Returns (U statistic, p-value).
-    """
-    _require_samples(a, b)
-    u_stat, p_value = scipy_stats.mannwhitneyu(a, b, alternative="two-sided")
-    return float(u_stat), float(p_value)
 
 
 def bootstrap_ci(
@@ -66,12 +55,3 @@ def cliffs_delta(a: np.ndarray, b: np.ndarray) -> tuple[float, str]:
 
     return float(delta), magnitude
 
-
-def shapiro_wilk(data: np.ndarray) -> tuple[float, float, bool]:
-    """Shapiro-Wilk normality test.
-
-    Returns (statistic, p_value, is_normal) where is_normal is True if p > 0.05.
-    """
-    _require_samples(data)
-    stat, p_value = scipy_stats.shapiro(data)
-    return float(stat), float(p_value), p_value > 0.05

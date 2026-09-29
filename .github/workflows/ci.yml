@@ -89,6 +89,27 @@ jobs:
           WAFER_REQUIRE_PLUGINS: "1"
         run: cargo test --locked --workspace
 
+      - name: Install uv for the analysis package
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: eval/analysis/uv.lock
+
+      - name: Evaluation harness tests
+        # Mirrors `mise run test-eval`. The deploy test needs the plugin
+        # artifacts built above; the analysis suite executes every notebook.
+        run: |
+          python3 -m pip install --quiet pytest
+          python3 -m pytest eval/scripts/tests -q
+          eval/scripts/tests/test_ekuiper_install.sh
+          eval/scripts/tests/test_glibc_floor.sh
+          eval/scripts/tests/test_eval_portability.sh
+          eval/scripts/tests/test_host_tags.sh
+          eval/scripts/tests/test_pi5_tooling.sh
+          eval/scripts/tests/test_run_experiment_canonical.sh
+          eval/ekuiper/test-native-scripts.sh
+          uv run --directory eval/analysis --frozen pytest -q
+
       - name: Docker-backed tests
         # Mirrors `mise run test-docker`; the runner has a Docker daemon.
         run: |

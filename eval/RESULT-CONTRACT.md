@@ -174,7 +174,6 @@ before reading. The matrix below is authoritative:
 | `hotswap-analysis.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `canonical_runner.py` | Index-matched API and sink observations with explicit `*_ns` names: internal phases, `http_total_ns`, and `sink_observed_output_gap_ns`. Includes the unique measurement source leaf so shared E-Swap-2/6 views do not multiply samples. |
 | `rollback.json` | E-Swap-5 and candidate rollback sessions | `canonical_runner.py` | Request-indexed compile, instantiate, signal, and rollback durations plus exact attempt/success counts and lossless sequence evidence. It contains no successful-v2 sink transition. |
 | `post-rollback-continuity.json` | E-Swap-5 | `canonical_runner.py` | Explicit output observed after the final rollback, with final request identity, bounded observation interval, message count, interval-metrics provenance, and lossless full-run sequence evidence. |
-| `summary.json` | E-Val-1 only | `run-e-val-1-shakedown.sh` | Gate-pass summary across runs (p99 range, honesty-window check). Bespoke to the honesty-gate methodology; not consumed by canonical analysis. |
 
 ### Ownership summary
 
@@ -272,7 +271,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools git grep -n -E \
   'add_to_linker_(sync|async)|spawn_blocking|block_in_place|\.instantiate(_async)?\(|call_(validate|init|process|evaluate|route)' \
   -- crates/wafer-core/src
 
-WASMTIME_REPO=/Users/i572543/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main
+WASMTIME_REPO=<path to a wasmtime checkout>
 DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C "$WASMTIME_REPO" \
   grep -n -E 'pub fn add_to_linker_(async|sync)|require_store_data_send' \
   e9f1ea232fd245aea338ab3eb7d73487ae75cab1 -- \
@@ -448,8 +447,8 @@ worktrees and never uses the developer's dirty working tree.
 set -euo pipefail
 export DEVELOPER_DIR=/Library/Developer/CommandLineTools
 export TOKIO_WORKER_THREADS=4
-export ROOT=/Users/i572543/.pi/plans/component-model-shippable-improvements/scratch/p2-ab
-export REPO=/Users/i572543/Dev/github.com/PedroKlein/wafer-poc/wasi-0.3-improvements
+export ROOT=<scratch directory for the A/B worktrees and outputs>
+export REPO=<path to this repository>
 export BASELINE_SHA=<full-40-character-P1-T1-commit>
 export CANDIDATE_SHA=<full-40-character-P1-T5-commit>
 export WASMTIME_REV=e9f1ea232fd245aea338ab3eb7d73487ae75cab1
@@ -864,15 +863,6 @@ relabels v10-v13 evidence. Output is diagnostic and non-poolable under
 PDF, and HTML, plus one hash-bound result-time observations artifact. Family
 observations cannot retain `PRE-RESULTS` or `PENDING`; genuine external gaps,
 including unmatched x86 E-Perf-5, remain report-level pending limitations.
-
-Validate this architecture before implementing or scheduling candidates:
-
-```sh
-python3 eval/scripts/validate-enhanced-architecture.py \
-  --matrix eval/canonical-matrix.json \
-  --decision .plans/rpi5-v5-enhanced-experiment-readiness/architecture-decision.json \
-  --contract eval/RESULT-CONTRACT.md
-```
 
 ### Focused-pilot contract
 
