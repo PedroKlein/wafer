@@ -680,7 +680,7 @@ response arrived) and the summary file, with `hotswap_triggered_at_secs: null`, 
 
 For final WAFER leaves, the verifier compares these effective metering fields with the condition in `canonical-matrix.json`. E-Perf-7 uses its four-way `metering_modes` table; declared attack stimuli use their condition-specific exceptions; all other WAFER conditions use `final_campaign.canonical_metering`. A missing or mismatched value is a contract violation.
 
-Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the Pi 5 host fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
+Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the host profile fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
 
 ```sh
 python3 eval/scripts/verify-result-contract.py --canonical <result-dir>
@@ -700,18 +700,32 @@ their contract being checked.
 python3 eval/scripts/verify-result-contract.py --canonical <pi-batch> --match <jetson-batch> --match <x86-batch>
 ```
 
-### Pi 5 host fields
+### Host profile fields
 
-Canonical `rpi5` runs additionally require:
+The `hosts` map of `eval/canonical-matrix.json` (schema version 2) holds one
+profile per host tag: `rpi5` is the canonical host, `jetson` and `x86` are
+replication hosts with their own batches, never pooled with the Pi's. The
+canonical runner (`--host`), `validate-canonical.py` (`--host`) and the
+verifier (by the leaf's `<host>-` batch directory) check a leaf only against its own
+profile:
 
-| Field | Source | Required value |
-| --- | --- | --- |
-| `hardware_model` | `/proc/device-tree/model` | Raspberry Pi 5 |
-| `memory_total_kib` | `/proc/meminfo` | approximately 4 GB; exact firmware-visible value is recorded |
-| `cpu_governors` | `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` | only `performance` during measured runs |
-| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | `1-3` |
-| `temperature_millicelsius` | `/sys/class/thermal/thermal_zone0/temp` | captured at run completion |
-| `throttled` | `vcgencmd get_throttled` | `0x0` |
+| Field | Source | `rpi5` | `jetson` | `x86` |
+| --- | --- | --- | --- | --- |
+| `host_tag` | runner `--host` | `rpi5` | `jetson` | `x86` |
+| `arch` | `uname -m` | `aarch64` | `aarch64` | `x86_64` |
+| `hardware_model` | `/proc/device-tree/model` or DMI | contains `Raspberry Pi 5` | contains `Jetson Orin Nano` | any |
+| `cpu_governors` | `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` | `performance` | `performance` | `performance` |
+| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | `1-3` | `1-3` | `1-3` |
+| `throttled` | `pi_telemetry.py` backend | `0x0` | `0x0` | `0x0` |
+| `online_cpus` | `/sys/devices/system/cpu/online` | any | `0-3` | any |
+| `power_mode` | `nvpmodel -q` | any | `25W` | any |
+| `smt` | `/sys/devices/system/cpu/smt/control` | any | any | `off`, `forceoff` or `notsupported` |
+| `turbo` | `intel_pstate/no_turbo` or `cpufreq/boost` | any | any | `off` |
+
+The SUT runs on CPUs `1-3` and the load generator, broker and samplers on CPU
+`0` on every host. `memory_total_kib` (`/proc/meminfo`) and
+`temperature_millicelsius` (the host's thermal zone at run completion) are
+recorded, not checked.
 
 Every `metadata.json` and `host-facts.json` also carries the platform facts
 below, on every host tag. A fact the host does not expose is `null`, never

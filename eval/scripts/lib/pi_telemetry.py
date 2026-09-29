@@ -334,6 +334,18 @@ def make_backend(name: str, sysroot: Path = Path("/")) -> PiBackend | JetsonBack
     return BACKENDS[name](sysroot)
 
 
+def host_snapshot() -> tuple[int, str]:
+    """Current temperature and throttle state of this host, (0, "unknown") without a backend."""
+    try:
+        backend = make_backend("auto")
+        temperature = read_temperature_millicelsius(
+            backend.sysroot, backend.zone_types, backend.hwmon_names
+        )
+        return temperature, backend.throttled()
+    except (OSError, KeyError, subprocess.CalledProcessError):
+        return 0, "unknown"
+
+
 def sample(
     backend: PiBackend | JetsonBackend | X86Backend,
 ) -> tuple[dict[str, int | float | str], list[dict[str, float | str]]]:
