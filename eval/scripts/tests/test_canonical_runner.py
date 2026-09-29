@@ -4040,8 +4040,8 @@ def test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in() -> None:
                 else "elapsed_secs,msg_count,bytes\n"
             )
             branch_dir.joinpath("sequence.csv").write_text(
-                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
-                f"{received},{received},0,0,0\n"
+                "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count\n"
+                f"{received},{received},{received},0,0,0\n"
             )
             branch_dir.joinpath("percentiles.json").write_text(
                 json.dumps(
@@ -4114,8 +4114,8 @@ def test_branch_isolation_distinguishes_target_from_actual_offered_population() 
                 "elapsed_secs,msg_count,bytes\n60.0,28000,3584000\n"
             )
             branch_dir.joinpath("sequence.csv").write_text(
-                "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
-                "28000,28000,0,0,0\n"
+                "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count\n"
+                "28000,28000,28000,0,0,0\n"
             )
             branch_dir.joinpath("percentiles.json").write_text(
                 json.dumps(
@@ -4145,6 +4145,37 @@ def test_branch_isolation_distinguishes_target_from_actual_offered_population() 
         assert branch_a["received_messages"] == 28_000
         assert branch_a["lost_messages"] == 0
         assert branch_a["target_shortfall_messages"] == 32_000
+
+
+def test_branch_isolation_loss_does_not_count_duplicates_as_received() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        for branch in ("branch-a", "branch-b"):
+            branch_dir = root / branch
+            branch_dir.mkdir()
+            branch_dir.joinpath("throughput.csv").write_text("elapsed_secs,msg_count,bytes\n60.0,60000,7680000\n")
+            branch_dir.joinpath("sequence.csv").write_text(
+                "total_expected,total_received,received_unique,gap_ranges,gap_msgs,duplicates_count\n"
+                "60000,60000,59995,1,5,5\n"
+            )
+            branch_dir.joinpath("percentiles.json").write_text(
+                json.dumps({"total_count": 60_000, "p50_ns": 1, "p95_ns": 2, "p99_ns": 3, "p999_ns": 4})
+            )
+            branch_dir.joinpath("measurement-window.json").write_text(
+                json.dumps({"started_ns": 1_000_000_000, "finished_ns": 61_000_000_000})
+            )
+
+        branch_a = derive_branch_isolation(
+            root,
+            warmup_secs=30,
+            measurement_secs=60,
+            branch_sources={"branch-a": "source_a", "branch-b": "source_b"},
+            target_messages=60_000,
+        )["branches"]["branch_a"]
+        assert branch_a["received_messages"] == 60_000
+        assert branch_a["received_unique_messages"] == 59_995
+        assert branch_a["lost_messages"] == 5
+        assert branch_a["duplicates"] == 5
 
 
 def test_branch_isolation_batch_summary_contains_both_attack_rows() -> None:
