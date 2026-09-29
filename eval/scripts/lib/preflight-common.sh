@@ -71,15 +71,18 @@ check_clocks_pinned() {
 }
 
 check_thermal_zone() {
-    local type="$1" zone
+    local zone type wanted
     for zone in "$SYSROOT"/sys/class/thermal/thermal_zone*; do
         [ -e "$zone" ] || continue
-        if [ "$(tr -d '\0' <"$zone/type" 2>/dev/null)" = "$type" ]; then
-            pass "thermal zone $type: $(tr -d '\0' <"$zone/temp" 2>/dev/null || echo unknown) millicelsius"
-            return
-        fi
+        type="$(tr -d '\0' <"$zone/type" 2>/dev/null)"
+        for wanted in "$@"; do
+            if [ "$type" = "$wanted" ]; then
+                pass "thermal zone $type: $(tr -d '\0' <"$zone/temp" 2>/dev/null || echo unknown) millicelsius"
+                return
+            fi
+        done
     done
-    fail "thermal zone $type" "no thermal zone of that type"
+    fail "thermal zone $*" "no thermal zone of that type"
 }
 
 check_tools_and_services() {

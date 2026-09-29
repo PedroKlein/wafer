@@ -4,7 +4,8 @@ set -u
 # Read-only preflight for a Jetson Orin Nano used as an evaluation host.
 # Expected setup: L4T R36 (Ubuntu 22.04), cores 4-5 offline, isolcpus=1-3,
 # a fixed nvpmodel mode (WAFER_JETSON_POWER_MODE, default 25W), jetson_clocks
-# applied, performance governor, INA3221 rails visible through hwmon.
+# applied, performance governor, INA3221 rails visible through hwmon. The CPU
+# thermal zone is `cpu-thermal` on Orin (L4T R35+) and `CPU-therm` on R32.
 
 # shellcheck source=lib/preflight-common.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib/preflight-common.sh"
@@ -48,7 +49,7 @@ check_online_cpus 0-3
 check_isolated_cpus 1-3
 check_governor
 check_clocks_pinned "1 2 3"
-check_thermal_zone CPU-therm
+check_thermal_zone cpu-thermal CPU-therm
 
 if ls "$SYSROOT"/sys/bus/i2c/drivers/ina3221/*/hwmon/hwmon* >/dev/null 2>&1; then
     pass "INA3221 power rails visible through hwmon"
