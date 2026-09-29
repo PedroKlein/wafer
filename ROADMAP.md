@@ -25,7 +25,7 @@ Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
 - A19 runtime-side memory sampler + per-node metrics emitter LANDED.
 - aarch64-linux cross-compile SHIPPED (`mise run cross-build-pi`;
   cross-arch CI workflow guards the recipe on every PR).
-- Thesis-grade PDF figure pipeline LANDED for all 11 canonical
+- Thesis-grade PDF figure pipeline LANDED for the canonical
   notebooks; LaTeX embed verified zero font substitution warnings.
 - Legacy shakedown metadata schema unified; `verify-result-contract.py`
   WARNs on missing merged provenance keys.
@@ -38,11 +38,13 @@ Remaining work for thesis-grade numbers:
   happens before canonical runs; P2 evidence is not relabeled as P3 evidence.
 - Run the frozen canonical experiment matrix (N=30, 30 s warmup,
   experiment-specific windows) on the already provisioned Pi 5 host via
-  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md).
+  [`docs/eval/pi5-experiment-runbook.md`](docs/eval/pi5-experiment-runbook.md),
+  then the same matrix on the Jetson Orin Nano and x86 replication hosts
+  ([`docs/eval/jetson-host-setup.md`](docs/eval/jetson-host-setup.md),
+  [`docs/eval/x86-host-setup.md`](docs/eval/x86-host-setup.md)).
   Pi 5 host setup (`isolcpus=1-3`, performance governor) and the native
   eKuiper 2.1.0 install and smoke path are done; see
   [`docs/status/rpi5-canonical-transition.md`](docs/status/rpi5-canonical-transition.md).
-  Dedicated canonical eKuiper comparator wrappers are still pending.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 

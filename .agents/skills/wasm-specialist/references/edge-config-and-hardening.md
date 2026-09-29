@@ -1,6 +1,6 @@
 # Wasmtime Edge Configuration & Production Hardening
 
-## Engine Configuration for Edge Hardware (RPi 4, Jetson Orin)
+## Engine Configuration for Edge Hardware (Raspberry Pi 5, Jetson Orin)
 
 ```rust
 let mut config = Config::new();
@@ -17,7 +17,7 @@ config.memory_guard_size(64 * 1024);         // 64KB guard vs 2GB default
 // → bounds checks required but memory footprint drops from GBs to MBs
 
 // Compilation:
-config.cranelift_opt_level(OptLevel::SpeedAndSize);  // Balance for Pi4
+config.cranelift_opt_level(OptLevel::SpeedAndSize);  // Balance for Pi 5
 config.parallel_compilation(true);                    // Use all cores during compilation
 
 // Pooling allocator (syscall-free instantiation):
@@ -38,7 +38,7 @@ config.allocation_strategy(pool.into());
 | `max_wasm_stack` | — | 256 KiB | Prevents stack overflow from consuming excessive memory |
 | `memory_reservation` | 4 GiB | 16 MiB | Enables bounds checks instead of guard pages. Saves VA space. |
 | `memory_guard_size` | 2 GiB | 64 KiB | Minimal guard when using explicit bounds checks |
-| `cranelift_opt_level` | Speed | SpeedAndSize | Balance for Pi4's limited icache |
+| `cranelift_opt_level` | Speed | SpeedAndSize | Balance for the Pi 5's limited icache |
 | `total_component_instances` | 1000 | 50 | Match maximum DAG node count |
 | `max_memory_size` | 4 GiB | 16 MiB | IoT transforms don't need GB-scale memory |
 
@@ -47,8 +47,8 @@ config.allocation_strategy(pool.into());
 Pre-allocates virtual memory regions for N instances at Engine creation.
 - Slot affinity: recently used slots for same module are preferred → cache benefits for hot-swap
 - On deallocation: `madvise(DONTNEED)` (not munmap) → no TLB flush overhead
-- Pi4 feasibility: With 10 nodes × 16MiB max memory, total VA reservation is ~640MB.
-  Pi4's 48-bit VA space (256TB) handles this easily. Physical memory committed only on access.
+- Pi 5 feasibility: With 10 nodes × 16MiB max memory, total VA reservation is ~640MB.
+  the Pi 5's 48-bit VA space (256TB) handles this easily. Physical memory committed only on access.
 
 ### When Pooling Doesn't Fit
 

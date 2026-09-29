@@ -153,7 +153,7 @@ edition = "2024"
 cargo build --release --manifest-path plugins/my-plugin/Cargo.toml
 
 # Build all plugins (via mise)
-mise run build-plugins
+mise run //plugins:build-plugins
 
 # The mise task:
 # for plugin in plugins/*/Cargo.toml; do

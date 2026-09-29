@@ -27,7 +27,7 @@ Ask yourself:
 |-----------|---------|
 | Single node behaviour | Unit test + plugin fixture + `#[tokio::test]` |
 | Graph topology validity | Pure `#[test]`, no async, no WASM |
-| Full pipeline execution | `crates/wafer-runtime/tests/integration.rs` + multi_thread flavor |
+| Full pipeline execution | a file under `crates/wafer-runtime/tests/` (e.g. `exit_status.rs`) + multi_thread flavor |
 | WASM overhead vs native | Criterion bench with paired native baseline |
 | Timeouts / retry backoff | Unit test + `tokio::time::pause()` |
 | Broker-dependent MQTT | Integration test + env-var guard |
@@ -50,7 +50,7 @@ fn plugin_path(name: &str) -> PathBuf {
 async fn test_transform_passthrough() {
     let path = plugin_path("pass-through");
     if !path.exists() {
-        eprintln!("Skipping: build plugins first with `mise run build-plugins`");
+        eprintln!("Skipping: build plugins first with `mise run //plugins:build-plugins`");
         return;
     }
     // ... test body
@@ -58,7 +58,7 @@ async fn test_transform_passthrough() {
 ```
 
 **Why not build in tests?** WASM compilation takes 10-30s. Tests would be unusably slow.
-Build once in CI or via `mise run build-plugins`, then run tests against the artifacts.
+Build once in CI or via `mise run //plugins:build-plugins`, then run tests against the artifacts.
 
 ---
 
@@ -119,8 +119,7 @@ system resources) then exceeding with latency histograms:
 | Hardware spec documentation | Standard | Exact model, kernel version, governor (performance) |
 | N≥30 repetitions | Thesis stats requirement | Mann-Whitney U, Bootstrap CI95 |
 
-**eKuiper baseline**: 12k msg/s on RPi 3B+. WAFER target: >5k msg/s on RPi 4 with isolation.
-Overhead budget: <60% throughput reduction is defensible; <40% is excellent.
+The RQ1 criteria (matched-load p95 ratio, delivery-ceiling ratio, the 50 µs per-hop reference) are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`; do not restate them from memory.
 
 ### The Setup/Measurement Separation Problem
 
@@ -155,7 +154,7 @@ For WASM benchmarks: use `SmallInput` when reusing engine/component across itera
 
 RQ1 asks: "What is the performance cost of typed Wasm boundaries?" The evaluation
 architecture requires measuring Gap A (WAFER vs Native Rust = isolation tax) and
-Gap B (WAFER vs eKuiper = competitive viability). Pass criterion: <50µs per-hop on RPi 4.
+Gap B (WAFER vs eKuiper = competitive viability). Per-hop cost is reported against a predeclared 50 µs reference on the Raspberry Pi 5.
 
 ```rust
 let mut group = c.benchmark_group("transform_latency");

@@ -31,7 +31,7 @@ With the complete runtime architecture designed in Sessions 1–6, this session 
 
 The post-refactor baseline already incorporates substantial performance decisions from prior sessions: `Bytes` payload with refcount-bump clone (~5ns), `Arc<EnvelopeHeader>` (~5ns clone), persistent Store per node (~77ns per-message overhead), `InstancePre` for hot-swap (~5µs instantiation), `borrow<buffer>` for zero-copy inspection, direct tokio mpsc channels (~100ns send+recv), and a typed nop call boundary measured at ~27ns on x86 (~50-80ns estimated on ARM64).
 
-RQ1 targets are <50µs per WIT boundary crossing on RPi 4 and within 30% of eKuiper throughput (~12K msg/s on RPi 3B+). RQ2 requires per-node memory containment for attack scenario S4. RQ3 benefits from faster hot-swap preparation via AOT cache (compilation drops from ~30ms to ~1-2ms on RPi 4).
+When this RFC was written (July 2026), the RQ1 targets were <50µs per WIT boundary crossing on RPi 4 and within 30% of eKuiper throughput (~12K msg/s on RPi 3B+); the current criteria and the Raspberry Pi 5 host are defined in `tcc-doc/research/analysis/thesis-statement-v3.md`. RQ2 requires per-node memory containment for attack scenario S4. RQ3 benefits from faster hot-swap preparation via AOT cache (compilation drops from ~30ms to ~1-2ms on RPi 4).
 
 ## Decisions
 

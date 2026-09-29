@@ -181,10 +181,10 @@ what state the task is in. For WASM tasks, this guarantees Store poisoning. Use
 
 ## Runtime Tuning for Edge Hardware
 
-WAFER targets Raspberry Pi 4 / Jetson Orin. Default `#[tokio::main]` is wrong:
+WAFER targets a Raspberry Pi 5, with Jetson Orin Nano and x86 Linux as replication hosts. Default `#[tokio::main]` is wrong:
 
 ```rust
-// Default: worker_threads = num_cpus (4 on Pi 4)
+// Default: worker_threads = num_cpus (4 on a Pi 5)
 // Problem: Tokio's work-stealer doesn't know about priority.
 // It will preempt your pipeline loop to service a log flush.
 
@@ -271,7 +271,8 @@ std::thread::spawn(move || {
 ## Hot-Swap Coordination (Thesis RQ3: Disruption Cost)
 
 RQ3 asks: "What is the disruption cost of replacing a stage at runtime?"
-Pass criteria: <100ms pause at p95, zero message loss, <5% throughput dip.
+Criteria (see `tcc-doc/research/analysis/thesis-statement-v3.md`): E-Swap-4 across-run p95 sink gap
+below 100 ms and E-Swap-3 median dip below 5% (upper CI), both with zero loss and duplication.
 
 WAFER uses a **watch-channel model**: the node task `select!`s between its input queue
 and a `watch::Receiver<Option<SwapPayload>>`. When a swap arrives between messages,
@@ -307,7 +308,7 @@ retired). What keeps the swap safe:
 - **NEVER hold tokio::sync::Mutex across complex await sequences** — cancellation drops
   the guard with invariants unrestored (Oxide found repeated state corruption from this)
 - **NEVER use default runtime config on constrained hardware** — `#[tokio::main]` spawns
-  num_cpus workers; on Raspberry Pi 4 that's all 4 cores, starving WASM and OS
+  num_cpus workers; on a Raspberry Pi 5 that's all 4 cores, starving WASM and OS
 - **NEVER assume channel close = immediate task stop** — the task finishes its current
   WASM call before observing the closed channel on the next recv()
 - **NEVER cancel an in-flight Wasm call to speed up a hot-swap** — the swap waits for the

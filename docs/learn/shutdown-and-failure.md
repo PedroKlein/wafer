@@ -54,7 +54,7 @@ The orchestrator joins whichever task completes next until the deadline; it does
 Cleanup differs by runner:
 
 - The source loop calls `source.close().await` after cancellation, EOF, or its exit path.
-- Transform, filter, and router loops call `policy.flush_to_dlq("shutdown", &metrics)` when their loop exits, moving buffered retries to the DLQ path when a sender is available.
+- Transform, filter, and router loops call `policy.flush_to_dlq(&DlqReason::Shutdown, &metrics)` when their loop exits, moving buffered retries to the DLQ path when a sender is available.
 - The sink loop exits its receive phase, uses `receiver.try_recv()` to consume messages already buffered, then calls `sink.flush().await` and `sink.close().await` even if collection during the drain reported an error.
 - The DLQ task receives the same cancellation token and drains entries already buffered in its own channel before exiting.
 
@@ -125,7 +125,7 @@ Failure handling is similarly layered. WIT errors are typed data processed by `E
 
 - **Source:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `pub async fn shutdown`, `pub async fn run_until_complete`, `self.tasks.shutdown().await`
 - **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `source.close().await`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq("shutdown", &metrics)`
+- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`, `policy.flush_to_dlq(&DlqReason::Shutdown, &metrics)`
 - **Source:** [`crates/wafer-core/src/runner/sink.rs`](../../crates/wafer-core/src/runner/sink.rs) | symbols: `pub async fn run_sink_loop`, `receiver.try_recv()`, `sink.flush().await`, `sink.close().await`
 - **Source:** [`crates/wafer-core/src/runner/error_policy.rs`](../../crates/wafer-core/src/runner/error_policy.rs) | symbols: `pub(crate) fn handle`, `pub fn flush_to_dlq`, `DlqReason::Shutdown`
 - **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_shutdown_completes_all_tasks()`, `async fn test_cancel_triggers_shutdown()`
