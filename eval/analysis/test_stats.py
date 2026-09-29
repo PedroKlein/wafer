@@ -3,7 +3,13 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from wafer_analysis.stats import clopper_pearson, cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
+from wafer_analysis.stats import (
+    clopper_pearson,
+    cliffs_delta_ci,
+    hodges_lehmann,
+    median_shift_ci,
+    pooled_ratio_ci,
+)
 
 
 def test_hodges_lehmann_is_the_median_of_walsh_averages() -> None:
@@ -66,3 +72,21 @@ def test_clopper_pearson_rejects_impossible_counts() -> None:
         clopper_pearson(0, 0)
     with pytest.raises(ValueError):
         clopper_pearson(31, 30)
+
+
+def test_median_shift_is_exact_for_constant_groups() -> None:
+    assert median_shift_ci(np.full(30, 990.0), np.full(30, 1_000.0)) == pytest.approx((-10, -10, -10))
+    assert median_shift_ci(np.full(30, 990.0), np.full(30, 1_000.0), relative=True) == pytest.approx(
+        (-0.01, -0.01, -0.01)
+    )
+
+
+def test_median_shift_interval_covers_zero_for_one_population() -> None:
+    values = np.random.default_rng(3).normal(1_000, 10, 60)
+    estimate, low, high = median_shift_ci(values[:30], values[30:])
+    assert low < 0 < high and low <= estimate <= high
+
+
+def test_relative_median_shift_needs_a_nonzero_reference() -> None:
+    with pytest.raises(ValueError, match="non-zero reference"):
+        median_shift_ci(np.ones(3), np.zeros(3), relative=True)

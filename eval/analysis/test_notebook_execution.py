@@ -187,7 +187,7 @@ def build_complete_fixture(root: Path) -> None:
     for experiment, condition in attacks.items():
         for run in (1, 2):
             write_passed_artifact(
-                root / experiment / condition / f"run-{run:02d}",
+                root / experiment / condition / f"run-{run:02d}-attempt-01",
                 "containment.json",
                 {
                     "experiment": experiment,
@@ -209,14 +209,24 @@ def build_complete_fixture(root: Path) -> None:
                 "branch-isolation.json",
                 {
                     "condition": condition,
+                    "run_index": run,
                     "branches": {
                         "branch_a": {
-                            "throughput": {"mean_messages_per_second": 1_000},
-                            "latency_ns": {"p95": 120_000},
+                            "offered_messages": 60_000,
+                            "lost_messages": 0,
+                            "throughput": {"mean_messages_per_second": 1_000 - run},
+                            "latency_ns": {"p95": 120_000 + run},
                         }
                     },
                 },
             )
+    for run in (1, 2):
+        leaf = root / "e-iso-8" / "panic-recovery" / f"run-{run:02d}-attempt-02"
+        write_passed_artifact(leaf, "recovery.json", {"sample_count": 3})
+        (leaf / "recovery.csv").write_text(
+            "node_id,sample_index,duration_ns\n"
+            f"attack,0,{40_000 * run}\nattack,1,{50_000 * run}\nattack,2,{90_000 * run}\n"
+        )
     for system in ("mqtt-loopback", "native", "wafer", "ekuiper"):
         for rate in (500, 1_000, 2_000, 4_000, 8_000, 16_000):
             for run in (1, 2):
@@ -339,6 +349,7 @@ def execute_notebooks(monkeypatch, fixture: Path) -> list[str]:
         "E_ISO_5_DIR": "e-iso-5",
         "E_ISO_6_DIR": "e-iso-6",
         "E_ISO_7_DIR": "e-iso-7",
+        "E_ISO_8_DIR": "e-iso-8",
         "E_PERF_10_DIR": "e-perf-10",
         "E_BACKPRESSURE_DIR": "e-backpressure",
         "E_PERF_9_DIR": "e-perf-9",
@@ -398,7 +409,7 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert "e-swap-6" not in hotswap_output
 
     expected_independent_runs = {
-        "06-fault-injection.ipynb": ("N=8", "N_runs"),
+        "06-fault-injection.ipynb": ("N=2", "N=6", "N_runs"),
         "09-backpressure.ipynb": ("N=90", "N_runs"),
         "09-saturation.ipynb": ("N=600", "N_runs"),
         "10-aot-startup.ipynb": ("N=12", "N_runs"),
@@ -415,6 +426,10 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq2/containment.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-containment.csv").is_file()
     assert "N=12" in output_by_name["06-fault-injection.ipynb"]
+    assert (rendered / "rq2/branch-isolation.pdf").stat().st_size > 1_000
+    assert (rendered / "rq2-branch-isolation.csv").is_file()
+    assert (rendered / "rq2/recovery.pdf").stat().st_size > 1_000
+    assert (rendered / "rq2-recovery.csv").is_file()
     assert (rendered / "e-perf-1-target-load.csv").is_file()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
