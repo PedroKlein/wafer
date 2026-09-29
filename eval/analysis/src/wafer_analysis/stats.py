@@ -1,5 +1,7 @@
 """Statistical analysis functions for WAFER evaluation."""
 
+import math
+
 import numpy as np
 
 
@@ -130,3 +132,30 @@ def pooled_ratio_ci(
     indices = rng.integers(0, len(numerators), size=(n_resamples, len(numerators)))
     ratios = numerators[indices].sum(axis=1) / denominators[indices].sum(axis=1)
     return _percentile_interval(ratios, ci)
+
+
+def _increasing_root(function, low: float = 0.0, high: float = 1.0) -> float:
+    for _ in range(200):
+        middle = (low + high) / 2
+        if function(middle) < 0:
+            low = middle
+        else:
+            high = middle
+    return (low + high) / 2
+
+
+def clopper_pearson(successes: int, trials: int, ci: float = 0.95) -> tuple[float, float]:
+    """Exact (Clopper-Pearson) interval for a binomial proportion."""
+    if trials <= 0 or not 0 <= successes <= trials:
+        raise ValueError("a proportion needs 0 <= successes <= trials and at least one trial")
+    alpha = (1 - ci) / 2
+
+    def at_least(p: float) -> float:
+        return sum(math.comb(trials, i) * p**i * (1 - p) ** (trials - i) for i in range(successes, trials + 1))
+
+    def at_most(p: float) -> float:
+        return sum(math.comb(trials, i) * p**i * (1 - p) ** (trials - i) for i in range(successes + 1))
+
+    low = 0.0 if successes == 0 else _increasing_root(lambda p: at_least(p) - alpha)
+    high = 1.0 if successes == trials else _increasing_root(lambda p: alpha - at_most(p))
+    return low, high

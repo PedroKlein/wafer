@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from wafer_analysis.canonical import (
+    containment_table,
     FINAL_VISUAL_MANIFEST,
     candidate_capacity_table,
     candidate_depth_table,
@@ -1185,3 +1186,73 @@ def test_analysis_consumers_do_not_modify_raw_artifacts(tmp_path: Path) -> None:
     swap3_table(json.loads((raw / "swap3.json").read_text()))
     swap4_table(json.loads((raw / "swap4.json").read_text()))
     assert hash_tree(raw) == before
+
+
+ATTACKS = {
+    "e-iso-1": ("buffer-overflow", "traps_memory_out_of_bounds"),
+    "e-iso-2": ("cross-read", "traps_memory_out_of_bounds"),
+    "e-iso-3": ("fs-access", "guest_unrecoverable"),
+    "e-iso-4": ("infinite-loop", "traps_interrupt"),
+    "e-iso-5": ("memory-exhaust", "traps_memory_limit"),
+    "e-iso-6": ("panic", "traps_unreachable"),
+}
+
+
+def containment_records(runs: int = 30, escaped: dict[str, int] | None = None) -> list[dict]:
+    escaped = escaped or {}
+    return [
+        {
+            "experiment": experiment,
+            "condition": condition,
+            "run_index": run,
+            "contained": run > escaped.get(experiment, 0),
+            "expected_mechanism": mechanism,
+            "expected_count": 3,
+            "unexpected_outcomes": 0 if run > escaped.get(experiment, 0) else 1,
+            "runtime_panic": False,
+            "healthy_messages_out": 60_000,
+        }
+        for experiment, (condition, mechanism) in ATTACKS.items()
+        for run in range(1, runs + 1)
+    ]
+
+
+def test_containment_table_bounds_the_escape_probability_per_attack() -> None:
+    table = containment_table(containment_records())
+    assert table["experiment"].tolist() == list(ATTACKS)
+    assert table["contained_runs"].eq(30).all() and table["all_contained"].all()
+    assert table["containment_ci95_low"].iloc[0] == pytest.approx(0.8843, abs=1e-4)
+    assert table["escape_probability_upper975"].iloc[0] == pytest.approx(0.1157, abs=1e-4)
+    assert table["thesis_evidence"].all()
+    assert (table["threshold"] == "every run contained").all()
+
+
+def test_one_escaped_run_fails_only_its_attack() -> None:
+    table = containment_table(containment_records(escaped={"e-iso-5": 1})).set_index("experiment")
+    assert table.loc["e-iso-5", "contained_runs"] == 29
+    assert not table.loc["e-iso-5", "all_contained"]
+    assert table.loc["e-iso-5", "max_unexpected_outcomes"] == 1
+    assert table.drop("e-iso-5")["all_contained"].all()
+
+
+def test_containment_table_requires_every_attack_at_full_n() -> None:
+    records = [record for record in containment_records() if record["experiment"] != "e-iso-3"]
+    with pytest.raises(ValueError, match="30 independent runs"):
+        containment_table(records)
+    summary = containment_table(records, canonical=False)
+    assert "e-iso-3" not in set(summary.experiment)
+    assert not summary["thesis_evidence"].any()
+
+
+def test_containment_table_rejects_a_run_without_a_verdict() -> None:
+    records = containment_records()
+    records[0]["contained"] = None
+    with pytest.raises(ValueError, match="without a containment verdict"):
+        containment_table(records)
+
+
+def test_containment_summary_rejects_duplicate_runs_in_any_mode() -> None:
+    records = containment_records(runs=2)
+    records[1]["run_index"] = 1
+    with pytest.raises(ValueError, match="duplicate run identity"):
+        containment_table(records, canonical=False)

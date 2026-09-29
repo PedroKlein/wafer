@@ -176,16 +176,32 @@ def build_complete_fixture(root: Path) -> None:
                 "duplicates": 0,
             },
         )
-    for run in (1, 2):
-        write_passed_artifact(
-            root / "e-iso-4" / "infinite-loop" / f"run-{run:02d}",
-            "containment.json",
-            {
-                "condition": "infinite-loop",
-                "traps_total": 2,
-                "nodes": [{"recovery_count": 2}],
-            },
-        )
+    attacks = {
+        "e-iso-1": "buffer-overflow",
+        "e-iso-2": "cross-read",
+        "e-iso-3": "fs-access",
+        "e-iso-4": "infinite-loop",
+        "e-iso-5": "memory-exhaust",
+        "e-iso-6": "panic",
+    }
+    for experiment, condition in attacks.items():
+        for run in (1, 2):
+            write_passed_artifact(
+                root / experiment / condition / f"run-{run:02d}",
+                "containment.json",
+                {
+                    "experiment": experiment,
+                    "condition": condition,
+                    "contained": True,
+                    "expected_mechanism": "traps_total",
+                    "expected_count": 2,
+                    "unexpected_outcomes": 0,
+                    "runtime_panic": False,
+                    "healthy_messages_out": 60_000,
+                    "traps_total": 2,
+                    "nodes": [{"recovery_count": 2}],
+                },
+            )
     for condition in ("control", "panic-attack", "epoch-loop-attack"):
         for run in (1, 2):
             write_passed_artifact(
@@ -316,7 +332,12 @@ def execute_notebooks(monkeypatch, fixture: Path) -> list[str]:
         "E_SWAP_3_DIR": "e-swap-3",
         "E_SWAP_4_DIR": "e-swap-4",
         "E_SWAP_6_DIR": "e-swap-6",
+        "E_ISO_1_DIR": "e-iso-1",
+        "E_ISO_2_DIR": "e-iso-2",
+        "E_ISO_3_DIR": "e-iso-3",
         "E_ISO_4_DIR": "e-iso-4",
+        "E_ISO_5_DIR": "e-iso-5",
+        "E_ISO_6_DIR": "e-iso-6",
         "E_ISO_7_DIR": "e-iso-7",
         "E_PERF_10_DIR": "e-perf-10",
         "E_BACKPRESSURE_DIR": "e-backpressure",
@@ -354,6 +375,8 @@ def raw_hashes(root: Path) -> dict[str, str]:
 def test_all_notebooks_execute_against_complete_focused_fixture(
     tmp_path, monkeypatch
 ) -> None:
+    # A run-like name above the run directories must not be read as a run index.
+    tmp_path = tmp_path / "run-99"
     build_complete_fixture(tmp_path)
     before = raw_hashes(tmp_path)
     outputs = execute_notebooks(monkeypatch, tmp_path)
@@ -389,6 +412,9 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "e-perf-7/metering-decomposition.pdf").stat().st_size > 1_000
     assert (rendered / "e-perf-10/gateway-capacity-metrics.png").stat().st_size > 1_000
     assert (rendered / "e-swap-3/disruption-metrics.pdf").stat().st_size > 1_000
+    assert (rendered / "rq2/containment.pdf").stat().st_size > 1_000
+    assert (rendered / "rq2-containment.csv").is_file()
+    assert "N=12" in output_by_name["06-fault-injection.ipynb"]
     assert (rendered / "e-perf-1-target-load.csv").is_file()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
