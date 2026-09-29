@@ -1,6 +1,0 @@
-{
-  "page": "plugin-boundary.md",
-  "find": "- **Source:** [`crates/wafer-core/src/engine/bindings.rs`](../../crates/wafer-core/src/engine/bindings.rs) | symbols: `pub mod transform_node`, `pub mod filter_node`, `pub(crate) mod router_node`",
-  "replace": "- **Source:** [`crates/wafer-core/src/engine/mod.rs`](../../crates/wafer-core/src/engine/mod.rs) | symbols: `pub mod bindings`, `pub mod loader`, `pub mod state`",
-  "expected_error": "plugin-boundary.md: evidence authority drift"
-}

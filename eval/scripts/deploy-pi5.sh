@@ -54,7 +54,6 @@ content:
   - eval/ekuiper
   - eval/analysis/pyproject.toml
   - eval/analysis/uv.lock
-  - eval/analysis/enhanced-visual-manifest.json
   - eval/analysis/src/wafer_analysis
   - eval/RESULT-CONTRACT.md
   - eval/canonical-matrix.json
@@ -83,8 +82,7 @@ mkdir -p "$stage/target/release" "$stage/eval" "$stage/plugins" \
 cp "$BIN_DIR/wafer" "$BIN_DIR/wafer-loadgen" "$BIN_DIR/waferctl" "$stage/target/release/"
 cp -R "$ROOT/eval/configs" "$ROOT/eval/loadgen" "$ROOT/eval/scripts" "$ROOT/eval/ekuiper" "$stage/eval/"
 cp -R "$ROOT/eval/analysis/src/wafer_analysis" "$stage/eval/analysis/src/"
-cp "$ROOT/eval/analysis/pyproject.toml" "$ROOT/eval/analysis/uv.lock" \
-    "$ROOT/eval/analysis/enhanced-visual-manifest.json" "$stage/eval/analysis/"
+cp "$ROOT/eval/analysis/pyproject.toml" "$ROOT/eval/analysis/uv.lock" "$stage/eval/analysis/"
 cp "$ROOT/eval/RESULT-CONTRACT.md" "$ROOT/eval/canonical-matrix.json" "$stage/eval/"
 find "$stage" -type f -name '*.pyc' -delete
 find "$stage" -type d -name __pycache__ -prune -exec rm -rf {} +

@@ -1,6 +1,0 @@
-{
-  "page": "evaluation-harness.md",
-  "find": "E-Perf-5 remains PENDING until its matching x86 Linux block exists.",
-  "replace": "E-Perf-5 is FINAL without its matching x86 Linux block.",
-  "expected_error": "evaluation-harness.md: promotes pending E-Perf-5 evidence"
-}

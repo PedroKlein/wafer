@@ -32,7 +32,3 @@ Entry points of the evaluation harness. The Python modules they share live in
 | `run-attack-evidence.py` | Containment attack bundle (`mise run mandatory-attack-evidence`). |
 | `check-current-docs.py` | CI gate: current eval docs against runtime defaults and the matrix. |
 | `test-http-security.sh` | Runs the ignored outbound-HTTP capability tests with a built fixture. |
-| `test-p2-invariants.sh` | Local P2 invariant gate (builds, timed tests, attack receipt). |
-| `diagnose-mqtt-latency.py` | Comparator MQTT latency diagnostic (`run` against a broker, `check` on traces). |
-| `estimate-final-schedule.py` | Planning receipt with record, file and byte counts of the final schedule. |
-| `analyze-p2-ab.py`, `write-p2-ab-manifest.py` | A/B tooling for the async host-call decision (procedure in `RESULT-CONTRACT.md`). |
