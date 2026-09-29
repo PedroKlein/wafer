@@ -188,3 +188,35 @@ def median_shift_ci(
         shifts = shifts / medians_b
         estimate /= float(np.median(b))
     return (estimate, *_percentile_interval(shifts, ci))
+
+
+def _ols(x: np.ndarray, y: np.ndarray) -> tuple[float, float]:
+    slope, intercept = np.polyfit(x, y, 1)
+    return float(slope), float(intercept)
+
+
+def stratified_slope(
+    x: np.ndarray, y: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+) -> tuple[float, float, float, float, float]:
+    """OLS slope of y on x with a percentile bootstrap interval that resamples within each x.
+
+    Every x is a fixed design level holding independent runs, so each resample
+    keeps the same number of runs per level. Returns
+    (slope, lower_bound, upper_bound, intercept, r_squared).
+    """
+    _require_samples(x, y)
+    x, y = np.asarray(x, dtype=float), np.asarray(y, dtype=float)
+    levels = np.unique(x)
+    if x.shape != y.shape or len(levels) < 2:
+        raise ValueError("a slope needs one value per run and at least two levels")
+    slope, intercept = _ols(x, y)
+    residual = y - (slope * x + intercept)
+    total = np.sum((y - y.mean()) ** 2)
+    r_squared = 1.0 - float(np.sum(residual**2) / total) if total else 1.0
+    rng = np.random.default_rng(seed)
+    groups = [np.flatnonzero(x == level) for level in levels]
+    slopes = np.empty(n_resamples)
+    for index in range(n_resamples):
+        chosen = np.concatenate([rng.choice(group, size=len(group)) for group in groups])
+        slopes[index] = _ols(x[chosen], y[chosen])[0]
+    return (slope, *_percentile_interval(slopes, ci), intercept, r_squared)
