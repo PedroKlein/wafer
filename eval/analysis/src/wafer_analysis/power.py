@@ -98,6 +98,8 @@ def summarize_power(
 ) -> dict[str, float | int | str | bool | None]:
     if not samples:
         raise ValueError("power telemetry contains no samples")
+    if idle_watts and measurement != MEASUREMENT_LABEL:
+        raise ValueError(f"the idle baseline is a {MEASUREMENT_LABEL} reading, not {measurement}")
     ordered = sorted(samples, key=lambda sample: int(sample["timestamp_ns"]))
     energy_j = 0.0
     for left, right in zip(ordered, ordered[1:]):
@@ -122,3 +124,13 @@ def summarize_power(
         "max_temperature_c": max(int(sample["temperature_millicelsius"]) for sample in ordered) / 1000,
         "throttled": any(str(sample["throttled"]) != "0x0" for sample in ordered),
     }
+
+
+def read_idle_watts(path: Path) -> float:
+    """Median idle proxy watts from a usable, unthrottled idle-baseline.json."""
+    baseline = json.loads(path.read_text())
+    if baseline.get("experiment") != "idle-baseline":
+        raise ValueError(f"{path} is not an idle baseline")
+    if baseline.get("usable") is not True or baseline.get("throttled") is not False:
+        raise ValueError(f"{path} was not taken on an idle, unthrottled host")
+    return float(baseline["idle_proxy_watts_median"])
