@@ -62,7 +62,10 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     wafer = table.loc[table.condition == "wafer"].iloc[0]
     assert wafer["reference_condition"] == "ekuiper"
     assert wafer["cliffs_delta_vs_reference"] is not None
+    assert wafer["cliffs_delta_ci95_low"] <= wafer["cliffs_delta_vs_reference"] <= wafer["cliffs_delta_ci95_high"]
     assert wafer["pooled_loss"] == 0
+    assert wafer["pooled_loss_ci95_low"] == 0
+    assert 0 < wafer["pooled_loss_ci95_high"] < 0.001
     assert wafer["mean_achieved_ratio"] == 1
     assert wafer["median_achieved_rate_msg_s"] == 1_000
     assert bool(wafer["delivery_good"])
@@ -100,6 +103,9 @@ def test_metering_table_reports_difference_ratio_ci_and_nonparametric_effect() -
     assert fuel["ratio_ci95_high"] > 1
     assert fuel["cliffs_delta_vs_neither"] is not None
     assert fuel["difference_ci95_low_ns"] is not None
+    assert fuel["hodges_lehmann_shift_ns"] > 0
+    assert fuel["shift_ci95_low_ns"] <= fuel["hodges_lehmann_shift_ns"] <= fuel["shift_ci95_high_ns"]
+    assert fuel["cliffs_delta_ci95_low"] <= fuel["cliffs_delta_vs_neither"] <= fuel["cliffs_delta_ci95_high"]
     assert (
         fuel["claim_boundary"]
         == "run-level metering ablation; no per-message inference"

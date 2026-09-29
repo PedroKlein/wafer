@@ -1,5 +1,8 @@
 """Statistical analysis functions for WAFER evaluation."""
 
+import math
+from statistics import NormalDist
+
 import numpy as np
 
 
@@ -55,3 +58,69 @@ def cliffs_delta(a: np.ndarray, b: np.ndarray) -> tuple[float, str]:
 
     return float(delta), magnitude
 
+
+
+def _percentile_interval(estimates: np.ndarray, ci: float) -> tuple[float, float]:
+    alpha = (1 - ci) / 2
+    return (
+        float(np.percentile(estimates, alpha * 100)),
+        float(np.percentile(estimates, (1 - alpha) * 100)),
+    )
+
+
+def _cliffs_delta_value(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.mean(np.sign(a[:, None] - b[None, :])))
+
+
+def cliffs_delta_ci(
+    a: np.ndarray, b: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+) -> tuple[float, float]:
+    """Percentile bootstrap interval for Cliff's delta, resampling each group independently."""
+    _require_samples(a, b)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    rng = np.random.default_rng(seed)
+    deltas = np.array(
+        [
+            _cliffs_delta_value(rng.choice(a, size=len(a)), rng.choice(b, size=len(b)))
+            for _ in range(n_resamples)
+        ]
+    )
+    return _percentile_interval(deltas, ci)
+
+
+def _walsh_median(values: np.ndarray) -> float:
+    upper = np.triu_indices(len(values))
+    return float(np.median((values[:, None] + values[None, :])[upper] / 2))
+
+
+def hodges_lehmann(
+    differences: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+) -> tuple[float, float, float]:
+    """One-sample Hodges-Lehmann shift of paired differences with a percentile bootstrap interval.
+
+    Returns (estimate, lower_bound, upper_bound).
+    """
+    _require_samples(differences)
+    differences = np.asarray(differences, dtype=float)
+    rng = np.random.default_rng(seed)
+    shifts = np.array(
+        [
+            _walsh_median(rng.choice(differences, size=len(differences)))
+            for _ in range(n_resamples)
+        ]
+    )
+    return (_walsh_median(differences), *_percentile_interval(shifts, ci))
+
+
+def wilson_interval(successes: int, trials: int, ci: float = 0.95) -> tuple[float, float]:
+    """Wilson score interval for a binomial proportion."""
+    if trials <= 0:
+        raise ValueError("a proportion needs at least one trial")
+    z = NormalDist().inv_cdf(1 - (1 - ci) / 2)
+    p = successes / trials
+    denominator = 1 + z**2 / trials
+    center = (p + z**2 / (2 * trials)) / denominator
+    margin = z * math.sqrt(p * (1 - p) / trials + z**2 / (4 * trials**2)) / denominator
+    low = 0.0 if successes == 0 else center - margin
+    high = 1.0 if successes == trials else center + margin
+    return low, high
