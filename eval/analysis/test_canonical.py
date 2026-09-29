@@ -29,6 +29,7 @@ from wafer_analysis.canonical import (
     recovery_table,
     swap3_table,
     swap4_table,
+    swap_phase_table,
     target_latency_table,
     validation_gate_table,
     validate_visual_manifest,
@@ -422,7 +423,7 @@ def test_tested_grid_capacity_handles_no_good_rate_and_zero_denominator() -> Non
     assert zero_denominator["status"] == "PENDING"
 
 
-def test_failed_replacement_table_requires_semantically_valid_rollback() -> None:
+def swap5_record(run_index: int = 1) -> dict:
     requests = []
     events = []
     for index in range(50):
@@ -469,13 +470,18 @@ def test_failed_replacement_table_requires_semantically_valid_rollback() -> None
     }
     record = {
         "condition": "process-trap-rollback",
-        "run_index": 1,
+        "run_index": run_index,
         "requests": requests,
         "rollback": rollback,
         "continuity": continuity,
         "sequence": sequence,
     }
 
+    return record
+
+
+def test_failed_replacement_table_requires_semantically_valid_rollback() -> None:
+    record = swap5_record()
     table = failed_replacement_table([record])
     assert table.loc[0, "N_runs"] == 1
     assert table.loc[0, "N_nested_events"] == 50
@@ -485,6 +491,63 @@ def test_failed_replacement_table_requires_semantically_valid_rollback() -> None
     drifted["rollback"]["rolled_back"] = 49
     with pytest.raises(ValueError, match="does not reconcile"):
         failed_replacement_table([drifted])
+
+
+def test_failed_replacement_table_labels_diagnostic_runs() -> None:
+    table = failed_replacement_table([swap5_record(2), swap5_record(1)], canonical=False)
+    assert table["run_index"].tolist() == [1, 2]
+    assert not table["thesis_evidence"].any()
+    assert failed_replacement_table([swap5_record()])["thesis_evidence"].all()
+    with pytest.raises(ValueError, match="one independent run"):
+        failed_replacement_table([swap5_record(1), swap5_record(2)])
+
+
+def swap_evidence(events: int = 50, run_index: int = 1) -> dict:
+    return {
+        "run_index": run_index,
+        "events": [
+            {
+                "event_index": index,
+                "compile_cache": "compiled" if index < 2 else "memory_hit",
+                "compile_ns": 40_000_000 if index < 2 else 10_000,
+                "instantiate_ns": 200_000,
+                "signal_ns": 5_000,
+                "replacement_adopted_ns": 100_000 + index,
+                "first_post_replacement_local_outcome_ns": 50_000,
+                "http_total_ns": 45_000_000 if index < 2 else 500_000,
+                "sink_observed_output_gap_ns": 1_000_000,
+            }
+            for index in range(events)
+        ],
+    }
+
+
+def test_swap_phase_table_splits_first_use_from_cached_events() -> None:
+    table = swap_phase_table([swap_evidence()]).set_index("event_class")
+    assert table.loc["first-use", "N_nested_events"] == 2
+    assert table.loc["cached", "N_nested_events"] == 48
+    assert table["N_runs"].eq(1).all()
+    assert table.loc["first-use", "median_compile_ns"] == 40_000_000
+    assert table.loc["cached", "median_compile_ns"] == 10_000
+    assert table.loc["cached", "median_phase_total_ns"] == pytest.approx(10_000 + 200_000 + 5_000 + 100_025.5 + 50_000)
+    assert "not a between-run interval" in table.loc["cached", "estimator"]
+
+
+def test_swap_phase_table_requires_one_full_run_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="one run with 50 nested"):
+        swap_phase_table([swap_evidence(49)])
+    with pytest.raises(ValueError, match="one run with 50 nested"):
+        swap_phase_table([swap_evidence(), swap_evidence(run_index=2)])
+    table = swap_phase_table([swap_evidence(3), swap_evidence(3, run_index=2)], canonical=False)
+    assert table.set_index("event_class").loc["first-use", "N_runs"] == 2
+    assert not table["thesis_evidence"].any()
+
+
+def test_swap_phase_table_rejects_unknown_cache_outcome() -> None:
+    evidence = swap_evidence()
+    evidence["events"][7]["compile_cache"] = None
+    with pytest.raises(ValueError, match="event 7 has unknown compile cache"):
+        swap_phase_table([evidence])
 
 
 def candidate_scaling_summary(experiment: str, conditions: list[tuple[str, int]]) -> dict:

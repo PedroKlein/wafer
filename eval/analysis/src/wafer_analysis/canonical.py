@@ -1736,49 +1736,117 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def failed_replacement_table(records: list[dict]) -> pd.DataFrame:
-    if len(records) != 1:
-        raise ValueError("E-Swap-5 requires one independent run")
-    record = records[0]
-    if record.get("condition") != "process-trap-rollback" or record.get("run_index") != 1:
-        raise ValueError("E-Swap-5 run identity is invalid")
-    requests = record.get("requests")
-    rollback = record.get("rollback")
-    continuity = record.get("continuity")
-    sequence = record.get("sequence")
-    if (
-        not isinstance(requests, list)
-        or not isinstance(rollback, dict)
-        or not isinstance(continuity, dict)
-        or not isinstance(sequence, dict)
+SWAP_PHASES = (
+    "compile_ns",
+    "instantiate_ns",
+    "signal_ns",
+    "replacement_adopted_ns",
+    "first_post_replacement_local_outcome_ns",
+)
+SWAP_EVENT_CLASSES = {"compiled": "first-use", "memory_hit": "cached", "disk_hit": "cached"}
+
+
+def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Swap-1/6: internal phases, HTTP duration and sink gap per compile-cache class.
+
+    ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added.
+    """
+    if canonical and (
+        len(runs) != 1 or runs[0].get("run_index") != 1 or len(runs[0]["events"]) != 50
     ):
-        raise ValueError("E-Swap-5 analysis input is malformed")
-    validate_swap5_artifacts(requests, rollback, continuity, sequence)
-    durations = [event["rollback_ns"] for event in rollback["events"]]
-    return pd.DataFrame(
-        [
+        raise ValueError("E-Swap-1 requires one run with 50 nested swap events")
+    events = []
+    for run in runs:
+        for event in run["events"]:
+            event_class = SWAP_EVENT_CLASSES.get(event.get("compile_cache"))
+            if event_class is None:
+                raise ValueError(
+                    f"swap event {event.get('event_index')} has unknown compile cache "
+                    f"outcome {event.get('compile_cache')!r}"
+                )
+            events.append({**event, "event_class": event_class, "run_index": run["run_index"]})
+    rows = []
+    for event_class in ("first-use", "cached"):
+        subset = [event for event in events if event["event_class"] == event_class]
+        if not subset:
+            continue
+        row = {
+            "experiment": "e-swap-1",
+            "event_class": event_class,
+            "N_runs": len({event["run_index"] for event in subset}),
+            "N_nested_events": len(subset),
+        }
+        totals = [sum(event[phase] for phase in SWAP_PHASES) for event in subset]
+        for field, values in [
+            *((phase, [event[phase] for event in subset]) for phase in SWAP_PHASES),
+            ("phase_total_ns", totals),
+            ("http_total_ns", [event["http_total_ns"] for event in subset]),
+            ("sink_observed_output_gap_ns", [event["sink_observed_output_gap_ns"] for event in subset]),
+        ]:
+            name = field.removesuffix("_ns")
+            p25, median, p75, p95 = np.percentile(np.asarray(values, dtype=float), [25, 50, 75, 95])
+            row |= {
+                f"median_{name}_ns": float(median),
+                f"p25_{name}_ns": float(p25),
+                f"p75_{name}_ns": float(p75),
+                f"p95_{name}_ns": float(p95),
+            }
+        rows.append(
+            row
+            | {
+                "units": "nanoseconds, runs, swap events",
+                "estimator": "quantiles over nested swap events; one run, so the spread is within-run, not a between-run interval",
+                "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
+                "thesis_evidence": canonical,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    if canonical and len(records) != 1:
+        raise ValueError("E-Swap-5 requires one independent run")
+    rows = []
+    for record in sorted(records, key=lambda record: int(record.get("run_index", 0))):
+        if record.get("condition") != "process-trap-rollback" or (
+            canonical and record.get("run_index") != 1
+        ):
+            raise ValueError("E-Swap-5 run identity is invalid")
+        requests = record.get("requests")
+        rollback = record.get("rollback")
+        continuity = record.get("continuity")
+        sequence = record.get("sequence")
+        if (
+            not isinstance(requests, list)
+            or not isinstance(rollback, dict)
+            or not isinstance(continuity, dict)
+            or not isinstance(sequence, dict)
+        ):
+            raise ValueError("E-Swap-5 analysis input is malformed")
+        validate_swap5_artifacts(requests, rollback, continuity, sequence)
+        durations = np.asarray([event["rollback_ns"] for event in rollback["events"]], dtype=float)
+        rows.append(
             {
                 "experiment": "e-swap-5",
                 "condition": "process-trap-rollback",
+                "run_index": record["run_index"],
                 "N_runs": 1,
                 "N_nested_events": len(durations),
                 "median_rollback_ns": float(np.median(durations)),
-                "post_rollback_messages": continuity[
-                    "messages_after_final_rollback"
-                ],
-                "post_rollback_continuity": continuity[
-                    "output_observed_after_final_rollback"
-                ],
-                "total_loss": record["sequence"]["gaps"],
-                "total_duplicates": record["sequence"]["duplicates"],
+                "p95_rollback_ns": float(np.percentile(durations, 95)),
+                "max_rollback_ns": float(durations.max()),
+                "post_rollback_messages": continuity["messages_after_final_rollback"],
+                "post_rollback_continuity": continuity["output_observed_after_final_rollback"],
+                "total_loss": sequence["gaps"],
+                "total_duplicates": sequence["duplicates"],
                 "units": "nanoseconds, messages, runs, rollback events",
                 "estimator": "one complete run with nested rollback-event durations",
                 "threshold": "50 successful rollbacks; post-rollback output; zero loss and duplication",
                 "claim_boundary": "failed replacement rollback and observed continuity without a successful v2 transition",
-                "thesis_evidence": True,
+                "thesis_evidence": canonical,
             }
-        ]
-    )
+        )
+    return pd.DataFrame(rows)
 
 
 def swap4_table(runs: list[dict]) -> pd.DataFrame:

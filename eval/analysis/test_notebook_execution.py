@@ -6,6 +6,8 @@ from pathlib import Path
 import nbformat
 from nbclient import NotebookClient
 
+from wafer_analysis.rollback import SWAP5_PLUGIN, build_post_rollback_continuity, build_swap5_rollback
+
 NOTEBOOKS = sorted((Path(__file__).parent / "notebooks").glob("*.ipynb"))
 
 
@@ -62,6 +64,45 @@ def capacity_envelope_fixture() -> dict:
         "rate_points_msg_s": [1_000, 4_000, 8_000, 15_000, 16_000],
         "systems": systems,
     }
+
+
+def write_swap5_fixture(leaf: Path) -> None:
+    started = 1_700_000_000_000_000_000
+    requests = [
+        {
+            "event_index": index,
+            "plugin": SWAP5_PLUGIN,
+            "request_started_ns": started + index * 2_000_000_000,
+            "request_finished_ns": started + index * 2_000_000_000 + 30_000_000,
+            "http_status": 200,
+            "body": {
+                "status": "rolled_back",
+                "timeline": {"compile_ns": 1_000, "instantiate_ns": 2_000, "signal_ns": 3_000, "rollback_ns": 4_000_000 + index},
+            },
+        }
+        for index in range(50)
+    ]
+    intervals = {
+        "rows": [
+            {
+                "interval_start_unix_epoch_ns": started + second * 1_000_000_000,
+                "interval_end_unix_epoch_ns": started + (second + 1) * 1_000_000_000,
+                "throughput_messages": 1_000,
+                "throughput_messages_per_second": 1_000.0,
+            }
+            for second in range(-5, 110)
+        ]
+    }
+    sequence = {"expected": 115_000, "received": 115_000, "gaps": 0, "duplicates": 0}
+    write_passed_artifact(leaf, "swap_requests.json", requests)
+    (leaf / "rollback.json").write_text(json.dumps(build_swap5_rollback(requests, sequence)))
+    (leaf / "interval-metrics.json").write_text(json.dumps(intervals))
+    (leaf / "post-rollback-continuity.json").write_text(
+        json.dumps(build_post_rollback_continuity(requests, intervals, sequence, interval_metrics_sha256="a" * 64))
+    )
+    (leaf / "sequence.csv").write_text(
+        "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n115000,115000,115000,0,0\n"
+    )
 
 
 def build_complete_fixture(root: Path) -> None:
@@ -128,9 +169,17 @@ def build_complete_fixture(root: Path) -> None:
 
     hotswap_events = [
         {
+            "event_index": index,
+            "compile_cache": "compiled" if index == 0 else "memory_hit",
+            "compile_ns": 40_000_000 if index == 0 else 10_000,
+            "instantiate_ns": 200_000,
+            "signal_ns": 5_000,
+            "replacement_adopted_ns": 100_000,
+            "first_post_replacement_local_outcome_ns": 50_000,
             "http_total_ns": 2_000_000,
             "sink_observed_output_gap_ns": 1_000_000,
         }
+        for index in range(3)
     ]
     for experiment, condition, source in (
         ("e-swap-1", "steady", "synthetic/steady/run-01"),
@@ -146,6 +195,7 @@ def build_complete_fixture(root: Path) -> None:
                 "events": hotswap_events,
             },
         )
+    write_swap5_fixture(root / "e-swap-5" / "process-trap-rollback" / "run-01-attempt-01")
     write_passed_artifact(
         root / "e-swap-4" / "burst-2x" / "run-01",
         "burst-timeline.json",
@@ -354,6 +404,7 @@ def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBO
         "E_SWAP_2_DIR": "e-swap-2",
         "E_SWAP_3_DIR": "e-swap-3",
         "E_SWAP_4_DIR": "e-swap-4",
+        "E_SWAP_5_DIR": "e-swap-5",
         "E_SWAP_6_DIR": "e-swap-6",
         "E_ISO_1_DIR": "e-iso-1",
         "E_ISO_2_DIR": "e-iso-2",
@@ -455,6 +506,10 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "e-perf-1-target-load.csv").is_file()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
+    assert (rendered / "rq3/swap-phases.pdf").stat().st_size > 1_000
+    assert (rendered / "rq3-swap-phases.csv").is_file()
+    assert (rendered / "rq3/rollback.pdf").stat().st_size > 1_000
+    assert (rendered / "rq3-rollback.csv").is_file()
     assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-validation-gate.csv").is_file()
     assert (rendered / "rq1/density.pdf").stat().st_size > 1_000
