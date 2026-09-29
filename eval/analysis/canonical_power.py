@@ -12,7 +12,20 @@ import pandas as pd
 
 from wafer_analysis.paths import find_canonical_batch
 from wafer_analysis.plots import SYSTEM_COLORS, save_figure, setup_thesis_style
-from wafer_analysis.power import clip_to_window, load_telemetry, read_idle_watts, summarize_power
+from wafer_analysis.power import (
+    clip_to_window,
+    load_telemetry,
+    measurement_label,
+    read_idle_watts,
+    summarize_power,
+)
+
+
+CAVEATS = {
+    "rpi5": "Not total USB-C input power; excludes direct 5 V/USB loads and conversion losses.",
+    "jetson": "Not total input power; covers only the rails the INA3221 monitors.",
+    "x86": "CPU package power only; excludes DRAM, chipset, peripherals and the power supply.",
+}
 
 
 def read_message_count(result: Path) -> int | None:
@@ -52,9 +65,15 @@ def collect(batch_id: str, experiments: list[str], idle_watts: float = 0.0) -> p
             samples = clip_to_window(
                 load_telemetry(telemetry), started_ns, finished_ns
             )
-            summary = summarize_power(samples, idle_watts=idle_watts, messages=messages)
+            summary = summarize_power(
+                samples,
+                idle_watts=idle_watts,
+                messages=messages,
+                measurement=measurement_label(telemetry.parent),
+            )
             rows.append(
                 {
+                    "host": metadata.get("host_tag", "rpi5"),
                     "experiment": experiment,
                     "system": metadata.get("system", "wafer"),
                     "condition": metadata.get("condition", "default"),
@@ -63,14 +82,24 @@ def collect(batch_id: str, experiments: list[str], idle_watts: float = 0.0) -> p
                 }
             )
     if not rows:
-        raise ValueError("canonical batch contains no valid PMIC telemetry")
+        raise ValueError("canonical batch contains no valid power telemetry")
     return pd.DataFrame(rows)
 
 
 def render(data: pd.DataFrame, output: Path) -> None:
+    hosts = set(data["host"]) if "host" in data else {"rpi5"}
+    measurements = set(data["measurement"])
+    if len(hosts) != 1 or len(measurements) != 1:
+        raise ValueError(
+            f"one power report per host and measurement: {sorted(hosts)}, {sorted(measurements)}"
+        )
+    host = hosts.pop()
+    measurement = measurements.pop()
+    stem = "pmic-energy-summary" if host == "rpi5" else f"{host}-power-summary"
+    figure = "power/pmic_proxy" if host == "rpi5" else f"power/{host}_power_proxy"
     output.mkdir(parents=True, exist_ok=True)
-    data.to_csv(output / "pmic-energy-summary.csv", index=False)
-    (output / "pmic-energy-summary.tex").write_text(
+    data.to_csv(output / f"{stem}.csv", index=False)
+    (output / f"{stem}.tex").write_text(
         data.groupby("system")[["mean_proxy_watts", "proxy_energy_j", "proxy_energy_per_message_j"]]
         .median()
         .to_latex(float_format="%.6f")
@@ -84,17 +113,17 @@ def render(data: pd.DataFrame, output: Path) -> None:
     boxes = ax.boxplot(values, tick_labels=[labels[system] for system in systems], patch_artist=True, showfliers=True)
     for patch, system in zip(boxes["boxes"], systems):
         patch.set_facecolor(SYSTEM_COLORS[labels[system]])
-    ax.set_ylabel("PMIC internal-rail proxy power (W)")
-    ax.set_title(f"Raspberry Pi 5 energy proxy (N={len(data)} runs)")
+    ax.set_ylabel(f"{measurement} (W)")
+    ax.set_title(f"{measurement} (N={len(data)} runs)")
     ax.text(
         0.5,
         -0.22,
-        "Not total USB-C input power; excludes direct 5 V/USB loads and conversion losses.",
+        CAVEATS[host],
         transform=ax.transAxes,
         ha="center",
         fontsize=8,
     )
-    save_figure(fig, "power/pmic_proxy", directory=str(output))
+    save_figure(fig, figure, directory=str(output))
 
 
 def main() -> int:
