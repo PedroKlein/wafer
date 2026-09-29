@@ -23,6 +23,7 @@ substitution warnings.
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+import numpy as np
 import seaborn as sns
 
 THESIS_STYLE = {
@@ -83,6 +84,10 @@ SYSTEM_COLORS = {
 # notebooks/ so "../figures/e-perf-4/per_hop_overhead.pdf" resolves cleanly.
 DEFAULT_FIGURES_DIR = "../figures"
 
+# The thesis text block is about 15 cm wide; figures drawn at this width are
+# included at 100% so their fonts match the body text.
+TEXT_WIDTH_IN = 5.9
+
 
 def setup_thesis_style() -> None:
     """Apply thesis-quality matplotlib styling in-place on ``plt.rcParams``.
@@ -134,3 +139,37 @@ def save_figure(
 
     return pdf_path
 
+
+
+def strip_with_ci(
+    ax: plt.Axes,
+    groups: dict[str, np.ndarray],
+    *,
+    colors: dict[str, str],
+    intervals: dict[str, tuple[float, float]] | None = None,
+    scale: float = 1.0,
+) -> None:
+    """Draw every run of each group as a dot, with the group median and its CI.
+
+    The run is the unit of analysis, so the reader sees all runs rather than a
+    bar that hides their spread. ``intervals`` maps a group to its median CI in
+    the same units as the values; ``scale`` divides values and intervals.
+    """
+    jitter = np.random.default_rng(0)
+    for position, (label, raw_values) in enumerate(groups.items()):
+        values = np.asarray(raw_values, dtype=float) / scale
+        offsets = jitter.uniform(-0.16, 0.16, len(values))
+        ax.scatter(position + offsets, values, s=12, alpha=0.55, color=colors[label], linewidths=0)
+        ax.hlines(np.median(values), position - 0.26, position + 0.26, color=colors[label], linewidth=2)
+        if intervals and label in intervals:
+            low, high = intervals[label]
+            ax.errorbar(
+                position + 0.34,
+                np.median(values),
+                yerr=[[np.median(values) - low / scale], [high / scale - np.median(values)]],
+                color="black",
+                linewidth=1,
+                capsize=3,
+            )
+    ax.set_xticks(range(len(groups)), list(groups))
+    ax.set_xlim(-0.6, len(groups) - 0.4)
