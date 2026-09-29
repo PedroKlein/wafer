@@ -593,6 +593,66 @@ def depth_tables(
     return per_depth, fit
 
 
+PAYLOAD_CONDITIONS = {"120b": 120, "1kb": 1_024, "10kb": 10_240, "100kb": 102_400}
+PER_HOP_REFERENCE_NS = 50_000
+
+
+def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """Latency and delivery per E-Perf-4 payload size, contrasted with the 120-byte baseline.
+
+    Each record is one run's percentiles plus its ``sequence.csv`` counts.
+    """
+    grouped = _group_runs(records, tuple(PAYLOAD_CONDITIONS), canonical=canonical)
+    baseline = np.asarray([run["p50_ns"] for run in grouped["120b"]], dtype=float)
+    rows = []
+    for condition, runs in grouped.items():
+        if not runs:
+            continue
+        percentiles = {
+            name: np.asarray([run[f"{name}_ns"] for run in runs], dtype=float)
+            for name in ("p50", "p95", "p99")
+        }
+        expected = [int(run["total_expected"]) for run in runs]
+        lost = [max(0, int(run["total_expected"]) - int(run["received_unique"])) for run in runs]
+        loss_low, loss_high = pooled_ratio_ci(lost, expected)
+        row = {"condition": condition, "payload_bytes": PAYLOAD_CONDITIONS[condition], "N_runs": len(runs)}
+        for name, values in percentiles.items():
+            low, high = bootstrap_ci(values)
+            row.update({f"median_{name}_ns": float(np.median(values)), f"{name}_ci95_low_ns": low, f"{name}_ci95_high_ns": high})
+        row.update(dict.fromkeys(("p50_shift_vs_120b_ns", "shift_ci95_low_ns", "shift_ci95_high_ns", "cliffs_delta_vs_120b", "cliffs_delta_ci95_low", "cliffs_delta_ci95_high", "effect_magnitude")))
+        if condition != "120b" and len(baseline):
+            shift, shift_low, shift_high = median_shift_ci(percentiles["p50"], baseline)
+            delta, magnitude = cliffs_delta(percentiles["p50"], baseline)
+            delta_low, delta_high = cliffs_delta_ci(percentiles["p50"], baseline)
+            row.update(
+                {
+                    "p50_shift_vs_120b_ns": shift,
+                    "shift_ci95_low_ns": shift_low,
+                    "shift_ci95_high_ns": shift_high,
+                    "cliffs_delta_vs_120b": delta,
+                    "cliffs_delta_ci95_low": delta_low,
+                    "cliffs_delta_ci95_high": delta_high,
+                    "effect_magnitude": magnitude,
+                }
+            )
+        row.update(
+            {
+                "pooled_loss": sum(lost) / sum(expected),
+                "pooled_loss_ci95_low": loss_low,
+                "pooled_loss_ci95_high": loss_high,
+                "total_duplicates": sum(int(run["duplicates"]) for run in runs),
+                "below_per_hop_reference": row["median_p50_ns"] < PER_HOP_REFERENCE_NS,
+                "units": "bytes, nanoseconds, fraction, messages",
+                "estimator": "median run p50, p95 and p99 with bootstrap 95% CIs; p50 shift against 120 B with a two-group bootstrap 95% CI and Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI",
+                "threshold": "median p50 < 50 microseconds per hop (reference); 120 B is the baseline for payload contrasts",
+                "claim_boundary": "end-to-end latency through source, one pass-through transform and sink, so it bounds the hop cost from above",
+                "thesis_evidence": canonical,
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _candidate_scaling_table(
     summary: dict,
     *,
