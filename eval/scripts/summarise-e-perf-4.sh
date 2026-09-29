@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # eval/scripts/summarise-e-perf-4.sh
 #
-# Post-process an E-Perf-4 shakedown directory (or a subset) into
+# Post-process an E-Perf-4 result directory (or a subset) into
 # per-size roll-up JSON containing p50/p95/p99/p999 both per-run and
 # aggregated across the N runs. Uses `wafer-loadgen hdr-summary` for
 # authoritative percentile extraction (bypasses the Python `hdrh`
@@ -9,10 +9,9 @@
 # `hdrhistogram` crate's serialiser — see hdr_summary.rs).
 #
 # Usage:
-#   summarise-e-perf-4.sh <shakedown-dir>
+#   summarise-e-perf-4.sh <result-dir>
 #
-# Writes per-size `size-percentiles.json` alongside the existing
-# `size-summary.json` (produced by run-e-perf-4-shakedown.sh).
+# Called by canonical_runner.py; writes per-size `size-percentiles.json`.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

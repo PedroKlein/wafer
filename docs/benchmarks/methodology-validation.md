@@ -82,11 +82,13 @@ For the canonical Pi run:
 ## How to reproduce
 
 ```sh
-cargo build --release -p wafer-runtime -p wafer-loadgen
-cd plugins/delay-injector && cargo build --release --target wasm32-wasip2 && cd -
-./eval/scripts/run-e-val-1-shakedown.sh --runs 5 --skip-build
-# Expected: pass=5 fail=0 honesty=pass
+# On the Pi, after deploy and preflight (see docs/eval/pi5-experiment-runbook.md)
+./eval/scripts/run-rpi5-validation.sh
+# Expected: p99 inside the 45-55 ms honesty window
 ```
+
+The canonical `e-val-1` condition repeats the same check inside every
+campaign batch.
 
 Any FAIL means the rig is measuring dishonestly — investigate before
 trusting other numbers. See `docs/status/implementation-gaps.md` A16 for

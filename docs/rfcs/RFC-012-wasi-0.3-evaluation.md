@@ -168,7 +168,7 @@ DEVELOPER_DIR=/Library/Developer/CommandLineTools git grep -n -E \
   'add_to_linker_(sync|async)|spawn_blocking|block_in_place|\.instantiate(_async)?\(|call_(validate|init|process|evaluate|route)' \
   -- crates/wafer-core/src
 
-WASMTIME_REPO=/Users/i572543/Dev/pi-repos/repos/github.com/bytecodealliance/wasmtime/main
+WASMTIME_REPO=<path to a wasmtime checkout>
 DEVELOPER_DIR=/Library/Developer/CommandLineTools git -C "$WASMTIME_REPO" \
   grep -n -E 'pub fn add_to_linker_(async|sync)|require_store_data_send' \
   e9f1ea232fd245aea338ab3eb7d73487ae75cab1 -- \

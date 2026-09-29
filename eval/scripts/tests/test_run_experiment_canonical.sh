@@ -5,6 +5,10 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+count_result_dirs() {
+  { find "$ROOT/eval/results/e-perf-4" -mindepth 1 -maxdepth 1 -type d 2>/dev/null || true; } | wc -l | tr -d ' '
+}
+
 cat >"$tmp/facts.json" <<'JSON'
 {
   "host_tag": "rpi5",
@@ -22,10 +26,10 @@ cat >"$tmp/facts.json" <<'JSON'
 }
 JSON
 
-before="$(find "$ROOT/eval/results/e-perf-4" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+before="$(count_result_dirs)"
 plan="$(
   "$ROOT/eval/scripts/run-experiment.sh" \
-    --config "$ROOT/eval/configs/e-perf-4/pipeline-c-passthrough-120b.toml" \
+    --config "$ROOT/eval/configs/canonical/e-perf-4-120b.toml" \
     --experiment e-perf-4 \
     --host rpi5 \
     --canonical \
@@ -34,7 +38,7 @@ plan="$(
     --output-dir "$tmp/planned-output" \
     --dry-run 2>&1
 )"
-after="$(find "$ROOT/eval/results/e-perf-4" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+after="$(count_result_dirs)"
 [ "$before" = "$after" ] || { echo 'canonical dry-run created a result directory' >&2; exit 1; }
 grep -q 'canonical        = true' <<<"$plan"
 grep -q 'canonical preflight: PASS' <<<"$plan"
@@ -108,7 +112,7 @@ cat >"$tmp/dirty.json" <<'JSON'
 }
 JSON
 if "$ROOT/eval/scripts/run-experiment.sh" \
-    --config "$ROOT/eval/configs/e-perf-4/pipeline-c-passthrough-120b.toml" \
+    --config "$ROOT/eval/configs/canonical/e-perf-4-120b.toml" \
     --experiment e-perf-4 \
     --host rpi5 \
     --canonical \
@@ -124,6 +128,7 @@ harness_root="$tmp/harness-root"
 mkdir -p "$harness_root/eval/scripts/lib" "$harness_root/target/release"
 cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experiment.sh"
 cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
+cp "$ROOT/eval/scripts/lib/host_facts.py" "$harness_root/eval/scripts/lib/host_facts.py"
 cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]

@@ -6,7 +6,7 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 
 - Rust toolchain pinned by `rust-toolchain.toml` (with the wasm32-wasip2 target). The first build downloads a pinned ONNX Runtime; for offline builds see [ONNX Runtime](../docs/operations/dependencies.md#onnx-runtime)
 - UV (Python package manager) — for analysis notebooks
-- Mosquitto MQTT broker — for E2E experiments (E-Perf-1/2, E-Swap-*)
+- Mosquitto MQTT broker — for the MQTT-bookended experiments
 - Raspberry Pi 5 with 4 GB RAM — canonical measurement host
 - Native eKuiper 2.1.0 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
 
@@ -16,28 +16,30 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 # Build everything (runtime + eval plugins)
 mise run //:build-release //eval:build-plugins-eval
 
-# Run a micro-benchmark (no MQTT needed)
-mise run //eval:e-perf-4
+# Print the frozen canonical matrix and schedule (no hardware needed)
+mise run plan-canonical-pi5
 
-# Run full E2E (requires Mosquitto)
-mise run //eval:e-perf-1
-
-# Or from inside eval/, use the shorter form:
-cd eval && mise run :e-perf-4
+# Run or resume a canonical batch (on the Raspberry Pi 5)
+mise run run-canonical-pi5 -- --batch-id <id>
 ```
 
-## Experiment Targets
+## Experiment execution
 
-| Target | Experiment | RQ | Requirements |
-|--------|-----------|-----|-------------|
-| `mise run //eval:e-perf-1` | E2E latency | RQ1 | Mosquitto |
-| `mise run //eval:e-perf-4` | Per-hop overhead | RQ1 | None |
-| `mise run //eval:e-perf-7` | Metering decomposition | RQ1 | None |
-| `mise run //eval:e-swap-1` | Hot-swap pause | RQ3 | None |
-| `mise run //eval:e-swap-2` | Zero-loss verification | RQ3 | None |
-| `mise run //eval:e-iso-7` | Fault isolation | RQ2 | None |
-| `mise run //eval:eval-all` | Run every experiment above | — | Mosquitto |
-| `mise run //eval:eval-clean` | Remove `eval/results/*/` | — | — |
+Every experiment in `canonical-matrix.json` (E-Perf-1..10, E-Val-1,
+E-Iso-1..8, E-Swap-1..6, E-Backpressure, E-Density-1) runs through
+`scripts/run-rpi5-canonical.sh`, a thin wrapper around
+`scripts/lib/canonical_runner.py`. The runner validates the matrix and the
+host, drives `scripts/run-experiment.sh` per leaf, and verifies each result
+with `scripts/verify-result-contract.py`. See
+[`../docs/eval/pi5-experiment-runbook.md`](../docs/eval/pi5-experiment-runbook.md).
+
+| Target | Purpose |
+|--------|---------|
+| `mise run plan-canonical-pi5` | Print the frozen matrix and schedule |
+| `mise run run-canonical-pi5 -- ...` | Run or resume a canonical batch |
+| `mise run mandatory-attack-evidence` | Containment attack evidence bundle (RQ2) |
+| `mise run test-eval` | Harness tests (pytest suites and shell tests) |
+| `mise run //eval:eval-clean` | Remove `eval/results/*/` |
 
 ## Results
 

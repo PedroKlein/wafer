@@ -24,7 +24,7 @@ def load_estimator():
 
 def run(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(SCRIPT), *args],
+        [sys.executable, str(SCRIPT), *args, "--tcc-root", str(ROOT)],
         cwd=ROOT,
         capture_output=True,
         text=True,
