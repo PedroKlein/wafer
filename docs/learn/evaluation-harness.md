@@ -10,7 +10,7 @@ Trace an evaluation claim from its machine-readable experiment definition throug
 
 ## Prerequisites
 
-Read this against commit `6ed111ea10035d60cfdb21a385265acf66348ac3`. Do not open or quote raw result values to complete the walkthrough. Paths, schemas, validators, and tests are enough to understand the evidence boundary.
+Read this against a current checkout of `main`. Do not open or quote raw result values to complete the walkthrough. Paths, schemas, validators, and tests are enough to understand the evidence boundary.
 
 ## Flow
 
@@ -70,4 +70,4 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 ## Checkpoint
 
-Choose one derived row and trace its `source_result_key` to a selected physical leaf, source release and hash, independent run index, nested observation, and evidence class. Then explain why fifty swap events in each of five runs still means N=5 rather than N=250.
+Choose one figure from an analysis notebook and trace it back to its batch, the physical result leaves it reads, their independent run indexes, nested observations, and evidence class. Then explain why fifty swap events in each of five runs still means N=5 rather than N=250.

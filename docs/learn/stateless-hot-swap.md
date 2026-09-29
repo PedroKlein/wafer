@@ -10,7 +10,7 @@ Follow replacement preparation, watch-channel delivery, between-message applicat
 
 ## Prerequisites
 
-Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router support replacement and between-message application, but the Transform runner owns the canary rollback logic below. This walkthrough follows source at commit `6ed111ea10035d60cfdb21a385265acf66348ac3`.
+Use a Transform node for the complete walkthrough because current process-time rollback is implemented there. Filter and Router support replacement and between-message application, but the Transform runner owns the canary rollback logic below.
 
 ## Flow
 
