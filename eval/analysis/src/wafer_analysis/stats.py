@@ -1,8 +1,5 @@
 """Statistical analysis functions for WAFER evaluation."""
 
-import math
-from statistics import NormalDist
-
 import numpy as np
 
 
@@ -112,15 +109,24 @@ def hodges_lehmann(
     return (_walsh_median(differences), *_percentile_interval(shifts, ci))
 
 
-def wilson_interval(successes: int, trials: int, ci: float = 0.95) -> tuple[float, float]:
-    """Wilson score interval for a binomial proportion."""
-    if trials <= 0:
-        raise ValueError("a proportion needs at least one trial")
-    z = NormalDist().inv_cdf(1 - (1 - ci) / 2)
-    p = successes / trials
-    denominator = 1 + z**2 / trials
-    center = (p + z**2 / (2 * trials)) / denominator
-    margin = z * math.sqrt(p * (1 - p) / trials + z**2 / (4 * trials**2)) / denominator
-    low = 0.0 if successes == 0 else center - margin
-    high = 1.0 if successes == trials else center + margin
-    return low, high
+def pooled_ratio_ci(
+    numerators: np.ndarray,
+    denominators: np.ndarray,
+    n_resamples: int = 10000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Percentile bootstrap interval for sum(numerators) / sum(denominators), resampling runs.
+
+    Runs are the independent unit, so a burst of loss inside one run widens the
+    interval instead of counting as thousands of independent trials.
+    """
+    _require_samples(numerators, denominators)
+    numerators = np.asarray(numerators, dtype=float)
+    denominators = np.asarray(denominators, dtype=float)
+    if numerators.shape != denominators.shape or np.any(denominators <= 0):
+        raise ValueError("a pooled ratio needs one positive denominator per numerator")
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(numerators), size=(n_resamples, len(numerators)))
+    ratios = numerators[indices].sum(axis=1) / denominators[indices].sum(axis=1)
+    return _percentile_interval(ratios, ci)

@@ -65,7 +65,7 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert wafer["cliffs_delta_ci95_low"] <= wafer["cliffs_delta_vs_reference"] <= wafer["cliffs_delta_ci95_high"]
     assert wafer["pooled_loss"] == 0
     assert wafer["pooled_loss_ci95_low"] == 0
-    assert 0 < wafer["pooled_loss_ci95_high"] < 0.001
+    assert wafer["pooled_loss_ci95_high"] == 0
     assert wafer["mean_achieved_ratio"] == 1
     assert wafer["median_achieved_rate_msg_s"] == 1_000
     assert bool(wafer["delivery_good"])

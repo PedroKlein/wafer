@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from wafer_analysis.stats import cliffs_delta_ci, hodges_lehmann, wilson_interval
+from wafer_analysis.stats import cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
 
 
 def test_hodges_lehmann_is_the_median_of_walsh_averages() -> None:
@@ -30,12 +30,17 @@ def test_cliffs_delta_interval_covers_zero_for_identical_samples() -> None:
     assert low < 0 < high
 
 
-def test_wilson_interval_matches_the_closed_form() -> None:
-    low, high = wilson_interval(0, 30)
+def test_pooled_loss_interval_treats_a_burst_as_one_run() -> None:
+    lost = np.array([3_000] + [0] * 29)
+    offered = np.full(30, 60_000)
+    low, high = pooled_ratio_ci(lost, offered)
     assert low == 0.0
-    assert high == pytest.approx(0.11351, abs=1e-5)
-    low, high = wilson_interval(15, 30)
-    assert (low, high) == pytest.approx((0.33154, 0.66846), abs=1e-5)
+    assert high > 0.004
+
+
+def test_pooled_loss_interval_is_exact_when_every_run_agrees() -> None:
+    low, high = pooled_ratio_ci(np.full(30, 60), np.full(30, 60_000))
+    assert (low, high) == pytest.approx((0.001, 0.001))
 
 
 def test_estimators_reject_empty_input() -> None:
@@ -44,4 +49,4 @@ def test_estimators_reject_empty_input() -> None:
     with pytest.raises(ValueError):
         cliffs_delta_ci(np.array([]), np.array([1.0]))
     with pytest.raises(ValueError):
-        wilson_interval(0, 0)
+        pooled_ratio_ci(np.array([1.0]), np.array([0.0]))

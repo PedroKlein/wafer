@@ -12,7 +12,7 @@ import pandas as pd
 
 from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
 from .rollback import validate_swap5_artifacts
-from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, hodges_lehmann, wilson_interval
+from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
 
 FINAL_VISUAL_MANIFEST = (
     {
@@ -218,7 +218,10 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         intended = sum(int(run["intended_messages"]) for run in condition_runs)
         received = sum(int(run["received_unique"]) for run in condition_runs)
         pooled_loss = (intended - received) / intended
-        loss_low, loss_high = wilson_interval(max(0, intended - received), intended)
+        loss_low, loss_high = pooled_ratio_ci(
+            [max(0, int(run["intended_messages"]) - int(run["received_unique"])) for run in condition_runs],
+            [int(run["intended_messages"]) for run in condition_runs],
+        )
         mean_achieved_ratio = float(
             np.mean([run["achieved_ratio"] for run in condition_runs])
         )
@@ -255,7 +258,7 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,
                 "units": "nanoseconds, messages/second, fraction, messages",
-                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with Wilson 95% CI over messages; mean achieved ratio; Cliff's delta with bootstrap 95% CI",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI",
                 "threshold": "median(WAFER p95) / median(eKuiper p95) <= 2.0; pooled loss <= 0.01; mean achieved/offered >= 0.99; zero duplicates",
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
                 "thesis_evidence": True,
