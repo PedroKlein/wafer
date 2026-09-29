@@ -137,3 +137,13 @@ def test_power_report_is_named_by_host_and_refuses_mixed_measurements(
     mixed = pd.DataFrame([row, {**row, "host": "rpi5", "measurement": "Raspberry Pi 5 PMIC internal-rail proxy"}])
     with pytest.raises(ValueError, match="one power report per host and measurement"):
         render(mixed, tmp_path / "mixed")
+
+
+def test_pi_idle_baseline_is_not_subtracted_from_another_host() -> None:
+    samples = [
+        {"timestamp_ns": 0, "rail_proxy_watts": 6.0, "temperature_millicelsius": 50000, "throttled": "0x0"},
+        {"timestamp_ns": 1_000_000_000, "rail_proxy_watts": 6.0, "temperature_millicelsius": 50000, "throttled": "0x0"},
+    ]
+    with pytest.raises(ValueError, match="idle baseline"):
+        summarize_power(samples, idle_watts=2.0, measurement="Jetson INA3221 rail proxy")
+    assert summarize_power(samples, idle_watts=2.0)["idle_adjusted_proxy_watts"] == 4.0
