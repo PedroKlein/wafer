@@ -12,7 +12,7 @@ import pandas as pd
 
 from wafer_analysis.paths import find_canonical_batch
 from wafer_analysis.plots import SYSTEM_COLORS, save_figure, setup_thesis_style
-from wafer_analysis.power import clip_to_window, load_telemetry, summarize_power
+from wafer_analysis.power import clip_to_window, load_telemetry, read_idle_watts, summarize_power
 
 
 def read_message_count(result: Path) -> int | None:
@@ -41,7 +41,7 @@ def read_measurement_window(result: Path) -> tuple[int, int]:
     return int(window["started_ns"]), int(window["finished_ns"])
 
 
-def collect(batch_id: str, experiments: list[str]) -> pd.DataFrame:
+def collect(batch_id: str, experiments: list[str], idle_watts: float = 0.0) -> pd.DataFrame:
     rows = []
     for experiment in experiments:
         batch = find_canonical_batch(experiment, batch_id)
@@ -52,7 +52,7 @@ def collect(batch_id: str, experiments: list[str]) -> pd.DataFrame:
             samples = clip_to_window(
                 load_telemetry(telemetry), started_ns, finished_ns
             )
-            summary = summarize_power(samples, messages=messages)
+            summary = summarize_power(samples, idle_watts=idle_watts, messages=messages)
             rows.append(
                 {
                     "experiment": experiment,
@@ -102,8 +102,16 @@ def main() -> int:
     parser.add_argument("--batch-id", required=True)
     parser.add_argument("--experiments", default="e-perf-1")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--idle-baseline",
+        type=Path,
+        help="idle-baseline.json from run-rpi5-idle-baseline.sh; its median is subtracted",
+    )
     args = parser.parse_args()
-    data = collect(args.batch_id, [value.strip() for value in args.experiments.split(",")])
+    idle_watts = read_idle_watts(args.idle_baseline) if args.idle_baseline else 0.0
+    data = collect(
+        args.batch_id, [value.strip() for value in args.experiments.split(",")], idle_watts
+    )
     render(data, args.output)
     return 0
 

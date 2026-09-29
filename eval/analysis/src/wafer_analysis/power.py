@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 
 MEASUREMENT_LABEL = "Raspberry Pi 5 PMIC internal-rail proxy"
@@ -103,3 +104,13 @@ def summarize_power(
         "max_temperature_c": max(int(sample["temperature_millicelsius"]) for sample in ordered) / 1000,
         "throttled": any(str(sample["throttled"]) != "0x0" for sample in ordered),
     }
+
+
+def read_idle_watts(path: Path) -> float:
+    """Median idle proxy watts from a usable, unthrottled idle-baseline.json."""
+    baseline = json.loads(path.read_text())
+    if baseline.get("experiment") != "idle-baseline":
+        raise ValueError(f"{path} is not an idle baseline")
+    if baseline.get("usable") is not True or baseline.get("throttled") is not False:
+        raise ValueError(f"{path} was not taken on an idle, unthrottled host")
+    return float(baseline["idle_proxy_watts_median"])

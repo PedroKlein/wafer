@@ -88,10 +88,23 @@ def summarise_sample(sample: Path) -> dict[str, object]:
     }
 
 
+REQUIRED_FILES = ("pi-telemetry.csv", "cpu-cores.csv", "host-sidecar.json", "measurement-window.json")
+
+
 def summarise(root: Path) -> dict[str, object]:
-    samples = [summarise_sample(path) for path in sorted(root.glob("sample-*")) if path.is_dir()]
+    samples = []
+    rejected = []
+    for path in sorted(root.glob("sample-*")):
+        if not path.is_dir():
+            continue
+        missing = [name for name in REQUIRED_FILES if not (path / name).is_file()]
+        errors = [name for name in ("telemetry-error.json", "host-sidecar-error.json") if (path / name).exists()]
+        if missing or errors:
+            rejected.append({"sample": path.name, "missing": missing, "errors": errors})
+            continue
+        samples.append(summarise_sample(path))
     if not samples:
-        raise ValueError(f"no sample-* directories under {root}")
+        raise ValueError(f"no complete sample-* directories under {root}")
     watts = [float(sample["mean_proxy_watts"]) for sample in samples]
     busy = [s["sut_core_busy_fraction"] for s in samples if s["sut_core_busy_fraction"] is not None]
     quartiles = statistics.quantiles(watts, n=4) if len(watts) >= 2 else [watts[0]] * 3
@@ -103,6 +116,7 @@ def summarise(root: Path) -> dict[str, object]:
         "measurement": "Raspberry Pi 5 PMIC internal-rail proxy",
         "is_total_input_power": False,
         "samples": len(samples),
+        "rejected_samples": rejected,
         "idle_proxy_watts_median": statistics.median(watts),
         "idle_proxy_watts_iqr": [quartiles[0], quartiles[2]],
         "idle_proxy_watts_min": min(watts),
@@ -111,6 +125,7 @@ def summarise(root: Path) -> dict[str, object]:
         "throttled": any(bool(sample["throttled"]) for sample in samples),
         "sut_core_busy_fraction_max": max(busy) if busy else None,
         "host_idle": bool(busy) and max(busy) <= MAX_IDLE_BUSY_FRACTION,
+        "usable": bool(busy) and max(busy) <= MAX_IDLE_BUSY_FRACTION and not rejected,
         "per_sample": samples,
     }
 
@@ -126,7 +141,7 @@ def main(argv: list[str]) -> int:
         f"idle baseline: {summary['samples']} samples, median {summary['idle_proxy_watts_median']:.3f} W "
         f"(proxy), SUT cores busy {summary['sut_core_busy_fraction_max']}, host_idle={summary['host_idle']}"
     )
-    return 0 if summary["host_idle"] and not summary["throttled"] else 1
+    return 0 if summary["usable"] and not summary["throttled"] else 1
 
 
 if __name__ == "__main__":

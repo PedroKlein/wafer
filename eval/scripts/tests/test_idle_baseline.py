@@ -77,3 +77,33 @@ def test_runner_dry_run_prints_the_plan() -> None:
     assert "evidence_class: diagnostic" in plan
     assert "samples: 4" in plan
     assert "--pin-cpus 0 --sut-cpus 1-3" in plan
+
+
+def test_incomplete_sample_is_rejected_and_makes_the_baseline_unusable(tmp_path: Path) -> None:
+    write_sample(tmp_path, 1, 2.0, busy_jiffies=1)
+    broken = tmp_path / "sample-02"
+    broken.mkdir()
+    (broken / "telemetry-error.json").write_text("{}")
+    summary = summarise_idle_baseline.summarise(tmp_path)
+    assert summary["samples"] == 1
+    assert summary["rejected_samples"][0]["sample"] == "sample-02"
+    assert summary["host_idle"] is True
+    assert summary["usable"] is False
+
+
+def test_power_report_reads_idle_watts_only_from_a_usable_baseline(tmp_path: Path) -> None:
+    read_idle_watts = summarise_idle_baseline.power_module.read_idle_watts
+    write_sample(tmp_path, 1, 2.0, busy_jiffies=1)
+    write_sample(tmp_path, 2, 2.4, busy_jiffies=1)
+    path = tmp_path / "idle-baseline.json"
+    path.write_text(json.dumps(summarise_idle_baseline.summarise(tmp_path)))
+    assert abs(read_idle_watts(path) - 2.2) < 1e-9
+
+    busy = json.loads(path.read_text()) | {"usable": False}
+    path.write_text(json.dumps(busy))
+    try:
+        read_idle_watts(path)
+    except ValueError as error:
+        assert "idle, unthrottled" in str(error)
+    else:
+        raise AssertionError("an unusable baseline must be refused")

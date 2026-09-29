@@ -97,7 +97,7 @@ Before the final batch, record the idle-power baseline once on the same host sta
 ./eval/scripts/run-rpi5-idle-baseline.sh
 ```
 
-It takes ten 60 s samples with the two host sidecars only and writes `eval/results/idle-baseline/rpi5-<UTC>/idle-baseline.json` with the median PMIC internal-rail proxy watts, the SUT-core busy fraction that proves the host was idle, and the throttle state. The baseline is diagnostic, never thesis evidence, and its only use is the idle subtraction in the proxy energy-per-message report.
+It stops `kuiper.service` as WAFER runs do (and restarts it on exit), refuses to start while a `wafer` or `wafer-loadgen` process exists, takes ten 60 s samples with the two host sidecars only, and writes `eval/results/idle-baseline/rpi5-<UTC>/idle-baseline.json` with the median PMIC internal-rail proxy watts, the SUT-core busy fraction that proves the host was idle, and the throttle state. The baseline is diagnostic, never thesis evidence. Pass it to the proxy energy report with `canonical_power.py --idle-baseline <dir>/idle-baseline.json`, which refuses a baseline marked not usable or throttled.
 
 ## Run the targeted pre-final pilot
 

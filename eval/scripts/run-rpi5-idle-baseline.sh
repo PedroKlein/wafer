@@ -39,6 +39,7 @@ done
 if [ "$dry_run" -eq 1 ]; then
     printf 'experiment: idle-baseline\nevidence_class: diagnostic\nsamples: %s\nsample_secs: %s\noutput: %s\n' \
         "$samples" "$sample_secs" "$output"
+    printf 'host state: broker up, kuiper.service stopped as in WAFER runs, no wafer or loadgen process\n'
     printf 'sidecars: taskset -c %s pi_telemetry.py; proc_telemetry.py --pin-cpus %s --sut-cpus %s\n' \
         "$support_cpus" "$support_cpus" "$sut_cpus"
     printf 'summary: eval/scripts/summarise-idle-baseline.py %s\n' "$output"
@@ -46,10 +47,16 @@ if [ "$dry_run" -eq 1 ]; then
 fi
 
 "$ROOT/eval/scripts/preflight-pi5.sh"
-if pgrep -x wafer >/dev/null || pgrep -x kuiperd >/dev/null; then
-    echo "error: a runtime is running; the idle baseline needs no pipeline" >&2
-    exit 1
-fi
+for process in wafer wafer-runtime wafer-loadgen; do
+    if pgrep -x "$process" >/dev/null; then
+        echo "error: $process is running; the idle baseline needs no pipeline or load" >&2
+        exit 1
+    fi
+done
+# WAFER and native campaign runs stop eKuiper for their duration, so the
+# baseline does too and restarts it however the script ends.
+sudo systemctl stop kuiper.service
+trap 'sudo systemctl start kuiper.service' EXIT
 mkdir -p "$output"
 git_sha="$(git -C "$ROOT" rev-parse HEAD)"
 
@@ -63,8 +70,9 @@ for index in $(seq -f '%02g' 1 "$samples"); do
         --pin-cpus "$support_cpus" --sut-cpus "$sut_cpus" &
     proc_pid=$!
     sleep "$sample_secs"
-    kill -TERM "$pi_pid" "$proc_pid"
-    wait "$pi_pid" "$proc_pid"
+    kill -TERM "$pi_pid" "$proc_pid" 2>/dev/null || true
+    wait "$pi_pid" 2>/dev/null || true
+    wait "$proc_pid" 2>/dev/null || true
     finished_ns="$(date +%s%N)"
     printf '{"started_ns":%s,"finished_ns":%s}\n' "$started_ns" "$finished_ns" >"$sample/measurement-window.json"
     python3 - "$sample/metadata.json" "$index" "$git_sha" "$sample_secs" <<'PY'
