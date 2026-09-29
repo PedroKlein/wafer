@@ -23,6 +23,35 @@ mise run plan-canonical-pi5
 mise run run-canonical-pi5 -- --batch-id <id>
 ```
 
+## Run, stop, resume and check a batch
+
+A batch is identified by its `--batch-id`. Every run is a leaf that is
+written once and marked passed or failed, and the batch ledger under
+`manifests/canonical-batches/<host>-<batch-id>/` keeps `schedule.json` and a
+`progress.jsonl` event log.
+
+```bash
+# Start (or resume) a batch
+mise run run-canonical-pi5 -- --batch-id <id>
+
+# Stop at any time with Ctrl-C. Re-running the same command resumes: passed
+# runs are skipped and an interrupted run gets a new attempt directory.
+mise run run-canonical-pi5 -- --batch-id <id>
+
+# Show done and pending runs per experiment, the next run and the last event
+./eval/scripts/run-rpi5-canonical.sh --status --batch-id <id>
+
+# A smaller diagnostic batch: the first N runs of the frozen schedule
+mise run run-canonical-pi5 -- --batch-id <id> --repetitions 5
+```
+
+A resume must use the same `--experiments`, `--seed` and `--repetitions` as
+the start; the runner refuses a schedule that differs from the batch's
+`schedule.json`. A `--repetitions` batch is labelled diagnostic in every leaf
+and is never accepted as thesis evidence (see
+[Reduced-repetition diagnostic batches](RESULT-CONTRACT.md#reduced-repetition-diagnostic-batches)).
+Use `--host jetson` or `--host x86` on the other platforms.
+
 ## Experiment execution
 
 Every experiment in `canonical-matrix.json` (E-Perf-1..10, E-Val-1,

@@ -830,6 +830,25 @@ def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:
     assert completed.returncode == 1
     assert "metering provenance differs" in completed.stdout
 
+def test_diagnostic_leaf_is_flagged_and_must_not_claim_thesis_evidence(tmp_path: Path) -> None:
+    result = make_result(tmp_path)
+    metadata_path = result / "metadata.json"
+    metadata = json.loads(metadata_path.read_text())
+    metadata_path.write_text(
+        json.dumps({**metadata, "diagnostic_repetitions": 5, "thesis_evidence": False})
+    )
+    accepted = run(result)
+    metadata_path.write_text(
+        json.dumps({**metadata, "diagnostic_repetitions": 5, "thesis_evidence": True})
+    )
+    rejected = run(result)
+
+    assert accepted.returncode == 0, accepted.stdout + accepted.stderr
+    assert "5 repetitions: not thesis evidence" in accepted.stdout + accepted.stderr
+    assert rejected.returncode == 1
+    assert "diagnostic metadata must set thesis_evidence=false" in rejected.stdout
+
+
 def test_e_perf_5_accepts_transform_only_fuel_for_transform_only_pipeline() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         result = make_result(Path(tmp))

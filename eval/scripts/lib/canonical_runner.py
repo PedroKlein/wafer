@@ -203,6 +203,7 @@ HOTSWAP_PHASE_FIELDS = (
     "first_post_replacement_local_outcome_ns",
 )
 FOCUSED_MATRIX_SHA_ENV = "WAFER_FOCUSED_MATRIX_SHA256"
+DIAGNOSTIC_REPETITIONS_ENV = "WAFER_DIAGNOSTIC_REPETITIONS"
 CAPACITY_SCOUT_SYSTEMS = RATE_SWEEP_SYSTEMS
 CAPACITY_SCOUT_SUTS = ("native", "wafer", "ekuiper")
 CAPACITY_SCOUT_BASE_RATE = 500
@@ -3906,6 +3907,13 @@ def stamp_focused_metadata(root: Path, metadata: dict) -> None:
     }
 
 
+def stamp_diagnostic_metadata(metadata: dict) -> None:
+    repetitions = os.environ.get(DIAGNOSTIC_REPETITIONS_ENV)
+    if repetitions is not None:
+        metadata["thesis_evidence"] = False
+        metadata["diagnostic_repetitions"] = int(repetitions)
+
+
 def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     validate_alias_mapping(CANONICAL_ALIASES)
     if item.shared_from is None:
@@ -3922,7 +3930,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if (
         metadata.get("experiment") != item.shared_from
         or metadata.get("evidence_class") != "final"
-        or metadata.get("thesis_evidence") is not True
+        or metadata.get("thesis_evidence") is not (DIAGNOSTIC_REPETITIONS_ENV not in os.environ)
     ):
         raise ValueError("shared source is not final admitted evidence")
     source_status_sha256 = hashlib.sha256(status_path.read_bytes()).hexdigest()
@@ -5967,6 +5975,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         metadata["shared_measurement"] = False
         metadata["measurement_source_leaf"] = results_layout(root).relative(output)
     stamp_focused_metadata(root, metadata)
+    stamp_diagnostic_metadata(metadata)
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
         loadgen = metadata.get("loadgen") or {}
@@ -6800,6 +6809,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
                 "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
             },
         }
+        stamp_diagnostic_metadata(summary)
         path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
         path.write_text(json.dumps(summary, indent=2) + "\n")
         return path
@@ -6946,6 +6956,50 @@ def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
             f"warmup={item.warmup_secs}s measurement={item.measurement_secs}s "
             f"sut_cpus={item.runtime_cpus} support_cpus={item.support_cpus}{cooldown}{suffix}"
         )
+
+
+def batch_status(layout: ResultsLayout, batch_id: str) -> int:
+    name = batch_name(batch_id)
+    ledger = next(
+        (
+            path
+            for path in (
+                layout.manifest_path(group, name)
+                for group in ("canonical-batches", "candidate-batches")
+            )
+            if (path / "schedule.json").is_file()
+        ),
+        None,
+    )
+    if ledger is None:
+        print(f"no batch {name} under {layout.manifests}", file=sys.stderr)
+        return 1
+    schedule = [RunItem(**item) for item in json.loads((ledger / "schedule.json").read_text())]
+    totals = Counter(item.experiment for item in schedule)
+    done: Counter[str] = Counter()
+    pending: list[str] = []
+    for item in schedule:
+        if item.shared_from:
+            finished = layout.manifest_path(
+                "aliases", item.experiment, name, item.condition, f"run-{item.run_index:02d}.json"
+            ).is_file()
+        else:
+            condition_dir = layout.raw_path(item.experiment, name, item.condition)
+            finished = select_attempt(condition_dir, item.run_index).skip
+        if finished:
+            done[item.experiment] += 1
+        else:
+            pending.append(item.result_key)
+    print(f"batch {name}")
+    for experiment, total in totals.items():
+        print(f"{experiment} {done[experiment]}/{total}")
+    print(f"done {len(schedule) - len(pending)}/{len(schedule)}, pending {len(pending)}")
+    if pending:
+        print(f"next {pending[0]}")
+    progress = ledger / "progress.jsonl"
+    if progress.is_file():
+        print(f"last event {progress.read_text().splitlines()[-1]}")
+    return 0
 
 
 def parse_experiments(raw: str) -> set[str]:
@@ -7237,8 +7291,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--host", default="rpi5", help="host profile from the matrix hosts map")
+    parser.add_argument(
+        "--repetitions",
+        type=int,
+        help="run only the first N repetitions of each experiment; the batch is "
+        "diagnostic and never thesis evidence",
+    )
+    parser.add_argument(
+        "--status", action="store_true", help="print done and pending runs of --batch-id"
+    )
     args = parser.parse_args()
-    if args.dry_run == args.execute:
+    if not args.status and args.dry_run == args.execute:
         parser.error("choose exactly one of --dry-run or --execute")
     try:
         select_host(args.host)
@@ -7252,10 +7315,16 @@ def main() -> int:
         os.environ["WAFER_RESULTS_ROOT"] = str(args.results_root)
     try:
         layout = results_layout(root)
+        if args.status:
+            if not args.batch_id:
+                raise ValueError("--status requires --batch-id")
+            return batch_status(layout, args.batch_id)
         if args.execute:
             layout.prepare()
         focused_freeze = None
         capacity_scout = args.capacity_scout
+        if args.repetitions is not None and (capacity_scout or args.focused):
+            raise ValueError("--repetitions cannot be combined with --capacity-scout or --focused")
         if capacity_scout:
             if args.focused or args.experiments != "all":
                 raise ValueError("--capacity-scout cannot be combined with --focused or --experiments")
@@ -7280,6 +7349,14 @@ def main() -> int:
         else:
             experiments = parse_experiments(args.experiments)
             schedule = build_schedule(experiments, args.seed)
+            if args.repetitions is not None:
+                frozen = max(item.run_index for item in schedule)
+                if not 1 <= args.repetitions < frozen:
+                    raise ValueError(
+                        f"--repetitions must be between 1 and {frozen - 1}; "
+                        f"omit it to run the frozen {frozen}"
+                    )
+                schedule = [item for item in schedule if item.run_index <= args.repetitions]
     except (KeyError, OSError, TypeError, ValueError) as error:
         parser.error(str(error))
 
@@ -7412,11 +7489,15 @@ def main() -> int:
         return 0
 
     print_plan(schedule, args.seed, batch_id)
+    if args.repetitions is not None:
+        print(f"DIAGNOSTIC repetitions={args.repetitions}: not thesis evidence")
     if args.dry_run:
         return 0
 
     if focused_freeze is not None:
         os.environ[FOCUSED_MATRIX_SHA_ENV] = focused_freeze["canonical_matrix_sha256"]
+    if args.repetitions is not None:
+        os.environ[DIAGNOSTIC_REPETITIONS_ENV] = str(args.repetitions)
 
     ledger_group = (
         "candidate-batches"
@@ -7426,7 +7507,15 @@ def main() -> int:
     ledger = layout.manifest_path(ledger_group, batch_name(batch_id))
     ledger.mkdir(parents=True, exist_ok=True)
     schedule_json = json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
-    (ledger / "schedule.json").write_text(schedule_json)
+    schedule_path = ledger / "schedule.json"
+    if schedule_path.is_file() and schedule_path.read_text() != schedule_json:
+        print(
+            f"error: batch {batch_name(batch_id)} was started with a different schedule; "
+            "resume it with the same --experiments, --seed and --repetitions",
+            file=sys.stderr,
+        )
+        return 2
+    schedule_path.write_text(schedule_json)
     if focused_freeze is not None:
         (ledger / "focused-pilot-execution.json").write_text(
             json.dumps(
@@ -7466,7 +7555,9 @@ def main() -> int:
         validation_root = layout.raw_path(
             "e-val-1", batch_name(batch_id), "delay-50ms"
         )
-        gate = evaluate_validation_gate(validation_root, expected_runs=30)
+        gate = evaluate_validation_gate(
+            validation_root, expected_runs=max(item.run_index for item in validation_items)
+        )
         (ledger / "e-val-1-gate.json").write_text(
             json.dumps(gate.__dict__, indent=2) + "\n"
         )

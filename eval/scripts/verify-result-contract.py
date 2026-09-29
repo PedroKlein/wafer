@@ -2044,6 +2044,11 @@ def check_leaf(
         try:
             with meta_path.open() as fh:
                 metadata = json.load(fh)
+            if "diagnostic_repetitions" in metadata:
+                warnings.append(
+                    f"diagnostic batch run with {metadata['diagnostic_repetitions']} "
+                    "repetitions: not thesis evidence"
+                )
             missing = [k for k in MERGED_PROVENANCE_KEYS if k not in metadata]
             if missing and metadata.get("system") not in {"ekuiper", "mqtt-loopback", "static"}:
                 message = (
@@ -2082,8 +2087,11 @@ def check_leaf(
                         violations.append("Pi 5 metadata records a non-zero static collector exit")
                 elif exit_codes.get("wafer_runtime") != 0:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
+                diagnostic = "diagnostic_repetitions" in metadata
+                if diagnostic and metadata.get("thesis_evidence") is not False:
+                    violations.append("diagnostic metadata must set thesis_evidence=false")
                 if experiment == "e-perf-10":
-                    expected_evidence = False if focused else True
+                    expected_evidence = not (focused or diagnostic)
                     if metadata.get("thesis_evidence") is not expected_evidence:
                         violations.append(
                             f"E-Perf-10 metadata must set thesis_evidence={str(expected_evidence).lower()}"
