@@ -23,6 +23,7 @@ from wafer_analysis.canonical import (
     capacity_competitive_decision,
     depth_tables,
     metering_table,
+    startup_table,
     payload_table,
     recovery_table,
     swap3_table,
@@ -1408,3 +1409,56 @@ def test_payload_loss_does_not_count_duplicates_as_delivered() -> None:
     table = payload_table(records).set_index("condition")
     assert table.loc["10kb", "pooled_loss"] == pytest.approx(6 / (30 * 60_000))
     assert table.loc["10kb", "total_duplicates"] == 5
+
+
+def startup_records(runs: int = 30, conditions: tuple[str, ...] | None = None) -> list[dict]:
+    base = {"small": 40_000_000, "medium": 60_000_000, "large": 120_000_000}
+    conditions = conditions or tuple(f"{tier}-{state}" for tier in base for state in ("cold", "warm"))
+    records = []
+    for condition in conditions:
+        tier, state = condition.rsplit("-", 1)
+        for run in range(1, runs + 1):
+            total = base[tier] * (3 if state == "cold" else 1) + run * 1_000
+            phases = dict.fromkeys(("process_config", "instantiation", "pipeline_setup", "first_process"), total // 10)
+            phases["component_load_compile"] = total - 4 * (total // 10) - 1_000_000
+            records.append(
+                {
+                    "condition": condition,
+                    "run_index": run,
+                    "total_wall_duration_ns": total,
+                    "phases_ns": phases,
+                    "compiled_component_cache": {"mode": "disabled", "hit": False},
+                }
+            )
+    return records
+
+
+def test_startup_table_contrasts_cold_with_warm_per_tier() -> None:
+    table = startup_table(startup_records()).set_index("condition")
+    assert len(table) == 6
+    assert table.loc["large-cold", "median_cold_minus_warm_ns"] == pytest.approx(240_000_000)
+    assert table.loc["large-cold", "N_pairs"] == 30
+    assert table.loc["large-cold", "cliffs_delta_vs_warm"] == 1.0
+    assert pd.isna(table.loc["small-warm", "median_cold_minus_warm_ns"])
+    assert table["median_unmeasured_ns"].eq(1_000_000).all()
+    assert table["compiled_cache_hits"].eq(0).all()
+    assert "no compiled-cache claim" in table.loc["small-cold", "claim_boundary"]
+
+
+def test_startup_table_requires_full_n_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        startup_table(startup_records(conditions=("small-cold", "small-warm")))
+    table = startup_table(startup_records(runs=2, conditions=("small-cold",)), canonical=False)
+    assert len(table) == 1 and pd.isna(table["median_cold_minus_warm_ns"].iloc[0])
+
+
+def test_startup_cold_minus_warm_pairs_runs_by_index() -> None:
+    records = startup_records()
+    for record in records:
+        if record["condition"] in {"small-cold", "small-warm"}:
+            cold_penalty = 5_000_000 if record["condition"] == "small-cold" else 0
+            record["total_wall_duration_ns"] = 40_000_000 + record["run_index"] * 1_000_000 + cold_penalty
+    row = startup_table(records).set_index("condition").loc["small-cold"]
+    assert row["median_cold_minus_warm_ns"] == pytest.approx(5_000_000)
+    assert (row["difference_ci95_low_ns"], row["difference_ci95_high_ns"]) == pytest.approx((5_000_000, 5_000_000))
+    assert row["hodges_lehmann_shift_ns"] == pytest.approx(5_000_000)
