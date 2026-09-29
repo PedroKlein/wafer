@@ -1039,6 +1039,18 @@ Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identify
 python3 eval/scripts/verify-result-contract.py --canonical <result-dir>
 ```
 
+Every leaf checked in one invocation must share `git_sha` and, per plugin
+name, `wafer_plugin_hashes`; the verifier names the first leaf that differs
+and the leaf it differs from. The matrix is part of the source tree, so an
+equal clean `git_sha` also means an equal `canonical-matrix.json`. Before the
+same experiment from two hosts is compared, pass the other host's batch with
+`--match` (repeatable): its leaves join this comparison without their own
+contract being checked.
+
+```sh
+python3 eval/scripts/verify-result-contract.py --canonical <pi-batch> --match <jetson-batch> --match <x86-batch>
+```
+
 ### Pi 5 host fields
 
 Canonical `rpi5` runs additionally require:
