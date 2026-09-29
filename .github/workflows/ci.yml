@@ -101,6 +101,8 @@ jobs:
         run: |
           python3 -m pip install --quiet pytest
           python3 -m pytest eval/scripts/tests -q
+          eval/scripts/tests/test_ekuiper_install.sh
+          eval/scripts/tests/test_glibc_floor.sh
           eval/scripts/tests/test_eval_portability.sh
           eval/scripts/tests/test_host_tags.sh
           eval/scripts/tests/test_pi5_tooling.sh
