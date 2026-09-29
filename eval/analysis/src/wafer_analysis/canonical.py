@@ -690,7 +690,7 @@ def validation_gate_table(records: list[dict], *, canonical: bool = True) -> pd.
     )
 
 
-def density_table(rows: list[dict]) -> pd.DataFrame:
+def density_table(rows: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """E-Density-1: release Wasm component size beside a documented container-image floor."""
     table = pd.DataFrame(
         [
@@ -712,7 +712,80 @@ def density_table(rows: list[dict]) -> pd.DataFrame:
         units="bytes",
         estimator="stat size of each release component; container floor is a documented lower-bound estimate, not a measurement",
         claim_boundary="orders of magnitude only; production images are larger than the floor",
+        thesis_evidence=canonical,
     )
+
+
+STARTUP_TIERS = ("small", "medium", "large")
+STARTUP_PHASES = ("process_config", "component_load_compile", "instantiation", "pipeline_setup", "first_process")
+
+
+def startup_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """Startup phases per tier and page-cache state, with the paired cold minus warm difference.
+
+    Each record is one run's ``startup.json`` with its ``condition`` and ``run_index``.
+    """
+    conditions = tuple(f"{tier}-{state}" for tier in STARTUP_TIERS for state in ("cold", "warm"))
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    totals = {
+        condition: np.asarray([run["total_wall_duration_ns"] for run in runs], dtype=float)
+        for condition, runs in grouped.items()
+    }
+    rows = []
+    for condition, runs in grouped.items():
+        if not runs:
+            continue
+        tier, state = condition.rsplit("-", 1)
+        low, high = bootstrap_ci(totals[condition])
+        phases = {
+            phase: np.asarray([run["phases_ns"][phase] for run in runs], dtype=float)
+            for phase in STARTUP_PHASES
+        }
+        unmeasured = totals[condition] - sum(phases.values())
+        row = {
+            "condition": condition,
+            "tier": tier,
+            "cache_state": state,
+            "N_runs": len(runs),
+            "median_total_ns": float(np.median(totals[condition])),
+            "total_ci95_low_ns": low,
+            "total_ci95_high_ns": high,
+            **{f"median_{phase}_ns": float(np.median(values)) for phase, values in phases.items()},
+            "median_unmeasured_ns": float(np.median(unmeasured)),
+            "compiled_cache_hits": sum(bool(run["compiled_component_cache"]["hit"]) for run in runs),
+            **dict.fromkeys(("N_pairs", "median_cold_minus_warm_ns", "difference_ci95_low_ns", "difference_ci95_high_ns", "hodges_lehmann_shift_ns", "shift_ci95_low_ns", "shift_ci95_high_ns", "cliffs_delta_vs_warm", "effect_magnitude")),
+        }
+        warm_by_run = {run["run_index"]: run["total_wall_duration_ns"] for run in grouped[f"{tier}-warm"]}
+        pairs = [(run["total_wall_duration_ns"], warm_by_run[run["run_index"]]) for run in runs if run["run_index"] in warm_by_run]
+        if state == "cold" and pairs:
+            cold, warm = (np.asarray(side, dtype=float) for side in zip(*pairs))
+            differences = cold - warm
+            difference_low, difference_high = bootstrap_ci(differences)
+            shift, shift_low, shift_high = hodges_lehmann(differences)
+            delta, magnitude = cliffs_delta(cold, warm)
+            row.update(
+                {
+                    "N_pairs": len(pairs),
+                    "median_cold_minus_warm_ns": float(np.median(differences)),
+                    "difference_ci95_low_ns": difference_low,
+                    "difference_ci95_high_ns": difference_high,
+                    "hodges_lehmann_shift_ns": shift,
+                    "shift_ci95_low_ns": shift_low,
+                    "shift_ci95_high_ns": shift_high,
+                    "cliffs_delta_vs_warm": delta,
+                    "effect_magnitude": magnitude,
+                }
+            )
+        row.update(
+            {
+                "units": "nanoseconds, runs",
+                "estimator": "median run total with bootstrap 95% CI; phase medians are descriptive and need not sum to the median total; cold minus warm paired by run index, because each warm start follows its cold start: median paired difference with bootstrap 95% CI and Hodges-Lehmann shift with bootstrap 95% CI; Cliff's delta is descriptive",
+                "claim_boundary": "Linux page-cache state only; the compiled-component cache is disabled, so no compiled-cache claim",
+                "thesis_evidence": canonical,
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
 
 
 def _candidate_scaling_table(
@@ -1563,7 +1636,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     return pd.DataFrame(rate_rows), pd.DataFrame(boundary_rows)
 
 
-def backpressure_table(records: list[dict]) -> pd.DataFrame:
+def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     grouped = _require_runs(records, BACKPRESSURE_POLICIES)
     rows = []
     for policy, runs in grouped.items():
@@ -1601,7 +1674,7 @@ def backpressure_table(records: list[dict]) -> pd.DataFrame:
                 "units": "occupancy ratio, messages/second, messages, boolean",
                 "estimator": "run-level medians with exact policy-specific counter totals",
                 "claim_boundary": "bounded internal queue under deterministic slow-consumer pressure",
-                "thesis_evidence": True,
+                "thesis_evidence": canonical,
             }
         )
     return pd.DataFrame(rows)

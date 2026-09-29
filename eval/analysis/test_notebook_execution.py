@@ -309,7 +309,7 @@ def build_complete_fixture(root: Path) -> None:
         for cache_state in ("cold", "warm"):
             for run in (1, 2):
                 write_passed_artifact(
-                    root / "e-perf-9" / f"{tier}-{cache_state}" / f"run-{run:02d}",
+                    root / "e-perf-9" / f"{tier}-{cache_state}" / f"run-{run:02d}-attempt-01",
                     "startup.json",
                     {
                         "cache_state": cache_state,
@@ -440,6 +440,8 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq2/containment.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-containment.csv").is_file()
     assert "N=12" in output_by_name["06-fault-injection.ipynb"]
+    assert (rendered / "rq1/startup-phases.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-startup.csv").is_file()
     assert (rendered / "rq1/payload-boundary.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-payload-boundary.csv").is_file()
     assert (rendered / "rq1/depth-scaling.pdf").stat().st_size > 1_000
