@@ -38,3 +38,16 @@ Pi, with the INA3221 rails from `/sys/class/hwmon` as the power source, the
 pinned clock as the throttle signal. `power-boundary.json` records
 `jetson-ina3221-rail-proxy`, so these watts are never compared with Pi PMIC
 watts.
+
+## Running a batch
+
+The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
+Pass it to the runner and the validator; results land under
+`jetson-<batch-id>` directories and are checked against this profile only:
+
+```sh
+python3 eval/scripts/validate-canonical.py host --host jetson --require-ekuiper
+python3 eval/scripts/lib/canonical_runner.py --host jetson --batch-id <batch-id> --dry-run
+```
+
+The focused pilot is frozen for the Pi and does not run on this host.

@@ -53,6 +53,7 @@ from containment import assess_containment
 from interval_metrics import validate_interval_metrics
 from latency_evidence import latency_evidence_violations
 from provenance_match import provenance_mismatches
+from host_profiles import host_profiles
 
 # The split contract (RESULT-CONTRACT.md source of truth).
 CORE_FILES = {"config.toml", "metadata.json", "stdout.log"}
@@ -63,6 +64,7 @@ CANONICAL_PI_FILES = {
     "power-boundary.json",
 }
 CANONICAL_MATRIX = Path(__file__).resolve().parents[1] / "canonical-matrix.json"
+HOST_PROFILES = host_profiles(json.loads(CANONICAL_MATRIX.read_text()))
 LATENCY_HIGHEST_NS = 3_600_000_000_000
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
@@ -1964,6 +1966,44 @@ def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
     }
 
 
+def batch_host(leaf: Path) -> str | None:
+    """The host named by the nearest `<host>-` directory of a leaf, if any.
+
+    Canonical leaves sit under a `<host>-<batch>` directory; a single-run
+    leaf from run-experiment.sh is itself named `<host>-<timestamp>`.
+    """
+    for part in reversed(leaf.parts):
+        for tag in HOST_PROFILES:
+            if part.startswith(f"{tag}-"):
+                return tag
+    return None
+
+
+def host_telemetry_violations(leaf: Path, profile) -> list[str]:
+    violations = []
+    boundary_path = leaf / "power-boundary.json"
+    if boundary_path.is_file():
+        try:
+            measurement = json.loads(boundary_path.read_text()).get("measurement")
+        except (OSError, ValueError, AttributeError) as exc:
+            return [f"power-boundary.json unreadable: {exc}"]
+        if measurement != profile.power_measurement:
+            violations.append(
+                f"{profile.tag} power measurement is {measurement!r}, expected {profile.power_measurement!r}"
+            )
+    telemetry_path = leaf / "pi-telemetry.csv"
+    if telemetry_path.is_file():
+        try:
+            with telemetry_path.open(newline="") as stream:
+                states = {row.get("throttled") for row in csv.DictReader(stream)}
+        except (OSError, csv.Error) as exc:
+            return [*violations, f"pi-telemetry.csv unreadable: {exc}"]
+        throttled = sorted(str(state) for state in states - {profile.throttled})
+        if throttled:
+            violations.append(f"host telemetry recorded throttling during the run: {throttled}")
+    return violations
+
+
 def check_leaf(
     leaf: Path,
     experiment: str,
@@ -2015,22 +2055,17 @@ def check_leaf(
                     violations.append(message)
                 else:
                     warnings.append(message)
-            if leaf.name.startswith("rpi5-") or canonical:
-                expected = {
-                    "host_tag": "rpi5",
-                    "arch": "aarch64",
-                    "isolated_cpus": "1-3",
-                    "throttled": "0x0",
-                }
-                for key, value in expected.items():
-                    if metadata.get(key) != value:
-                        violations.append(
-                            f"Pi 5 metadata {key}={metadata.get(key)!r}, expected {value!r}"
-                        )
-                if "Raspberry Pi 5" not in str(metadata.get("hardware_model", "")):
-                    violations.append("Pi 5 metadata lacks Raspberry Pi 5 hardware model")
-                if metadata.get("cpu_governors") != ["performance"]:
-                    violations.append("Pi 5 metadata CPU governor is not performance")
+            directory_host = batch_host(leaf) if canonical else batch_host(Path(leaf.name))
+            if directory_host is not None or canonical:
+                profile = HOST_PROFILES[
+                    directory_host
+                    or (metadata.get("host_tag") if metadata.get("host_tag") in HOST_PROFILES else "rpi5")
+                ]
+                violations.extend(
+                    f"{profile.tag} metadata: {error}" for error in profile.fact_errors(metadata)
+                )
+                if canonical:
+                    violations.extend(host_telemetry_violations(leaf, profile))
                 if not re.fullmatch(r"[0-9a-f]{40}", str(metadata.get("git_sha", ""))):
                     violations.append("Pi 5 metadata lacks a source commit SHA")
                 if not isinstance(metadata.get("git_dirty"), bool):

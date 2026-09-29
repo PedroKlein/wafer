@@ -13,6 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
 from host_facts import platform_facts  # noqa: E402
+from host_profiles import HostProfile, host_profile, host_profiles  # noqa: E402
+from pi_telemetry import host_snapshot  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -139,7 +141,7 @@ def read_text(path: Path, default: str = "unknown") -> str:
         return default
 
 
-def collect_host_facts(root: Path) -> dict:
+def collect_host_facts(root: Path, host: str = "rpi5") -> dict:
     sha, dirty, tags = source_facts(root)
     governors = sorted(
         {
@@ -156,9 +158,7 @@ def collect_host_facts(root: Path) -> dict:
     except OSError:
         pass
 
-    throttled = command_output(["vcgencmd", "get_throttled"])
-    if throttled.startswith("throttled="):
-        throttled = throttled.removeprefix("throttled=")
+    _temperature, throttled = host_snapshot()
 
     ekuiper_ready = command_output(
         ["systemctl", "is-active", "kuiper.service"], default="inactive"
@@ -171,7 +171,7 @@ def collect_host_facts(root: Path) -> dict:
     platform = platform_facts()
     return {
         **platform,
-        "host_tag": "rpi5",
+        "host_tag": host,
         "arch": command_output(["uname", "-m"]),
         "hardware_model": platform["hardware_model"] or "unknown",
         "git_sha": sha,
@@ -255,6 +255,39 @@ def validate_focused_pilot(matrix: dict, experiments: dict) -> list[str]:
     return errors
 
 
+def validate_hosts(matrix: dict) -> list[str]:
+    if matrix.get("schema_version") != 2:
+        return ["schema_version must be 2"]
+    if matrix.get("canonical_host") != "rpi5":
+        return ["canonical_host must be rpi5"]
+    try:
+        profiles = host_profiles(matrix)
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        return [f"hosts map is malformed: {error}"]
+    errors = []
+    if set(profiles) != {"rpi5", "jetson", "x86"}:
+        errors.append(f"hosts must be rpi5, jetson and x86, got {sorted(profiles)}")
+    for tag, profile in profiles.items():
+        expected_role = "canonical" if tag == matrix["canonical_host"] else "replication"
+        if profile.role != expected_role:
+            errors.append(f"host {tag} role must be {expected_role}")
+        if profile.throttled != "0x0" or profile.cpu_governors != ("performance",):
+            errors.append(f"host {tag} must require no throttling and the performance governor")
+        if _cpu_set(profile.sut_cpus) & _cpu_set(profile.support_cpus):
+            errors.append(f"host {tag} SUT and support CPUs overlap")
+        if profile.isolated_cpus != profile.sut_cpus:
+            errors.append(f"host {tag} must isolate exactly its SUT CPUs")
+    return errors
+
+
+def _cpu_set(text: str) -> set[int]:
+    cpus: set[int] = set()
+    for part in text.split(","):
+        low, _, high = part.partition("-")
+        cpus.update(range(int(low), int(high or low) + 1))
+    return cpus
+
+
 def validate_matrix(matrix: dict) -> list[str]:
     errors: list[str] = []
     experiments = matrix.get("experiments")
@@ -269,8 +302,7 @@ def validate_matrix(matrix: dict) -> list[str]:
     if extra:
         errors.append(f"unknown experiments: {', '.join(extra)}")
 
-    if matrix.get("host_tag") != "rpi5":
-        errors.append("host_tag must be rpi5")
+    errors.extend(validate_hosts(matrix))
 
     errors.extend(validate_focused_pilot(matrix, experiments))
 
@@ -577,28 +609,10 @@ def validate_matrix(matrix: dict) -> list[str]:
     return errors
 
 
-def validate_preflight(facts: dict, require_ekuiper: bool) -> list[str]:
-    errors: list[str] = []
-    expected = {
-        "host_tag": "rpi5",
-        "arch": "aarch64",
-        "isolated_cpus": "1-3",
-        "throttled": "0x0",
-    }
-    labels = {
-        "host_tag": "host tag",
-        "arch": "architecture",
-        "isolated_cpus": "isolated CPUs",
-        "throttled": "throttling",
-    }
-    for key, value in expected.items():
-        if facts.get(key) != value:
-            errors.append(f"{labels[key]} must be {value!r}, got {facts.get(key)!r}")
-
-    if "Raspberry Pi 5" not in str(facts.get("hardware_model", "")):
-        errors.append("hardware model must be Raspberry Pi 5")
-    if facts.get("cpu_governors") != ["performance"]:
-        errors.append("CPU governor must be performance")
+def validate_preflight(
+    facts: dict, require_ekuiper: bool, profile: HostProfile | None = None
+) -> list[str]:
+    errors = (profile or host_profile("rpi5")).fact_errors(facts)
     if facts.get("git_dirty") is not False:
         errors.append("dirty source is not canonical")
     if not re.fullmatch(r"[0-9a-f]{40}", str(facts.get("git_sha", ""))):
@@ -639,19 +653,27 @@ def main() -> int:
     preflight_parser = subparsers.add_parser("preflight")
     preflight_parser.add_argument("facts", type=Path)
     preflight_parser.add_argument("--require-ekuiper", action="store_true")
+    preflight_parser.add_argument("--host", default="rpi5")
 
     host_parser = subparsers.add_parser("host")
     host_parser.add_argument("--root", type=Path, default=Path.cwd())
     host_parser.add_argument("--require-ekuiper", action="store_true")
     host_parser.add_argument("--output", type=Path)
+    host_parser.add_argument("--host", default="rpi5")
 
     args = parser.parse_args()
+    profile: HostProfile | None = None
+    if args.command in {"host", "preflight"}:
+        try:
+            profile = host_profile(args.host)
+        except (OSError, ValueError, KeyError) as error:
+            return report([str(error)], "")
     if args.command == "host":
-        value = collect_host_facts(args.root.resolve())
+        value = collect_host_facts(args.root.resolve(), args.host)
         if args.output:
             args.output.write_text(json.dumps(value, indent=2) + "\n")
         return report(
-            validate_preflight(value, args.require_ekuiper),
+            validate_preflight(value, args.require_ekuiper, profile),
             "canonical host preflight: PASS",
         )
 
@@ -672,7 +694,7 @@ def main() -> int:
         )
 
     return report(
-        validate_preflight(value, args.require_ekuiper),
+        validate_preflight(value, args.require_ekuiper, profile),
         "canonical preflight: PASS",
     )
 
