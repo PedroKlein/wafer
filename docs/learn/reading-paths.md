@@ -55,7 +55,7 @@ Rust checkpoints: [crate](rust-in-context.md#crate), [Arc](rust-in-context.md#ar
 
 **Intended design:** The routes follow vertical flows so that a reader sees a value enter, cross a boundary, and reach its consumer before studying adjacent subsystems.
 
-**Known drift:** Architecture and status prose may summarize old or intended behavior. For every implementation claim, prefer the source and named tests at the pinned commit. Some Wasm integration tests require prebuilt component fixtures; a skipped test is conditional evidence, not a passing runtime demonstration.
+**Known drift:** Architecture and status prose may summarize old or intended behavior. For every implementation claim, prefer the source and named tests on `main`. Some Wasm integration tests require prebuilt component fixtures; a skipped test is conditional evidence, not a passing runtime demonstration.
 
 ## Evidence
 

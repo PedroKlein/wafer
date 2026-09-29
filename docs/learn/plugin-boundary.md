@@ -10,7 +10,7 @@ Trace one processing plugin from its WIT world through generated guest and host 
 
 ## Prerequisites
 
-Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows source at commit `6ed111ea10035d60cfdb21a385265acf66348ac3`, which includes the asynchronous P2 host path and bounded outbound HTTP implementation.
+Keep the [WIT contracts](../interfaces/wit-contracts.md) open for signatures and the [plugin SDK reference](../interfaces/plugin-sdk.md) open for macro details. This walkthrough follows the source on `main`, which includes the asynchronous P2 host path and bounded outbound HTTP implementation.
 
 ## Flow
 

@@ -14,14 +14,14 @@ WAFER is a Rust workspace whose runtime loads a typed pipeline configuration and
 
 | Field | Binding for this guide |
 |---|---|
-| Source commit | `6ed111ea10035d60cfdb21a385265acf66348ac3` |
-| Snapshot repository | `github.com/PedroKlein/wafer-poc` |
-| Implementation authority | Rust source, Cargo manifests, WIT files, and tests at the snapshot above |
+| Repository | `github.com/PedroKlein/wafer` |
+| Source revision | The `main` branch. A published copy names the commit it was staged from |
+| Implementation authority | Rust source, Cargo manifests, WIT files, and tests at that revision |
 | Current implementation | A claim verified directly in those files and named tests |
 | Intended design | A design goal or rationale that is not proof of runtime behavior |
 | Known drift | A documented statement that differs from the cited source, or an explicit implementation limit |
 
-The commit is deliberate. If you read another revision, re-check every cited symbol and test before treating a claim as current.
+The guides are updated with `main`. If a cited symbol or test is missing from the revision you are reading, trust the source and re-check the claim.
 
 ## Start with your question
 
