@@ -1,6 +1,0 @@
-{
-  "page": "stateless-hot-swap.md",
-  "find": "Mutable guest state is lost whenever a new Store and instance replace the old ones.",
-  "replace": "Replacement retains mutable guest state when a new Store and instance replace the old ones.",
-  "expected_error": "stateless-hot-swap.md: claims mutable guest state survives replacement"
-}

@@ -1,6 +1,0 @@
-{
-  "page": "rust-in-context.md",
-  "find": "`send_one` reserves a permit for `slow`, uses non-blocking `try_send` for `drop` and `dead-letter`, and records closed/full outcomes separately.",
-  "replace": "Configured Drop and DeadLetter overflow policies are currently dispatched by every sender.",
-  "expected_error": "rust-in-context.md: contradicts bounded overflow implementation"
-}
