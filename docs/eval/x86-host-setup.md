@@ -1,6 +1,6 @@
 # x86_64 host setup
 
-Read-only preflight: `./eval/scripts/preflight-x86.sh` (from the deployed
+Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.sh` (from the deployed
 `~/wafer`). It checks the items below and exits non-zero when one fails.
 
 ## Expected state
@@ -43,5 +43,8 @@ Pass it to the runner and the validator; results land under
 python3 eval/scripts/validate-canonical.py host --host x86 --require-ekuiper
 python3 eval/scripts/lib/canonical_runner.py --host x86 --batch-id <batch-id> --dry-run
 ```
+
+`mise run plan-campaign -- --host x86` prints the same schedule, and
+`mise run run-campaign -- --host x86 --batch-id <batch-id>` runs or resumes it.
 
 The focused pilot is frozen for the Pi and does not run on this host.

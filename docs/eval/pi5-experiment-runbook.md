@@ -94,7 +94,7 @@ Do not continue if preflight reports a dirty or untagged source, a non-performan
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 
 ```sh
-./eval/scripts/run-rpi5-idle-baseline.sh
+./eval/scripts/run-rpi5-idle-baseline.sh   # or: mise run idle-baseline-pi5
 ```
 
 It stops `kuiper.service` as WAFER runs do (and restarts it on exit), refuses to start while a `wafer` or `wafer-loadgen` process exists, takes ten 60 s samples with the two host sidecars only, and writes `eval/results/idle-baseline/rpi5-<UTC>/idle-baseline.json` with the median PMIC internal-rail proxy watts, the SUT-core busy fraction that proves the host was idle, and the throttle state. The baseline is diagnostic, never thesis evidence. Pass it to the proxy energy report with `canonical_power.py --idle-baseline <dir>/idle-baseline.json`, which refuses a baseline marked not usable or throttled.
@@ -102,7 +102,7 @@ It stops `kuiper.service` as WAFER runs do (and restarts it on exit), refuses to
 Also measure what the host telemetry sidecars cost on the Pi:
 
 ```sh
-./eval/scripts/run-rpi5-instrument-ab.sh
+./eval/scripts/run-rpi5-instrument-ab.sh   # or: mise run instrument-ab-pi5
 ```
 
 It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measurement, 60,000 messages, same cpusets), one with the Pi and `/proc` sidecars on and one with them off (`WAFER_HOST_SIDECARS=off`), alternating which goes first and pausing 60 s between runs, with eKuiper stopped in both arms. `analyze-instrument-ab.py` writes `instrument-ab.json` with the paired on-minus-off differences of p50, p95, p99 and achieved rate and the `/proc` sampler's CPU share, and exits non-zero unless the median p95 and achieved-rate differences are within 5%, every run is lossless and the sampler used at most 1% of one core. The pairs are diagnostic and never pooled with the final batch. About 25 minutes of Pi time.
@@ -147,6 +147,8 @@ Use the exact command copied into the approved handoff. Its shape is:
   --batch-id <approved-fresh-batch-id> \
   --seed 1729
 ```
+
+`mise run run-campaign -- --batch-id <id>` runs the same command, and `mise run campaign-status -- --batch-id <id>` lists its done and pending runs. On the Jetson and x86 replication hosts add `--host jetson` or `--host x86`.
 
 Run only after explicit approval. The runner executes sequentially, writes `progress.jsonl`, creates a new attempt directory after failure, and skips a run index once a passed attempt exists. Reusing the same command and batch ID resumes the batch.
 
