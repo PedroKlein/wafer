@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import importlib.util
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[3]
+
+spec = importlib.util.spec_from_file_location(
+    "summarise_idle_baseline", ROOT / "eval/scripts/summarise-idle-baseline.py"
+)
+assert spec and spec.loader
+summarise_idle_baseline = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(summarise_idle_baseline)
+
+
+def write_sample(root: Path, index: int, watts: float, busy_jiffies: int) -> None:
+    sample = root / f"sample-{index:02d}"
+    sample.mkdir(parents=True)
+    start = 1_000_000_000_000
+    rows = ["timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,rail_proxy_watts"]
+    cores = ["timestamp_ns,cpu,user,nice,system,idle,iowait,irq,softirq,steal,frequency_hz"]
+    for second in range(0, 11):
+        stamp = start + second * 1_000_000_000
+        rows.append(f"{stamp},45000,2400000000,performance,0x0,{watts}")
+        for cpu in range(4):
+            busy = busy_jiffies * second if cpu else 50 * second
+            cores.append(f"{stamp},{cpu},{busy},0,0,{100 * second - busy},0,0,0,0,2400000000")
+    (sample / "pi-telemetry.csv").write_text("\n".join(rows) + "\n")
+    (sample / "cpu-cores.csv").write_text("\n".join(cores) + "\n")
+    (sample / "measurement-window.json").write_text(
+        json.dumps({"started_ns": start, "finished_ns": start + 10_000_000_000})
+    )
+    (sample / "host-sidecar.json").write_text(
+        json.dumps({"sut_cpus": "1-3", "sampler_cpu_seconds": 0.05})
+    )
+
+
+def test_summary_reports_median_idle_watts_and_sut_core_idleness(tmp_path: Path) -> None:
+    write_sample(tmp_path, 1, 2.0, busy_jiffies=1)
+    write_sample(tmp_path, 2, 2.4, busy_jiffies=1)
+    write_sample(tmp_path, 3, 2.2, busy_jiffies=1)
+    summary = summarise_idle_baseline.summarise(tmp_path)
+    assert summary["samples"] == 3
+    assert abs(summary["idle_proxy_watts_median"] - 2.2) < 1e-9
+    assert summary["thesis_evidence"] is False
+    assert summary["is_total_input_power"] is False
+    assert abs(summary["sut_core_busy_fraction_max"] - 0.01) < 1e-9
+    assert summary["host_idle"] is True
+    assert summary["throttled"] is False
+
+
+def test_busy_sut_cores_mark_the_host_as_not_idle(tmp_path: Path) -> None:
+    write_sample(tmp_path, 1, 2.0, busy_jiffies=30)
+    summary = summarise_idle_baseline.summarise(tmp_path)
+    assert summary["host_idle"] is False
+    assert (
+        subprocess.run(
+            [sys.executable, str(ROOT / "eval/scripts/summarise-idle-baseline.py"), str(tmp_path)],
+            capture_output=True,
+        ).returncode
+        == 1
+    )
+    assert (tmp_path / "idle-baseline.json").is_file()
+
+
+def test_runner_dry_run_prints_the_plan() -> None:
+    plan = subprocess.run(
+        [str(ROOT / "eval/scripts/run-rpi5-idle-baseline.sh"), "--dry-run", "--samples", "4", "--sample-secs", "30"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    assert "experiment: idle-baseline" in plan
+    assert "evidence_class: diagnostic" in plan
+    assert "samples: 4" in plan
+    assert "--pin-cpus 0 --sut-cpus 1-3" in plan

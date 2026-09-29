@@ -91,6 +91,14 @@ Deploy the tagged release using the reviewed deployment command in the release r
 
 Do not continue if preflight reports a dirty or untagged source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
+Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
+
+```sh
+./eval/scripts/run-rpi5-idle-baseline.sh
+```
+
+It takes ten 60 s samples with the two host sidecars only and writes `eval/results/idle-baseline/rpi5-<UTC>/idle-baseline.json` with the median PMIC internal-rail proxy watts, the SUT-core busy fraction that proves the host was idle, and the throttle state. The baseline is diagnostic, never thesis evidence, and its only use is the idle subtraction in the proxy energy-per-message report.
+
 ## Run the targeted pre-final pilot
 
 The targeted pilot is a new diagnostic batch declared before launch. It covers:
