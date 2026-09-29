@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from canonical_power import read_measurement_window, read_message_count, render
-from wafer_analysis.power import clip_to_window, summarize_power
+from wafer_analysis.power import clip_to_window, measurement_label, summarize_power
 
 
 def test_external_subscriber_message_count_ignores_empty_gap_csv(
@@ -100,3 +100,40 @@ def test_power_report_writes_data_and_vector_figure(tmp_path: pathlib.Path) -> N
     assert (tmp_path / "power/pmic_proxy.pdf").stat().st_size > 1000
     assert (tmp_path / "power/pmic_proxy.png").stat().st_size > 1000
     assert "PMIC internal-rail proxy" in (tmp_path / "pmic-energy-summary.csv").read_text()
+
+
+def test_measurement_label_comes_from_the_leaf_power_boundary(tmp_path: pathlib.Path) -> None:
+    (tmp_path / "power-boundary.json").write_text(
+        '{"backend":"jetson","measurement":"jetson-ina3221-rail-proxy"}'
+    )
+    assert measurement_label(tmp_path) == "Jetson INA3221 rail proxy"
+    (tmp_path / "power-boundary.json").write_text('{"measurement":"unavailable"}')
+    with pytest.raises(ValueError, match="no power measurement"):
+        measurement_label(tmp_path)
+    (tmp_path / "power-boundary.json").unlink()
+    with pytest.raises(ValueError, match="malformed power boundary"):
+        measurement_label(tmp_path)
+
+
+def test_power_report_is_named_by_host_and_refuses_mixed_measurements(
+    tmp_path: pathlib.Path,
+) -> None:
+    row = {
+        "host": "jetson",
+        "experiment": "e-perf-1",
+        "system": "wafer",
+        "condition": "wafer",
+        "run": "run-01",
+        "measurement": "Jetson INA3221 rail proxy",
+        "mean_proxy_watts": 6.1,
+        "proxy_energy_j": 366.0,
+        "proxy_energy_per_message_j": 0.0061,
+    }
+    render(pd.DataFrame([row, {**row, "system": "native", "mean_proxy_watts": 5.8}]), tmp_path)
+    assert (tmp_path / "jetson-power-summary.csv").is_file()
+    assert (tmp_path / "power/jetson_power_proxy.pdf").stat().st_size > 1000
+    assert not (tmp_path / "pmic-energy-summary.csv").exists()
+
+    mixed = pd.DataFrame([row, {**row, "host": "rpi5", "measurement": "Raspberry Pi 5 PMIC internal-rail proxy"}])
+    with pytest.raises(ValueError, match="one power report per host and measurement"):
+        render(mixed, tmp_path / "mixed")

@@ -729,5 +729,94 @@ def test_cross_architecture_requires_x86_batch(fake_results: pathlib.Path):
         utils.require_cross_architecture(pi_batch, None)
 
 
+
+def write_host_approval(repo: pathlib.Path, host: str, **changes: object) -> pathlib.Path:
+    source = repo / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
+    approval = json.loads(source.read_text())
+    approval["canonical_matrix_sha256"] = hashlib.sha256(
+        (repo / "eval/canonical-matrix.json").read_bytes()
+    ).hexdigest()
+    approval.update({"host_tag": host, **changes})
+    path = repo / f".plans/{host}-final-experiment-readiness/full-run-approval.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(approval))
+    return path
+
+
+def test_each_host_batch_is_validated_against_its_own_approval(
+    fake_results: pathlib.Path,
+):
+    batch = fake_results / "eval/results/e-val-1/jetson-batch-a"
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="jetson")
+    with pytest.raises(ValueError, match="unapproved canonical batch"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+    write_host_approval(fake_results, "jetson")
+    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
+    assert utils.find_canonical_batch("e-val-1", "jetson-batch-a") == batch
+
+    write_host_approval(fake_results, "jetson", host_tag="rpi5")
+    with pytest.raises(ValueError, match="approval identifiers are invalid"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_host_batch_rejects_leaves_from_another_host(fake_results: pathlib.Path):
+    write_host_approval(fake_results, "x86")
+    batch = fake_results / "eval/results/e-val-1/x86-batch-a"
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="rpi5")
+    with pytest.raises(ValueError, match="non-x86 input"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_host_approval_can_come_from_its_own_environment_variable(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    batch = fake_results / "eval/results/e-val-1/x86-batch-a"
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="x86")
+    receipt = write_host_approval(fake_results, "x86")
+    explicit = fake_results / "x86-approval.json"
+    receipt.rename(explicit)
+    monkeypatch.setenv("WAFER_FULL_RUN_APPROVAL_X86", str(explicit))
+    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
+
+
+def test_canonical_batch_needs_a_known_host_prefix(fake_results: pathlib.Path):
+    batch = fake_results / "eval/results/e-val-1/laptop-batch-a"
+    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="laptop")
+    with pytest.raises(ValueError, match="no known host prefix"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_cross_architecture_validates_each_side_against_its_own_host(
+    fake_results: pathlib.Path,
+):
+    fake_results.joinpath("eval/canonical-matrix.json").write_text(
+        json.dumps(
+            {
+                "experiments": {
+                    "e-perf-5": {
+                        "conditions": ["delay-50ms"],
+                        "repetitions": 1,
+                        "required_outputs": ["percentiles.json"],
+                    }
+                }
+            }
+        )
+    )
+    refresh_approval_matrix_hash(fake_results)
+    write_host_approval(fake_results, "x86")
+    pi_batch = fake_results / "eval/results/e-perf-5/rpi5-batch-a"
+    x86_batch = fake_results / "eval/results/e-perf-5/x86-batch-a"
+    for batch, host in ((pi_batch, "rpi5"), (x86_batch, "x86")):
+        leaf = batch / "delay-50ms/run-01-attempt-01"
+        write_canonical_leaf(leaf, host=host)
+        metadata = json.loads((leaf / "metadata.json").read_text())
+        metadata["experiment"] = "e-perf-5"
+        (leaf / "metadata.json").write_text(json.dumps(metadata))
+    utils.require_cross_architecture(pi_batch, x86_batch)
+    with pytest.raises(ValueError, match="compares an rpi5 batch with an x86 batch"):
+        utils.require_cross_architecture(x86_batch, pi_batch)
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
