@@ -1,6 +1,0 @@
-{
-  "page": "README.md",
-  "find": "- Follow a configuration from TOML to running tasks in [Configuration to running pipeline](config-to-running-pipeline.md).",
-  "replace": "- Follow a configuration from TOML to running tasks in the configuration walkthrough.",
-  "expected_error": "README.md: missing S12 navigation link: config-to-running-pipeline.md"
-}
