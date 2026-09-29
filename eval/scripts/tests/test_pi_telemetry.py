@@ -234,8 +234,13 @@ def test_x86_backend_without_rapl_declares_power_unavailable_and_uses_hwmon_temp
 ) -> None:
     from pi_telemetry import X86_NO_POWER_BOUNDARY, make_backend, sample
 
+    _write(tmp_path / "sys/class/thermal/thermal_zone0/type", "acpitz\n")
+    _write(tmp_path / "sys/class/thermal/thermal_zone0/temp", "27800\n")
     _write(tmp_path / "sys/class/hwmon/hwmon2/name", "k10temp\n")
     _write(tmp_path / "sys/class/hwmon/hwmon2/temp1_input", "55125\n")
+    unreadable = tmp_path / "sys/class/powercap/intel-rapl:0"
+    _write(unreadable / "name", "package-0\n")
+    (unreadable / "energy_uj").mkdir()
     backend = make_backend("x86", tmp_path)
     assert backend.boundary is X86_NO_POWER_BOUNDARY
     summary, rails = sample(backend)
@@ -264,6 +269,8 @@ def test_sampler_writes_the_same_files_on_a_jetson_sysroot(tmp_path: Path) -> No
             str(ROOT / "eval/scripts/lib/pi_telemetry.py"),
             str(output),
             "0.05",
+            "--backend",
+            "jetson",
             "--sysroot",
             str(root),
         ]

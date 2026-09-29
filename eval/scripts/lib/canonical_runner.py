@@ -7022,15 +7022,28 @@ def capacity_scout_source_state(root: Path) -> dict:
     return {"git_sha": state["git_sha"], "git_dirty": state["git_dirty"], "git_tags": tags}
 
 
+_scout_backend: pi_telemetry.PiBackend | pi_telemetry.JetsonBackend | pi_telemetry.X86Backend | None = None
+
+
+def scout_telemetry_backend() -> pi_telemetry.PiBackend | pi_telemetry.JetsonBackend | pi_telemetry.X86Backend:
+    """One backend per process, so counters that need a previous sample keep it."""
+    global _scout_backend
+    if _scout_backend is None:
+        _scout_backend = pi_telemetry.make_backend("auto")
+    return _scout_backend
+
+
 def capacity_scout_current_snapshot(
     root: Path, ledger: Path, batch_started_epoch: float, evidence_root: Path | None = None
 ) -> dict:
     telemetry_available = True
     try:
-        backend = pi_telemetry.make_backend("auto")
+        backend = scout_telemetry_backend()
         temperature = pi_telemetry.read_temperature_millicelsius(
             backend.sysroot, backend.zone_types, backend.hwmon_names
         )
+        if temperature <= 0:
+            raise OSError("no readable thermal zone")
         throttled = backend.throttled() != pi_telemetry.NOT_THROTTLED
     except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
         telemetry_available = False

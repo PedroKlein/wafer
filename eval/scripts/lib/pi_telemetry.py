@@ -145,16 +145,11 @@ def read_governor(sysroot: Path = Path("/")) -> str:
     return "+".join(values) if values else "unknown"
 
 
-def thermal_zone(sysroot: Path, zone_types: tuple[str, ...]) -> Path | None:
-    zones = sorted(
+def thermal_zones(sysroot: Path) -> list[Path]:
+    return sorted(
         sysroot.glob("sys/class/thermal/thermal_zone[0-9]*"),
         key=lambda path: int(path.name[12:]),
     )
-    by_type = {read_text(zone / "type"): zone for zone in zones}
-    for zone_type in zone_types:
-        if zone_type in by_type:
-            return by_type[zone_type]
-    return zones[0] if zones else None
 
 
 def hwmon_dirs(sysroot: Path, names: tuple[str, ...]) -> list[Path]:
@@ -170,11 +165,20 @@ def read_temperature_millicelsius(
     zone_types: tuple[str, ...] = (),
     hwmon_names: tuple[str, ...] = (),
 ) -> int:
-    zone = thermal_zone(sysroot, zone_types)
-    if zone is not None:
-        return read_int(zone / "temp") or 0
+    """The first readable source: a zone of a wanted type, a wanted hwmon, any zone."""
+    zones = thermal_zones(sysroot)
+    by_type = {read_text(zone / "type"): zone for zone in zones}
+    candidates = [by_type[zone_type] for zone_type in zone_types if zone_type in by_type]
+    for zone in candidates:
+        value = read_int(zone / "temp")
+        if value is not None:
+            return value
     for hwmon in hwmon_dirs(sysroot, hwmon_names):
         value = read_int(hwmon / "temp1_input")
+        if value is not None:
+            return value
+    for zone in zones:
+        value = read_int(zone / "temp")
         if value is not None:
             return value
     return 0
@@ -260,7 +264,7 @@ class X86Backend:
             domain
             for domain in sysroot.glob("sys/class/powercap/intel-rapl:[0-9]*")
             if ":" not in domain.name.split("intel-rapl:", 1)[1]
-            and (domain / "energy_uj").is_file()
+            and read_int(domain / "energy_uj") is not None
         )
         self.boundary = X86_RAPL_BOUNDARY if self.domains else X86_NO_POWER_BOUNDARY
         self.previous: dict[str, tuple[int, int]] = {}
