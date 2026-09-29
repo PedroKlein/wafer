@@ -16,6 +16,7 @@ from wafer_analysis.canonical import (
     candidate_payload_table,
     candidate_swap_tables,
     backpressure_table,
+    bucket_band,
     branch_isolation_table,
     capacity_tables,
     ekuiper_profile_tables,
@@ -1563,3 +1564,13 @@ def test_startup_cold_minus_warm_pairs_runs_by_index() -> None:
     assert row["median_cold_minus_warm_ns"] == pytest.approx(5_000_000)
     assert (row["difference_ci95_low_ns"], row["difference_ci95_high_ns"]) == pytest.approx((5_000_000, 5_000_000))
     assert row["hodges_lehmann_shift_ns"] == pytest.approx(5_000_000)
+
+
+def test_bucket_band_summarises_each_bucket_across_runs() -> None:
+    band = bucket_band([-100_000_000, 0, 100_000_000], [[100, 50, 90], [100, 70, 100], [100, 60, 95]])
+    assert band["offset_s"].tolist() == [-0.1, 0.0, 0.1]
+    assert band["median"].tolist() == [100, 60, 95]
+    assert band.loc[1, "p25"] == 55 and band.loc[1, "p75"] == 65
+    assert band["N_runs"].eq(3).all()
+    with pytest.raises(ValueError, match="one value per bucket"):
+        bucket_band([0, 1], [[1, 2], [1]])

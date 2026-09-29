@@ -1803,6 +1803,23 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+def bucket_band(offsets_ns: list[int], runs: list[list[float]]) -> pd.DataFrame:
+    """Per-bucket median and IQR across runs of an event-aligned rate series."""
+    if not runs or any(len(run) != len(offsets_ns) for run in runs):
+        raise ValueError("every run needs one value per bucket")
+    values = np.asarray(runs, dtype=float)
+    p25, median, p75 = np.percentile(values, [25, 50, 75], axis=0)
+    return pd.DataFrame(
+        {
+            "offset_s": np.asarray(offsets_ns, dtype=float) / 1e9,
+            "N_runs": len(runs),
+            "median": median,
+            "p25": p25,
+            "p75": p75,
+        }
+    )
+
+
 def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     if canonical and len(records) != 1:
         raise ValueError("E-Swap-5 requires one independent run")
