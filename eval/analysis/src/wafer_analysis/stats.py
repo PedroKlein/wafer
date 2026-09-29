@@ -55,3 +55,78 @@ def cliffs_delta(a: np.ndarray, b: np.ndarray) -> tuple[float, str]:
 
     return float(delta), magnitude
 
+
+
+def _percentile_interval(estimates: np.ndarray, ci: float) -> tuple[float, float]:
+    alpha = (1 - ci) / 2
+    return (
+        float(np.percentile(estimates, alpha * 100)),
+        float(np.percentile(estimates, (1 - alpha) * 100)),
+    )
+
+
+def _cliffs_delta_value(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.mean(np.sign(a[:, None] - b[None, :])))
+
+
+def cliffs_delta_ci(
+    a: np.ndarray, b: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+) -> tuple[float, float]:
+    """Percentile bootstrap interval for Cliff's delta, resampling each group independently."""
+    _require_samples(a, b)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    rng = np.random.default_rng(seed)
+    deltas = np.array(
+        [
+            _cliffs_delta_value(rng.choice(a, size=len(a)), rng.choice(b, size=len(b)))
+            for _ in range(n_resamples)
+        ]
+    )
+    return _percentile_interval(deltas, ci)
+
+
+def _walsh_median(values: np.ndarray) -> float:
+    upper = np.triu_indices(len(values))
+    return float(np.median((values[:, None] + values[None, :])[upper] / 2))
+
+
+def hodges_lehmann(
+    differences: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+) -> tuple[float, float, float]:
+    """One-sample Hodges-Lehmann shift of paired differences with a percentile bootstrap interval.
+
+    Returns (estimate, lower_bound, upper_bound).
+    """
+    _require_samples(differences)
+    differences = np.asarray(differences, dtype=float)
+    rng = np.random.default_rng(seed)
+    shifts = np.array(
+        [
+            _walsh_median(rng.choice(differences, size=len(differences)))
+            for _ in range(n_resamples)
+        ]
+    )
+    return (_walsh_median(differences), *_percentile_interval(shifts, ci))
+
+
+def pooled_ratio_ci(
+    numerators: np.ndarray,
+    denominators: np.ndarray,
+    n_resamples: int = 10000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float]:
+    """Percentile bootstrap interval for sum(numerators) / sum(denominators), resampling runs.
+
+    Runs are the independent unit, so a burst of loss inside one run widens the
+    interval instead of counting as thousands of independent trials.
+    """
+    _require_samples(numerators, denominators)
+    numerators = np.asarray(numerators, dtype=float)
+    denominators = np.asarray(denominators, dtype=float)
+    if numerators.shape != denominators.shape or np.any(denominators <= 0):
+        raise ValueError("a pooled ratio needs one positive denominator per numerator")
+    rng = np.random.default_rng(seed)
+    indices = rng.integers(0, len(numerators), size=(n_resamples, len(numerators)))
+    ratios = numerators[indices].sum(axis=1) / denominators[indices].sum(axis=1)
+    return _percentile_interval(ratios, ci)

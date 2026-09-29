@@ -12,7 +12,7 @@ import pandas as pd
 
 from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
 from .rollback import validate_swap5_artifacts
-from .stats import bootstrap_ci, cliffs_delta
+from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
 
 FINAL_VISUAL_MANIFEST = (
     {
@@ -214,9 +214,14 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         low, high = bootstrap_ci(values)
         achieved_low, achieved_high = bootstrap_ci(achieved)
         delta, magnitude = cliffs_delta(values, reference)
+        delta_low, delta_high = cliffs_delta_ci(values, reference)
         intended = sum(int(run["intended_messages"]) for run in condition_runs)
         received = sum(int(run["received_unique"]) for run in condition_runs)
         pooled_loss = (intended - received) / intended
+        loss_low, loss_high = pooled_ratio_ci(
+            [max(0, int(run["intended_messages"]) - int(run["received_unique"])) for run in condition_runs],
+            [int(run["intended_messages"]) for run in condition_runs],
+        )
         mean_achieved_ratio = float(
             np.mean([run["achieved_ratio"] for run in condition_runs])
         )
@@ -238,6 +243,8 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "achieved_ci95_low_msg_s": achieved_low,
                 "achieved_ci95_high_msg_s": achieved_high,
                 "pooled_loss": pooled_loss,
+                "pooled_loss_ci95_low": loss_low,
+                "pooled_loss_ci95_high": loss_high,
                 "mean_achieved_ratio": mean_achieved_ratio,
                 "total_duplicates": total_duplicates,
                 "delivery_good": pooled_loss <= 0.01
@@ -247,9 +254,11 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "median_ratio_vs_reference": float(np.median(values))
                 / reference_median,
                 "cliffs_delta_vs_reference": delta,
+                "cliffs_delta_ci95_low": delta_low,
+                "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,
                 "units": "nanoseconds, messages/second, fraction, messages",
-                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss; mean achieved ratio",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI",
                 "threshold": "median(WAFER p95) / median(eKuiper p95) <= 2.0; pooled loss <= 0.01; mean achieved/offered >= 0.99; zero duplicates",
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
                 "thesis_evidence": True,
@@ -267,7 +276,9 @@ def metering_table(records: list[dict]) -> pd.DataFrame:
         values = np.asarray([run["p95_ns"] for run in grouped[condition]], dtype=float)
         low, high = bootstrap_ci(values)
         delta, magnitude = cliffs_delta(values, reference)
+        delta_low, delta_high = cliffs_delta_ci(values, reference)
         paired_difference = values - reference
+        shift, shift_low, shift_high = hodges_lehmann(paired_difference)
         paired_ratio = values / reference
         difference_low, difference_high = bootstrap_ci(paired_difference)
         ratio_low, ratio_high = bootstrap_ci(paired_ratio)
@@ -285,10 +296,15 @@ def metering_table(records: list[dict]) -> pd.DataFrame:
                 "median_p95_ratio": float(np.median(paired_ratio)),
                 "ratio_ci95_low": ratio_low,
                 "ratio_ci95_high": ratio_high,
+                "hodges_lehmann_shift_ns": shift,
+                "shift_ci95_low_ns": shift_low,
+                "shift_ci95_high_ns": shift_high,
                 "cliffs_delta_vs_neither": delta,
+                "cliffs_delta_ci95_low": delta_low,
+                "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,
                 "units": "nanoseconds",
-                "estimator": "median run p95 difference and ratio with bootstrap 95% CI",
+                "estimator": "median run p95 difference and ratio with bootstrap 95% CI; Hodges-Lehmann shift of the paired differences and Cliff's delta, each with bootstrap 95% CI",
                 "claim_boundary": "run-level metering ablation; no per-message inference",
                 "thesis_evidence": True,
             }
