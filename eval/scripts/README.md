@@ -7,7 +7,7 @@ Entry points of the evaluation harness. The Python modules they share live in
 
 | File | Role |
 |---|---|
-| `run-rpi5-canonical.sh` | Entry point for every host despite its name: `mise run plan-campaign` / `run-campaign` / `campaign-status` with `--host rpi5\|jetson\|x86`. Wraps `lib/canonical_runner.py`. |
+| `run-rpi5-canonical.sh` | Entry point for every host despite its name: `mise run plan-campaign` / `run-campaign` / `campaign-status` / `approve-batch` with `--host rpi5\|jetson\|x86`. Wraps `lib/canonical_runner.py`. |
 | `run-experiment.sh` | One run: result directory, broker, load generator, runtime, metadata. Called per leaf by the runner. |
 | `validate-canonical.py` | `matrix`, `preflight`, `host`: checks `eval/canonical-matrix.json` and gathers host facts. |
 | `verify-result-contract.py` | Checks every artifact of a result leaf against `eval/RESULT-CONTRACT.md`. |

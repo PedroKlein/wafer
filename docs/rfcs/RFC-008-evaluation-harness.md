@@ -9,7 +9,7 @@
 
 The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
-The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, targeted-pilot, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; a post-rehearsal selection receipt must record `include`, `defer`, or `reject` first.
+The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; a post-rehearsal selection receipt must record `include`, `defer`, or `reject` first.
 
 ## Measurement boundary
 
@@ -141,7 +141,7 @@ The retained 5 V / 4.2 A supply is admitted empirically. It receives no threshol
 
 ## Reproducibility
 
-A final leaf contains clean tagged provenance, config and binary identities, thermal/throttle state, experiment-specific artifacts, and a passed completion receipt. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites a passed attempt.
+A final leaf contains clean source provenance (one commit SHA for the whole batch), config and binary identities, thermal/throttle state, experiment-specific artifacts, and a passed completion receipt. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites a passed attempt.
 
 Use these gates before interpreting a batch:
 
@@ -151,7 +151,7 @@ python3 -m pytest -q eval/scripts/tests
 python3 eval/scripts/verify-result-contract.py --canonical <result-directory>
 ```
 
-Canonical notebook resolution also requires the human approval receipt described by `eval/analysis/notebooks/README.md`.
+Canonical notebook resolution also requires the batch's entry in `eval/final-batches.json`. `mise run approve-batch` writes that entry after checking the finished batch, as described by `eval/analysis/notebooks/README.md`.
 
 ## Related documents
 
@@ -278,7 +278,7 @@ Published alongside thesis: git repository, raw results tarball (Zenodo), exact 
 
 ### Decision 13: Cross-Architecture — Same Source Revision, Ratio Reporting
 
-Build equivalent release binaries from the same tagged source revision for ARM64 (Raspberry Pi 5) and x86-64. Report overhead RATIO (Wasm/Native) — dimensionless, portable across hardware. Target: |ARM ratio – x86 ratio| < 5 percentage points.
+Build equivalent release binaries from the same clean source revision for ARM64 (Raspberry Pi 5) and x86-64. Report overhead RATIO (Wasm/Native) — dimensionless, portable across hardware. Target: |ARM ratio – x86 ratio| < 5 percentage points.
 
 ### Decision 14: Memory Measurement — `/proc/self/statm` at 1Hz
 

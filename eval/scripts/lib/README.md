@@ -7,7 +7,7 @@ imports `backpressure`, `rollback` and `results_layout` from
 
 | Module | Role | Imported by |
 |---|---|---|
-| `canonical_runner.py` | The resumable campaign driver: schedule, capacity scout and knee, swaps, per-leaf runs, verification. | `run-rpi5-canonical.sh` |
+| `canonical_runner.py` | The resumable campaign driver: schedule, capacity scout and knee, swaps, per-leaf runs, verification, batch approval. | `run-rpi5-canonical.sh` |
 | `interval_metrics.py` | Builds and validates `interval-metrics.json` from the telemetry CSVs. | runner, verifier, `run-experiment.sh` |
 | `write_metadata.py` | Merges run metadata, runtime provenance and hardware facts into `metadata.json`. | runner, `run-experiment.sh` |
 | `write_throughput.py` | Writes `throughput.csv` from the bench sink output. | runner, `run-experiment.sh` |

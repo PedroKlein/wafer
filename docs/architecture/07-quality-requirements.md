@@ -46,7 +46,7 @@ A sink-observed gap, HTTP duration, and internal swap phases are separate measur
 - Bootstrap confidence intervals and non-parametric effects use run-level values.
 - Canonical analysis rejects incomplete, dirty, mixed-SHA, throttled, malformed, or unapproved batches.
 - Raspberry Pi 5 PMIC telemetry is an internal-rail proxy, not total board or USB-C input power.
-- Scout, v11-v17, targeted-pilot, laptop, and synthetic fixture data remain diagnostic and are not pooled with final evidence.
+- Scout, v11-v17, diagnostic-batch, laptop, and synthetic fixture data remain diagnostic and are not pooled with final evidence.
 
 ## Supporting documents
 

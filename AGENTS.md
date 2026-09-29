@@ -98,7 +98,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/status/migration-audit.md` | Historical row-per-decision audit of the runtime-migration plan closure. |
 | `docs/benchmarks/README.md` | Which benchmark pages are current and which are historical diagnostics. `rq-summary.md`, `binary-sizes.md`, `methodology-validation.md`, `rq2-attacks.md` and `ekuiper-tail-diagnostic.md` are archived shakedown records, not results. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phase timing reference. |
-| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for the campaign: gates, pilot, launch, resume, analysis. |
+| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for the campaign: gates, diagnostic batch, launch, resume, approval, analysis. |
 | `docs/eval/pi5-host-setup.md`, `jetson-host-setup.md`, `x86-host-setup.md` | Host preparation for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. |
 | `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`) and the glibc each binary needs. |
 | `eval/canonical-matrix.json` | **Executable source** of the campaign: experiments, repetitions, rates, host profiles. |
@@ -194,14 +194,15 @@ Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/
 
 ### Evaluation Campaign
 
-Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`). The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`), and `approve-batch`, which runs on the analysis machine against the results volume. The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
 
 ```bash
 mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts
 mise run plan-campaign -- --host rpi5                # Print the schedule (no runs)
 mise run run-campaign -- --host rpi5 --batch-id ID   # Run or resume a batch
-mise run run-campaign -- --host rpi5 --batch-id ID --repetitions 3   # Diagnostic pilot, never thesis evidence
+mise run run-campaign -- --host rpi5 --batch-id ID --repetitions 3   # Diagnostic batch, never thesis evidence
 mise run campaign-status -- --host rpi5 --batch-id ID
+mise run approve-batch -- --host rpi5 --batch-id ID  # Check a finished final batch, record it in eval/final-batches.json
 mise run idle-baseline-pi5                           # Diagnostic idle-power baseline
 mise run instrument-ab-pi5                           # Cost of the host telemetry sidecars
 ```

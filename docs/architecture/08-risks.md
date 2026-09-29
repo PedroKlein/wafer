@@ -20,7 +20,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Mitigation:** Runtime fuel and epoch limits default to `None`; final configs set the protected values explicitly. Parsed-config tests enumerate final WAFER leaves, and metadata records the effective fuel budgets, epoch deadline/tick, and metering mode.
 
-**Residual:** A source/config change after the release tag invalidates the receipt and requires a new tag plus targeted validation.
+**Residual:** A source or config change after the diagnostic batch is a new commit. It needs a new diagnostic batch, and the runner refuses to resume a batch from another commit.
 
 ## R3: attack containment fails outside the measured boundary
 
@@ -100,7 +100,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, and never overwrites passed attempts. Retrieval is additive and verified path-for-path with SHA-256 manifests.
 
-**Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or targeted-pilot outcomes.
+**Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or diagnostic-batch outcomes.
 
 ## R11: tested-grid bounds are reported as exact capacity
 

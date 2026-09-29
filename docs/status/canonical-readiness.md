@@ -9,7 +9,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - Capacity grid: `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper, with 30 runs per system/rate.
 - Metering: ordinary WAFER leaves explicitly use fuel plus epoch; runtime defaults remain unmetered.
 - E-Swap-3: actual-t0-aligned event series implemented; `disruption-timeline.json` is the only final action timeline, while `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected.
-- E-Swap-4: true source-driven burst and one swap/run implemented; source-origin primary/drain sink accounting is pending a fresh targeted Pi validation.
+- E-Swap-4: true source-driven burst and one swap/run implemented; source-origin primary/drain sink accounting is pending the `--repetitions 3` diagnostic batch on the Pi.
 - E-Swap-5: final leaves require request, rollback, sequence, and `post-rollback-continuity.json`; a successful-v2 sink timeline is forbidden after rollback.
 - E-Backpressure: separate `slow`, `drop`, and `dead-letter` conditions with policy-specific accounting are implemented; final evidence remains pending.
 - E-Perf-9: Linux filesystem page-cache method; disk compiled-component cache disabled.
@@ -17,16 +17,16 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.
 - Final campaign: not approved and not started (`campaign_started=false`).
 
-No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, and targeted-pilot results are diagnostic and are not pooled with the final N=30 batch. The laptop shakedown scripts (`run-e-*-shakedown.sh`, `run-e-iso-7-8.sh`) the Docker eKuiper stack and the shakedown-only configs under `eval/configs/e-perf-4/` and `eval/configs/e-perf-6/` named in the archived per-experiment log no longer exist; every experiment runs through `eval/scripts/run-rpi5-canonical.sh` with the configs listed in `eval/canonical-matrix.json`.
+No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, and diagnostic-batch results are diagnostic and are not pooled with the final N=30 batch. The laptop shakedown scripts (`run-e-*-shakedown.sh`, `run-e-iso-7-8.sh`) the Docker eKuiper stack and the shakedown-only configs under `eval/configs/e-perf-4/` and `eval/configs/e-perf-6/` named in the archived per-experiment log no longer exist; every experiment runs through `eval/scripts/run-rpi5-canonical.sh` with the configs listed in `eval/canonical-matrix.json`.
 
 ## Remaining admission path
 
 1. Synchronize WAFER and thesis methodology documents.
 2. Render and review the pre-final analysis preview.
-3. Create a clean tagged release and source-bound schedule receipt.
-4. Run the reduced targeted Pi pilot and verify additive retrieval.
+3. Verify one clean commit locally and deploy it.
+4. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
 5. Obtain all-PASS independent readiness review.
-6. Obtain explicit human approval. Approval authorizes a later launch and retains `campaign_started=false`.
+6. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
 
 ## Current claim boundaries
 
