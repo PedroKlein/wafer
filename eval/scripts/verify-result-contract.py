@@ -1232,7 +1232,7 @@ def _focused_leaf_identity(leaf: Path, experiment: str) -> tuple[str, int] | Non
         batch_index = next(
             index
             for index in range(experiment_index + 1, len(parts))
-            if parts[index].startswith(tuple(f"{tag}-" for tag in HOST_PROFILES))
+            if parts[index].startswith("rpi5-")
         )
     except (ValueError, StopIteration):
         return None
@@ -1965,6 +1965,44 @@ def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
     }
 
 
+def batch_host(leaf: Path) -> str | None:
+    """The host named by the nearest `<host>-` directory of a leaf, if any.
+
+    Canonical leaves sit under a `<host>-<batch>` directory; a single-run
+    leaf from run-experiment.sh is itself named `<host>-<timestamp>`.
+    """
+    for part in reversed(leaf.parts):
+        for tag in HOST_PROFILES:
+            if part.startswith(f"{tag}-"):
+                return tag
+    return None
+
+
+def host_telemetry_violations(leaf: Path, profile) -> list[str]:
+    violations = []
+    boundary_path = leaf / "power-boundary.json"
+    if boundary_path.is_file():
+        try:
+            measurement = json.loads(boundary_path.read_text()).get("measurement")
+        except (OSError, ValueError, AttributeError) as exc:
+            return [f"power-boundary.json unreadable: {exc}"]
+        if measurement != profile.power_measurement:
+            violations.append(
+                f"{profile.tag} power measurement is {measurement!r}, expected {profile.power_measurement!r}"
+            )
+    telemetry_path = leaf / "pi-telemetry.csv"
+    if telemetry_path.is_file():
+        try:
+            with telemetry_path.open(newline="") as stream:
+                states = {row.get("throttled") for row in csv.DictReader(stream)}
+        except (OSError, csv.Error) as exc:
+            return [*violations, f"pi-telemetry.csv unreadable: {exc}"]
+        throttled = sorted(str(state) for state in states - {profile.throttled})
+        if throttled:
+            violations.append(f"host telemetry recorded throttling during the run: {throttled}")
+    return violations
+
+
 def check_leaf(
     leaf: Path,
     experiment: str,
@@ -2016,11 +2054,17 @@ def check_leaf(
                     violations.append(message)
                 else:
                     warnings.append(message)
-            if leaf.name.startswith("rpi5-") or canonical:
-                profile = HOST_PROFILES.get(str(metadata.get("host_tag")), HOST_PROFILES["rpi5"])
+            directory_host = batch_host(leaf) if canonical else batch_host(Path(leaf.name))
+            if directory_host is not None or canonical:
+                profile = HOST_PROFILES[
+                    directory_host
+                    or (metadata.get("host_tag") if metadata.get("host_tag") in HOST_PROFILES else "rpi5")
+                ]
                 violations.extend(
                     f"{profile.tag} metadata: {error}" for error in profile.fact_errors(metadata)
                 )
+                if canonical:
+                    violations.extend(host_telemetry_violations(leaf, profile))
                 if not re.fullmatch(r"[0-9a-f]{40}", str(metadata.get("git_sha", ""))):
                     violations.append("Pi 5 metadata lacks a source commit SHA")
                 if not isinstance(metadata.get("git_dirty"), bool):

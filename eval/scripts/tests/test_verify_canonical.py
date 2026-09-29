@@ -13,6 +13,13 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER = ROOT / "eval/scripts/verify-result-contract.py"
+FIXTURE_CONTENT = {
+    "power-boundary.json": '{"backend":"pi","measurement":"rpi5-pmic-internal-rail-proxy"}\n',
+    "pi-telemetry.csv": (
+        "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,rail_proxy_watts\n"
+        "100,50000,2400000000,performance,0x0,4.0\n"
+    ),
+}
 SPEC = importlib.util.spec_from_file_location("verify_result_contract", VERIFIER)
 assert SPEC is not None and SPEC.loader is not None
 CONTRACT = importlib.util.module_from_spec(SPEC)
@@ -256,7 +263,7 @@ def make_result(root: Path) -> Path:
         "pmic-rails.csv",
         "power-boundary.json",
     ):
-        (result / name).write_text("fixture\n")
+        (result / name).write_text(FIXTURE_CONTENT.get(name, "fixture\n"))
     (result / "measurement-window.json").write_text(
         '{"started_ns":100,"finished_ns":200}\n'
     )
@@ -355,7 +362,7 @@ def make_focused_result(root: Path, experiment: str, condition: str, system: str
         "power-boundary.json",
         *required,
     }:
-        (result / name).write_text("fixture\n")
+        (result / name).write_text(FIXTURE_CONTENT.get(name, "fixture\n"))
     (result / "measurement-window.json").write_text('{"started_ns":100,"finished_ns":200}\n')
     metadata = {
         "experiment": experiment,
@@ -774,7 +781,7 @@ def test_canonical_static_density_result_accepts_release_component_sizes() -> No
             "pmic-rails.csv",
             "power-boundary.json",
         ):
-            (result / name).write_text("fixture\n")
+            (result / name).write_text(FIXTURE_CONTENT.get(name, "fixture\n"))
         (result / "measurement-window.json").write_text(
             '{"started_ns":100,"finished_ns":200}\n'
         )
@@ -1556,7 +1563,7 @@ def complete_candidate_swap_leaf(leaf: Path, metadata: dict) -> None:
         "pmic-rails.csv",
         "power-boundary.json",
     ):
-        (leaf / name).write_text("fixture\n")
+        (leaf / name).write_text(FIXTURE_CONTENT.get(name, "fixture\n"))
     (leaf / "metadata.json").write_text(json.dumps(metadata))
     (leaf / "measurement-window.json").write_text(
         '{"started_ns":100,"finished_ns":200}\n'
@@ -2346,7 +2353,11 @@ def _set_metadata(leaf: Path, **changes: object) -> None:
 
 
 def test_canonical_leaf_is_checked_against_its_own_host_profile(tmp_path: Path) -> None:
-    leaf = make_result(tmp_path)
+    pi_leaf = make_result(tmp_path)
+    jetson_batch = pi_leaf.parents[1].with_name("jetson-2026-08-30T00-00-00Z")
+    pi_leaf.parents[1].rename(jetson_batch)
+    leaf = jetson_batch / "120b" / "run-01"
+    (leaf / "power-boundary.json").write_text('{"measurement":"jetson-ina3221-rail-proxy"}')
     _set_metadata(
         leaf,
         host_tag="jetson",
@@ -2362,6 +2373,34 @@ def test_canonical_leaf_is_checked_against_its_own_host_profile(tmp_path: Path) 
     assert completed.returncode == 1
     assert "jetson metadata: power_mode must be one of ['25W'], got 'MAXN_SUPER'" in completed.stdout
 
-    _set_metadata(leaf, host_tag="laptop")
+    _set_metadata(leaf, power_mode="25W", host_tag="rpi5")
     completed = run(leaf.parents[1])
-    assert "rpi5 metadata: host tag must be 'rpi5', got 'laptop'" in completed.stdout
+    assert "jetson metadata: host tag must be 'jetson', got 'rpi5'" in completed.stdout
+
+    _set_metadata(leaf, host_tag="jetson")
+    (leaf / "power-boundary.json").write_text('{"measurement":"unavailable"}')
+    completed = run(leaf.parents[1])
+    assert "jetson power measurement is 'unavailable'" in completed.stdout
+
+
+def test_canonical_leaf_rejects_throttling_seen_by_any_telemetry_sample(tmp_path: Path) -> None:
+    leaf = make_result(tmp_path)
+    telemetry = leaf / "pi-telemetry.csv"
+    rows = telemetry.read_text().splitlines()
+    header = rows[0].split(",")
+    sample = dict(zip(header, rows[1].split(",")))
+    sample["throttled"] = "cpu1-thermal-throttle"
+    telemetry.write_text("\n".join([*rows, ",".join(sample[key] for key in header)]) + "\n")
+    completed = run(leaf.parents[1])
+    assert completed.returncode == 1
+    assert "host telemetry recorded throttling during the run: ['cpu1-thermal-throttle']" in completed.stdout
+
+
+def test_host_named_single_run_leaf_is_checked_against_that_host(tmp_path: Path) -> None:
+    import shutil
+
+    source = make_result(tmp_path / "source")
+    leaf = tmp_path / "e-perf-4" / "jetson-2026-08-30T00-00-00Z"
+    shutil.copytree(source, leaf)
+    completed = run(leaf, canonical=False)
+    assert "jetson metadata: host tag must be 'jetson', got 'rpi5'" in completed.stdout
