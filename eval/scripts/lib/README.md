@@ -12,7 +12,7 @@ imports `backpressure`, `rollback` and `results_layout` from
 | `write_metadata.py` | Merges run metadata, runtime provenance and hardware facts into `metadata.json`. | runner, `run-experiment.sh` |
 | `write_throughput.py` | Writes `throughput.csv` from the bench sink output. | runner, `run-experiment.sh` |
 | `pi_telemetry.py` | Background sampler for thermal, governor and PMIC rail CSVs. | runner, `run-experiment.sh`, `host_characterization.py` |
-| `containment.py` | Per-attack containment verdict from `per_node_metrics.csv`. | runner, verifier |
+| `containment.py` | Per-attack containment verdict from `per_node_metrics.csv`. | runner |
 | `latency_evidence.py` | Rejection rules for `measurement-window.json`. | runner, verifier |
 | `host_characterization.py` | Eight-phase host load ladder. | `characterize-rpi5-host.sh` |
 | `attack_evidence.py` | Manifest and validation helpers for the attack bundle. | `run-attack-evidence.py` |
