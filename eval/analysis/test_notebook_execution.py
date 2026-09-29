@@ -564,6 +564,7 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq3-rollback.csv").is_file()
     assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-validation-gate.csv").is_file()
+    assert "\\label{tab:rq1-validation-gate}" in (rendered / "rq1-validation-gate.tex").read_text()
     assert (rendered / "rq1/density.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-density.csv").is_file()
     assert (rendered / "rq1/core-utilisation.pdf").stat().st_size > 1_000

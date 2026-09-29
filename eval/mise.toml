@@ -51,11 +51,12 @@ done
 '''
 
 [tasks.figures]
-description = "Execute the notebooks and write the thesis figures and tables under eval/analysis/figures/"
+description = "Execute the notebooks and write the thesis figures and tables under eval/analysis/figures/: mise run //eval:figures [batch-id]"
 dir = "{{config_root}}/analysis"
 run = '''
 set -euo pipefail
 export WAFER_ANALYSIS_OUTPUT_DIR="$PWD/figures"
+if [ -n "${1:-}" ]; then export WAFER_EVAL_BATCH_ID="$1"; fi
 for nb in notebooks/*.ipynb; do
   echo "=== executing $(basename "$nb") ==="
   uv run jupyter nbconvert --to notebook --execute --inplace "$nb"
