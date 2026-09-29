@@ -109,6 +109,9 @@ def build_complete_fixture(root: Path) -> None:
                     "p999_ns": p50 + 80_000,
                 },
             )
+            (leaf / "sequence.csv").write_text(
+                "total_expected,total_received,gap_msgs,duplicates_count\n60000,60000,0,0\n"
+            )
             if experiment == "e-perf-6":
                 (leaf / "memory.csv").write_text(
                     "elapsed_ms,rss_bytes\n0,60000000\n30000,67108864\n31000,67108864\n"
@@ -427,6 +430,8 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq2/containment.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-containment.csv").is_file()
     assert "N=12" in output_by_name["06-fault-injection.ipynb"]
+    assert (rendered / "rq1/payload-boundary.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-payload-boundary.csv").is_file()
     assert (rendered / "rq1/depth-scaling.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-depth-latency-slope.csv").is_file()
     assert (rendered / "rq1/depth-rss.pdf").stat().st_size > 1_000

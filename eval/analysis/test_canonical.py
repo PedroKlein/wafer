@@ -23,6 +23,7 @@ from wafer_analysis.canonical import (
     capacity_competitive_decision,
     depth_tables,
     metering_table,
+    payload_table,
     recovery_table,
     swap3_table,
     swap4_table,
@@ -1359,3 +1360,41 @@ def test_depth_tables_require_every_depth_at_full_n_unless_diagnostic() -> None:
     assert len(per_depth) == 2 and not fit["thesis_evidence"].any()
     per_depth, fit = depth_tables(depth_records(runs=2, depths=(1,)), "p50_ns", units="nanoseconds", canonical=False)
     assert len(per_depth) == 1 and fit.empty
+
+
+def payload_records(runs: int = 30, sizes: tuple[str, ...] = ("120b", "1kb", "10kb", "100kb")) -> list[dict]:
+    base = {"120b": 30_000, "1kb": 31_000, "10kb": 38_000, "100kb": 95_000}
+    return [
+        {
+            "condition": size,
+            "run_index": run,
+            "p50_ns": base[size] + run % 5 * 100,
+            "p95_ns": base[size] * 2,
+            "p99_ns": base[size] * 3,
+            "total_expected": 60_000,
+            "total_received": 60_000 - (run == 1),
+            "duplicates": 0,
+        }
+        for size in sizes
+        for run in range(1, runs + 1)
+    ]
+
+
+def test_payload_table_contrasts_each_size_with_the_120_byte_baseline() -> None:
+    table = payload_table(payload_records()).set_index("condition")
+    assert table["payload_bytes"].tolist() == [120, 1_024, 10_240, 102_400]
+    assert pd.isna(table.loc["120b", "p50_shift_vs_120b_ns"])
+    assert table.loc["100kb", "p50_shift_vs_120b_ns"] == pytest.approx(65_000)
+    assert table.loc["100kb", "cliffs_delta_vs_120b"] == 1.0
+    assert table.loc["10kb", "below_per_hop_reference"]
+    assert not table.loc["100kb", "below_per_hop_reference"]
+    assert table.loc["1kb", "pooled_loss"] == pytest.approx(1 / (30 * 60_000))
+    assert "bounds the hop cost from above" in table.loc["1kb", "claim_boundary"]
+
+
+def test_payload_table_requires_full_n_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        payload_table(payload_records(sizes=("120b", "1kb", "10kb")))
+    table = payload_table(payload_records(runs=2, sizes=("1kb",)), canonical=False)
+    assert len(table) == 1 and pd.isna(table["cliffs_delta_vs_120b"].iloc[0])
+    assert not table["thesis_evidence"].any()
