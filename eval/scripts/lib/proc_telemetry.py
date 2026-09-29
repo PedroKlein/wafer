@@ -179,21 +179,33 @@ def read_frequency_hz(cpu: int) -> int | None:
 
 
 class ProcessTracker:
-    """Keeps the pid to comm map so each second only new pids cost a read."""
+    """Keeps the pid to comm map so most seconds only new pids cost a read.
+
+    A pid seen between fork and exec still carries the wrapper's name (the
+    runner launches the SUT through taskset), so untracked pids are re-read
+    every RECHECK_EVERY samples instead of being written off for good.
+    """
+
+    RECHECK_EVERY = 5
 
     def __init__(self, comms: frozenset[str] = TRACKED_COMMS) -> None:
         self.comms = comms
         self.known: dict[int, str | None] = {}
+        self.calls = 0
 
     def tracked_pids(self) -> list[int]:
         try:
             live = {int(name) for name in os.listdir(PROC) if name.isdigit()}
         except OSError:
             return []
+        recheck = self.calls % self.RECHECK_EVERY == 0
+        self.calls += 1
         for pid in list(self.known):
             if pid not in live:
                 del self.known[pid]
-        for pid in live - self.known.keys():
+        for pid in live:
+            if pid in self.known and (self.known[pid] is not None or not recheck):
+                continue
             text = read_text(PROC / str(pid) / "comm")
             comm = text.strip() if text is not None else None
             self.known[pid] = comm if comm in self.comms else None
@@ -310,8 +322,22 @@ class Sampler:
         }
 
 
+def write_error(output_dir: Path, error: BaseException) -> None:
+    (output_dir / "host-sidecar-error.json").write_text(
+        json.dumps({"error": f"{type(error).__name__}: {error}", "timestamp_ns": time.time_ns()}) + "\n"
+    )
+
+
 def run(output_dir: Path, interval_secs: float, pin_cpus: str, sut_cpus: str) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        return sample_until_stopped(output_dir, interval_secs, pin_cpus, sut_cpus)
+    except Exception as error:
+        write_error(output_dir, error)
+        return 1
+
+
+def sample_until_stopped(output_dir: Path, interval_secs: float, pin_cpus: str, sut_cpus: str) -> int:
     sampler = Sampler(output_dir, interval_secs, pin_cpus, sut_cpus)
     stop = False
 
