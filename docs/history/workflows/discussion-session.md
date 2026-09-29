@@ -9,7 +9,7 @@
 >
 > **Status:** Phase 0 is COMPLETE (8 sessions done). This workflow is retained for
 > reference and for any future design sessions that may be needed. The decision
-> documents produced by these sessions now live under [`../rfcs/`](../rfcs/) as
+> documents produced by these sessions now live under [`docs/rfcs/`](../../rfcs/) as
 > `RFC-NNN-<slug>.md` files.
 
 ---
@@ -150,7 +150,7 @@ Steps:
 1. **Check previous sessions** — do any decisions here amend/contradict prior session docs?
 2. **Check future sessions** — how do these decisions change the context for upcoming sessions?
 3. **Update ROADMAP / task plan context** — mark completed decisions, adjust future-session context, and record cross-session dependencies in `ROADMAP.md` or the active `plan_tasks` plan
-4. **Write RFC** — `docs/rfcs/RFC-NNN-<topic>.md` with full rationale, code sketches, sources consulted (see the RFC template in [`../rfcs/README.md`](../rfcs/README.md))
+4. **Write RFC** — `docs/rfcs/RFC-NNN-<topic>.md` with full rationale, code sketches, sources consulted (see the RFC template in [`docs/rfcs/README.md`](../../rfcs/README.md))
 5. **Generate next session prompt** — incorporate all new context, copy to clipboard
 
 ---
