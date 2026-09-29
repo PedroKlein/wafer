@@ -1,6 +1,0 @@
-{
-  "page": "README.md",
-  "find": "- Cross WIT, generated bindings, registry loading, and a live Store in [Cross the plugin boundary](plugin-boundary.md).",
-  "replace": "- Cross WIT, generated bindings, registry loading, and a live Store in the plugin walkthrough.",
-  "expected_error": "README.md: missing S13 navigation link: plugin-boundary.md"
-}

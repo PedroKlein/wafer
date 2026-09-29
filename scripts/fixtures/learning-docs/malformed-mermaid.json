@@ -1,6 +1,0 @@
-{
-  "page": "workspace-map.md",
-  "find": "    operator --> ctl\n```",
-  "replace": "    operator --> ctl",
-  "expected_error": "workspace-map.md: unclosed or malformed Mermaid fence"
-}

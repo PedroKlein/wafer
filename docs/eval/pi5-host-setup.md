@@ -20,7 +20,7 @@ sudo systemctl enable --now ssh mosquitto
 sudo reboot
 ```
 
-Mosquitto runs with the packaged `/etc/mosquitto/mosquitto.conf` unchanged; no WAFER file is deployed to `/etc/mosquitto/`. That file defines no listener, so Mosquitto 2.x starts in local-only mode: it listens on loopback port 1883 and accepts anonymous clients. The evaluation configs rely on exactly that (they connect to `localhost:1883` without credentials). The repository's `mosquitto.conf` files (root, and `eval/ekuiper/mosquitto.conf`) are for the Docker development and eKuiper Compose setups and are not used on the Pi. `preflight-pi5.sh` checks that the service is active, not that an anonymous publish succeeds; if a later package adds a listener or disables anonymous access, the MQTT experiments fail at connect time.
+Mosquitto runs with the packaged `/etc/mosquitto/mosquitto.conf` unchanged; no WAFER file is deployed to `/etc/mosquitto/`. That file defines no listener, so Mosquitto 2.x starts in local-only mode: it listens on loopback port 1883 and accepts anonymous clients. The evaluation configs rely on exactly that (they connect to `localhost:1883` without credentials). The repository's root `mosquitto.conf` is for the Docker development setup and is not used on the Pi. `preflight-pi5.sh` checks that the service is active, not that an anonymous publish succeeds; if a later package adds a listener or disables anonymous access, the MQTT experiments fail at connect time.
 
 Freeze this package state for one complete canonical batch. If the OS, kernel, firmware, WAFER binary, plugin, or eKuiper package changes, begin a new batch rather than combining results.
 

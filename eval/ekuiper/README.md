@@ -63,4 +63,3 @@ taskset -pc "$(systemctl show -p MainPID --value kuiper)"
 - `seed-pipeline-a.sh` — idempotent REST registration.
 - `pipeline-a-rule.sql` — human-readable rule definition.
 - `smoke-test.sh` — native pass/drop behavior check.
-- `docker-compose.yml` — retained for reproducing historical laptop shakedowns only.

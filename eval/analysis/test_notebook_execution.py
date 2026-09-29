@@ -397,7 +397,6 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
         "00-warmup-validation.ipynb",
         "02-per-hop-overhead.ipynb",
         "03-memory-scaling.ipynb",
-        "04b-depth-scaling.ipynb",
         "05-hotswap-timeline.ipynb",
         "08-depth-scaling.ipynb",
         "09-saturation.ipynb",

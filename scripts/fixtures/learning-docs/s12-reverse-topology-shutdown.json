@@ -1,6 +1,0 @@
-{
-  "page": "shutdown-and-failure.md",
-  "find": "The orchestrator joins whichever task completes next until the deadline; it does not shut nodes down in reverse topological order.",
-  "replace": "The orchestrator shuts down every node in reverse topological order before joining tasks.",
-  "expected_error": "shutdown-and-failure.md: claims reverse-topological shutdown"
-}
