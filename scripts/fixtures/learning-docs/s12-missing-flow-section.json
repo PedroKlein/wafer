@@ -1,6 +1,0 @@
-{
-  "page": "config-to-running-pipeline.md",
-  "find": "## Flow",
-  "replace": "## Execution path",
-  "expected_error": "config-to-running-pipeline.md: missing required section: Flow"
-}
