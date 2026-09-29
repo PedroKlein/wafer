@@ -91,7 +91,15 @@ Deploy the tagged release using the reviewed deployment command in the release r
 
 Do not continue if preflight reports a dirty or untagged source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
-Before the final batch, also measure what the host telemetry sidecars cost on the Pi:
+Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
+
+```sh
+./eval/scripts/run-rpi5-idle-baseline.sh
+```
+
+It stops `kuiper.service` as WAFER runs do (and restarts it on exit), refuses to start while a `wafer` or `wafer-loadgen` process exists, takes ten 60 s samples with the two host sidecars only, and writes `eval/results/idle-baseline/rpi5-<UTC>/idle-baseline.json` with the median PMIC internal-rail proxy watts, the SUT-core busy fraction that proves the host was idle, and the throttle state. The baseline is diagnostic, never thesis evidence. Pass it to the proxy energy report with `canonical_power.py --idle-baseline <dir>/idle-baseline.json`, which refuses a baseline marked not usable or throttled.
+
+Also measure what the host telemetry sidecars cost on the Pi:
 
 ```sh
 ./eval/scripts/run-rpi5-instrument-ab.sh

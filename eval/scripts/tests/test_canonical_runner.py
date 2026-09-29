@@ -2289,6 +2289,26 @@ def test_startup_postprocessing_preserves_runtime_measurement() -> None:
         assert json.loads((output / "startup.json").read_text()) == artifact
 
 
+def test_postprocessing_labels_final_matrix_leaves_as_admitted_evidence(tmp_path: Path) -> None:
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "startup.json").write_text(json.dumps(_startup_artifact()))
+    item = RunItem(
+        experiment="e-perf-9",
+        condition="small-warm",
+        run_index=1,
+        config="eval/configs/e-perf-9/pipeline-tier-small.toml",
+        warmup_secs=0,
+        measurement_secs=0,
+        startup_mode="warm",
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["evidence_class"] == "final"
+    assert metadata["thesis_evidence"] is True
+
+
 def test_startup_postprocessing_rejects_condition_mismatch() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         output = Path(tmp)
