@@ -189,5 +189,8 @@ a required check.
 - `mise.toml` — `[tasks.cross-build-pi]`, `[tasks.cross-build-pi-check]`,
   `[tasks.build-release-x86]`, `[tasks.glibc-floor]`
 - `scripts/glibc-floor.sh` — glibc requirement report and floor check
+- `docs/eval/jetson-host-setup.md`, `docs/eval/x86-host-setup.md` — host
+  expectations checked by `eval/scripts/preflight-jetson.sh` and
+  `eval/scripts/preflight-x86.sh`
 - `.github/workflows/cross-arch.yml` — CI integration
 - `target/docker-aarch64-linux/` — build output directory (gitignored)

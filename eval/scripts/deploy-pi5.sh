@@ -6,14 +6,17 @@ HOST="${PI_HOST:-}"
 REMOTE_ROOT="${WAFER_PI_ROOT:-wafer}"
 dry_run=0
 
+BIN_DIR="${WAFER_BIN_DIR:-$ROOT/target/docker-aarch64-linux/release}"
+
 usage() {
-    echo "usage: $0 --host <user@hostname> [--root <remote-relative-path>] [--dry-run]" >&2
+    echo "usage: $0 --host <user@hostname> [--root <remote-relative-path>] [--bin-dir <release-dir>] [--dry-run]" >&2
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --host) HOST="${2:?}"; shift 2 ;;
         --root) REMOTE_ROOT="${2:?}"; shift 2 ;;
+        --bin-dir) BIN_DIR="${2:?}"; shift 2 ;;
         --dry-run) dry_run=1; shift ;;
         -h|--help) usage; exit 0 ;;
         *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
@@ -25,7 +28,6 @@ case "$REMOTE_ROOT" in
     /*|*..*|*[!A-Za-z0-9._/-]*) echo "error: --root must be a safe path relative to the remote home" >&2; exit 2 ;;
 esac
 
-BIN_DIR="$ROOT/target/docker-aarch64-linux/release"
 REVISION="$(git -C "$ROOT" rev-parse HEAD)"
 SOURCE_TAGS_JSON="$(git -C "$ROOT" tag --points-at "$REVISION" | python3 -c 'import json,sys; print(json.dumps([line.strip() for line in sys.stdin if line.strip()]))')"
 if [ -n "$(git -C "$ROOT" status --porcelain)" ]; then
@@ -37,6 +39,7 @@ fi
 cat <<PLAN
 host: $HOST
 remote_root: ~/$REMOTE_ROOT
+bin_dir: $BIN_DIR
 source_revision: $REVISION
 source_dirty: $SOURCE_DIRTY
 source_tags: $SOURCE_TAGS_JSON
@@ -62,7 +65,7 @@ PLAN
 
 for binary in wafer wafer-loadgen waferctl; do
     [ -x "$BIN_DIR/$binary" ] || {
-        echo "error: missing $BIN_DIR/$binary; run: mise run cross-build-pi" >&2
+        echo "error: missing $BIN_DIR/$binary; run: mise run cross-build-pi, or pass --bin-dir" >&2
         exit 1
     }
 done
