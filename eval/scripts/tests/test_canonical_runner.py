@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -3075,6 +3076,126 @@ def test_capacity_knee_cli_dry_run_exposes_candidate_plan() -> None:
     assert result.stdout.count("PLAN e-perf-capacity-knee") == 37
     assert "runs=5" in result.stdout
     assert "cooldown=60s" in result.stdout
+
+
+def run_runner(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(ROOT / "eval/scripts/lib/canonical_runner.py"), *args],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_repetitions_keeps_the_first_runs_of_the_frozen_schedule_and_marks_the_batch() -> None:
+    full = build_schedule({"e-perf-1"}, seed=1729)
+
+    result = run_runner(
+        "--experiments", "e-perf-1", "--batch-id", "test", "--repetitions", "5", "--dry-run"
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "DIAGNOSTIC repetitions=5: not thesis evidence" in result.stdout
+    plans = [line for line in result.stdout.splitlines() if line.startswith("PLAN ")]
+    assert len(plans) == len({item.condition for item in full})
+    assert all(" runs=5 " in line for line in plans)
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [["--repetitions", "30"], ["--repetitions", "0"], ["--repetitions", "5", "--focused"]],
+)
+def test_repetitions_rejects_the_frozen_count_and_frozen_modes(extra: list[str]) -> None:
+    arguments = ["--batch-id", "test", "--dry-run", *extra]
+    if "--focused" not in extra:
+        arguments = ["--experiments", "e-perf-1", *arguments]
+
+    result = run_runner(*arguments)
+
+    assert result.returncode == 2
+    assert "--repetitions" in result.stderr
+
+
+def test_diagnostic_leaves_are_not_thesis_evidence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(runner.DIAGNOSTIC_REPETITIONS_ENV, "5")
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "startup.json").write_text(json.dumps(_startup_artifact()))
+    item = RunItem(
+        experiment="e-perf-9",
+        condition="small-warm",
+        run_index=1,
+        config="eval/configs/e-perf-9/pipeline-tier-small.toml",
+        warmup_secs=0,
+        measurement_secs=0,
+        startup_mode="warm",
+    )
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
+    assert metadata["thesis_evidence"] is False
+    assert metadata["diagnostic_repetitions"] == 5
+
+
+def test_repetitions_drops_alias_views_of_measured_runs() -> None:
+    result = run_runner(
+        "--experiments", "e-perf-1,e-perf-2", "--batch-id", "test", "--repetitions", "5",
+        "--dry-run",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PLAN e-perf-1 " in result.stdout
+    assert "PLAN e-perf-2 " not in result.stdout
+
+
+def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
+    tmp_path: Path,
+) -> None:
+    results = tmp_path / "eval/results"
+    ledger = results / "canonical-batches/rpi5-test"
+    ledger.mkdir(parents=True)
+    schedule = build_schedule({"e-perf-1"}, seed=1729)[:3]
+    (ledger / "schedule.json").write_text(
+        json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
+    )
+    (ledger / "progress.jsonl").write_text('{"event":"item-finished","completed":1}\n')
+    first = schedule[0]
+    attempt = results / first.experiment / "rpi5-test" / first.condition / "run-01-attempt-01"
+    attempt.mkdir(parents=True)
+    (attempt / "canonical-status.json").write_text('{"status":"passed"}')
+    environment = {key: value for key, value in os.environ.items() if key != "WAFER_RESULTS_ROOT"}
+
+    def runner_in_tmp(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ROOT / "eval/scripts/lib/canonical_runner.py"),
+                "--root",
+                str(tmp_path),
+                "--batch-id",
+                "test",
+                *args,
+            ],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+            env=environment,
+        )
+
+    status = runner_in_tmp("--status")
+    resumed = runner_in_tmp("--experiments", "e-perf-1", "--repetitions", "2", "--execute")
+
+    assert status.returncode == 0, status.stderr
+    assert "e-perf-1 1/3" in status.stdout
+    assert "done 1/3, pending 2" in status.stdout
+    assert f"next {schedule[1].result_key}" in status.stdout
+    assert '"event":"item-finished"' in status.stdout
+    assert resumed.returncode == 2
+    assert "was started with a different schedule" in resumed.stderr
 
 
 def test_capacity_knee_candidate_invocations_are_trace_free() -> None:

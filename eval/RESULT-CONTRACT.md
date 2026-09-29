@@ -560,6 +560,20 @@ enforces these semantic invariants:
 - the matrix records the closed memory-retention decision and its verified
   zero-byte/message diagnostic slope.
 
+### Reduced-repetition diagnostic batches
+
+`canonical_runner.py --repetitions N` runs only runs 1 to N of the frozen
+schedule, in the frozen order, with N below the matrix count. Such a batch is
+diagnostic. Every leaf records `thesis_evidence=false` and
+`diagnostic_repetitions=N` in `metadata.json`; `metadata.json` is the label, and
+artifacts such as `capacity-run.json` keep their final schema. The batch skips
+alias views (E-Perf-2, E-Perf-8, E-Swap-2, E-Swap-6), whose runs are the source
+experiment's, and the batch summaries, which need the full run population. The
+verifier warns on every such leaf and rejects one that sets
+`diagnostic_repetitions` with `thesis_evidence` other than `false`. The
+analysis gate never admits it, because it rejects `thesis_evidence=false` and
+requires the matrix's full run population.
+
 ### `startup.json` schema
 
 E-Perf-9 measures startup from runtime process entry through the first successful
