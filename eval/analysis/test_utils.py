@@ -29,27 +29,38 @@ def fake_results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
             }
         )
     )
-    approval = (
-        tmp_path / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    )
-    approval.parent.mkdir(parents=True)
-    matrix_sha = hashlib.sha256(
-        (tmp_path / "eval/canonical-matrix.json").read_bytes()
-    ).hexdigest()
-    approval.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "decision": "APPROVE",
-                "batch_id": "batch-a",
-                "wafer_git_sha": "1" * 40,
-                "canonical_matrix_sha256": matrix_sha,
-                "campaign_started": False,
-            }
-        )
-    )
+    approve_batch(tmp_path, tmp_path / "eval/results/canonical-batches/rpi5-batch-a")
     monkeypatch.setattr(utils, "_find_repo_root", lambda: tmp_path)
     return tmp_path
+
+
+def approve_batch(repo: pathlib.Path, ledger: pathlib.Path, host: str = "rpi5") -> None:
+    """Write what `approve-batch` leaves behind for batch-a: ledger files and the entry."""
+    matrix_sha = hashlib.sha256(
+        (repo / "eval/canonical-matrix.json").read_bytes()
+    ).hexdigest()
+    ledger.mkdir(parents=True, exist_ok=True)
+    (ledger / "raw.sha256").write_text(f"{'0' * 64}  raw/fixture\n")
+    (ledger / "batch.json").write_text(
+        json.dumps({"source_git_sha": "1" * 40, "canonical_matrix_sha256": matrix_sha})
+    )
+    final_batches = repo / "eval/final-batches.json"
+    document = (
+        json.loads(final_batches.read_text())
+        if final_batches.is_file()
+        else {"schema_version": 1, "batches": {}}
+    )
+    document["batches"][host] = {
+        "batch_id": "batch-a",
+        "wafer_git_sha": "1" * 40,
+        "canonical_matrix_sha256": matrix_sha,
+        "raw_manifest_sha256": hashlib.sha256(
+            (ledger / "raw.sha256").read_bytes()
+        ).hexdigest(),
+        "approved_at": "2026-09-29T00:00:00Z",
+        "other_final_batches": [],
+    }
+    final_batches.write_text(json.dumps(document))
 
 
 def test_implicit_latest_selection_is_disabled(fake_results: pathlib.Path):
@@ -97,7 +108,7 @@ def alias_fixture(fake_results: pathlib.Path) -> tuple[pathlib.Path, pathlib.Pat
         },
     }
     matrix_path.write_text(json.dumps(matrix))
-    refresh_approval_matrix_hash(fake_results)
+    approve_batch(fake_results, volume / "manifests/canonical-batches/rpi5-batch-a")
     receipt = volume / "manifests/aliases/e-perf-2/rpi5-batch-a/native/run-01.json"
     receipt.parent.mkdir(parents=True)
     source_leaf = "raw/e-perf-1/rpi5-batch-a/native/run-01-attempt-01"
@@ -376,14 +387,7 @@ def write_swap5_canonical_leaf(path: pathlib.Path) -> None:
 
 
 def refresh_approval_matrix_hash(fake_results: pathlib.Path) -> None:
-    approval_path = (
-        fake_results / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    )
-    approval = json.loads(approval_path.read_text())
-    approval["canonical_matrix_sha256"] = hashlib.sha256(
-        (fake_results / "eval/canonical-matrix.json").read_bytes()
-    ).hexdigest()
-    approval_path.write_text(json.dumps(approval))
+    approve_batch(fake_results, fake_results / "eval/results/canonical-batches/rpi5-batch-a")
 
 
 def canonical_batch(fake_results: pathlib.Path, name: str = "batch-a") -> pathlib.Path:
@@ -404,7 +408,6 @@ def test_explicit_canonical_ledger_requires_a_named_existing_batch(
     fake_results: pathlib.Path,
 ):
     ledger = fake_results / "eval/results/canonical-batches/rpi5-batch-a"
-    ledger.mkdir(parents=True)
     assert utils.find_canonical_ledger("batch-a") == ledger
 
     with pytest.raises(
@@ -588,77 +591,74 @@ def test_canonical_batch_rejects_unapproved_batch(fake_results: pathlib.Path):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
-def test_canonical_batch_requires_an_approval_receipt(fake_results: pathlib.Path):
+def test_canonical_batch_requires_a_final_batches_entry(fake_results: pathlib.Path):
     batch = canonical_batch(fake_results)
-    (
-        fake_results / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    ).unlink()
-    with pytest.raises(ValueError, match="unapproved canonical batch"):
+    (fake_results / "eval/final-batches.json").unlink()
+    with pytest.raises(
+        ValueError,
+        match="run `mise run approve-batch -- --batch-id batch-a --host rpi5`",
+    ):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
-def test_explicit_approval_receipt_takes_precedence(
-    fake_results: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    batch = canonical_batch(fake_results)
-    fallback = (
-        fake_results / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    )
-    explicit = fake_results / "approval.json"
-    explicit.write_bytes(fallback.read_bytes())
-    fallback.unlink()
-    monkeypatch.setenv("WAFER_FULL_RUN_APPROVAL", str(explicit))
-    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
-
-
-def test_diagnostic_path_does_not_consume_approval(
-    fake_results: pathlib.Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_diagnostic_path_does_not_consume_approval(fake_results: pathlib.Path):
     diagnostic = fake_results / "eval/results/e-val-1/diagnostic"
     diagnostic.mkdir(parents=True)
-    monkeypatch.setenv("WAFER_FULL_RUN_APPROVAL", str(fake_results / "missing.json"))
+    (fake_results / "eval/final-batches.json").unlink()
     assert utils.resolve_analysis_batch("e-val-1", diagnostic_path=str(diagnostic)) == (
         diagnostic,
         False,
     )
 
 
-def test_canonical_batch_rejects_invalid_minimal_approval(fake_results: pathlib.Path):
+def test_canonical_batch_rejects_a_malformed_final_batches_file(fake_results: pathlib.Path):
     batch = canonical_batch(fake_results)
-    approval_path = (
-        fake_results / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    )
-    approval = json.loads(approval_path.read_text())
-    del approval["schema_version"]
-    approval_path.write_text(json.dumps(approval))
+    final_batches = fake_results / "eval/final-batches.json"
+    document = json.loads(final_batches.read_text())
+    del document["schema_version"]
+    final_batches.write_text(json.dumps(document))
     with pytest.raises(ValueError, match="unapproved canonical batch"):
         utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_canonical_batch_accepts_an_untagged_clean_source(fake_results: pathlib.Path):
+    batch = canonical_batch(fake_results)
+    metadata_path = next(batch.rglob("metadata.json"))
+    metadata = json.loads(metadata_path.read_text())
+    metadata["git_tags"] = []
+    metadata_path.write_text(json.dumps(metadata))
+    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
 
 
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("canonical_matrix_sha256", "0" * 64, "unapproved canonical batch"),
-        ("wafer_git_sha", "2" * 40, "canonical input SHA differs from approval"),
-        ("batch_id", "batch-b", "unapproved canonical batch"),
+        ("canonical_matrix_sha256", "0" * 64, "differs from the approved matrix"),
+        ("wafer_git_sha", "2" * 40, "batch.json differs from its eval/final-batches.json entry"),
+        ("batch_id", "batch-b", "approves rpi5-batch-b"),
     ],
 )
-def test_canonical_batch_rejects_approval_identifier_drift(
+def test_canonical_batch_rejects_final_batch_entry_drift(
     fake_results: pathlib.Path,
     field: str,
     value: str,
     message: str,
 ):
     batch = canonical_batch(fake_results)
-    approval_path = (
-        fake_results / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    )
-    approval = json.loads(approval_path.read_text())
-    approval[field] = value
-    approval_path.write_text(json.dumps(approval))
+    final_batches = fake_results / "eval/final-batches.json"
+    document = json.loads(final_batches.read_text())
+    document["batches"]["rpi5"][field] = value
+    final_batches.write_text(json.dumps(document))
     with pytest.raises(ValueError, match=message):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_canonical_batch_rejects_a_changed_raw_manifest(fake_results: pathlib.Path):
+    batch = canonical_batch(fake_results)
+    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
+    manifest = fake_results / "eval/results/canonical-batches/rpi5-batch-a/raw.sha256"
+    manifest.write_text(f"{'f' * 64}  raw/fixture\n")
+    with pytest.raises(ValueError, match="raw.sha256 differs from the approved"):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
@@ -730,17 +730,12 @@ def test_cross_architecture_requires_x86_batch(fake_results: pathlib.Path):
 
 
 
-def write_host_approval(repo: pathlib.Path, host: str, **changes: object) -> pathlib.Path:
-    source = repo / ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-    approval = json.loads(source.read_text())
-    approval["canonical_matrix_sha256"] = hashlib.sha256(
-        (repo / "eval/canonical-matrix.json").read_bytes()
-    ).hexdigest()
-    approval.update({"host_tag": host, **changes})
-    path = repo / f".plans/{host}-final-experiment-readiness/full-run-approval.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(approval))
-    return path
+def write_host_approval(repo: pathlib.Path, host: str, **changes: object) -> None:
+    approve_batch(repo, repo / f"eval/results/canonical-batches/{host}-batch-a", host)
+    final_batches = repo / "eval/final-batches.json"
+    document = json.loads(final_batches.read_text())
+    document["batches"][host].update(changes)
+    final_batches.write_text(json.dumps(document))
 
 
 def test_each_host_batch_is_validated_against_its_own_approval(
@@ -748,15 +743,15 @@ def test_each_host_batch_is_validated_against_its_own_approval(
 ):
     batch = fake_results / "eval/results/e-val-1/jetson-batch-a"
     write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="jetson")
-    with pytest.raises(ValueError, match="unapproved canonical batch"):
+    with pytest.raises(ValueError, match="has no jetson entry"):
         utils.validate_canonical_batch(batch, "e-val-1")
 
     write_host_approval(fake_results, "jetson")
     assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
     assert utils.find_canonical_batch("e-val-1", "jetson-batch-a") == batch
 
-    write_host_approval(fake_results, "jetson", host_tag="rpi5")
-    with pytest.raises(ValueError, match="approval identifiers are invalid"):
+    write_host_approval(fake_results, "jetson", batch_id="batch-b")
+    with pytest.raises(ValueError, match="unapproved canonical batch"):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
@@ -766,18 +761,6 @@ def test_host_batch_rejects_leaves_from_another_host(fake_results: pathlib.Path)
     write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="rpi5")
     with pytest.raises(ValueError, match="non-x86 input"):
         utils.validate_canonical_batch(batch, "e-val-1")
-
-
-def test_host_approval_can_come_from_its_own_environment_variable(
-    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
-):
-    batch = fake_results / "eval/results/e-val-1/x86-batch-a"
-    write_canonical_leaf(batch / "delay-50ms/run-01-attempt-01", host="x86")
-    receipt = write_host_approval(fake_results, "x86")
-    explicit = fake_results / "x86-approval.json"
-    receipt.rename(explicit)
-    monkeypatch.setenv("WAFER_FULL_RUN_APPROVAL_X86", str(explicit))
-    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
 
 
 def test_canonical_batch_needs_a_known_host_prefix(fake_results: pathlib.Path):

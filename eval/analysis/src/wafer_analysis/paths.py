@@ -211,17 +211,6 @@ def _batch_host(batch_name: str) -> str | None:
     return None
 
 
-def _approval_path(repo: pathlib.Path, host: str) -> pathlib.Path:
-    """Each host batch has its own receipt; the Pi keeps its original path and variable."""
-    variable = (
-        "WAFER_FULL_RUN_APPROVAL"
-        if host == "rpi5"
-        else f"WAFER_FULL_RUN_APPROVAL_{host.upper()}"
-    )
-    default = repo / f".plans/{host}-final-experiment-readiness/full-run-approval.json"
-    return pathlib.Path(os.environ.get(variable, default))
-
-
 def _read_object(path: pathlib.Path, label: str) -> dict:
     try:
         value = json.loads(path.read_text())
@@ -232,25 +221,31 @@ def _read_object(path: pathlib.Path, label: str) -> dict:
     return value
 
 
-def _approved_batch(repo: pathlib.Path, host: str = "rpi5") -> dict:
-    approval_path = _approval_path(repo, host)
+def _final_batch(repo: pathlib.Path, host: str, batch_id: str) -> dict:
+    """Read the host's entry in eval/final-batches.json, written by `mise run approve-batch`."""
+    path = repo / "eval/final-batches.json"
     try:
-        approval = _read_object(approval_path, "full-run approval")
+        document = _read_object(path, "eval/final-batches.json") if path.is_file() else {}
     except (TypeError, ValueError) as error:
         raise ValueError(f"unapproved canonical batch: {error}") from error
-    matrix_path = repo / "eval/canonical-matrix.json"
-    matrix_sha256 = hashlib.sha256(matrix_path.read_bytes()).hexdigest()
+    batches = document.get("batches", {})
+    entry = batches.get(host) if isinstance(batches, dict) else None
+    if entry is None:
+        raise ValueError(
+            f"unapproved canonical batch: eval/final-batches.json has no {host} entry; "
+            f"run `mise run approve-batch -- --batch-id {batch_id} --host {host}` "
+            "once the batch has finished"
+        )
     if (
-        approval.get("schema_version") != 1
-        or approval.get("decision") != "APPROVE"
-        or not isinstance(approval.get("batch_id"), str)
-        or not isinstance(approval.get("wafer_git_sha"), str)
-        or re.fullmatch(r"[0-9a-f]{40}", approval["wafer_git_sha"]) is None
-        or approval.get("canonical_matrix_sha256") != matrix_sha256
-        or approval.get("host_tag", "rpi5") != host
+        document.get("schema_version") != 1
+        or not isinstance(entry, dict)
+        or not isinstance(entry.get("batch_id"), str)
+        or re.fullmatch(r"[0-9a-f]{40}", str(entry.get("wafer_git_sha"))) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(entry.get("canonical_matrix_sha256"))) is None
+        or re.fullmatch(r"[0-9a-f]{64}", str(entry.get("raw_manifest_sha256"))) is None
     ):
-        raise ValueError("unapproved canonical batch: approval identifiers are invalid")
-    return approval
+        raise ValueError(f"unapproved canonical batch: malformed {host} entry in {path}")
+    return entry
 
 
 def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
@@ -374,11 +369,34 @@ def validate_canonical_batch(
     host = _batch_host(path.name)
     if host is None:
         raise ValueError(f"canonical batch name has no known host prefix: {path.name}")
-    approval = _approved_batch(repo, host)
-    if path.name != _canonical_batch_name(approval["batch_id"], host):
-        raise ValueError(f"unapproved canonical batch: {path.name}")
+    approval = _final_batch(repo, host, path.name.removeprefix(f"{host}-"))
+    if path.name != f"{host}-{approval['batch_id']}":
+        raise ValueError(
+            f"unapproved canonical batch: {path.name}; eval/final-batches.json "
+            f"approves {host}-{approval['batch_id']}"
+        )
+    matrix_path = repo / "eval/canonical-matrix.json"
+    if hashlib.sha256(matrix_path.read_bytes()).hexdigest() != approval["canonical_matrix_sha256"]:
+        raise ValueError(
+            "unapproved canonical batch: eval/canonical-matrix.json differs from the approved matrix"
+        )
+    ledger = layout.manifest_path("canonical-batches", path.name)
+    batch = _read_object(ledger / "batch.json", "batch.json")
+    if (
+        batch.get("source_git_sha") != approval["wafer_git_sha"]
+        or batch.get("canonical_matrix_sha256") != approval["canonical_matrix_sha256"]
+    ):
+        raise ValueError(f"{ledger / 'batch.json'} differs from its eval/final-batches.json entry")
+    try:
+        manifest_sha256 = hashlib.sha256((ledger / "raw.sha256").read_bytes()).hexdigest()
+    except OSError as error:
+        raise ValueError(f"approved batch has no raw.sha256: {error}") from error
+    if manifest_sha256 != approval["raw_manifest_sha256"]:
+        raise ValueError(
+            f"{ledger / 'raw.sha256'} differs from the approved raw_manifest_sha256"
+        )
 
-    matrix = _read_object(repo / "eval/canonical-matrix.json", "canonical matrix")
+    matrix = _read_object(matrix_path, "canonical matrix")
     experiments = matrix.get("experiments")
     if not isinstance(experiments, dict) or experiment not in experiments:
         raise ValueError(f"canonical matrix does not declare experiment {experiment}")
@@ -434,7 +452,6 @@ def validate_canonical_batch(
             "host_tag",
             "git_sha",
             "git_dirty",
-            "git_tags",
             "throttled",
         }
         if not required_metadata <= metadata.keys():
@@ -447,9 +464,6 @@ def validate_canonical_batch(
             raise ValueError(f"non-{host} input: {metadata_path}")
         if metadata.get("git_dirty") is not False:
             raise ValueError(f"dirty canonical input: {metadata_path}")
-        tags = metadata.get("git_tags")
-        if not isinstance(tags, list) or not tags:
-            raise ValueError(f"untagged canonical input: {metadata_path}")
         if metadata.get("throttled") != "0x0":
             raise ValueError(f"throttled canonical input: {metadata_path}")
         if metadata.get("thesis_evidence", True) is not True:

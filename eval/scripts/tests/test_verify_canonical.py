@@ -413,6 +413,16 @@ def test_canonical_result_accepts_complete_leaf() -> None:
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_canonical_result_accepts_an_untagged_clean_source(tmp_path: Path) -> None:
+    result = make_result(tmp_path)
+    metadata_path = result / "metadata.json"
+    metadata_path.write_text(json.dumps({**json.loads(metadata_path.read_text()), "git_tags": []}))
+
+    completed = run(result)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
 
 def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:
     with tempfile.TemporaryDirectory() as tmp:
@@ -522,10 +532,9 @@ def test_historical_rate_sweep_contract_rejects_missing_resource_field() -> None
         violations = CONTRACT.check_rate_sweep_result(path)
     assert "resources missing field: cpu_percent" in " ".join(violations)
 
-def test_canonical_result_rejects_dirty_untagged_and_missing_output() -> None:
+def test_canonical_result_rejects_dirty_source_and_missing_output() -> None:
     mutations = {
         "dirty source": lambda result, metadata: metadata.update(git_dirty=True),
-        "tagged source": lambda result, metadata: metadata.update(git_tags=[]),
         "required canonical artefact": lambda result, metadata: (
             result / "latency.hdr"
         ).unlink(),
@@ -1936,7 +1945,7 @@ def test_swap4_cross_artifacts_reconcile_source_primary_and_drain(tmp_path: Path
 if __name__ == "__main__":
     test_canonical_result_accepts_complete_leaf()
     test_canonical_ekuiper_result_does_not_require_wasmtime_provenance()
-    test_canonical_result_rejects_dirty_untagged_and_missing_output()
+    test_canonical_result_rejects_dirty_source_and_missing_output()
     print("canonical result verifier tests: PASS")
 
 

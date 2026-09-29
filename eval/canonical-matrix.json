@@ -3,7 +3,6 @@
   "canonical_host": "rpi5",
   "source_policy": {
     "clean": true,
-    "tagged": true,
     "same_sha_per_batch": true
   },
   "hosts": {

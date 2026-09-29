@@ -509,11 +509,6 @@ def validate_preflight(
         errors.append("dirty source is not canonical")
     if not re.fullmatch(r"[0-9a-f]{40}", str(facts.get("git_sha", ""))):
         errors.append("source commit SHA must be a full 40-character lowercase hex digest")
-    tags = facts.get("git_tags")
-    if not isinstance(tags, list) or not tags or not all(
-        isinstance(tag, str) and tag for tag in tags
-    ):
-        errors.append("untagged source is not canonical")
     if facts.get("broker_ready") is not True:
         errors.append("broker is not ready")
     if require_ekuiper:

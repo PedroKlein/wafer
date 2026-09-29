@@ -1807,9 +1807,6 @@ def check_leaf(
                             )
                     if metadata.get("git_dirty") is not False:
                         violations.append("canonical result records dirty source")
-                    tags = metadata.get("git_tags")
-                    if not isinstance(tags, list) or not tags:
-                        violations.append("canonical result lacks tagged source provenance")
                     if (
                         metadata.get("system") not in {"ekuiper", "mqtt-loopback", "static"}
                         and "runtime-provenance.json" not in files

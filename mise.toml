@@ -342,3 +342,7 @@ run = './eval/scripts/run-rpi5-canonical.sh --execute "$@"'
 [tasks.campaign-status]
 description = "Print done and pending runs of a batch (--batch-id ID, --host as for run-campaign)"
 run = './eval/scripts/run-rpi5-canonical.sh --status "$@"'
+
+[tasks.approve-batch]
+description = "Check a finished final batch and record it in eval/final-batches.json (--batch-id ID, --host)"
+run = './eval/scripts/run-rpi5-canonical.sh --approve "$@"'

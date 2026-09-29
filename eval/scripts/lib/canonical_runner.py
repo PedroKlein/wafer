@@ -6725,6 +6725,16 @@ def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
         )
 
 
+def finished_evidence(layout: ResultsLayout, name: str, item: RunItem) -> Path | None:
+    """The alias receipt or passed attempt that completes a scheduled item."""
+    if item.shared_from:
+        receipt = layout.manifest_path(
+            "aliases", item.experiment, name, item.condition, f"run-{item.run_index:02d}.json"
+        )
+        return receipt if receipt.is_file() else None
+    return find_passed_attempt(layout.raw_path(item.experiment, name, item.condition), item.run_index)
+
+
 def batch_status(layout: ResultsLayout, batch_id: str) -> int:
     name = batch_name(batch_id)
     ledger = next(
@@ -6746,14 +6756,7 @@ def batch_status(layout: ResultsLayout, batch_id: str) -> int:
     done: Counter[str] = Counter()
     pending: list[str] = []
     for item in schedule:
-        if item.shared_from:
-            finished = layout.manifest_path(
-                "aliases", item.experiment, name, item.condition, f"run-{item.run_index:02d}.json"
-            ).is_file()
-        else:
-            condition_dir = layout.raw_path(item.experiment, name, item.condition)
-            finished = select_attempt(condition_dir, item.run_index).skip
-        if finished:
+        if finished_evidence(layout, name, item) is not None:
             done[item.experiment] += 1
         else:
             pending.append(item.result_key)
@@ -6767,6 +6770,114 @@ def batch_status(layout: ResultsLayout, batch_id: str) -> int:
     if progress.is_file():
         print(f"last event {progress.read_text().splitlines()[-1]}")
     return 0
+
+
+def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
+    name = batch_name(batch_id)
+    ledger = layout.manifest_path("canonical-batches", name)
+    if not (ledger / "schedule.json").is_file():
+        raise ValueError(
+            f"no ledger at {ledger}; only final batches under canonical-batches can be "
+            "approved, never candidate batches"
+        )
+    batch = json.loads((ledger / "batch.json").read_text())
+    if batch.get("thesis_evidence") is not True or batch.get("repetitions") is not None:
+        raise ValueError("batch.json marks a diagnostic batch, which is never thesis evidence")
+    sha = str(batch.get("source_git_sha"))
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise ValueError(f"batch.json source_git_sha is not a 40-character hex SHA: {sha}")
+    if batch.get("source_dirty") is not False:
+        raise ValueError("the batch ran from a dirty source tree")
+    matrix_sha256 = hashlib.sha256(CANONICAL_MATRIX_PATH.read_bytes()).hexdigest()
+    if batch.get("canonical_matrix_sha256") != matrix_sha256:
+        raise ValueError("the batch ran with a different eval/canonical-matrix.json than this checkout")
+    schedule = [RunItem(**item) for item in json.loads((ledger / "schedule.json").read_text())]
+    if schedule != build_schedule(parse_experiments("all"), int(batch["seed"])):
+        raise ValueError(f"schedule.json is not the full schedule for seed {batch['seed']}")
+    evidence = [(item, finished_evidence(layout, name, item)) for item in schedule]
+    pending = [item.result_key for item, path in evidence if path is None]
+    if pending:
+        raise ValueError(f"{len(pending)} of {len(schedule)} runs are not done, first {pending[0]}")
+    try:
+        gate = json.loads((ledger / "e-val-1-gate.json").read_text())
+    except (OSError, ValueError):
+        gate = {}
+    if gate.get("passed") is not True:
+        raise ValueError("e-val-1-gate.json does not report a pass")
+    for item, leaf in evidence:
+        if item.shared_from:
+            continue
+        metadata = json.loads((leaf / "metadata.json").read_text())
+        if (
+            metadata.get("git_sha") != sha
+            or metadata.get("git_dirty") is not False
+            or metadata.get("throttled") != "0x0"
+            or metadata.get("thesis_evidence") is False
+        ):
+            raise ValueError(
+                f"{layout.relative(leaf)} has git_sha={metadata.get('git_sha')} "
+                f"git_dirty={metadata.get('git_dirty')} throttled={metadata.get('throttled')} "
+                f"thesis_evidence={metadata.get('thesis_evidence')}; a final leaf needs "
+                f"git_sha={sha}, a clean tree and throttled=0x0"
+            )
+    final_path = root / "eval/final-batches.json"
+    document = (
+        json.loads(final_path.read_text())
+        if final_path.is_file()
+        else {"schema_version": 1, "batches": {}}
+    )
+    if document.get("schema_version") != 1 or not isinstance(document.get("batches"), dict):
+        raise ValueError(f"{final_path} is malformed")
+    previous = document["batches"].get(HOST.tag)
+    if previous is not None and previous.get("batch_id") != batch_id:
+        raise ValueError(
+            f"{final_path} already approves {HOST.tag} batch {previous.get('batch_id')}; "
+            "remove that entry by hand to replace it"
+        )
+
+    manifest = ledger / "raw.sha256"
+    directories = {ledger} | {
+        layout.manifest_path("aliases", item.experiment, name)
+        if item.shared_from
+        else layout.raw_path(item.experiment, name)
+        for item in schedule
+    }
+    files = sorted(
+        (layout.relative(path), path)
+        for directory in directories
+        for path in directory.rglob("*")
+        if path.is_file()
+        and path != manifest
+        and not any(part.startswith(".") for part in path.relative_to(directory).parts)
+    )
+    lines = []
+    for relative, path in files:
+        with path.open("rb") as stream:
+            lines.append(f"{hashlib.file_digest(stream, 'sha256').hexdigest()}  {relative}\n")
+    manifest_bytes = "".join(lines).encode()
+    manifest.write_bytes(manifest_bytes)
+
+    others = sorted(
+        path.parent.name.removeprefix(f"{HOST.tag}-")
+        for path in layout.manifest_path("canonical-batches").glob(f"{HOST.tag}-*/batch.json")
+        if path.parent != ledger and json.loads(path.read_text()).get("thesis_evidence") is True
+    )
+    entry = {
+        "batch_id": batch_id,
+        "wafer_git_sha": sha,
+        "canonical_matrix_sha256": matrix_sha256,
+        "raw_manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "approved_at": utc_now(),
+        "other_final_batches": others,
+    }
+    if previous is not None and {**previous, "approved_at": entry["approved_at"]} == entry:
+        entry = previous
+    document["batches"] = dict(sorted({**document["batches"], HOST.tag: entry}.items()))
+    final_path.write_text(json.dumps(document, indent=2) + "\n")
+    print(f"approved {name}: {len(files)} files listed in {layout.relative(manifest)}")
+    print(f"recorded {HOST.tag} batch {batch_id} at {sha} in {final_path}; commit that file")
+    if others:
+        print(f"other final {HOST.tag} batches in this results root: {', '.join(others)}")
 
 
 def parse_experiments(raw: str) -> set[str]:
@@ -6830,7 +6941,7 @@ def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], d
     return decisions, accepted
 
 
-def capacity_scout_source_state(root: Path) -> dict:
+def source_state(root: Path) -> dict:
     try:
         sha = subprocess.check_output(
             ["git", "-C", str(root), "rev-parse", "HEAD"],
@@ -6858,14 +6969,14 @@ def capacity_scout_source_state(root: Path) -> dict:
         try:
             state = json.loads((root / "SOURCE_STATE.json").read_text())
         except (OSError, ValueError) as error:
-            raise ValueError("capacity-scout source provenance is unavailable") from error
+            raise ValueError("source provenance is unavailable") from error
     if not re.fullmatch(r"[0-9a-f]{40}", str(state.get("git_sha", ""))):
-        raise ValueError("capacity-scout source SHA is invalid")
+        raise ValueError("source SHA is invalid")
     if not isinstance(state.get("git_dirty"), bool):
-        raise ValueError("capacity-scout source dirty flag is invalid")
+        raise ValueError("source dirty flag is invalid")
     tags = state.get("git_tags")
     if not isinstance(tags, list) or not all(isinstance(tag, str) and tag for tag in tags):
-        raise ValueError("capacity-scout source tags are invalid")
+        raise ValueError("source tags are invalid")
     return {"git_sha": state["git_sha"], "git_dirty": state["git_dirty"], "git_tags": tags}
 
 
@@ -6917,11 +7028,9 @@ def capacity_scout_current_snapshot(
         repeated = max(Counter(failures).values())
     batch_meta = json.loads((ledger / "batch.json").read_text())
     try:
-        source = capacity_scout_source_state(root)
+        source = source_state(root)
         provenance_matches = (
-            source["git_sha"] == batch_meta["source_git_sha"]
-            and source["git_dirty"] is False
-            and source["git_tags"] == batch_meta["source_git_tags"]
+            source["git_sha"] == batch_meta["source_git_sha"] and source["git_dirty"] is False
         )
     except ValueError:
         provenance_matches = False
@@ -7072,8 +7181,14 @@ def main() -> int:
     parser.add_argument(
         "--status", action="store_true", help="print done and pending runs of --batch-id"
     )
+    parser.add_argument(
+        "--approve",
+        action="store_true",
+        help="check that final batch --batch-id is complete and clean, write its raw.sha256 "
+        "and record it in eval/final-batches.json",
+    )
     args = parser.parse_args()
-    if not args.status and args.dry_run == args.execute:
+    if not (args.status or args.approve) and args.dry_run == args.execute:
         parser.error("choose exactly one of --dry-run or --execute")
     try:
         select_host(args.host)
@@ -7089,6 +7204,15 @@ def main() -> int:
             if not args.batch_id:
                 raise ValueError("--status requires --batch-id")
             return batch_status(layout, args.batch_id)
+        if args.approve:
+            if not args.batch_id:
+                raise ValueError("--approve requires --batch-id")
+            try:
+                approve_batch(root, layout, args.batch_id)
+            except (AttributeError, KeyError, OSError, TypeError, ValueError) as error:
+                print(f"error: {batch_name(args.batch_id)} not approved: {error}", file=sys.stderr)
+                return 1
+            return 0
         if args.execute:
             layout.prepare()
         capacity_scout = args.capacity_scout
@@ -7131,11 +7255,9 @@ def main() -> int:
         if batch_path.is_file():
             batch = json.loads(batch_path.read_text())
         else:
-            source = capacity_scout_source_state(root)
+            source = source_state(root)
             if not args.dry_run and source["git_dirty"]:
                 raise ValueError("capacity-scout source must be clean")
-            if not args.dry_run and not source["git_tags"]:
-                raise ValueError("capacity-scout source must be tagged")
             batch = {
                 "schema_version": 1,
                 "batch_class": "capacity-scout",
@@ -7264,6 +7386,13 @@ def main() -> int:
         else "canonical-batches"
     )
     ledger = layout.manifest_path(ledger_group, batch_name(batch_id))
+    if (ledger / "raw.sha256").is_file():
+        print(
+            f"error: batch {batch_name(batch_id)} is approved and its files are sealed by "
+            f"{layout.relative(ledger / 'raw.sha256')}; start a new batch id",
+            file=sys.stderr,
+        )
+        return 2
     ledger.mkdir(parents=True, exist_ok=True)
     schedule_json = json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
     schedule_path = ledger / "schedule.json"
@@ -7274,6 +7403,52 @@ def main() -> int:
             file=sys.stderr,
         )
         return 2
+    try:
+        source = source_state(root)
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    thesis_evidence = ledger_group == "canonical-batches" and args.repetitions is None
+    if thesis_evidence and source["git_dirty"]:
+        print(
+            f"error: final batch {batch_name(batch_id)} needs a clean source tree; commit or "
+            "remove the changes git status shows, redeploy, then run it again",
+            file=sys.stderr,
+        )
+        return 2
+    matrix_sha256 = hashlib.sha256(CANONICAL_MATRIX_PATH.read_bytes()).hexdigest()
+    batch_path = ledger / "batch.json"
+    if batch_path.is_file():
+        started = json.loads(batch_path.read_text())
+        if (started.get("source_git_sha"), started.get("canonical_matrix_sha256")) != (
+            source["git_sha"],
+            matrix_sha256,
+        ):
+            print(
+                f"error: batch {batch_name(batch_id)} was started from source "
+                f"{started.get('source_git_sha')} and matrix {started.get('canonical_matrix_sha256')}; "
+                f"this checkout is source {source['git_sha']} and matrix {matrix_sha256}. "
+                "A batch runs from one commit and one matrix, so start a new batch id",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        atomic_write_json(
+            batch_path,
+            {
+                "schema_version": 1,
+                "batch_id": batch_id,
+                "host": HOST.tag,
+                "source_git_sha": source["git_sha"],
+                "source_dirty": source["git_dirty"],
+                "canonical_matrix_sha256": matrix_sha256,
+                "seed": args.seed,
+                "experiments": sorted(experiments),
+                "repetitions": args.repetitions,
+                "thesis_evidence": thesis_evidence,
+                "started_at": utc_now(),
+            },
+        )
     schedule_path.write_text(schedule_json)
 
     failures: list[str] = []
