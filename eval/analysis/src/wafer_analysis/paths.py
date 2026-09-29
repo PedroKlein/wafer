@@ -14,9 +14,7 @@ from .backpressure import validate_backpressure_result
 from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
 from .rollback import validate_swap5_artifacts
 
-APPROVAL_RELATIVE_PATH = pathlib.Path(
-    ".plans/rpi5-final-experiment-readiness/full-run-approval.json"
-)
+HOST_TAGS = ("rpi5", "jetson", "x86")
 def resolve_result_batch(
     experiment_id: str,
     diagnostic_path: str | None = None,
@@ -71,7 +69,10 @@ def find_canonical_batch(
     batch_id: str,
     results_root: pathlib.Path | str | None = None,
 ) -> pathlib.Path:
-    """Resolve one explicitly named approved Pi 5 batch and validate it."""
+    """Resolve one explicitly named approved batch and validate it.
+
+    A batch id without a host prefix names a Pi 5 batch.
+    """
     name = _canonical_batch_name(batch_id)
     repo = _find_repo_root()
     layout = ResultsLayout.resolve(repo, results_root)
@@ -191,14 +192,34 @@ def _reject_links_below(path: pathlib.Path, root: pathlib.Path) -> None:
         current = current.parent
 
 
-def _canonical_batch_name(batch_id: str) -> str:
+def _canonical_batch_name(batch_id: str, host: str = "rpi5") -> str:
     if not batch_id or any(
         character
         not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
         for character in batch_id
     ):
         raise ValueError("batch_id contains unsafe characters")
-    return batch_id if batch_id.startswith("rpi5-") else f"rpi5-{batch_id}"
+    if _batch_host(batch_id) is not None:
+        return batch_id
+    return f"{host}-{batch_id}"
+
+
+def _batch_host(batch_name: str) -> str | None:
+    for host in HOST_TAGS:
+        if batch_name.startswith(f"{host}-"):
+            return host
+    return None
+
+
+def _approval_path(repo: pathlib.Path, host: str) -> pathlib.Path:
+    """Each host batch has its own receipt; the Pi keeps its original path and variable."""
+    variable = (
+        "WAFER_FULL_RUN_APPROVAL"
+        if host == "rpi5"
+        else f"WAFER_FULL_RUN_APPROVAL_{host.upper()}"
+    )
+    default = repo / f".plans/{host}-final-experiment-readiness/full-run-approval.json"
+    return pathlib.Path(os.environ.get(variable, default))
 
 
 def _read_object(path: pathlib.Path, label: str) -> dict:
@@ -211,10 +232,8 @@ def _read_object(path: pathlib.Path, label: str) -> dict:
     return value
 
 
-def _approved_batch(repo: pathlib.Path) -> dict:
-    approval_path = pathlib.Path(
-        os.environ.get("WAFER_FULL_RUN_APPROVAL", repo / APPROVAL_RELATIVE_PATH)
-    )
+def _approved_batch(repo: pathlib.Path, host: str = "rpi5") -> dict:
+    approval_path = _approval_path(repo, host)
     try:
         approval = _read_object(approval_path, "full-run approval")
     except (TypeError, ValueError) as error:
@@ -228,6 +247,7 @@ def _approved_batch(repo: pathlib.Path) -> dict:
         or not isinstance(approval.get("wafer_git_sha"), str)
         or re.fullmatch(r"[0-9a-f]{40}", approval["wafer_git_sha"]) is None
         or approval.get("canonical_matrix_sha256") != matrix_sha256
+        or approval.get("host_tag", "rpi5") != host
     ):
         raise ValueError("unapproved canonical batch: approval identifiers are invalid")
     return approval
@@ -351,8 +371,11 @@ def validate_canonical_batch(
     if layout.explicit and layout.raw.resolve() not in resolved_path.parents:
         raise ValueError(f"canonical input must be beneath the raw evidence root: {path}")
     experiment = experiment_id or path.parent.name
-    approval = _approved_batch(repo)
-    if path.name != _canonical_batch_name(approval["batch_id"]):
+    host = _batch_host(path.name)
+    if host is None:
+        raise ValueError(f"canonical batch name has no known host prefix: {path.name}")
+    approval = _approved_batch(repo, host)
+    if path.name != _canonical_batch_name(approval["batch_id"], host):
         raise ValueError(f"unapproved canonical batch: {path.name}")
 
     matrix = _read_object(repo / "eval/canonical-matrix.json", "canonical matrix")
@@ -420,8 +443,8 @@ def validate_canonical_batch(
             raise ValueError(
                 f"malformed metadata schema: wrong experiment in {metadata_path}"
             )
-        if metadata.get("host_tag") != "rpi5":
-            raise ValueError(f"non-rpi5 input: {metadata_path}")
+        if metadata.get("host_tag") != host:
+            raise ValueError(f"non-{host} input: {metadata_path}")
         if metadata.get("git_dirty") is not False:
             raise ValueError(f"dirty canonical input: {metadata_path}")
         tags = metadata.get("git_tags")
@@ -491,6 +514,10 @@ def require_cross_architecture(
     """Refuse a cross-architecture conclusion until both native hosts exist."""
     if x86_batch is None or not x86_batch.is_dir():
         raise ValueError("E-Perf-5 is incomplete until matching x86 Linux data exists")
+    if _batch_host(pi_batch.name) != "rpi5" or _batch_host(x86_batch.name) != "x86":
+        raise ValueError(
+            f"E-Perf-5 compares an rpi5 batch with an x86 batch: {pi_batch.name}, {x86_batch.name}"
+        )
     validate_canonical_batch(pi_batch, "e-perf-5")
     validate_canonical_batch(x86_batch, "e-perf-5")
 
