@@ -198,7 +198,7 @@ description = "Run sample pipeline with remote plugins, bypassing cache"
 run = 'echo "Hello, World!" | cargo run -p wafer-runtime -- --config examples/dag-remote.toml --no-cache'
 
 # =============================================================================
-# Cross-compile for aarch64-linux (Pi / Jetson / ARM64 servers)
+# Release builds per target (aarch64-linux for Pi / Jetson, native x86_64)
 # =============================================================================
 #
 # C1 (canonical-runs plan, 2026-08-02): cross-compile wafer, wafer-loadgen,
@@ -244,6 +244,9 @@ for b in wafer wafer-loadgen waferctl; do
     exit 1
   fi
 done
+scripts/glibc-floor.sh target/docker-aarch64-linux/release/wafer \
+  target/docker-aarch64-linux/release/wafer-loadgen \
+  target/docker-aarch64-linux/release/waferctl
 '''
 
 [tasks.cross-build-pi-check]
@@ -269,6 +272,28 @@ for b in wafer wafer-loadgen waferctl; do
 done
 [ "$missing" -eq 0 ] || { echo "cross-build-pi-check FAILED: $missing binary/binaries missing or wrong arch" >&2; exit 1; }
 '''
+
+[tasks.build-release-x86]
+description = "Build wafer, wafer-loadgen, waferctl natively for x86_64-linux"
+shell = "bash -c"
+run = '''
+set -euo pipefail
+[ "$(uname -s)-$(uname -m)" = "Linux-x86_64" ] || {
+  echo "error: build-release-x86 runs natively on an x86_64 Linux host (this is $(uname -s)-$(uname -m))" >&2
+  exit 1
+}
+cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl
+for b in wafer wafer-loadgen waferctl; do
+  f=target/release/$b
+  file "$f" | grep -q "x86-64" || { echo "WRONG ARCH: $f"; file "$f"; exit 1; } >&2
+  echo "OK   $f ($(du -h "$f" | cut -f1))"
+done
+scripts/glibc-floor.sh target/release/wafer target/release/wafer-loadgen target/release/waferctl
+'''
+
+[tasks.glibc-floor]
+description = "Print the glibc each release binary needs; --max VERSION fails on a newer one"
+run = 'scripts/glibc-floor.sh "$@"'
 
 [tasks.deploy-pi5]
 description = "Deploy prebuilt ARM64 WAFER bundle to a Raspberry Pi 5"

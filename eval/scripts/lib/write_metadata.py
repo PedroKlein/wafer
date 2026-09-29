@@ -30,6 +30,9 @@ import pathlib
 import subprocess
 import sys
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from host_facts import platform_facts  # noqa: E402
+
 
 def _sh(cmd: list[str]) -> str:
     try:
@@ -105,8 +108,10 @@ def _hardware_metadata() -> dict:
     if throttled.startswith("throttled="):
         throttled = throttled.removeprefix("throttled=")
 
+    platform = platform_facts()
     return {
-        "hardware_model": _read_text("/proc/device-tree/model"),
+        **platform,
+        "hardware_model": platform["hardware_model"] or "unknown",
         "memory_total_kib": memory_total_kib,
         "cpu_governors": governors or ["unknown"],
         "isolated_cpus": _read_text("/sys/devices/system/cpu/isolated"),
