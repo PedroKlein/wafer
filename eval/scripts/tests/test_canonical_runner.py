@@ -3097,15 +3097,13 @@ def test_repetitions_rejects_the_frozen_count_and_frozen_modes(extra: list[str])
     assert "--repetitions" in result.stderr
 
 
-def test_diagnostic_leaves_and_shared_results_are_not_thesis_evidence(
+def test_diagnostic_leaves_are_not_thesis_evidence(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(runner.DIAGNOSTIC_REPETITIONS_ENV, "5")
-    leaf = tmp_path / "leaf"
-    leaf.mkdir()
-    (leaf / "metadata.json").write_text("{}")
-    (leaf / "startup.json").write_text(json.dumps(_startup_artifact()))
-    startup = RunItem(
+    (tmp_path / "metadata.json").write_text("{}")
+    (tmp_path / "startup.json").write_text(json.dumps(_startup_artifact()))
+    item = RunItem(
         experiment="e-perf-9",
         condition="small-warm",
         run_index=1,
@@ -3114,29 +3112,23 @@ def test_diagnostic_leaves_and_shared_results_are_not_thesis_evidence(
         measurement_secs=0,
         startup_mode="warm",
     )
-    source = tmp_path / "eval/results/e-swap-1/rpi5-batch/steady/run-01-attempt-01"
-    source.mkdir(parents=True)
-    (source / "canonical-status.json").write_text('{"status":"passed"}')
-    (source / "metadata.json").write_text(
-        '{"experiment":"e-swap-1","evidence_class":"final","thesis_evidence":false}'
-    )
-    shared = RunItem(
-        experiment="e-swap-2",
-        condition="steady",
-        run_index=1,
-        config="unused.toml",
-        warmup_secs=30,
-        measurement_secs=120,
-        shared_from="e-swap-1",
-    )
 
-    postprocess_run(ROOT, startup, leaf)
-    receipt = copy_shared_result(tmp_path, "batch", shared)
+    postprocess_run(ROOT, item, tmp_path)
 
-    metadata = json.loads((leaf / "metadata.json").read_text())
+    metadata = json.loads((tmp_path / "metadata.json").read_text())
     assert metadata["thesis_evidence"] is False
     assert metadata["diagnostic_repetitions"] == 5
-    assert receipt.is_file()
+
+
+def test_repetitions_drops_alias_views_of_measured_runs() -> None:
+    result = run_runner(
+        "--experiments", "e-perf-1,e-perf-2", "--batch-id", "test", "--repetitions", "5",
+        "--dry-run",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "PLAN e-perf-1 " in result.stdout
+    assert "PLAN e-perf-2 " not in result.stdout
 
 
 def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(

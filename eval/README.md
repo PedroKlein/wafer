@@ -47,8 +47,9 @@ mise run run-canonical-pi5 -- --batch-id <id> --repetitions 5
 
 A resume must use the same `--experiments`, `--seed` and `--repetitions` as
 the start; the runner refuses a schedule that differs from the batch's
-`schedule.json`. A `--repetitions` batch is labelled diagnostic in every leaf
-and is never accepted as thesis evidence (see
+`schedule.json`. A `--repetitions` batch is labelled diagnostic in every leaf,
+skips alias views and batch summaries, and is never accepted as thesis
+evidence (see
 [Reduced-repetition diagnostic batches](RESULT-CONTRACT.md#reduced-repetition-diagnostic-batches)).
 Use `--host jetson` or `--host x86` on the other platforms.
 

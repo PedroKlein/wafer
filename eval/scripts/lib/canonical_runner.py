@@ -3930,7 +3930,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if (
         metadata.get("experiment") != item.shared_from
         or metadata.get("evidence_class") != "final"
-        or metadata.get("thesis_evidence") is not (DIAGNOSTIC_REPETITIONS_ENV not in os.environ)
+        or metadata.get("thesis_evidence") is not True
     ):
         raise ValueError("shared source is not final admitted evidence")
     source_status_sha256 = hashlib.sha256(status_path.read_bytes()).hexdigest()
@@ -6809,7 +6809,6 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
                 "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
             },
         }
-        stamp_diagnostic_metadata(summary)
         path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
         path.write_text(json.dumps(summary, indent=2) + "\n")
         return path
@@ -7353,10 +7352,14 @@ def main() -> int:
                 frozen = max(item.run_index for item in schedule)
                 if not 1 <= args.repetitions < frozen:
                     raise ValueError(
-                        f"--repetitions must be between 1 and {frozen - 1}; "
-                        f"omit it to run the frozen {frozen}"
+                        f"--repetitions must be at least 1 and below the frozen {frozen}; "
+                        "omit it for a final batch"
                     )
-                schedule = [item for item in schedule if item.run_index <= args.repetitions]
+                schedule = [
+                    item
+                    for item in schedule
+                    if item.run_index <= args.repetitions and not item.shared_from
+                ]
     except (KeyError, OSError, TypeError, ValueError) as error:
         parser.error(str(error))
 
@@ -7580,7 +7583,8 @@ def main() -> int:
             failures.append(item.result_key)
         completed += 1
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
-    summarise(root, batch_id, experiments)
+    if args.repetitions is None:
+        summarise(root, batch_id, experiments)
     if focused_freeze is not None and not failures:
         verify_focused_batch(root, batch_id, experiments)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
