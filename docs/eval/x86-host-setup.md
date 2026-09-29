@@ -46,3 +46,5 @@ python3 eval/scripts/lib/canonical_runner.py --host x86 --batch-id <batch-id> --
 
 `mise run plan-campaign -- --host x86` prints the same schedule, and
 `mise run run-campaign -- --host x86 --batch-id <batch-id>` runs or resumes it.
+When it has finished, `mise run approve-batch -- --host x86 --batch-id <batch-id>`
+on the analysis machine records it as the x86 entry of `eval/final-batches.json`.

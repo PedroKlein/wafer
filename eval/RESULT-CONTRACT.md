@@ -66,6 +66,17 @@ copy. `BenchSink`, `BenchSource`, and the `wafer-loadgen` subscriber artifacts,
 `publisher-summary.json` and publisher timing receipt are written the same way: a
 hidden `.<name>.tmp` file beside the destination, synced, then renamed.
 
+Each batch ledger under `manifests/canonical-batches/` or `manifests/candidate-batches/`
+holds `schedule.json`, `progress.jsonl`, and `batch.json`. The runner writes `batch.json`
+once, when the batch starts: `schema_version`, `batch_id`, `host`, `source_git_sha`,
+`source_dirty`, `canonical_matrix_sha256`, `seed`, sorted `experiments`, `repetitions`
+(the diagnostic override or `null`), `thesis_evidence` (true only for a
+`canonical-batches` ledger without `repetitions`), and `started_at`. A resume from another
+source SHA or matrix hash is refused. `mise run approve-batch` adds `raw.sha256`: one
+`sha256sum` line per file of the batch under `raw/`, its alias receipts, and its ledger,
+sorted, with volume-relative paths. It records the batch and the SHA-256 of `raw.sha256`
+in the repository file `eval/final-batches.json`, which canonical analysis reads.
+
 Raw attempts are additive. A failed or interrupted attempt remains in place and the
 next attempt uses the next numeric suffix. A passed terminal receipt makes the leaf
 immutable. Analysis resolves raw inputs through the same results root and may create
@@ -279,7 +290,7 @@ Final E-Swap-1, E-Swap-2, E-Swap-5, and E-Swap-6 use one complete process run as
 
 Final E-Swap-5 contains one independent process run with 50 nested failed-replacement events. Each request must return `rolled_back`; `rollback.json` reconciles all request-indexed internal phases and the lossless full-run sequence. `post-rollback-continuity.json` proves output after the final rollback and explicitly records that no successful v2 transition was observed. A retained or synthesized `swap_timeline.json`, missing continuity, nonzero loss or duplication, or any request/rollback mismatch rejects the leaf.
 
-Final E-Density-1 is a static source-bound measurement. The canonical runner invokes `eval/scripts/collect-binary-sizes.sh` instead of `run-experiment.sh`, requires one `binary-sizes.csv` row for every non-comment entry in `eval/scripts/binary-sizes.index`, and records Pi host, tag, governor, throttling, telemetry, and measurement-window evidence. Its metadata uses `system = "static"` and `exit_codes.collector = 0`; runtime/Wasmtime provenance is intentionally inapplicable because no WAFER runtime process executes.
+Final E-Density-1 is a static source-bound measurement. The canonical runner invokes `eval/scripts/collect-binary-sizes.sh` instead of `run-experiment.sh`, requires one `binary-sizes.csv` row for every non-comment entry in `eval/scripts/binary-sizes.index`, and records Pi host, source provenance, governor, throttling, telemetry, and measurement-window evidence. Its metadata uses `system = "static"` and `exit_codes.collector = 0`; runtime/Wasmtime provenance is intentionally inapplicable because no WAFER runtime process executes.
 
 ### v10 enhanced candidate contract
 
@@ -630,7 +641,7 @@ response arrived) and the summary file, with `hotswap_triggered_at_secs: null`, 
 
 For final WAFER leaves, the verifier compares these effective metering fields with the condition in `canonical-matrix.json`. E-Perf-7 uses its four-way `metering_modes` table; declared attack stimuli use their condition-specific exceptions; all other WAFER conditions use `final_campaign.canonical_metering`. A missing or mismatched value is a contract violation.
 
-Canonical runs require `git_dirty: false`, a non-empty `git_tags` array identifying a tag that points at `git_sha`, and the host profile fields below. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
+Canonical runs require `git_dirty: false`, a 40-character `git_sha`, and the host profile fields below. `git_tags` records any tags on that commit; a tag is not required. Smoke runs may be dirty but cannot be promoted to thesis evidence. Validate canonical leaves with:
 
 ```sh
 python3 eval/scripts/verify-result-contract.py --canonical <result-dir>

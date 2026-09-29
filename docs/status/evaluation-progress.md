@@ -13,11 +13,11 @@ The final Raspberry Pi 5 method is implemented through canonical analysis. The f
 | E-Swap-4 source-driven burst | implemented |
 | Canonical analysis and approval gate | implemented |
 | WAFER/thesis documentation sync | WAFER reconciled; thesis pending |
-| Tagged release candidate | pending |
-| Reduced targeted Pi pilot | pending |
+| Verified clean release commit | pending |
+| Diagnostic batch (`--repetitions 3`) | pending |
 | Independent final-readiness review | pending |
-| Human approval | pending |
 | Full N=30 campaign | not started |
+| Batch approval (`mise run approve-batch`) | pending |
 
 The matrix contains 2,165 schedule records and 1,953 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
 

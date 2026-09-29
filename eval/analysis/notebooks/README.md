@@ -54,23 +54,22 @@ The complete and missing-leaf synthetic executions are reviewed for these proper
 
 ## Run an explicit canonical batch
 
-Install the analysis environment, provide the human approval receipt, export the batch identifier once, then execute a notebook:
+Approve the finished batch first (`mise run approve-batch`, see the [runbook](../../../docs/eval/pi5-experiment-runbook.md#approve-the-finished-batch)). Then install the analysis environment, export the batch identifier once, and execute a notebook:
 
 ```bash
 cd eval/analysis
 uv sync
-export WAFER_FULL_RUN_APPROVAL=../../.plans/rpi5-final-experiment-readiness/full-run-approval.json
 export WAFER_EVAL_BATCH_ID=<batch-id>
 export WAFER_ANALYSIS_OUTPUT_DIR=figures/final-<batch-id>
 uv run jupyter nbconvert --execute --to notebook --output-dir executed \
   notebooks/09-saturation.ipynb
 ```
 
-`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the approval decision and batch identity, Raspberry Pi 5 provenance, final-evidence labeling, a clean tagged source, zero throttling, passed completion receipts, one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
+`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the batch against its entry in `eval/final-batches.json`, Raspberry Pi 5 provenance, final-evidence labeling, a clean source, zero throttling, passed completion receipts, one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
 
-`WAFER_EVAL_BATCH_ID=jetson-<batch-id>` or `x86-<batch-id>` selects that host's batch instead. Each host batch has its own approval receipt at `.plans/<host>-final-experiment-readiness/full-run-approval.json` (or `WAFER_FULL_RUN_APPROVAL_JETSON` / `WAFER_FULL_RUN_APPROVAL_X86`), and every leaf must carry that host's `host_tag`. A batch is never validated against another host's receipt, and `require_cross_architecture` checks the Pi and x86 E-Perf-5 batches each against their own. Power reports take their label from each leaf's `power-boundary.json` and refuse to mix hosts or measurements in one figure.
+`WAFER_EVAL_BATCH_ID=jetson-<batch-id>` or `x86-<batch-id>` selects that host's batch instead. Each host has its own entry in `eval/final-batches.json`, and every leaf must carry that host's `host_tag`. A batch is never validated against another host's entry, and `require_cross_architecture` checks the Pi and x86 E-Perf-5 batches each against their own. Power reports take their label from each leaf's `power-boundary.json` and refuse to mix hosts or measurements in one figure.
 
-The analysis gate consumes a minimal approval subset: `schema_version=1`, `decision=APPROVE`, `batch_id`, `wafer_git_sha`, and `canonical_matrix_sha256`, plus `host_tag` for a receipt that is not the Pi's (a missing `host_tag` means `rpi5`). The T14 launch receipt is a strict superset and additionally records its timestamp, release tag, tcc-doc SHA, schedule hash, binary/plugin receipts, targeted-pilot ID, runtime/storage estimates, and `campaign_started=false`. Explicit diagnostic paths never consume or satisfy the approval gate.
+`mise run approve-batch -- --batch-id <id> --host <host>` writes the entry after it has checked that the finished batch is complete, clean, and from one commit. The gate then requires that the batch directory is `<host>-<batch_id>` from the entry, that the ledger `batch.json` has the entry's `wafer_git_sha` and `canonical_matrix_sha256`, that the current `eval/canonical-matrix.json` has that hash, and that the SHA-256 of the ledger's `raw.sha256` equals `raw_manifest_sha256`. It does not hash the raw files again; `sha256sum -c` on `raw.sha256` does that. A missing entry fails with the `approve-batch` command to run. Explicit diagnostic paths never consume or satisfy the approval gate.
 
 ## Run an explicit diagnostic directory
 

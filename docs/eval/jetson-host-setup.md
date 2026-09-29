@@ -52,3 +52,5 @@ python3 eval/scripts/lib/canonical_runner.py --host jetson --batch-id <batch-id>
 
 `mise run plan-campaign -- --host jetson` prints the same schedule, and
 `mise run run-campaign -- --host jetson --batch-id <batch-id>` runs or resumes it.
+When it has finished, `mise run approve-batch -- --host jetson --batch-id <batch-id>`
+on the analysis machine records it as the Jetson entry of `eval/final-batches.json`.
