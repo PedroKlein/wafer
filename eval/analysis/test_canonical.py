@@ -21,6 +21,7 @@ from wafer_analysis.canonical import (
     ekuiper_profile_tables,
     failed_replacement_table,
     capacity_competitive_decision,
+    depth_tables,
     metering_table,
     recovery_table,
     swap3_table,
@@ -1329,3 +1330,32 @@ def test_recovery_table_rejects_a_run_without_samples() -> None:
         recovery_table(records)
     with pytest.raises(ValueError, match="30 independent runs"):
         recovery_table(recovery_records(runs=29))
+
+
+def depth_records(runs: int = 30, depths: tuple[int, ...] = (1, 3, 5, 10)) -> list[dict]:
+    return [
+        {"condition": f"depth-{depth}", "run_index": run, "p50_ns": 40_000 + 7_500 * depth + run % 5}
+        for depth in depths
+        for run in range(1, runs + 1)
+    ]
+
+
+def test_depth_tables_report_medians_and_the_per_transform_slope() -> None:
+    per_depth, fit = depth_tables(depth_records(), "p50_ns", units="nanoseconds")
+    assert per_depth["depth"].tolist() == [1, 3, 5, 10]
+    assert per_depth["median_p50_ns"].tolist() == pytest.approx([47_502, 62_502, 77_502, 115_002])
+    row = fit.iloc[0]
+    assert row["slope_per_depth"] == pytest.approx(7_500, abs=0.5)
+    assert row["slope_ci95_low"] <= row["slope_per_depth"] <= row["slope_ci95_high"]
+    assert row["N_runs"] == 120 and row["r_squared"] > 0.99
+    assert row["units"] == "nanoseconds per added transform"
+    assert "not a decision rule" in row["claim_boundary"]
+
+
+def test_depth_tables_require_every_depth_at_full_n_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        depth_tables(depth_records(depths=(1, 3, 5)), "p50_ns", units="nanoseconds")
+    per_depth, fit = depth_tables(depth_records(runs=2, depths=(1, 3)), "p50_ns", units="nanoseconds", canonical=False)
+    assert len(per_depth) == 2 and not fit["thesis_evidence"].any()
+    per_depth, fit = depth_tables(depth_records(runs=2, depths=(1,)), "p50_ns", units="nanoseconds", canonical=False)
+    assert len(per_depth) == 1 and fit.empty

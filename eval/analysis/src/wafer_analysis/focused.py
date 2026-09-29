@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 
 import pandas as pd
@@ -57,6 +58,14 @@ def passed_artifacts(batch: Path, artifact: str) -> list[tuple[Path, dict]]:
             continue
         results.append((path, json.loads(path.read_text())))
     return results
+
+
+def run_index(leaf: Path) -> int:
+    """The run number of a ``run-N`` or ``run-N-attempt-M`` result directory."""
+    match = re.fullmatch(r"run-(\d+)(?:-attempt-\d+)?", leaf.name)
+    if match is None:
+        raise ValueError(f"malformed run directory: {leaf}")
+    return int(match.group(1))
 
 
 def percentile_rows(batch: Path) -> pd.DataFrame:

@@ -9,6 +9,7 @@ from wafer_analysis.stats import (
     hodges_lehmann,
     median_shift_ci,
     pooled_ratio_ci,
+    stratified_slope,
 )
 
 
@@ -90,3 +91,22 @@ def test_median_shift_interval_covers_zero_for_one_population() -> None:
 def test_relative_median_shift_needs_a_nonzero_reference() -> None:
     with pytest.raises(ValueError, match="non-zero reference"):
         median_shift_ci(np.ones(3), np.zeros(3), relative=True)
+
+
+def test_stratified_slope_recovers_an_exact_line() -> None:
+    depths = np.repeat([1, 3, 5, 10], 30)
+    slope, low, high, intercept, r_squared = stratified_slope(depths, 40.0 + 7.5 * depths)
+    assert (slope, low, high, intercept, r_squared) == pytest.approx((7.5, 7.5, 7.5, 40.0, 1.0))
+
+
+def test_stratified_slope_interval_covers_the_true_slope_under_noise() -> None:
+    depths = np.repeat([1, 3, 5, 10], 30)
+    values = 40.0 + 7.5 * depths + np.random.default_rng(5).normal(0, 4, len(depths))
+    slope, low, high, _, r_squared = stratified_slope(depths, values)
+    assert low < 7.5 < high and low < slope < high
+    assert 0.8 < r_squared < 1.0
+
+
+def test_stratified_slope_needs_two_levels() -> None:
+    with pytest.raises(ValueError, match="two levels"):
+        stratified_slope(np.ones(5), np.arange(5.0))

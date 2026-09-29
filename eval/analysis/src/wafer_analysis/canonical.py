@@ -20,6 +20,7 @@ from .stats import (
     hodges_lehmann,
     median_shift_ci,
     pooled_ratio_ci,
+    stratified_slope,
 )
 
 FINAL_VISUAL_MANIFEST = (
@@ -532,6 +533,64 @@ def recovery_table(records: list[dict], *, canonical: bool = True) -> pd.DataFra
             }
         ]
     )
+
+
+DEPTH_CONDITIONS = ("depth-1", "depth-3", "depth-5", "depth-10")
+
+
+def depth_tables(
+    records: list[dict], value: str, *, units: str, canonical: bool = True
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Per-depth medians of one run-level ``value`` and its fitted per-depth slope.
+
+    Returns (one row per depth, one row with the slope). The slope describes
+    the trend across depths 1, 3, 5 and 10; it is not a decision rule.
+    """
+    grouped = _group_runs(records, DEPTH_CONDITIONS, canonical=canonical)
+    rows = []
+    for condition, runs in grouped.items():
+        if not runs:
+            continue
+        values = np.asarray([run[value] for run in runs], dtype=float)
+        low, high = bootstrap_ci(values)
+        rows.append(
+            {
+                "condition": condition,
+                "depth": int(condition.removeprefix("depth-")),
+                "N_runs": len(runs),
+                f"median_{value}": float(np.median(values)),
+                "ci95_low": low,
+                "ci95_high": high,
+                "units": units,
+                "estimator": "median run value with bootstrap 95% CI",
+                "thesis_evidence": canonical,
+            }
+        )
+    per_depth = pd.DataFrame(rows)
+    if len(rows) < 2:
+        return per_depth, pd.DataFrame()
+    depths = [int(condition.removeprefix("depth-")) for condition, runs in grouped.items() for _ in runs]
+    values = [run[value] for runs in grouped.values() for run in runs]
+    slope, low, high, intercept, r_squared = stratified_slope(np.asarray(depths), np.asarray(values))
+    fit = pd.DataFrame(
+        [
+            {
+                "value": value,
+                "depths": ", ".join(str(depth) for depth in per_depth.depth),
+                "N_runs": len(values),
+                "slope_per_depth": slope,
+                "slope_ci95_low": low,
+                "slope_ci95_high": high,
+                "intercept": intercept,
+                "r_squared": r_squared,
+                "units": f"{units} per added transform",
+                "estimator": "OLS slope over run-level values with a bootstrap 95% CI resampling runs within each depth",
+                "claim_boundary": "describes the trend over the tested depths; not a decision rule and not an extrapolation",
+                "thesis_evidence": canonical,
+            }
+        ]
+    )
+    return per_depth, fit
 
 
 def _candidate_scaling_table(

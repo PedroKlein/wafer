@@ -96,7 +96,7 @@ def build_complete_fixture(root: Path) -> None:
     for experiment, experiment_values in experiment_conditions.items():
         for condition in experiment_values:
             p50 = conditions[condition]
-            leaf = root / experiment / condition / "run-01"
+            leaf = root / experiment / condition / "run-01-attempt-01"
             write_passed_artifact(
                 leaf,
                 "percentiles.json",
@@ -110,7 +110,7 @@ def build_complete_fixture(root: Path) -> None:
             )
             if experiment == "e-perf-6":
                 (leaf / "memory.csv").write_text(
-                    "elapsed_ms,rss_bytes\n0,67108864\n1000,67108864\n"
+                    "elapsed_ms,rss_bytes\n0,60000000\n30000,67108864\n31000,67108864\n"
                 )
 
     hotswap_events = [
@@ -426,6 +426,10 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "rq2/containment.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-containment.csv").is_file()
     assert "N=12" in output_by_name["06-fault-injection.ipynb"]
+    assert (rendered / "rq1/depth-scaling.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-depth-latency-slope.csv").is_file()
+    assert (rendered / "rq1/depth-rss.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-depth-rss-slope.csv").is_file()
     assert (rendered / "rq2/branch-isolation.pdf").stat().st_size > 1_000
     assert (rendered / "rq2-branch-isolation.csv").is_file()
     assert (rendered / "rq2/recovery.pdf").stat().st_size > 1_000
