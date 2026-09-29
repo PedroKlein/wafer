@@ -44,6 +44,7 @@ from results_layout import (
 from containment import assess_containment
 from host_facts import PLATFORM_KEYS
 from interval_metrics import compose_interval_metrics
+import pi_telemetry
 from latency_evidence import latency_evidence_violations
 from write_metadata import merge_metadata
 
@@ -3806,12 +3807,7 @@ def write_progress(
     failures: int = 0,
     **details: object,
 ) -> None:
-    try:
-        temperature_c = int(
-            Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()
-        ) / 1000
-    except (OSError, ValueError):
-        temperature_c = None
+    temperature_c = pi_telemetry.read_temperature_millicelsius() / 1000 or None
     entry = {
         "timestamp": utc_now(),
         "event": event,
@@ -7015,12 +7011,12 @@ def capacity_scout_current_snapshot(
 ) -> dict:
     telemetry_available = True
     try:
-        temperature = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text())
-        throttle_text = subprocess.check_output(
-            ["vcgencmd", "get_throttled"], text=True, stderr=subprocess.DEVNULL
-        ).strip()
-        throttled = throttle_text != "throttled=0x0"
-    except (OSError, ValueError, subprocess.CalledProcessError):
+        backend = pi_telemetry.make_backend("auto")
+        temperature = pi_telemetry.read_temperature_millicelsius(
+            backend.sysroot, backend.zone_types, backend.hwmon_names
+        )
+        throttled = backend.throttled() != pi_telemetry.NOT_THROTTLED
+    except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
         telemetry_available = False
         temperature = 0
         throttled = False
