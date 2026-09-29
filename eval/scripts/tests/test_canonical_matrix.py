@@ -390,10 +390,18 @@ def test_preflight_accepts_canonical_facts() -> None:
     assert "canonical preflight: PASS" in result.stdout
 
 
+def test_preflight_accepts_an_untagged_clean_source(tmp_path: Path) -> None:
+    path = tmp_path / "facts.json"
+    write_json(path, {**valid_facts(), "git_tags": []})
+
+    result = run_validator("preflight", str(path), "--require-ekuiper")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_preflight_rejects_each_provenance_and_host_violation() -> None:
     invalid = {
         "dirty source": ("git_dirty", True),
-        "untagged source": ("git_tags", []),
         "host tag": ("host_tag", "shakedown-macos"),
         "CPU governor": ("cpu_governors", ["ondemand"]),
         "isolated CPUs": ("isolated_cpus", ""),

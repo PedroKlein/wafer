@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 
+import contextlib
 import hashlib
+import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -30,7 +33,6 @@ from canonical_runner import (  # noqa: E402
     capacity_scout_failed_attempt_stop_reason,
     capacity_scout_next_rate,
     capacity_scout_safety_action,
-    capacity_scout_source_state,
     persist_capacity_scout_decision,
     replay_capacity_scout_decisions,
     build_schedule,
@@ -51,6 +53,7 @@ from canonical_runner import (  # noqa: E402
     ProcessResourceSampler,
     RunItem,
     select_attempt,
+    source_state,
     summarize_branch_isolation,
     summarize_capacity_knee,
     summarize_process_resources,
@@ -2773,7 +2776,7 @@ def test_capacity_scout_progress_has_one_complete_schema() -> None:
     assert entry["counters"] == counters
 
 
-def test_capacity_scout_source_state_uses_deploy_receipt_without_git_checkout() -> None:
+def test_source_state_uses_deploy_receipt_without_git_checkout() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         receipt = {
@@ -2783,7 +2786,7 @@ def test_capacity_scout_source_state_uses_deploy_receipt_without_git_checkout() 
         }
         (root / "SOURCE_STATE.json").write_text(json.dumps(receipt))
 
-        assert capacity_scout_source_state(root) == receipt
+        assert source_state(root) == receipt
 
 
 def test_capacity_scout_safety_boundaries() -> None:
@@ -4584,6 +4587,357 @@ def test_validation_gate_accepts_hdr_bucket_containing_55_ms() -> None:
         result = evaluate_validation_gate(root, expected_runs=1)
     assert result.passed is False
     assert result.failed_runs == [1]
+
+
+SOURCE_SHA = "a" * 40
+
+
+def run_main(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], *args: str
+) -> tuple[int, str, str]:
+    monkeypatch.setattr(sys, "argv", ["canonical_runner.py", *args])
+    code = runner.main()
+    captured = capsys.readouterr()
+    return code, captured.out, captured.err
+
+
+def passed_item(root: Path, batch_id: str, item: RunItem) -> bool:
+    """Stand in for a real run: leave a passed, clean leaf or an alias receipt."""
+    if item.shared_from:
+        copy_shared_result(root, batch_id, item)
+        return True
+    condition = runner.results_layout(root).raw_path(
+        item.experiment, runner.batch_name(batch_id), item.condition
+    )
+    selection = select_attempt(condition, item.run_index)
+    if selection.skip:
+        return True
+    selection.path.mkdir(parents=True)
+    (selection.path / "metadata.json").write_text(
+        json.dumps(
+            {
+                "experiment": item.experiment,
+                "git_sha": SOURCE_SHA,
+                "git_dirty": False,
+                "git_tags": [],
+                "throttled": "0x0",
+                "evidence_class": "final",
+                "thesis_evidence": True,
+            }
+        )
+    )
+    if item.experiment == "e-val-1":
+        (selection.path / "percentiles.json").write_text(
+            json.dumps({"total_count": 1, "p99_ns": 50_000_000})
+        )
+    runner.write_status(selection.path, item, "passed")
+    return True
+
+
+def use_results_volume(patch: pytest.MonkeyPatch, base: Path) -> tuple[Path, Path, Path]:
+    root, volume = base / "checkout", base / "results volume"
+    layout = runner.ResultsLayout.resolve(root, volume, mount_check=lambda _: True)
+    patch.setattr(runner, "results_layout", lambda _: layout)
+    patch.setattr(runner, "run_item", passed_item)
+    patch.setattr(runner, "summarise", lambda *_: None)
+    return root, volume, layout.manifest_path("canonical-batches", "rpi5-final")
+
+
+@pytest.fixture(scope="module")
+def executed_final_batch(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    base = tmp_path_factory.mktemp("final-batch")
+    (base / "checkout/eval").mkdir(parents=True)
+    (base / "checkout/SOURCE_STATE.json").write_text(
+        json.dumps({"git_sha": SOURCE_SHA, "git_dirty": False, "git_tags": []})
+    )
+    (base / "results volume").mkdir()
+    with pytest.MonkeyPatch.context() as patch, contextlib.redirect_stdout(io.StringIO()):
+        root, _, _ = use_results_volume(patch, base)
+        patch.setattr(
+            sys, "argv", ["canonical_runner.py", "--root", str(root), "--execute", "--batch-id", "final"]
+        )
+        assert runner.main() == 0
+    return base
+
+
+@pytest.fixture
+def final_batch(
+    executed_final_batch: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, Path, Path]:
+    """A copy of one full schedule executed with every item stubbed to pass."""
+    shutil.copytree(executed_final_batch, tmp_path, dirs_exist_ok=True)
+    return use_results_volume(monkeypatch, tmp_path)
+
+
+def _set_json(path: Path, **changes: object) -> None:
+    path.write_text(json.dumps({**json.loads(path.read_text()), **changes}))
+
+
+def _leaf(volume: Path, experiment: str) -> Path:
+    return next((volume / "raw" / experiment / "rpi5-final").rglob("run-01-attempt-01"))
+
+
+def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Path, Path]) -> None:
+    _, _, ledger = final_batch
+
+    batch = json.loads((ledger / "batch.json").read_text())
+
+    assert batch == {
+        "schema_version": 1,
+        "batch_id": "final",
+        "host": "rpi5",
+        "source_git_sha": SOURCE_SHA,
+        "source_dirty": False,
+        "canonical_matrix_sha256": hashlib.sha256(
+            runner.CANONICAL_MATRIX_PATH.read_bytes()
+        ).hexdigest(),
+        "seed": 1729,
+        "experiments": sorted(runner.parse_experiments("all")),
+        "repetitions": None,
+        "thesis_evidence": True,
+        "started_at": batch["started_at"],
+    }
+
+
+def test_resume_refuses_another_source_or_matrix(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _, ledger = final_batch
+    resume = ("--root", str(root), "--execute", "--batch-id", "final")
+
+    assert run_main(monkeypatch, capsys, *resume)[0] == 0
+    (root / "SOURCE_STATE.json").write_text(
+        json.dumps({"git_sha": "b" * 40, "git_dirty": False, "git_tags": []})
+    )
+    new_source = run_main(monkeypatch, capsys, *resume)
+    (root / "SOURCE_STATE.json").write_text(
+        json.dumps({"git_sha": SOURCE_SHA, "git_dirty": False, "git_tags": []})
+    )
+    _set_json(ledger / "batch.json", canonical_matrix_sha256="c" * 64)
+    new_matrix = run_main(monkeypatch, capsys, *resume)
+
+    for code, _, err in (new_source, new_matrix):
+        assert code == 2
+        assert "one commit and one matrix" in err
+
+
+def test_final_batch_refuses_a_dirty_source_at_start_and_on_resume(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _, ledger = final_batch
+    (root / "SOURCE_STATE.json").write_text(
+        json.dumps({"git_sha": SOURCE_SHA, "git_dirty": True, "git_tags": []})
+    )
+    execute = ("--root", str(root), "--execute")
+
+    fresh = run_main(monkeypatch, capsys, *execute, "--batch-id", "fresh")
+    resumed = run_main(monkeypatch, capsys, *execute, "--batch-id", "final")
+    monkeypatch.setenv(runner.DIAGNOSTIC_REPETITIONS_ENV, "unset")
+    diagnostic = run_main(
+        monkeypatch, capsys, *execute, "--batch-id", "pilot", "--repetitions", "2",
+        "--experiments", "e-val-1",
+    )
+
+    for code, _, err in (fresh, resumed):
+        assert code == 2
+        assert "needs a clean source tree" in err
+    assert not (ledger.parent / "rpi5-fresh/batch.json").exists()
+    assert diagnostic[0] == 0, diagnostic[2]
+
+
+def test_execute_refuses_to_resume_an_approved_batch(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    assert run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")[0] == 0
+    sealed = {path: path.read_bytes() for path in volume.rglob("*") if path.is_file()}
+
+    code, _, err = run_main(monkeypatch, capsys, "--root", str(root), "--execute", "--batch-id", "final")
+
+    assert code == 2
+    assert "is approved" in err
+    assert {path: path.read_bytes() for path in volume.rglob("*") if path.is_file()} == sealed
+
+
+def test_approve_leaves_finder_metadata_out_of_the_manifest(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    leaf = _leaf(volume, "e-perf-1")
+    (leaf / ".DS_Store").write_bytes(b"finder")
+    (leaf / "._metadata.json").write_bytes(b"appledouble")
+
+    code, _, err = run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")
+
+    assert code == 0, err
+    listed = (ledger / "raw.sha256").read_text()
+    assert "metadata.json" in listed
+    assert ".DS_Store" not in listed
+    assert "._metadata.json" not in listed
+
+
+def test_approve_writes_a_verifiable_manifest_and_the_final_batch_entry(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    approve = ("--root", str(root), "--approve", "--batch-id", "final")
+
+    code, out, err = run_main(monkeypatch, capsys, *approve)
+    first = (root / "eval/final-batches.json").read_text()
+    assert run_main(monkeypatch, capsys, *approve)[0] == 0
+
+    assert code == 0, err
+    assert "approved rpi5-final" in out
+    assert (root / "eval/final-batches.json").read_text() == first
+    listed = [line.split("  ", 1)[1] for line in (ledger / "raw.sha256").read_text().splitlines()]
+    assert listed == sorted(
+        path.relative_to(volume).as_posix()
+        for path in volume.rglob("*")
+        if path.is_file() and path.name != "raw.sha256"
+    )
+    assert any(path.startswith("manifests/aliases/e-perf-2/rpi5-final/") for path in listed)
+    checker = ["sha256sum"] if shutil.which("sha256sum") else ["shasum", "-a", "256"]
+    checked = subprocess.run(
+        [*checker, "-c", "manifests/canonical-batches/rpi5-final/raw.sha256"],
+        cwd=volume,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert checked.returncode == 0, checked.stdout + checked.stderr
+    entry = json.loads(first)["batches"]["rpi5"]
+    assert json.loads(first)["schema_version"] == 1
+    assert entry == {
+        "batch_id": "final",
+        "wafer_git_sha": SOURCE_SHA,
+        "canonical_matrix_sha256": hashlib.sha256(
+            runner.CANONICAL_MATRIX_PATH.read_bytes()
+        ).hexdigest(),
+        "raw_manifest_sha256": hashlib.sha256((ledger / "raw.sha256").read_bytes()).hexdigest(),
+        "approved_at": entry["approved_at"],
+        "other_final_batches": [],
+    }
+
+
+def test_approve_discloses_other_final_batches_of_the_host(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _, ledger = final_batch
+    for name, thesis in (("rpi5-earlier", True), ("rpi5-pilot", False), ("jetson-other", True)):
+        other = ledger.parent / name
+        other.mkdir()
+        (other / "batch.json").write_text(json.dumps({"thesis_evidence": thesis}))
+
+    code, out, err = run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")
+
+    assert code == 0, err
+    entry = json.loads((root / "eval/final-batches.json").read_text())["batches"]["rpi5"]
+    assert entry["other_final_batches"] == ["earlier"]
+    assert "earlier" in out
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda root, volume, ledger: _set_json(
+                _leaf(volume, "e-perf-1") / "canonical-status.json", status="failed"
+            ),
+            "runs are not done",
+        ),
+        (
+            lambda root, volume, ledger: _set_json(
+                _leaf(volume, "e-perf-3") / "metadata.json", git_dirty=True
+            ),
+            "git_dirty=True",
+        ),
+        (
+            lambda root, volume, ledger: _set_json(
+                _leaf(volume, "e-swap-4") / "metadata.json", git_sha="b" * 40
+            ),
+            f"git_sha={'b' * 40}",
+        ),
+        (
+            lambda root, volume, ledger: _set_json(ledger / "e-val-1-gate.json", passed=False),
+            "e-val-1-gate.json does not report a pass",
+        ),
+        (
+            lambda root, volume, ledger: (root / "eval/final-batches.json").write_text(
+                json.dumps({"schema_version": 1, "batches": {"rpi5": {"batch_id": "earlier"}}})
+            ),
+            "already approves rpi5 batch earlier",
+        ),
+    ],
+    ids=[
+        "incomplete",
+        "dirty-leaf",
+        "leaf-sha",
+        "e-val-1-gate",
+        "other-approved",
+    ],
+)
+def test_approve_refuses_a_batch_that_is_not_final_evidence(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    mutate: object,
+    message: str,
+) -> None:
+    root, volume, ledger = final_batch
+    mutate(root, volume, ledger)
+    final_batches = root / "eval/final-batches.json"
+    before = final_batches.read_bytes() if final_batches.is_file() else None
+
+    code, _, err = run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")
+
+    assert code == 1
+    assert message in err
+    assert not (ledger / "raw.sha256").exists()
+    assert (final_batches.read_bytes() if final_batches.is_file() else None) == before
+
+
+def test_approve_refuses_diagnostic_candidate_and_dirty_batches(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, _, ledger = final_batch
+    monkeypatch.setenv(runner.DIAGNOSTIC_REPETITIONS_ENV, "unset")
+    execute = ("--root", str(root), "--execute")
+    assert run_main(
+        monkeypatch, capsys, *execute, "--batch-id", "pilot", "--repetitions", "2",
+        "--experiments", "e-val-1",
+    )[0] == 0
+    assert run_main(
+        monkeypatch, capsys, *execute, "--batch-id", "candidate",
+        "--experiments", "e-perf-payload-refinement",
+    )[0] == 0
+    pilot = json.loads((ledger.parent / "rpi5-pilot/batch.json").read_text())
+    assert (pilot["repetitions"], pilot["thesis_evidence"]) == (2, False)
+    _set_json(ledger / "batch.json", source_dirty=True)
+
+    refusals = {
+        batch_id: run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", batch_id)
+        for batch_id in ("pilot", "candidate", "final")
+    }
+
+    assert all(code == 1 for code, _, _ in refusals.values())
+    assert "diagnostic batch" in refusals["pilot"][2]
+    assert "only final batches under canonical-batches" in refusals["candidate"][2]
+    assert "dirty source tree" in refusals["final"][2]
+    assert not (root / "eval/final-batches.json").exists()
 
 
 if __name__ == "__main__":
