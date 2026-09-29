@@ -69,8 +69,6 @@ Environment:
   WAFER_HARNESS_MQTT         Default for --broker.
   WAFER_RUNTIME_CPUSET       Optional taskset CPU list for wafer-runtime.
   WAFER_LOADGEN_CPUSET       Optional taskset CPU list for loadgen processes.
-  WAFER_HOST_SIDECARS        "off" skips the Pi and /proc telemetry sidecars of a
-                             --canonical run (instrument on/off control pairs only).
 USAGE
 }
 
@@ -322,7 +320,6 @@ TELEMETRY_PID=""
 PROC_TELEMETRY_PID=""
 _start_pi_telemetry() {
     [ "$canonical" -eq 1 ] || return 0
-    [ "${WAFER_HOST_SIDECARS:-on}" != "off" ] || return 0
     python3 "$REPO_ROOT/eval/scripts/lib/pi_telemetry.py" "$OUT_DIR" &
     TELEMETRY_PID=$!
     python3 "$REPO_ROOT/eval/scripts/lib/proc_telemetry.py" "$OUT_DIR" \
