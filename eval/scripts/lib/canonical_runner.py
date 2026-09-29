@@ -42,6 +42,7 @@ from results_layout import (
     validate_alias_mapping,
 )
 from containment import assess_containment
+from host_facts import PLATFORM_KEYS
 from interval_metrics import compose_interval_metrics
 from latency_evidence import latency_evidence_violations
 from write_metadata import merge_metadata
@@ -5714,6 +5715,15 @@ def run_rate_sweep_item(
     return True
 
 
+def static_host_metadata(facts: dict) -> dict:
+    metadata = {
+        key: facts[key]
+        for key in ("git_sha", "git_dirty", "git_tags", "arch", "isolated_cpus", "cpu_governors", "throttled")
+    }
+    metadata.update({key: facts.get(key) for key in PLATFORM_KEYS})
+    return metadata
+
+
 def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
     output = selection.path
     output.mkdir(parents=True, exist_ok=True)
@@ -5780,14 +5790,7 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             "generated_at": utc_now(),
             "started_at": started_at,
             "duration_ns": finished_ns - started_ns,
-            "git_sha": facts["git_sha"],
-            "git_dirty": facts["git_dirty"],
-            "git_tags": facts["git_tags"],
-            "hardware_model": facts["hardware_model"],
-            "arch": facts["arch"],
-            "isolated_cpus": facts["isolated_cpus"],
-            "cpu_governors": facts["cpu_governors"],
-            "throttled": facts["throttled"],
+            **static_host_metadata(facts),
             "exit_codes": {"collector": 0},
             "plugin_count": len(actual_plugins),
             "thesis_evidence": True,
