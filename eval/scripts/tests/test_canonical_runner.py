@@ -3217,6 +3217,13 @@ def test_default_all_schedule_does_not_admit_candidate_experiments() -> None:
     assert "e-perf-capacity-knee" not in runner.parse_experiments("all")
 
 
+
+def test_candidates_set_schedules_one_candidate_only_batch() -> None:
+    experiments = runner.parse_experiments("candidates")
+
+    assert experiments == runner.EXECUTABLE_CANDIDATE_EXPERIMENTS
+    assert not experiments & runner.parse_experiments("all")
+    assert {item.experiment for item in build_schedule(experiments, seed=1729)} == experiments
 def test_final_capacity_loadgen_commands_use_bounded_summaries_without_raw_traces() -> None:
     item = next(
         item

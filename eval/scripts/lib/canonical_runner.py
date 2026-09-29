@@ -7000,6 +7000,8 @@ def batch_status(layout: ResultsLayout, batch_id: str) -> int:
 def parse_experiments(raw: str) -> set[str]:
     if raw == "all":
         return set(json.loads(CANONICAL_MATRIX_PATH.read_text())["experiments"])
+    if raw == "candidates":
+        return set(EXECUTABLE_CANDIDATE_EXPERIMENTS)
     values = {value.strip() for value in raw.split(",") if value.strip()}
     if not values:
         raise ValueError("--experiments must not be empty")
@@ -7278,7 +7280,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run resumable canonical evaluations on one host")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--results-root", type=Path)
-    parser.add_argument("--experiments", default="all")
+    parser.add_argument(
+        "--experiments",
+        default="all",
+        help="all (the final matrix), candidates, or a comma-separated list",
+    )
     parser.add_argument("--focused", action="store_true")
     parser.add_argument("--capacity-scout", action="store_true")
     parser.add_argument("--batch-id")
