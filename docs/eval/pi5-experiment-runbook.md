@@ -162,6 +162,8 @@ To dry-run one experiment without execution:
   --experiments e-swap-3
 ```
 
+Candidate experiments run as their own batch with `--experiments candidates`. The runner refuses to mix them with final experiments and writes their ledger under `manifests/candidate-batches/`.
+
 ## Monitor and stop safely
 
 Monitor the batch ledger and telemetry without changing result files:
