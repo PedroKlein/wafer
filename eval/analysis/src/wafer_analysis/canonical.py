@@ -653,6 +653,73 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+STARTUP_TIERS = ("small", "medium", "large")
+STARTUP_PHASES = ("process_config", "component_load_compile", "instantiation", "pipeline_setup", "first_process")
+
+
+def startup_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """Startup phases per tier and page-cache state, with the cold minus warm difference.
+
+    Each record is one run's ``startup.json`` with its ``condition`` and ``run_index``.
+    """
+    conditions = tuple(f"{tier}-{state}" for tier in STARTUP_TIERS for state in ("cold", "warm"))
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    totals = {
+        condition: np.asarray([run["total_wall_duration_ns"] for run in runs], dtype=float)
+        for condition, runs in grouped.items()
+    }
+    rows = []
+    for condition, runs in grouped.items():
+        if not runs:
+            continue
+        tier, state = condition.rsplit("-", 1)
+        low, high = bootstrap_ci(totals[condition])
+        phases = {
+            phase: np.asarray([run["phases_ns"][phase] for run in runs], dtype=float)
+            for phase in STARTUP_PHASES
+        }
+        unmeasured = totals[condition] - sum(phases.values())
+        row = {
+            "condition": condition,
+            "tier": tier,
+            "cache_state": state,
+            "N_runs": len(runs),
+            "median_total_ns": float(np.median(totals[condition])),
+            "total_ci95_low_ns": low,
+            "total_ci95_high_ns": high,
+            **{f"median_{phase}_ns": float(np.median(values)) for phase, values in phases.items()},
+            "median_unmeasured_ns": float(np.median(unmeasured)),
+            "compiled_cache_hits": sum(bool(run["compiled_component_cache"]["hit"]) for run in runs),
+            **dict.fromkeys(("cold_minus_warm_ns", "difference_ci95_low_ns", "difference_ci95_high_ns", "cliffs_delta_vs_warm", "cliffs_delta_ci95_low", "cliffs_delta_ci95_high", "effect_magnitude")),
+        }
+        warm = totals[f"{tier}-warm"]
+        if state == "cold" and len(warm):
+            difference, difference_low, difference_high = median_shift_ci(totals[condition], warm)
+            delta, magnitude = cliffs_delta(totals[condition], warm)
+            delta_low, delta_high = cliffs_delta_ci(totals[condition], warm)
+            row.update(
+                {
+                    "cold_minus_warm_ns": difference,
+                    "difference_ci95_low_ns": difference_low,
+                    "difference_ci95_high_ns": difference_high,
+                    "cliffs_delta_vs_warm": delta,
+                    "cliffs_delta_ci95_low": delta_low,
+                    "cliffs_delta_ci95_high": delta_high,
+                    "effect_magnitude": magnitude,
+                }
+            )
+        row.update(
+            {
+                "units": "nanoseconds, runs",
+                "estimator": "median run total with bootstrap 95% CI; phase medians are descriptive and need not sum to the median total; cold minus warm median with a two-group bootstrap 95% CI and Cliff's delta with bootstrap 95% CI",
+                "claim_boundary": "Linux page-cache state only; the compiled-component cache is disabled, so no compiled-cache claim",
+                "thesis_evidence": canonical,
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def _candidate_scaling_table(
     summary: dict,
     *,
