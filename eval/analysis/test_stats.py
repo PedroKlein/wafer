@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from wafer_analysis.stats import cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
+from wafer_analysis.stats import clopper_pearson, cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
 
 
 def test_hodges_lehmann_is_the_median_of_walsh_averages() -> None:
@@ -50,3 +50,19 @@ def test_estimators_reject_empty_input() -> None:
         cliffs_delta_ci(np.array([]), np.array([1.0]))
     with pytest.raises(ValueError):
         pooled_ratio_ci(np.array([1.0]), np.array([0.0]))
+
+
+def test_clopper_pearson_matches_the_exact_closed_forms() -> None:
+    low, high = clopper_pearson(30, 30)
+    assert low == pytest.approx(0.025 ** (1 / 30), abs=1e-9)
+    assert high == 1.0
+    low, high = clopper_pearson(0, 30)
+    assert (low, high) == (0.0, pytest.approx(1 - 0.025 ** (1 / 30), abs=1e-9))
+    assert clopper_pearson(15, 30) == pytest.approx((0.3129703, 0.6870297), abs=1e-7)
+
+
+def test_clopper_pearson_rejects_impossible_counts() -> None:
+    with pytest.raises(ValueError):
+        clopper_pearson(0, 0)
+    with pytest.raises(ValueError):
+        clopper_pearson(31, 30)

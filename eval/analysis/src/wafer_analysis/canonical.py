@@ -12,7 +12,7 @@ import pandas as pd
 
 from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
 from .rollback import validate_swap5_artifacts
-from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, hodges_lehmann, pooled_ratio_ci
+from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, clopper_pearson, hodges_lehmann, pooled_ratio_ci
 
 FINAL_VISUAL_MANIFEST = (
     {
@@ -307,6 +307,61 @@ def metering_table(records: list[dict]) -> pd.DataFrame:
                 "estimator": "median run p95 difference and ratio with bootstrap 95% CI; Hodges-Lehmann shift of the paired differences and Cliff's delta, each with bootstrap 95% CI",
                 "claim_boundary": "run-level metering ablation; no per-message inference",
                 "thesis_evidence": True,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+CONTAINMENT_ATTACKS = {
+    "e-iso-1": "buffer-overflow",
+    "e-iso-2": "cross-read",
+    "e-iso-3": "fs-access",
+    "e-iso-4": "infinite-loop",
+    "e-iso-5": "memory-exhaust",
+    "e-iso-6": "panic",
+}
+
+
+def containment_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """One row per single-node attack from its runs' containment.json records.
+
+    A canonical table needs all six attacks at 30 runs; ``canonical=False``
+    summarises whatever runs exist and marks the rows as non-evidence.
+    """
+    rows = []
+    for experiment, condition in CONTAINMENT_ATTACKS.items():
+        runs = [record for record in records if record.get("experiment") == experiment]
+        if any(run.get("condition") != condition for run in runs):
+            raise ValueError(f"{experiment} holds a condition other than {condition}")
+        if canonical:
+            _require_runs(runs, (condition,))
+        if not runs:
+            continue
+        if any(run.get("contained") is None for run in runs):
+            raise ValueError(f"{experiment} has a run without a containment verdict")
+        contained = sum(bool(run["contained"]) for run in runs)
+        low, high = clopper_pearson(contained, len(runs))
+        rows.append(
+            {
+                "experiment": experiment,
+                "condition": condition,
+                "expected_mechanism": runs[0].get("expected_mechanism"),
+                "N_runs": len(runs),
+                "contained_runs": contained,
+                "containment_proportion": contained / len(runs),
+                "containment_ci95_low": low,
+                "containment_ci95_high": high,
+                "escape_probability_upper95": 1 - low,
+                "median_mechanism_count": float(np.median([run["expected_count"] for run in runs])),
+                "max_unexpected_outcomes": max(int(run["unexpected_outcomes"]) for run in runs),
+                "runtime_panics": sum(bool(run["runtime_panic"]) for run in runs),
+                "median_healthy_messages_out": float(np.median([run["healthy_messages_out"] for run in runs])),
+                "all_contained": contained == len(runs),
+                "units": "runs, events, messages",
+                "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a Clopper-Pearson 95% interval",
+                "threshold": "every run contained",
+                "claim_boundary": "per attack on this host; the escape bound covers this attack only",
+                "thesis_evidence": canonical,
             }
         )
     return pd.DataFrame(rows)
