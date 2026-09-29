@@ -187,7 +187,7 @@ def build_complete_fixture(root: Path) -> None:
     for experiment, condition in attacks.items():
         for run in (1, 2):
             write_passed_artifact(
-                root / experiment / condition / f"run-{run:02d}",
+                root / experiment / condition / f"run-{run:02d}-attempt-01",
                 "containment.json",
                 {
                     "experiment": experiment,
@@ -221,7 +221,7 @@ def build_complete_fixture(root: Path) -> None:
                 },
             )
     for run in (1, 2):
-        leaf = root / "e-iso-8" / "panic-recovery" / f"run-{run:02d}"
+        leaf = root / "e-iso-8" / "panic-recovery" / f"run-{run:02d}-attempt-02"
         write_passed_artifact(leaf, "recovery.json", {"sample_count": 3})
         (leaf / "recovery.csv").write_text(
             "node_id,sample_index,duration_ns\n"
