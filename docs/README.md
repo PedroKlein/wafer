@@ -15,9 +15,11 @@ arc42-lite framework, split into subdirectories by reader intent.
 - **Writing a plugin?** →
   [`interfaces/wit-contracts.md`](interfaces/wit-contracts.md) and
   [`interfaces/plugin-sdk.md`](interfaces/plugin-sdk.md).
-- **Preparing the Raspberry Pi 5 evaluation host?** →
-  [`eval/pi5-host-setup.md`](eval/pi5-host-setup.md), then
-  [`eval/pi5-experiment-runbook.md`](eval/pi5-experiment-runbook.md).
+- **Preparing an evaluation host?** →
+  [`eval/pi5-host-setup.md`](eval/pi5-host-setup.md) for the canonical
+  Raspberry Pi 5, [`eval/jetson-host-setup.md`](eval/jetson-host-setup.md)
+  and [`eval/x86-host-setup.md`](eval/x86-host-setup.md) for the replication
+  hosts, then [`eval/pi5-experiment-runbook.md`](eval/pi5-experiment-runbook.md).
 - **Investigating a design decision?** →
   [`rfcs/`](rfcs/) for long-form and [`adr/`](adr/) for short summaries.
 - **Checking what is implemented today?** →
@@ -77,6 +79,8 @@ docs/
 │   └── dependencies.md
 ├── eval/                 Evaluation host setup and runbooks (How-to)
 │   ├── pi5-host-setup.md
+│   ├── jetson-host-setup.md
+│   ├── x86-host-setup.md
 │   ├── pi5-experiment-runbook.md
 │   └── cross-compile.md
 ├── status/               Current state of the world (Reference)
@@ -87,27 +91,27 @@ docs/
 │   ├── canonical-readiness.md
 │   ├── rpi5-canonical-transition.md
 │   └── migration-audit.md
-├── benchmarks/           Measurement reports
+├── benchmarks/           Measurement notes; no final results yet
 │   ├── README.md
-│   ├── rq-summary.md
 │   ├── hot-swap.md
-│   ├── rq2-attacks.md
-│   ├── binary-sizes.md
-│   ├── methodology-validation.md
 │   ├── ekuiper-comparator.md
 │   ├── ekuiper-profile-diagnostic.md
-│   └── ekuiper-tail-diagnostic.md
-├── workflows/            Session recipes (Explanation)
-│   ├── README.md
-│   ├── discussion-session.md
-│   ├── implementation-session.md
-│   └── planning-session.md
+│   ├── rq-summary.md                (archived shakedown record)
+│   ├── rq2-attacks.md               (archived shakedown record)
+│   ├── binary-sizes.md              (archived shakedown record)
+│   ├── methodology-validation.md    (archived shakedown record)
+│   └── ekuiper-tail-diagnostic.md   (archived pilot diagnosis)
 ├── api/                  Machine-readable API artefacts
 │   ├── README.md
 │   ├── openapi.yaml
 │   └── bruno-collection/
-└── history/plans/        Archived planning scratchpads (Historical)
+└── history/              Archive, not current: plans, pre-final status logs,
+                          Phase 0 session recipes
 ```
+
+Files under `history/` and the benchmark pages marked archived open with an
+"Archived, not current" banner. They explain how the project got here; they do
+not describe the runtime or the evaluation as they are today.
 
 ## Reader profiles
 

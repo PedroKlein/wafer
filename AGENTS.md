@@ -6,17 +6,17 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 | What you need | Where to find it |
 |---------------|------------------|
-| **What to build next** | Archived planning scratchpads live in `docs/history/plans/`: `canonical-runs.md` (Pi/Jetson canonical-run plan), `thesis-hardening.md` (closed 2026-08-02), `eval-followups.md`. `ROADMAP.md` gives the aspirational narrative. |
-| **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (per-experiment readiness for Pi/Jetson runs) |
+| **What to build next** | GitHub issues. `ROADMAP.md` gives the longer-horizon narrative. |
+| **Current implementation state** | `docs/status/implementation-status.md` (what's built) + `docs/status/implementation-gaps.md` (documented drift with per-gap fix plans) + `docs/status/canonical-readiness.md` (what the final campaign still needs) |
 | **Which document is authoritative** | `tcc-doc/SOURCES-OF-TRUTH.md` |
-| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology) + `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
-| **RQ verdicts + shakedown numbers** | `docs/benchmarks/rq-summary.md` — RQ1/RQ2/RQ3 tables with linked notebooks |
+| **How experiments should run** | `tcc-doc/research/analysis/evaluation-plan.md` (methodology), `eval/canonical-matrix.json` (the executable schedule and host profiles), `docs/eval/pi5-experiment-runbook.md` (operator steps), `eval/RESULT-CONTRACT.md` (per-experiment output-directory shape) |
+| **Evaluation numbers** | None are final yet. Every number under `docs/benchmarks/` or `docs/history/` is a pre-final diagnostic; never quote one as a result. |
 | **RQs and pass/fail criteria** | `tcc-doc/research/analysis/thesis-statement-v3.md` |
 | **Pipeline topologies to implement** | `tcc-doc/context/use-cases.md` |
 | **Old RQ4/5/6 references** | `tcc-doc/RQ-VERSION-MAP.md` (they map to current RQ1–3) |
 | **Literature on a topic** | Obsidian vault `TCC/papers/` |
 
-**Sibling repos** (pi-repos group `tcc`):
+**Sibling repos:**
 - `github.com/PedroKlein/tcc-doc` — research, evaluation plan, thesis writing
 - `github.com/PedroKlein/obsidian-personal` — knowledge base (notes under `TCC/`)
 
@@ -74,7 +74,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | `plugins/` | Wasm plugin source (e.g. `pass-through`, `uppercase`, `json-parse`, `threshold-filter`, `content-router`, `mnist-inference`, `tensor-prep`, `cayenne-decoder`, `quality-rules`, `anomaly-detector`, `vibration-features`, `result-format`, `attacks/…`) |
 | `wit/` | The single `wafer:pipeline@0.1.0` project package, the four `transform-node` / `filter-node` / `router-node` / `inference-node` worlds, and pinned dependency WIT |
 | `examples/` | Runtime-schema pipeline TOML examples (passthrough, uppercase, filter, chain, fanout, file-io, mqtt, http, overflow-dlq-demo, metrics-demo, mnist-inference, remote OCI, …). See `examples/README.md` before copying config shape. |
-| `tests/` | Integration tests |
+| `tests/` | Shared test fixtures (integration tests live in each crate's `tests/`) |
 | `docs/` | Project documentation (see Documentation Map below) |
 | `specs/` | Feature specifications (OpenSpec workflow) |
 | `scripts/` | Helper scripts |
@@ -85,7 +85,7 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 
 ## Documentation Map
 
-When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, status reports, and workflows. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
+When you need deeper context on any aspect of the project, consult these files. The `docs/` tree follows an arc42-lite layout: architecture views, RFCs, ADRs, interfaces, operations guides, evaluation runbooks and status reports. `docs/history/` is an archive: every file there opens with an "Archived, not current" banner, and nothing in it describes the runtime or the evaluation as they are today. Each entry includes a summary so you know what to expect before reading. If documentation and implementation disagree, trust the source code, WIT files under `wit/`, and `docs/status/implementation-gaps.md`.
 
 ### Status & Evaluation
 
@@ -93,22 +93,20 @@ When you need deeper context on any aspect of the project, consult these files. 
 |----------|---------|
 | `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP doc. |
 | `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID (A1–A20). Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
-| `docs/status/canonical-readiness.md` | Per-experiment readiness matrix for canonical Pi/Jetson runs. Notes macOS-vs-Linux confounders + what needs to change to book Pi time. |
-| `docs/status/evaluation-progress.md` | Progress against RFC-008 / evaluation-plan (24 experiments). |
-| `docs/status/migration-audit.md` | Row-per-decision audit of the runtime-migration plan closure. |
-| `docs/benchmarks/rq-summary.md` | **RQ1/RQ2/RQ3 verdict tables** with shakedown numbers and links to the driving notebook for each row. Read before quoting any evaluation number. |
+| `docs/status/canonical-readiness.md` | What the final campaign still needs and the current claim boundaries. |
+| `docs/status/evaluation-progress.md` | Final-campaign readiness per area. |
+| `docs/status/migration-audit.md` | Historical row-per-decision audit of the runtime-migration plan closure. |
+| `docs/benchmarks/README.md` | Which benchmark pages are current and which are historical diagnostics. `rq-summary.md`, `binary-sizes.md`, `methodology-validation.md`, `rq2-attacks.md` and `ekuiper-tail-diagnostic.md` are archived shakedown records, not results. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phase timing reference. |
-| `docs/benchmarks/binary-sizes.md`, `ekuiper-comparator.md`, `methodology-validation.md`, `rq2-attacks.md` | Per-experiment benchmark documentation. |
-| `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`); the path used to produce Pi-target binaries. |
-| `eval/RESULT-CONTRACT.md` | **Authoritative shape** of every result directory under `eval/results/`. Every notebook and every canonical-runs comparison assumes this contract. |
+| `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for the campaign: gates, pilot, launch, resume, analysis. |
+| `docs/eval/pi5-host-setup.md`, `jetson-host-setup.md`, `x86-host-setup.md` | Host preparation for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. |
+| `docs/eval/cross-compile.md` | aarch64-linux cross-compile recipe via docker (`mise run cross-build-pi`) and the glibc each binary needs. |
+| `eval/canonical-matrix.json` | **Executable source** of the campaign: experiments, repetitions, rates, host profiles. |
+| `eval/RESULT-CONTRACT.md` | **Authoritative shape** of every result directory under `eval/results/`. Every notebook and the result verifier assume this contract. |
 
-### Active Plans
+### Archive
 
-| Plan | Status |
-|------|--------|
-| `docs/history/plans/canonical-runs.md` | **Active.** Pi/Jetson preflight + canonical-run execution against RFC-008. C1+C2 closed 2026-08-02; open: C3, R1..R3, H1..H3, E1, F1..F5. |
-| `docs/history/plans/thesis-hardening.md` | **Closed 2026-08-02** (9/9). Landed A17, A19, cross-arch cross-compile, thesis-grade PDF pipeline, doc-freshness sweep, plus BL/M/L verify follow-ups. |
-| `docs/history/plans/eval-followups.md` | Archived follow-ups from the closed `evaluation-infrastructure` plan. |
+`docs/history/` holds archived plans (`plans/`), the pre-final readiness and progress logs (`status/`) and the Phase 0 session recipes (`workflows/`). Read them only for background; see `docs/history/README.md`.
 
 ### Design & Specification
 
@@ -133,11 +131,6 @@ When you need deeper context on any aspect of the project, consult these files. 
 | `docs/api/bruno-collection/` | Bruno HTTP client collection for interactive API testing. |
 | `docs/operations/registry.md` | OCI registry integration guide — publishing Wasm components to ghcr.io/Docker Hub, pulling via the `plugin` field, configuring caching, and using `wkg` tooling. |
 | `docs/operations/mqtt-setup.md` | Local MQTT broker setup (Docker Mosquitto) for developing and testing MQTT sources and sinks. |
-
-### Benchmarks & Workflow
-
-| Document | Summary |
-|----------|---------|
 
 ### Root Files
 
@@ -180,9 +173,9 @@ mise run //plugins:build-plugin NAME  # Build a specific plugin (e.g., mise run 
 ### Cross-Compile (aarch64 Linux — Pi/Jetson target)
 
 ```bash
-mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch64-unknown-linux-gnu
+mise run cross-build-pi        # Build wafer, wafer-loadgen, waferctl for aarch64 Linux
                                # via docker run --platform linux/arm64 rust:1-slim-bookworm.
-                               # Output: target/aarch64-unknown-linux-gnu/release/{wafer,wafer-loadgen,waferctl}
+                               # Output: target/docker-aarch64-linux/release/{wafer,wafer-loadgen,waferctl}
 mise run cross-build-pi-check  # Verify the three binaries are aarch64 ELF via `file(1)`. CI-friendly.
 ```
 
@@ -191,13 +184,27 @@ See `docs/eval/cross-compile.md` for the design rationale (why docker over the `
 ### Analysis Notebooks
 
 ```bash
-mise run //eval:notebooks                          # Open all 15 analysis notebooks in JupyterLab (browser)
+mise run //eval:notebooks                          # Open all 13 analysis notebooks in JupyterLab (browser)
 mise run //eval:notebooks-view 05-hotswap-timeline # Render one notebook to HTML + open in browser (read-only)
 mise run //eval:notebooks-execute                  # Re-execute all notebooks against current eval/results/ data
 mise run //eval:figures                            # Re-execute notebooks + list regenerated PDFs under eval/analysis/figures/
 ```
 
 Notebooks live under `eval/analysis/notebooks/`; the uv project (`eval/analysis/pyproject.toml`) pins JupyterLab, matplotlib, pandas, HdrHistogram, statsmodels, scipy. `notebooks-view` is the fastest path for reading rendered analysis without launching a live kernel. See `eval/analysis/notebooks/README.md` for the notebook ↔ experiment ↔ RQ mapping.
+
+### Evaluation Campaign
+
+Run these on the evaluation host itself (from its `~/wafer` checkout), except `preflight-pi5`, which uses SSH (`PI_HOST=user@host`). The full sequence is in `docs/eval/pi5-experiment-runbook.md`.
+
+```bash
+mise run preflight-pi5                               # or preflight-jetson / preflight-x86 on those hosts
+mise run plan-campaign -- --host rpi5                # Print the schedule (no runs)
+mise run run-campaign -- --host rpi5 --batch-id ID   # Run or resume a batch
+mise run run-campaign -- --host rpi5 --batch-id ID --repetitions 3   # Diagnostic pilot, never thesis evidence
+mise run campaign-status -- --host rpi5 --batch-id ID
+mise run idle-baseline-pi5                           # Diagnostic idle-power baseline
+mise run instrument-ab-pi5                           # Cost of the host telemetry sidecars
+```
 
 ### Running Pipelines
 
@@ -213,7 +220,7 @@ mise run run-remote                         # Run with OCI-hosted plugins
 cargo test --workspace                          # All tests
 cargo test -p wafer-core                        # Single crate
 cargo test -p wafer-core --features http-api    # With feature flags
-cargo test -p wafer-runtime --test integration  # Integration tests only
+cargo test -p wafer-runtime --test exit_status  # One integration test file
 cargo test --workspace -- --nocapture           # With stdout output
 ```
 
