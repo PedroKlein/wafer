@@ -2337,3 +2337,31 @@ if __name__ == "__main__":
     test_canonical_result_rejects_dirty_untagged_and_missing_output()
     test_bench_sink_sequence_summary_rejects_out_of_range_messages()
     print("canonical result verifier tests: PASS")
+
+
+def _set_metadata(leaf: Path, **changes: object) -> None:
+    metadata = json.loads((leaf / "metadata.json").read_text())
+    metadata.update(changes)
+    (leaf / "metadata.json").write_text(json.dumps(metadata))
+
+
+def test_canonical_leaf_is_checked_against_its_own_host_profile(tmp_path: Path) -> None:
+    leaf = make_result(tmp_path)
+    _set_metadata(
+        leaf,
+        host_tag="jetson",
+        hardware_model="NVIDIA Jetson Orin Nano Engineering Reference Developer Kit Super",
+        online_cpus="0-3",
+        power_mode="25W",
+    )
+    completed = run(leaf.parents[1])
+    assert "jetson metadata" not in completed.stdout, completed.stdout
+
+    _set_metadata(leaf, power_mode="MAXN_SUPER")
+    completed = run(leaf.parents[1])
+    assert completed.returncode == 1
+    assert "jetson metadata: power_mode must be one of ['25W'], got 'MAXN_SUPER'" in completed.stdout
+
+    _set_metadata(leaf, host_tag="laptop")
+    completed = run(leaf.parents[1])
+    assert "rpi5 metadata: host tag must be 'rpi5', got 'laptop'" in completed.stdout

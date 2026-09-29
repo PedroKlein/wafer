@@ -32,3 +32,16 @@ is the `x86_pkg_temp` zone, or `k10temp`/`coretemp` through hwmon, and the
 throttle signal is a core below 95% of its pinned clock or a moved
 `thermal_throttle/core_throttle_count`. `power-boundary.json` records
 `x86-rapl-package-energy` or `unavailable`.
+
+## Running a batch
+
+The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
+Pass it to the runner and the validator; results land under
+`x86-<batch-id>` directories and are checked against this profile only:
+
+```sh
+python3 eval/scripts/validate-canonical.py host --host x86 --require-ekuiper
+python3 eval/scripts/lib/canonical_runner.py --host x86 --batch-id <batch-id> --dry-run
+```
+
+The focused pilot is frozen for the Pi and does not run on this host.

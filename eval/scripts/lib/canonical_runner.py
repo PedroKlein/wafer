@@ -21,7 +21,7 @@ import urllib.error
 import urllib.request
 from collections import Counter
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 EVAL_ROOT = Path(__file__).resolve().parents[2]
@@ -43,6 +43,7 @@ from results_layout import (
 )
 from containment import assess_containment
 from host_facts import PLATFORM_KEYS
+from host_profiles import HostProfile, host_profile
 from interval_metrics import compose_interval_metrics
 import pi_telemetry
 from latency_evidence import latency_evidence_violations
@@ -63,6 +64,19 @@ class Condition:
     exclusive_sut: bool = False
 
 
+HOST: HostProfile = host_profile("rpi5")
+
+
+def select_host(tag: str) -> None:
+    """Point every batch path, metadata tag and cpuset of this run at one host profile."""
+    global HOST
+    HOST = host_profile(tag)
+
+
+def batch_name(batch_id: str) -> str:
+    return f"{HOST.tag}-{batch_id}"
+
+
 @dataclass(frozen=True)
 class RunItem:
     experiment: str
@@ -71,8 +85,8 @@ class RunItem:
     config: str
     warmup_secs: int
     measurement_secs: int
-    runtime_cpus: str = "1-3"
-    support_cpus: str = "0"
+    runtime_cpus: str = field(default_factory=lambda: HOST.sut_cpus)
+    support_cpus: str = field(default_factory=lambda: HOST.support_cpus)
     loadgen_profile: str | None = None
     total_messages: int | None = None
     shared_from: str | None = None
@@ -3899,7 +3913,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     if CANONICAL_ALIASES.get(item.experiment) != item.shared_from:
         raise ValueError("shared result differs from the canonical alias mapping")
     layout = results_layout(root)
-    source_dir = layout.raw_path(item.shared_from, f"rpi5-{batch_id}", item.condition)
+    source_dir = layout.raw_path(item.shared_from, batch_name(batch_id), item.condition)
     source = find_passed_attempt(source_dir, item.run_index)
     if source is None:
         raise RuntimeError(f"shared source is incomplete: {source_dir}")
@@ -3915,7 +3929,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
     receipt = layout.manifest_path(
         "aliases",
         item.experiment,
-        f"rpi5-{batch_id}",
+        batch_name(batch_id),
         item.condition,
         f"run-{item.run_index:02d}.json",
     )
@@ -4040,6 +4054,8 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 sys.executable,
                 str(root / "eval/scripts/validate-canonical.py"),
                 "host",
+                "--host",
+                HOST.tag,
                 "--root",
                 str(root),
             ],
@@ -4201,7 +4217,7 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
         merge_metadata(
             str(output / "metadata.json"),
             item.experiment,
-            "rpi5",
+            HOST.tag,
             utc_now(),
             started_at,
             str(finished_ns - started_ns),
@@ -4260,7 +4276,7 @@ def loadgen_command(
             "--topic", topic or "wafer/telemetry/hot", "--output-dir", str(output),
             "--total-messages", str(item.total_messages or 0),
             "--measurement-secs", str(item.measurement_secs),
-            "--host-tag", "rpi5",
+            "--host-tag", HOST.tag,
         ]
         if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT} and item.total_messages is not None:
             command.extend(["--sequence-end-exclusive", str(item.total_messages)])
@@ -4328,6 +4344,8 @@ def run_restart_item(
             sys.executable,
             str(root / "eval/scripts/validate-canonical.py"),
             "host",
+            "--host",
+            HOST.tag,
             "--root",
             str(root),
             "--output",
@@ -4505,7 +4523,7 @@ def run_restart_item(
                 "system": "ekuiper",
                 "condition": item.condition,
                 "run_index": item.run_index,
-                "host_tag": "rpi5",
+                "host_tag": HOST.tag,
                 "generated_at": utc_now(),
                 "started_at": started_at,
                 "duration_ns": finished_ns - started_ns,
@@ -4526,7 +4544,7 @@ def run_restart_item(
             merge_metadata(
                 str(output / "metadata.json"),
                 item.experiment,
-                "rpi5",
+                HOST.tag,
                 utc_now(),
                 started_at,
                 str(finished_ns - started_ns),
@@ -4769,6 +4787,8 @@ def run_ekuiper_item(
                 sys.executable,
                 str(root / "eval/scripts/validate-canonical.py"),
                 "host",
+                "--host",
+                HOST.tag,
                 "--root",
                 str(root),
                 "--require-ekuiper",
@@ -4847,7 +4867,7 @@ def run_ekuiper_item(
             "system": "ekuiper",
             "condition": item.condition,
             "run_index": item.run_index,
-            "host_tag": "rpi5",
+            "host_tag": HOST.tag,
             "generated_at": utc_now(),
             "started_at": started_at,
             "duration_ns": finished_ns - started_ns,
@@ -5475,6 +5495,8 @@ def run_rate_sweep_item(
             sys.executable,
             str(root / "eval/scripts/validate-canonical.py"),
             "host",
+            "--host",
+            HOST.tag,
             "--root",
             str(root),
             "--output",
@@ -5622,7 +5644,7 @@ def run_rate_sweep_item(
                 "system": item.system,
                 "condition": item.condition,
                 "run_index": item.run_index,
-                "host_tag": "rpi5",
+                "host_tag": HOST.tag,
                 "generated_at": utc_now(),
                 "started_at": started_at,
                 "duration_ns": finished_ns - started_ns,
@@ -5648,7 +5670,7 @@ def run_rate_sweep_item(
             merge_metadata(
                 str(output / "metadata.json"),
                 item.experiment,
-                "rpi5",
+                HOST.tag,
                 utc_now(),
                 started_at,
                 str(finished_ns - started_ns),
@@ -5762,6 +5784,8 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
                 sys.executable,
                 str(root / "eval/scripts/validate-canonical.py"),
                 "host",
+                "--host",
+                HOST.tag,
                 "--root",
                 str(root),
                 "--output",
@@ -5782,7 +5806,7 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
             "system": item.system,
             "run_index": item.run_index,
             "static_measurement": True,
-            "host_tag": "rpi5",
+            "host_tag": HOST.tag,
             "generated_at": utc_now(),
             "started_at": started_at,
             "duration_ns": finished_ns - started_ns,
@@ -5816,7 +5840,7 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
             return False
 
     condition_dir = layout.raw_path(
-        item.experiment, f"rpi5-{batch_id}", item.condition
+        item.experiment, batch_name(batch_id), item.condition
     )
     selection = select_attempt(condition_dir, item.run_index)
     if selection.skip:
@@ -5849,7 +5873,7 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
         "--experiment",
         item.experiment,
         "--host",
-        "rpi5",
+        HOST.tag,
         "--canonical",
         "--defer-verification",
         "--skip-build",
@@ -6250,8 +6274,8 @@ def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> No
     layout = results_layout(root)
     result_dirs = []
     for experiment in sorted(experiments):
-        raw_batch = layout.raw_path(experiment, f"rpi5-{batch_id}")
-        alias_batch = layout.manifest_path("aliases", experiment, f"rpi5-{batch_id}")
+        raw_batch = layout.raw_path(experiment, batch_name(batch_id))
+        alias_batch = layout.manifest_path("aliases", experiment, batch_name(batch_id))
         if raw_batch.is_dir():
             result_dirs.append(raw_batch)
         elif alias_batch.is_dir():
@@ -6271,7 +6295,7 @@ def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> No
 
 def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
-    result_root = layout.raw_path("e-iso-7", f"rpi5-{batch_id}")
+    result_root = layout.raw_path("e-iso-7", batch_name(batch_id))
     runs: dict[str, list[dict]] = {
         "control": [],
         "panic-attack": [],
@@ -6294,14 +6318,14 @@ def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
         "sample_unit": "run",
         "comparisons": compare_branch_conditions(runs),
     }
-    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "branch-isolation-summary.json")
+    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "branch-isolation-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
 
 def summarize_swap4(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
-    result_root = layout.raw_path("e-swap-4", f"rpi5-{batch_id}")
+    result_root = layout.raw_path("e-swap-4", batch_name(batch_id))
     runs = []
     for timeline_path in result_root.rglob("burst-timeline.json"):
         leaf = timeline_path.parent
@@ -6321,7 +6345,7 @@ def summarize_swap4(root: Path, batch_id: str) -> Path:
         except (OSError, ValueError, KeyError, TypeError):
             continue
     summary = {**summarize_swap4_runs(runs), "batch_id": batch_id}
-    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "swap4-summary.json")
+    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "swap4-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
@@ -6334,7 +6358,7 @@ def _candidate_scaling_summary(root: Path, batch_id: str, experiment: str) -> di
         if experiment == PAYLOAD_REFINEMENT_EXPERIMENT
         else "topology-manifest.json"
     )
-    result_root = layout.raw_path(experiment, f"rpi5-{batch_id}")
+    result_root = layout.raw_path(experiment, batch_name(batch_id))
     records = []
     for manifest_path in sorted(result_root.rglob(manifest_name)):
         leaf = manifest_path.parent
@@ -6396,7 +6420,7 @@ def _candidate_scaling_summary(root: Path, batch_id: str, experiment: str) -> di
 def summarize_payload_refinement(root: Path, batch_id: str) -> Path:
     summary = _candidate_scaling_summary(root, batch_id, PAYLOAD_REFINEMENT_EXPERIMENT)
     path = results_layout(root).manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "payload-refinement-summary.json"
+        "candidate-batches", batch_name(batch_id), "payload-refinement-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6406,7 +6430,7 @@ def summarize_payload_refinement(root: Path, batch_id: str) -> Path:
 def summarize_depth_extension(root: Path, batch_id: str) -> Path:
     summary = _candidate_scaling_summary(root, batch_id, DEPTH_EXTENSION_EXPERIMENT)
     path = results_layout(root).manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "depth-extension-summary.json"
+        "candidate-batches", batch_name(batch_id), "depth-extension-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6546,7 +6570,7 @@ def _candidate_swap_summary(root: Path, batch_id: str, experiment: str) -> dict:
         if experiment == SWAP_SESSIONS_EXPERIMENT
         else "rollback.json"
     )
-    result_root = layout.raw_path(experiment, f"rpi5-{batch_id}")
+    result_root = layout.raw_path(experiment, batch_name(batch_id))
     records = []
     for artifact_path in sorted(result_root.rglob(artifact_name)):
         leaf = artifact_path.parent
@@ -6590,7 +6614,7 @@ def _candidate_swap_summary(root: Path, batch_id: str, experiment: str) -> dict:
 def summarize_swap_sessions(root: Path, batch_id: str) -> Path:
     summary = _candidate_swap_summary(root, batch_id, SWAP_SESSIONS_EXPERIMENT)
     path = results_layout(root).manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "independent-swap-summary.json"
+        "candidate-batches", batch_name(batch_id), "independent-swap-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6600,7 +6624,7 @@ def summarize_swap_sessions(root: Path, batch_id: str) -> Path:
 def summarize_rollback_sessions(root: Path, batch_id: str) -> Path:
     summary = _candidate_swap_summary(root, batch_id, ROLLBACK_SESSIONS_EXPERIMENT)
     path = results_layout(root).manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "rollback-session-summary.json"
+        "candidate-batches", batch_name(batch_id), "rollback-session-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6689,7 +6713,7 @@ def validate_ekuiper_profile_summary(summary: dict) -> None:
 
 def summarize_ekuiper_profile(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
-    result_root = layout.raw_path(EKUIPER_PROFILE_EXPERIMENT, f"rpi5-{batch_id}")
+    result_root = layout.raw_path(EKUIPER_PROFILE_EXPERIMENT, batch_name(batch_id))
     records = []
     for path in sorted(result_root.rglob("ekuiper-runtime-summary.json")):
         leaf = path.parent
@@ -6721,7 +6745,7 @@ def summarize_ekuiper_profile(root: Path, batch_id: str) -> Path:
     }
     validate_ekuiper_profile_summary(summary)
     path = layout.manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "ekuiper-profile-summary.json"
+        "candidate-batches", batch_name(batch_id), "ekuiper-profile-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6730,7 +6754,7 @@ def summarize_ekuiper_profile(root: Path, batch_id: str) -> Path:
 
 def summarize_capacity_knee(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
-    result_root = layout.raw_path(CAPACITY_KNEE_EXPERIMENT, f"rpi5-{batch_id}")
+    result_root = layout.raw_path(CAPACITY_KNEE_EXPERIMENT, batch_name(batch_id))
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
     for path in result_root.rglob("capacity-run.json"):
         status_path = path.parent / "canonical-status.json"
@@ -6744,7 +6768,7 @@ def summarize_capacity_knee(root: Path, batch_id: str) -> Path:
         by_system[result["system"]].append(result)
     summary = {**estimate_candidate_capacity_envelope(by_system), "batch_id": batch_id}
     path = layout.manifest_path(
-        "candidate-batches", f"rpi5-{batch_id}", "capacity-knee-summary.json"
+        "candidate-batches", batch_name(batch_id), "capacity-knee-summary.json"
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6753,7 +6777,7 @@ def summarize_capacity_knee(root: Path, batch_id: str) -> Path:
 
 def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
-    result_root = layout.raw_path("e-perf-10", f"rpi5-{batch_id}")
+    result_root = layout.raw_path("e-perf-10", batch_name(batch_id))
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
     capacity_paths = list(result_root.rglob("capacity-run.json"))
     if capacity_paths:
@@ -6776,7 +6800,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
                 "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
             },
         }
-        path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "rate-sweep-summary.json")
+        path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
         path.write_text(json.dumps(summary, indent=2) + "\n")
         return path
 
@@ -6832,7 +6856,7 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
         },
         "systems": systems,
     }
-    path = layout.manifest_path("canonical-batches", f"rpi5-{batch_id}", "rate-sweep-summary.json")
+    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
     return path
 
@@ -6870,7 +6894,7 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
             or script is None
         ):
             continue
-        result_root = results_layout(root).raw_path(experiment, f"rpi5-{batch_id}")
+        result_root = results_layout(root).raw_path(experiment, batch_name(batch_id))
         subprocess.run([str(root / "eval/scripts" / script), str(result_root)], check=True)
 
 
@@ -6903,7 +6927,7 @@ def validate_focused_freeze(root: Path, matrix_path: Path) -> dict:
 
 
 def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
-    print(f"batch_id={batch_id} seed={seed} host=rpi5")
+    print(f"batch_id={batch_id} seed={seed} host={HOST.tag}")
     seen: set[tuple[str, str]] = set()
     for item in schedule:
         key = (item.experiment, item.condition)
@@ -6935,8 +6959,8 @@ def parse_experiments(raw: str) -> set[str]:
 
 def load_capacity_scout_replay(root: Path, batch_id: str) -> tuple[list[dict], dict[str, dict]]:
     layout = results_layout(root)
-    batch_root = layout.raw_path("capacity-scout", f"rpi5-{batch_id}")
-    ledger = layout.manifest_path("capacity-scout", f"rpi5-{batch_id}")
+    batch_root = layout.raw_path("capacity-scout", batch_name(batch_id))
+    ledger = layout.manifest_path("capacity-scout", batch_name(batch_id))
     decisions = []
     previous_sha256 = None
     for path in sorted((ledger / "decisions").glob("decision-*.json")):
@@ -7202,7 +7226,7 @@ def run_capacity_scout_item_with_timeout(root: Path, batch_id: str, item: RunIte
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run resumable canonical Pi 5 evaluations")
+    parser = argparse.ArgumentParser(description="Run resumable canonical evaluations on one host")
     parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[3])
     parser.add_argument("--results-root", type=Path)
     parser.add_argument("--experiments", default="all")
@@ -7212,9 +7236,16 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument("--host", default="rpi5", help="host profile from the matrix hosts map")
     args = parser.parse_args()
     if args.dry_run == args.execute:
         parser.error("choose exactly one of --dry-run or --execute")
+    try:
+        select_host(args.host)
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    if args.focused and HOST.tag != "rpi5":
+        parser.error("the focused pilot is frozen for rpi5")
 
     root = args.root.resolve()
     if args.results_root is not None:
@@ -7256,8 +7287,8 @@ def main() -> int:
     if not all(character.isalnum() or character in "._-" for character in batch_id):
         parser.error("--batch-id contains unsafe characters")
     if capacity_scout:
-        evidence_root = layout.raw_path("capacity-scout", f"rpi5-{batch_id}")
-        ledger = layout.manifest_path("capacity-scout", f"rpi5-{batch_id}")
+        evidence_root = layout.raw_path("capacity-scout", batch_name(batch_id))
+        ledger = layout.manifest_path("capacity-scout", batch_name(batch_id))
         batch_path = ledger / "batch.json"
         if batch_path.is_file():
             batch = json.loads(batch_path.read_text())
@@ -7320,7 +7351,7 @@ def main() -> int:
         )
         for item in schedule:
             condition_dir = layout.raw_path(
-                "capacity-scout", f"rpi5-{batch_id}", item.condition
+                "capacity-scout", batch_name(batch_id), item.condition
             )
             selection = select_attempt(condition_dir, item.run_index)
             attempt = int(selection.path.name.rsplit("-attempt-", 1)[-1])
@@ -7392,7 +7423,7 @@ def main() -> int:
         if experiments <= EXECUTABLE_CANDIDATE_EXPERIMENTS
         else "canonical-batches"
     )
-    ledger = layout.manifest_path(ledger_group, f"rpi5-{batch_id}")
+    ledger = layout.manifest_path(ledger_group, batch_name(batch_id))
     ledger.mkdir(parents=True, exist_ok=True)
     schedule_json = json.dumps([item.__dict__ for item in schedule], indent=2) + "\n"
     (ledger / "schedule.json").write_text(schedule_json)
@@ -7433,7 +7464,7 @@ def main() -> int:
 
     if validation_items:
         validation_root = layout.raw_path(
-            "e-val-1", f"rpi5-{batch_id}", "delay-50ms"
+            "e-val-1", batch_name(batch_id), "delay-50ms"
         )
         gate = evaluate_validation_gate(validation_root, expected_runs=30)
         (ledger / "e-val-1-gate.json").write_text(
@@ -7447,7 +7478,7 @@ def main() -> int:
     for item in remaining_items:
         if item.experiment == CAPACITY_KNEE_EXPERIMENT:
             condition_dir = layout.raw_path(
-                item.experiment, f"rpi5-{batch_id}", item.condition
+                item.experiment, batch_name(batch_id), item.condition
             )
             if not select_attempt(condition_dir, item.run_index).skip:
                 apply_capacity_knee_cooldown(

@@ -129,6 +129,7 @@ mkdir -p "$harness_root/eval/scripts/lib" "$harness_root/target/release"
 cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experiment.sh"
 cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
 cp "$ROOT/eval/scripts/lib/host_facts.py" "$harness_root/eval/scripts/lib/host_facts.py"
+cp "$ROOT/eval/scripts/lib/pi_telemetry.py" "$harness_root/eval/scripts/lib/pi_telemetry.py"
 cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]
