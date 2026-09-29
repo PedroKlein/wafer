@@ -1,16 +1,31 @@
 #!/usr/bin/env python3
+"""Host power and thermal sampler that runs beside a canonical leaf.
+
+The loop, the output files and their columns are the same on every host; a
+backend supplies the power rails, the throttle probe and the thermal zone.
+`power-boundary.json` says which quantity the backend measures, because Pi
+PMIC rails, Jetson INA3221 rails and RAPL package energy are not the same
+thing. The `throttled` column is `0x0` when the host is not throttled,
+whatever the backend, so every reader keeps that single convention.
+"""
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import platform
 import re
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
+NOT_THROTTLED = "0x0"
+PINNED_CLOCK_TOLERANCE = 0.95
+POWER_SOURCE = "https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/raspberry-pi/power-supplies.adoc"
 BOUNDARY = {
     "measurement": "rpi5-pmic-internal-rail-proxy",
     "is_total_input_power": False,
@@ -20,7 +35,33 @@ BOUNDARY = {
         "PMIC conversion losses",
         "power-supply conversion losses",
     ],
-    "source": "https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/raspberry-pi/power-supplies.adoc",
+    "source": POWER_SOURCE,
+}
+JETSON_BOUNDARY = {
+    "measurement": "jetson-ina3221-rail-proxy",
+    "is_total_input_power": False,
+    "excludes": [
+        "rails the on-board INA3221 monitors do not cover",
+        "carrier-board regulators upstream of the monitored rails",
+        "USB and PCIe devices powered from the carrier board",
+    ],
+    "source": "https://docs.nvidia.com/jetson/archives/r36.3/DeveloperGuide/SD/PlatformPowerAndPerformance.html",
+}
+X86_RAPL_BOUNDARY = {
+    "measurement": "x86-rapl-package-energy",
+    "is_total_input_power": False,
+    "excludes": [
+        "DRAM outside the DRAM domain",
+        "chipset, storage, network and peripherals",
+        "voltage regulators and the power supply",
+    ],
+    "source": "https://www.kernel.org/doc/html/latest/power/powercap/powercap.html",
+}
+X86_NO_POWER_BOUNDARY = {
+    "measurement": "unavailable",
+    "is_total_input_power": False,
+    "excludes": ["everything: this host exposes no power counters"],
+    "source": "https://www.kernel.org/doc/html/latest/power/powercap/powercap.html",
 }
 RAIL_PATTERN = re.compile(
     r"^\s*(\S+)\s+(current|volt)\(\d+\)=([0-9.]+)(A|V)\s*$"
@@ -60,56 +101,272 @@ def command_output(command: list[str]) -> str:
     return subprocess.check_output(command, text=True, stderr=subprocess.DEVNULL).strip()
 
 
-def read_cpu_frequency_hz() -> int:
+def read_text(path: Path) -> str | None:
+    try:
+        return path.read_text().strip()
+    except OSError:
+        return None
+
+
+def read_int(path: Path) -> int | None:
+    text = read_text(path)
+    if text is None:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
+
+
+def cpufreq_dirs(sysroot: Path) -> list[Path]:
+    return sorted(
+        sysroot.glob("sys/devices/system/cpu/cpu[0-9]*/cpufreq"),
+        key=lambda path: int(path.parent.name[3:]),
+    )
+
+
+def read_cpu_frequency_hz(sysroot: Path = Path("/")) -> int:
     values = []
-    for path in Path("/sys/devices/system/cpu").glob("cpu[0-9]*/cpufreq/scaling_cur_freq"):
-        try:
-            values.append(int(path.read_text().strip()) * 1000)
-        except (OSError, ValueError):
-            continue
+    for cpufreq in cpufreq_dirs(sysroot):
+        value = read_int(cpufreq / "scaling_cur_freq")
+        if value is not None:
+            values.append(value * 1000)
     return max(values, default=0)
 
 
-def read_governor() -> str:
+def read_governor(sysroot: Path = Path("/")) -> str:
     values = sorted(
         {
-            path.read_text().strip()
-            for path in Path("/sys/devices/system/cpu").glob(
-                "cpu[0-9]*/cpufreq/scaling_governor"
-            )
+            governor
+            for cpufreq in cpufreq_dirs(sysroot)
+            if (governor := read_text(cpufreq / "scaling_governor")) is not None
         }
     )
     return "+".join(values) if values else "unknown"
 
 
-def read_temperature_millicelsius() -> int:
-    try:
-        return int(Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip())
-    except (OSError, ValueError):
-        return 0
-
-
-def sample() -> tuple[dict[str, int | float | str], list[dict[str, float | str]]]:
-    timestamp_ns = time.time_ns()
-    rails = parse_pmic(command_output(["vcgencmd", "pmic_read_adc"]))
-    throttled = command_output(["vcgencmd", "get_throttled"]).removeprefix(
-        "throttled="
+def thermal_zones(sysroot: Path) -> list[Path]:
+    return sorted(
+        sysroot.glob("sys/class/thermal/thermal_zone[0-9]*"),
+        key=lambda path: int(path.name[12:]),
     )
+
+
+def hwmon_dirs(sysroot: Path, names: tuple[str, ...]) -> list[Path]:
+    return sorted(
+        hwmon
+        for hwmon in sysroot.glob("sys/class/hwmon/hwmon[0-9]*")
+        if read_text(hwmon / "name") in names
+    )
+
+
+def read_temperature_millicelsius(
+    sysroot: Path = Path("/"),
+    zone_types: tuple[str, ...] = (),
+    hwmon_names: tuple[str, ...] = (),
+) -> int:
+    """The first readable source: a zone of a wanted type, a wanted hwmon, any zone."""
+    zones = thermal_zones(sysroot)
+    by_type = {read_text(zone / "type"): zone for zone in zones}
+    candidates = [by_type[zone_type] for zone_type in zone_types if zone_type in by_type]
+    for zone in candidates:
+        value = read_int(zone / "temp")
+        if value is not None:
+            return value
+    for hwmon in hwmon_dirs(sysroot, hwmon_names):
+        value = read_int(hwmon / "temp1_input")
+        if value is not None:
+            return value
+    for zone in zones:
+        value = read_int(zone / "temp")
+        if value is not None:
+            return value
+    return 0
+
+
+def cpus_below_pinned_clock(sysroot: Path) -> list[str]:
+    below = []
+    for cpufreq in cpufreq_dirs(sysroot):
+        current = read_int(cpufreq / "scaling_cur_freq")
+        maximum = read_int(cpufreq / "scaling_max_freq")
+        if current is None or not maximum:
+            continue
+        if current < maximum * PINNED_CLOCK_TOLERANCE:
+            below.append(f"{cpufreq.parent.name}-below-pinned-clock")
+    return below
+
+
+def throttle_token(reasons: list[str]) -> str:
+    return "+".join(reasons) if reasons else NOT_THROTTLED
+
+
+class PiBackend:
+    name = "pi"
+    boundary = BOUNDARY
+    zone_types = ("cpu-thermal",)
+    hwmon_names: tuple[str, ...] = ()
+
+    def __init__(self, sysroot: Path) -> None:
+        self.sysroot = sysroot
+
+    def rails(self, timestamp_ns: int) -> list[dict[str, float | str]]:
+        return parse_pmic(command_output(["vcgencmd", "pmic_read_adc"]))
+
+    def throttled(self) -> str:
+        return command_output(["vcgencmd", "get_throttled"]).removeprefix("throttled=")
+
+
+class JetsonBackend:
+    name = "jetson"
+    boundary = JETSON_BOUNDARY
+    zone_types = ("cpu-thermal", "CPU-therm")
+    hwmon_names: tuple[str, ...] = ()
+
+    def __init__(self, sysroot: Path) -> None:
+        self.sysroot = sysroot
+
+    def rails(self, timestamp_ns: int) -> list[dict[str, float | str]]:
+        rails = []
+        for hwmon in hwmon_dirs(self.sysroot, ("ina3221",)):
+            for label_path in sorted(hwmon.glob("in[0-9]*_label")):
+                channel = label_path.name[2:].split("_", 1)[0]
+                label = read_text(label_path)
+                millivolts = read_int(hwmon / f"in{channel}_input")
+                milliamps = read_int(hwmon / f"curr{channel}_input")
+                if not label or millivolts is None or milliamps is None:
+                    continue
+                voltage = millivolts / 1000
+                current = milliamps / 1000
+                rails.append(
+                    {
+                        "rail": label,
+                        "current_a": current,
+                        "voltage_v": voltage,
+                        "power_w": voltage * current,
+                    }
+                )
+        if not rails:
+            raise OSError("no INA3221 rails under /sys/class/hwmon")
+        return rails
+
+    def throttled(self) -> str:
+        return throttle_token(cpus_below_pinned_clock(self.sysroot))
+
+
+class X86Backend:
+    name = "x86"
+    zone_types = ("x86_pkg_temp",)
+    hwmon_names = ("k10temp", "coretemp")
+
+    def __init__(self, sysroot: Path) -> None:
+        self.sysroot = sysroot
+        self.domains = sorted(
+            domain
+            for domain in sysroot.glob("sys/class/powercap/intel-rapl:[0-9]*")
+            if ":" not in domain.name.split("intel-rapl:", 1)[1]
+            and read_int(domain / "energy_uj") is not None
+        )
+        self.boundary = X86_RAPL_BOUNDARY if self.domains else X86_NO_POWER_BOUNDARY
+        self.previous: dict[str, tuple[int, int]] = {}
+        self.throttle_counts: dict[str, int] = {}
+
+    def rails(self, timestamp_ns: int) -> list[dict[str, float | str]]:
+        rails = []
+        for domain in self.domains:
+            energy = read_int(domain / "energy_uj")
+            if energy is None:
+                continue
+            label = read_text(domain / "name") or domain.name
+            last = self.previous.get(label)
+            self.previous[label] = (timestamp_ns, energy)
+            if last is None:
+                continue
+            last_ns, last_energy = last
+            if timestamp_ns <= last_ns:
+                continue
+            delta = energy - last_energy
+            if delta < 0:
+                wrap = read_int(domain / "max_energy_range_uj")
+                if wrap is None:
+                    continue
+                delta += wrap
+            rails.append(
+                {
+                    "rail": label,
+                    "current_a": "",
+                    "voltage_v": "",
+                    "power_w": delta / (timestamp_ns - last_ns) * 1000,
+                }
+            )
+        return rails
+
+    def throttled(self) -> str:
+        reasons = cpus_below_pinned_clock(self.sysroot)
+        for counter in sorted(
+            self.sysroot.glob("sys/devices/system/cpu/cpu[0-9]*/thermal_throttle/core_throttle_count")
+        ):
+            count = read_int(counter)
+            if count is None:
+                continue
+            cpu = counter.parent.parent.name
+            if count > self.throttle_counts.get(cpu, count):
+                reasons.append(f"{cpu}-thermal-throttle")
+            self.throttle_counts[cpu] = count
+        return throttle_token(reasons)
+
+
+BACKENDS = {"pi": PiBackend, "jetson": JetsonBackend, "x86": X86Backend}
+
+
+def detect_backend_name(sysroot: Path = Path("/"), machine: str | None = None) -> str:
+    if shutil.which("vcgencmd") is not None:
+        return "pi"
+    if (sysroot / "etc/nv_tegra_release").is_file():
+        return "jetson"
+    if (machine or platform.machine()) == "x86_64":
+        return "x86"
+    raise OSError("no telemetry backend for this host: no vcgencmd, no L4T release and not x86_64")
+
+
+def make_backend(name: str, sysroot: Path = Path("/")) -> PiBackend | JetsonBackend | X86Backend:
+    if name == "auto":
+        name = detect_backend_name(sysroot)
+    return BACKENDS[name](sysroot)
+
+
+def sample(
+    backend: PiBackend | JetsonBackend | X86Backend,
+) -> tuple[dict[str, int | float | str], list[dict[str, float | str]]]:
+    timestamp_ns = time.time_ns()
+    rails = backend.rails(timestamp_ns)
     summary = {
         "timestamp_ns": timestamp_ns,
-        "temperature_millicelsius": read_temperature_millicelsius(),
-        "cpu_frequency_hz": read_cpu_frequency_hz(),
-        "governor": read_governor(),
-        "throttled": throttled,
+        "temperature_millicelsius": read_temperature_millicelsius(
+            backend.sysroot, backend.zone_types, backend.hwmon_names
+        ),
+        "cpu_frequency_hz": read_cpu_frequency_hz(backend.sysroot),
+        "governor": read_governor(backend.sysroot),
+        "throttled": backend.throttled(),
         "rail_proxy_watts": sum(float(rail["power_w"]) for rail in rails),
     }
     return summary, rails
 
 
-def run(output_dir: Path, interval_secs: float) -> int:
+def write_error(output_dir: Path, error: BaseException) -> None:
+    (output_dir / "telemetry-error.json").write_text(
+        json.dumps({"error": str(error), "timestamp_ns": time.time_ns()}) + "\n"
+    )
+
+
+def run(output_dir: Path, interval_secs: float, backend_name: str = "auto", sysroot: Path = Path("/")) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        backend = make_backend(backend_name, sysroot)
+    except (OSError, KeyError) as error:
+        write_error(output_dir, error)
+        return 1
     (output_dir / "power-boundary.json").write_text(
-        json.dumps(BOUNDARY, indent=2) + "\n"
+        json.dumps({**backend.boundary, "backend": backend.name}, indent=2) + "\n"
     )
     stop = False
 
@@ -142,12 +399,9 @@ def run(output_dir: Path, interval_secs: float) -> int:
         while not stop:
             started = time.monotonic()
             try:
-                summary, rails = sample()
+                summary, rails = sample(backend)
             except (OSError, subprocess.CalledProcessError) as error:
-                (output_dir / "telemetry-error.json").write_text(
-                    json.dumps({"error": str(error), "timestamp_ns": time.time_ns()})
-                    + "\n"
-                )
+                write_error(output_dir, error)
                 return 1
             summary_writer.writerow(summary)
             for rail in rails:
@@ -158,12 +412,14 @@ def run(output_dir: Path, interval_secs: float) -> int:
     return 0
 
 
-def main() -> int:
-    if len(sys.argv) not in {2, 3}:
-        print(f"usage: {sys.argv[0]} <output-dir> [interval-secs]", file=sys.stderr)
-        return 2
-    interval = float(sys.argv[2]) if len(sys.argv) == 3 else 1.0
-    return run(Path(sys.argv[1]), interval)
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("output_dir", type=Path)
+    parser.add_argument("interval_secs", type=float, nargs="?", default=1.0)
+    parser.add_argument("--backend", choices=("auto", *BACKENDS), default="auto")
+    parser.add_argument("--sysroot", type=Path, default=Path("/"), help=argparse.SUPPRESS)
+    args = parser.parse_args(argv)
+    return run(args.output_dir, args.interval_secs, args.backend, args.sysroot)
 
 
 if __name__ == "__main__":
