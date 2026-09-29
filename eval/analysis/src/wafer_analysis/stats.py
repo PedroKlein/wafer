@@ -159,3 +159,32 @@ def clopper_pearson(successes: int, trials: int, ci: float = 0.95) -> tuple[floa
     low = 0.0 if successes == 0 else _increasing_root(lambda p: at_least(p) - alpha)
     high = 1.0 if successes == trials else _increasing_root(lambda p: alpha - at_most(p))
     return low, high
+
+
+def median_shift_ci(
+    a: np.ndarray,
+    b: np.ndarray,
+    *,
+    relative: bool = False,
+    n_resamples: int = 10000,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> tuple[float, float, float]:
+    """median(a) - median(b), or that difference over median(b), with a percentile bootstrap interval.
+
+    Each group is resampled independently, so this suits unpaired runs.
+    Returns (estimate, lower_bound, upper_bound).
+    """
+    _require_samples(a, b)
+    a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    if relative and np.median(b) == 0:
+        raise ValueError("a relative shift needs a non-zero reference median")
+    rng = np.random.default_rng(seed)
+    medians_a = np.median(rng.choice(a, size=(n_resamples, len(a))), axis=1)
+    medians_b = np.median(rng.choice(b, size=(n_resamples, len(b))), axis=1)
+    shifts = medians_a - medians_b
+    estimate = float(np.median(a) - np.median(b))
+    if relative:
+        shifts = shifts / medians_b
+        estimate /= float(np.median(b))
+    return (estimate, *_percentile_interval(shifts, ci))

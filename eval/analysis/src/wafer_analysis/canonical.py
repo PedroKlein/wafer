@@ -12,7 +12,15 @@ import pandas as pd
 
 from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
 from .rollback import validate_swap5_artifacts
-from .stats import bootstrap_ci, cliffs_delta, cliffs_delta_ci, clopper_pearson, hodges_lehmann, pooled_ratio_ci
+from .stats import (
+    bootstrap_ci,
+    cliffs_delta,
+    cliffs_delta_ci,
+    clopper_pearson,
+    hodges_lehmann,
+    median_shift_ci,
+    pooled_ratio_ci,
+)
 
 FINAL_VISUAL_MANIFEST = (
     {
@@ -367,6 +375,163 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
             }
         )
     return pd.DataFrame(rows)
+
+
+def _group_runs(
+    records: list[dict], conditions: tuple[str, ...], *, canonical: bool
+) -> dict[str, list[dict]]:
+    if canonical:
+        return _require_runs(records, conditions)
+    grouped = {condition: [] for condition in conditions}
+    for record in records:
+        if record.get("condition") not in grouped:
+            raise ValueError(f"unexpected condition: {record.get('condition')}")
+        grouped[record["condition"]].append(record)
+    for condition, runs in grouped.items():
+        if len({run.get("run_index") for run in runs}) != len(runs):
+            raise ValueError(f"{condition} contains duplicate run identity")
+        runs.sort(key=lambda run: int(run["run_index"]))
+    return grouped
+
+
+BRANCH_ISOLATION_CONDITIONS = ("control", "panic-attack", "epoch-loop-attack")
+
+
+def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """Branch-A throughput, p95 and loss per E-Iso-7 condition, contrasted with the control.
+
+    ``records`` are the runs' ``branch-isolation.json`` documents.
+    """
+    grouped = _group_runs(records, BRANCH_ISOLATION_CONDITIONS, canonical=canonical)
+    if not grouped["control"]:
+        return pd.DataFrame()
+
+    def branch_a(run: dict, *keys: str) -> float:
+        value = run["branches"]["branch_a"]
+        for key in keys:
+            value = value[key]
+        return float(value)
+
+    def metrics(runs: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+        return (
+            np.asarray([branch_a(run, "throughput", "mean_messages_per_second") for run in runs]),
+            np.asarray([branch_a(run, "latency_ns", "p95") for run in runs]),
+        )
+
+    control_throughput, control_p95 = metrics(grouped["control"])
+    rows = []
+    for condition in BRANCH_ISOLATION_CONDITIONS:
+        runs = grouped[condition]
+        if not runs:
+            continue
+        throughput, p95 = metrics(runs)
+        offered = [int(run["branches"]["branch_a"]["offered_messages"]) for run in runs]
+        lost = [int(run["branches"]["branch_a"]["lost_messages"]) for run in runs]
+        throughput_low, throughput_high = bootstrap_ci(throughput)
+        p95_low, p95_high = bootstrap_ci(p95)
+        loss_low, loss_high = pooled_ratio_ci(lost, offered)
+        row = {
+            "condition": condition,
+            "N_runs": len(runs),
+            "median_throughput_msg_s": float(np.median(throughput)),
+            "throughput_ci95_low_msg_s": throughput_low,
+            "throughput_ci95_high_msg_s": throughput_high,
+            "median_p95_ns": float(np.median(p95)),
+            "p95_ci95_low_ns": p95_low,
+            "p95_ci95_high_ns": p95_high,
+            "pooled_loss": sum(lost) / sum(offered),
+            "pooled_loss_ci95_low": loss_low,
+            "pooled_loss_ci95_high": loss_high,
+            "reference_condition": "control",
+            **dict.fromkeys(
+                (
+                    "throughput_drop_percent",
+                    "drop_ci95_low_percent",
+                    "drop_ci95_high_percent",
+                    "p95_increase_percent",
+                    "increase_ci95_low_percent",
+                    "increase_ci95_high_percent",
+                    "throughput_cliffs_delta",
+                    "cliffs_delta_ci95_low",
+                    "cliffs_delta_ci95_high",
+                    "effect_magnitude",
+                    "isolated",
+                )
+            ),
+        }
+        if condition != "control":
+            drop, drop_low, drop_high = median_shift_ci(throughput, control_throughput, relative=True)
+            increase, increase_low, increase_high = median_shift_ci(p95, control_p95, relative=True)
+            delta, magnitude = cliffs_delta(throughput, control_throughput)
+            delta_low, delta_high = cliffs_delta_ci(throughput, control_throughput)
+            row.update(
+                {
+                    "throughput_drop_percent": -100 * drop,
+                    "drop_ci95_low_percent": -100 * drop_high,
+                    "drop_ci95_high_percent": -100 * drop_low,
+                    "p95_increase_percent": 100 * increase,
+                    "increase_ci95_low_percent": 100 * increase_low,
+                    "increase_ci95_high_percent": 100 * increase_high,
+                    "throughput_cliffs_delta": delta,
+                    "cliffs_delta_ci95_low": delta_low,
+                    "cliffs_delta_ci95_high": delta_high,
+                    "effect_magnitude": magnitude,
+                    "isolated": -100 * drop < 1.0,
+                }
+            )
+        row.update(
+            {
+                "units": "messages/second, nanoseconds, percent, fraction",
+                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI",
+                "threshold": "branch-A throughput drop < 1 percent",
+                "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
+                "thesis_evidence": canonical,
+            }
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def recovery_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Iso-8 trap-to-running durations: per-run statistics over runs, and pooled percentiles.
+
+    Each record carries a run's ``run_index``, ``condition`` and the
+    ``durations_ns`` read from its ``recovery.csv``.
+    """
+    runs = _group_runs(records, ("panic-recovery",), canonical=canonical)["panic-recovery"]
+    if not runs:
+        return pd.DataFrame()
+    if any(not run["durations_ns"] for run in runs):
+        raise ValueError("every E-Iso-8 run needs at least one recovery sample")
+    medians = np.asarray([np.median(run["durations_ns"]) for run in runs], dtype=float)
+    p95s = np.asarray([np.percentile(run["durations_ns"], 95) for run in runs], dtype=float)
+    pooled = np.concatenate([np.asarray(run["durations_ns"], dtype=float) for run in runs])
+    median_low, median_high = bootstrap_ci(medians)
+    p95_low, p95_high = bootstrap_ci(p95s)
+    return pd.DataFrame(
+        [
+            {
+                "condition": "panic-recovery",
+                "N_runs": len(runs),
+                "recovery_samples": len(pooled),
+                "min_samples_per_run": min(len(run["durations_ns"]) for run in runs),
+                "median_run_median_ns": float(np.median(medians)),
+                "median_ci95_low_ns": median_low,
+                "median_ci95_high_ns": median_high,
+                "median_run_p95_ns": float(np.median(p95s)),
+                "p95_ci95_low_ns": p95_low,
+                "p95_ci95_high_ns": p95_high,
+                "pooled_p50_ns": float(np.percentile(pooled, 50)),
+                "pooled_p99_ns": float(np.percentile(pooled, 99)),
+                "pooled_max_ns": float(pooled.max()),
+                "units": "nanoseconds, samples",
+                "estimator": "median over runs of each run's median and p95 recovery, with bootstrap 95% CIs over runs; pooled percentiles are descriptive because samples within a run are not independent",
+                "threshold": "none; descriptive recovery time",
+                "claim_boundary": "trap to running for the declared panic stimulus on this host",
+                "thesis_evidence": canonical,
+            }
+        ]
+    )
 
 
 def _candidate_scaling_table(

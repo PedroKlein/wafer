@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 from wafer_analysis.canonical import (
@@ -15,11 +16,13 @@ from wafer_analysis.canonical import (
     candidate_payload_table,
     candidate_swap_tables,
     backpressure_table,
+    branch_isolation_table,
     capacity_tables,
     ekuiper_profile_tables,
     failed_replacement_table,
     capacity_competitive_decision,
     metering_table,
+    recovery_table,
     swap3_table,
     swap4_table,
     target_latency_table,
@@ -1256,3 +1259,73 @@ def test_containment_summary_rejects_duplicate_runs_in_any_mode() -> None:
     records[1]["run_index"] = 1
     with pytest.raises(ValueError, match="duplicate run identity"):
         containment_table(records, canonical=False)
+
+
+def branch_records(throughput: dict[str, float], runs: int = 30) -> list[dict]:
+    return [
+        {
+            "condition": condition,
+            "run_index": run,
+            "branches": {
+                "branch_a": {
+                    "offered_messages": 60_000,
+                    "lost_messages": 0,
+                    "throughput": {"mean_messages_per_second": rate + run % 3},
+                    "latency_ns": {"p95": 120_000 + run},
+                }
+            },
+        }
+        for condition, rate in throughput.items()
+        for run in range(1, runs + 1)
+    ]
+
+
+def test_branch_isolation_table_contrasts_each_attack_with_the_control() -> None:
+    table = branch_isolation_table(
+        branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
+    ).set_index("condition")
+    assert table.loc["panic-attack", "throughput_drop_percent"] == pytest.approx(100 * 5 / 1_001)
+    assert table.loc["panic-attack", "isolated"]
+    assert table.loc["epoch-loop-attack", "throughput_drop_percent"] == pytest.approx(100 * 100 / 1_001)
+    assert not table.loc["epoch-loop-attack", "isolated"]
+    low, high = table.loc["epoch-loop-attack", ["drop_ci95_low_percent", "drop_ci95_high_percent"]]
+    assert low <= 100 * 100 / 1_001 <= high
+    assert table.loc["epoch-loop-attack", "throughput_cliffs_delta"] == -1.0
+    assert pd.isna(table.loc["control", "throughput_drop_percent"])
+    assert table["pooled_loss"].eq(0).all() and table["thesis_evidence"].all()
+
+
+def test_branch_isolation_table_requires_full_n_unless_diagnostic() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 995}, runs=2)
+    with pytest.raises(ValueError, match="30 independent runs"):
+        branch_isolation_table(records)
+    assert not branch_isolation_table(records, canonical=False)["thesis_evidence"].any()
+    records[1]["run_index"] = 1
+    with pytest.raises(ValueError, match="duplicate run identity"):
+        branch_isolation_table(records, canonical=False)
+
+
+def recovery_records(runs: int = 30) -> list[dict]:
+    return [
+        {"condition": "panic-recovery", "run_index": run, "durations_ns": [100_000 * run, 200_000 * run, 300_000 * run]}
+        for run in range(1, runs + 1)
+    ]
+
+
+def test_recovery_table_summarises_runs_before_pooling() -> None:
+    table = recovery_table(recovery_records())
+    row = table.iloc[0]
+    assert row["N_runs"] == 30 and row["recovery_samples"] == 90
+    assert row["median_run_median_ns"] == pytest.approx(3_100_000)
+    assert row["median_ci95_low_ns"] <= row["median_run_median_ns"] <= row["median_ci95_high_ns"]
+    assert row["pooled_max_ns"] == 9_000_000
+    assert "not independent" in row["estimator"]
+
+
+def test_recovery_table_rejects_a_run_without_samples() -> None:
+    records = recovery_records()
+    records[4]["durations_ns"] = []
+    with pytest.raises(ValueError, match="at least one recovery sample"):
+        recovery_table(records)
+    with pytest.raises(ValueError, match="30 independent runs"):
+        recovery_table(recovery_records(runs=29))
