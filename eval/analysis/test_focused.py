@@ -4,35 +4,12 @@ from pathlib import Path
 import pytest
 
 from wafer_analysis.focused import (
-    artifact_inventory,
     evidence_label,
     passed_artifacts,
     pending_record,
     percentile_rows,
     target_load_rows,
 )
-
-
-def test_artifact_inventory_covers_every_followup_question() -> None:
-    inventory = artifact_inventory({"backpressure.json", "startup.json"})
-    assert set(inventory["question"]) == {
-        "eKuiper latency tail",
-        "target load versus saturation",
-        "branch-A throughput and latency",
-        "epoch recovery",
-        "startup cache state",
-        "bounded queue pressure",
-        "internal and sink-observed hot-swap timing",
-    }
-    assert (
-        inventory.loc[inventory["artifact"] == "backpressure.json", "status"].item()
-        == "READY"
-    )
-    assert (
-        inventory.loc[inventory["artifact"] == "branch-isolation.json", "status"].item()
-        == "PENDING"
-    )
-    assert inventory["thesis_evidence"].eq(False).all()
 
 
 def test_passed_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None:
@@ -118,7 +95,7 @@ def test_evidence_label_exposes_sample_units_and_claim_boundary() -> None:
     )
 
 
-def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
+def test_notebooks_label_evidence_and_pending_conditions() -> None:
     notebook_dir = Path(__file__).parent / "notebooks"
     for name in (
         "05-hotswap-timeline.ipynb",
@@ -163,7 +140,6 @@ def test_focused_notebooks_label_evidence_and_pending_conditions() -> None:
         "".join(cell.get("source", [])) for cell in summary["cells"]
     )
     assert "PMIC internal-rail proxy" in summary_source
-    assert "artifact_inventory(" in summary_source
 
 
 def test_pending_record_uses_null_instead_of_zero() -> None:

@@ -137,12 +137,5 @@ def test_runner_plans_a_batch_for_the_selected_host() -> None:
     plan = subprocess.run([*command, "--host", "jetson"], cwd=ROOT, capture_output=True, text=True)
     assert plan.returncode == 0, plan.stderr
     assert "host=jetson" in plan.stdout
-    focused = subprocess.run(
-        [sys.executable, str(RUNNER), "--focused", "--dry-run", "--host", "x86"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-    )
-    assert focused.returncode == 2 and "focused pilot is frozen for rpi5" in focused.stderr
     unknown = subprocess.run([*command, "--host", "rpi4"], cwd=ROOT, capture_output=True, text=True)
     assert unknown.returncode == 2 and "no host profile 'rpi4'" in unknown.stderr

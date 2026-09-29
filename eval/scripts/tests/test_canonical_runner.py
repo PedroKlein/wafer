@@ -19,7 +19,6 @@ from canonical_runner import (  # noqa: E402
     analyze_backpressure,
     analyze_capacity_scout_summary,
     analyze_swap3_disruption,
-    analyze_rate_sweep_traces,
     estimate_candidate_capacity_envelope,
     estimate_capacity_envelope,
     apply_capacity_knee_cooldown,
@@ -34,7 +33,6 @@ from canonical_runner import (  # noqa: E402
     capacity_scout_source_state,
     persist_capacity_scout_decision,
     replay_capacity_scout_decisions,
-    build_focused_schedule,
     build_schedule,
     classify_capacity_scout_probe,
     classify_sustainable_throughput,
@@ -71,7 +69,6 @@ from canonical_runner import (  # noqa: E402
     write_capacity_result,
     write_capacity_scout_result,
     validate_fine_event_buckets,
-    validate_focused_freeze,
     validate_rate_sweep_result,
     validate_startup_artifact,
     validate_swap3_artifacts,
@@ -691,56 +688,6 @@ def test_final_wafer_catalog_exactly_matches_runner_schedule() -> None:
         for entry in matrix["final_campaign"]["wafer_config_catalog"]
     }
     assert catalog == expected
-
-
-def test_focused_schedule_matches_frozen_condition_runs() -> None:
-    matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
-    selected = matrix["focused_pilot"]["experiments"]
-    expected = {
-        f"{experiment}/{condition}/run-{run_index:02d}"
-        for experiment, definition in selected.items()
-        for condition, run_indices in definition["condition_runs"].items()
-        for run_index in run_indices
-    }
-
-    schedule = build_focused_schedule(seed=matrix["focused_pilot"]["seed"])
-
-    assert {item.result_key for item in schedule} == expected
-    assert len(schedule) == len(expected) == 143
-    assert [item.run_index for item in schedule if item.experiment == "e-swap-3"] == [1, 2, 3]
-    assert {item.condition for item in schedule if item.experiment == "e-swap-3"} == {
-        "wafer-hotswap"
-    }
-    assert len([item for item in schedule if item.experiment == "e-swap-5"]) == 1
-    assert all(item.system != "ekuiper" or item.experiment == "e-perf-10" for item in schedule)
-
-
-def test_focused_freeze_matches_canonical_matrix_and_schedule() -> None:
-    receipt = validate_focused_freeze(ROOT, ROOT / "eval/canonical-matrix.json")
-    schedule_path = ROOT / "eval/focused-pilot-schedule.json"
-    schedule_bytes = schedule_path.read_bytes()
-    schedule = json.loads(schedule_bytes)
-    expected = [item.__dict__ for item in build_focused_schedule(seed=1729)]
-
-    assert schedule == expected
-    assert receipt["selected_leaf_count"] == len(schedule) == 143
-    assert receipt["schedule_sha256"] == hashlib.sha256(schedule_bytes).hexdigest()
-    assert receipt["thesis_evidence"] is False
-
-
-def test_focused_freeze_rejects_matrix_drift(tmp_path: Path) -> None:
-    matrix = tmp_path / "eval/canonical-matrix.json"
-    matrix.parent.mkdir(parents=True)
-    matrix.write_text('{"focused_pilot": {}}\n')
-    receipt = tmp_path / "eval/focused-pilot-freeze.json"
-    receipt.write_text(json.dumps({
-        "status": "frozen-before-execution",
-        "thesis_evidence": False,
-        "canonical_matrix_sha256": "0" * 64,
-    }))
-
-    with pytest.raises(ValueError, match="matrix changed after freeze"):
-        validate_focused_freeze(tmp_path, matrix)
 
 
 def test_hotswap_evidence_keeps_internal_and_sink_timings_distinct() -> None:
@@ -3103,11 +3050,11 @@ def test_repetitions_keeps_the_first_runs_of_the_frozen_schedule_and_marks_the_b
 
 @pytest.mark.parametrize(
     "extra",
-    [["--repetitions", "30"], ["--repetitions", "0"], ["--repetitions", "5", "--focused"]],
+    [["--repetitions", "30"], ["--repetitions", "0"], ["--repetitions", "5", "--capacity-scout"]],
 )
 def test_repetitions_rejects_the_frozen_count_and_frozen_modes(extra: list[str]) -> None:
     arguments = ["--batch-id", "test", "--dry-run", *extra]
-    if "--focused" not in extra:
+    if "--capacity-scout" not in extra:
         arguments = ["--experiments", "e-perf-1", *arguments]
 
     result = run_runner(*arguments)
@@ -3714,47 +3661,6 @@ def test_rate_sweep_result_schema_rejects_every_required_field() -> None:
             invalid[section].pop(field)
             with pytest.raises(ValueError, match=field):
                 validate_rate_sweep_result(invalid)
-
-
-def test_rate_sweep_trace_analysis_preserves_pairs_and_counts_loss() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        published = root / "published.csv"
-        received = root / "received.csv"
-        metadata = root / "subscriber-metadata.json"
-        published.write_text("seq,ts_ns\n0,100\n1,200\n2,300\n3,400\n")
-        received.write_text(
-            "seq,payload_ts_ns,receive_ns,latency_ns\n"
-            "0,100,110,10\n1,200,220,20\n1,200,225,25\n"
-        )
-        metadata.write_text(
-            json.dumps(
-                {
-                    "total_messages": 3,
-                    "total_recorded": 3,
-                    "parse_errors": 0,
-                    "negative_latency_count": 0, "above_highest_latency_count": 0, "clock_steps": 0,
-                    "sequence": {"total_received": 3, "total_duplicates": 1},
-                    "latency_p50_ns": 20,
-                    "latency_p95_ns": 25,
-                    "latency_p99_ns": 25,
-                }
-            )
-        )
-        result = analyze_rate_sweep_traces(published, received, metadata)
-        assert result["messages"] == {
-            "offered": 4,
-            "received": 2,
-            "lost": 2,
-            "duplicates": 1,
-        }
-        assert result["latency_ns"] == {"p50": 20, "p95": 25, "p99": 25}
-
-        received.write_text(
-            "seq,payload_ts_ns,receive_ns,latency_ns\n0,101,110,9\n"
-        )
-        with pytest.raises(ValueError, match="timestamp changed"):
-            analyze_rate_sweep_traces(published, received, metadata)
 
 
 def test_process_resource_sampler_records_memory_regions_and_threads() -> None:

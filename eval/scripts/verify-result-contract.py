@@ -44,12 +44,9 @@ ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
-from backpressure import validate_backpressure_result
-from rollback import validate_swap5_artifacts
 from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from containment import assess_containment
 from interval_metrics import validate_interval_metrics
 from latency_evidence import latency_evidence_violations
 from provenance_match import provenance_mismatches
@@ -72,6 +69,7 @@ CANDIDATE_SCALING_EXPERIMENTS = {
     "e-perf-payload-refinement",
     "e-perf-depth-extension",
 }
+DLQ_CONTAINMENT_EXPERIMENTS = {f"e-iso-{index}" for index in range(1, 7)}
 CANDIDATE_SWAP_EXPERIMENTS = {
     "e-swap-independent-sessions",
     "e-swap-rollback-sessions",
@@ -1164,338 +1162,6 @@ def _load_json(path: Path, label: str, violations: list[str]) -> dict | None:
     return value
 
 
-def _sequence_violations(path: Path) -> list[str]:
-    try:
-        with path.open(newline="") as stream:
-            reader = csv.DictReader(stream)
-            rows = list(reader)
-            fields = set(reader.fieldnames or [])
-
-        summary_fields = {
-            "total_expected",
-            "total_received",
-            "received_unique",
-            "gap_ranges",
-            "gap_msgs",
-            "duplicates_count",
-            "out_of_order",
-            "out_of_range",
-        }
-        event_fields = {"event_type", "seq_start", "seq_end", "count"}
-        if summary_fields <= fields:
-            if len(rows) != 1:
-                return ["sequence.csv must contain one summary row"]
-            expected = int(rows[0]["total_expected"])
-            received = int(rows[0]["total_received"])
-            gaps = int(rows[0]["gap_msgs"])
-            duplicates = int(rows[0]["duplicates_count"])
-            unique = int(rows[0]["received_unique"])
-            if int(rows[0]["out_of_range"]) != 0:
-                return ["sequence.csv counts messages outside the declared population"]
-            if expected != unique + gaps or received != unique + duplicates:
-                return ["sequence.csv counters do not reconcile"]
-        elif event_fields <= fields:
-            metadata = json.loads((path.parent / "subscriber-metadata.json").read_text())
-            sequence = metadata["sequence"]
-            expected = int(metadata["total_messages"])
-            received = int(sequence["total_received"])
-            gaps = int(sequence["total_gaps"])
-            duplicates = int(sequence["total_duplicates"])
-            event_gaps = sum(int(row["count"]) for row in rows if row["event_type"] == "gap")
-            event_duplicates = sum(
-                int(row["count"]) for row in rows if row["event_type"] == "duplicate"
-            )
-            if event_gaps != gaps or event_duplicates != duplicates:
-                return ["sequence.csv events differ from subscriber metadata"]
-            if (
-                metadata.get("exit_reason") != "total-messages"
-                or int(metadata["total_recorded"]) != received
-                or int(metadata.get("parse_errors", 0)) != 0
-                or int(metadata.get("negative_latency_count", 0)) != 0
-            ):
-                return ["subscriber sequence metadata is inconsistent"]
-        else:
-            return ["sequence.csv has an unknown schema"]
-    except (KeyError, OSError, TypeError, ValueError) as error:
-        return [f"sequence.csv is invalid: {error}"]
-    if expected != received or gaps != 0 or duplicates != 0:
-        return [
-            "sequence.csv is not lossless: "
-            f"expected={expected}, received={received}, gaps={gaps}, duplicates={duplicates}"
-        ]
-    return []
-
-
-def _focused_leaf_identity(leaf: Path, experiment: str) -> tuple[str, int] | None:
-    parts = leaf.parts
-    try:
-        experiment_index = parts.index(experiment)
-        batch_index = next(
-            index
-            for index in range(experiment_index + 1, len(parts))
-            if parts[index].startswith("rpi5-")
-        )
-    except (ValueError, StopIteration):
-        return None
-    match = re.match(r"run-(\d+)(?:-attempt-\d+)?$", leaf.name)
-    if match is None:
-        return None
-    condition = "/".join(parts[batch_index + 1 : -1])
-    return condition, int(match.group(1))
-
-
-def check_focused_matrix(matrix: dict) -> list[str]:
-    focused = matrix.get("focused_pilot")
-    if not isinstance(focused, dict):
-        return ["canonical matrix lacks focused_pilot"]
-    if focused.get("thesis_evidence") is not False:
-        return ["focused_pilot must set thesis_evidence=false"]
-    decisions = focused.get("decisions", {})
-    concurrency = decisions.get("ekuiper_operator_concurrency", {})
-    memory = decisions.get("memory_retention", {})
-    violations = []
-    if concurrency.get("value") != 1 or concurrency.get("comparison") != "default-system":
-        violations.append("focused_pilot eKuiper concurrency decision is not frozen at default-system value 1")
-    if memory.get("status") != "fixed":
-        violations.append("focused_pilot memory-retention status is not fixed")
-    if memory.get("max_observed_slope_bytes_per_message") != 0.0:
-        violations.append("focused_pilot memory-retention slope is not 0 bytes/message")
-    if memory.get("canonical_measurement_secs_adequate") is not True:
-        violations.append("focused_pilot memory-retention decision does not approve the measurement window")
-    return violations
-
-
-def check_focused_leaf(
-    leaf: Path,
-    experiment: str,
-    metadata: dict,
-    canonical_matrix: dict,
-    matrix_sha256: str,
-) -> list[str]:
-    violations: list[str] = []
-    focused = canonical_matrix["focused_pilot"]
-    definition = focused.get("experiments", {}).get(experiment)
-    identity = _focused_leaf_identity(leaf, experiment)
-    if not isinstance(definition, dict) or identity is None:
-        return [f"leaf is not selected by focused_pilot: {leaf}"]
-    condition, run_index = identity
-    if run_index not in definition.get("condition_runs", {}).get(condition, []):
-        violations.append(
-            f"focused_pilot does not select {experiment}/{condition}/run-{run_index:02d}"
-        )
-    if metadata.get("thesis_evidence") is not False:
-        violations.append("focused pilot metadata must set thesis_evidence=false")
-    provenance = metadata.get("focused_pilot", {})
-    decisions = focused["decisions"]
-    expected_provenance = {
-        "id": focused["id"],
-        "matrix_sha256": matrix_sha256,
-        "memory_retention_fix_commit": decisions["memory_retention"]["fix_commit"],
-        "ekuiper_operator_concurrency": decisions["ekuiper_operator_concurrency"]["value"],
-    }
-    if provenance != expected_provenance:
-        violations.append("focused pilot metadata provenance differs from the frozen matrix")
-
-    if experiment == "e-perf-10":
-        sweep = _load_json(leaf / "rate-sweep.json", "rate-sweep.json", violations)
-        if sweep is not None:
-            violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
-            if sweep.get("system") != metadata.get("system"):
-                violations.append("rate-sweep system differs from metadata")
-        subscriber = _load_json(
-            leaf / "subscriber-metadata.json", "subscriber-metadata.json", violations
-        )
-        if subscriber is not None and sweep is not None:
-            offered = sweep.get("messages", {}).get("offered")
-            if subscriber.get("sequence_end_exclusive") != offered:
-                violations.append(
-                    "E-Perf-10 subscriber sequence boundary differs from offered messages"
-                )
-            ignored = subscriber.get("ignored_sequence_count")
-            if not isinstance(ignored, int) or ignored < 0:
-                violations.append(
-                    "E-Perf-10 subscriber ignored sequence count is missing or invalid"
-                )
-        if metadata.get("system") == "ekuiper":
-            audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", violations)
-            expected = focused["decisions"]["ekuiper_operator_concurrency"]["value"]
-            if audit is not None and audit.get("rule", {}).get("options", {}).get("concurrency") != expected:
-                violations.append("eKuiper audit does not use frozen operator concurrency 1")
-
-    if experiment == "e-backpressure":
-        result = _load_json(leaf / "backpressure.json", "backpressure.json", violations)
-        if result is not None:
-            try:
-                validate_backpressure_result(result, condition)
-            except ValueError as error:
-                violations.append(str(error))
-
-    if experiment in {"e-iso-1", "e-iso-2", "e-iso-3", "e-iso-4", "e-iso-5", "e-iso-6"}:
-        result = _load_json(leaf / "containment.json", "containment.json", violations)
-        if result is not None:
-            try:
-                traps = int(result.get("traps_total", 0))
-                nodes = result.get("nodes", [])
-                if not isinstance(nodes, list) or not nodes:
-                    raise ValueError
-                recoveries = sum(int(node.get("recovery_count", 0)) for node in nodes)
-                if sum(int(node.get("traps_total", 0)) for node in nodes) != traps:
-                    raise ValueError
-                assessment = assess_containment(nodes, experiment, condition)
-            except (TypeError, ValueError):
-                violations.append("containment.json contains invalid runtime metrics")
-            else:
-                if result.get("condition") != condition:
-                    violations.append("containment evidence expected condition differs from the leaf")
-                if result.get("contained") is not True or assessment["contained_by_mechanism"] is not True:
-                    violations.append(
-                        f"containment evidence was not stopped by {assessment['expected_mechanism']} alone"
-                    )
-                if result.get("runtime_panic") is not False:
-                    violations.append("containment evidence recorded a runtime panic")
-                violations.extend(check_dlq_evidence(leaf, result))
-                if experiment == "e-iso-4" and recoveries != traps:
-                    violations.append(f"epoch recovery count differs from traps: {recoveries} != {traps}")
-        if experiment == "e-iso-4":
-            try:
-                if "cannot enter component instance" in (leaf / "stdout.log").read_text(errors="replace"):
-                    violations.append("epoch recovery reused an interrupted component instance")
-            except OSError:
-                pass
-
-    if experiment == "e-iso-7":
-        result = _load_json(leaf / "branch-isolation.json", "branch-isolation.json", violations)
-        if result is not None:
-            if result.get("condition") != condition:
-                violations.append("branch-isolation condition differs from the leaf")
-            if result.get("measurement_boundary", {}).get("kind") != "branch_sink_post_warmup":
-                violations.append("branch-isolation measurement boundary is not branch-local")
-            branches = result.get("branches", {})
-            branch_a = branches.get("branch_a", {})
-            branch_b = branches.get("branch_b", {})
-            if (
-                branch_a.get("artifact_dir") != "branch-a"
-                or branch_b.get("artifact_dir") != "branch-b"
-            ):
-                violations.append("branch-isolation evidence does not use independent branch sinks")
-            if (
-                branch_a.get("source_node") != "source_a"
-                or branch_b.get("source_node") != "source_b"
-                or branch_a.get("source_node") == branch_b.get("source_node")
-            ):
-                violations.append("branch-isolation evidence does not use independent source populations")
-            target = branch_a.get("target_messages")
-            offered = branch_a.get("offered_messages")
-            received = branch_a.get("received_messages")
-            if (
-                branch_a.get("sequence_scope") != "post_warmup"
-                or not isinstance(target, int)
-                or not isinstance(offered, int)
-                or target < offered
-                or branch_a.get("target_shortfall_messages") != target - offered
-                or branch_a.get("target_shortfall_messages") != 0
-                or offered != received
-                or branch_a.get("lost_messages") != 0
-                or branch_a.get("gap_messages") != 0
-                or branch_a.get("duplicates") != 0
-            ):
-                violations.append("branch A is not lossless and independently attributed")
-            throughput = branch_a.get("throughput", {})
-            latency = branch_a.get("latency_ns", {})
-            window = branch_a.get("measurement_window", {})
-            duration_ns = (
-                window.get("finished_ns", 0) - window.get("started_ns", 0)
-                if isinstance(window, dict)
-                else 0
-            )
-            expected_duration_ns = int(definition["measurement_secs"]) * 1_000_000_000
-            if (
-                throughput.get("total_messages") != received
-                or latency.get("sample_count") != received
-                or abs(duration_ns - expected_duration_ns) > 2_000_000_000
-            ):
-                violations.append("branch A counts do not share the measurement boundary")
-
-    if experiment == "e-perf-9":
-        result = _load_json(leaf / "startup.json", "startup.json", violations)
-        if result is not None:
-            phases = result.get("phases_ns", {})
-            required_phases = {
-                "process_config", "component_load_compile", "instantiation",
-                "pipeline_setup", "first_process",
-            }
-            if set(phases) != required_phases or any(type(value) is not int or value < 0 for value in phases.values()):
-                violations.append("startup phases must be complete non-negative nanosecond values")
-            if result.get("processed_messages") != 1:
-                violations.append("startup evidence must contain exactly one processed message")
-            cache = result.get("compiled_component_cache", {})
-            if cache.get("mode") == "disabled" and (
-                cache.get("hit") is not False
-                or cache.get("artifact") is not None
-                or cache.get("identity") is not None
-            ):
-                violations.append("disabled compiled cache reports unsupported hit evidence")
-
-    if experiment in {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-6"}:
-        result = _load_json(leaf / "hotswap-analysis.json", "hotswap-analysis.json", violations)
-        expected_events = definition.get("events_per_run")
-        if result is not None:
-            events = result.get("events")
-            if result.get("duration_unit") != "ns" or not isinstance(events, list):
-                violations.append("hot-swap analysis must contain nanosecond event records")
-            elif result.get("sample_count") != expected_events or len(events) != expected_events:
-                violations.append(f"hot-swap analysis must contain {expected_events} events")
-            else:
-                required = {
-                    "compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns",
-                    "first_post_replacement_local_outcome_ns", "http_total_ns", "sink_observed_output_gap_ns",
-                }
-                if any(
-                    any(type(event.get(field)) is not int or event[field] < 0 for field in required)
-                    for event in events
-                ):
-                    violations.append("hot-swap event phases must be non-negative nanoseconds")
-
-    if experiment.startswith("e-swap-"):
-        violations.extend(_sequence_violations(leaf / "sequence.csv"))
-    if experiment == "e-swap-5":
-        if (leaf / "swap_timeline.json").exists():
-            violations.append("E-Swap-5 must not contain a successful-v2 sink timeline")
-        try:
-            requests = json.loads((leaf / "swap_requests.json").read_text())
-            if not isinstance(requests, list):
-                raise ValueError("must contain an array")
-        except (OSError, ValueError) as error:
-            violations.append(f"swap_requests.json is unreadable: {error}")
-            requests = None
-        rollback = _load_json(leaf / "rollback.json", "rollback.json", violations)
-        continuity = _load_json(
-            leaf / "post-rollback-continuity.json",
-            "post-rollback-continuity.json",
-            violations,
-        )
-        try:
-            with (leaf / "sequence.csv").open(newline="") as stream:
-                rows = list(csv.DictReader(stream))
-            if len(rows) != 1:
-                raise ValueError("sequence.csv must contain one summary row")
-            sequence = {
-                "expected": int(rows[0]["total_expected"]),
-                "received": int(rows[0]["total_received"]),
-                "gaps": int(rows[0]["gap_msgs"]),
-                "duplicates": int(rows[0]["duplicates_count"]),
-            }
-        except (KeyError, OSError, TypeError, ValueError) as error:
-            violations.append(f"E-Swap-5 sequence evidence is invalid: {error}")
-            sequence = None
-        if None not in (requests, rollback, continuity, sequence):
-            try:
-                validate_swap5_artifacts(requests, rollback, continuity, sequence)
-            except ValueError as error:
-                violations.append(str(error))
-    return violations
-
-
 def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
     violations: list[str] = []
     runtime = _load_json(
@@ -2009,8 +1675,6 @@ def check_leaf(
     experiment: str,
     canonical: bool = False,
     canonical_matrix: dict | None = None,
-    focused: bool = False,
-    matrix_sha256: str = "",
 ) -> tuple[list[str], list[str]]:
     """Return (violations, warnings). Empty lists = fully conformant."""
     files = {f.name for f in leaf.iterdir() if f.is_file()}
@@ -2091,7 +1755,7 @@ def check_leaf(
                 if diagnostic and metadata.get("thesis_evidence") is not False:
                     violations.append("diagnostic metadata must set thesis_evidence=false")
                 if experiment == "e-perf-10":
-                    expected_evidence = not (focused or diagnostic)
+                    expected_evidence = not diagnostic
                     if metadata.get("thesis_evidence") is not expected_evidence:
                         violations.append(
                             f"E-Perf-10 metadata must set thesis_evidence={str(expected_evidence).lower()}"
@@ -2132,7 +1796,7 @@ def check_leaf(
                             "eKuiper profile metadata diagnostic identity is invalid"
                         )
                 if canonical:
-                    if not focused and metadata.get("system") == "wafer" and canonical_matrix is not None:
+                    if metadata.get("system") == "wafer" and canonical_matrix is not None:
                         expected = expected_metering(
                             canonical_matrix, experiment, str(metadata.get("condition", ""))
                         )
@@ -2164,9 +1828,7 @@ def check_leaf(
 
     if canonical and canonical_matrix is not None:
         experiment_contract = (
-            canonical_matrix.get("focused_pilot", {}).get("experiments", {}).get(experiment)
-            if focused
-            else canonical_matrix.get("experiments", {}).get(experiment)
+            canonical_matrix.get("experiments", {}).get(experiment)
             or canonical_matrix.get("enhanced_candidate", {}).get("experiments", {}).get(experiment)
         )
         if not isinstance(experiment_contract, dict):
@@ -2186,7 +1848,7 @@ def check_leaf(
             timed_output = int(experiment_contract.get("measurement_secs", 0)) > 0 and bool(
                 {"latency.hdr", "throughput.csv"} & set(required_outputs)
             )
-            if interval_contract and timed_output and not focused:
+            if interval_contract and timed_output:
                 for required in ("interval-latency.json", "interval-metrics.json"):
                     if required not in files:
                         violations.append(
@@ -2219,9 +1881,13 @@ def check_leaf(
         violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
     if experiment == EKUIPER_PROFILE_EXPERIMENT:
         violations.extend(check_ekuiper_profile_artifacts(leaf, metadata))
+    if experiment in DLQ_CONTAINMENT_EXPERIMENTS and "containment.json" in files:
+        containment = _load_json(leaf / "containment.json", "containment.json", violations)
+        if containment is not None:
+            violations.extend(check_dlq_evidence(leaf, containment))
     if experiment == "e-perf-10" and "rate-sweep.json" in files:
         violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
-    if experiment == "e-perf-10" and not focused:
+    if experiment == "e-perf-10":
         for historical in ("rate-sweep.json", "published.csv", "received.csv"):
             if historical in files:
                 violations.append(f"final E-Perf-10 must not contain historical trace artifact: {historical}")
@@ -2262,7 +1928,7 @@ def check_leaf(
                 expected_evidence_class="candidate-supplementary",
             ))
         violations.extend(check_capacity_artifact_reconciliation(leaf))
-    if experiment == "e-swap-3" and not focused:
+    if experiment == "e-swap-3":
         if "publisher-timing.json" in files:
             violations.append("final E-Swap-3 must not retain publisher-timing.json")
         if "swap_timeline.json" in files:
@@ -2280,7 +1946,7 @@ def check_leaf(
         violations.extend(check_subscriber_metadata(leaf / "subscriber-metadata.json"))
         violations.extend(check_disruption_analysis(leaf / "disruption-analysis.json"))
         violations.extend(check_swap3_reconciliation(leaf, metadata))
-    if experiment == "e-swap-4" and not focused:
+    if experiment == "e-swap-4":
         violations.extend(check_burst_timeline(leaf / "burst-timeline.json"))
         violations.extend(check_swap4_reconciliation(leaf))
         violations.extend(
@@ -2297,11 +1963,6 @@ def check_leaf(
             or len(analysis["events"]) != 1
         ):
             violations.append("final E-Swap-4 must contain exactly one swap event")
-
-    if focused and canonical_matrix is not None:
-        violations.extend(
-            check_focused_leaf(leaf, experiment, metadata, canonical_matrix, matrix_sha256)
-        )
 
     matrix = OPTIONAL_MATRIX.get(experiment)
     if matrix is None:
@@ -2325,7 +1986,7 @@ def check_dlq_evidence(leaf: Path, containment: dict) -> list[str]:
         with dlq_path.open(encoding="utf-8") as stream:
             records = sum(1 for line in stream if line.strip())
         sent = sum(int(node.get("dlq_sent", 0)) for node in containment.get("nodes", []))
-    except (OSError, TypeError, ValueError):
+    except (OSError, TypeError, ValueError, AttributeError):
         return ["dlq.jsonl or containment dlq_sent counters are unreadable"]
     if records != sent:
         return [f"dlq.jsonl holds {records} records but nodes sent {sent} to the dead-letter queue"]
@@ -2338,11 +1999,6 @@ def main() -> int:
         "--canonical",
         action="store_true",
         help="enforce Pi 5 provenance and experiment-specific canonical outputs",
-    )
-    parser.add_argument(
-        "--focused",
-        action="store_true",
-        help="enforce the frozen focused-pilot selection and semantic invariants",
     )
     parser.add_argument("--matrix", type=Path, default=CANONICAL_MATRIX)
     parser.add_argument(
@@ -2358,22 +2014,10 @@ def main() -> int:
     parser.add_argument("dirs", nargs="+", type=Path)
     args = parser.parse_args()
 
-    if args.focused and not args.canonical:
-        parser.error("--focused requires --canonical")
-
     canonical_matrix: dict | None = None
-    matrix_sha256 = ""
     if args.canonical:
         try:
-            matrix_bytes = args.matrix.read_bytes()
-            canonical_matrix = json.loads(matrix_bytes)
-            matrix_sha256 = hashlib.sha256(matrix_bytes).hexdigest()
-            if args.focused:
-                freeze_path = args.matrix.with_name("focused-pilot-freeze.json")
-                if not freeze_path.is_file():
-                    freeze_path = CANONICAL_MATRIX.with_name("focused-pilot-freeze.json")
-                freeze = json.loads(freeze_path.read_text())
-                matrix_sha256 = freeze["canonical_matrix_sha256"]
+            canonical_matrix = json.loads(args.matrix.read_bytes())
         except (OSError, ValueError) as exc:
             print(f"error: cannot load canonical matrix: {exc}", file=sys.stderr)
             return 2
@@ -2423,8 +2067,6 @@ def main() -> int:
                 experiment,
                 canonical=args.canonical,
                 canonical_matrix=canonical_matrix,
-                focused=args.focused,
-                matrix_sha256=matrix_sha256,
             )
             for v in violations:
                 all_violations.append((leaf, v))
@@ -2440,11 +2082,6 @@ def main() -> int:
     if args.canonical or matched_leaves:
         all_violations.extend(
             provenance_mismatches(sorted(provenance_leaves) + matched_leaves)
-        )
-    if args.focused and canonical_matrix is not None:
-        all_violations.extend(
-            (Path("<focused-pilot>"), violation)
-            for violation in check_focused_matrix(canonical_matrix)
         )
 
     for leaf, w in all_warnings:

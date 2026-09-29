@@ -203,7 +203,6 @@ HOTSWAP_PHASE_FIELDS = (
     "replacement_adopted_ns",
     "first_post_replacement_local_outcome_ns",
 )
-FOCUSED_MATRIX_SHA_ENV = "WAFER_FOCUSED_MATRIX_SHA256"
 DIAGNOSTIC_REPETITIONS_ENV = "WAFER_DIAGNOSTIC_REPETITIONS"
 CAPACITY_SCOUT_SYSTEMS = RATE_SWEEP_SYSTEMS
 CAPACITY_SCOUT_SUTS = ("native", "wafer", "ekuiper")
@@ -2860,14 +2859,6 @@ def capacity_knee_cooldown_secs() -> int:
     return int(definition["ordering"]["cooldown_secs"])
 
 
-def build_focused_schedule(seed: int) -> list[RunItem]:
-    focused = json.loads(CANONICAL_MATRIX_PATH.read_text())["focused_pilot"]
-    if seed != focused["seed"]:
-        raise ValueError(f"focused pilot seed must be {focused['seed']}")
-    snapshot = CANONICAL_MATRIX_PATH.with_name("focused-pilot-schedule.json")
-    return [RunItem(**item) for item in json.loads(snapshot.read_text())]
-
-
 def results_layout(root: Path) -> ResultsLayout:
     return ResultsLayout.resolve(root)
 
@@ -3204,59 +3195,6 @@ def _read_integer_csv(path: Path, fields: tuple[str, ...]) -> list[dict[str, int
             return [{field: int(row[field]) for field in fields} for row in reader]
         except (TypeError, ValueError) as error:
             raise ValueError(f"{path} contains invalid integers") from error
-
-
-def analyze_rate_sweep_traces(
-    published_path: Path,
-    received_path: Path,
-    subscriber_metadata_path: Path,
-) -> dict:
-    published = _read_integer_csv(published_path, ("seq", "ts_ns"))
-    received = _read_integer_csv(
-        received_path,
-        ("seq", "payload_ts_ns", "receive_ns", "latency_ns"),
-    )
-    published_by_seq = {row["seq"]: row["ts_ns"] for row in published}
-    if len(published_by_seq) != len(published):
-        raise ValueError("publisher trace contains duplicate sequences")
-
-    received_counts = Counter(row["seq"] for row in received)
-    unexpected = sorted(set(received_counts) - set(published_by_seq))
-    if unexpected:
-        raise ValueError(f"received unexpected sequences: {unexpected}")
-    for row in received:
-        expected_ts = published_by_seq[row["seq"]]
-        if row["payload_ts_ns"] != expected_ts:
-            raise ValueError(f"timestamp changed for sequence {row['seq']}")
-        if row["receive_ns"] < row["payload_ts_ns"]:
-            raise ValueError(f"negative latency for sequence {row['seq']}")
-        if row["latency_ns"] != row["receive_ns"] - row["payload_ts_ns"]:
-            raise ValueError(f"latency mismatch for sequence {row['seq']}")
-
-    metadata = json.loads(subscriber_metadata_path.read_text())
-    if _subscriber_latency_is_suspect(metadata):
-        raise ValueError("subscriber reported parse errors, clamped latency or a clock step")
-    if metadata.get("total_messages") != len(received) or metadata.get("total_recorded") != len(received):
-        raise ValueError("subscriber metadata count differs from received trace")
-    sequence = metadata.get("sequence", {})
-    duplicates = sum(count - 1 for count in received_counts.values() if count > 1)
-    if sequence.get("total_received") != len(received) or sequence.get("total_duplicates") != duplicates:
-        raise ValueError("subscriber sequence metadata differs from received trace")
-    unique_received = len(received_counts)
-    offered = len(published_by_seq)
-    return {
-        "messages": {
-            "offered": offered,
-            "received": unique_received,
-            "lost": max(0, offered - unique_received),
-            "duplicates": duplicates,
-        },
-        "latency_ns": {
-            "p50": int(metadata["latency_p50_ns"]),
-            "p95": int(metadata["latency_p95_ns"]),
-            "p99": int(metadata["latency_p99_ns"]),
-        },
-    }
 
 
 def summarize_process_resources(path: Path, clock_ticks: int | None = None) -> dict:
@@ -3885,21 +3823,6 @@ def find_passed_attempt(condition_dir: Path, run_index: int) -> Path | None:
     return selection.path if selection.skip else None
 
 
-def stamp_focused_metadata(root: Path, metadata: dict) -> None:
-    matrix_sha256 = os.environ.get(FOCUSED_MATRIX_SHA_ENV)
-    if matrix_sha256 is None:
-        return
-    focused = json.loads((root / "eval/canonical-matrix.json").read_text())["focused_pilot"]
-    decisions = focused["decisions"]
-    metadata["thesis_evidence"] = False
-    metadata["focused_pilot"] = {
-        "id": focused["id"],
-        "matrix_sha256": matrix_sha256,
-        "memory_retention_fix_commit": decisions["memory_retention"]["fix_commit"],
-        "ekuiper_operator_concurrency": decisions["ekuiper_operator_concurrency"]["value"],
-    }
-
-
 def stamp_diagnostic_metadata(metadata: dict) -> None:
     repetitions = os.environ.get(DIAGNOSTIC_REPETITIONS_ENV)
     if repetitions is not None:
@@ -4262,7 +4185,6 @@ def loadgen_command(
     output: Path | None = None,
     duration: int | None = None,
     topic: str | None = None,
-    trace_file: Path | None = None,
     sequence_start: int | None = None,
     summary_file: Path | None = None,
     event_aligned: bool = True,
@@ -4288,8 +4210,6 @@ def loadgen_command(
                 "--publisher-timing-receipt", str(output / "publisher-timing.json"),
                 "--action-timing-receipt", str(output / "disruption-timeline.json"),
             ])
-        if trace_file is not None:
-            command.extend(["--trace-file", str(trace_file)])
         return command
     command = [
         "taskset", "-c", item.support_cpus,
@@ -4312,8 +4232,6 @@ def loadgen_command(
         ])
     if sequence_start is not None:
         command.extend(["--sequence-start", str(sequence_start)])
-    if trace_file is not None:
-        command.extend(["--trace-file", str(trace_file)])
     if summary_file is not None:
         command.extend(["--summary-file", str(summary_file)])
     return command
@@ -4963,16 +4881,6 @@ def _write_process_audit(
     return path
 
 
-def _file_receipt(path: Path) -> dict:
-    with path.open() as stream:
-        samples = max(0, sum(1 for _ in stream) - 1)
-    return {
-        "path": path.name,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "samples": samples,
-    }
-
-
 def _read_pi_thermal(path: Path) -> dict:
     with path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
@@ -4984,10 +4892,6 @@ def _read_pi_thermal(path: Path) -> dict:
         ),
         "throttled": any(row.get("throttled") != "0x0" for row in rows),
     }
-
-
-def _rate_sweep_throttled(path: Path) -> bool:
-    return bool(_read_pi_thermal(path)["throttled"])
 
 
 def _binary_file_receipt(path: Path, samples: int | None = None) -> dict:
@@ -5380,79 +5284,6 @@ def write_candidate_capacity_result(
     )
 
 
-def write_rate_sweep_result(
-    root: Path,
-    item: RunItem,
-    output: Path,
-    measurement_duration_ns: int,
-) -> dict:
-    if measurement_duration_ns <= 0:
-        raise ValueError("rate-sweep measurement duration must be positive")
-    traces = analyze_rate_sweep_traces(
-        output / "published.csv",
-        output / "received.csv",
-        output / "subscriber-metadata.json",
-    )
-    messages = traces["messages"]
-    loss_percent = (
-        100.0 * messages["lost"] / messages["offered"]
-        if messages["offered"]
-        else 100.0
-    )
-    profile_path = root / str(item.loadgen_profile)
-    profile = tomllib.loads(profile_path.read_text())["loadgen"]
-    process_audit = output / "process-audit.json"
-    if (output / "telemetry-error.json").exists():
-        raise ValueError("Pi telemetry failed during rate-sweep measurement")
-    resources = summarize_process_resources(output / "resource-usage.csv")
-    expected_scope = "no-sut" if item.system == "mqtt-loopback" else "sut"
-    if resources["scope"] != expected_scope:
-        raise ValueError(
-            f"rate-sweep resource scope {resources['scope']!r}, expected {expected_scope!r}"
-        )
-    result = {
-        "schema_version": 1,
-        "experiment": item.experiment,
-        "system": item.system,
-        "thesis_evidence": False,
-        "measurement_boundary": "publisher run window to subscriber receive timestamp",
-        "units": {
-            "rate": "messages/second",
-            "latency": "nanoseconds",
-            "duration": "nanoseconds",
-            "timestamps": "nanoseconds since Unix epoch",
-            "counts": "messages",
-            "cpu": "percent of one logical CPU",
-            "rss": "bytes",
-        },
-        "offered_rate_msg_s": item.offered_rate_msg_s,
-        "actual_offered_rate_msg_s": messages["offered"] / (measurement_duration_ns / 1_000_000_000),
-        "achieved_rate_msg_s": messages["received"] / (measurement_duration_ns / 1_000_000_000),
-        "measurement_duration_ns": measurement_duration_ns,
-        "messages": messages,
-        "loss_percent": loss_percent,
-        "latency_ns": traces["latency_ns"],
-        "resources": resources,
-        "throttled": _rate_sweep_throttled(output / "pi-telemetry.csv"),
-        "profile": {
-            "path": item.loadgen_profile,
-            "sha256": hashlib.sha256(profile_path.read_bytes()).hexdigest(),
-            "payload_template_sha256": profile["payload_template_sha256"],
-        },
-        "process_audit": {
-            "path": process_audit.name,
-            "sha256": hashlib.sha256(process_audit.read_bytes()).hexdigest(),
-        },
-        "traces": {
-            "published": _file_receipt(output / "published.csv"),
-            "received": _file_receipt(output / "received.csv"),
-        },
-    }
-    validate_rate_sweep_result(result)
-    (output / "rate-sweep.json").write_text(json.dumps(result, indent=2) + "\n")
-    return result
-
-
 def run_rate_sweep_item(
     root: Path,
     item: RunItem,
@@ -5462,7 +5293,7 @@ def run_rate_sweep_item(
     output.mkdir(parents=True)
     config = root / item.config
     shutil.copy2(config, output / "config.toml")
-    final_capacity = item.experiment == "e-perf-10" and FOCUSED_MATRIX_SHA_ENV not in os.environ
+    final_capacity = item.experiment == "e-perf-10"
     candidate_capacity = item.experiment == CAPACITY_KNEE_EXPERIMENT
     if item.experiment == "capacity-scout" or final_capacity or candidate_capacity:
         shutil.copy2(root / str(item.loadgen_profile), output / "loadgen-profile.toml")
@@ -5566,7 +5397,6 @@ def run_rate_sweep_item(
                     "subscribe",
                     output=output,
                     topic=output_topic,
-                    trace_file=(output / "received.csv") if item.experiment == "e-perf-10" and not final_capacity else None,
                 ),
                 cwd=root,
                 env=environment,
@@ -5586,7 +5416,6 @@ def run_rate_sweep_item(
                     item,
                     "publish",
                     topic=input_topic,
-                    trace_file=(output / "published.csv") if item.experiment == "e-perf-10" and not final_capacity else None,
                     summary_file=(output / "publisher-summary.json") if item.experiment == "capacity-scout" or final_capacity or candidate_capacity else None,
                 ),
                 cwd=root,
@@ -5703,11 +5532,6 @@ def run_rate_sweep_item(
         elif candidate_capacity:
             invocation = json.loads((output / "invocation-receipt.json").read_text())
             write_candidate_capacity_result(item, output, invocation["controlled_factors"])
-            verify_result(root, output)
-        else:
-            result = write_rate_sweep_result(root, item, output, measurement_duration_ns)
-            if result["throttled"]:
-                raise RuntimeError("Pi throttling occurred during rate-sweep measurement")
             verify_result(root, output)
     except (
         OSError,
@@ -5970,7 +5794,6 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         metadata["offered_rate_msg_s"] = item.offered_rate_msg_s
         metadata["shared_measurement"] = False
         metadata["measurement_source_leaf"] = results_layout(root).relative(output)
-    stamp_focused_metadata(root, metadata)
     stamp_diagnostic_metadata(metadata)
     if item.loadgen_profile:
         profile = root / item.loadgen_profile
@@ -6269,29 +6092,6 @@ def verify_result(root: Path, output: Path) -> None:
             str(root / "eval/scripts/verify-result-contract.py"),
             "--canonical",
             str(output),
-        ],
-        cwd=root,
-        check=True,
-    )
-
-
-def verify_focused_batch(root: Path, batch_id: str, experiments: set[str]) -> None:
-    layout = results_layout(root)
-    result_dirs = []
-    for experiment in sorted(experiments):
-        raw_batch = layout.raw_path(experiment, batch_name(batch_id))
-        alias_batch = layout.manifest_path("aliases", experiment, batch_name(batch_id))
-        if raw_batch.is_dir():
-            result_dirs.append(raw_batch)
-        elif alias_batch.is_dir():
-            result_dirs.append(alias_batch)
-    subprocess.run(
-        [
-            sys.executable,
-            str(root / "eval/scripts/verify-result-contract.py"),
-            "--canonical",
-            "--focused",
-            *map(str, result_dirs),
         ],
         cwd=root,
         check=True,
@@ -6903,34 +6703,6 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
         subprocess.run([str(root / "eval/scripts" / script), str(result_root)], check=True)
 
 
-def validate_focused_freeze(root: Path, matrix_path: Path) -> dict:
-    receipt_path = root / "eval/focused-pilot-freeze.json"
-    receipt = json.loads(receipt_path.read_text())
-    matrix_bytes = matrix_path.read_bytes()
-    matrix_sha256 = hashlib.sha256(matrix_bytes).hexdigest()
-    if receipt.get("status") != "frozen-before-execution":
-        raise ValueError("focused-pilot freeze receipt is not frozen-before-execution")
-    if receipt.get("canonical_matrix_sha256") != matrix_sha256:
-        matrix = json.loads(matrix_bytes)
-        selection = json.dumps(
-            matrix.get("focused_pilot", {}).get("experiments", {}),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        if (
-            "final_campaign" not in matrix
-            or receipt.get("focused_selection_sha256")
-            != hashlib.sha256(selection).hexdigest()
-        ):
-            raise ValueError("focused-pilot matrix changed after freeze")
-    schedule_path = root / str(receipt.get("schedule_path", ""))
-    if receipt.get("schedule_sha256") != hashlib.sha256(schedule_path.read_bytes()).hexdigest():
-        raise ValueError("focused-pilot schedule changed after freeze")
-    if receipt.get("thesis_evidence") is not False:
-        raise ValueError("focused-pilot freeze receipt must set thesis_evidence=false")
-    return receipt
-
-
 def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
     print(f"batch_id={batch_id} seed={seed} host={HOST.tag}")
     seen: set[tuple[str, str]] = set()
@@ -7285,7 +7057,6 @@ def main() -> int:
         default="all",
         help="all (the final matrix), candidates, or a comma-separated list",
     )
-    parser.add_argument("--focused", action="store_true")
     parser.add_argument("--capacity-scout", action="store_true")
     parser.add_argument("--batch-id")
     parser.add_argument("--seed", type=int, default=1729)
@@ -7308,8 +7079,6 @@ def main() -> int:
         select_host(args.host)
     except (OSError, ValueError) as error:
         parser.error(str(error))
-    if args.focused and HOST.tag != "rpi5":
-        parser.error("the focused pilot is frozen for rpi5")
 
     root = args.root.resolve()
     if args.results_root is not None:
@@ -7322,31 +7091,18 @@ def main() -> int:
             return batch_status(layout, args.batch_id)
         if args.execute:
             layout.prepare()
-        focused_freeze = None
         capacity_scout = args.capacity_scout
-        if args.repetitions is not None and (capacity_scout or args.focused):
-            raise ValueError("--repetitions cannot be combined with --capacity-scout or --focused")
+        if args.repetitions is not None and capacity_scout:
+            raise ValueError("--repetitions cannot be combined with --capacity-scout")
         if capacity_scout:
-            if args.focused or args.experiments != "all":
-                raise ValueError("--capacity-scout cannot be combined with --focused or --experiments")
+            if args.experiments != "all":
+                raise ValueError("--capacity-scout cannot be combined with --experiments")
             if args.seed != CAPACITY_SCOUT_SEED:
                 raise ValueError(f"capacity-scout seed must be {CAPACITY_SCOUT_SEED}")
             if not args.batch_id:
                 raise ValueError("--capacity-scout requires --batch-id")
             schedule = []
             experiments = {"capacity-scout"}
-        elif args.focused:
-            if args.experiments != "all":
-                raise ValueError("--focused cannot be combined with --experiments")
-            matrix_path = root / "eval/canonical-matrix.json"
-            focused_freeze = validate_focused_freeze(root, matrix_path)
-            schedule = build_focused_schedule(args.seed)
-            frozen_schedule = json.loads(
-                (root / focused_freeze["schedule_path"]).read_text()
-            )
-            if frozen_schedule != [item.__dict__ for item in schedule]:
-                raise ValueError("focused-pilot runner schedule differs from frozen snapshot")
-            experiments = {item.experiment for item in schedule}
         else:
             experiments = parse_experiments(args.experiments)
             schedule = build_schedule(experiments, args.seed)
@@ -7499,8 +7255,6 @@ def main() -> int:
     if args.dry_run:
         return 0
 
-    if focused_freeze is not None:
-        os.environ[FOCUSED_MATRIX_SHA_ENV] = focused_freeze["canonical_matrix_sha256"]
     if args.repetitions is not None:
         os.environ[DIAGNOSTIC_REPETITIONS_ENV] = str(args.repetitions)
 
@@ -7521,27 +7275,6 @@ def main() -> int:
         )
         return 2
     schedule_path.write_text(schedule_json)
-    if focused_freeze is not None:
-        (ledger / "focused-pilot-execution.json").write_text(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "batch_id": batch_id,
-                    "thesis_evidence": False,
-                    "source_git_sha": subprocess.check_output(
-                        ["git", "-C", str(root), "rev-parse", "HEAD"], text=True
-                    ).strip(),
-                    "canonical_matrix_sha256": focused_freeze["canonical_matrix_sha256"],
-                    "freeze_receipt_sha256": hashlib.sha256(
-                        (root / "eval/focused-pilot-freeze.json").read_bytes()
-                    ).hexdigest(),
-                    "schedule_sha256": hashlib.sha256(schedule_json.encode()).hexdigest(),
-                    "started_at": utc_now(),
-                },
-                indent=2,
-            )
-            + "\n"
-        )
 
     failures: list[str] = []
     completed = 0
@@ -7587,8 +7320,6 @@ def main() -> int:
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
     if args.repetitions is None:
         summarise(root, batch_id, experiments)
-    if focused_freeze is not None and not failures:
-        verify_focused_batch(root, batch_id, experiments)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
     write_progress(ledger, "batch-finished", completed, total, failures=len(failures))
     return 1 if failures else 0

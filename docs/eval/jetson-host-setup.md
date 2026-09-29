@@ -52,5 +52,3 @@ python3 eval/scripts/lib/canonical_runner.py --host jetson --batch-id <batch-id>
 
 `mise run plan-campaign -- --host jetson` prints the same schedule, and
 `mise run run-campaign -- --host jetson --batch-id <batch-id>` runs or resumes it.
-
-The focused pilot is frozen for the Pi and does not run on this host.

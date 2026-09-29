@@ -143,14 +143,14 @@ before reading. The matrix below is authoritative:
 | `host-sched.csv` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | One row per second of system-wide scheduler and memory-pressure counters: `timestamp_ns,ctxt,processes,procs_running,procs_blocked,mem_available_bytes,psi_cpu_some_avg10,psi_memory_some_avg10,psi_memory_full_avg10,psi_io_some_avg10,psi_io_full_avg10,sampler_cpu_ms`. `ctxt` and `processes` are cumulative; PSI columns are empty on kernels without `/proc/pressure`; `sampler_cpu_ms` is the CPU time the sampler itself spent since its previous row, so every leaf carries its own overhead evidence. |
 | `sut-processes.csv` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | One row per second per tracked process (`wafer`, `wafer-runtime`, `wafer-loadgen`, `kuiperd`, `mosquitto`, matched on `/proc/<pid>/comm`): `timestamp_ns,pid,comm,utime,stime,minflt,majflt,voluntary_ctxt_switches,nonvoluntary_ctxt_switches,threads,rss_bytes,cpus_allowed_list`. Counters are cumulative for the process's lifetime. Support processes are recorded next to the SUT so the leaf shows where the broker and the load generator ran. |
 | `host-sidecar.json` | Same as `cpu-cores.csv` | `eval/scripts/lib/proc_telemetry.py` | Written when the sampler stops: `schema_version`, `sampler`, `interval_secs`, `started_unix_epoch_ns`, `finished_unix_epoch_ns`, `samples`, `sampler_affinity` (the CPU list it pinned itself to, the support cpuset under the canonical runner), `sut_cpus`, `sampler_cpu_seconds` and `sampler_max_rss_bytes` (its total cost), `clock_ticks_per_second`, `page_size_bytes`, `cpu_count`, `boot_id`, `kernel_cmdline`, `uptime_secs_at_start` and `tracked_comms`. If the sampler dies it writes `host-sidecar-error.json` (`error`, `timestamp_ns`) instead; the four files are supplementary host evidence, so their absence does not reject a leaf. |
-| `published.csv`, `received.csv` | Historical focused E-Perf-10 diagnostics only | `wafer-loadgen` opt-in tracing | Raw publisher/subscriber timestamp and sequence samples retained for v11-v17 compatibility. Final E-Perf-10 rejects these mandatory traces and uses bounded summaries. |
+| `published.csv`, `received.csv` | Historical E-Perf-10 diagnostics only | `wafer-loadgen` opt-in tracing | Raw publisher/subscriber timestamp and sequence samples retained for v11-v17 compatibility. Final E-Perf-10 rejects these mandatory traces and uses bounded summaries. |
 | `publisher-summary.json` | Final E-Perf-10 and Final E-Swap-3 | `wafer-loadgen publish` | `schema_version`, bounded `intended`, `rejected`, `enqueued`, `acked`, and `unacked_at_exit` counters plus the scheduled `measurement_duration_ns`. `intended = rejected + enqueued` and `enqueued = acked + unacked_at_exit` are mandatory: `enqueued` is what was handed to the MQTT client, `acked` is what the broker acknowledged (QoS 1 PUBACK), and `unacked_at_exit` is what was still unacknowledged when the 5 s drain window after a completed schedule closed (a run stopped by a signal skips the drain). `connects` counts successful CONNACKs and `connection_errors` counts event-loop errors; the clock starts only after the first CONNACK (10 s timeout, then the run fails without a summary). The verifier rejects `connects != 1` or `unacked_at_exit != 0`, and loss downstream of the publisher is `acked - received_unique`. `published` and `errors` repeat `intended` and `rejected` under their older names. `elapsed_ms` and `actual_rate` are the wall time the schedule took and `intended` divided by it; `deadline_misses` counts messages whose hand-off to the client ended after the next message was due; `hotswap_triggered_at_secs` is the swap offset for the `hotswap-trigger` profile and null otherwise. `source_lag_ns` (`count`, `p50`, `p99`, `p999`, `max`) is how late each message was handed to the MQTT client relative to its scheduled time; payload `ts` is the scheduled time, so this lag is part of the measured latency. `exit_reason` is `duration` when the schedule ran to its end, `sigterm`/`sigint` when a signal stopped it, or `broker-lost` when the MQTT session ended for good mid-run; the counters then cover the messages offered before the stop, and the verifier rejects the run. A second signal exits at once without a summary. |
 | `subscriber-metadata.json` | Final E-Perf-10 and external-MQTT experiments | `wafer-loadgen subscribe` | Bounded receive, duplicate, ignored-warmup, parse, latency, and sequence totals: `broker`, `topic`, `started_at_ns`, `ended_at_ns`, `git_sha`, `host_tag`, `sequence_end_exclusive`, `total_messages` (every message read), `total_recorded` (the `latency.hdr` population), `ignored_sequence_count` (warmup), `parse_errors`, `latency_min_ns`, `latency_max_ns`, `latency_mean_ns`, `latency_p50_ns`, `latency_p95_ns`, `latency_p99_ns`, `latency_p999_ns`, the histogram range `histogram_lowest_ns`, `histogram_highest_ns`, `histogram_sig_digits`, and `sequence` (`expected`, `total_received`, `received_unique`, `total_gaps` (missing, tail included when `sequence_end_exclusive` is set), `total_duplicates`, `out_of_order`, `out_of_range`, plus bounded `gap_ranges` and `duplicate_seqs` examples and `examples_truncated`). The HDR count and received-event population must match. `negative_latency_count` and `above_highest_latency_count` count samples recorded at a histogram bound; `clock_steps` counts wall-clock steps larger than 100 ms seen between received messages (the gap between the wall clock and the monotonic clock changed). Latency subtracts the publisher's wall-clock schedule from the subscriber's wall-clock receive time, so a step shifts every later sample; the verifier rejects the run when any of the three is non-zero. `exit_reason` is `total-messages`, `sigterm`, `sigint`, or `eof`. `status` is `complete`, or `partial` when `interval-latency.json` or `throughput-buckets.json` overflowed its bound or failed its checks; `partial_reasons` names each failure. A partial run keeps `latency.hdr`, `sequence.csv` and this file, leaves out the failed artifact, exits non-zero, and is rejected by the verifier. Written last, so its presence means the other subscriber artifacts are complete. A second SIGTERM or SIGINT exits at once without flushing. |
 | `export-errors.json` | Any run with a `BenchSink` output directory, only when an artifact failed | `BenchSink` | `{"schema_version":1,"errors":[{"artifact":…,"error":…}]}`. `BenchSink` writes `sequence.csv`, `measurement-window.json`, `swap_timeline.json`, `latency.hdr`, `service.hdr`, `source-lag.hdr` and `throughput.csv` first and the derived artifacts after, and one failed artifact does not stop the rest. Its presence rejects the leaf. |
 | `capacity-run.json` | Final E-Perf-10 and candidate E-Perf-Capacity-Knee | `canonical_runner.py` | Trace-free run summary containing intended/rejected/enqueued/acked/received/lost/duplicate counts, offered and achieved rates, loss, p50/p95/p99, CPU, RSS, thermal state, process/config receipts, and controlled factors. Final E-Perf-10 sets `thesis_evidence=true`; capacity-knee sets `evidence_class=candidate-supplementary`, `thesis_evidence=false`, and `n30_admitted=false`. |
 | `resource-usage.csv` | E-Perf-10 and E-Perf-Capacity-Knee | `canonical_runner.py` | One-second SUT samples: wall-clock timestamp, aggregate process CPU ticks, RSS bytes, and process count. MQTT loopback records the explicit no-SUT zero baseline. |
 | `process-audit.json` | E-Perf-10 and E-Perf-Capacity-Knee | `canonical_runner.py` | Active SUT PID, process affinity, exclusivity, and allowed CPU set captured before measurement. |
-| `rate-sweep.json` | Historical focused E-Perf-10 diagnostics only | `canonical_runner.py` | Legacy trace-backed run summary, always `thesis_evidence=false`. It remains readable but is not accepted as a final-capacity leaf. |
+| `rate-sweep.json` | Historical E-Perf-10 diagnostics only | Earlier `canonical_runner.py` versions | Legacy trace-backed run summary, always `thesis_evidence=false`. It remains readable but is not accepted as a final-capacity leaf. |
 | `throughput-buckets.json` | Final E-Swap-3 and E-Swap-4 | `wafer-loadgen subscribe` / `BenchSink` / `canonical_runner.py` | Contiguous 100 ms output-rate buckets with unique/event/duplicate counts. E-Swap-3 bins exactly -10 s through +10 s around the actual disruption event. E-Swap-4 keeps 1,200 source-origin primary buckets over `[0,120s)` and a separate 100-bucket drain series over `[120s,130s)`, with O(1) after-drain evidence. Unix-epoch values are labeled for source/sink or cross-process alignment only. |
 | `throughput-buckets-10ms.json` | Final E-Swap-3 and E-Swap-4 | `wafer-loadgen subscribe` / `BenchSink` | Exactly 400 contiguous 10 ms buckets over `[-2s,+2s)` around actual `t0`, plus 40 nested actual-t0-aligned 100 ms parent buckets. Both levels carry unique/event/duplicate counts and reconcile exactly. E-Swap-3 parent buckets also match the canonical event-window slice; E-Swap-4 retains its separate source-origin primary/drain series as the loss-accounting authority. No message identity or timestamp trace is retained. |
 | `disruption-timeline.json` | Final E-Swap-3 | `canonical_runner.py` | Strategy, actual Unix-epoch action start/end for cross-process alignment, monotonic scheduling/duration labels, the scheduled t=60 target, measured offset, signed alignment error, and a 10 ms maximum alignment tolerance. This is the single retained runner-owned final action timeline for E-Swap-3. |
@@ -160,7 +160,7 @@ before reading. The matrix below is authoritative:
 | `burst-timeline.json` | Final E-Swap-4 | `BenchSource` / `canonical_runner.py` | One 1,000 to 2,000 to 1,000 msg/s burst with boundaries at measured seconds 55 and 65 and exactly one successful swap scheduled at second 60, plus actual alignment, phase populations, primary/drain completion evidence, sequence integrity, sink gap, and internal swap phases. |
 | `startup-preparation.json` | E-Perf-9 | `run-experiment.sh` | Filesystem-cache condition and preparation action completed before the timed runtime process starts. |
 | `startup.json` | E-Perf-9 | `wafer-runtime` | Monotonic process/config, component load/compile, instantiation, pipeline setup, and first-process durations; total startup duration; exactly-one-message proof; plugin SHA-256; and explicit compiled-component cache state. |
-| `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than `dlq_sent_total`. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. False containment, runtime panic, malformed or pre-split metrics, or condition drift reject the leaf. |
+| `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than its nodes sent to the dead-letter queue. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. The runner fails the run when `per_node_metrics.csv` is malformed or lacks the attack node's counters. The analysis rejects records whose condition differs from the attack, and counts runs that were not contained or recorded a runtime panic instead of dropping them. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local source identity, configured post-warmup target count, actually offered/received post-warmup counts, target shortfall, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
 | `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
@@ -255,7 +255,7 @@ The runtime adopted this async P2 path. The A/B tooling that produced
 
 ### Final amended contract
 
-The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,165 schedule records, and 1,953 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`; diagnostic and focused entries remain in the separate `focused_pilot` object with `thesis_evidence=false`.
+The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,165 schedule records, and 1,953 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`.
 
 Final E-Perf-5 uses explicit transform fuel and epoch protection. Its transform-only pipeline records `filter = null` and `router = null` because those node categories are absent; this is a declared matrix exception, not an unmetered WAFER run.
 
@@ -493,72 +493,8 @@ a bounded large-file/many-small-file corpus manifest. The operator then stops
 writers, synchronizes, safely unmounts, and remounts the physical volume. A fresh
 mount identity is mandatory. `verified.json` records expected and observed file
 and byte counts plus missing, extra, and mismatched counts after full SHA-256
-verification; every error count must be zero. After a terminal rehearsal PASS,
-the `seal` command rejects active evidence writers, validates the immutable
-terminal reconciliation, writes one sorted volume-relative SHA-256 manifest for
-the complete `raw/` tree, and builds a composite index containing one selected
-passed leaf per physical key, immutable aliases, the qualified prerequisite, and
-unselected failed attempts. Production defaults require the exact 661-record
-composition (623 unique selected raw leaves, 37 aliases, one B00 prerequisite,
-and four excluded failed attempts). It then synchronizes and re-verifies the raw
-tree before writing the Pi source-host seal. Existing seal paths are never
-overwritten; an interrupted seal can resume only from byte-identical manifest
-and composite artifacts. macOS and Jetson handoff receipts bind the same UUID, stable
-identifier, raw manifest, source-host seal, and composite index before analysis
-may open the raw tree. Cross-host checks use path, size, and SHA-256 identity;
-source-local modification times remain recorded but are not treated as portable
-exFAT identity. The exact signed verifier bytes recorded in the source seal are
-required at handoff. The qualification tooling does not format, relabel, mount,
-unmount, copy, or delete storage.
-
-### Focused-pilot contract
-
-The follow-up pilot is selected by `focused_pilot` in
-`eval/canonical-matrix.json` and launched with:
-
-```sh
-python3 eval/scripts/lib/canonical_runner.py --focused --execute --batch-id <new-id>
-```
-
-This mode is diagnostic only. Every selected experiment declares its exact
-condition/run indices, sample unit, repetitions, event count where applicable,
-warmup, measurement boundary, required outputs, and analysis consumer. The
-runner rejects a non-frozen seed and requires the committed
-`eval/focused-pilot-schedule.json` snapshot. It writes both `schedule.json` and
-`focused-pilot-execution.json` in the batch ledger. The execution receipt binds
-the schedule and source revision to `eval/focused-pilot-freeze.json`; execution
-stops if either the canonical-matrix or schedule SHA-256 no longer matches the
-freeze receipt.
-
-Every focused leaf records `thesis_evidence=false` and a `focused_pilot`
-metadata object containing the matrix hash, memory-retention fix commit, and
-eKuiper operator concurrency. Validate focused results with:
-
-```sh
-python3 eval/scripts/verify-result-contract.py --canonical --focused \
-  eval/results/<experiment>/rpi5-<batch-id>
-```
-
-In addition to file presence and canonical host provenance, focused validation
-enforces these semantic invariants:
-
-- E-Perf-10 result status, counts, units, trace hashes, and system identity;
-- eKuiper's captured rule uses the frozen default operator concurrency of one;
-- every E-Backpressure policy crossed its queue threshold, drained, reconciled
-  its policy-specific counters and sequence evidence, and stayed within the frozen RSS bound;
-- E-Iso-4 recorded contained traps with one recovery per trap and no reuse of
-  an interrupted component instance;
-- E-Iso-7 uses independent source and sink populations, a branch-local
-  post-warmup measurement boundary, and lossless branch-A counts rather than
-  shared-source or aggregate fan-in values;
-- E-Perf-9 records every monotonic startup phase, one processed message, and
-  valid compiled-cache state;
-- E-Swap-1/2/4/6 keep internal phases and sink-observed gaps as distinct
-  nanosecond fields with the frozen event count;
-- E-Swap-3 and E-Swap-5 preserve sequence integrity; E-Swap-5 records all
-  requested rollbacks, post-rollback output, and no successful-v2 transition;
-- the matrix records the closed memory-retention decision and its verified
-  zero-byte/message diagnostic slope.
+verification; every error count must be zero. The qualification tooling does
+not format, relabel, mount, unmount, copy, or delete storage.
 
 ### Reduced-repetition diagnostic batches
 
