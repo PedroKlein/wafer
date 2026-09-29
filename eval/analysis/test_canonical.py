@@ -21,6 +21,7 @@ from wafer_analysis.canonical import (
     ekuiper_profile_tables,
     failed_replacement_table,
     capacity_competitive_decision,
+    density_table,
     depth_tables,
     metering_table,
     payload_table,
@@ -28,6 +29,7 @@ from wafer_analysis.canonical import (
     swap3_table,
     swap4_table,
     target_latency_table,
+    validation_gate_table,
     validate_visual_manifest,
 )
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta
@@ -1408,3 +1410,35 @@ def test_payload_loss_does_not_count_duplicates_as_delivered() -> None:
     table = payload_table(records).set_index("condition")
     assert table.loc["10kb", "pooled_loss"] == pytest.approx(6 / (30 * 60_000))
     assert table.loc["10kb", "total_duplicates"] == 5
+
+
+def validation_records(p99_ns: list[int]) -> list[dict]:
+    return [
+        {"condition": "delay-50ms", "run_index": index, "p50_ns": 50_100_000, "p99_ns": p99}
+        for index, p99 in enumerate(p99_ns, start=1)
+    ]
+
+
+def test_validation_gate_uses_the_runner_p99_band() -> None:
+    table = validation_gate_table(validation_records([55_017_471] + [50_300_000] * 29))
+    assert table.loc[0, "gate_passed"] and table.loc[0, "runs_inside_band"] == 30
+    table = validation_gate_table(validation_records([55_017_472] + [50_300_000] * 29))
+    assert not table.loc[0, "gate_passed"] and table.loc[0, "runs_inside_band"] == 29
+
+
+def test_validation_gate_requires_full_n_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="30 independent runs"):
+        validation_gate_table(validation_records([50_300_000] * 29))
+    assert not validation_gate_table(validation_records([50_300_000] * 2), canonical=False)["thesis_evidence"].any()
+
+
+def test_density_table_labels_container_floors_as_estimates() -> None:
+    rows = [
+        {"plugin": "pass-through", "wasm_bytes": "65536", "container_base": "alpine", "container_min_mb": "50"},
+        {"plugin": "tensor-prep", "wasm_bytes": "262144", "container_base": "alpine + ndarray", "container_min_mb": "70"},
+    ]
+    table = density_table(rows).set_index("plugin")
+    assert table.loc["pass-through", "floor_to_wasm_ratio"] == pytest.approx(800)
+    assert "estimate, not a measurement" in table.loc["tensor-prep", "estimator"]
+    with pytest.raises(ValueError, match="one positive size"):
+        density_table(rows + rows[:1])

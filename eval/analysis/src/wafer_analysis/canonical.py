@@ -653,6 +653,68 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
+VALIDATION_P99_BAND_NS = (45_000_000, 55_017_471)
+
+
+def validation_gate_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Val-1: how many runs recovered the injected 50 ms delay inside the runner's p99 band."""
+    runs = _group_runs(records, ("delay-50ms",), canonical=canonical)["delay-50ms"]
+    if not runs:
+        return pd.DataFrame()
+    low_bound, high_bound = VALIDATION_P99_BAND_NS
+    p50 = np.asarray([run["p50_ns"] for run in runs], dtype=float)
+    p99 = np.asarray([run["p99_ns"] for run in runs], dtype=float)
+    inside = int(np.sum((p99 >= low_bound) & (p99 <= high_bound)))
+    p50_low, p50_high = bootstrap_ci(p50)
+    p99_low, p99_high = bootstrap_ci(p99)
+    return pd.DataFrame(
+        [
+            {
+                "condition": "delay-50ms",
+                "N_runs": len(runs),
+                "runs_inside_band": inside,
+                "median_p50_ns": float(np.median(p50)),
+                "p50_ci95_low_ns": p50_low,
+                "p50_ci95_high_ns": p50_high,
+                "median_p99_ns": float(np.median(p99)),
+                "p99_ci95_low_ns": p99_low,
+                "p99_ci95_high_ns": p99_high,
+                "gate_passed": inside == len(runs),
+                "units": "nanoseconds, runs",
+                "estimator": "count of runs whose p99 lies in the band; median run p50 and p99 with bootstrap 95% CIs",
+                "threshold": "every run's p99 between 45 ms and 55,017,471 ns (the HdrHistogram bucket holding 55 ms)",
+                "claim_boundary": "the harness recovers a known 50 ms delay; it gates the other measurements and is not a WAFER result",
+                "thesis_evidence": canonical,
+            }
+        ]
+    )
+
+
+def density_table(rows: list[dict]) -> pd.DataFrame:
+    """E-Density-1: release Wasm component size beside a documented container-image floor."""
+    table = pd.DataFrame(
+        [
+            {
+                "plugin": row["plugin"],
+                "wasm_bytes": int(row["wasm_bytes"]),
+                "container_base": row["container_base"],
+                "container_floor_bytes": int(float(row["container_min_mb"]) * 1_048_576),
+            }
+            for row in rows
+        ]
+    )
+    if table.empty:
+        return table
+    if (table.wasm_bytes <= 0).any() or table.plugin.duplicated().any():
+        raise ValueError("binary sizes need one positive size per plugin")
+    return table.assign(
+        floor_to_wasm_ratio=table.container_floor_bytes / table.wasm_bytes,
+        units="bytes",
+        estimator="stat size of each release component; container floor is a documented lower-bound estimate, not a measurement",
+        claim_boundary="orders of magnitude only; production images are larger than the floor",
+    )
+
+
 def _candidate_scaling_table(
     summary: dict,
     *,

@@ -117,6 +117,15 @@ def build_complete_fixture(root: Path) -> None:
                     "elapsed_ms,rss_bytes\n0,60000000\n30000,67108864\n31000,67108864\n"
                 )
 
+    density = root / "e-density-1" / "release-components" / "run-01-attempt-01"
+    density.mkdir(parents=True)
+    (density / "canonical-status.json").write_text('{"status":"passed"}')
+    (density / "binary-sizes.csv").write_text(
+        "plugin,wasm_bytes,wasm_kb,container_base,container_min_mb,ratio_min,container_rationale\n"
+        "pass-through,90000,87.9,alpine + static Rust binary,50,582,alpine\n"
+        "json-parse,180000,175.8,alpine + static Rust binary + serde_json,60,349,serde_json\n"
+    )
+
     hotswap_events = [
         {
             "http_total_ns": 2_000_000,
@@ -357,6 +366,7 @@ def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBO
         "E_PERF_10_DIR": "e-perf-10",
         "E_BACKPRESSURE_DIR": "e-backpressure",
         "E_PERF_9_DIR": "e-perf-9",
+        "E_DENSITY_1_DIR": "e-density-1",
     }
     for name, experiment in experiment_paths.items():
         (fixture / experiment).mkdir(parents=True, exist_ok=True)
@@ -443,6 +453,11 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
     assert (rendered / "e-perf-1-target-load.csv").is_file()
     assert (rendered / "e-perf-10-rate-estimates.csv").is_file()
     assert (rendered / "e-swap-4-burst.tex").is_file()
+    assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-validation-gate.csv").is_file()
+    assert (rendered / "rq1/density.pdf").stat().st_size > 1_000
+    assert (rendered / "rq1-density.csv").is_file()
+    assert (rendered / "e-backpressure-queue-pressure.csv").is_file()
 
     for name in (
         "00-warmup-validation.ipynb",
@@ -451,6 +466,7 @@ def test_all_notebooks_execute_against_complete_focused_fixture(
         "05-hotswap-timeline.ipynb",
         "08-depth-scaling.ipynb",
         "09-saturation.ipynb",
+        "10-summary-stats.ipynb",
     ):
         assert "[image/png]" in output_by_name[name], name
 
