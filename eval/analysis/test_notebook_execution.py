@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import nbformat
@@ -325,7 +326,7 @@ def notebook_output(notebook: dict) -> str:
     return "\n".join(output)
 
 
-def execute_notebooks(monkeypatch, fixture: Path) -> list[str]:
+def execute_notebooks(monkeypatch, fixture: Path, notebooks: list[Path] = NOTEBOOKS) -> list[str]:
     experiment_paths = {
         "E_VAL_1_DIR": "e-val-1",
         "E_PERF_1_DIR": "e-perf-1",
@@ -363,7 +364,7 @@ def execute_notebooks(monkeypatch, fixture: Path) -> list[str]:
 
     cwd = Path(__file__).parent
     outputs = []
-    for path in NOTEBOOKS:
+    for path in notebooks:
         notebook = nbformat.read(path, as_version=4)
         executed = NotebookClient(
             notebook,
@@ -455,3 +456,15 @@ def test_all_notebooks_render_missing_conditions_as_pending(
     outputs = execute_notebooks(monkeypatch, tmp_path)
     assert len(outputs) == len(NOTEBOOKS)
     assert all("PENDING" in output for output in outputs)
+
+
+def test_depth_notebooks_render_a_single_depth_without_a_slope(tmp_path, monkeypatch) -> None:
+    build_complete_fixture(tmp_path)
+    for experiment in ("e-perf-3", "e-perf-6", "e-perf-8"):
+        for depth in ("depth-3", "depth-5", "depth-10"):
+            shutil.rmtree(tmp_path / experiment / depth)
+    notebooks = [path for path in NOTEBOOKS if path.name in {"03-memory-scaling.ipynb", "08-depth-scaling.ipynb"}]
+    outputs = execute_notebooks(monkeypatch, tmp_path, notebooks)
+    assert all("PENDING" in output for output in outputs)
+    assert (tmp_path / "rendered/rq1/depth-scaling.pdf").is_file()
+    assert (tmp_path / "rendered/rq1/depth-rss.pdf").is_file()
