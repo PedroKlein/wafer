@@ -563,23 +563,14 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[lower] + (ordered[upper] - ordered[lower]) * (position - lower)
 
 
-def _bootstrap_median_ci(values: list[float], seed: str) -> list[float]:
-    generator = random.Random(int(hashlib.sha256(seed.encode()).hexdigest(), 16))
-    medians = [
-        statistics.median(generator.choices(values, k=len(values)))
-        for _ in range(2_000)
-    ]
-    return [_percentile(medians, 0.025), _percentile(medians, 0.975)]
-
-
-def _run_summary(values: list[float], seed: str) -> dict:
+def _run_summary(values: list[float]) -> dict:
     return {
         "min": min(values),
         "median": statistics.median(values),
         "q1": _percentile(values, 0.25),
         "q3": _percentile(values, 0.75),
         "max": max(values),
-        "bootstrap_median_ci95": _bootstrap_median_ci(values, seed),
+        "values": sorted(values),
     }
 
 
@@ -758,11 +749,11 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
                     "mean_achieved_ratio": mean_achieved_ratio,
                     "total_duplicates": total_duplicates,
                     "run_summary": {
-                        name: _run_summary(values, f"{system}:{rate}:{name}")
+                        name: _run_summary(values)
                         for name, values in metrics.items()
                     } if rate_runs else None,
                     "normalized_p99": (
-                        _run_summary(normalized, f"{system}:{rate}:normalized-p99")
+                        _run_summary(normalized)
                         if normalized
                         else None
                     ),
@@ -1803,7 +1794,7 @@ def summarize_swap4_runs(runs: list[dict]) -> dict:
             raise ValueError("E-Swap-4 run has invalid drain evidence")
         gaps.append(int(events[0]["sink_observed_output_gap_ns"]))
     ordered = sorted(gaps)
-    run_level = _run_summary([float(value) for value in gaps], "e-swap-4:sink-gap")
+    run_level = _run_summary([float(value) for value in gaps])
     return {
         "schema_version": 1,
         "experiment": "e-swap-4",
@@ -1812,7 +1803,6 @@ def summarize_swap4_runs(runs: list[dict]) -> dict:
         "n_events": len(gaps),
         "median_sink_observed_output_gap_ns": statistics.median(ordered),
         "iqr_sink_observed_output_gap_ns": run_level["q3"] - run_level["q1"],
-        "bootstrap_median_ci95_ns": run_level["bootstrap_median_ci95"],
         "p95_sink_observed_output_gap_ns": ordered[math.ceil(len(ordered) * 0.95) - 1],
         "total_loss": sum(int(run["burst_timeline"].get("loss", 0)) for run in runs),
         "total_duplicates": sum(

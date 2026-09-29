@@ -233,19 +233,19 @@ def capacity_summary() -> dict:
                             "iqr": [rate * 0.99, rate],
                             "min": rate * 0.98,
                             "max": rate,
-                            "bootstrap_median_ci95": [rate * 0.99, rate],
+                            "values": [rate * (0.98 + index / 1_500) for index in range(30)],
                         },
                         "p99_ns": {
                             "median": 100_000 + rate,
                             "iqr": [100_000, 120_000],
                             "min": 90_000,
                             "max": 130_000,
-                            "bootstrap_median_ci95": [99_000, 101_000],
+                            "values": [90_000 + 1_000 * index for index in range(30)],
                         },
                     },
                     "normalized_p99": {
                         "median": 1.0 if rate < 8_000 else 2.1,
-                        "bootstrap_median_ci95": [0.9, 2.2],
+                        "values": [0.9 + 0.05 * index for index in range(30)],
                     },
                 }
             )
@@ -1073,6 +1073,20 @@ def test_capacity_tables_reject_schema_drift_from_the_producer() -> None:
     summary = capacity_summary()
     summary["rate_points_msg_s"][-1] = 32_000
     with pytest.raises(ValueError, match="wrong common rate grid"):
+        capacity_tables(summary)
+
+
+def test_capacity_intervals_bootstrap_the_run_values() -> None:
+    summary = capacity_summary()
+    rates, _ = capacity_tables(summary)
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 1_000)].iloc[0]
+    values = summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"]
+    assert (row["p99_ci95_low_ns"], row["p99_ci95_high_ns"]) == bootstrap_ci(
+        np.asarray(values, dtype=float)
+    )
+
+    summary["systems"]["wafer"]["rates"][0]["normalized_p99"]["values"].pop()
+    with pytest.raises(ValueError, match="30 run values"):
         capacity_tables(summary)
 
 

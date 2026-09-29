@@ -1938,7 +1938,6 @@ def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
     assert summary["n_runs"] == 30
     assert summary["n_events"] == 30
     assert summary["p95_sink_observed_output_gap_ns"] == 29_000_000
-    assert len(summary["bootstrap_median_ci95_ns"]) == 2
     assert summary["runs_with_drain_arrivals"] == 15
     assert summary["max_drain_arrival_offset_ns"] == 120_000_000_029
 
@@ -3556,6 +3555,9 @@ def test_capacity_estimator_handles_first_rate_failure() -> None:
         }
     )
     summary = estimate_capacity_envelope(runs)
+    first = summary["systems"]["wafer"]["rates"][0]
+    assert len(first["run_summary"]["p99_ns"]["values"]) == 30
+    assert len(first["normalized_p99"]["values"]) == 30
     assert summary["systems"]["mqtt-loopback"]["delivery_ceiling"] == {
         "rate_msg_s": None,
         "censoring": "left-censored-below-1000",
