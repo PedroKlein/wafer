@@ -13,6 +13,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 VERIFIER = ROOT / "eval/scripts/verify-result-contract.py"
+sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 SPEC = importlib.util.spec_from_file_location("verify_result_contract", VERIFIER)
 assert SPEC is not None and SPEC.loader is not None
 CONTRACT = importlib.util.module_from_spec(SPEC)
@@ -2337,3 +2338,90 @@ if __name__ == "__main__":
     test_canonical_result_rejects_dirty_untagged_and_missing_output()
     test_bench_sink_sequence_summary_rejects_out_of_range_messages()
     print("canonical result verifier tests: PASS")
+
+
+def _set_metadata(leaf: Path, **changes: object) -> None:
+    metadata = json.loads((leaf / "metadata.json").read_text())
+    metadata.update(changes)
+    (leaf / "metadata.json").write_text(json.dumps(metadata))
+
+
+def _copy_leaf(source: Path, root: Path, run_name: str) -> Path:
+    import shutil
+
+    target = root / source.relative_to(source.parents[3]).parent / run_name
+    shutil.copytree(source, target)
+    return target
+
+
+def test_canonical_batch_rejects_leaves_with_different_plugin_bytes(tmp_path: Path) -> None:
+    first = make_result(tmp_path)
+    second = _copy_leaf(first, tmp_path, "run-02")
+    _set_metadata(second, wafer_plugin_hashes={"transform": "4" * 64})
+    completed = run(first.parents[1])
+    assert completed.returncode == 1
+    assert f"wafer_plugin_hashes.transform is {'4' * 64}, but {first} has {'3' * 64}" in completed.stdout
+
+
+def test_canonical_batch_names_the_leaf_with_a_different_source_sha(tmp_path: Path) -> None:
+    first = make_result(tmp_path)
+    second = _copy_leaf(first, tmp_path, "run-02")
+    _set_metadata(second, git_sha="9" * 40)
+    completed = run(first.parents[1])
+    assert completed.returncode == 1
+    assert f"VIOLATION  {second}: git_sha is {'9' * 40}" in completed.stdout
+
+
+def test_match_compares_another_hosts_batch_without_checking_its_contract(tmp_path: Path) -> None:
+    pi_leaf = make_result(tmp_path / "pi")
+    other = make_result(tmp_path / "jetson")
+    _set_metadata(other, host_tag="jetson", hardware_model="NVIDIA Jetson Orin Nano")
+    command = [sys.executable, str(VERIFIER), "--canonical", str(pi_leaf.parents[1])]
+    matching = subprocess.run(
+        [*command, "--match", str(other.parents[1])], cwd=ROOT, capture_output=True, text=True
+    )
+    assert matching.returncode == 0, matching.stdout + matching.stderr
+
+    _set_metadata(other, wafer_plugin_hashes={"transform": "5" * 64, "filter": "6" * 64})
+    differing = subprocess.run(
+        [*command, "--match", str(other.parents[1])], cwd=ROOT, capture_output=True, text=True
+    )
+    assert differing.returncode == 1
+    assert f"VIOLATION  {other}: wafer_plugin_hashes.transform is {'5' * 64}" in differing.stdout
+    assert f"VIOLATION  {other}: wafer_plugin_hashes.filter is absent from {pi_leaf}" in differing.stdout
+
+    _set_metadata(other, wafer_plugin_hashes={"transform": "3" * 64}, git_dirty=True)
+    dirty = subprocess.run(
+        [*command, "--match", str(other.parents[1])], cwd=ROOT, capture_output=True, text=True
+    )
+    assert dirty.returncode == 1
+    assert f"VIOLATION  {other}: provenance comes from a dirty or unrecorded source tree" in dirty.stdout
+
+    _set_metadata(other, wafer_plugin_hashes=None, git_dirty=False)
+    unmerged = subprocess.run(
+        [*command, "--match", str(other.parents[1])], cwd=ROOT, capture_output=True, text=True
+    )
+    assert unmerged.returncode == 1
+    assert f"VIOLATION  {other}: wafer_plugin_hashes lacks transform, which {pi_leaf} has" in unmerged.stdout
+
+    missing = subprocess.run(
+        [*command, "--match", str(tmp_path / "absent")], cwd=ROOT, capture_output=True, text=True
+    )
+    assert missing.returncode == 1
+    assert "--match directory has no leaf run dirs" in missing.stdout
+
+
+def test_one_node_id_may_load_different_plugins_in_different_conditions(tmp_path: Path) -> None:
+    import provenance_match
+
+    batch = tmp_path / "e-perf-9" / "rpi5-batch"
+    for tier, digest in (("pass-through", "a"), ("tensor-prep", "b")):
+        for run_name in ("run-01", "run-02-attempt-2"):
+            leaf = batch / tier / run_name
+            leaf.mkdir(parents=True)
+            (leaf / "metadata.json").write_text(
+                json.dumps({"git_sha": "1" * 40, "git_dirty": False, "wafer_plugin_hashes": {"t1": digest * 64}})
+            )
+    leaves = sorted(path.parent for path in batch.rglob("metadata.json"))
+    assert provenance_match.provenance_mismatches(leaves) == []
+    assert provenance_match.condition_key(batch / "tensor-prep" / "run-02-attempt-2") == "e-perf-9/tensor-prep"
