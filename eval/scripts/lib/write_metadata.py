@@ -32,6 +32,7 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from host_facts import platform_facts  # noqa: E402
+from pi_telemetry import host_snapshot  # noqa: E402
 
 
 def _sh(cmd: list[str]) -> str:
@@ -99,14 +100,8 @@ def _hardware_metadata() -> dict:
         if path.is_file()
     })
 
-    temperature: int | str = "unknown"
-    raw_temperature = _read_text("/sys/class/thermal/thermal_zone0/temp")
-    if raw_temperature.isdigit():
-        temperature = int(raw_temperature)
-
-    throttled = _sh(["vcgencmd", "get_throttled"])
-    if throttled.startswith("throttled="):
-        throttled = throttled.removeprefix("throttled=")
+    raw_temperature, throttled = host_snapshot()
+    temperature: int | str = raw_temperature or "unknown"
 
     platform = platform_facts()
     return {

@@ -58,7 +58,8 @@ Common options:
   --output-dir <path>        Exact result leaf. Must not already exist.
   --broker <host:port>       Reuse an existing MQTT broker.
   --skip-build               Assume wafer-runtime + wafer-loadgen are built.
-  --canonical                Enforce the frozen Pi 5 provenance and host gate.
+  --canonical                Enforce the frozen provenance and the host profile gate
+                             (rpi5, jetson or x86 from the canonical matrix).
   --canonical-facts <path>   Validate a saved facts JSON during --dry-run only.
   --defer-verification       Let a canonical wrapper add derived artefacts before verification.
   --dry-run                  Print the plan; do not launch anything or create results.
@@ -211,10 +212,13 @@ if [ "$has_mqtt_source" -eq 1 ] && [ -z "$loadgen_profile" ]; then
 fi
 
 if [ "$canonical" -eq 1 ]; then
-    [ "$host" = "rpi5" ] || {
-        _log "canonical runs require --host rpi5 (got $host)"
-        exit 2
-    }
+    case "$host" in
+        rpi5 | jetson | x86) ;;
+        *)
+            _log "canonical runs require --host rpi5, jetson or x86 (got $host)"
+            exit 2
+            ;;
+    esac
     python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" matrix \
         "$REPO_ROOT/eval/canonical-matrix.json"
     python3 - "$REPO_ROOT/eval/canonical-matrix.json" "$experiment" <<'PY'
@@ -241,10 +245,10 @@ PY
             exit 2
         }
         python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" preflight \
-            "$canonical_facts"
+            "$canonical_facts" --host "$host"
     else
         python3 "$REPO_ROOT/eval/scripts/validate-canonical.py" host \
-            --root "$REPO_ROOT"
+            --host "$host" --root "$REPO_ROOT"
     fi
 elif [ -n "$canonical_facts" ]; then
     _log "--canonical-facts requires --canonical"
