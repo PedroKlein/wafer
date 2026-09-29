@@ -1222,7 +1222,7 @@ def test_containment_table_bounds_the_escape_probability_per_attack() -> None:
     assert table["experiment"].tolist() == list(ATTACKS)
     assert table["contained_runs"].eq(30).all() and table["all_contained"].all()
     assert table["containment_ci95_low"].iloc[0] == pytest.approx(0.8843, abs=1e-4)
-    assert table["escape_probability_upper95"].iloc[0] == pytest.approx(0.1157, abs=1e-4)
+    assert table["escape_probability_upper975"].iloc[0] == pytest.approx(0.1157, abs=1e-4)
     assert table["thesis_evidence"].all()
     assert (table["threshold"] == "every run contained").all()
 
@@ -1249,3 +1249,10 @@ def test_containment_table_rejects_a_run_without_a_verdict() -> None:
     records[0]["contained"] = None
     with pytest.raises(ValueError, match="without a containment verdict"):
         containment_table(records)
+
+
+def test_containment_summary_rejects_duplicate_runs_in_any_mode() -> None:
+    records = containment_records(runs=2)
+    records[1]["run_index"] = 1
+    with pytest.raises(ValueError, match="duplicate run identity"):
+        containment_table(records, canonical=False)

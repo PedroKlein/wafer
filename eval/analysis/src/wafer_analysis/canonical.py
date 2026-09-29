@@ -333,6 +333,8 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
         runs = [record for record in records if record.get("experiment") == experiment]
         if any(run.get("condition") != condition for run in runs):
             raise ValueError(f"{experiment} holds a condition other than {condition}")
+        if len({run.get("run_index") for run in runs}) != len(runs):
+            raise ValueError(f"{experiment} contains duplicate run identity")
         if canonical:
             _require_runs(runs, (condition,))
         if not runs:
@@ -351,14 +353,14 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
                 "containment_proportion": contained / len(runs),
                 "containment_ci95_low": low,
                 "containment_ci95_high": high,
-                "escape_probability_upper95": 1 - low,
+                "escape_probability_upper975": 1 - low,
                 "median_mechanism_count": float(np.median([run["expected_count"] for run in runs])),
                 "max_unexpected_outcomes": max(int(run["unexpected_outcomes"]) for run in runs),
                 "runtime_panics": sum(bool(run["runtime_panic"]) for run in runs),
                 "median_healthy_messages_out": float(np.median([run["healthy_messages_out"] for run in runs])),
                 "all_contained": contained == len(runs),
                 "units": "runs, events, messages",
-                "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a Clopper-Pearson 95% interval",
+                "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a two-sided Clopper-Pearson 95% interval; its lower end gives the one-sided 97.5% upper bound on the escape probability",
                 "threshold": "every run contained",
                 "claim_boundary": "per attack on this host; the escape bound covers this attack only",
                 "thesis_evidence": canonical,

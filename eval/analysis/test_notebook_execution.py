@@ -375,6 +375,8 @@ def raw_hashes(root: Path) -> dict[str, str]:
 def test_all_notebooks_execute_against_complete_focused_fixture(
     tmp_path, monkeypatch
 ) -> None:
+    # A run-like name above the run directories must not be read as a run index.
+    tmp_path = tmp_path / "run-99"
     build_complete_fixture(tmp_path)
     before = raw_hashes(tmp_path)
     outputs = execute_notebooks(monkeypatch, tmp_path)
