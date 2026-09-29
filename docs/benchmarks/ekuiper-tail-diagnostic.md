@@ -1,5 +1,9 @@
 # Why the v11 eKuiper latency tail was misleading
 
+> **Archived, not current.** Diagnosis of the v11 Pi pilot eKuiper tail.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [eKuiper comparator](ekuiper-comparator.md).
+
 <!-- historical-diagnostic-file -->
 
 The Raspberry Pi 5 v11 pilot recorded an approximately 18–20 ms eKuiper latency tail. The measurements were internally consistent, but the comparator configuration was not matched: the eKuiper MQTT sink omitted `qos`, selecting QoS 0 instead of the QoS 1 used by WAFER and the native comparator.

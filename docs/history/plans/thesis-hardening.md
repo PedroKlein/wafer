@@ -1,5 +1,9 @@
 # Thesis hardening — pre-Pi work
 
+> **Archived, not current.** Pre-Pi hardening plan, closed 2026-08-02.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [implementation status](../../status/implementation-status.md).
+
 **Status:** ✅ **CLOSED 2026-08-02.** All 9 tasks landed across 3 phases.
 See the closing checklist at the bottom of this file for the final tally
 and the follow-up gaps that survived (A20 Prometheus rollbacks counter).

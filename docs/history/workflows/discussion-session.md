@@ -1,5 +1,9 @@
 # Discussion Session Workflow
 
+> **Archived, not current.** Phase 0 design-discussion recipe.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [AGENTS.md](../../../AGENTS.md).
+
 > Recipe for conducting architecture discussion sessions in the WAFER Phase 0 refactor.
 > Each session produces **decisions only** — no implementation code.
 >

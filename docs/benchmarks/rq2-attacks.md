@@ -1,5 +1,9 @@
 # RQ2 — Attack Containment Evidence
 
+> **Archived, not current.** macOS shakedown attack-containment evidence.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+
 <!-- historical-diagnostic-file -->
 
 **Status:** informational (shakedown-macos). Canonical evidence pending
