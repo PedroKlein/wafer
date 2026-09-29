@@ -613,7 +613,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
             for name in ("p50", "p95", "p99")
         }
         expected = [int(run["total_expected"]) for run in runs]
-        lost = [max(0, int(run["total_expected"]) - int(run["total_received"])) for run in runs]
+        lost = [max(0, int(run["total_expected"]) - int(run["received_unique"])) for run in runs]
         loss_low, loss_high = pooled_ratio_ci(lost, expected)
         row = {"condition": condition, "payload_bytes": PAYLOAD_CONDITIONS[condition], "N_runs": len(runs)}
         for name, values in percentiles.items():

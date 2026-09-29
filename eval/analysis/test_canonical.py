@@ -1372,7 +1372,7 @@ def payload_records(runs: int = 30, sizes: tuple[str, ...] = ("120b", "1kb", "10
             "p95_ns": base[size] * 2,
             "p99_ns": base[size] * 3,
             "total_expected": 60_000,
-            "total_received": 60_000 - (run == 1),
+            "received_unique": 60_000 - (run == 1),
             "duplicates": 0,
         }
         for size in sizes
@@ -1398,3 +1398,13 @@ def test_payload_table_requires_full_n_unless_diagnostic() -> None:
     table = payload_table(payload_records(runs=2, sizes=("1kb",)), canonical=False)
     assert len(table) == 1 and pd.isna(table["cliffs_delta_vs_120b"].iloc[0])
     assert not table["thesis_evidence"].any()
+
+
+def test_payload_loss_does_not_count_duplicates_as_delivered() -> None:
+    records = payload_records()
+    for record in records:
+        if record["condition"] == "10kb" and record["run_index"] == 2:
+            record.update({"received_unique": 59_995, "duplicates": 5})
+    table = payload_table(records).set_index("condition")
+    assert table.loc["10kb", "pooled_loss"] == pytest.approx(6 / (30 * 60_000))
+    assert table.loc["10kb", "total_duplicates"] == 5

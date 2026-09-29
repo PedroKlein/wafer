@@ -110,7 +110,7 @@ def build_complete_fixture(root: Path) -> None:
                 },
             )
             (leaf / "sequence.csv").write_text(
-                "total_expected,total_received,gap_msgs,duplicates_count\n60000,60000,0,0\n"
+                "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n60000,60000,60000,0,0\n"
             )
             if experiment == "e-perf-6":
                 (leaf / "memory.csv").write_text(
