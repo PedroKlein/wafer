@@ -13,7 +13,7 @@ Read-only preflight: `./eval/scripts/preflight-jetson.sh` (from the deployed
 | Isolated CPUs | `1-3` | `isolcpus=1-3` in `/boot/extlinux/extlinux.conf` `APPEND`, then reboot |
 | Governor | `performance` on every online CPU | `jetson_clocks` sets it; verify with `cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` |
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | `jetson_clocks` |
-| Thermal | a `CPU-therm` thermal zone | present on L4T |
+| Thermal | a `cpu-thermal` thermal zone (`CPU-therm` on L4T R32) | present on L4T |
 | Power rails | INA3221 through hwmon | present on the developer kit |
 | Binaries | built on this host | `cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl`, then `mise run glibc-floor -- --max 2.35 target/release/wafer` |
 | Services | Mosquitto and native eKuiper 2.1.0 | `eval/ekuiper/install-native.sh` |

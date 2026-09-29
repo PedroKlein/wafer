@@ -50,8 +50,10 @@ write "$jetson/etc/os-release" 'PRETTY_NAME="Ubuntu 22.04.5 LTS"
 VERSION_ID="22.04"'
 write "$jetson/sys/devices/system/cpu/online" "0-3"
 cpu_tree "$jetson"
-write "$jetson/sys/class/thermal/thermal_zone0/type" "CPU-therm"
-write "$jetson/sys/class/thermal/thermal_zone0/temp" "41000"
+write "$jetson/sys/class/thermal/thermal_zone0/type" "gpu-thermal"
+write "$jetson/sys/class/thermal/thermal_zone0/temp" "39000"
+write "$jetson/sys/class/thermal/thermal_zone1/type" "cpu-thermal"
+write "$jetson/sys/class/thermal/thermal_zone1/temp" "41000"
 mkdir -p "$jetson/sys/bus/i2c/drivers/ina3221/1-0040/hwmon/hwmon1"
 
 log="$tmp/jetson.log"
@@ -64,7 +66,7 @@ fi
 grep -q '^PASS  nvpmodel mode: 25W' "$log"
 grep -q '^PASS  online CPUs: 0-3' "$log"
 grep -q '^PASS  INA3221' "$log"
-grep -q '^PASS  thermal zone CPU-therm' "$log"
+grep -q '^PASS  thermal zone cpu-thermal: 41000' "$log"
 
 write "$jetson/sys/devices/system/cpu/cpu2/cpufreq/scaling_cur_freq" "729600"
 write "$jetson/sys/devices/system/cpu/online" "0-5"
