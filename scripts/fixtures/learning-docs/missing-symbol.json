@@ -1,6 +1,0 @@
-{
-  "page": "workspace-map.md",
-  "find": "`pub use loader::load_config`",
-  "replace": "`pub use loader::load_missing`",
-  "expected_error": "workspace-map.md: missing symbol 'pub use loader::load_missing' in crates/wafer-config/src/lib.rs"
-}

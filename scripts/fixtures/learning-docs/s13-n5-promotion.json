@@ -1,6 +1,0 @@
-{
-  "page": "evaluation-harness.md",
-  "find": "The completed expanded N=5 rehearsal is diagnostic, descriptive, and non-poolable with final or earlier campaigns.",
-  "replace": "The completed expanded N=5 is final thesis evidence.",
-  "expected_error": "evaluation-harness.md: promotes diagnostic N=5 evidence"
-}

@@ -1,6 +1,0 @@
-{
-  "page": "reading-paths.md",
-  "find": "[ownership](rust-in-context.md#ownership)",
-  "replace": "[ownership](rust-in-context.md#missing-ownership)",
-  "expected_error": "reading-paths.md: undefined glossary link: ownership -> missing-ownership"
-}

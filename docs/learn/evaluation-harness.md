@@ -21,8 +21,7 @@ flowchart TD
     C --> D[RESULT-CONTRACT artifacts]
     D --> E[verify-result-contract.py]
     E --> F[selected physical leaves and aliases]
-    F --> G[expanded_n5.py datasets]
-    G --> H[validated figures and tables]
+    F --> H[analysis notebooks: figures and tables]
     H --> I{evidence classification}
     I -->|current rehearsal| J[diagnostic and non-poolable]
     I -->|future admitted campaign| K[final N equals 30]
@@ -33,8 +32,7 @@ flowchart TD
 3. `eval/scripts/run-experiment.sh` handles one run: configuration, runtime and load-generator processes, bounded collection, shutdown, metadata, and result placement. It delegates fresh local result-directory creation to `eval/scripts/collect-results.sh`, which never overwrites an existing directory.
 4. `eval/RESULT-CONTRACT.md` assigns each artifact to its producer and states which experiments require it. `verify-result-contract.py` and experiment-specific checks reject missing, malformed, inconsistent, or wrongly classified evidence.
 5. Shared experiment IDs are aliases to one selected physical leaf. An alias receipt preserves identity; it does not copy evidence or create another replicate.
-6. `load_expanded_n5_selection` requires a validated manifest, source seal, composite selection, and handoff receipt before opening selected evidence. It checks path sets, hashes, release lineage, terminal status, aliases, prerequisites, and disjoint failed attempts.
-7. `build_expanded_n5_datasets` converts selected artifacts into rows that retain result key, run index, release, source hash, sample unit, and evidence flags. `validate_expanded_n5_datasets` rejects provenance drift, alias inflation, right-censored drain evidence, and promotion to final evidence before rendering.
+6. The notebooks under `eval/analysis/notebooks/` resolve one explicit batch through `wafer_analysis.paths.resolve_analysis_batch` and render figures and tables that carry run counts, units, estimator, and evidence class.
 
 ## Rust
 
@@ -54,7 +52,7 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 ## Status boundaries
 
-**Current implementation:** The matrix, runners, result verifier, storage layout, expanded N=5 selector, analysis builder, and tests encode distinct raw, alias, derived, and evidence-class boundaries. Current accepted N=5 material can support descriptive patterns only.
+**Current implementation:** The matrix, runners, result verifier, storage layout, analysis notebooks, and tests encode distinct raw, alias, derived, and evidence-class boundaries. Current accepted N=5 material can support descriptive patterns only.
 
 **Intended design:** A future fully admitted final campaign uses 30 independent runs for its defined estimands and preserves the same artifact and provenance discipline.
 
@@ -68,9 +66,7 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 - **Source:** [`eval/scripts/collect-results.sh`](../../eval/scripts/collect-results.sh) | symbols: `never overwrites an existing directory`, `mkdir -p "$target"`
 - **Source:** [`eval/scripts/lib/canonical_runner.py`](../../eval/scripts/lib/canonical_runner.py) | symbols: `class RunItem`, `def build_schedule`, `def verify_result`, `def summarize_capacity_knee`
 - **Source:** [`eval/analysis/src/wafer_analysis/results_layout.py`](../../eval/analysis/src/wafer_analysis/results_layout.py) | symbols: `class ResultsLayout`, `def resolve_raw_relative`
-- **Source:** [`eval/analysis/src/wafer_analysis/expanded_n5.py`](../../eval/analysis/src/wafer_analysis/expanded_n5.py) | symbols: `def load_expanded_n5_selection`, `def build_expanded_n5_datasets`, `def validate_expanded_n5_datasets`
 - **Test:** [`eval/scripts/tests/test_canonical_matrix.py`](../../eval/scripts/tests/test_canonical_matrix.py) | symbols: `def test_matrix_accepts_frozen_experiments`, `def test_final_capacity_repetitions_cannot_drop_below_30`
-- **Test:** [`eval/analysis/test_expanded_n5.py`](../../eval/analysis/test_expanded_n5.py) | symbols: `def test_selection_accepts_exact_mixed_v10_v13_composite`, `def test_builds_and_renders_all_completed_families_without_mutating_sources`
 
 ## Checkpoint
 

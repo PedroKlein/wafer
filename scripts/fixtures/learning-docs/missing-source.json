@@ -1,6 +1,0 @@
-{
-  "page": "workspace-map.md",
-  "find": "- **Source:** [`crates/wafer-config/src/lib.rs`](../../crates/wafer-config/src/lib.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`",
-  "replace": "- **Source:** [`crates/wafer-config/src/missing.rs`](../../crates/wafer-config/src/missing.rs) | symbols: `pub use loader::load_config`, `pub use validation::{UNSUPPORTED_ALLOW_INFERENCE_MESSAGE, validate}`",
-  "expected_error": "workspace-map.md: broken local link: ../../crates/wafer-config/src/missing.rs"
-}

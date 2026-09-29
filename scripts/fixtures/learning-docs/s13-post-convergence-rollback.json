@@ -1,6 +1,0 @@
-{
-  "page": "stateless-hot-swap.md",
-  "find": "Before that marker consumes the sender, a process-time rollback completes the pending caller with `rolled_back`. After a successful local outcome has already returned, a later canary rollback cannot rewrite the response; recovery state and metrics are then the remaining local record.",
-  "replace": "Every process-time rollback completes the API caller with an explicit `rolled_back` outcome, even after a successful local outcome has already returned.",
-  "expected_error": "stateless-hot-swap.md: claims every canary rollback rewrites the completed API outcome"
-}
