@@ -169,7 +169,10 @@ under `wafer_plugin_hashes`.
 differs from `plugins/ARTIFACTS.sha256`. The hashes are specific to the build
 host: panic messages embed the cargo registry path, and Cargo derives each
 plugin's symbol hashes from the absolute path of `crates/wafer-plugin`. Record
-and verify them on the machine that builds the plugins for a run.
+and verify them on the machine that builds the plugins for a run. When the
+same batch runs on several hosts, build the plugins once and deploy the same
+`.wasm` files everywhere; `verify-result-contract.py --match` rejects batches
+whose `wafer_plugin_hashes` differ.
 
 ## Upgrading
 
