@@ -1,6 +1,0 @@
-{
-  "page": "evaluation-harness.md",
-  "find": "> **Documentation type:** Tutorial",
-  "replace": "> **Documentation type:** Reference",
-  "expected_error": "evaluation-harness.md: expected Diataxis type Tutorial, found Reference"
-}

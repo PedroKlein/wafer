@@ -1,6 +1,0 @@
-{
-  "page": "evaluation-harness.md",
-  "find": "Messages, aliases, events, buckets, and one-second intervals are nested observations or alternate views.",
-  "replace": "Aliases, events, buckets, and intervals add independent N.",
-  "expected_error": "evaluation-harness.md: inflates independent N with nested or aliased observations"
-}
