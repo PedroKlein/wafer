@@ -1,5 +1,9 @@
 # Binary Size Comparison — Wasm Components vs. Container Images
 
+> **Archived, not current.** Pre-final E-Density-1 sizes from the shakedown build.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+
 <!-- historical-diagnostic-file -->
 
 **Experiment**: E-Density-1 (RFC-008, D9).

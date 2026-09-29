@@ -1,5 +1,9 @@
 # RQ Summary — Shakedown Results
 
+> **Archived, not current.** macOS shakedown RQ tables; no final verdict.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+
 <!-- historical-diagnostic-file -->
 
 > **⚠️ SHAKEDOWN QUALITY — NOT THESIS GRADE.**

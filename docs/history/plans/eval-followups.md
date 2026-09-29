@@ -1,5 +1,9 @@
 # Evaluation-infrastructure — follow-up work
 
+> **Archived, not current.** Follow-ups from the July 2026 evaluation-infrastructure plan.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [implementation status](../../status/implementation-status.md).
+
 > **Status.** The `evaluation-infrastructure` plan closed 42/42 on
 > 2026-07-22. This document collects issues raised by two rounds of
 > parallel blind reviewers (review pass) that are **too large or too

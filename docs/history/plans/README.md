@@ -12,7 +12,7 @@ behaves today, read `docs/architecture/` and `docs/operations/` instead.
 
 - `thesis-hardening.md` — closed 2026-08-02. The final push to bring
   the runtime up to the shape the thesis defends.
-- `canonical-runs.md` — Raspberry Pi and Jetson canonical experiment
+- `canonical-runs.md` — pre-final Raspberry Pi 4 and Jetson experiment
   preflight and execution plan.
 - `eval-followups.md` — follow-up work identified during the initial
   evaluation shakedown.

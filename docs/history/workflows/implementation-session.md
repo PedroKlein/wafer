@@ -1,5 +1,9 @@
 # Implementation Session Workflow
 
+> **Archived, not current.** Phase 0 refactor implementation recipe.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [AGENTS.md](../../../AGENTS.md).
+
 > Recipe for running babysitter-driven implementation sessions in the WAFER refactor.
 > Each session implements ONE phase (or part of a phase) from the roadmap.
 

@@ -1,5 +1,9 @@
 # Planning Session Workflow
 
+> **Archived, not current.** Phase 0 roadmap planning recipe.
+> Kept as a historical record only. Do not use it for decisions, commands,
+> paths or numbers. Current source: [AGENTS.md](../../../AGENTS.md).
+
 > Recipe for expanding a roadmap phase into detailed implementation subtasks.
 > Run at the START of an implementation session (before babysitter takes over).
 
