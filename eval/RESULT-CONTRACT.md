@@ -1052,6 +1052,24 @@ Canonical `rpi5` runs additionally require:
 | `temperature_millicelsius` | `/sys/class/thermal/thermal_zone0/temp` | captured at run completion |
 | `throttled` | `vcgencmd get_throttled` | `0x0` |
 
+Every `metadata.json` and `host-facts.json` also carries the platform facts
+below, on every host tag. A fact the host does not expose is `null`, never
+omitted, so a verifier can require the keys everywhere and compare values
+only where they exist.
+
+| Field | Source | Notes |
+| --- | --- | --- |
+| `hardware_model` | `/proc/device-tree/model`, else DMI `sys_vendor` + `product_name` | `unknown` when neither exists |
+| `cpu_model` | `/proc/cpuinfo` `model name` (x86) or `Model`/`Hardware`, else the first device-tree `compatible` entry | `null` on hosts whose cpuinfo names no model |
+| `physical_cores` | distinct (`physical id`, `core id`) pairs in `/proc/cpuinfo`, else the online CPU count | SMT siblings count once |
+| `online_cpus` | `/sys/devices/system/cpu/online` | cpuset syntax |
+| `smt` | `/sys/devices/system/cpu/smt/control` | `on`, `off`, `notsupported`, or `null` |
+| `turbo` | `intel_pstate/no_turbo` or `cpufreq/boost` | `on`, `off`, or `null` |
+| `cpufreq_driver` | `intel_pstate`/`amd_pstate` status, else `cpu0/cpufreq/scaling_driver` | for example `intel_pstate:active` |
+| `os_release` | `PRETTY_NAME` in `/etc/os-release` | |
+| `glibc_version` | `getconf GNU_LIBC_VERSION` | |
+| `power_mode` | `nvpmodel -q` (`NV Power Mode`) | Jetson only, `null` elsewhere |
+
 The preflight rejects a host that does not meet these conditions. Smoke runs may retain the same `rpi5` path prefix, but their metadata and invocation are labelled non-canonical and must not be consumed as thesis evidence.
 
 ### Runtime-owned fields
