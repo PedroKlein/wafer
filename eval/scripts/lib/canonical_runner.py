@@ -2959,6 +2959,7 @@ def _summarize_branch_artifacts(
         sequence = {field: int(rows[0][field]) for field in (
             "total_expected",
             "total_received",
+            "received_unique",
             "gap_msgs",
             "duplicates_count",
         )}
@@ -3032,7 +3033,8 @@ def _summarize_branch_artifacts(
         "sequence_scope": "post_warmup",
         "offered_messages": offered,
         "received_messages": sequence["total_received"],
-        "lost_messages": max(0, offered - sequence["total_received"]),
+        "received_unique_messages": sequence["received_unique"],
+        "lost_messages": max(0, offered - sequence["received_unique"]),
         "gap_messages": sequence["gap_msgs"],
         "duplicates": sequence["duplicates_count"],
         "measurement_window": window,
