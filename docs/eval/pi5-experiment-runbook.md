@@ -40,19 +40,19 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2165
-measured_leaves=1953
+schedule_records=2201
+measured_leaves=1971
 ```
 
-The 2,165 records include shared-result aliases with `independent_n_contribution=0`. The 1,953 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,201 records include shared-result aliases with `independent_n_contribution=0`. The 1,971 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
 | Estimate | Value | Basis |
 |---|---:|---|
-| Nominal active-run time | 45.52 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
-| Operational estimate | 50.07 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
-| Storage estimate | 43,433,437,093 bytes | Current primary N=30 estimate over all 2,165 schedule records, including the three E-Backpressure policies; regenerate before execution |
+| Nominal active-run time | 46.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 51.57 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Storage estimate | about 43.8 GB | The 43,433,437,093-byte estimate for the 2,165-record schedule, scaled by measured leaves from 1,953 to 1,971, including the three E-Backpressure policies; regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
 Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.
@@ -144,7 +144,7 @@ Before the final batch, run the first three repetitions of every experiment from
   --repetitions 3
 ```
 
-That is 198 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 202 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;
@@ -273,6 +273,7 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
 - E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
 - E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
+- E-Swap-1 and E-Swap-5 have ten independent process runs with 50 nested swap or rollback events each. Analysis summarises each run first and reports the first-use (compiling) event of each run apart from the cached events.
 - E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled, with zero after-drain arrivals and no right censoring.
 - E-Perf-2 remains an alias view of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Aliases never add independent samples.
 - PMIC remains an internal-rail proxy, not total input power. External USB-C input-power capture is `future-work`.

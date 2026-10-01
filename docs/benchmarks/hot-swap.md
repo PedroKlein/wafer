@@ -22,7 +22,7 @@ The replacement is stateless. Guest memory is not transferred between versions. 
 
 ### Repeated swap
 
-E-Swap-1 measures 50 repeated swaps in one process for phase and sink-gap distributions. E-Swap-2 and E-Swap-6 share those measurements through explicit matrix aliases rather than multiplying samples. The p95 sink-observed gap criterion is 100 ms; E-Swap-2 also requires zero loss and duplication.
+E-Swap-1 measures 50 repeated swaps in each of 10 independent process runs for phase and sink-gap evidence. The first swap of each run compiles its replacement and the later swaps reuse the cached component, so the first-use swap is reported apart from the cached swaps. Each run is reduced first to its first-use value, its cached median, and the p95 of its cached phase totals and sink gaps, and the result is the median over runs with a bootstrap 95% CI over runs. E-Swap-2 and E-Swap-6 share those measurements through explicit matrix aliases rather than multiplying samples. E-Swap-2 requires zero loss and duplication in every run.
 
 ### Restart comparison
 
@@ -34,7 +34,7 @@ E-Swap-4 uses 30 independent runs. The source emits 1,000 msg/s before measured 
 
 ### Failed replacement
 
-E-Swap-5 records one request, rollback evidence, sequence accounting, and `post-rollback-continuity.json`. A failed replacement must not contain a successful-v2 `swap_timeline.json`. Process-time canary rollback is implemented only for Transform, and the continuity artifact—not the API's local rollback response—owns the post-rollback delivery claim.
+E-Swap-5 has 10 independent process runs of 50 failed replacements each. Every run records its requests, rollback evidence, sequence accounting, and `post-rollback-continuity.json`, and rollback durations are summarised per run before they are summarised over runs. A failed replacement must not contain a successful-v2 `swap_timeline.json`. Process-time canary rollback is implemented only for Transform, and the continuity artifact—not the API's local rollback response—owns the post-rollback delivery claim.
 
 ## Cache boundary
 

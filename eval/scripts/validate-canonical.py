@@ -40,8 +40,11 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_SCHEDULE_RECORDS = 2_165
-FINAL_MEASURED_LEAVES = 1_953
+FINAL_SCHEDULE_RECORDS = 2_201
+FINAL_MEASURED_LEAVES = 1_971
+SWAP_SESSION_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"}
+SWAP_SESSION_RUNS = 10
+SWAP_SESSION_EVENTS = 50
 
 
 def load_object(path: Path) -> dict:
@@ -220,16 +223,17 @@ def validate_matrix(matrix: dict) -> list[str]:
         conditions = experiment["conditions"]
         outputs = experiment["required_outputs"]
 
-        if sample_unit not in {"run", "event", "static"}:
+        if sample_unit not in {"run", "static"}:
             errors.append(f"{experiment_id} has invalid sample_unit {sample_unit!r}")
         if not isinstance(repetitions, int) or repetitions < 1:
             errors.append(f"{experiment_id} repetitions must be a positive integer")
+        elif experiment_id in SWAP_SESSION_EXPERIMENTS:
+            if repetitions != SWAP_SESSION_RUNS:
+                errors.append(f"{experiment_id} repetitions must be exactly {SWAP_SESSION_RUNS}")
+            if experiment.get("events_per_run") != SWAP_SESSION_EVENTS:
+                errors.append(f"{experiment_id} events_per_run must be exactly {SWAP_SESSION_EVENTS}")
         elif sample_unit == "run" and repetitions < 30:
             errors.append(f"{experiment_id} repetitions must be >= 30")
-        if sample_unit == "event":
-            events = experiment.get("events_per_run")
-            if not isinstance(events, int) or events < 50:
-                errors.append(f"{experiment_id} events_per_run must be >= 50")
         if sample_unit == "static" and repetitions != 1:
             errors.append(f"{experiment_id} static measurement must have one repetition")
         if experiment_id in {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-5", "e-swap-6"}:

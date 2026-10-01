@@ -1889,73 +1889,115 @@ SWAP_PHASES = (
     "first_post_replacement_local_outcome_ns",
 )
 SWAP_EVENT_CLASSES = {"compiled": "first-use", "memory_hit": "cached", "disk_hit": "cached"}
+SWAP_METRICS = (*SWAP_PHASES, "phase_total_ns", "http_total_ns", "sink_observed_output_gap_ns")
+SWAP_TAIL_METRICS = ("phase_total_ns", "sink_observed_output_gap_ns")
+SWAP_SESSION_RUNS = 10
+SWAP_SESSION_EVENTS = 50
+
+
+def _swap_session_runs(records: list[dict], experiment: str, *, canonical: bool) -> list[dict]:
+    runs = sorted(records, key=lambda record: int(record.get("run_index", 0)))
+    indices = [int(run.get("run_index", 0)) for run in runs]
+    if len(set(indices)) != len(indices):
+        raise ValueError(f"{experiment} contains duplicate run identity")
+    if canonical and indices != list(range(1, SWAP_SESSION_RUNS + 1)):
+        raise ValueError(f"{experiment} requires {SWAP_SESSION_RUNS} independent runs")
+    return runs
+
+
+def _swap_event_class(compile_cache: object, event_index: object) -> str:
+    event_class = SWAP_EVENT_CLASSES.get(compile_cache)
+    if event_class is None:
+        raise ValueError(
+            f"swap event {event_index} has unknown compile cache outcome {compile_cache!r}"
+        )
+    return event_class
+
+
+def _median_over_runs(metric: str, run_values: list[float]) -> dict:
+    name = metric.removesuffix("_ns")
+    low, high = _ci(run_values)
+    return {
+        f"median_{metric}": float(np.median(run_values)),
+        f"{name}_ci95_low_ns": low,
+        f"{name}_ci95_high_ns": high,
+    }
 
 
 def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """E-Swap-1/6: internal phases, HTTP duration and sink gap per compile-cache class.
 
-    ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added. A run the
-    system under test stopped early (a failed swap, a runtime exit) has no phases and
-    gets its own row, so the failure is reported rather than dropped.
+    ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added.
+    Each run is first reduced to the median of its events in a class, and its
+    cached swaps also to their p95 phase total and sink gap; the table gives the
+    median of those run values with a bootstrap 95% CI over runs. A run the system
+    under test stopped early (a failed swap, a runtime exit) has no phases and is
+    counted in its own row, so the failure is reported rather than dropped.
     """
-    if canonical and (
-        len(runs) != 1
-        or runs[0].get("run_index") != 1
-        or (not _stopped_early(runs[0]) and len(runs[0]["events"]) != 50)
-    ):
-        raise ValueError("E-Swap-1 requires one run with 50 nested swap events")
+    session = _swap_session_runs(runs, "E-Swap-1", canonical=canonical)
     reasons = ", ".join(
-        sorted({reason for run in runs for reason in run.get("sut_outcome_reasons", ())})
+        sorted({reason for run in session for reason in run.get("sut_outcome_reasons", ())})
     )
-    events = []
-    for run in runs:
+    by_class: dict[str, list[list[dict]]] = {"first-use": [], "cached": []}
+    for run in session:
         if _stopped_early(run):
             continue
+        if canonical and len(run["events"]) != SWAP_SESSION_EVENTS:
+            raise ValueError(
+                f"E-Swap-1 run {run['run_index']} requires {SWAP_SESSION_EVENTS} nested swap events"
+            )
+        classes: dict[str, list[dict]] = {"first-use": [], "cached": []}
+        first_use = []
         for event in run["events"]:
-            event_class = SWAP_EVENT_CLASSES.get(event.get("compile_cache"))
-            if event_class is None:
-                raise ValueError(
-                    f"swap event {event.get('event_index')} has unknown compile cache "
-                    f"outcome {event.get('compile_cache')!r}"
-                )
-            events.append({**event, "event_class": event_class, "run_index": run["run_index"]})
+            values = {phase: event[phase] for phase in SWAP_PHASES}
+            values |= {
+                "phase_total_ns": sum(values.values()),
+                "http_total_ns": event["http_total_ns"],
+                "sink_observed_output_gap_ns": event["sink_observed_output_gap_ns"],
+            }
+            event_class = _swap_event_class(event.get("compile_cache"), event.get("event_index"))
+            classes[event_class].append(values)
+            if event_class == "first-use":
+                first_use.append(event.get("event_index"))
+        if canonical and first_use != [0]:
+            raise ValueError(
+                f"E-Swap-1 run {run['run_index']} requires exactly one first-use swap event, its first"
+            )
+        for event_class, events in classes.items():
+            if events:
+                by_class[event_class].append(events)
     rows = []
-    for event_class in ("first-use", "cached"):
-        subset = [event for event in events if event["event_class"] == event_class]
-        if not subset:
+    for event_class, runs_events in by_class.items():
+        if not runs_events:
             continue
         row = {
             "experiment": "e-swap-1",
             "event_class": event_class,
-            "N_runs": len({event["run_index"] for event in subset}),
-            "N_nested_events": len(subset),
+            "N_runs": len(runs_events),
+            "N_nested_events": sum(len(events) for events in runs_events),
         }
-        totals = [sum(event[phase] for phase in SWAP_PHASES) for event in subset]
-        for field, values in [
-            *((phase, [event[phase] for event in subset]) for phase in SWAP_PHASES),
-            ("phase_total_ns", totals),
-            ("http_total_ns", [event["http_total_ns"] for event in subset]),
-            ("sink_observed_output_gap_ns", [event["sink_observed_output_gap_ns"] for event in subset]),
-        ]:
-            name = field.removesuffix("_ns")
-            p25, median, p75, p95 = np.percentile(np.asarray(values, dtype=float), [25, 50, 75, 95])
-            row |= {
-                f"median_{name}_ns": float(median),
-                f"p25_{name}_ns": float(p25),
-                f"p75_{name}_ns": float(p75),
-                f"p95_{name}_ns": float(p95),
-            }
+        for metric in SWAP_METRICS:
+            row |= _median_over_runs(
+                metric,
+                [float(np.median([event[metric] for event in events])) for events in runs_events],
+            )
+        if event_class == "cached":
+            for metric in SWAP_TAIL_METRICS:
+                row |= _median_over_runs(
+                    f"run_p95_{metric}",
+                    [float(np.percentile([event[metric] for event in events], 95)) for events in runs_events],
+                )
         rows.append(
             row
             | {
                 "sut_outcome_reasons": reasons,
                 "units": "nanoseconds, runs, swap events",
-                "estimator": "quantiles over nested swap events; one run, so the spread is within-run, not a between-run interval",
+                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached phase total and sink gap, each with a bootstrap 95% CI over runs; the first-use class holds the one compiling swap of each run",
                 "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
                 "thesis_evidence": canonical,
             }
         )
-    stopped = [run for run in runs if _stopped_early(run)]
+    stopped = [run for run in session if _stopped_early(run)]
     if stopped:
         rows.append(
             {
@@ -1971,6 +2013,52 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
             }
         )
     return pd.DataFrame(rows)
+
+
+def swap_sequence_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Swap-2: loss and duplication in each E-Swap-1 run, then summed over runs.
+
+    Each record is one run's ``sequence.csv`` counts under ``sequence`` with its
+    ``run_index`` and ``sut_outcome_reasons``. A run the system under test stopped
+    early has no counts and is not lossless. The last row, ``run == "all"``, holds
+    the totals.
+    """
+    counts = ("expected", "received", "loss", "duplicates")
+    rows = []
+    for record in _swap_session_runs(records, "E-Swap-2", canonical=canonical):
+        if _stopped_early(record):
+            rows.append({"run": str(record["run_index"]), "runs_stopped_early": 1})
+            continue
+        sequence = record["sequence"]
+        rows.append(
+            {
+                "run": str(record["run_index"]),
+                "runs_stopped_early": 0,
+                "expected": int(sequence["expected"]),
+                "received": int(sequence["received"]),
+                "loss": int(sequence["gaps"]),
+                "duplicates": int(sequence["duplicates"]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    complete = [row for row in rows if not row["runs_stopped_early"]]
+    rows.append(
+        {"run": "all", "runs_stopped_early": len(rows) - len(complete)}
+        | {field: sum(row[field] for row in complete) for field in counts}
+    )
+    table = pd.DataFrame(rows)
+    return table.assign(
+        lossless=(table.runs_stopped_early == 0)
+        & (table.loss == 0)
+        & (table.duplicates == 0)
+        & (table.expected == table.received),
+        units="messages",
+        estimator="exact full-run sequence counts of each run and their sum over the runs that were not stopped early",
+        threshold="zero loss and zero duplication in every run",
+        claim_boundary="stateless swaps; E-Swap-2 reads the E-Swap-1 runs and adds no independent N",
+        thesis_evidence=canonical,
+    )
 
 
 def bucket_band(offsets_ns: list[int], runs: list[list[float]]) -> pd.DataFrame:
@@ -1991,13 +2079,14 @@ def bucket_band(offsets_ns: list[int], runs: list[list[float]]) -> pd.DataFrame:
 
 
 def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
-    if canonical and len(records) != 1:
-        raise ValueError("E-Swap-5 requires one independent run")
+    """E-Swap-5: one row per run, with its first-use rollback apart from its cached ones.
+
+    A run the system under test stopped early has no rollback durations; its row
+    counts the requests that still rolled back.
+    """
     rows = []
-    for record in sorted(records, key=lambda record: int(record.get("run_index", 0))):
-        if record.get("condition") != "process-trap-rollback" or (
-            canonical and record.get("run_index") != 1
-        ):
+    for record in _swap_session_runs(records, "E-Swap-5", canonical=canonical):
+        if record.get("condition") != "process-trap-rollback":
             raise ValueError("E-Swap-5 run identity is invalid")
         reasons = ", ".join(record.get("sut_outcome_reasons", ()))
         if _stopped_early(record):
@@ -2016,7 +2105,9 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
                         for request in requests
                     ),
                     "all_rolled_back": False,
+                    "stopped_early": True,
                     "sut_outcome_reasons": reasons,
+                    "post_rollback_continuity": False,
                     "units": "rollback events, runs",
                     "estimator": "a run the system under test stopped early; no rollback durations",
                     "threshold": "50 successful rollbacks; post-rollback output; zero loss and duplication",
@@ -2037,32 +2128,88 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
         ):
             raise ValueError("E-Swap-5 analysis input is malformed")
         validate_swap5_artifacts(requests, rollback, continuity, sequence)
-        durations = np.asarray([event["rollback_ns"] for event in rollback["events"]], dtype=float)
+        durations = {"first-use": [], "cached": []}
+        first_use = []
+        for request, event in zip(requests, rollback["events"], strict=True):
+            event_class = _swap_event_class(request["body"].get("compile_cache"), event["event_index"])
+            durations[event_class].append(event["rollback_ns"])
+            if event_class == "first-use":
+                first_use.append(event["event_index"])
+        if canonical and first_use != [0]:
+            raise ValueError(
+                f"E-Swap-5 run {record['run_index']} requires exactly one first-use rollback event, its first"
+            )
         rows.append(
             {
                 "experiment": "e-swap-5",
                 "condition": "process-trap-rollback",
                 "run_index": record["run_index"],
                 "N_runs": 1,
-                "N_nested_events": len(durations),
-                "rolled_back_events": len(durations),
+                "N_nested_events": len(rollback["events"]),
+                "rolled_back_events": rollback["rolled_back"],
                 "all_rolled_back": True,
+                "stopped_early": False,
                 "sut_outcome_reasons": reasons,
-                "median_rollback_ns": float(np.median(durations)),
-                "p95_rollback_ns": float(np.percentile(durations, 95)),
-                "max_rollback_ns": float(durations.max()),
+                "median_first_use_rollback_ns": (
+                    float(np.median(durations["first-use"])) if durations["first-use"] else None
+                ),
+                "median_cached_rollback_ns": (
+                    float(np.median(durations["cached"])) if durations["cached"] else None
+                ),
+                "max_rollback_ns": float(max(durations["first-use"] + durations["cached"])),
                 "post_rollback_messages": continuity["messages_after_final_rollback"],
                 "post_rollback_continuity": continuity["output_observed_after_final_rollback"],
                 "total_loss": sequence["gaps"],
                 "total_duplicates": sequence["duplicates"],
                 "units": "nanoseconds, messages, runs, rollback events",
-                "estimator": "one complete run with nested rollback-event durations",
+                "estimator": "one complete run; the first-use (compiling) rollback apart from the median of the cached rollbacks",
                 "threshold": "50 successful rollbacks; post-rollback output; zero loss and duplication",
                 "claim_boundary": "failed replacement rollback and observed continuity without a successful v2 transition",
                 "thesis_evidence": canonical,
             }
         )
     return pd.DataFrame(rows)
+
+
+def failed_replacement_summary(runs: pd.DataFrame) -> pd.DataFrame:
+    """E-Swap-5 over runs: medians of the per-run rollback durations and exact totals.
+
+    ``runs`` is the per-run table from :func:`failed_replacement_table`.
+    """
+    if runs.empty:
+        return pd.DataFrame()
+    complete = runs[~runs.stopped_early.astype(bool)]
+    row = {
+        "experiment": "e-swap-5",
+        "condition": "process-trap-rollback",
+        "N_runs": len(runs),
+        "N_nested_events": int(runs.N_nested_events.sum()),
+        "rolled_back_events": int(runs.rolled_back_events.sum()),
+        "all_rolled_back": bool(runs.all_rolled_back.all()),
+        "runs_stopped_early": int(runs.stopped_early.sum()),
+        "sut_outcome_reasons": ", ".join(
+            sorted({reason for value in runs.sut_outcome_reasons for reason in value.split(", ") if reason})
+        ),
+    }
+    for metric in ("first_use_rollback_ns", "cached_rollback_ns"):
+        values = complete[f"median_{metric}"].dropna().astype(float).tolist()
+        row |= _median_over_runs(metric, values) if values else {f"median_{metric}": None}
+    return pd.DataFrame(
+        [
+            row
+            | {
+                "max_rollback_ns": None if complete.empty else float(complete.max_rollback_ns.max()),
+                "runs_with_post_rollback_output": int(runs.post_rollback_continuity.astype(bool).sum()),
+                "total_loss": int(complete.total_loss.sum()),
+                "total_duplicates": int(complete.total_duplicates.sum()),
+                "units": "nanoseconds, messages, runs, rollback events",
+                "estimator": "median over runs of each run's first-use rollback and of its cached-rollback median, with bootstrap 95% CIs over runs; counts are exact sums over the runs that were not stopped early",
+                "threshold": "50 successful rollbacks, post-rollback output, zero loss and zero duplication in every run",
+                "claim_boundary": "failed replacement rollback and observed continuity without a successful v2 transition",
+                "thesis_evidence": bool(runs.thesis_evidence.all()),
+            }
+        ]
+    )
 
 
 def swap4_table(runs: list[dict]) -> pd.DataFrame:

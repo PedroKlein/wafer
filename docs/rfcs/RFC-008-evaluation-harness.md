@@ -9,7 +9,7 @@
 
 The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.5 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
-The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
+The independent unit is a complete process run unless the matrix explicitly declares a static experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
 
 ## Measurement boundary
 
@@ -117,7 +117,7 @@ E-Swap-4 uses 30 independent runs of the source schedule shown above. Each run r
 
 ### E-Swap-5 failed replacement
 
-A final leaf records the request, rollback, sequence accounting, and `post-rollback-continuity.json`. It must not contain a successful-v2 `swap_timeline.json`. Runtime-local rollback establishes the action outcome; the continuity artifact establishes post-rollback delivery.
+E-Swap-5 has 10 independent process runs with 50 failed replacements each. A final leaf records the requests, rollback, sequence accounting, and `post-rollback-continuity.json`. It must not contain a successful-v2 `swap_timeline.json`. Runtime-local rollback establishes the action outcome; the continuity artifact establishes post-rollback delivery.
 
 ## E-Backpressure
 
@@ -125,7 +125,7 @@ The final matrix contains 30 runs each for `slow`, `drop`, and `dead-letter`. Al
 
 ## Statistics and outputs
 
-Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. Every bootstrap interval comes from `wafer_analysis.stats` (median, 10,000 resamples, seed 42); the runner's batch summaries carry the run values, not intervals. Intervals and repeated swap events are nested observations, not independent replicates. Candidate-supplementary runs are not pooled with canonical-primary or prior rehearsal runs. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
+Canonical analysis uses complete runs as independent units, run-level bootstrap 95 percent confidence intervals, and non-parametric effect sizes where applicable. Every bootstrap interval comes from `wafer_analysis.stats` (median, 10,000 resamples, seed 42); the runner's batch summaries carry the run values, not intervals. Intervals and repeated swap events are nested observations, not independent replicates: E-Swap-1 and E-Swap-5 reduce each of their 10 runs to per-run summaries for each compile-cache class before any interval is computed. Candidate-supplementary runs are not pooled with canonical-primary or prior rehearsal runs. The notebooks fail closed on unapproved, incomplete, dirty, mixed-SHA, throttled, failed, or malformed canonical input. Explicit diagnostic paths remain descriptive and render missing inputs as `PENDING`.
 
 Figures and tables state N, units, estimator, evidence class, and claim boundary. Percentile summaries are not presented as empirical CDFs. PMIC measurements are labeled as a Raspberry Pi 5 internal-rail proxy, not total board, USB-C input, or total input power. External input-power capture remains `future-work`.
 
