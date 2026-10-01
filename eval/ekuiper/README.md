@@ -62,5 +62,4 @@ taskset -pc "$(systemctl show -p MainPID --value kuiper)"
 - `mqtt-source-default.yaml` — canonical MQTT source settings installed on the Pi.
 - `gctrace-drop-in.conf` — systemd drop-in that the profiled tail-profiling runs install under `/run` to set `GODEBUG=gctrace=1`.
 - `seed-pipeline-a.sh` — idempotent REST registration.
-- `pipeline-a-rule.sql` — human-readable rule definition.
 - `smoke-test.sh` — native pass/drop behavior check.

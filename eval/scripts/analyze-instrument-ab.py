@@ -4,7 +4,7 @@
 Reads <root>/{on,off}/pair-NN/ leaves written by run-rpi5-instrument-ab.sh and
 writes <root>/instrument-ab.json. Differences are paired within a pair and
 relative to the sidecars-off run. The tolerance is the same 5% used for the
-Preview 2 async A/B in RESULT-CONTRACT.md.
+Preview 2 async A/B in RFC-012.
 """
 
 from __future__ import annotations

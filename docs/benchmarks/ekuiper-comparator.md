@@ -101,6 +101,5 @@ E-Perf-10 compares both systems with these defaults. To test the hypothesis, the
 - `eval/ekuiper/gctrace-drop-in.conf`
 - `eval/ekuiper/seed-pipeline-a.sh`
 - `eval/ekuiper/smoke-test.sh`
-- `eval/ekuiper/pipeline-a-rule.sql`
 - `docs/status/rpi5-canonical-transition.md`
 - `docs/rfcs/RFC-008-evaluation-harness.md`
