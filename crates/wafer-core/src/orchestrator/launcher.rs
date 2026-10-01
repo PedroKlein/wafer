@@ -278,7 +278,12 @@ fn create_sink(node_id: &str, sink_def: &SinkDef) -> Result<Box<dyn Sink + Send>
         SinkDef::File(cfg) => Box::new(FileSink::new(node_id, &cfg.path)),
         SinkDef::Mqtt(cfg) => {
             let client_id = cfg.client_id.clone().unwrap_or_else(|| format!("wafer-{node_id}"));
-            Box::new(MqttSink::new(node_id, &cfg.broker, cfg.port, &cfg.topic, cfg.qos, client_id))
+            let sink =
+                MqttSink::new(node_id, &cfg.broker, cfg.port, &cfg.topic, cfg.qos, client_id);
+            match cfg.max_inflight {
+                Some(max_inflight) => Box::new(sink.with_max_inflight(max_inflight)),
+                None => Box::new(sink),
+            }
         }
         SinkDef::Http(cfg) => Box::new(HttpSink::new(node_id, &cfg.url)),
         SinkDef::BenchSink(cfg) => Box::new(bench_sink_from_toml(node_id, cfg)),
