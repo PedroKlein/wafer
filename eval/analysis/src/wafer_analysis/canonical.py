@@ -594,58 +594,90 @@ def depth_tables(
 
 
 PAYLOAD_CONDITIONS = {"120b": 120, "1kb": 1_024, "10kb": 10_240, "100kb": 102_400}
+NATIVE_PAYLOAD_PREFIX = "native-"
 PER_HOP_REFERENCE_NS = 50_000
 
 
 def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
-    """Latency and delivery per E-Perf-4 payload size, contrasted with the 120-byte baseline.
+    """Wasm boundary cost per E-Perf-4 payload size: WAFER minus native service time.
 
-    Each record is one run's percentiles plus its ``sequence.csv`` counts.
+    Each record is one run's ``service-percentiles.json`` values as
+    ``service_p50_ns``, ``service_p95_ns`` and ``service_p99_ns`` plus its
+    ``sequence.csv`` counts. A WAFER run is paired with the native run of the
+    same payload size and run index, which ran in the same randomised block.
     """
-    grouped = _group_runs(records, tuple(PAYLOAD_CONDITIONS), canonical=canonical)
-    baseline = np.asarray([run["p50_ns"] for run in grouped["120b"]], dtype=float)
+    conditions = (
+        *PAYLOAD_CONDITIONS,
+        *(f"{NATIVE_PAYLOAD_PREFIX}{size}" for size in PAYLOAD_CONDITIONS),
+    )
+    grouped = _group_runs(records, conditions, canonical=canonical)
     rows = []
-    for condition, runs in grouped.items():
-        if not runs:
-            continue
-        percentiles = {
-            name: np.asarray([run[f"{name}_ns"] for run in runs], dtype=float)
-            for name in ("p50", "p95", "p99")
+    for size, payload_bytes in PAYLOAD_CONDITIONS.items():
+        wafer_runs = {int(run["run_index"]): run for run in grouped[size]}
+        native_runs = {
+            int(run["run_index"]): run for run in grouped[f"{NATIVE_PAYLOAD_PREFIX}{size}"]
         }
-        expected = [int(run["total_expected"]) for run in runs]
-        lost = [max(0, int(run["total_expected"]) - int(run["received_unique"])) for run in runs]
-        loss_low, loss_high = pooled_ratio_ci(lost, expected)
-        row = {"condition": condition, "payload_bytes": PAYLOAD_CONDITIONS[condition], "N_runs": len(runs)}
-        for name, values in percentiles.items():
-            low, high = bootstrap_ci(values)
-            row.update({f"median_{name}_ns": float(np.median(values)), f"{name}_ci95_low_ns": low, f"{name}_ci95_high_ns": high})
-        row.update(dict.fromkeys(("p50_shift_vs_120b_ns", "shift_ci95_low_ns", "shift_ci95_high_ns", "cliffs_delta_vs_120b", "cliffs_delta_ci95_low", "cliffs_delta_ci95_high", "effect_magnitude")))
-        if condition != "120b" and len(baseline):
-            shift, shift_low, shift_high = median_shift_ci(percentiles["p50"], baseline)
-            delta, magnitude = cliffs_delta(percentiles["p50"], baseline)
-            delta_low, delta_high = cliffs_delta_ci(percentiles["p50"], baseline)
+        pairs = sorted(wafer_runs.keys() & native_runs.keys())
+        if not pairs:
+            continue
+        wafer = [wafer_runs[index] for index in pairs]
+        native = [native_runs[index] for index in pairs]
+        service = {
+            arm: {
+                name: np.asarray([run[f"service_{name}_ns"] for run in runs], dtype=float)
+                for name in ("p50", "p95", "p99")
+            }
+            for arm, runs in (("wafer", wafer), ("native", native))
+        }
+        row = {"condition": size, "payload_bytes": payload_bytes, "N_pairs": len(pairs)}
+        for arm in ("wafer", "native"):
+            low, high = bootstrap_ci(service[arm]["p50"])
             row.update(
                 {
-                    "p50_shift_vs_120b_ns": shift,
-                    "shift_ci95_low_ns": shift_low,
-                    "shift_ci95_high_ns": shift_high,
-                    "cliffs_delta_vs_120b": delta,
-                    "cliffs_delta_ci95_low": delta_low,
-                    "cliffs_delta_ci95_high": delta_high,
-                    "effect_magnitude": magnitude,
+                    f"{arm}_median_service_p50_ns": float(np.median(service[arm]["p50"])),
+                    f"{arm}_service_p50_ci95_low_ns": low,
+                    f"{arm}_service_p50_ci95_high_ns": high,
+                }
+            )
+        for name in ("p50", "p95", "p99"):
+            difference = service["wafer"][name] - service["native"][name]
+            low, high = bootstrap_ci(difference)
+            row.update(
+                {
+                    f"boundary_{name}_ns": float(np.median(difference)),
+                    f"boundary_{name}_ci95_low_ns": low,
+                    f"boundary_{name}_ci95_high_ns": high,
+                }
+            )
+        delta, magnitude = cliffs_delta(service["wafer"]["p50"], service["native"]["p50"])
+        delta_low, delta_high = cliffs_delta_ci(service["wafer"]["p50"], service["native"]["p50"])
+        row.update(
+            {
+                "cliffs_delta": delta,
+                "cliffs_delta_ci95_low": delta_low,
+                "cliffs_delta_ci95_high": delta_high,
+                "effect_magnitude": magnitude,
+                "below_per_hop_reference": row["boundary_p50_ns"] < PER_HOP_REFERENCE_NS,
+            }
+        )
+        for arm, runs in (("wafer", wafer), ("native", native)):
+            expected = [int(run["total_expected"]) for run in runs]
+            lost = [max(0, int(run["total_expected"]) - int(run["received_unique"])) for run in runs]
+            loss_low, loss_high = pooled_ratio_ci(lost, expected)
+            row.update(
+                {
+                    f"{arm}_pooled_loss": sum(lost) / sum(expected),
+                    f"{arm}_pooled_loss_ci95_low": loss_low,
+                    f"{arm}_pooled_loss_ci95_high": loss_high,
+                    f"{arm}_duplicates": sum(int(run["duplicates"]) for run in runs),
                 }
             )
         row.update(
             {
-                "pooled_loss": sum(lost) / sum(expected),
-                "pooled_loss_ci95_low": loss_low,
-                "pooled_loss_ci95_high": loss_high,
-                "total_duplicates": sum(int(run["duplicates"]) for run in runs),
-                "below_per_hop_reference": row["median_p50_ns"] < PER_HOP_REFERENCE_NS,
                 "units": "bytes, nanoseconds, fraction, messages",
-                "estimator": "median run p50, p95 and p99 with bootstrap 95% CIs; p50 shift against 120 B with a two-group bootstrap 95% CI and Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI",
-                "threshold": "median p50 < 50 microseconds per hop (reference); 120 B is the baseline for payload contrasts",
-                "claim_boundary": "end-to-end latency through source, one pass-through transform and sink, so it bounds the hop cost from above",
+                "estimator": "median over run pairs of the WAFER-minus-native service-time p50, p95 and p99, pairing runs by index within the randomised block, with a bootstrap 95% CI over pairs; per-arm median service p50 with bootstrap 95% CIs; Cliff's delta of WAFER against native service p50 with bootstrap 95% CI; pooled loss per arm with a run-resampling bootstrap 95% CI",
+                "threshold": "median WAFER-minus-native service p50 < 50 microseconds per hop (reference)",
+                "claim_boundary": "in-process path only: bench-source, one pass-through transform, bench-sink; the MQTT adapters keep rumqttc's 10 KiB packet limit and are not measured. The difference covers the whole Wasm stage, including metering and copies into and out of guest memory",
                 "thesis_evidence": canonical,
             }
         )
