@@ -154,7 +154,7 @@ That is 198 runs and about five hours of nominal run time. The batch is diagnost
 
 Stop and preserve the failed attempt if metering truth, capacity counters, event alignment, E-Swap-4 phase or drain boundaries, provenance, or throttling fails. Fix it in a new commit, verify and deploy that commit, and run a new diagnostic batch. E-Swap-4 must retain 1,200 source-origin primary buckets over `[0,120s)` and 100 separate drain buckets over `[120s,130s)`; full-run counters reconcile both regions. Reconciled drain arrivals are reported, while an after-drain receive, source completion at or after 130 seconds, or incomplete population fails closed.
 
-The diagnostic batch must also demonstrate resume behavior: stop it with SIGINT after a declared leaf, rerun the same command, and confirm with `mise run campaign-status -- --batch-id diag-<date>` that passed attempts are skipped rather than duplicated.
+The diagnostic batch must also demonstrate resume behavior: stop it with SIGINT after a declared leaf, rerun the same command, and confirm with `mise run campaign-status -- --batch-id diag-<date>` that admitted attempts are skipped rather than duplicated.
 
 ## Launch and resume the final batch
 
@@ -169,7 +169,7 @@ Launch only after the diagnostic batch passes review, from the same deployed com
 
 `mise run run-campaign -- --batch-id <id>` runs the same command, and `mise run campaign-status -- --batch-id <id>` lists its done and pending runs. On the Jetson and x86 replication hosts add `--host jetson` or `--host x86`.
 
-On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, and the start time. The runner executes sequentially, writes `progress.jsonl`, creates a new attempt directory after failure, and skips a run index once a passed attempt exists. Reusing the same command and batch ID resumes the batch. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
+On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, and the start time. The runner executes sequentially and writes `progress.jsonl`. Each attempt ends as a clean pass, a system outcome, or an infrastructure failure, and its `canonical-status.json` records the class and reasons; [Attempts and retries](../../eval/RESULT-CONTRACT.md#attempts-and-retries) defines them. A clean pass or a system outcome is admitted and the run index is skipped from then on. A system outcome, such as a runtime exit or a containment escape, is data and is never retried. An infrastructure failure is retried once, immediately and in a new attempt directory; when the retry also fails, the run is missing and is not run again. E-Val-1 is never retried: any failed or interrupted repetition fails the gate, and a new gate needs a new batch. Reusing the same command and batch ID resumes the batch; an interrupted attempt counts as one infrastructure attempt. `--status` lists done, pending and missing runs. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
 
 To dry-run one experiment without execution:
 
@@ -192,17 +192,17 @@ tail -f eval/results/canonical-batches/rpi5-<batch-id>/progress.jsonl
 find eval/results -path "*rpi5-<batch-id>*" -name canonical-status.json -print
 ```
 
-Stop the runner normally with SIGINT. Do not delete partial attempts. Stop admission immediately for:
+Stop the runner normally with SIGINT. Do not delete partial attempts. The runner records a system outcome and moves on; it does not stop for one. Stop admission immediately for:
 
 - thermal throttling or missing telemetry;
 - provenance, config, binary, or plugin drift;
 - free disk space below the required free space in the estimate above;
-- repeated systemic harness failure;
+- repeated systemic harness failure, including missing runs whose retry also failed;
 - counter or schema mismatch;
 - missed E-Swap event alignment;
 - unexpected concurrent SUT activity.
 
-A threshold miss by a valid SUT run is data, not a reason to tune the threshold or system during the batch.
+A threshold miss, a crash, or a containment escape by the system under test is data, not a reason to rerun the unit or to tune the threshold or system during the batch.
 
 ## Move the single evidence volume between hosts
 
@@ -238,9 +238,9 @@ It refuses the batch unless all of these hold:
 
 - the ledger is under `manifests/canonical-batches/`, and its `batch.json` marks thesis evidence with no repetition override;
 - the batch ran from one clean commit with the current matrix;
-- `schedule.json` is the full schedule for the batch seed, and every run has a passed attempt or an alias receipt;
+- `schedule.json` is the full schedule for the batch seed, and every run has an admitted attempt (a clean pass or a system outcome) within its retry cap, or an alias receipt;
 - `e-val-1-gate.json` reports a pass;
-- every passed leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
+- every admitted leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
 
 It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, and its ledger, with paths relative to the volume root. Check it at any time:
 

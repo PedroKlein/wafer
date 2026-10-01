@@ -141,7 +141,7 @@ The retained 5 V / 4.2 A supply is admitted empirically. It receives no threshol
 
 ## Reproducibility
 
-A final leaf contains clean source provenance (one commit SHA for the whole batch), config and binary identities, thermal/throttle state, experiment-specific artifacts, and a passed completion receipt. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites a passed attempt.
+A final leaf contains clean source provenance (one commit SHA for the whole batch), config and binary identities, thermal/throttle state, experiment-specific artifacts, and a completion receipt that classes the attempt as a clean pass, a system outcome, or an infrastructure failure. The canonical runner is sequential and resumable. It writes a deterministic schedule and never overwrites an attempt. A clean pass or a system outcome is admitted; a system outcome counts against the criterion it failed and is never retried. An infrastructure failure is retried once in place, and a unit whose retry also fails is reported missing. The E-Val-1 gate is never retried.
 
 Use these gates before interpreting a batch:
 

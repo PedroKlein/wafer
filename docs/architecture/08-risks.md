@@ -98,7 +98,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Impact:** Schedule delay and partial attempts.
 
-**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, and never overwrites passed attempts. Retrieval is additive and verified path-for-path with SHA-256 manifests.
+**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, never overwrites an attempt, and retries an infrastructure failure once in place. A failure of the system under test is admitted as data, not retried. Retrieval is additive and verified path-for-path with SHA-256 manifests.
 
 **Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or diagnostic-batch outcomes.
 

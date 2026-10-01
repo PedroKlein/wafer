@@ -78,8 +78,9 @@ sorted, with volume-relative paths. It records the batch and the SHA-256 of `raw
 in the repository file `eval/final-batches.json`, which canonical analysis reads.
 
 Raw attempts are additive. A failed or interrupted attempt remains in place and the
-next attempt uses the next numeric suffix. A passed terminal receipt makes the leaf
-immutable. Analysis resolves raw inputs through the same results root and may create
+next attempt uses the next numeric suffix. A terminal receipt makes the leaf
+immutable; [Attempts and retries](#attempts-and-retries) defines the receipt and
+which attempt of a run is admitted. Analysis resolves raw inputs through the same results root and may create
 outputs only below `derived/` or `reports/`; output traversal or overlap with raw is
 rejected.
 
@@ -87,7 +88,7 @@ Shared canonical views do not create another raw tree. A small alias receipt und
 `manifests/aliases/` records the volume-relative source leaf, source status digest,
 shared sample identity, machine evidence class `final`, and
 `independent_n_contribution = 0`. Consumers validate and dereference that receipt to
-one passed, thesis-eligible source leaf. Alias mappings must be acyclic; aliases may
+one admitted, thesis-eligible source leaf (a clean pass or a system outcome). Alias mappings must be acyclic; aliases may
 not target rejected, diagnostic, or candidate evidence. Copies, symlinks, and
 hardlinks are not alias mechanisms. `final` is the machine value; prose names its
 admitted analytical class `canonical-primary` or `final admitted`. Historical
@@ -103,6 +104,79 @@ repository-local result trees remain unchanged.
 
 **Timestamp format**: `YYYY-MM-DDTHH-MM-SSZ` — UTC, colons replaced with
 hyphens so the path is `mv`-safe on every filesystem.
+
+## Attempts and retries
+
+Each scheduled unit (one experiment, condition and run index) may have several
+attempt directories, `run-NN-attempt-MM`. Every attempt ends in one of three
+classes, which its terminal receipt `canonical-status.json` records:
+
+| Class | Receipt | Meaning | Admitted | Retried |
+| --- | --- | --- | --- | --- |
+| clean pass | `"status": "passed"` | The run met every integrity gate and every criterion it measures. | yes | no |
+| system outcome | `"status": "failed"`, `"failure_class": "sut_outcome"`, `"reasons": [...]` | The system under test failed a criterion the run measures. | yes, and it counts against that criterion | never |
+| infrastructure failure | `"status": "failed"`, `"failure_class": "infrastructure"`, `"reasons": [...]` | The host, the harness or the evidence failed before the run could be judged. | no | at most once, in place |
+
+Every receipt also records `experiment`, `condition`, `run_index` and
+`updated_at`; a failure may add a free-text `detail`. An attempt directory
+without a receipt was interrupted and counts as one infrastructure attempt with
+the reason `interrupted`.
+
+| Reason | Class | When |
+| --- | --- | --- |
+| `runtime-exit` | system outcome | The runtime exited non-zero after it started the pipeline, crashed, or was killed after its shutdown grace period (see [Runtime exit status](#runtime-exit-status)). |
+| `containment-escape` | system outcome | `containment.json` records `contained: false`. |
+| `message-loss` | system outcome | Messages were lost where the criterion expects none: E-Swap-1, the E-Swap-3 hot swap, E-Swap-4, E-Swap-5, the candidate swap and rollback sessions, and the E-Backpressure `slow` policy. |
+| `duplicates` | system outcome | Messages were delivered twice where the criterion expects none, in the same experiments. |
+| `swap-failed` | system outcome | A hot-swap request of E-Swap-1, the E-Swap-3 hot swap, E-Swap-4 or the candidate swap sessions did not return HTTP 200. |
+| `rollback-failed` | system outcome | A failed replacement of E-Swap-5 or the candidate rollback sessions did not return `rolled_back`. |
+| `memory-limit` | system outcome | E-Backpressure resident memory went over its declared limit. |
+| `harness-error` | infrastructure | Host facts or preflight, throttle or temperature gates, storage, the broker, a load generator or publisher that crashed or did not start, an action that missed its alignment window, or any other harness exception. |
+| `contract-violation` | infrastructure | The verifier rejected the leaf: missing or invalid telemetry, schema, provenance or host evidence. |
+| `interrupted` | infrastructure | The attempt has no receipt. |
+
+`eval/analysis/src/wafer_analysis/attempts.py` declares both reason lists and
+reads the system-outcome reasons back from a leaf's artefacts; a new reason is one
+entry there and its check. The runner writes the receipt from those reasons after
+the verifier accepted the leaf, and the analysis rejects a receipt whose reasons
+differ from the ones the artefacts give.
+
+A run that the system under test stopped early (`runtime-exit`, `swap-failed` or
+`rollback-failed`) is not post-processed. The verifier checks only what the
+harness owns: the core artefacts, provenance, host facts, Pi telemetry and the
+measurement window. When the runtime died before its sink exported
+`measurement-window.json`, the harness writes the attempt's own wall-clock bounds in
+its place, so the leaf still verifies. A run that completed with a failed criterion
+goes through every check. The verifier prints an `OUTCOME` line for each system
+outcome and still exits 0 when nothing else is wrong. A runtime that dies before
+its control plane answers, or that dies when E-Swap-3 restarts it, is judged by its
+exit code like any other run. One path still ends as an infrastructure failure
+although the system under test may have caused it: an E-Swap-3 restart whose new
+runtime keeps running but never answers its control plane.
+
+`final_campaign.attempt_policy` in `canonical-matrix.json` sets the retry cap: one
+infrastructure retry per unit, and none for the experiments in `gate_experiments`
+(E-Val-1). The runner retries an infrastructure failure immediately, before the
+next scheduled unit, so the retry keeps the unit's place in the randomized order. A
+system outcome is never retried. On resume, a unit with an admitted attempt is
+skipped, a unit whose attempts reached the cap without one is reported missing and
+not run again, and an interrupted attempt counts against the cap. The capacity
+scout is not a final experiment; it has no cap and keeps its own stop rules.
+
+The analysis admits exactly one attempt per unit: its clean pass or its system
+outcome. A unit with more attempts than the cap allows, two admitted attempts, or
+an attempt after the admitted one rejects the batch, and so does a missing unit.
+Each criterion counts system outcomes as failures: a run the runtime did not
+survive is not contained, its E-Iso-7 attack condition is not isolated, and its
+E-Perf-10 rate is delivery-bad; a run with loss, duplicates or a failed swap is not
+lossless, and a failed rollback is not a successful rollback. The summary notebook
+writes `campaign-attempts`, one row per experiment, system and condition with its
+units, attempts, clean passes, system outcomes, infrastructure failures, retries and
+missing units, counted from the attempt directories themselves.
+
+E-Val-1 is the gate for the rest of the batch and is never retried. Every
+repetition must pass on its only attempt inside the p99 band; a failed, outcome or
+interrupted attempt fails the gate, and a new gate needs a new batch.
 
 ## Manifest
 
@@ -144,9 +218,9 @@ before reading. The matrix below is authoritative:
 | `dlq.jsonl` | All experiments (every config under `eval/configs/` sets `[dead_letter] kind = "file"`, `path = "dlq.jsonl"`, which the runtime resolves under `WAFER_BENCH_OUTPUT_DIR`) | `wafer-runtime` DLQ sink | One JSON object per dead-lettered message, written as it arrives: `timestamp` (ms since the Unix epoch), `source_node`, `error_category` (`bad_input`, `dependency_failed`, `processing_failed`, `timed_out`, `unrecoverable`, or null for a trap or queue overflow), `error_message`, `retry_count`, `reason` (`type` one of `bad_input`, `timed_out`, `retries_exhausted`, `retry_buffer_full`, `hot_swap_drain`, `shutdown`, `queue_full`, `trapped` with `kind`, `unrecoverable`, `recovery_failed`), `original` (id, timestamp, source, metadata, base64 payload, retry_count), `trace_id`, `parent_id`. The file exists, possibly empty, for every graceful run; the sink drains until every node has exited, so the record count equals the sum of `dlq_sent` over `per_node_metrics.csv` plus the edges' `dead_lettered` counts. |
 | `queue-depth.csv` | E-Backpressure, when `WAFER_QUEUE_DEPTH_OUTPUT` is set | `wafer-runtime` via `QueueDepthRecorder` | Bounded internal Tokio queue samples at 10 ms intervals: `elapsed_ns,queue,depth,capacity,accepted,dequeued,processed,dropped,dead_lettered,downstream_closed,dlq_full,dlq_closed`. The five policy counters expose existing R1 `QueueSnapshot` state without changing dispatch behavior. Counters are internal pipeline observations; broker backlog is excluded. Collection is capped at 131,072 rows and reports truncation in the runtime log. |
 | `queue-depth-clock.json` | Runs with `queue-depth.csv` | `wafer-runtime` | Pairs the queue recorder's monotonic zero with one Unix-epoch anchor for cross-process interval composition. Same keys as `memory-clock.json`. |
-| `backpressure.json` | E-Backpressure | `canonical_runner.py` | Schema v2 records condition/policy, run index, measured queue, threshold crossing and recovery, offered/accepted/processed/drained rates, exact R1 queue counters, sequence counts, policy equation, producer-progress mode, explicit DLQ-full/closed failures, and peak-RSS bound. Attempted messages come from the frozen BenchSource population; `sequence.csv` validates its observed span because a trailing overflow disposition is not visible at the sink. `slow` requires attempted = delivered with no overflow disposition; `drop` requires attempted = delivered + dropped; `dead-letter` requires attempted = delivered + dead_lettered + dlq_full + dlq_closed. `dead_lettered` is the runtime's successful enqueue to the configured DLQ delivery path; full/closed failures are never counted as success. A high offered rate without measured occupancy is `not-saturated`. |
+| `backpressure.json` | E-Backpressure | `canonical_runner.py` | Schema v2 records condition/policy, run index, measured queue, threshold crossing and recovery, offered/accepted/processed/drained rates, exact R1 queue counters, sequence counts, policy equation, producer-progress mode, explicit DLQ-full/closed failures, and peak-RSS bound (exceeding it is a `memory-limit` outcome). Attempted messages come from the frozen BenchSource population; `sequence.csv` validates its observed span because a trailing overflow disposition is not visible at the sink. `slow` expects attempted = delivered with no overflow disposition, and a shortfall is a `message-loss` outcome; `drop` requires attempted = delivered + dropped; `dead-letter` requires attempted = delivered + dead_lettered + dlq_full + dlq_closed. `dead_lettered` is the runtime's successful enqueue to the configured DLQ delivery path; full/closed failures are never counted as success. A high offered rate without measured occupancy is `not-saturated`. |
 | `recovery.csv` | E-Iso-8 and any run with recovery events | `wafer-runtime` via `PipelineOrchestrator::export_per_node_metrics` | Exact recovery samples: `node_id,sample_index,duration_ns`. Retains nanosecond precision for trap-to-running percentiles. |
-| `measurement-window.json` | Canonical Pi 5 runs | `BenchSink` for in-process runs with post-warmup output; canonical harness for external MQTT subscribers and zero-output containment runs | Exact `started_ns` and `finished_ns` bounds (wall clock) for excluding warmup and teardown from PMIC energy integration. The `BenchSink` copy adds `latency_clamps`: for each of `latency`, `service` and `source_lag`, the `negative` and `above_highest` sample counts recorded at a histogram bound. The verifier rejects a canonical leaf where any of them is non-zero. It also adds `wall_clock_step_ns`: how far the wall clock moved away from the in-process monotonic clock between the process start and the export, signed. In-process latencies do not depend on it; it tells whether `started_ns` and `finished_ns` can be aligned with other processes' telemetry. |
+| `measurement-window.json` | Canonical Pi 5 runs | `BenchSink` for in-process runs with post-warmup output; canonical harness for external MQTT subscribers, zero-output containment runs, and runs the runtime did not survive (the attempt's own bounds) | Exact `started_ns` and `finished_ns` bounds (wall clock) for excluding warmup and teardown from PMIC energy integration. The `BenchSink` copy adds `latency_clamps`: for each of `latency`, `service` and `source_lag`, the `negative` and `above_highest` sample counts recorded at a histogram bound. The verifier rejects a canonical leaf where any of them is non-zero. It also adds `wall_clock_step_ns`: how far the wall clock moved away from the in-process monotonic clock between the process start and the export, signed. In-process latencies do not depend on it; it tells whether `started_ns` and `finished_ns` can be aligned with other processes' telemetry. |
 | `pi-telemetry.csv` | Canonical runs on every host | `eval/scripts/lib/pi_telemetry.py` | Timestamped temperature, CPU frequency, governor, throttling state, and summed rail watts from the host's backend (`rail_proxy_watts`). `throttled` is `0x0` when the host is not throttled on every backend: the Pi writes the `vcgencmd get_throttled` value, Jetson and x86 write `cpuN-below-pinned-clock` when a core runs under 95% of its pinned clock, and x86 adds `cpuN-thermal-throttle` when the kernel's throttle counter moved. The temperature comes from the `cpu-thermal` (Pi, Jetson; `CPU-therm` on L4T R32) or `x86_pkg_temp` zone, falling back to `k10temp`/`coretemp` hwmon, and is 0 when none exists. The power column is 0 while the backend has no reading (the first x86 RAPL sample, or an x86 host without RAPL), which `interval_metrics.py` reports as unavailable. |
 | `pmic-rails.csv` | Canonical runs on every host | `eval/scripts/lib/pi_telemetry.py` | Long-form named rail samples (`timestamp_ns,rail,current_a,voltage_v,power_w`). Pi: PMIC rails, without rails lacking either voltage or current. Jetson: INA3221 channels from hwmon. x86: one row per RAPL package domain with `power_w` from the energy delta since the previous sample and empty current and voltage; header only when the host has no RAPL. |
 | `power-boundary.json` | Canonical runs on every host | `eval/scripts/lib/pi_telemetry.py` | Names the `backend` (`pi`, `jetson`, `x86`) and its `measurement` (`rpi5-pmic-internal-rail-proxy`, `jetson-ina3221-rail-proxy`, `x86-rapl-package-energy`, or `unavailable`), states that none is total input power, and records the excluded consumers and the source. Power numbers are comparable only between leaves with the same `measurement`. |
@@ -171,7 +245,7 @@ before reading. The matrix below is authoritative:
 | `burst-timeline.json` | Final E-Swap-4 | `BenchSource` / `canonical_runner.py` | One 1,000 to 2,000 to 1,000 msg/s burst with boundaries at measured seconds 55 and 65 and exactly one successful swap scheduled at second 60, plus actual alignment, phase populations, primary/drain completion evidence, sequence integrity, sink gap, and internal swap phases. |
 | `startup-preparation.json` | E-Perf-9 | `run-experiment.sh` | Filesystem-cache condition and preparation action completed before the timed runtime process starts. |
 | `startup.json` | E-Perf-9 | `wafer-runtime` | Monotonic process/config, component load/compile, instantiation, pipeline setup, and first-process durations; total startup duration; exactly-one-message proof; plugin SHA-256; and explicit compiled-component cache state. |
-| `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than its nodes sent to the dead-letter queue. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. The runner fails the run when `per_node_metrics.csv` is malformed or lacks the attack node's counters. The analysis never counts a record whose condition differs from the attack, and it counts runs that were not contained or recorded a runtime panic instead of dropping them. |
+| `containment.json` | E-Iso-1..8 | `canonical_runner.py` | Containment verdict for one attack condition: expected condition, attack node, expected mechanism (the `per_node_metrics.csv` column that must count the attack, see `eval/scripts/lib/containment.py`), its count, unexpected outcomes on the attack node, trap total, runtime-panic flag, healthy-node output count, per-node runtime metrics, and the dead-letter evidence: `dlq_sent_total` (sum over nodes) and `dlq_records` (lines in `dlq.jsonl`, null when the file is absent). The verifier rejects an E-Iso-1..6 leaf whose `dlq.jsonl` exists but holds a different number of records than its nodes sent to the dead-letter queue. An attack counts as contained only when the expected mechanism stopped it at least once and nothing else happened on that node: no other trap kind or guest error, and no message passed on. `contained` is null for conditions without an attack. The runner fails the run when `per_node_metrics.csv` is malformed or lacks the attack node's counters. The analysis never counts a record whose condition differs from the attack, and it counts runs that were not contained or recorded a runtime panic instead of dropping them. `contained: false` is a `containment-escape` outcome, not a rejected leaf, and a run whose runtime exited before it wrote `containment.json` counts as not contained. |
 | `branch-a/`, `branch-b/` | E-Iso-7 | `BenchSink` | Independent post-warmup latency histogram, throughput series, sequence accounting, and measurement window for each branch. Each branch has its own `BenchSource`; root-level fan-out/fan-in measurements are forbidden for branch-impact analysis. |
 | `branch-isolation.json` | E-Iso-7 | `canonical_runner.py` | Branch-local source identity, configured post-warmup target count, actually offered/received post-warmup counts, target shortfall, throughput samples, latency percentiles, measurement boundaries, and explicit units. |
 | `branch-isolation-summary.json` | E-Iso-7 batch ledger | `canonical_runner.py` | Separate branch-A throughput-drop and p95-latency-increase rows for panic and epoch-loop attacks, including run counts and units. |
@@ -181,11 +255,11 @@ before reading. The matrix below is authoritative:
 | `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and the Go GC trace summary for the measurement window (`gc_runtime_metrics`) when the profiled run logged one. It never infers GC events from RSS or latency. |
 | `ekuiper-gctrace.log` | E-Compare-eKuiper-Profile | `canonical_runner.py` | One line per Go GC cycle that the `kuiper.service` journal recorded from eKuiper start to stop: the journal receive time in Unix-epoch nanoseconds, a space, and the unchanged `GODEBUG=gctrace=1` line. Empty in the unprofiled control. |
 | `profiler-overhead.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Profiler state, matched rate/run pair, collection-enabled flag, and the run-level profiled-minus-control estimator label. It declares association-only interpretation and is not primary evidence. |
-| `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-5, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's typed internal outcome phases. E-Swap-5 requires 50 process-trap requests whose response status is `rolled_back`. |
+| `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-3 (`wafer-hotswap`), E-Swap-4, E-Swap-5, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's typed internal outcome phases. E-Swap-3 records its one request with the plugin, HTTP status and response body only; `disruption-timeline.json` holds its action boundaries. E-Swap-5 requires 50 process-trap requests whose response status is `rolled_back`. |
 | `swap_timeline.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `BenchSink` | Sink-observed successful plugin-version transitions. Each `pause_ns` is an output interarrival gap and is not an internal swap duration. E-Swap-5 forbids this artifact because the rejected v2 never becomes sink-observed. |
 | `hotswap-analysis.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `canonical_runner.py` | Index-matched API and sink observations with explicit `*_ns` names: internal phases, `http_total_ns`, and `sink_observed_output_gap_ns`. Includes the unique measurement source leaf so shared E-Swap-2/6 views do not multiply samples. |
-| `rollback.json` | E-Swap-5 and candidate rollback sessions | `canonical_runner.py` | Request-indexed compile, instantiate, signal, and rollback durations plus exact attempt/success counts and lossless sequence evidence. It contains no successful-v2 sink transition. |
-| `post-rollback-continuity.json` | E-Swap-5 | `canonical_runner.py` | Explicit output observed after the final rollback, with final request identity, bounded observation interval, message count, interval-metrics provenance, and lossless full-run sequence evidence. |
+| `rollback.json` | E-Swap-5 and candidate rollback sessions | `canonical_runner.py` | Request-indexed compile, instantiate, signal, and rollback durations plus exact attempt/success counts and full-run sequence evidence; loss or duplication is a system outcome. It contains no successful-v2 sink transition. |
+| `post-rollback-continuity.json` | E-Swap-5 | `canonical_runner.py` | Explicit output observed after the final rollback, with final request identity, bounded observation interval, message count, interval-metrics provenance, and full-run sequence evidence. |
 
 ### Ownership summary
 
@@ -273,7 +347,7 @@ The `final_campaign` object in `eval/canonical-matrix.json` is the executable so
 
 Final E-Perf-5 uses explicit transform fuel and epoch protection. Its transform-only pipeline records `filter = null` and `router = null` because those node categories are absent; this is a declared matrix exception, not an unmetered WAFER run.
 
-Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`. `capacity-run.json` uses this counter identity:
+Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`; a run the runtime did not survive has no `capacity-run.json`. Such a run counts toward its rate's 30 runs as `sut_outcome_runs` in `rate-sweep-summary.json` and makes that rate delivery-bad; the rate's loss, achieved-rate and p99 figures cover the runs that completed. `capacity-run.json` uses this counter identity:
 
 ```text
 intended = rejected + enqueued
@@ -285,17 +359,17 @@ total_undelivered = rejected + downstream_lost
 
 It must contain no mandatory per-message traces. `check_capacity_run_result` rejects missing fields, inconsistent counters, non-final evidence labels, or trace mode.
 
-The batch summary `manifests/canonical-batches/<host-tag>-<batch-id>/rate-sweep-summary.json` carries, per system and rate, `run_count`, `pooled_loss`, `mean_achieved_ratio`, `total_duplicates`, and the 30 run values of achieved rate, achieved ratio, loss, and p99. Canonical analysis classifies every cell from these counters, never from the stored `classification` string: a cell is delivery-good when pooled loss is at most 0.01, mean achieved ratio is at least 0.99, and the duplicate total is zero, and a SUT cell at or above the lowest delivery-bad MQTT loopback rate is support-confounded. A stored classification or support-censoring rate that disagrees with the counters, or a pooled loss or mean achieved ratio that disagrees with the run values, rejects the summary. The rate table reports run-level min, quartiles, max, and a bootstrap 95% CI of the median for achieved rate, achieved ratio, loss, and p99; the pooled loss with a run-resampling bootstrap 95% CI; the mean achieved ratio; the duplicate total; and the normalized p99, whose interval resamples both that rate's runs and the 1,000 msg/s runs. Any strictly increasing grid that contains 1,000 msg/s is accepted.
+The batch summary `manifests/canonical-batches/<host-tag>-<batch-id>/rate-sweep-summary.json` carries, per system and rate, `run_count` (completed runs), `sut_outcome_runs`, `pooled_loss`, `mean_achieved_ratio`, `total_duplicates`, and one value per completed run of achieved rate, achieved ratio, loss, and p99; `run_count + sut_outcome_runs` is 30. Canonical analysis classifies every cell from these counters, never from the stored `classification` string: a cell is delivery-good when it has no outcome run, pooled loss is at most 0.01, mean achieved ratio is at least 0.99, and the duplicate total is zero, and a SUT cell at or above the lowest delivery-bad MQTT loopback rate is support-confounded. A stored classification or support-censoring rate that disagrees with the counters, or a pooled loss or mean achieved ratio that disagrees with the run values, rejects the summary. The rate table reports run-level min, quartiles, max, and a bootstrap 95% CI of the median for achieved rate, achieved ratio, loss, and p99; the pooled loss with a run-resampling bootstrap 95% CI; the mean achieved ratio; the duplicate total; and the normalized p99, whose interval resamples both that rate's runs and the 1,000 msg/s runs. These statistics cover the completed runs, and a rate with no completed run reports none. Any strictly increasing grid that contains 1,000 msg/s is accepted.
 
 Each system's delivery ceiling is bracketed by tested rates, not read as one grid point. The lower bound is the highest delivery-good tested rate with no delivery-bad tested rate below it, or zero. The upper bound is the lowest delivery-bad tested rate above every delivery-good one; it is unbounded when no such rate exists, as when the top of the grid is delivery-good. A delivery-bad rate below a delivery-good one is flagged as non-monotonic and widens the bracket to cover both readings instead of invalidating the population. Support-confounded cells set neither bound, so a ceiling with only support-confounded cells above its lower bound is unbounded above. The WAFER/eKuiper ratio interval runs from WAFER lower / eKuiper upper (worst case) to WAFER upper / eKuiper lower (best case, unbounded when the eKuiper lower bound is zero). The decision is `PASS` when the worst case is at least 0.70, `FAIL` when the best case is below 0.70, and `CENSORED` otherwise; an incomplete or malformed population is `PENDING`. The criterion is a statement about the tested grid: WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's, with each ceiling bracketed by tested rates. The claim-boundary table reports both systems' bounds, the ratio interval, and the verdict.
 
-Final E-Swap-3 requires `publisher-summary.json`, `subscriber-metadata.json`, 200 contiguous 100 ms buckets in `throughput-buckets.json`, 400 contiguous 10 ms buckets and 40 nested 100 ms parent buckets in `throughput-buckets-10ms.json`, `disruption-timeline.json`, and `disruption-analysis.json`. The 100 ms series stays aligned to the actual action-start `t0`, and the parent buckets equal the matching canonical event-window slice. `disruption-timeline.json` records the actual action start immediately before control issuance, the actual acknowledged/readiness wall-clock end, independent monotonic action duration, the scheduled measured t=60 target, actual event offset, signed alignment error, and a fixed 10 ms tolerance. `swap_timeline.json` is not a final E-Swap-3 artifact and must not remain in the admitted raw leaf. The leaf fails when the actual action start misses the scheduled target by more than 10 ms.
+Final E-Swap-3 requires `publisher-summary.json`, `subscriber-metadata.json`, 200 contiguous 100 ms buckets in `throughput-buckets.json`, 400 contiguous 10 ms buckets and 40 nested 100 ms parent buckets in `throughput-buckets-10ms.json`, `disruption-timeline.json`, and `disruption-analysis.json`. The 100 ms series stays aligned to the actual action-start `t0`, and the parent buckets equal the matching canonical event-window slice. `disruption-timeline.json` records the actual action start immediately before control issuance, the actual acknowledged/readiness wall-clock end, independent monotonic action duration, the scheduled measured t=60 target, actual event offset, signed alignment error, and a fixed 10 ms tolerance. `swap_timeline.json` is not a final E-Swap-3 artifact and must not remain in the admitted raw leaf. The leaf fails when the actual action start misses the scheduled target by more than 10 ms. Loss or duplication in a `wafer-hotswap` run is a `message-loss` or `duplicates` outcome; the restart comparators have no zero-loss criterion, so their loss is reported data. A `wafer-hotswap` run records its one request in `swap_requests.json`, and a request that does not return HTTP 200 is a `swap-failed` outcome. A runtime that exits during the run, including one restarted by `wafer-restart` that dies, is a `runtime-exit` outcome; a restarted runtime that keeps running without answering its control plane is an infrastructure failure.
 
-Final E-Swap-4 uses a source-driven 1,000→2,000→1,000 msg/s schedule over measured intervals `[0,55)`, `[55,65)`, and `[65,120)` after 30,000 warmup messages. Each independent run contains exactly 130,000 measured messages and one swap scheduled at measured t=60. `throughput-buckets.json` contains 1,200 contiguous source-origin 100 ms primary buckets over `[0,120s)` plus a separate 100-bucket drain series over `[120s,130s)`. Full-run counters reconcile primary, drain, and O(1) after-drain evidence; any after-drain receive or right-censored drain rejects the run. `swap-actual-t0.json` declares the single source-origin actual-`t0` receipt, and it must reconcile with `swap_requests.json`, `throughput-buckets-10ms.json`, `throughput-buckets.json`, and `burst-timeline.json` on source origin, scheduled t=60, actual request timestamp, alignment error, and the fixed 10 ms tolerance. `burst-timeline.json` records source and actual swap boundaries, monotonic source-completion offset, intended/emitted/received phase populations, sequence loss/duplication, primary/drain completion evidence, the sink-observed gap, and internal swap phases. The semantic verifier rejects wrong clocks, origins, phase rates or populations, zero or multiple swaps, a missing or inconsistent actual-`t0` receipt, a swap outside the burst, a non-centered scheduled swap, bucket gaps, clamped/misclassified tail evidence, completion at or after 130 s, population mismatches, loss, or duplication. Batch analysis admits exactly one event from each of 30 distinct runs before computing the across-run p95 and bootstrap median interval, and separately reports runs with drain arrivals and the maximum drain offset. Missing required files fail through the matrix contract; malformed files fail through experiment-specific semantic checks.
+Final E-Swap-4 uses a source-driven 1,000→2,000→1,000 msg/s schedule over measured intervals `[0,55)`, `[55,65)`, and `[65,120)` after 30,000 warmup messages. Each independent run contains exactly 130,000 measured messages and one swap scheduled at measured t=60. `throughput-buckets.json` contains 1,200 contiguous source-origin 100 ms primary buckets over `[0,120s)` plus a separate 100-bucket drain series over `[120s,130s)`. Full-run counters reconcile primary, drain, and O(1) after-drain evidence; any after-drain receive or right-censored drain rejects the run. `swap-actual-t0.json` declares the single source-origin actual-`t0` receipt, and it must reconcile with `swap_requests.json`, `throughput-buckets-10ms.json`, `throughput-buckets.json`, and `burst-timeline.json` on source origin, scheduled t=60, actual request timestamp, alignment error, and the fixed 10 ms tolerance. `burst-timeline.json` records source and actual swap boundaries, monotonic source-completion offset, intended/emitted/received phase populations, sequence loss/duplication, primary/drain completion evidence, the sink-observed gap, and internal swap phases. The semantic verifier rejects wrong clocks, origins, phase rates or populations, zero or multiple swaps, a missing or inconsistent actual-`t0` receipt, a swap outside the burst, a non-centered scheduled swap, bucket gaps, clamped/misclassified tail evidence, completion at or after 130 s, or population mismatches. Loss or duplication is a `message-loss` or `duplicates` outcome and a failed swap a `swap-failed` outcome; the run is admitted and fails the zero-loss criterion. Batch analysis admits exactly one event from each of 30 distinct runs that kept running, counts every admitted run in the zero-loss criterion, before computing the across-run p95 and bootstrap median interval, and separately reports runs with drain arrivals and the maximum drain offset. Missing required files fail through the matrix contract; malformed files fail through experiment-specific semantic checks.
 
 Final E-Swap-1, E-Swap-2, E-Swap-5, and E-Swap-6 use one complete process run as the independent unit and their 50 swap or rollback events as nested observations; E-Swap-4 uses 30 independent runs with one nested swap each. E-Swap-2 and E-Swap-6 are alias views of E-Swap-1 and contribute zero additional independent N.
 
-Final E-Swap-5 contains one independent process run with 50 nested failed-replacement events. Each request must return `rolled_back`; `rollback.json` reconciles all request-indexed internal phases and the lossless full-run sequence. `post-rollback-continuity.json` proves output after the final rollback and explicitly records that no successful v2 transition was observed. A retained or synthesized `swap_timeline.json`, missing continuity, nonzero loss or duplication, or any request/rollback mismatch rejects the leaf.
+Final E-Swap-5 contains one independent process run with 50 nested failed-replacement events. Each request must return `rolled_back`; a request that does not is a `rollback-failed` outcome. `rollback.json` reconciles all request-indexed internal phases and the full-run sequence, where loss or duplication is a system outcome. `post-rollback-continuity.json` proves output after the final rollback and explicitly records that no successful v2 transition was observed. A retained or synthesized `swap_timeline.json`, missing continuity, or any request/rollback mismatch rejects the leaf.
 
 Final E-Density-1 is a static source-bound measurement. The canonical runner invokes `eval/scripts/collect-binary-sizes.sh` instead of `run-experiment.sh`, requires one `binary-sizes.csv` row for every non-comment entry in `eval/scripts/binary-sizes.index`, and records Pi host, source provenance, governor, throttling, telemetry, and measurement-window evidence. Its metadata uses `system = "static"` and `exit_codes.collector = 0`; runtime/Wasmtime provenance is intentionally inapplicable because no WAFER runtime process executes.
 
@@ -385,7 +459,7 @@ returns in its swap response: `compiled` is labeled `first-use-aot`, and
 `first-use-aot` and events 1–49 must be `cached`; any other outcome fails the
 run. Event-level rows stay nested
 within their run, while comparisons use one per-run aggregate for each event
-class. Sequence evidence must remain lossless, failed attempts remain immutable,
+class. Sequence evidence must reconcile, loss or duplication is a system outcome, failed attempts remain immutable,
 and neither candidate may reference an E-Swap-1/2/5/6 alias as its measurement
 source. The 10 ms actual-t0 artifacts remain scoped to E-Swap-3/E-Swap-4; these
 multi-event candidates use bounded one-second interval metrics and event timing
@@ -473,7 +547,7 @@ metric is a discriminated object with either `status=available` and `value`, or
 `status=unavailable` and a specific reason. Zero is never used as a substitute
 for a missing observation. `interval-latency.json` is the bounded producer
 fragment; the runner composes it with resource and host telemetry before a leaf
-can receive a passed terminal receipt. Late or out-of-order interval arrivals,
+can receive its terminal receipt. Late or out-of-order interval arrivals,
 missing fragments on timed v5 runs, row-count overflow, clock drift, and
 population mismatches reject the leaf. Both Rust producers preallocate the row
 vector and reuse one bucket histogram, so interval recording adds no per-message
@@ -636,15 +710,20 @@ authoritative through cross-compilation.
 ### Runtime exit status
 
 `exit_codes.wafer_runtime` is the only in-band failure signal the harness
-has, so the runtime never exits `0` for a run that failed. The canonical
-runner rejects any non-zero code (`RuntimeError: wafer runtime exited with N`).
+has, so the runtime never exits `0` for a run that failed. Codes `1` and `2`
+mean the runtime refused to start the pipeline, and `130` and `143` mean a
+second interrupt reached it from outside the run; the canonical runner records
+these as infrastructure failures. Any other non-zero code, including `3`, a
+crash, or a kill after the shutdown grace period, is a `runtime-exit` outcome
+of the system under test: the attempt is admitted, not retried, and fails the
+run's criteria.
 
 | Code | Meaning | Artefacts |
 | --- | --- | --- |
 | `0` | Every node task exited cleanly (natural completion or SIGTERM/SIGINT drain). | All runtime-owned artefacts. |
 | `1` | Startup failed for a reason other than configuration: engine creation, plugin compile, control-plane bind, or a `startup.json` write after an otherwise clean run. | Whatever was written before the failure; usually none. |
 | `2` | Invalid configuration: TOML load, semantic validation, or a source/sink `validate()` run at launch (for example a bench-source `rate = 0` or an inconsistent burst block, a mistyped HTTP `bind`), a local plugin path that cannot be read, or bad `--swap-*` arguments. Nothing is spawned, except that a `--swap-node` that is not a swappable Wasm node is only found after launch and the pipeline is drained first. Also clap's code for bad arguments. | None. |
-| `3` | The pipeline started but failed while running: a node task panicked (the log names the node), a source/sink `init()` failed (the pipeline is cancelled at once), a source hit its poll-error budget, a Wasm node could not be re-instantiated after a trap or was torn down by its error policy (the pipeline is cancelled at once), a sink's final flush or `close()` failed, a node did not stop within the 5 s shutdown deadline and was aborted, the DLQ sink failed or did not stop in time, or a `--swap-after-secs` swap could not be prepared or dispatched. | Bench artefacts and `runtime-provenance.json` are still flushed before exiting, for post-mortem analysis only; the leaf is not a valid sample. |
+| `3` | The pipeline started but failed while running: a node task panicked (the log names the node), a source/sink `init()` failed (the pipeline is cancelled at once), a source hit its poll-error budget, a Wasm node could not be re-instantiated after a trap or was torn down by its error policy (the pipeline is cancelled at once), a sink's final flush or `close()` failed, a node did not stop within the 5 s shutdown deadline and was aborted, the DLQ sink failed or did not stop in time, or a `--swap-after-secs` swap could not be prepared or dispatched. | Bench artefacts and `runtime-provenance.json` are still flushed before exiting. The leaf is an admitted `runtime-exit` outcome; its partial artefacts are kept for post-mortem analysis and are not used as measurements. |
 | `130`, `143` | A second SIGINT (`130`) or SIGTERM (`143`) arrived before the graceful shutdown finished, and the runtime exited at once. | Whatever was written before the second signal; the leaf is not a valid sample. |
 
 A run killed by the harness after its SIGTERM grace period reports the

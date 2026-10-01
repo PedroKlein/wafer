@@ -472,6 +472,58 @@ def test_canonical_result_accepts_an_untagged_clean_source(tmp_path: Path) -> No
 
 
 
+def stopped_containment_run(root: Path, runtime_exit: int) -> Path:
+    """An E-Iso-6 leaf whose runtime exited before the run produced its outputs."""
+    result = make_result(root)
+    target = root / "e-iso-6" / "rpi5-2026-08-30T00-00-00Z" / "panic" / "run-01"
+    target.parent.mkdir(parents=True)
+    result.rename(target)
+    for name in (
+        "latency.hdr",
+        "throughput.csv",
+        "sequence.csv",
+        "interval-latency.json",
+        "interval-metrics.json",
+    ):
+        (target / name).unlink()
+    metadata = json.loads((target / "metadata.json").read_text())
+    metadata.update(
+        experiment="e-iso-6", condition="panic", exit_codes={"wafer_runtime": runtime_exit}
+    )
+    (target / "metadata.json").write_text(json.dumps(metadata))
+    return target
+
+
+def test_runtime_exit_is_an_outcome_checked_only_for_harness_evidence(tmp_path: Path) -> None:
+    result = stopped_containment_run(tmp_path, runtime_exit=134)
+
+    completed = run(result)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert f"OUTCOME    {result}: system under test failed runtime-exit" in completed.stdout
+
+    (result / "pi-telemetry.csv").unlink()
+    rejected = run(result)
+    assert rejected.returncode == 1
+    assert "missing canonical Pi telemetry artefact: pi-telemetry.csv" in rejected.stdout
+
+    unbounded = stopped_containment_run(tmp_path / "unbounded", runtime_exit=134)
+    (unbounded / "measurement-window.json").unlink()
+    rejected = run(unbounded)
+    assert rejected.returncode == 1
+    assert "missing canonical Pi telemetry artefact: measurement-window.json" in rejected.stdout
+
+
+def test_runtime_startup_refusal_is_a_violation(tmp_path: Path) -> None:
+    result = stopped_containment_run(tmp_path, runtime_exit=2)
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert "Pi 5 metadata records a non-zero runtime exit" in completed.stdout
+    assert "OUTCOME" not in completed.stdout
+
+
 def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         result = make_result(Path(tmp))

@@ -10,6 +10,12 @@ import pathlib
 import re
 from collections.abc import Mapping
 
+from .attempts import (
+    INCOMPLETE_RUN_REASONS,
+    batch_units,
+    infrastructure_retries,
+    sut_outcome_reasons,
+)
 from .backpressure import validate_backpressure_result
 from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
 from .rollback import validate_swap5_artifacts
@@ -357,7 +363,12 @@ def validate_canonical_batch(
     experiment_id: str | None = None,
     results_root: pathlib.Path | str | None = None,
 ) -> str:
-    """Reject unapproved, mixed, dirty, throttled, malformed, or incomplete input."""
+    """Reject unapproved, mixed, dirty, throttled, malformed, or incomplete input.
+
+    Each scheduled unit contributes its one admitted attempt: a clean pass or an outcome
+    of the system under test. A unit without one, or with more attempts than the retry
+    policy allows, rejects the batch.
+    """
     repo = _find_repo_root()
     layout = ResultsLayout.resolve(repo, results_root)
     if layout.explicit:
@@ -408,31 +419,34 @@ def validate_canonical_batch(
     status_paths = sorted(path.rglob("canonical-status.json"))
     if not status_paths:
         raise ValueError(f"canonical batch has no completion receipts: {path}")
-    attempts: dict[tuple[str, int], list[tuple[pathlib.Path, dict]]] = {}
     for status_path in status_paths:
-        status = _read_object(status_path, "canonical status")
-        leaf = status_path.parent
-        relative = leaf.relative_to(path)
-        match = re.fullmatch(r"run-(\d+)(?:-attempt-\d+)?", relative.name)
-        if match is None or len(relative.parts) < 2:
+        relative = status_path.parent.relative_to(path)
+        if (
+            re.fullmatch(r"run-\d+(?:-attempt-\d+)?", relative.name) is None
+            or len(relative.parts) < 2
+        ):
             raise ValueError(f"malformed canonical status path: {status_path}")
-        unit = ("/".join(relative.parts[:-1]), int(match.group(1)))
-        if unit not in expected:
-            raise ValueError(f"unexpected canonical attempt: {unit}")
-        attempts.setdefault(unit, []).append((status_path, status))
+    try:
+        retries = infrastructure_retries(matrix, experiment)
+    except (KeyError, TypeError) as error:
+        raise ValueError(f"canonical matrix lacks its attempt policy: {error}") from error
 
     selected: list[pathlib.Path] = []
-    for unit, unit_attempts in attempts.items():
-        passed = [
-            status_path.parent
-            for status_path, status in unit_attempts
-            if status.get("status") == "passed"
-        ]
-        if not passed:
-            raise ValueError(f"failed canonical input: {unit}")
-        if len(passed) != 1:
-            raise ValueError(f"duplicate canonical run: {unit}")
-        selected.extend(passed)
+    stopped_early: set[pathlib.Path] = set()
+    for unit in batch_units(path, retries):
+        key = (unit.condition, unit.run_index)
+        if key not in expected:
+            raise ValueError(f"unexpected canonical attempt: {key}")
+        if len(unit.attempts) > retries + 1:
+            raise ValueError(f"canonical unit exceeds its retry policy: {key}")
+        if unit.admitted is None:
+            raise ValueError(f"failed canonical input: {key}")
+        leaf = unit.admitted.path
+        if set(unit.admitted.reasons) != set(sut_outcome_reasons(leaf, experiment)):
+            raise ValueError(f"canonical receipt differs from its outcome evidence: {leaf}")
+        if INCOMPLETE_RUN_REASONS & set(unit.admitted.reasons):
+            stopped_early.add(leaf)
+        selected.append(leaf)
 
     shas: set[str] = set()
     observed: set[tuple[str, int]] = set()
@@ -484,6 +498,8 @@ def validate_canonical_batch(
         if unit in observed:
             raise ValueError(f"duplicate canonical run: {unit}")
         observed.add(unit)
+        if leaf in stopped_early:
+            continue
         for artifact in required_outputs:
             artifact_path = leaf / str(artifact)
             if not artifact_path.is_file():
