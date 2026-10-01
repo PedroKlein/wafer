@@ -77,9 +77,9 @@ E-Perf-10 runs MQTT loopback, Native, protected WAFER, and eKuiper at the common
 [1,000, 4,000, 8,000, 15,000, 16,000] msg/s
 ```
 
-Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
+Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis brackets each delivery ceiling between tested rates and reports the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
 
-A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The pure decision uses only exact tested-grid lower/upper bounds and threshold 0.70; it does not interpolate. Identifiable and bounded worst/best cases can produce PASS or FAIL. Invalid/incomplete populations, zero denominators, no-good-rate cases, and bounds that straddle the threshold remain `CENSORED/PENDING` with an explicit reason.
+A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. Each ceiling's lower bound is the highest delivery-good tested rate with no delivery-bad rate below it, or zero; its upper bound is the lowest delivery-bad rate above every delivery-good one, and stays open at the top of the grid or above support-confounded cells. The decision does not interpolate. `PASS` needs WAFER lower / eKuiper upper >= 0.70, `FAIL` needs WAFER upper / eKuiper lower < 0.70, and every other interval is `CENSORED`. Incomplete or malformed populations are `PENDING` with an explicit reason.
 
 ### Startup and cross-architecture boundaries
 

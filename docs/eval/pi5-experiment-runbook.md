@@ -243,7 +243,7 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 ## Experiment boundaries to retain
 
 - E-Perf-1 is the matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates.
+- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates. Each delivery ceiling is bracketed by tested rates, and a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - E-Perf-7 disables mechanisms by TOML omission.
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
 - E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
