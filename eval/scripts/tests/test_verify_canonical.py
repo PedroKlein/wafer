@@ -516,7 +516,7 @@ def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace() -> None
             experiment="e-perf-1",
             condition="ekuiper",
             system="ekuiper",
-            ekuiper_version="2.1.0",
+            ekuiper_version="2.1.5",
             exit_codes={"ekuiper": 0},
         )
         metadata_path.write_text(json.dumps(metadata))
