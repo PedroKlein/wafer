@@ -222,7 +222,9 @@ before reading. The matrix below is authoritative:
   `cpu-cores.csv`, `host-sched.csv`, `sut-processes.csv` and
   `host-sidecar.json`. Both are sidecar processes the canonical runner and
   `run-experiment.sh --canonical` start before the runtime and stop after it
-  exits; neither reads or changes anything the runtime measures.
+  exits. Both pin themselves to the support CPUs (`--pin-cpus`) before they
+  start sampling, so neither they nor the commands they run share a CPU with
+  the SUT; neither reads or changes anything the runtime measures.
 
 ### Schema table
 
@@ -403,7 +405,7 @@ only report the corresponding evaluated gate decisions.
 `e-compare-ekuiper-profile` contains exactly five profiled and five unprofiled
 control runs at each of 1,000, 4,000, and 8,000 msg/s. A pair is the profiled
 and unprofiled run sharing one offered rate and run index; both use the same
-canonical eKuiper 2.1.0 config, load-generator profile, QoS, operator
+canonical eKuiper 2.1.5 config, load-generator profile, QoS, operator
 concurrency, 30-second warmup, and 60-second measurement. The profiled arm alone
 starts a one-second external `/proc` sampler bounded to at most 62 rows. If
 required process files are unreadable, the run continues and records process
@@ -598,7 +600,9 @@ authoritative through cross-compilation.
   "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
   "memory_total_kib": 4194304,
   "cpu_governors": ["performance"],
-  "isolated_cpus": "1-3",
+  "isolated_cpus": "",
+  "housekeeping_cpus": "0",
+  "irq_default_cpus": "0",
   "temperature_millicelsius": 53800,
   "throttled": "0x0",
   "rustc_version": "rustc 1.85.0 (unknown)",
@@ -692,15 +696,25 @@ profile:
 | `arch` | `uname -m` | `aarch64` | `aarch64` | `x86_64` |
 | `hardware_model` | `/proc/device-tree/model` or DMI | contains `Raspberry Pi 5` | contains `Jetson Orin Nano` | any |
 | `cpu_governors` | `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` | `performance` | `performance` | `performance` |
-| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | `1-3` | `1-3` | `1-3` |
+| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | empty | empty | empty |
+| `housekeeping_cpus` | `Cpus_allowed_list` of PID 1 (systemd `CPUAffinity=`) | `0` | `0` | `0` |
+| `irq_default_cpus` | `/proc/irq/default_smp_affinity` as a CPU list (`irqaffinity=`) | `0` | `0` | `0` |
 | `throttled` | `pi_telemetry.py` backend | `0x0` | `0x0` | `0x0` |
 | `online_cpus` | `/sys/devices/system/cpu/online` | any | `0-3` | any |
 | `power_mode` | `nvpmodel -q` | any | `25W` | any |
 | `smt` | `/sys/devices/system/cpu/smt/control` | any | any | `off`, `forceoff` or `notsupported` |
 | `turbo` | `intel_pstate/no_turbo` or `cpufreq/boost` | any | any | `off` |
 
-The SUT runs on CPUs `1-3` and the load generator, broker and samplers on CPU
-`0` on every host. `memory_total_kib` (`/proc/meminfo`) and
+The SUT runs on CPUs `1-3` (`sut_cpus`) and the load generator, broker and
+samplers on CPU `0` on every host. The runner starts WAFER and the native
+baseline under `taskset -c 1-3`, and the eKuiper unit sets `CPUAffinity=1 2 3`.
+The runner pins the load generator and the host samplers to `support_cpus`.
+Everything else, Mosquitto included, inherits `housekeeping_cpus` from
+systemd, and the kernel sends new interrupts there too. No CPU is isolated
+with `isolcpus`: its default domain isolation stops load balancing on CPUs
+1-3, so every thread of a SUT would stay on the one CPU its process started
+on. A `null` value means the fact could not be read, which fails the check.
+`memory_total_kib` (`/proc/meminfo`) and
 `temperature_millicelsius` (the host's thermal zone at run completion) are
 recorded, not checked.
 

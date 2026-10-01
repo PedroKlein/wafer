@@ -79,7 +79,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 ```
 
 **Hardware**: Raspberry Pi 5 4 GB (primary), Jetson Orin (optional inference validation), x86 (cross-validation).
-**Canonical allocation**: CPU 0 runs OS, native Mosquitto, and `wafer-loadgen`; isolated CPUs 1–3 run one active SUT. eKuiper 2.1.0 runs natively. ESP32 is excluded from measured experiments.
+**Canonical allocation**: CPU 0 runs OS, native Mosquitto, `wafer-loadgen` and telemetry (systemd `CPUAffinity=0`, `irqaffinity=0`, no `isolcpus`); CPUs 1–3 run one active SUT. eKuiper 2.1.5 runs natively. ESP32 is excluded from measured experiments.
 **Method**: N≥30 repetitions, open-loop load gen, Mann-Whitney U, HdrHistogram, Bootstrap CI95.
 
 ---

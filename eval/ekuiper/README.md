@@ -1,6 +1,6 @@
 # Native eKuiper comparator
 
-The evaluation hosts run eKuiper 2.1.0 directly from its official Linux Debian package (`install-native.sh` picks the ARM64 or amd64 build). No evaluation path uses Docker.
+The evaluation hosts run eKuiper 2.1.5 directly from its official Linux Debian package (`install-native.sh` picks the ARM64 or amd64 build). No evaluation path uses Docker.
 
 ## Install on the Pi
 
@@ -9,7 +9,7 @@ The evaluation hosts run eKuiper 2.1.0 directly from its official Linux Debian p
 ./eval/ekuiper/install-native.sh
 ```
 
-The installer downloads both the pinned package and its published SHA256 file, verifies the package, installs the canonical MQTT source configuration, writes an installation receipt, and assigns the service to CPUs 1–3.
+The installer downloads the pinned package and its published SHA256 file and checks both against the SHA256 pinned in the script for that architecture. It then installs the package, installs the canonical MQTT source configuration, writes an installation receipt, assigns the service to CPUs 1–3, and restarts the service so an upgraded host runs the new package.
 
 ## Register Pipeline A
 

@@ -2,7 +2,7 @@
 set -u
 
 # Read-only preflight for an x86_64 Linux evaluation host. Expected setup:
-# SMT off, turbo off, isolcpus=1-3, performance governor, a package
+# SMT off, turbo off, systemd and IRQs on CPU 0, performance governor, a package
 # temperature sensor, Mosquitto and native eKuiper installed.
 
 # shellcheck source=lib/preflight-common.sh
@@ -40,7 +40,7 @@ else
     fail "turbo off" "turbo is enabled; write 1 to intel_pstate/no_turbo or 0 to cpufreq/boost"
 fi
 
-check_isolated_cpus 1-3
+check_cpu_affinity 0 1-3
 check_governor
 check_clocks_pinned "1 2 3"
 if [ -d "$SYSROOT/sys/devices/system/cpu/intel_pstate" ]; then

@@ -30,7 +30,7 @@ SSD. Network: Gigabit Ethernet. Canonical runs use Raspberry Pi OS Lite
   gap, throughput, and sequence evidence. The < 100 ms p95 pause budget is
   evaluated from sink-owned artifacts on this hardware.
 
-**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are isolated and assigned to exactly one active SUT. Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache supports a disk directory, but the runtime binary uses only its in-memory layer, seeded at launch so a later hot-swap of an already loaded binary is a memory hit. E-Perf-9 startup runs therefore measure Linux filesystem page-cache state, not a persisted compile cache.
+**Operational notes.** The runtime is a native process; Mosquitto is co-located on CPU 0 when MQTT sources/sinks are exercised. CPUs 1-3 are assigned to exactly one active SUT; systemd and interrupts stay on CPU 0, and the kernel balances the SUT's threads across CPUs 1-3 (no `isolcpus`). Runtime fuel budgets and the epoch deadline default to `None`. Final evaluation configs explicitly set Transform fuel to 10,000,000, Filter and Router fuel to 500,000, `epoch_deadline` to 100, and `epoch_tick_ms` to 10 except for matrix-declared cases. The compiled-component cache supports a disk directory, but the runtime binary uses only its in-memory layer, seeded at launch so a later hot-swap of an already loaded binary is a memory hit. E-Perf-9 startup runs therefore measure Linux filesystem page-cache state, not a persisted compile cache.
 
 ### Jetson Orin: diagnostic inference target
 
@@ -75,7 +75,7 @@ The active deployment targets differ in hardware and operational controls. Every
 - No IPC across processes, no container boundary, no supervisor
   managing peer nodes.
 
-Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the native eKuiper 2.1.0 ARM64 package, not a container. WAFER remains a single process on every target.
+Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the native eKuiper 2.1.5 ARM64 package, not a container. WAFER remains a single process on every target.
 
 ## Operational touchpoints
 

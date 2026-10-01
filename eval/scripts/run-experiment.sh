@@ -327,7 +327,8 @@ PROC_TELEMETRY_PID=""
 _start_pi_telemetry() {
     [ "$canonical" -eq 1 ] || return 0
     [ "${WAFER_HOST_SIDECARS:-on}" != "off" ] || return 0
-    python3 "$REPO_ROOT/eval/scripts/lib/pi_telemetry.py" "$OUT_DIR" &
+    python3 "$REPO_ROOT/eval/scripts/lib/pi_telemetry.py" "$OUT_DIR" \
+        --pin-cpus "${WAFER_LOADGEN_CPUSET:-}" &
     TELEMETRY_PID=$!
     python3 "$REPO_ROOT/eval/scripts/lib/proc_telemetry.py" "$OUT_DIR" \
         --pin-cpus "${WAFER_LOADGEN_CPUSET:-}" --sut-cpus "${WAFER_RUNTIME_CPUSET:-}" &

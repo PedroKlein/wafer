@@ -26,6 +26,7 @@ PLATFORM_KEYS = (
     "glibc_version",
     "power_mode",
 )
+CPU_POLICY_KEYS = ("isolated_cpus", "housekeeping_cpus", "irq_default_cpus")
 
 
 def run_command(command: list[str]) -> str | None:
@@ -169,4 +170,49 @@ def platform_facts(root: Path = Path("/"), run: Runner = run_command) -> dict:
         "power_mode": _power_mode(run),
     }
     assert tuple(facts) == PLATFORM_KEYS
+    return facts
+
+
+def _cpu_list(cpus: set[int]) -> str:
+    ranges: list[list[int]] = []
+    for cpu in sorted(cpus):
+        if ranges and cpu == ranges[-1][1] + 1:
+            ranges[-1][1] = cpu
+        else:
+            ranges.append([cpu, cpu])
+    return ",".join(str(low) if low == high else f"{low}-{high}" for low, high in ranges)
+
+
+def _allowed_cpus(root: Path, pid: int) -> str | None:
+    for line in (_read(root / f"proc/{pid}/status") or "").splitlines():
+        if line.startswith("Cpus_allowed_list:"):
+            return line.partition(":")[2].strip() or None
+    return None
+
+
+def _irq_default_cpus(root: Path) -> str | None:
+    try:
+        mask = int((_read(root / "proc/irq/default_smp_affinity") or "").replace(",", ""), 16)
+    except ValueError:
+        return None
+    return _cpu_list({cpu for cpu in range(mask.bit_length()) if mask >> cpu & 1})
+
+
+def cpu_policy_facts(root: Path = Path("/")) -> dict:
+    """CPU placement of everything that is not the system under test.
+
+    `isolated_cpus` is empty when no CPU is isolated and `None` when it cannot
+    be read. `housekeeping_cpus` is PID 1's affinity, which every service and
+    login session inherits; `irq_default_cpus` is the default IRQ affinity.
+    """
+    try:
+        isolated = (root / "sys/devices/system/cpu/isolated").read_text().replace("\x00", "").strip()
+    except OSError:
+        isolated = None
+    facts = {
+        "isolated_cpus": isolated,
+        "housekeeping_cpus": _allowed_cpus(root, 1),
+        "irq_default_cpus": _irq_default_cpus(root),
+    }
+    assert tuple(facts) == CPU_POLICY_KEYS
     return facts
