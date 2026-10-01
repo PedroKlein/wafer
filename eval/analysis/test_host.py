@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from wafer_analysis.host import attempt_ledger, core_utilisation, cpu_list, item_progress
+from wafer_analysis.host import attempts_table, core_utilisation, cpu_list, item_progress
 
 
 def cpu_row(timestamp: int, cpu: int, busy: int, idle: int, iowait: int = 0) -> dict:
@@ -40,26 +40,47 @@ def test_core_utilisation_rejects_a_single_or_decreasing_sample() -> None:
         core_utilisation([cpu_row(1, 0, 100, 900), cpu_row(2, 0, 90, 1_000)])
 
 
-def test_attempt_ledger_counts_retries_and_failed_attempts(tmp_path) -> None:
-    def leaf(path: str, status: str) -> None:
+def test_attempts_table_counts_classes_retries_and_missing_units(tmp_path) -> None:
+    matrix = {
+        "final_campaign": {
+            "attempt_policy": {"infrastructure_retries": 1, "gate_experiments": ["e-val-1"]}
+        },
+        "experiments": {
+            "e-perf-1": {"conditions": ["wafer", "native"], "repetitions": 3},
+            "e-val-1": {"conditions": ["delay-50ms"], "repetitions": 1},
+        },
+    }
+
+    def attempt(path: str, receipt: dict | None, system: str = "wafer") -> None:
         directory = tmp_path / path
         directory.mkdir(parents=True)
-        (directory / "canonical-status.json").write_text(json.dumps({"status": status}))
+        (directory / "metadata.json").write_text(json.dumps({"system": system}))
+        if receipt is not None:
+            (directory / "canonical-status.json").write_text(json.dumps(receipt))
 
-    leaf("wafer/rate-01000/run-01-attempt-01", "failed")
-    leaf("wafer/rate-01000/run-01-attempt-02", "passed")
-    leaf("wafer/rate-01000/run-02-attempt-01", "passed")
-    leaf("native/rate-01000/run-01-attempt-01", "failed")
-    leaf("native/rate-01000/summary", "passed")
+    infrastructure = {
+        "status": "failed",
+        "failure_class": "infrastructure",
+        "reasons": ["harness-error"],
+    }
+    outcome = {"status": "failed", "failure_class": "sut_outcome", "reasons": ["runtime-exit"]}
+    attempt("perf/wafer/run-01-attempt-01", infrastructure)
+    attempt("perf/wafer/run-01-attempt-02", {"status": "passed"})
+    attempt("perf/wafer/run-02-attempt-01", outcome)
+    attempt("perf/wafer/run-03-attempt-01", None)
+    attempt("perf/wafer/run-03-attempt-02", infrastructure)
+    attempt("perf/native/run-01-attempt-01", {"status": "passed"}, "native")
+    (tmp_path / "perf/native/summary").mkdir()
+    attempt("val/delay-50ms/run-01-attempt-01", None)
 
-    (row,) = attempt_ledger({"e-perf-10": tmp_path}).to_dict("records")
-    assert row == {
-        "experiment": "e-perf-10",
-        "runs": 3,
-        "attempts": 4,
-        "passed_runs": 2,
-        "failed_attempts": 2,
-        "retried_runs": 1,
+    table = attempts_table({"e-perf-1": tmp_path / "perf", "e-val-1": tmp_path / "val"}, matrix)
+
+    columns = ["units", "attempts", "passed", "sut_outcome", "infrastructure", "retries", "missing"]
+    rows = table.set_index(["experiment", "system", "condition"])[columns]
+    assert rows.to_dict("index") == {
+        ("e-perf-1", "native", "native"): dict(zip(columns, [3, 1, 1, 0, 0, 0, 2])),
+        ("e-perf-1", "wafer", "wafer"): dict(zip(columns, [3, 5, 1, 1, 3, 2, 1])),
+        ("e-val-1", "wafer", "delay-50ms"): dict(zip(columns, [1, 1, 0, 0, 1, 0, 1])),
     }
 
 
