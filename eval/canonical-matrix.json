@@ -467,7 +467,7 @@
           "kind": "external-procfs-process-sampler",
           "interval_secs": 1,
           "maximum_rows_per_run": 62,
-          "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+          "gc_runtime_metrics": "go-gctrace-from-kuiper-journal-in-profiled-state",
           "graceful_unavailable": true
         },
         "ordering": {
@@ -479,7 +479,8 @@
           "throughput.csv",
           "interval-metrics.json",
           "ekuiper-runtime-summary.json",
-          "profiler-overhead.json"
+          "profiler-overhead.json",
+          "ekuiper-gctrace.log"
         ],
         "analysis": "ekuiper-tail-association",
         "no_pool_with": [
