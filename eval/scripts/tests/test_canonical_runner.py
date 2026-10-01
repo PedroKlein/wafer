@@ -5014,6 +5014,26 @@ def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
     assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
 
 
+def test_summaries_continue_past_one_a_system_outcome_left_incomplete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    written: list[str] = []
+
+    def incomplete(root: Path, batch_id: str) -> None:
+        raise ValueError("wafer rate 16000 lacks a run")
+
+    monkeypatch.setattr(runner, "summarize_rate_sweep", incomplete)
+    monkeypatch.setattr(
+        runner, "summarize_branch_isolation", lambda root, batch_id: written.append("e-iso-7")
+    )
+    monkeypatch.setattr(runner, "summarize_swap4", lambda root, batch_id: written.append("e-swap-4"))
+
+    runner.summarise(tmp_path, "test", {"e-perf-10", "e-iso-7", "e-swap-4"})
+
+    assert written == ["e-iso-7", "e-swap-4"]
+    assert "SUMMARY e-perf-10 incomplete: wafer rate 16000 lacks a run" in capsys.readouterr().out
+
+
 def test_one_dropped_message_in_a_burst_swap_is_an_admitted_outcome(tmp_path: Path) -> None:
     timing, source, requests, sink, throughput, sequence = swap4_fixture()
     for bucket in throughput["drain_buckets"][:1]:

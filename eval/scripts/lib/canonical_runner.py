@@ -6792,24 +6792,25 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
 
 
 def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
-    if "e-perf-10" in experiments:
-        summarize_rate_sweep(root, batch_id)
-    if CAPACITY_KNEE_EXPERIMENT in experiments:
-        summarize_capacity_knee(root, batch_id)
-    if PAYLOAD_REFINEMENT_EXPERIMENT in experiments:
-        summarize_payload_refinement(root, batch_id)
-    if DEPTH_EXTENSION_EXPERIMENT in experiments:
-        summarize_depth_extension(root, batch_id)
-    if SWAP_SESSIONS_EXPERIMENT in experiments:
-        summarize_swap_sessions(root, batch_id)
-    if ROLLBACK_SESSIONS_EXPERIMENT in experiments:
-        summarize_rollback_sessions(root, batch_id)
-    if EKUIPER_PROFILE_EXPERIMENT in experiments:
-        summarize_ekuiper_profile(root, batch_id)
-    if "e-iso-7" in experiments:
-        summarize_branch_isolation(root, batch_id)
-    if "e-swap-4" in experiments:
-        summarize_swap4(root, batch_id)
+    """Write the batch summaries; one that a system outcome left incomplete does not stop the rest."""
+    summaries = {
+        "e-perf-10": summarize_rate_sweep,
+        CAPACITY_KNEE_EXPERIMENT: summarize_capacity_knee,
+        PAYLOAD_REFINEMENT_EXPERIMENT: summarize_payload_refinement,
+        DEPTH_EXTENSION_EXPERIMENT: summarize_depth_extension,
+        SWAP_SESSIONS_EXPERIMENT: summarize_swap_sessions,
+        ROLLBACK_SESSIONS_EXPERIMENT: summarize_rollback_sessions,
+        EKUIPER_PROFILE_EXPERIMENT: summarize_ekuiper_profile,
+        "e-iso-7": summarize_branch_isolation,
+        "e-swap-4": summarize_swap4,
+    }
+    for experiment, summarize in summaries.items():
+        if experiment not in experiments:
+            continue
+        try:
+            summarize(root, batch_id)
+        except ValueError as error:
+            print(f"[{utc_now()}] SUMMARY {experiment} incomplete: {error}", flush=True)
     scripts = {
         "e-perf-4": "summarise-e-perf-4.sh",
         "e-perf-6": "summarise-e-perf-6-8.sh",
@@ -7632,10 +7633,7 @@ def main() -> int:
         completed += 1
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
     if args.repetitions is None:
-        try:
-            summarise(root, batch_id, experiments)
-        except ValueError as error:
-            print(f"[{utc_now()}] SUMMARY incomplete: {error}", flush=True)
+        summarise(root, batch_id, experiments)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
     write_progress(ledger, "batch-finished", completed, total, failures=len(failures))
     return 1 if failures else 0
