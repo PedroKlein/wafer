@@ -4077,12 +4077,17 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 stdout=log,
                 stderr=log,
             )
-            wait_for_api("http://127.0.0.1:9090/health")
+            try:
+                wait_for_api("http://127.0.0.1:9090/health")
+            except RuntimeError:
+                if runtime.poll() is None or not runtime_exit_is_outcome(runtime.returncode):
+                    raise
+            started = runtime.poll() is None
             v1 = root / "plugins/pass-through-v1/target/wasm32-wasip2/release/wafer_pass_through_v1.wasm"
             v2 = root / "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
             panics = root / "plugins/pass-through-v2-panics/target/wasm32-wasip2/release/wafer_pass_through_v2_panics.wasm"
             requests: list[dict] = []
-            if item.experiment == "e-swap-4":
+            if started and item.experiment == "e-swap-4":
                 timing_path = output / "burst-source-timing.json"
                 deadline = time.monotonic() + item.warmup_secs + 10
                 while not timing_path.is_file() and time.monotonic() < deadline:
@@ -4125,7 +4130,7 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 )
                 if abs(request_started_ns - scheduled_swap_ns) > SWAP4_ALIGNMENT_TOLERANCE_NS:
                     raise RuntimeError("E-Swap-4 swap missed measured t=60 by more than 10 ms")
-            else:
+            elif started:
                 time.sleep(item.warmup_secs)
                 offsets = hot_swap_offsets(item)
                 interval = item.measurement_secs / len(offsets)
@@ -4358,7 +4363,19 @@ def run_restart_item(
                 )
                 time.sleep(1)
                 if runtime.poll() is not None:
-                    raise RuntimeError("wafer runtime exited during startup")
+                    runtime_exit = runtime.returncode
+                    runtime = None
+                    if not runtime_exit_is_outcome(runtime_exit):
+                        raise RuntimeError(
+                            f"wafer runtime exited during startup with {runtime_exit}"
+                        )
+                    stop_pi_telemetry(telemetry)
+                    telemetry = None
+                    write_attempt_window(output, started_ns)
+                    _merge_runtime_metadata(output, item, started_at, started_ns, runtime_exit)
+                    postprocess_run(root, item, output)
+                    verify_result(root, output)
+                    return finish_attempt(output, item)
 
             subprocess.run(
                 loadgen_command(
@@ -4403,8 +4420,10 @@ def run_restart_item(
             if item.condition == "wafer-hotswap":
                 plugin = root / "plugins/pass-through-v2/target/wasm32-wasip2/release/wafer_pass_through_v2.wasm"
                 response = post_hot_swap("transform", plugin)
-                if response["http_status"] != 200:
-                    raise RuntimeError(f"hot-swap failed: {response}")
+                write_json_atomic(
+                    output / "swap_requests.json",
+                    [{"event_index": 0, "plugin": plugin.name, **response}],
+                )
             elif is_ekuiper:
                 subprocess.run(
                     ["curl", "-fsS", "-X", "POST", "http://127.0.0.1:9081/rules/pipeline_a/stop"],
@@ -4430,8 +4449,12 @@ def run_restart_item(
                     stdout=log,
                     stderr=log,
                 )
-                wait_for_api("http://127.0.0.1:9090/health")
-                if runtime.poll() is not None:
+                try:
+                    wait_for_api("http://127.0.0.1:9090/health")
+                except RuntimeError:
+                    if runtime.poll() is None:
+                        raise
+                if runtime.poll() is not None and not runtime_exit_is_outcome(runtime.returncode):
                     raise RuntimeError("wafer runtime failed to restart")
             action_finished_monotonic_ns = time.monotonic_ns()
             action_finished_ns = time.time_ns()
@@ -5424,7 +5447,7 @@ def run_rate_sweep_item(
                 stop_pi_telemetry(telemetry)
                 telemetry = None
                 write_attempt_window(output, started_ns)
-                _merge_rate_sweep_metadata(output, item, started_at, started_ns, runtime_exit)
+                _merge_runtime_metadata(output, item, started_at, started_ns, runtime_exit)
                 postprocess_run(root, item, output)
                 verify_result(root, output)
                 return finish_attempt(output, item)
@@ -5563,7 +5586,7 @@ def run_rate_sweep_item(
                 }
             (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         else:
-            _merge_rate_sweep_metadata(output, item, started_at, started_ns, runtime_exit)
+            _merge_runtime_metadata(output, item, started_at, started_ns, runtime_exit)
         postprocess_run(root, item, output)
         invocation = json.loads((output / "invocation-receipt.json").read_text())
         if item.experiment == "capacity-scout":
@@ -5598,11 +5621,14 @@ def run_rate_sweep_item(
     return finish_attempt(output, item)
 
 
-def _merge_rate_sweep_metadata(
+def _merge_runtime_metadata(
     output: Path, item: RunItem, started_at: str, started_ns: int, runtime_exit: int
 ) -> None:
     provenance_path = output / "runtime-provenance.json"
     provenance = provenance_path.read_text() if provenance_path.is_file() else "null"
+    loadgen = {"profile_path": item.loadgen_profile, "warmup_secs": item.warmup_secs}
+    if item.offered_rate_msg_s is not None:
+        loadgen["offered_rate_msg_s"] = item.offered_rate_msg_s
     merge_metadata(
         str(output / "metadata.json"),
         item.experiment,
@@ -5612,13 +5638,7 @@ def _merge_rate_sweep_metadata(
         str(time.time_ns() - started_ns),
         item.config,
         hashlib.sha256((output / "config.toml").read_bytes()).hexdigest(),
-        json.dumps(
-            {
-                "profile_path": item.loadgen_profile,
-                "warmup_secs": item.warmup_secs,
-                "offered_rate_msg_s": item.offered_rate_msg_s,
-            }
-        ),
+        json.dumps(loadgen),
         json.dumps({"broker": "127.0.0.1:1883", "managed_by_harness": False}),
         str(runtime_exit),
         provenance,

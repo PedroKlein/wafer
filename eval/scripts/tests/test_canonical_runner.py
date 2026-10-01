@@ -4891,6 +4891,115 @@ def test_hot_swap_run_the_runtime_did_not_survive_keeps_its_window(
     assert window["started_ns"] < window["finished_ns"]
 
 
+@pytest.mark.parametrize(
+    ("runtime_exit", "failure_class", "reasons"),
+    [(134, "sut_outcome", ["runtime-exit"]), (2, "infrastructure", ["harness-error"])],
+)
+def test_hot_swap_runtime_that_dies_before_its_control_plane_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runtime_exit: int,
+    failure_class: str,
+    reasons: list[str],
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=runtime_exit)
+
+    def unanswered(url: str, timeout_secs: float = 10.0) -> None:
+        raise RuntimeError(f"{url} did not answer")
+
+    monkeypatch.setattr(runner, "wait_for_api", unanswered)
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+
+    admitted = runner.run_hot_swap_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (admitted, receipt["failure_class"], receipt["reasons"]) == (
+        failure_class == "sut_outcome",
+        failure_class,
+        reasons,
+    )
+
+
+@pytest.mark.parametrize(
+    ("runtime_exit", "failure_class", "reasons"),
+    [(134, "sut_outcome", ["runtime-exit"]), (2, "infrastructure", ["harness-error"])],
+)
+def test_disruption_runtime_that_dies_at_startup_is_judged_by_its_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runtime_exit: int,
+    failure_class: str,
+    reasons: list[str],
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=runtime_exit)
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-restart"
+    )
+    output = tmp_path / "wafer-restart/run-01-attempt-01"
+
+    admitted = runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (admitted, receipt["failure_class"], receipt["reasons"]) == (
+        failure_class == "sut_outcome",
+        failure_class,
+        reasons,
+    )
+
+
+def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=0)
+    clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
+    monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-hotswap"
+    )
+    output = tmp_path / "wafer-hotswap/run-01-attempt-01"
+
+    class Process:
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+    def launch(command: list[str], **kwargs: object) -> Process:
+        if command == ["publish"]:
+            now = next(clock)
+            (output / "publisher-timing.json").write_text(
+                json.dumps(
+                    {
+                        "measurement_started_unix_epoch_ns": now,
+                        "event_unix_epoch_ns": now,
+                        "event_offset_ns": runner.SWAP3_EVENT_OFFSET_NS,
+                    }
+                )
+            )
+        return Process()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(
+        runner, "post_hot_swap", lambda node, plugin: {"http_status": 500, "body": "rejected"}
+    )
+    monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
+
+    assert runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["swap-failed"])
+    assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
+
+
 def test_one_dropped_message_in_a_burst_swap_is_an_admitted_outcome(tmp_path: Path) -> None:
     timing, source, requests, sink, throughput, sequence = swap4_fixture()
     for bucket in throughput["drain_buckets"][:1]:

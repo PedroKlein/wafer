@@ -49,6 +49,7 @@ STARTUP_REFUSALS = frozenset({1, 2})
 OUTSIDE_INTERRUPTS = frozenset({130, 143})
 RUNTIME_SYSTEMS = frozenset({"wafer", "native"})
 SWAP_EXPERIMENTS = frozenset({"e-swap-1", "e-swap-4", "e-swap-independent-sessions"})
+SWAP_REQUEST_EXPERIMENTS = SWAP_EXPERIMENTS | {"e-swap-3"}
 ROLLBACK_EXPERIMENTS = frozenset({"e-swap-5", "e-swap-rollback-sessions"})
 ZERO_LOSS_EXPERIMENTS = SWAP_EXPERIMENTS | ROLLBACK_EXPERIMENTS
 
@@ -84,7 +85,7 @@ def sut_outcome_reasons(leaf: Path, experiment: str) -> list[str]:
         reasons.append("containment-escape")
     requests = _read_json(leaf / "swap_requests.json")
     if isinstance(requests, list):
-        if experiment in SWAP_EXPERIMENTS and any(
+        if experiment in SWAP_REQUEST_EXPERIMENTS and any(
             not isinstance(request, dict) or request.get("http_status") != 200
             for request in requests
         ):
