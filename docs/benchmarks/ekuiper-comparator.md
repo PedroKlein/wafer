@@ -1,14 +1,20 @@
 # eKuiper comparator setup
 
-**Version pin.** Native eKuiper `2.1.0` Linux package (ARM64, or amd64 on the x86 host). The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
+**Version pin.** Native eKuiper `2.1.5` Linux package (ARM64, or amd64 on the x86 host), the last patch release of the 2.1 line. The evaluation hosts (Raspberry Pi 5, Jetson and x86) run it natively; no evaluation path uses Docker.
 
 **Role.** eKuiper is the reference stream-processing engine for E-Perf-1 target-load delivery/latency, E-Perf-10 gateway capacity, and E-Swap-3 rule-restart disruption. It is treated as a black box driven identically to WAFER through `wafer-loadgen publish` and `wafer-loadgen subscribe`.
 
 ## Raspberry Pi 5 setup
 
-Install the pinned package and verify its published checksum. The script
-picks the `arm64` or `amd64` package from `uname -m`, so the same pin serves
-aarch64 and x86_64 hosts:
+Install the pinned package. The script picks the `arm64` or `amd64` package
+from `uname -m`, so the same pin serves aarch64 and x86_64 hosts. It refuses a
+download, or a published checksum, that differs from the SHA256 pinned for that
+architecture:
+
+| Package | SHA256 |
+|---|---|
+| `kuiper-2.1.5-linux-arm64.deb` | `917579fdd8683e047c43d01a694180ae73ca234bd0727e11deb3a902e1556d49` |
+| `kuiper-2.1.5-linux-amd64.deb` | `9ec8f68e23f507d0e02e6bb45ff61ed904443c84ef0f6288b00d6b19ea66f12b` |
 
 ```sh
 ./eval/ekuiper/install-native.sh --dry-run
@@ -16,7 +22,7 @@ aarch64 and x86_64 hosts:
 systemctl is-active kuiper
 ```
 
-The package installs the daemon under `/usr/lib/kuiper`, configuration under `/etc/kuiper`, mutable data under `/var/lib/kuiper`, and logs under `/var/log/kuiper`. The systemd override assigns eKuiper to CPUs 1–3 and sets the default MQTT broker to `tcp://127.0.0.1:1883`.
+The package installs the daemon under `/usr/lib/kuiper`, configuration under `/etc/kuiper`, mutable data under `/var/lib/kuiper`, and logs under `/var/log/kuiper`. The systemd override assigns eKuiper to CPUs 1–3 and sets the default MQTT broker to `tcp://127.0.0.1:1883`. The installer restarts the service, so a host that still runs an older package upgrades in place by running it again.
 
 Register and test Pipeline A:
 
@@ -24,6 +30,20 @@ Register and test Pipeline A:
 ./eval/ekuiper/seed-pipeline-a.sh
 ./eval/ekuiper/smoke-test.sh
 ```
+
+## Version choice
+
+The comparator was first pinned to 2.1.0, the first release of the 2.1 line. Releases 2.1.1 to 2.1.5 stay on that line and are mostly bug fixes, and some of them change the rule stop and start path that E-Swap-3 drives through the REST API. In 2.1.0, when the run of a manually stopped rule exited, it could still set the rule to stopped and clear its topology, which races with an immediate restart. Other fixes change how a rule on a shared stream, such as `wafer_telemetry`, attaches to and detaches from the shared source when it stops, starts, or is updated.
+
+What the harness depends on did not change between 2.1.0 and 2.1.5:
+
+- the packaged `/etc/kuiper/kuiper.yaml`, `/etc/kuiper/mqtt_source.yaml`, systemd unit and maintainer scripts are byte-identical;
+- the REST calls the harness makes (create and delete the stream and rule, read the rule, stop, start, and read its status) return the same status codes and fields;
+- both packages are built with Go 1.23.4 and the same Paho MQTT client, and the MQTT sink still waits for each QoS 1 acknowledgement before the next publish.
+
+Three things did change. 2.1.0 opened an idle MQTT control-channel client to the local broker at startup, and 2.1.5 does not. The packaged `connections/connection.yaml` no longer defines sample connections, which Pipeline A never referenced. 2.1.5 also presizes some per-message maps in the projection path, so its numbers are not interchangeable with earlier 2.1.0 diagnostics.
+
+Results describe eKuiper 2.1.5 with this configuration, not a later release line or a tuned deployment. Before each host's final batch, the [runbook](../eval/pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch) re-runs the smoke test and a short series of rule restarts under load on that host.
 
 ## Historical macOS setup
 

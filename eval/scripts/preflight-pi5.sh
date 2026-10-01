@@ -28,7 +28,7 @@ else
 fi
 info "kernel: $(uname -r)"
 
-check_isolated_cpus 1-3
+check_cpu_affinity 0 1-3
 check_governor
 
 if command -v vcgencmd >/dev/null 2>&1; then

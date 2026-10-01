@@ -377,7 +377,7 @@ def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic
     assert runtime["process_metrics"]["maximum_rows"] == 62
     assert runtime["gc_runtime_metrics"] == {
         "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
     }
     assert runtime["interval_alignment"]["row_count"] == 60
     assert overhead["paired_condition"] == "rate-01000/unprofiled-control"
@@ -1600,6 +1600,16 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
 
     assert observed_timeouts == [0]
     assert ekuiper_states == [True, False]
+
+
+def test_both_host_samplers_pin_themselves_to_the_support_cpus(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda command, **kwargs: commands.append(command))
+    item = RunItem("e-perf-1", "wafer", 1, "c.toml", 30, 60, runtime_cpus="1-3", support_cpus="0")
+    runner.start_pi_telemetry(tmp_path, tmp_path / "leaf", item)
+    assert [Path(command[1]).name for command in commands] == ["pi_telemetry.py", "proc_telemetry.py"]
+    for command in commands:
+        assert command[command.index("--pin-cpus") + 1] == "0"
 
 
 def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
@@ -4378,6 +4388,7 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
         capture_output=True,
         text=True,
     ).stdout
+    assert f"version: {comparator['version']}\n" in install
     assert "CPUAffinity=1 2 3" in install
     assert "MQTT_SOURCE__DEFAULT__SERVER=tcp://127.0.0.1:1883" in install
     assert "mqtt_source_config: /etc/kuiper/mqtt_source.yaml" in install

@@ -373,11 +373,13 @@ def valid_facts() -> dict:
         "git_dirty": False,
         "git_tags": ["rpi5-eval-v1"],
         "cpu_governors": ["performance"],
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "throttled": "0x0",
         "broker_ready": True,
         "ekuiper_ready": True,
-        "ekuiper_version": "2.1.0",
+        "ekuiper_version": "2.1.5",
     }
 
 
@@ -388,6 +390,18 @@ def test_preflight_accepts_canonical_facts() -> None:
         result = run_validator("preflight", str(path), "--require-ekuiper")
     assert result.returncode == 0, result.stderr
     assert "canonical preflight: PASS" in result.stdout
+
+
+def test_preflight_requires_the_comparator_config_version(tmp_path: Path) -> None:
+    comparator = tomllib.loads(
+        (ROOT / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
+    )["comparator"]
+    path = tmp_path / "facts.json"
+    write_json(path, {**valid_facts(), "ekuiper_version": comparator["version"]})
+
+    result = run_validator("preflight", str(path), "--require-ekuiper")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_preflight_accepts_an_untagged_clean_source(tmp_path: Path) -> None:
@@ -404,11 +418,13 @@ def test_preflight_rejects_each_provenance_and_host_violation() -> None:
         "dirty source": ("git_dirty", True),
         "host tag": ("host_tag", "shakedown-macos"),
         "CPU governor": ("cpu_governors", ["ondemand"]),
-        "isolated CPUs": ("isolated_cpus", ""),
+        "isolated CPUs": ("isolated_cpus", "1-3"),
+        "housekeeping CPUs": ("housekeeping_cpus", "0-3"),
+        "default IRQ CPUs": ("irq_default_cpus", "0-3"),
         "throttling": ("throttled", "0x50000"),
         "broker": ("broker_ready", False),
         "eKuiper": ("ekuiper_ready", False),
-        "eKuiper version": ("ekuiper_version", "2.2.0"),
+        "eKuiper version": ("ekuiper_version", "2.1.0"),
     }
     for expected, (key, value) in invalid.items():
         facts = valid_facts()

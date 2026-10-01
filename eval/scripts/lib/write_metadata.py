@@ -31,7 +31,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from host_facts import platform_facts  # noqa: E402
+from host_facts import cpu_policy_facts, platform_facts  # noqa: E402
 from pi_telemetry import host_snapshot  # noqa: E402
 
 
@@ -40,13 +40,6 @@ def _sh(cmd: list[str]) -> str:
         return subprocess.check_output(cmd, text=True).strip()
     except Exception:
         return "unknown"
-
-
-def _read_text(path: str, default: str = "unknown") -> str:
-    try:
-        return pathlib.Path(path).read_text().replace("\x00", "").strip() or default
-    except OSError:
-        return default
 
 
 def _source_metadata() -> tuple[str, bool, list[str]]:
@@ -109,7 +102,7 @@ def _hardware_metadata() -> dict:
         "hardware_model": platform["hardware_model"] or "unknown",
         "memory_total_kib": memory_total_kib,
         "cpu_governors": governors or ["unknown"],
-        "isolated_cpus": _read_text("/sys/devices/system/cpu/isolated"),
+        **cpu_policy_facts(),
         "temperature_millicelsius": temperature,
         "throttled": throttled,
     }

@@ -23,6 +23,8 @@ import sys
 import time
 from pathlib import Path
 
+from proc_telemetry import pin_to
+
 NOT_THROTTLED = "0x0"
 PINNED_CLOCK_TOLERANCE = 0.95
 POWER_SOURCE = "https://github.com/raspberrypi/documentation/blob/master/documentation/asciidoc/computers/raspberry-pi/power-supplies.adoc"
@@ -370,9 +372,17 @@ def write_error(output_dir: Path, error: BaseException) -> None:
     )
 
 
-def run(output_dir: Path, interval_secs: float, backend_name: str = "auto", sysroot: Path = Path("/")) -> int:
+def run(
+    output_dir: Path,
+    interval_secs: float,
+    backend_name: str = "auto",
+    sysroot: Path = Path("/"),
+    pin_cpus: str = "",
+) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
+        if pin_cpus:
+            pin_to(pin_cpus)
         backend = make_backend(backend_name, sysroot)
     except (OSError, KeyError) as error:
         write_error(output_dir, error)
@@ -430,8 +440,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("interval_secs", type=float, nargs="?", default=1.0)
     parser.add_argument("--backend", choices=("auto", *BACKENDS), default="auto")
     parser.add_argument("--sysroot", type=Path, default=Path("/"), help=argparse.SUPPRESS)
+    parser.add_argument("--pin-cpus", default="", help="CPU list the sampler pins itself to")
     args = parser.parse_args(argv)
-    return run(args.output_dir, args.interval_secs, args.backend, args.sysroot)
+    return run(args.output_dir, args.interval_secs, args.backend, args.sysroot, args.pin_cpus)
 
 
 if __name__ == "__main__":

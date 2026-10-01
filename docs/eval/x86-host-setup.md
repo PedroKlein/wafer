@@ -9,12 +9,21 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 |------|----------|-----|
 | SMT | off | `echo off \| sudo tee /sys/devices/system/cpu/smt/control` |
 | Turbo | off | Intel: `echo 1 \| sudo tee /sys/devices/system/cpu/intel_pstate/no_turbo`; AMD: `echo 0 \| sudo tee /sys/devices/system/cpu/cpufreq/boost` |
-| Isolated CPUs | `1-3` (three physical cores for the SUT, core 0 for the broker and load generator) | `isolcpus=1-3` on the kernel command line, then reboot |
+| CPU 0 for everything but the SUT | systemd affinity `0`; no isolated CPUs (cores 1-3 run the SUT, core 0 the broker, load generator and samplers) | `CPUAffinity=0` under `[Manager]` in `/etc/systemd/system.conf`, then reboot; drop any `isolcpus=` from the kernel command line |
+| IRQs on CPU 0 | `/proc/irq/default_smp_affinity` is CPU 0 only | add `irqaffinity=0` to `GRUB_CMDLINE_LINUX` in `/etc/default/grub`, run `sudo update-grub`, then reboot |
+| SUT CPUs balanced | three busy loops under `taskset -c 1-3` run on three CPUs | follows from the two rows above |
 | Governor | `performance` on every CPU | `sudo cpupower frequency-set -g performance` |
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | follows from the governor and turbo settings |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
 | Binaries | built on this host | `mise run build-release-x86` |
-| Services | Mosquitto and native eKuiper 2.1.0 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
+| Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
+
+The runner starts WAFER and the native baseline with `taskset -c 1-3` and pins
+`wafer-loadgen` and both telemetry samplers to CPU 0; the eKuiper unit sets
+`CPUAffinity=1 2 3`, and Mosquitto inherits CPU 0 from systemd. Do not use
+`isolcpus`: its default domain isolation stops load balancing on CPUs 1-3, so
+every thread of a system under test would stay on the single CPU its process
+started on.
 
 Deploy the evaluation tree with
 `./eval/scripts/deploy-pi5.sh --host user@box --bin-dir target/release` from
@@ -34,6 +43,10 @@ throttle signal is a core below 95% of its pinned clock or a moved
 `x86-rapl-package-energy` or `unavailable`.
 
 ## Running a batch
+
+Before each batch on this host, re-check the eKuiper comparator as the
+[runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)
+describes, with `--host x86`.
 
 The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
 Pass it to the runner and the validator; results land under

@@ -42,7 +42,7 @@ from results_layout import (
     validate_alias_mapping,
 )
 from containment import assess_containment
-from host_facts import PLATFORM_KEYS
+from host_facts import CPU_POLICY_KEYS, PLATFORM_KEYS
 from host_profiles import HostProfile, host_profile
 from interval_metrics import compose_interval_metrics
 import pi_telemetry
@@ -3494,7 +3494,7 @@ def write_ekuiper_profile_artifacts(
         "process_metrics": process_metrics,
         "gc_runtime_metrics": {
             "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
         },
         "claim_boundary": "diagnostic-association-only-not-gc-causality",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
@@ -3895,7 +3895,13 @@ def start_pi_telemetry(root: Path, output: Path, item: RunItem) -> list[subproce
     """Start the Pi power sidecar and the host /proc sidecar for one leaf."""
     return [
         subprocess.Popen(
-            [sys.executable, str(root / "eval/scripts/lib/pi_telemetry.py"), str(output)],
+            [
+                sys.executable,
+                str(root / "eval/scripts/lib/pi_telemetry.py"),
+                str(output),
+                "--pin-cpus",
+                item.support_cpus,
+            ],
             cwd=root,
         ),
         subprocess.Popen(
@@ -5574,7 +5580,7 @@ def run_rate_sweep_item(
 def static_host_metadata(facts: dict) -> dict:
     metadata = {
         key: facts[key]
-        for key in ("git_sha", "git_dirty", "git_tags", "arch", "isolated_cpus", "cpu_governors", "throttled")
+        for key in ("git_sha", "git_dirty", "git_tags", "arch", *CPU_POLICY_KEYS, "cpu_governors", "throttled")
     }
     metadata.update({key: facts.get(key) for key in PLATFORM_KEYS})
     return metadata

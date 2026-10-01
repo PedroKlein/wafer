@@ -10,6 +10,7 @@ eval/scripts/tests/test_glibc_floor.sh        # glibc floor report for release b
 eval/scripts/tests/test_eval_portability.sh   # no developer-machine paths in tracked files
 eval/scripts/tests/test_host_tags.sh          # collect-results.sh host tags
 eval/scripts/tests/test_pi5_tooling.sh        # deploy, smoke and validation dry runs
+eval/scripts/tests/test_preflight_hosts.sh    # Pi, Jetson and x86 preflights against fake hosts
 eval/scripts/tests/test_run_experiment_canonical.sh  # run-experiment.sh plan and dry run
 ```
 
