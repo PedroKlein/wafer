@@ -20,6 +20,7 @@ from wafer_analysis.canonical import (
     branch_isolation_table,
     capacity_tables,
     ekuiper_profile_tables,
+    failed_replacement_summary,
     failed_replacement_table,
     capacity_competitive_decision,
     density_table,
@@ -31,6 +32,7 @@ from wafer_analysis.canonical import (
     swap3_table,
     swap4_table,
     swap_phase_table,
+    swap_sequence_table,
     target_latency_table,
     validation_gate_table,
     validate_visual_manifest,
@@ -432,7 +434,7 @@ def swap5_record(run_index: int = 1) -> dict:
             "compile_ns": 1,
             "instantiate_ns": 2,
             "signal_ns": 3,
-            "rollback_ns": 4 + index,
+            "rollback_ns": 4 + index + 100 * run_index,
         }
         requests.append({
             "event_index": index,
@@ -440,7 +442,11 @@ def swap5_record(run_index: int = 1) -> dict:
             "request_started_ns": 1_000 + index * 100,
             "request_finished_ns": 1_010 + index * 100,
             "http_status": 200,
-            "body": {"status": "rolled_back", "timeline": timeline},
+            "body": {
+                "status": "rolled_back",
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
+                "timeline": timeline,
+            },
         })
         events.append({"event_index": index, **timeline})
     sequence = {"expected": 1000, "received": 1000, "gaps": 0, "duplicates": 0}
@@ -481,26 +487,63 @@ def swap5_record(run_index: int = 1) -> dict:
     return record
 
 
+def swap5_records() -> list[dict]:
+    return [swap5_record(run_index) for run_index in range(1, 11)]
+
+
 def test_failed_replacement_table_requires_semantically_valid_rollback() -> None:
-    record = swap5_record()
-    table = failed_replacement_table([record])
-    assert table.loc[0, "N_runs"] == 1
-    assert table.loc[0, "N_nested_events"] == 50
-    assert table.loc[0, "post_rollback_continuity"]
+    records = swap5_records()
+    table = failed_replacement_table(records)
+    assert table["run_index"].tolist() == list(range(1, 11))
+    assert table["N_nested_events"].eq(50).all()
+    assert table["rolled_back_events"].eq(50).all()
+    assert table["post_rollback_continuity"].all()
 
-    drifted = json.loads(json.dumps(record))
-    drifted["rollback"]["rolled_back"] = 49
+    drifted = json.loads(json.dumps(records))
+    drifted[3]["rollback"]["rolled_back"] = 49
     with pytest.raises(ValueError, match="does not reconcile"):
-        failed_replacement_table([drifted])
+        failed_replacement_table(drifted)
 
 
-def test_failed_replacement_table_labels_diagnostic_runs() -> None:
+def test_failed_replacement_table_separates_the_first_use_rollback_of_each_run() -> None:
+    table = failed_replacement_table(swap5_records()).set_index("run_index")
+    assert table.loc[3, "median_first_use_rollback_ns"] == 304
+    assert table.loc[3, "median_cached_rollback_ns"] == 329
+    assert table.loc[3, "max_rollback_ns"] == 353
+
+    twice_compiled = swap5_records()
+    twice_compiled[4]["requests"][1]["body"]["compile_cache"] = "compiled"
+    with pytest.raises(ValueError, match="run 5 requires exactly one first-use rollback"):
+        failed_replacement_table(twice_compiled)
+
+
+def test_failed_replacement_table_requires_ten_runs_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="requires 10 independent runs"):
+        failed_replacement_table([swap5_record()])
+    with pytest.raises(ValueError, match="requires 10 independent runs"):
+        failed_replacement_table([*swap5_records()[:9], swap5_record(11)])
     table = failed_replacement_table([swap5_record(2), swap5_record(1)], canonical=False)
     assert table["run_index"].tolist() == [1, 2]
     assert not table["thesis_evidence"].any()
-    assert failed_replacement_table([swap5_record()])["thesis_evidence"].all()
-    with pytest.raises(ValueError, match="one independent run"):
-        failed_replacement_table([swap5_record(1), swap5_record(2)])
+    assert failed_replacement_table(swap5_records())["thesis_evidence"].all()
+
+
+def test_failed_replacement_summary_pools_runs_not_rollback_events() -> None:
+    summary = failed_replacement_summary(failed_replacement_table(swap5_records())).iloc[0]
+    first_use = [4 + 100 * run for run in range(1, 11)]
+    cached = [29 + 100 * run for run in range(1, 11)]
+    assert summary["N_runs"] == 10
+    assert summary["N_nested_events"] == 500
+    assert summary["rolled_back_events"] == 500
+    assert summary["all_rolled_back"]
+    assert summary["median_first_use_rollback_ns"] == np.median(first_use)
+    assert (summary["first_use_rollback_ci95_low_ns"], summary["first_use_rollback_ci95_high_ns"]) == bootstrap_ci(np.asarray(first_use, dtype=float))
+    assert summary["median_cached_rollback_ns"] == np.median(cached)
+    assert (summary["cached_rollback_ci95_low_ns"], summary["cached_rollback_ci95_high_ns"]) == bootstrap_ci(np.asarray(cached, dtype=float))
+    assert summary["runs_with_post_rollback_output"] == 10
+    assert summary["total_loss"] == 0
+    assert summary["total_duplicates"] == 0
+    assert summary["thesis_evidence"]
 
 
 def swap_evidence(events: int = 50, run_index: int = 1) -> dict:
@@ -509,46 +552,82 @@ def swap_evidence(events: int = 50, run_index: int = 1) -> dict:
         "events": [
             {
                 "event_index": index,
-                "compile_cache": "compiled" if index < 2 else "memory_hit",
-                "compile_ns": 40_000_000 if index < 2 else 10_000,
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
+                "compile_ns": 40_000_000 + run_index if index == 0 else 10_000,
                 "instantiate_ns": 200_000,
                 "signal_ns": 5_000,
                 "replacement_adopted_ns": 100_000 + index,
                 "first_post_replacement_local_outcome_ns": 50_000,
-                "http_total_ns": 45_000_000 if index < 2 else 500_000,
-                "sink_observed_output_gap_ns": 1_000_000,
+                "http_total_ns": 45_000_000 if index == 0 else 500_000,
+                "sink_observed_output_gap_ns": 1_000 * run_index if index <= 25 else 1_000_000,
             }
             for index in range(events)
         ],
     }
 
 
-def test_swap_phase_table_splits_first_use_from_cached_events() -> None:
-    table = swap_phase_table([swap_evidence()]).set_index("event_class")
-    assert table.loc["first-use", "N_nested_events"] == 2
-    assert table.loc["cached", "N_nested_events"] == 48
-    assert table["N_runs"].eq(1).all()
-    assert table.loc["first-use", "median_compile_ns"] == 40_000_000
+def swap_runs(events: int = 50) -> list[dict]:
+    return [swap_evidence(events, run_index) for run_index in range(1, 11)]
+
+
+def test_swap_phase_table_summarises_each_run_before_pooling_runs() -> None:
+    table = swap_phase_table(swap_runs()).set_index("event_class")
+    assert table["N_runs"].eq(10).all()
+    assert table.loc["first-use", "N_nested_events"] == 10
+    assert table.loc["cached", "N_nested_events"] == 490
+    assert table.loc["first-use", "median_compile_ns"] == 40_000_005.5
     assert table.loc["cached", "median_compile_ns"] == 10_000
-    assert table.loc["cached", "median_phase_total_ns"] == pytest.approx(10_000 + 200_000 + 5_000 + 100_025.5 + 50_000)
-    assert "not a between-run interval" in table.loc["cached", "estimator"]
+    assert table.loc["cached", "median_phase_total_ns"] == 10_000 + 200_000 + 5_000 + 100_025 + 50_000
+    assert "bootstrap 95% CI over runs" in table.loc["cached", "estimator"]
+
+    run_medians = np.asarray([1_000.0 * run for run in range(1, 11)])
+    assert table.loc["cached", "median_sink_observed_output_gap_ns"] == np.median(run_medians) == 5_500
+    assert (
+        table.loc["cached", "sink_observed_output_gap_ci95_low_ns"],
+        table.loc["cached", "sink_observed_output_gap_ci95_high_ns"],
+    ) == bootstrap_ci(run_medians)
 
 
-def test_swap_phase_table_requires_one_full_run_unless_diagnostic() -> None:
-    with pytest.raises(ValueError, match="one run with 50 nested"):
-        swap_phase_table([swap_evidence(49)])
-    with pytest.raises(ValueError, match="one run with 50 nested"):
-        swap_phase_table([swap_evidence(), swap_evidence(run_index=2)])
+def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
+    with pytest.raises(ValueError, match="requires 10 independent runs"):
+        swap_phase_table([swap_evidence()])
+    with pytest.raises(ValueError, match="run 4 requires 50 nested"):
+        swap_phase_table([*swap_runs()[:3], swap_evidence(49, run_index=4), *swap_runs()[4:]])
+    recompiled = swap_runs()
+    recompiled[6]["events"][3]["compile_cache"] = "compiled"
+    with pytest.raises(ValueError, match="run 7 requires exactly one first-use"):
+        swap_phase_table(recompiled)
     table = swap_phase_table([swap_evidence(3), swap_evidence(3, run_index=2)], canonical=False)
     assert table.set_index("event_class").loc["first-use", "N_runs"] == 2
     assert not table["thesis_evidence"].any()
 
 
 def test_swap_phase_table_rejects_unknown_cache_outcome() -> None:
-    evidence = swap_evidence()
-    evidence["events"][7]["compile_cache"] = None
+    runs = swap_runs()
+    runs[0]["events"][7]["compile_cache"] = None
     with pytest.raises(ValueError, match="event 7 has unknown compile cache"):
-        swap_phase_table([evidence])
+        swap_phase_table(runs)
+
+
+def test_swap_sequence_table_reports_each_run_and_the_total() -> None:
+    records = [
+        {"run_index": run, "sequence": {"expected": 120_000, "received": 120_000, "gaps": 0, "duplicates": 0}}
+        for run in range(1, 11)
+    ]
+    table = swap_sequence_table(records)
+    assert table["run"].tolist() == [*(str(run) for run in range(1, 11)), "all"]
+    total = table.set_index("run").loc["all"]
+    assert (total.expected, total.received, total.loss, total.duplicates) == (1_200_000, 1_200_000, 0, 0)
+    assert table["lossless"].all()
+
+    records[4]["sequence"] |= {"received": 119_998, "gaps": 2}
+    table = swap_sequence_table(records).set_index("run")
+    assert not table.loc["5", "lossless"]
+    assert table.loc["all", "loss"] == 2
+    assert not table.loc["all", "lossless"]
+    with pytest.raises(ValueError, match="requires 10 independent runs"):
+        swap_sequence_table(records[:9])
+    assert not swap_sequence_table(records[:2], canonical=False)["thesis_evidence"].any()
 
 
 def candidate_scaling_summary(experiment: str, conditions: list[tuple[str, int]]) -> dict:

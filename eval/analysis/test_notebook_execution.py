@@ -84,6 +84,7 @@ def write_swap5_fixture(leaf: Path) -> None:
             "http_status": 200,
             "body": {
                 "status": "rolled_back",
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
                 "timeline": {"compile_ns": 1_000, "instantiate_ns": 2_000, "signal_ns": 3_000, "rollback_ns": 4_000_000 + index},
             },
         }
@@ -226,6 +227,9 @@ def build_complete_fixture(root: Path) -> None:
                 "events": hotswap_events,
             },
         )
+    (root / "e-swap-1" / "steady" / "run-01" / "sequence.csv").write_text(
+        "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n120000,120000,120000,0,0\n"
+    )
     write_swap5_fixture(root / "e-swap-5" / "process-trap-rollback" / "run-01-attempt-01")
     write_passed_artifact(
         root / "e-swap-4" / "burst-2x" / "run-01",
@@ -562,6 +566,8 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert (rendered / "rq3/swap-fine-timeline.pdf").stat().st_size > 1_000
     assert (rendered / "rq3/burst-timeline.pdf").stat().st_size > 1_000
     assert (rendered / "rq3-rollback.csv").is_file()
+    assert (rendered / "rq3-rollback-runs.csv").is_file()
+    assert (rendered / "rq3-swap-sequence.csv").is_file()
     assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-validation-gate.csv").is_file()
     assert "\\label{tab:rq1-validation-gate}" in (rendered / "rq1-validation-gate.tex").read_text()
