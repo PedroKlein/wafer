@@ -36,7 +36,7 @@ MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT w
 
 The optional `e-compare-ekuiper-profile` batch is isolated from canonical comparisons. It schedules five profiled and five unprofiled-control host runs at each of 1,000, 4,000, and 8,000 messages per second. Paired runs share the same rate, run index, Pipeline A config, QoS 1 transport, operator concurrency 1, 30-second warmup, and 60-second measurement.
 
-Only the profiled arm starts the bounded one-second external `/proc` sampler. If those process files are unavailable, the run retains latency, throughput, interval, and host telemetry while marking process metrics unavailable. The frozen eKuiper 2.1.0 deployment has no validated GC-event interface, so it records that limitation rather than inferring GC events. Results describe run-level associations and profiler overhead; they do not establish GC causality and are never pooled with E-Perf-1, E-Perf-10, or prior diagnostics. See `docs/benchmarks/ekuiper-profile-diagnostic.md`.
+Only the profiled arm starts the bounded one-second external `/proc` sampler. If those process files are unavailable, the run retains latency, throughput, interval, and host telemetry while marking process metrics unavailable. The profiled arm also starts eKuiper with `GODEBUG=gctrace=1` through the runtime drop-in `gctrace-drop-in.conf`, which the runner removes when eKuiper stops, and keeps the Go GC lines from the `kuiper.service` journal in `ekuiper-gctrace.log`. Missing GC lines are recorded as unavailable, not inferred. Results describe run-level associations and profiler overhead; they do not establish GC causality and are never pooled with E-Perf-1, E-Perf-10, or prior diagnostics. See `docs/benchmarks/ekuiper-profile-diagnostic.md`.
 
 ## Smoke test
 
@@ -60,6 +60,7 @@ taskset -pc "$(systemctl show -p MainPID --value kuiper)"
 
 - `install-native.sh` — pinned package download, checksum verification, installation, and systemd affinity.
 - `mqtt-source-default.yaml` — canonical MQTT source settings installed on the Pi.
+- `gctrace-drop-in.conf` — systemd drop-in that the profiled tail-profiling runs install under `/run` to set `GODEBUG=gctrace=1`.
 - `seed-pipeline-a.sh` — idempotent REST registration.
 - `pipeline-a-rule.sql` — human-readable rule definition.
 - `smoke-test.sh` — native pass/drop behavior check.

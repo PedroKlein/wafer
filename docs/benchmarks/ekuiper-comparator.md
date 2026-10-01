@@ -53,7 +53,7 @@ For every paired WAFER/eKuiper run:
 4. Use the same `wafer-loadgen` profile, payload, topics, warmup, and measurement window for WAFER and eKuiper.
 5. Use the common subscriber to write `latency.hdr` and sequence accounting; the harness derives the E2E `throughput.csv` from the subscriber's metadata.
 6. Record the eKuiper package version and SHA256 in run metadata.
-7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, MQTT source configuration, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check.
+7. Save `ekuiper-audit.json` before warmup. It contains the active rule and stream, effective systemd settings, MQTT source configuration, process tree, per-process `Cpus_allowed_list`, and an explicit concurrent-SUT check. The unit environment must not set `GODEBUG`; only the profiled arm of the [tail-profiling diagnostic](ekuiper-profile-diagnostic.md) traces Go GC, and the runner removes its drop-in before any other eKuiper start.
 
 ## Diagnostic finding
 
@@ -72,6 +72,7 @@ See [Why the v11 eKuiper latency tail was misleading](ekuiper-tail-diagnostic.md
 ## Related files
 
 - `eval/ekuiper/install-native.sh`
+- `eval/ekuiper/gctrace-drop-in.conf`
 - `eval/ekuiper/seed-pipeline-a.sh`
 - `eval/ekuiper/smoke-test.sh`
 - `eval/ekuiper/pipeline-a-rule.sql`

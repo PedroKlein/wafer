@@ -143,7 +143,8 @@ ENHANCED_METHOD_REQUIREMENTS = {
     "docs/benchmarks/ekuiper-profile-diagnostic.md": (
         "five externally profiled and five unprofiled",
         "1,000, 4,000, and 8,000 messages per second",
-        "no validated GC event stream",
+        "`GODEBUG=gctrace=1`",
+        "The unprofiled control never traces GC",
         "does not claim that GC caused any tail event",
         "never pooled with E-Perf-1, E-Perf-10",
     ),
