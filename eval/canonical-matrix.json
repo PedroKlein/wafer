@@ -648,7 +648,7 @@
     },
     "e-perf-4": {
       "research_question": "rq1",
-      "purpose": "Measure Wasm boundary cost across payload sizes.",
+      "purpose": "Measure Wasm boundary cost across payload sizes as the paired WAFER-minus-native service-time difference.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -657,16 +657,23 @@
         "120b",
         "1kb",
         "10kb",
-        "100kb"
+        "100kb",
+        "native-120b",
+        "native-1kb",
+        "native-10kb",
+        "native-100kb"
       ],
       "required_outputs": [
         "latency.hdr",
+        "service.hdr",
+        "service-percentiles.json",
         "throughput.csv",
         "sequence.csv"
       ],
       "analysis": "02-per-hop-overhead.ipynb",
       "thesis_evidence": true,
-      "evidence_class": "final"
+      "evidence_class": "final",
+      "measurement_boundary": "in-process path from bench-source through one pass-through transform to bench-sink; no MQTT adapter"
     },
     "e-perf-5": {
       "research_question": "rq1",
@@ -1338,8 +1345,8 @@
     "status": "frozen-before-execution",
     "seed": 1729,
     "thesis_evidence": true,
-    "expected_schedule_records": 2201,
-    "expected_measured_leaves": 1971,
+    "expected_schedule_records": 2321,
+    "expected_measured_leaves": 2091,
     "capacity_grid": {
       "source_batch_id": "capacity-scout-v3-20260904T045000Z",
       "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",

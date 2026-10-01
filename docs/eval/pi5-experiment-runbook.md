@@ -40,19 +40,19 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2201
-measured_leaves=1971
+schedule_records=2321
+measured_leaves=2091
 ```
 
-The 2,201 records include shared-result aliases with `independent_n_contribution=0`. The 1,971 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,321 records include shared-result aliases with `independent_n_contribution=0`. The 2,091 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
 | Estimate | Value | Basis |
 |---|---:|---|
-| Nominal active-run time | 46.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
-| Operational estimate | 51.57 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
-| Storage estimate | about 43.8 GB | The 43,433,437,093-byte estimate for the 2,165-record schedule, scaled by measured leaves from 1,953 to 1,971, including the three E-Backpressure policies; regenerate before execution |
+| Nominal active-run time | 49.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 54.87 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs and the ten-run E-Swap-1 and E-Swap-5 sessions, so regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
 Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.
@@ -144,7 +144,7 @@ Before the final batch, run the first three repetitions of every experiment from
   --repetitions 3
 ```
 
-That is 202 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 214 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;

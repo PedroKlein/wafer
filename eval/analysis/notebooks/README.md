@@ -8,7 +8,7 @@ The notebooks consume one explicitly identified result batch. They never select 
 |---|---|---|
 | `00-warmup-validation.ipynb` | E-Val-1 | 50 ms measurement honesty gate |
 | `01-latency-cdf.ipynb` | E-Perf-2 | Matched target-load latency percentiles |
-| `02-per-hop-overhead.ipynb` | E-Perf-4 | Payload-size boundary cost |
+| `02-per-hop-overhead.ipynb` | E-Perf-4 | Paired WAFER-minus-native service time by payload size, in-process path only |
 | `03-memory-scaling.ipynb` | E-Perf-6 | Pipeline-depth RSS |
 | `04-cross-arch.ipynb` | E-Perf-5 | ARM64/x86 WAFER-to-native ratio, or an explicit no-claim result |
 | `05-hotswap-timeline.ipynb` | E-Swap | Internal HTTP duration and sink-observed output gap |

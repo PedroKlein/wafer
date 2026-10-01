@@ -290,13 +290,13 @@ def _validate_json_artifact(path: pathlib.Path) -> None:
         return
     if not isinstance(value, dict):
         raise TypeError(f"malformed {path.name}: expected an object")
-    if path.name == "percentiles.json":
+    if path.name in {"percentiles.json", "service-percentiles.json"}:
         required = {"total_count", "p50_ns", "p95_ns", "p99_ns", "p999_ns"}
         if not required <= value.keys() or any(
             not isinstance(value[field], (int, float)) for field in required
         ):
             raise ValueError(
-                "malformed percentiles.json: missing numeric percentile fields"
+                f"malformed {path.name}: missing numeric percentile fields"
             )
     elif (
         path.name

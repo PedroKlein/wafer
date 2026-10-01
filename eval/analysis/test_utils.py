@@ -672,6 +672,21 @@ def test_canonical_batch_rejects_malformed_schema(fake_results: pathlib.Path):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
+def test_canonical_batch_rejects_service_percentiles_without_numeric_fields(
+    fake_results: pathlib.Path,
+):
+    matrix_path = fake_results / "eval/canonical-matrix.json"
+    matrix = json.loads(matrix_path.read_text())
+    matrix["experiments"]["e-val-1"]["required_outputs"].append("service-percentiles.json")
+    matrix_path.write_text(json.dumps(matrix))
+    refresh_approval_matrix_hash(fake_results)
+    batch = canonical_batch(fake_results)
+    leaf = batch / "delay-50ms/run-01-attempt-01"
+    (leaf / "service-percentiles.json").write_text(json.dumps({"total_count": 60_000, "p50_ns": "1"}))
+    with pytest.raises(ValueError, match="malformed service-percentiles.json"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
 def test_canonical_batch_rejects_incomplete_n(fake_results: pathlib.Path):
     matrix_path = fake_results / "eval/canonical-matrix.json"
     matrix = json.loads(matrix_path.read_text())

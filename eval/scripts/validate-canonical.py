@@ -40,8 +40,14 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_SCHEDULE_RECORDS = 2_201
-FINAL_MEASURED_LEAVES = 1_971
+FINAL_SCHEDULE_RECORDS = 2_321
+FINAL_MEASURED_LEAVES = 2_091
+PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
+NATIVE_PASS_THROUGH = {"kind": "native", "function": "passthrough"}
+PAYLOAD_BOUNDARY = (
+    "in-process path from bench-source through one pass-through transform to bench-sink; "
+    "no MQTT adapter"
+)
 SWAP_SESSION_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"}
 SWAP_SESSION_RUNS = 10
 SWAP_SESSION_EVENTS = 50
@@ -494,6 +500,8 @@ def validate_matrix(matrix: dict) -> list[str]:
         if config.get("dead_letter", {}).get("kind") != "file":
             errors.append(f"e-backpressure {policy} config has no file DLQ declaration")
 
+    errors.extend(validate_payload_arms(experiments.get("e-perf-4", {}), campaign))
+
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
     if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
@@ -518,6 +526,53 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append(f"final_campaign expected_measured_leaves must be {FINAL_MEASURED_LEAVES}")
 
     return errors
+
+
+def validate_payload_arms(payload: dict, campaign: dict) -> list[str]:
+    errors = []
+    if payload.get("conditions") != [*PAYLOAD_SIZES, *(f"native-{size}" for size in PAYLOAD_SIZES)]:
+        errors.append("e-perf-4 must pair every WAFER payload size with a native arm")
+    if not {"service.hdr", "service-percentiles.json"} <= set(payload.get("required_outputs", [])):
+        errors.append("e-perf-4 required outputs lack the service-time histogram and summary")
+    if payload.get("measurement_boundary") != PAYLOAD_BOUNDARY:
+        errors.append("e-perf-4 measurement boundary differs from the in-process path")
+    wafer_configs = {
+        entry.get("condition"): entry.get("config")
+        for entry in campaign.get("wafer_config_catalog", [])
+        if entry.get("experiment") == "e-perf-4"
+    }
+    for size in PAYLOAD_SIZES:
+        try:
+            wafer = tomllib.loads((ROOT / wafer_configs[size]).read_text())
+            native = tomllib.loads(
+                (ROOT / f"eval/configs/canonical/e-perf-4-native-{size}.toml").read_text()
+            )
+            native_plugin = native["nodes"]["transform"]["plugin"]
+            wafer_plugin = wafer["nodes"]["transform"]["plugin"]
+        except (KeyError, OSError, TypeError, tomllib.TOMLDecodeError):
+            errors.append(f"e-perf-4 {size} WAFER or native config is missing or malformed")
+            continue
+        if (
+            native_plugin != NATIVE_PASS_THROUGH
+            or not str(wafer_plugin).endswith("wafer_pass_through.wasm")
+            or "engine" in native
+            or _without_transform_plugin(native) != _without_transform_plugin(wafer)
+        ):
+            errors.append(
+                f"e-perf-4 {size} native arm differs from the WAFER arm beyond the transform"
+            )
+    return errors
+
+
+def _without_transform_plugin(config: dict) -> dict:
+    nodes = {
+        name: {key: value for key, value in node.items() if name != "transform" or key != "plugin"}
+        for name, node in config["nodes"].items()
+    }
+    return {
+        **{key: value for key, value in config.items() if key not in {"pipeline", "engine"}},
+        "nodes": nodes,
+    }
 
 
 def validate_preflight(

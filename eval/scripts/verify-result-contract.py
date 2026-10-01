@@ -1169,6 +1169,24 @@ def _load_json(path: Path, label: str, violations: list[str]) -> dict | None:
     return value
 
 
+def check_service_percentiles(leaf: Path) -> list[str]:
+    violations: list[str] = []
+    service = _load_json(leaf / "service-percentiles.json", "service-percentiles.json", violations)
+    latency = _load_json(leaf / "percentiles.json", "percentiles.json", violations)
+    if service is None or latency is None:
+        return violations
+    try:
+        count = int(service["total_count"])
+        if count <= 0 or count != int(latency["total_count"]):
+            violations.append(
+                f"service-percentiles.json counts {count} messages, "
+                f"percentiles.json counts {latency['total_count']}"
+            )
+    except (KeyError, TypeError, ValueError):
+        violations.append("service-percentiles.json or percentiles.json lacks total_count")
+    return violations
+
+
 def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
     violations: list[str] = []
     runtime = _load_json(
@@ -1963,6 +1981,8 @@ def check_leaf(
         violations.extend(check_payload_manifest(leaf / "payload-manifest.json", metadata))
     if experiment == "e-perf-depth-extension" and "topology-manifest.json" in files:
         violations.extend(check_topology_manifest(leaf / "topology-manifest.json", metadata))
+    if "service-percentiles.json" in files:
+        violations.extend(check_service_percentiles(leaf))
     if experiment == "e-density-1" and "container-floor.json" in files:
         violations.extend(check_container_floor(leaf / "container-floor.json", metadata))
     if experiment in CANDIDATE_SWAP_EXPERIMENTS:
