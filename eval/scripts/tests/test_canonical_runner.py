@@ -1600,15 +1600,18 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
     assert ekuiper_states == [True, False]
 
 
+@pytest.mark.parametrize(
+    ("state", "gctrace"), [("unprofiled-control", False), ("profiled", True)]
+)
 def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, gctrace: bool
 ) -> None:
     output = tmp_path / "attempt"
     config = tmp_path / "ekuiper.toml"
     config.write_text("[comparator]\n")
     item = RunItem(
         experiment="e-compare-ekuiper-profile",
-        condition="rate-08000/unprofiled-control",
+        condition=f"rate-08000/{state}",
         run_index=1,
         config=config.name,
         warmup_secs=30,
@@ -1624,7 +1627,8 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
 
     subscriber = Process()
     observed_timeouts: list[int] = []
-    ekuiper_states: list[bool] = []
+    ekuiper_states: list[tuple[bool, bool]] = []
+    audited_gctrace: list[bool] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         if "validate-canonical.py" in " ".join(command):
@@ -1632,7 +1636,8 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
             output_arg.write_text(json.dumps({"git_sha": "test-sha"}))
         return subprocess.CompletedProcess(command, 0)
 
-    def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
+    def fake_audit(root: Path, destination: Path, cpus: str, gctrace: bool = False) -> Path:
+        audited_gctrace.append(gctrace)
         path = destination / "ekuiper-audit.json"
         path.write_text('{"process_snapshot":{"processes":[]}}\n')
         return path
@@ -1644,7 +1649,11 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
 
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
-    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
+    monkeypatch.setattr(
+        runner,
+        "set_ekuiper_active",
+        lambda root, active, gctrace=False: ekuiper_states.append((active, gctrace)),
+    )
     monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
     monkeypatch.setattr(runner, "build_ekuiper_profile_context", lambda item, audit: (None, []))
     monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
@@ -1660,7 +1669,108 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
     )
 
     assert observed_timeouts == [0]
-    assert ekuiper_states == [True, False]
+    assert ekuiper_states == [(True, gctrace), (False, False)]
+    assert audited_gctrace == [gctrace]
+
+
+@pytest.fixture
+def systemctl_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, list[list[str]]]:
+    drop_in = tmp_path / "run/kuiper.service.d/wafer-gctrace.conf"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        if command[:2] == ["sudo", "install"]:
+            drop_in.parent.mkdir(parents=True, exist_ok=True)
+            drop_in.write_bytes(Path(command[-2]).read_bytes())
+        elif command[:3] == ["sudo", "rm", "-f"]:
+            drop_in.unlink(missing_ok=True)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner, "EKUIPER_GCTRACE_DROP_IN", drop_in)
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    return drop_in, calls
+
+
+def test_profiled_ekuiper_start_traces_gc_and_stop_removes_the_drop_in(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    drop_in, calls = systemctl_calls
+
+    runner.set_ekuiper_active(ROOT, True, gctrace=True)
+
+    assert drop_in.read_text() == "[Service]\nEnvironment=GODEBUG=gctrace=1\n"
+    assert [command[:3] for command in calls[:4]] == [
+        ["sudo", "systemctl", "stop"],
+        ["sudo", "install", "-D"],
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "start"],
+    ]
+    assert calls[4][0].endswith("seed-pipeline-a.sh")
+
+    calls.clear()
+    runner.set_ekuiper_active(ROOT, False)
+
+    assert not drop_in.exists()
+    assert calls == [
+        ["sudo", "systemctl", "stop", "kuiper.service"],
+        ["sudo", "rm", "-f", str(drop_in)],
+        ["sudo", "systemctl", "daemon-reload"],
+    ]
+
+
+def test_ekuiper_start_without_gctrace_removes_a_leftover_drop_in(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    drop_in, calls = systemctl_calls
+    drop_in.parent.mkdir(parents=True)
+    drop_in.write_text("[Service]\nEnvironment=GODEBUG=gctrace=1\n")
+
+    runner.set_ekuiper_active(ROOT, True)
+
+    assert not drop_in.exists()
+    assert calls[:4] == [
+        ["sudo", "systemctl", "stop", "kuiper.service"],
+        ["sudo", "rm", "-f", str(drop_in)],
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "start", "kuiper.service"],
+    ]
+
+
+def test_ekuiper_start_without_gctrace_keeps_the_plain_start_sequence(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    _, calls = systemctl_calls
+
+    runner.set_ekuiper_active(ROOT, True)
+    runner.set_ekuiper_active(ROOT, False)
+
+    assert calls[0] == ["sudo", "systemctl", "start", "kuiper.service"]
+    assert calls[1][0].endswith("seed-pipeline-a.sh")
+    assert calls[2:] == [["sudo", "systemctl", "stop", "kuiper.service"]]
+
+
+@pytest.mark.parametrize(
+    ("environment", "gctrace"),
+    [
+        ("HOME=/var/lib/kuiper GODEBUG=gctrace=1", False),
+        ("HOME=/var/lib/kuiper", True),
+        ("HOME=/var/lib/kuiper GODEBUG=gctrace=1,madvdontneed=1", True),
+    ],
+)
+def test_ekuiper_audit_rejects_godebug_that_does_not_match_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, environment: str, gctrace: bool
+) -> None:
+    monkeypatch.setattr(
+        runner,
+        "_service_properties",
+        lambda: {"MainPID": "100", "Environment": environment},
+    )
+
+    with pytest.raises(ValueError, match="GODEBUG"):
+        runner.capture_ekuiper_audit(ROOT, tmp_path, "1-3", gctrace=gctrace)
 
 
 def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:

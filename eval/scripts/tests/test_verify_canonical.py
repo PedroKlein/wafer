@@ -498,6 +498,35 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
+def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        source = make_result(root)
+        result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
+        result.parent.mkdir(parents=True)
+        source.rename(result)
+        (result / "runtime-provenance.json").unlink()
+        metadata_path = result / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata.update(
+            experiment="e-perf-1",
+            condition="ekuiper",
+            system="ekuiper",
+            ekuiper_version="2.1.0",
+            exit_codes={"ekuiper": 0},
+        )
+        metadata_path.write_text(json.dumps(metadata))
+        audit = {"service": {"properties": {"Environment": "HOME=/var/lib/kuiper"}}}
+        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+        clean = run(result)
+        audit["service"]["properties"]["Environment"] += " GODEBUG=gctrace=1"
+        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+        traced = run(result)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert traced.returncode != 0
+    assert "GODEBUG" in traced.stdout + traced.stderr
+
+
 def test_historical_rate_sweep_contract_rejects_missing_resource_field() -> None:
     result = {
         "schema_version": 1,

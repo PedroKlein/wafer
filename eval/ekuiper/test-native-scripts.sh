@@ -20,6 +20,11 @@ grep -q '^Group=kuiper$' <<<"$install_output"
 grep -q '^Type=simple$' <<<"$install_output"
 grep -q '^ExecStart=/usr/bin/kuiperd -loadFileType absolute$' <<<"$install_output"
 grep -q '^CPUAffinity=1 2 3$' <<<"$install_output"
+if grep -q 'GODEBUG' <<<"$install_output"; then
+    echo 'the persistent eKuiper override must not set GODEBUG' >&2
+    exit 1
+fi
+grep -qx 'Environment=GODEBUG=gctrace=1' "$ROOT/eval/ekuiper/gctrace-drop-in.conf"
 grep -q '/var/log/kuiper' "$ROOT/eval/ekuiper/install-native.sh"
 grep -q '"broker_url":"tcp://127.0.0.1:1883"' <<<"$seed_output"
 grep -q 'temperature >= 50 AND temperature <= 99999' <<<"$seed_output"

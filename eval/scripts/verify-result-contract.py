@@ -36,6 +36,7 @@ import hashlib
 import json
 import math
 import re
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -1306,6 +1307,23 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
     return violations
 
 
+def check_ekuiper_godebug(leaf: Path, metadata: dict, experiment: str) -> list[str]:
+    violations: list[str] = []
+    audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", violations)
+    if audit is None:
+        return violations
+    environment = audit.get("service", {}).get("properties", {}).get("Environment", "")
+    godebug = [
+        entry for entry in shlex.split(str(environment)) if entry.startswith("GODEBUG=")
+    ]
+    profiled = experiment == EKUIPER_PROFILE_EXPERIMENT and str(
+        metadata.get("condition", "")
+    ).endswith("/profiled")
+    if godebug != (["GODEBUG=gctrace=1"] if profiled else []):
+        violations.append(f"eKuiper service GODEBUG {godebug} does not belong to this run")
+    return violations
+
+
 def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -> list[str]:
     violations: list[str] = []
     artifact_name = (
@@ -1878,6 +1896,8 @@ def check_leaf(
         violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
     if experiment == EKUIPER_PROFILE_EXPERIMENT:
         violations.extend(check_ekuiper_profile_artifacts(leaf, metadata))
+    if "ekuiper-audit.json" in files:
+        violations.extend(check_ekuiper_godebug(leaf, metadata, experiment))
     if experiment in DLQ_CONTAINMENT_EXPERIMENTS and "containment.json" in files:
         containment = _load_json(leaf / "containment.json", "containment.json", violations)
         if containment is not None:

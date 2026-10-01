@@ -9,6 +9,7 @@ import math
 import os
 import random
 import re
+import shlex
 import shutil
 import signal
 import statistics
@@ -174,6 +175,7 @@ CANDIDATE_MEASUREMENT_SECS = 60
 CANDIDATE_RATE_MSG_S = 1_000
 EKUIPER_PROFILE_RATES = (1_000, 4_000, 8_000)
 EKUIPER_PROFILE_STATES = ("profiled", "unprofiled-control")
+EKUIPER_GCTRACE_DROP_IN = Path("/run/systemd/system/kuiper.service.d/wafer-gctrace.conf")
 CAPACITY_KNEE_GRID = {
     "mqtt-loopback": (
         4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000,
@@ -4600,9 +4602,20 @@ def ekuiper_operator_concurrency(root: Path) -> int:
     return concurrency
 
 
-def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
+def capture_ekuiper_audit(
+    root: Path, output: Path, allowed_cpus: str, gctrace: bool = False
+) -> Path:
     operator_concurrency = ekuiper_operator_concurrency(root)
     service = _service_properties()
+    godebug = [
+        entry
+        for entry in shlex.split(service.get("Environment", ""))
+        if entry.startswith("GODEBUG=")
+    ]
+    if godebug != (["GODEBUG=gctrace=1"] if gctrace else []):
+        raise ValueError(
+            f"eKuiper service GODEBUG {godebug} does not match gctrace={gctrace}"
+        )
     main_pid = int(service.get("MainPID", "0"))
     snapshot = _process_snapshot(main_pid)
     validate_ekuiper_process_snapshot(snapshot, allowed_cpus)
@@ -4668,10 +4681,31 @@ def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
     return path
 
 
-def set_ekuiper_active(root: Path, active: bool) -> None:
-    action = "start" if active else "stop"
-    subprocess.run(["sudo", "systemctl", action, "kuiper.service"], check=True)
+def set_ekuiper_active(root: Path, active: bool, gctrace: bool = False) -> None:
+    installed = EKUIPER_GCTRACE_DROP_IN.exists()
+    wanted = active and gctrace
+    # start leaves a running unit alone, so it must stop before its environment changes.
+    if not active or installed != wanted:
+        subprocess.run(["sudo", "systemctl", "stop", "kuiper.service"], check=True)
+    if installed != wanted:
+        if wanted:
+            subprocess.run(
+                [
+                    "sudo",
+                    "install",
+                    "-D",
+                    "-m",
+                    "0644",
+                    str(root / "eval/ekuiper/gctrace-drop-in.conf"),
+                    str(EKUIPER_GCTRACE_DROP_IN),
+                ],
+                check=True,
+            )
+        else:
+            subprocess.run(["sudo", "rm", "-f", str(EKUIPER_GCTRACE_DROP_IN)], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
     if active:
+        subprocess.run(["sudo", "systemctl", "start", "kuiper.service"], check=True)
         subprocess.run(
             [
                 str(root / "eval/ekuiper/seed-pipeline-a.sh"),
@@ -4698,8 +4732,9 @@ def run_ekuiper_item(
     telemetry = start_pi_telemetry(root, output, item)
     process_sampler: ProcessResourceSampler | None = None
     profile_context: dict | None = None
+    gctrace = is_ekuiper_profile_item(item) and ekuiper_profile_state(item) == "profiled"
     try:
-        set_ekuiper_active(root, True)
+        set_ekuiper_active(root, True, gctrace=gctrace)
         facts_path = output / "host-facts.json"
         subprocess.run(
             [
@@ -4719,7 +4754,9 @@ def run_ekuiper_item(
         )
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = json.loads(facts_path.read_text())["git_sha"]
-        ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
+        ekuiper_audit = capture_ekuiper_audit(
+            root, output, item.runtime_cpus, gctrace=gctrace
+        )
         profile_context, pids = build_ekuiper_profile_context(
             item, json.loads(ekuiper_audit.read_text())
         )
