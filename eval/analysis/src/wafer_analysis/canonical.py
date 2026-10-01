@@ -1357,161 +1357,141 @@ def candidate_capacity_table(summary: dict) -> pd.DataFrame:
 CAPACITY_COMPETITIVE_THRESHOLD = 0.70
 
 
-def _tested_grid_bounds(result: dict, tested_rates: list[int]) -> dict:
-    rates = result.get("rates")
-    invalid = {
-        "valid": False,
-        "lower_bound_msg_s": None,
-        "upper_bound_msg_s": None,
-        "support_confounded_rate_msg_s": None,
-    }
-    if not result.get("complete") or not isinstance(rates, list):
-        return {**invalid, "reason": "incomplete system population"}
-    if [rate.get("rate_msg_s") for rate in rates] != tested_rates:
-        return {**invalid, "reason": "system rates differ from tested grid"}
-    classifications = [rate.get("classification") for rate in rates]
-    if "incomplete" in classifications:
-        return {**invalid, "reason": "incomplete tested-rate cell"}
-    seen_bad = False
-    seen_censored = False
-    for classification in classifications:
-        if classification == "bad":
-            if seen_censored:
-                return {**invalid, "reason": "non-contiguous support censoring"}
-            seen_bad = True
-        elif classification == "good":
-            if seen_bad or seen_censored:
-                return {**invalid, "reason": "non-monotonic delivery classification"}
-        elif classification == "support-confounded":
-            seen_censored = True
-        else:
-            return {**invalid, "reason": "invalid delivery classification"}
-    good_rates = [
-        rate for rate, classification in zip(tested_rates, classifications, strict=True)
-        if classification == "good"
-    ]
-    unresolved = [
-        rate for rate, classification in zip(tested_rates, classifications, strict=True)
-        if classification == "support-confounded"
-    ]
-    lower = max(good_rates, default=0)
-    upper = max(unresolved) if unresolved else lower
+def _capacity_grid(summary: dict) -> list[int]:
+    grid = summary.get("rate_points_msg_s")
+    if (
+        not isinstance(grid, list)
+        or not grid
+        or any(type(rate) is not int or rate <= 0 for rate in grid)
+        or any(low >= high for low, high in zip(grid, grid[1:]))
+    ):
+        raise ValueError("capacity rate grid must be strictly increasing positive rates")
+    return grid
+
+
+def _capacity_cell_classes(summary: dict, systems: Iterable[str]) -> dict[str, list[str]]:
+    grid = _capacity_grid(summary)
+    results = summary.get("systems")
+    if not isinstance(results, dict):
+        raise ValueError("capacity population is malformed")
+    required = summary.get("required_runs_per_rate")
+
+    def classify(system: str, support_from: int | None) -> list[str]:
+        result = results.get(system)
+        rates = result.get("rates") if isinstance(result, dict) else None
+        if not isinstance(rates, list) or not result.get("complete"):
+            raise ValueError(f"{system}: incomplete system population")
+        if [rate.get("rate_msg_s") for rate in rates] != grid:
+            raise ValueError(f"{system}: system rates differ from tested grid")
+        classes = []
+        for rate in rates:
+            if rate.get("run_count") != required:
+                raise ValueError(f"{system}: incomplete tested-rate cell")
+            try:
+                good = (
+                    float(rate["pooled_loss"]) <= 0.01
+                    and float(rate["mean_achieved_ratio"]) >= 0.99
+                    and int(rate["total_duplicates"]) == 0
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(f"{system}: malformed delivery counters") from error
+            if support_from is not None and rate["rate_msg_s"] >= support_from:
+                classes.append("support-confounded")
+            else:
+                classes.append("good" if good else "bad")
+        return classes
+
+    support = classify("mqtt-loopback", None)
+    support_from = next(
+        (rate for rate, value in zip(grid, support, strict=True) if value == "bad"), None
+    )
     return {
-        "valid": True,
-        "reason": "tested-grid bounds derived without interpolation",
-        "lower_bound_msg_s": lower,
-        "upper_bound_msg_s": upper,
-        "support_confounded_rate_msg_s": min(unresolved, default=None),
+        system: support if system == "mqtt-loopback" else classify(system, support_from)
+        for system in systems
+    }
+
+
+def _ceiling_bounds(grid: list[int], classes: list[str]) -> dict:
+    good = [index for index, value in enumerate(classes) if value == "good"]
+    bad = [index for index, value in enumerate(classes) if value == "bad"]
+    highest_good = max(good, default=-1)
+    first_bad = min(bad, default=len(classes))
+    sustained = [index for index in good if index < first_bad]
+    above = [index for index in bad if index > highest_good]
+    confounded = [
+        rate
+        for rate, value in zip(grid, classes, strict=True)
+        if value == "support-confounded"
+    ]
+    return {
+        "lower_bound_msg_s": grid[sustained[-1]] if sustained else 0,
+        "upper_bound_msg_s": grid[above[0]] if above else math.inf,
+        "non_monotonic": first_bad < highest_good,
+        "support_confounded_rate_msg_s": confounded[0] if confounded else None,
     }
 
 
 def capacity_competitive_decision(summary: dict) -> dict:
-    tested_rates = summary.get("rate_points_msg_s")
-    systems = summary.get("systems")
-    if not isinstance(tested_rates, list) or not isinstance(systems, dict):
-        return {
-            "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
-            "branch": "invalid-population",
-            "status": "PENDING",
-            "reason": "capacity population is malformed",
-        }
-    bounds = {
-        system: _tested_grid_bounds(systems.get(system, {}), tested_rates)
-        for system in ("wafer", "ekuiper")
-    }
-    invalid = [system for system, value in bounds.items() if not value["valid"]]
+    grid = summary.get("rate_points_msg_s")
     common = {
         "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
+        "beyond_grid_limitation": (
+            f"tested-grid only; no claim beyond {max(grid)} msg/s"
+            if isinstance(grid, list) and grid and all(type(rate) is int for rate in grid)
+            else "tested grid is unavailable"
+        ),
+        "claim_boundary": (
+            "co-located gateway envelope; each delivery ceiling is bracketed by "
+            "tested rates and bounded by the MQTT support path"
+        ),
+    }
+    try:
+        classes = _capacity_cell_classes(summary, ("wafer", "ekuiper"))
+    except ValueError as error:
+        return {
+            **common,
+            "systems": {},
+            "support_confounded_rate_msg_s": None,
+            "ratio_lower_bound": None,
+            "ratio_upper_bound": None,
+            "branch": "invalid-population",
+            "status": "PENDING",
+            "reason": str(error),
+        }
+    bounds = {system: _ceiling_bounds(grid, value) for system, value in classes.items()}
+    wafer = bounds["wafer"]
+    ekuiper = bounds["ekuiper"]
+    worst = wafer["lower_bound_msg_s"] / ekuiper["upper_bound_msg_s"]
+    best = (
+        math.inf
+        if ekuiper["lower_bound_msg_s"] == 0
+        else wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
+    )
+    if worst >= CAPACITY_COMPETITIVE_THRESHOLD:
+        branch, status = "worst-case-pass", "PASS"
+        reason = "WAFER lower bound divided by eKuiper upper bound meets the threshold"
+    elif best < CAPACITY_COMPETITIVE_THRESHOLD:
+        branch, status = "best-case-fail", "FAIL"
+        reason = "WAFER upper bound divided by eKuiper lower bound misses the threshold"
+    else:
+        branch, status = "straddles-threshold", "CENSORED"
+        reason = "the tested grid allows ratios on both sides of the threshold"
+    return {
+        **common,
         "systems": bounds,
         "support_confounded_rate_msg_s": min(
             (
                 value["support_confounded_rate_msg_s"]
                 for value in bounds.values()
-                if value.get("support_confounded_rate_msg_s") is not None
+                if value["support_confounded_rate_msg_s"] is not None
             ),
             default=None,
         ),
-        "beyond_grid_limitation": (
-            f"tested-grid only; no claim beyond {max(tested_rates)} msg/s"
-            if tested_rates
-            else "tested grid is unavailable"
-        ),
-        "claim_boundary": (
-            "co-located gateway envelope; tested-grid delivery ceiling bounded by "
-            "the MQTT support path"
-        ),
-    }
-    if invalid:
-        return {
-            **common,
-            "ratio_lower_bound": None,
-            "ratio_upper_bound": None,
-            "branch": "invalid-population",
-            "status": "PENDING",
-            "reason": "; ".join(
-                f"{system}: {bounds[system]['reason']}" for system in invalid
-            ),
-        }
-    wafer = bounds["wafer"]
-    ekuiper = bounds["ekuiper"]
-    ratio_lower = (
-        wafer["lower_bound_msg_s"] / ekuiper["upper_bound_msg_s"]
-        if ekuiper["upper_bound_msg_s"] > 0
-        else None
-    )
-    ratio_upper = (
-        wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
-        if ekuiper["lower_bound_msg_s"] > 0
-        else None
-    )
-    collapsed = all(
-        value["lower_bound_msg_s"] == value["upper_bound_msg_s"]
-        for value in bounds.values()
-    )
-    if collapsed and ratio_lower is not None:
-        status = "PASS" if ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD else "FAIL"
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_lower,
-            "branch": f"identifiable-{status.lower()}",
-            "status": status,
-            "reason": "collapsed tested-grid bounds identify the competitive ratio",
-        }
-    if ratio_lower is not None and ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "censored-worst-case-pass",
-            "status": "PASS",
-            "reason": "WAFER lower bound divided by eKuiper upper bound meets the threshold",
-        }
-    if ratio_upper is not None and ratio_upper < CAPACITY_COMPETITIVE_THRESHOLD:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "censored-best-case-fail",
-            "status": "FAIL",
-            "reason": "WAFER upper bound divided by eKuiper lower bound misses the threshold",
-        }
-    if ratio_lower is None or ratio_upper is None:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "zero-denominator",
-            "status": "PENDING",
-            "reason": "eKuiper tested-grid bound is zero; competitive ratio is undefined",
-        }
-    return {
-        **common,
-        "ratio_lower_bound": ratio_lower,
-        "ratio_upper_bound": ratio_upper,
-        "branch": "censored-straddling",
-        "status": "CENSORED/PENDING",
-        "reason": "tested-grid ratio bounds do not determine the threshold",
+        "ratio_lower_bound": worst,
+        "ratio_upper_bound": best,
+        "branch": branch,
+        "status": status,
+        "reason": reason,
     }
 
 
@@ -1524,8 +1504,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         or summary.get("required_runs_per_rate") != 30
     ):
         raise ValueError("malformed final capacity summary")
-    if summary.get("rate_points_msg_s") != [1_000, 4_000, 8_000, 15_000, 16_000]:
-        raise ValueError("final capacity summary uses the wrong common rate grid")
+    grid = _capacity_grid(summary)
     systems = summary.get("systems")
     if not isinstance(systems, dict) or set(systems) != {
         "mqtt-loopback",
@@ -1534,18 +1513,32 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         "ekuiper",
     }:
         raise ValueError("final capacity summary requires all four systems")
+    classes = _capacity_cell_classes(summary, systems)
+    support_from = next(
+        (
+            rate
+            for rate, value in zip(grid, classes["mqtt-loopback"], strict=True)
+            if value == "bad"
+        ),
+        None,
+    )
+    for system, result in systems.items():
+        for rate, classification in zip(result["rates"], classes[system], strict=True):
+            if rate.get("classification") != classification:
+                raise ValueError(
+                    f"{system} rate {rate['rate_msg_s']} classification disagrees "
+                    "with its delivery counters or MQTT censoring"
+                )
+        support = result.get("support_censoring")
+        if not isinstance(support, dict) or support.get("from_rate_msg_s") != support_from:
+            raise ValueError(
+                f"{system} MQTT support-path censoring disagrees with the loopback counters"
+            )
     decision = capacity_competitive_decision(summary)
     rate_rows = []
     boundary_rows = []
     for system, result in systems.items():
-        rates = result.get("rates")
-        if not result.get("complete") or not isinstance(rates, list) or len(rates) != 5:
-            raise ValueError(f"{system} capacity summary is incomplete")
-        if [rate.get("rate_msg_s") for rate in rates] != summary["rate_points_msg_s"]:
-            raise ValueError(f"{system} capacity rates differ from the common grid")
-        for rate in rates:
-            if rate.get("run_count") != 30:
-                raise ValueError(f"{system} rate requires 30 independent runs")
+        for rate, classification in zip(result["rates"], classes[system], strict=True):
             run_summary = rate.get("run_summary")
             normalized = rate.get("normalized_p99")
             if not isinstance(run_summary, dict) or not isinstance(normalized, dict):
@@ -1562,14 +1555,6 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
             if any(len(values) != 30 for values in samples):
                 raise ValueError(f"{system} rate summary needs 30 run values per metric")
             achieved_ci, p99_ci, normalized_ci = (_ci(values) for values in samples)
-            classification = rate.get("classification")
-            if classification not in {
-                "good",
-                "bad",
-                "support-confounded",
-                "incomplete",
-            }:
-                raise ValueError(f"{system} rate classification is invalid")
             rate_rows.append(
                 {
                     "system": system,
@@ -1580,6 +1565,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "achieved_ci95_high_msg_s": float(achieved_ci[1]),
                     "pooled_loss": float(rate["pooled_loss"]),
                     "mean_achieved_ratio": float(rate["mean_achieved_ratio"]),
+                    "total_duplicates": int(rate["total_duplicates"]),
                     "median_p99_ns": float(p99["median"]),
                     "p99_ci95_low_ns": float(p99_ci[0]),
                     "p99_ci95_high_ns": float(p99_ci[1]),
@@ -1589,17 +1575,19 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "classification": classification,
                     "delivery_good": classification == "good",
                     "support_confounded": classification == "support-confounded",
-                    "units": "messages/second, fraction, nanoseconds",
+                    "units": "messages/second, fraction, nanoseconds, messages",
                     "estimator": "pooled loss; mean achieved ratio; median run p99",
                     "thesis_evidence": True,
                 }
             )
         support = result["support_censoring"]
+        bounds = _ceiling_bounds(grid, classes[system])
         boundary_rows.append(
             {
                 "system": system,
-                "delivery_ceiling_msg_s": result["delivery_ceiling"]["rate_msg_s"],
-                "delivery_ceiling_censoring": result["delivery_ceiling"]["censoring"],
+                "delivery_ceiling_lower_bound_msg_s": bounds["lower_bound_msg_s"],
+                "delivery_ceiling_upper_bound_msg_s": bounds["upper_bound_msg_s"],
+                "delivery_ceiling_non_monotonic": bounds["non_monotonic"],
                 "normalized_p99_knee_msg_s": result["normalized_p99_knee"][
                     "rate_msg_s"
                 ],

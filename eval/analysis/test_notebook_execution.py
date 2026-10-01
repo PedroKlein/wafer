@@ -34,6 +34,7 @@ def capacity_envelope_fixture() -> dict:
                     "run_count": 30,
                     "pooled_loss": 0.0 if rate < 16_000 else 0.02,
                     "mean_achieved_ratio": 1.0 if rate < 16_000 else 0.97,
+                    "total_duplicates": 0,
                     "classification": "good"
                     if rate < 16_000
                     else ("bad" if system == "mqtt-loopback" else "support-confounded"),
