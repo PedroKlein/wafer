@@ -299,7 +299,12 @@ def write_ekuiper_profile_fixture(
             "reason": None if process_available else "procfs-process-metrics-unavailable",
             "collection_enabled": process_available,
         },
+        "gctrace": {
+            "collection_enabled": runner.ekuiper_profile_state(item) == "profiled",
+            "journal_readable": True,
+        },
     }
+    (output / "ekuiper-gctrace.log").write_text("")
     if process_available:
         (output / "resource-usage.csv").write_text(
             "timestamp_ns,cpu_time_ticks,rss_bytes,process_count,thread_count,"
@@ -375,7 +380,7 @@ def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic
     assert runtime["process_metrics"]["maximum_rows"] == 62
     assert runtime["gc_runtime_metrics"] == {
         "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        "reason": "gctrace-lines-missing-from-journal",
     }
     assert runtime["interval_alignment"]["row_count"] == 60
     assert overhead["paired_condition"] == "rate-01000/unprofiled-control"
@@ -430,6 +435,154 @@ def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics
     }
     assert overhead["profile_collection_enabled"] is False
     assert overhead["overhead_role"] == "sampler-skipped-unavailable"
+
+
+def journal_entry(timestamp_s: float, message: str) -> str:
+    return json.dumps(
+        {"__REALTIME_TIMESTAMP": str(round(timestamp_s * 1_000_000)), "MESSAGE": message}
+    )
+
+
+def gctrace_line(cycle: int, clock_ms: str, heap_mb: str, goal_mb: int) -> str:
+    return (
+        f"gc {cycle} @{cycle}.012s 1%: {clock_ms} ms clock, "
+        f"0.06+0.45/1.8/0.62+0.012 ms cpu, {heap_mb} MB, {goal_mb} MB goal, "
+        "0 MB stacks, 0 MB globals, 4 P"
+    )
+
+
+def fake_journalctl(
+    monkeypatch: pytest.MonkeyPatch, entries: list[str], returncode: int = 0
+) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        if kwargs.get("check") and returncode:
+            raise subprocess.CalledProcessError(returncode, command)
+        return subprocess.CompletedProcess(command, returncode, "\n".join(entries) + "\n", "")
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    return calls
+
+
+def profile_item(condition: str) -> runner.RunItem:
+    return next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == condition and item.run_index == 1
+    )
+
+
+def test_ekuiper_gctrace_summary_covers_only_the_measurement_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = profile_item("rate-04000/profiled")
+    output = tmp_path / "profiled"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    calls = fake_journalctl(
+        monkeypatch,
+        [
+            journal_entry(4.0, gctrace_line(1, "0.010+1.0+0.010", "4->4->1", 4)),
+            journal_entry(6.0, "Started kuiper.service"),
+            journal_entry(8.0, gctrace_line(2, "0.020+1.2+0.030", "4->4->2", 5)),
+            journal_entry(20.0, gctrace_line(3, "0.015+2.1+0.003", "6->7->3", 8)),
+            journal_entry(40.0, gctrace_line(5, "0.12+3.0+0.45", "9->10->4", 9)),
+            journal_entry(75.0, gctrace_line(6, "12+4.0+0.050", "11->12->5", 10) + " (forced)"),
+        ],
+    )
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, True)
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert calls == [
+        [
+            "journalctl",
+            "--unit=kuiper.service",
+            "--since=@5",
+            "--output=json",
+            "--no-pager",
+        ]
+    ]
+    log = (output / "ekuiper-gctrace.log").read_text().splitlines()
+    assert [line.split(" ", 2)[:2] for line in log] == [
+        ["8000000000", "gc"],
+        ["20000000000", "gc"],
+        ["40000000000", "gc"],
+        ["75000000000", "gc"],
+    ]
+    assert runtime["gc_runtime_metrics"] == {
+        "status": "available",
+        "source": "go-gctrace-journal",
+        "path": "ekuiper-gctrace.log",
+        "sha256": hashlib.sha256((output / "ekuiper-gctrace.log").read_bytes()).hexdigest(),
+        "trace_line_count": 4,
+        "missing_cycle_count": 1,
+        "cycle_count": 2,
+        "stw_pause_total_ns": 15_000 + 3_000 + 120_000 + 450_000,
+        "stw_pause_max_ns": 450_000,
+        "max_heap_at_start_mib": 9,
+        "max_live_heap_mib": 4,
+        "max_heap_goal_mib": 9,
+    }
+
+
+@pytest.mark.parametrize(
+    ("entries", "returncode", "reason"),
+    [
+        ([journal_entry(20.0, "Started kuiper.service")], 0, "gctrace-lines-missing-from-journal"),
+        ([], 1, "kuiper-journal-unreadable"),
+        ([journal_entry(20.0, "gc 3 @13.901s 1%: unexpected")], 0, "gctrace-format-unrecognized"),
+    ],
+)
+def test_ekuiper_gctrace_problems_become_unavailable_markers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entries: list[str],
+    returncode: int,
+    reason: str,
+) -> None:
+    item = profile_item("rate-01000/profiled")
+    output = tmp_path / "profiled"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    fake_journalctl(monkeypatch, entries, returncode)
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, True)
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert runtime["gc_runtime_metrics"] == {"status": "unavailable", "reason": reason}
+
+
+def test_ekuiper_gctrace_capture_survives_a_missing_journalctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(runner.subprocess, "run", missing)
+
+    assert runner.capture_ekuiper_gctrace(tmp_path, 5_000_000_000, True) == {
+        "collection_enabled": True,
+        "journal_readable": False,
+    }
+    assert (tmp_path / "ekuiper-gctrace.log").read_text() == ""
+
+
+def test_unprofiled_control_rejects_gctrace_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = profile_item("rate-01000/unprofiled-control")
+    output = tmp_path / "control"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    fake_journalctl(
+        monkeypatch,
+        [journal_entry(20.0, gctrace_line(3, "0.015+2.1+0.003", "6->7->3", 8))],
+    )
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, False)
+
+    with pytest.raises(ValueError, match="gctrace output exists"):
+        runner.write_ekuiper_profile_artifacts(item, output, context)
 
 
 def candidate_ekuiper_profile_summary() -> dict:

@@ -1228,12 +1228,44 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
             violations.append("eKuiper runtime summary interval alignment is invalid")
     except (KeyError, OSError, TypeError, ValueError):
         violations.append("eKuiper runtime summary interval alignment is invalid")
-    gc_runtime = runtime.get("gc_runtime_metrics")
-    if gc_runtime != {
-        "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
-    }:
-        violations.append("eKuiper GC/runtime limitation is missing or overstated")
+    gc_runtime = runtime.get("gc_runtime_metrics", {})
+    gctrace_path = leaf / "ekuiper-gctrace.log"
+    if gc_runtime.get("status") == "available":
+        try:
+            counts = [
+                gc_runtime[field]
+                for field in (
+                    "trace_line_count",
+                    "missing_cycle_count",
+                    "cycle_count",
+                    "stw_pause_total_ns",
+                )
+            ]
+            if (
+                state != "profiled"
+                or gc_runtime.get("source") != "go-gctrace-journal"
+                or gc_runtime.get("path") != gctrace_path.name
+                or hashlib.sha256(gctrace_path.read_bytes()).hexdigest()
+                != gc_runtime.get("sha256")
+                or any(type(count) is not int or count < 0 for count in counts)
+                or len(gctrace_path.read_text().splitlines())
+                != gc_runtime["trace_line_count"]
+                or gc_runtime["trace_line_count"] < 1
+                or gc_runtime["cycle_count"] > gc_runtime["trace_line_count"]
+                or (gc_runtime["stw_pause_max_ns"] is None)
+                != (gc_runtime["cycle_count"] == 0)
+            ):
+                violations.append("eKuiper GC trace summary is invalid")
+        except (KeyError, OSError, TypeError, ValueError):
+            violations.append("eKuiper GC trace summary is invalid")
+    elif (
+        gc_runtime.get("status") != "unavailable"
+        or not gc_runtime.get("reason")
+        or (state == "profiled") == (gc_runtime["reason"] == "gctrace-disabled-by-design")
+    ):
+        violations.append("eKuiper GC trace availability is invalid")
+    if state == "unprofiled-control" and gctrace_path.is_file() and gctrace_path.read_text():
+        violations.append("eKuiper unprofiled control contains gctrace output")
     latency = runtime.get("latency_ns", {})
     try:
         interval_document = json.loads(interval_path.read_text())
