@@ -734,7 +734,9 @@ def estimate_capacity_envelope(
         baseline_runs = by_system_rate[system][RATE_SWEEP_BASELINE]
         baseline_p99 = (
             statistics.median(run["latency_ns"]["p99"] for run in baseline_runs)
-            if len(baseline_runs) == RATE_SWEEP_REPETITIONS
+            if baseline_runs
+            and len(baseline_runs) + outcome_runs.get((system, RATE_SWEEP_BASELINE), 0)
+            == RATE_SWEEP_REPETITIONS
             else None
         )
         rates = []

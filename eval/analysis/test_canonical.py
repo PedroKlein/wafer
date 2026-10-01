@@ -1688,3 +1688,48 @@ def test_slow_policy_loss_is_admitted_and_reported() -> None:
     assert slow["N_runs"] == 30
     assert slow["sut_outcome_runs"] == 1
     assert slow["total_attempted"] - slow["total_delivered"] == 1
+
+
+def test_capacity_tables_count_a_run_the_system_under_test_failed() -> None:
+    summary = capacity_summary()
+    top = summary["systems"]["wafer"]["rates"][3]
+    top.update(run_count=29, sut_outcome_runs=1, classification="bad")
+    for metric in top["run_summary"].values():
+        metric["values"].pop()
+    top["normalized_p99"]["values"].pop()
+
+    rates, _ = capacity_tables(summary)
+
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 15_000)].iloc[0]
+    assert (row["N_runs"], row["sut_outcome_runs"]) == (30, 1)
+    assert not row["delivery_good"]
+
+
+def test_branch_isolation_counts_an_attack_run_the_runtime_did_not_survive() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 1_000, "epoch-loop-attack": 1_000})
+    crashed = next(
+        index
+        for index, record in enumerate(records)
+        if record["condition"] == "panic-attack" and record["run_index"] == 7
+    )
+    records[crashed] = {
+        "condition": "panic-attack",
+        "run_index": 7,
+        "sut_outcome_reasons": ["runtime-exit"],
+    }
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["panic-attack", "N_runs"] == 30
+    assert table.loc["panic-attack", "runs_stopped_early"] == 1
+    assert not table.loc["panic-attack", "isolated"]
+    assert table.loc["epoch-loop-attack", "isolated"]
+
+
+def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
+    records = recovery_records()
+    records[4] = {"condition": "panic-recovery", "run_index": 5, "sut_outcome_reasons": ["runtime-exit"]}
+
+    row = recovery_table(records).iloc[0]
+
+    assert (row["N_runs"], row["runs_stopped_early"], row["recovery_samples"]) == (30, 1, 87)

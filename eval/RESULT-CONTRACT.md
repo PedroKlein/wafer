@@ -167,7 +167,8 @@ The analysis admits exactly one attempt per unit: its clean pass or its system
 outcome. A unit with more attempts than the cap allows, two admitted attempts, or
 an attempt after the admitted one rejects the batch, and so does a missing unit.
 Each criterion counts system outcomes as failures: a run the runtime did not
-survive is not contained, a run with loss, duplicates or a failed swap is not
+survive is not contained, its E-Iso-7 attack condition is not isolated, and its
+E-Perf-10 rate is delivery-bad; a run with loss, duplicates or a failed swap is not
 lossless, and a failed rollback is not a successful rollback. The summary notebook
 writes `campaign-attempts`, one row per experiment, system and condition with its
 units, attempts, clean passes, system outcomes, infrastructure failures, retries and
@@ -343,7 +344,7 @@ The `final_campaign` object in `eval/canonical-matrix.json` is the executable so
 
 Final E-Perf-5 uses explicit transform fuel and epoch protection. Its transform-only pipeline records `filter = null` and `router = null` because those node categories are absent; this is a declared matrix exception, not an unmetered WAFER run.
 
-Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`. `capacity-run.json` uses this counter identity:
+Final E-Perf-10 requires `capacity-run.json`, `publisher-summary.json`, `subscriber-metadata.json`, `latency.hdr`, `throughput.csv`, `sequence.csv`, `resource-usage.csv`, and `process-audit.json`; a run the runtime did not survive has no `capacity-run.json`. Such a run counts toward its rate's 30 runs as `sut_outcome_runs` in `rate-sweep-summary.json` and makes that rate delivery-bad; the rate's loss, achieved-rate and p99 figures cover the runs that completed. `capacity-run.json` uses this counter identity:
 
 ```text
 intended = rejected + enqueued

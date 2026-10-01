@@ -3570,6 +3570,20 @@ def test_capacity_estimator_handles_all_rates_good() -> None:
     }
 
 
+def test_capacity_estimator_normalizes_against_a_baseline_with_an_outcome_run() -> None:
+    rates = {rate: (0.0, 1.0, 1_000_000) for rate in (1000, 4000, 8000, 15000, 16000)}
+    runs = capacity_batch({system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")})
+    runs["wafer"] = [
+        run for run in runs["wafer"] if (run["rate_msg_s"], run["run_index"]) != (1000, 30)
+    ]
+
+    summary = estimate_capacity_envelope(runs, {("wafer", 1000): 1})
+
+    wafer = summary["systems"]["wafer"]
+    assert wafer["rates"][0]["classification"] == "bad"
+    assert len(wafer["rates"][1]["normalized_p99"]["values"]) == 30
+
+
 def test_capacity_estimator_flags_non_contiguous_good_rates() -> None:
     rates = {
         1000: (0.0, 1.0, 1_000_000),
