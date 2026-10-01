@@ -69,19 +69,9 @@
     "schema_version": 1,
     "id": "rpi5-v10-enhanced-candidate",
     "status": "architecture-frozen-before-n5",
-    "release_lineage": "v10",
-    "signed_v4_immutable": true,
-    "signed_v5_immutable": true,
-    "signed_v6_immutable": true,
-    "signed_v7_immutable": true,
-    "signed_v8_immutable": true,
-    "signed_v9_immutable": true,
-    "supersedes_release_tag": "rpi5-final-rc-v9",
-    "supersession_reason": "v9 downstream eKuiper consumers reject contract-valid bounded terminal partial intervals",
     "thesis_evidence": false,
     "campaign_started": false,
     "n30_admitted": false,
-    "selection_receipt_required": ".plans/rpi5-v5-enhanced-experiment-readiness/n30-selection.json",
     "capabilities": [
       "bounded-interval-metrics",
       "multi-resolution-swap-buckets",
@@ -95,7 +85,7 @@
     ],
     "evidence_classes": {
       "canonical_primary": "Existing final estimands; unchanged by candidate instrumentation.",
-      "candidate_supplementary": "Diagnostic N=5 evidence pending post-rehearsal selection.",
+      "candidate_supplementary": "Diagnostic N=5 evidence kept out of the final campaign.",
       "diagnostic": "Host qualification and profiler evidence excluded from thesis estimators.",
       "future_work": "Evidence that is not collected in the Raspberry Pi 5 candidate campaign."
     },

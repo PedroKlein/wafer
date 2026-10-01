@@ -9,7 +9,7 @@
 
 The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
-The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; a post-rehearsal selection receipt must record `include`, `defer`, or `reject` first.
+The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
 
 ## Measurement boundary
 
