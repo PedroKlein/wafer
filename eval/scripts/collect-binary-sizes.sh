@@ -8,7 +8,7 @@
 #
 # Container estimates are documented lower bounds derived from Docker
 # Hub's minimum viable image for a Rust static binary. Sources are
-# listed in docs/benchmarks/binary-sizes.md.
+# listed in the header of eval/scripts/binary-sizes.index.
 #
 # The point of E-Density-1 is orders of magnitude, not decimal accuracy.
 set -euo pipefail

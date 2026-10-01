@@ -37,5 +37,7 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 - Hot-swap is stateless.
 - PMIC telemetry is an internal-rail proxy, not total board power.
 
-The pre-final shakedown readiness log that used to follow here is archived in
-[docs/history/status/canonical-readiness-log.md](../history/status/canonical-readiness-log.md).
+The pre-final shakedown readiness and progress logs that used to follow here
+are archived in
+[docs/history/status/canonical-readiness-log.md](../history/status/canonical-readiness-log.md)
+and [docs/history/status/evaluation-progress-log.md](../history/status/evaluation-progress-log.md).

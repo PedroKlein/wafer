@@ -5,6 +5,20 @@
 # container_min_mb is a documented lower bound derived from the smallest
 # realistic Docker Hub image (2025-Q1) hosting an equivalent Rust worker.
 # Rationale strings cite the delta drivers per plugin.
+#
+# Sources for the floor:
+# - alpine:3.19, about 7.7 MB uncompressed (https://hub.docker.com/_/alpine).
+# - A statically linked Rust binary for x86_64-unknown-linux-musl, about 40 MB
+#   once the standard library, panic infrastructure and ecosystem crates land
+#   (Rust community benchmarks, 2024; the Alpine plus
+#   `cargo install --target musl` recipe).
+# - python:3.11-slim, about 45 MB, as a comparative reference only; no plugin
+#   needs Python.
+#
+# The floor leaves out observability agents (fluent-bit, cadvisor sidecars,
+# 15-30 MB), health-probe binaries and shell tooling, CI/SBOM/provenance
+# artefacts, and distro CVE patch layers (5-15 MB a year). Production images
+# are usually 2-5x the floor, so the ratio is a lower bound.
 pass-through|plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm|alpine + static Rust binary|50|alpine (~7 MB) + ~40 MB Rust MUSL toolchain artefacts; scratch cannot exec musl
 uppercase|plugins/uppercase/target/wasm32-wasip2/release/wafer_uppercase.wasm|alpine + static Rust binary|50|same shape as pass-through
 json-parse|plugins/json-parse/target/wasm32-wasip2/release/wafer_json_parse.wasm|alpine + static Rust binary + serde_json|60|serde_json adds ~5 MB of stripped release code

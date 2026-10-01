@@ -1,6 +1,6 @@
 # RFC-002: Host-Side Runtime Architecture
 
-- **Status:** Implemented — envelope shape, host resource handling, and lineage assignment (A13 closed 2026-07-20). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — envelope shape, host resource handling, and lineage assignment (A13 closed 2026-07-20). See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md).
 - **Original session date:** 2026-07-06
 - **Amends:** —
 - **Amended by:** RFC-003 (§A3 — envelope shape redesigned to `Arc<EnvelopeHeader>` + `Bytes` payload + `Lineage`); RFC-005 (§D6 — drain phase replaced with watch-channel between-messages hot-swap)

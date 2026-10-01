@@ -76,7 +76,6 @@ This repo is the **experimental artifact** for an undergraduate thesis (TCC, UFR
 | `examples/` | Runtime-schema pipeline TOML examples (passthrough, uppercase, filter, chain, fanout, file-io, mqtt, http, overflow-dlq-demo, metrics-demo, mnist-inference, remote OCI, …). See `examples/README.md` before copying config shape. |
 | `tests/` | Shared test fixtures (integration tests live in each crate's `tests/`) |
 | `docs/` | Project documentation (see Documentation Map below) |
-| `specs/` | Feature specifications (OpenSpec workflow) |
 | `scripts/` | Helper scripts |
 | `models/` | ML model files (e.g., MNIST ONNX model for inference plugin) |
 | `eval/` | Evaluation harness inputs / outputs |
@@ -92,11 +91,9 @@ When you need deeper context on any aspect of the project, consult these files. 
 | Document | Summary |
 |----------|---------|
 | `docs/status/implementation-status.md` | Current implementation state — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP doc. |
-| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID (A1–A20). Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
+| `docs/status/implementation-gaps.md` | **Drift ledger.** Every documented behaviour the runtime does not yet implement, keyed by gap ID. Only A20 is open; closed entries are archived. Every RFC/ADR/architecture chapter with an aspirational banner points here. **Consult before assuming code matches docs.** |
 | `docs/status/canonical-readiness.md` | What the final campaign still needs and the current claim boundaries. |
-| `docs/status/evaluation-progress.md` | Final-campaign readiness per area. |
-| `docs/status/migration-audit.md` | Historical row-per-decision audit of the runtime-migration plan closure. |
-| `docs/benchmarks/README.md` | Which benchmark pages are current and which are historical diagnostics. `rq-summary.md`, `binary-sizes.md`, `methodology-validation.md`, `rq2-attacks.md` and `ekuiper-tail-diagnostic.md` are archived shakedown records, not results. |
+| `docs/benchmarks/README.md` | Current benchmark reference pages. The shakedown pages are archived under `docs/history/benchmarks/`. |
 | `docs/benchmarks/hot-swap.md` | Hot-swap phase timing reference. |
 | `docs/eval/pi5-experiment-runbook.md` | **Operator runbook** for the campaign: gates, diagnostic batch, launch, resume, approval, analysis. |
 | `docs/eval/pi5-host-setup.md`, `jetson-host-setup.md`, `x86-host-setup.md` | Host preparation for the canonical Raspberry Pi 5 and the Jetson and x86 replication hosts. |
@@ -106,7 +103,7 @@ When you need deeper context on any aspect of the project, consult these files. 
 
 ### Archive
 
-`docs/history/` holds archived plans (`plans/`), the pre-final readiness and progress logs (`status/`) and the Phase 0 session recipes (`workflows/`). Read them only for background; see `docs/history/README.md`.
+`docs/history/` holds archived plans (`plans/`), the pre-final readiness and progress logs and the closed gap entries (`status/`), the shakedown benchmark pages (`benchmarks/`) and the Phase 0 session recipes (`workflows/`). Read them only for background; see `docs/history/README.md`.
 
 ### Design & Specification
 
@@ -114,9 +111,8 @@ When you need deeper context on any aspect of the project, consult these files. 
 |----------|---------|
 | `docs/architecture/` | arc42-lite architecture views: vision, goals & constraints, solution strategy, building blocks, runtime view, deployment, cross-cutting concepts, quality requirements, risks, comparators. |
 | `docs/status/implementation-status.md` | Current implementation status — what's built, what's tested, per-plugin coverage. Replaces the old monolithic MVP status doc. |
-| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Twelve RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, doc refactor, and WASI 0.3 / Component Model evolution. |
+| `docs/rfcs/` | RFC archive — long-form design decisions with Abstract, Alternatives Considered, Related RFCs, Implementation Notes. Eleven RFCs cover WIT contracts, host runtime, node types, config schema, orchestrator, plugin SDK, performance, evaluation harness, implementation architecture, I/O integration, and WASI 0.3 / Component Model evolution. |
 | `docs/adr/` | Architecture Decision Records in Michael Nygard format (short, executive). Eighteen ADRs at present. See `docs/adr/README.md` for the index and conventions. |
-| `specs/` | Feature specifications directory (OpenSpec workflow). See `specs/README.md`. |
 | `ROADMAP.md` | Aspirational / longer-horizon items flagged in RFCs and the evaluation plan. |
 
 ### API & Integration
