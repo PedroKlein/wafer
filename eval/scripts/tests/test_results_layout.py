@@ -171,7 +171,7 @@ def test_alias_receipt_rejects_link_and_tampered_source(tmp_path: Path) -> None:
 
     assert resolve_alias_receipt(receipt)[1] == source
     status.write_text('{"status":"failed"}')
-    with pytest.raises(ValueError, match="not passed"):
+    with pytest.raises(ValueError, match="not an admitted attempt"):
         resolve_alias_receipt(receipt)
 
     link = receipt.with_name("linked.json")

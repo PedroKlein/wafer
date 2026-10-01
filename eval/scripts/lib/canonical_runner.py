@@ -4,6 +4,7 @@ import argparse
 import csv
 import datetime as dt
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -29,6 +30,20 @@ RESULTS_LAYOUT_ROOT = EVAL_ROOT / "analysis" / "src" / "wafer_analysis"
 if str(RESULTS_LAYOUT_ROOT) not in sys.path:
     sys.path.insert(0, str(RESULTS_LAYOUT_ROOT))
 
+from attempts import (
+    ADMITTED,
+    INCOMPLETE_RUN_REASONS,
+    INFRASTRUCTURE,
+    PASSED,
+    SUT_OUTCOME,
+    batch_units,
+    condition_attempts,
+    infrastructure_retries,
+    read_attempt,
+    runtime_exit_is_outcome,
+    settle,
+    sut_outcome_reasons,
+)
 from backpressure import validate_backpressure_result
 from rollback import (
     build_post_rollback_continuity,
@@ -105,6 +120,7 @@ class RunItem:
 class AttemptSelection:
     path: Path
     skip: bool
+    missing: bool = False
 
 
 @dataclass(frozen=True)
@@ -574,20 +590,26 @@ def _run_summary(values: list[float]) -> dict:
 
 
 def _classify_delivery_runs(
-    rate_runs: list[dict], required_repetitions: int
+    rate_runs: list[dict], required_repetitions: int, outcome_runs: int = 0
 ) -> tuple[str, float | None, float | None, int]:
+    """Delivery class of one rate; a run the system under test failed makes it bad."""
     duplicates = sum(int(run["messages"]["duplicates"]) for run in rate_runs)
-    if len(rate_runs) != required_repetitions:
+    if len(rate_runs) + outcome_runs != required_repetitions:
         return "incomplete", None, None, duplicates
     intended = sum(int(run["messages"]["intended"]) for run in rate_runs)
     undelivered = sum(int(run["messages"]["total_undelivered"]) for run in rate_runs)
     pooled_loss = undelivered / intended if intended else 1.0
-    mean_achieved_ratio = statistics.mean(
-        float(run["rates_msg_s"]["achieved_ratio"]) for run in rate_runs
+    mean_achieved_ratio = (
+        statistics.mean(float(run["rates_msg_s"]["achieved_ratio"]) for run in rate_runs)
+        if rate_runs
+        else None
     )
     classification = (
         "good"
-        if pooled_loss <= 0.01 and mean_achieved_ratio >= 0.99 and duplicates == 0
+        if not outcome_runs
+        and pooled_loss <= 0.01
+        and mean_achieved_ratio >= 0.99
+        and duplicates == 0
         else "bad"
     )
     return classification, pooled_loss, mean_achieved_ratio, duplicates
@@ -667,7 +689,16 @@ def estimate_candidate_capacity_envelope(runs_by_system: dict[str, list[dict]]) 
     }
 
 
-def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
+def estimate_capacity_envelope(
+    runs_by_system: dict[str, list[dict]],
+    outcome_runs: dict[tuple[str, int], int] | None = None,
+) -> dict:
+    """Capacity envelope from passed runs and the runs each system under test failed.
+
+    ``outcome_runs`` counts admitted outcome runs per (system, rate); they hold no
+    capacity result but complete the rate and make it delivery-bad.
+    """
+    outcome_runs = outcome_runs or {}
     if set(runs_by_system) != set(RATE_SWEEP_SYSTEMS):
         raise ValueError("capacity envelope requires all four frozen systems")
     by_system_rate: dict[str, dict[int, list[dict]]] = {}
@@ -689,7 +720,9 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
 
     mqtt_classifications = {
         rate: _classify_delivery_runs(
-            by_system_rate["mqtt-loopback"][rate], RATE_SWEEP_REPETITIONS
+            by_system_rate["mqtt-loopback"][rate],
+            RATE_SWEEP_REPETITIONS,
+            outcome_runs.get(("mqtt-loopback", rate), 0),
         )[0]
         for rate in RATE_SWEEP_RATES
     }
@@ -707,8 +740,9 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
         rates = []
         for rate in RATE_SWEEP_RATES:
             rate_runs = by_system_rate[system][rate]
+            failed_runs = outcome_runs.get((system, rate), 0)
             classification = _classify_delivery_runs(
-                rate_runs, RATE_SWEEP_REPETITIONS
+                rate_runs, RATE_SWEEP_REPETITIONS, failed_runs
             )[0]
             support_confounded = (
                 system != "mqtt-loopback"
@@ -743,6 +777,7 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
                 {
                     "rate_msg_s": rate,
                     "run_count": len(rate_runs),
+                    "sut_outcome_runs": failed_runs,
                     "classification": classification,
                     "pooled_loss": pooled_loss,
                     "mean_achieved_ratio": mean_achieved_ratio,
@@ -789,7 +824,8 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
             (
                 entry["rate_msg_s"]
                 for entry in eligible
-                if entry["normalized_p99"]["median"] > RATE_SWEEP_P99_MULTIPLIER
+                if entry["normalized_p99"] is not None
+                and entry["normalized_p99"]["median"] > RATE_SWEEP_P99_MULTIPLIER
             ),
             None,
         )
@@ -803,7 +839,10 @@ def estimate_capacity_envelope(runs_by_system: dict[str, list[dict]]) -> dict:
             knee_censoring = f"left-censored-below-{RATE_SWEEP_RATES[0]}"
 
         systems[system] = {
-            "complete": all(entry["run_count"] == RATE_SWEEP_REPETITIONS for entry in rates),
+            "complete": all(
+                entry["run_count"] + entry["sut_outcome_runs"] == RATE_SWEEP_REPETITIONS
+                for entry in rates
+            ),
             "non_monotonic": non_monotonic,
             "support_censoring": {
                 "from_rate_msg_s": first_support_bad,
@@ -1342,24 +1381,18 @@ def derive_hotswap_evidence(
     }
 
 
-def _read_lossless_sequence(path: Path) -> dict[str, int]:
+def _read_sequence(path: Path) -> dict[str, int]:
+    """The sink's sequence summary; loss and duplicates are outcomes, not errors."""
     with path.open(newline="") as stream:
         rows = list(csv.DictReader(stream))
     if len(rows) != 1:
         raise ValueError("sequence.csv must contain one summary row")
-    sequence = {
+    return {
         "expected": int(rows[0]["total_expected"]),
         "received": int(rows[0]["total_received"]),
         "gaps": int(rows[0]["gap_msgs"]),
         "duplicates": int(rows[0]["duplicates_count"]),
     }
-    if (
-        sequence["expected"] != sequence["received"]
-        or sequence["gaps"] != 0
-        or sequence["duplicates"] != 0
-    ):
-        raise ValueError("candidate swap session is not lossless")
-    return sequence
 
 
 def stamp_candidate_swap_evidence(evidence: dict, item: RunItem, sequence: dict) -> dict:
@@ -1752,8 +1785,6 @@ def validate_swap4_artifacts(
         or timeline.get("loss") != 130_000 - (sequence["received"] - sequence["duplicates"])
         or sequence["gaps"] != timeline["loss"]
         or sequence["duplicates"] != full["duplicates"]
-        or sequence["gaps"] != 0
-        or sequence["duplicates"] != 0
     ):
         raise ValueError("E-Swap-4 sequence totals do not reconcile")
     if timeline.get("sink_observed_output_gap_ns") != sink_timeline["transitions"][0].get(
@@ -2863,57 +2894,44 @@ def results_layout(root: Path) -> ResultsLayout:
     return ResultsLayout.resolve(root)
 
 
-def select_attempt(condition_dir: Path, run_index: int) -> AttemptSelection:
-    attempts: list[tuple[int, Path]] = []
-    pattern = re.compile(rf"run-{run_index:02d}-attempt-(\d+)")
-    for attempt in condition_dir.glob(f"run-{run_index:02d}-attempt-*"):
-        match = pattern.fullmatch(attempt.name)
-        if match is None or attempt.is_symlink() or not attempt.is_dir():
-            raise ValueError(f"malformed attempt path: {attempt}")
-        attempts.append((int(match.group(1)), attempt))
-    passed: list[Path] = []
-    for _, attempt in sorted(attempts):
-        status_path = attempt / "canonical-status.json"
-        if status_path.is_symlink() or (
-            status_path.is_file() and status_path.stat().st_nlink > 1
-        ):
-            raise ValueError(f"linked terminal receipt is forbidden: {status_path}")
-        try:
-            status = json.loads(status_path.read_text())
-        except (OSError, ValueError):
-            continue
-        if status.get("status") == "passed":
-            passed.append(attempt)
-    if len(passed) > 1:
-        raise ValueError(f"multiple passed attempts for run {run_index:02d}")
-    if passed:
-        return AttemptSelection(passed[0], True)
+def attempt_retries(item: RunItem) -> int | None:
+    """The in-place infrastructure retries one unit may use; the scout sets no cap."""
+    if item.experiment == "capacity-scout":
+        return None
+    return infrastructure_retries(json.loads(CANONICAL_MATRIX_PATH.read_text()), item.experiment)
 
-    next_index = max((index for index, _ in attempts), default=0) + 1
+
+def select_attempt(
+    condition_dir: Path, run_index: int, retries: int | None = None
+) -> AttemptSelection:
+    """The admitted attempt to skip to, or the next attempt directory to run.
+
+    A unit whose attempts used up ``retries`` without an admitted one is missing.
+    """
+    attempts = condition_attempts(condition_dir, run_index)
+    state, admitted = settle(attempts, retries)
+    if admitted is not None:
+        return AttemptSelection(admitted.path, True)
+    next_index = max((attempt.number for attempt in attempts), default=0) + 1
     path = condition_dir / f"run-{run_index:02d}-attempt-{next_index:02d}"
-    return AttemptSelection(path, False)
+    return AttemptSelection(path, False, state == "missing")
 
 
 def evaluate_validation_gate(root: Path, expected_runs: int) -> ValidationGate:
+    """Pass only when every repetition passed on its only attempt inside the p99 band.
+
+    The gate is never retried, so a failed, outcome or interrupted attempt fails it.
+    """
     failed: list[int] = []
     observed = 0
     for run_index in range(1, expected_runs + 1):
-        attempts = sorted(root.glob(f"run-{run_index:02d}-attempt-*"))
-        passed_attempt = None
-        for attempt in attempts:
-            try:
-                status = json.loads((attempt / "canonical-status.json").read_text())
-            except (OSError, ValueError):
-                continue
-            if status.get("status") == "passed":
-                passed_attempt = attempt
-                break
-        if passed_attempt is None:
+        attempts = condition_attempts(root, run_index)
+        if len(attempts) != 1 or attempts[0].outcome != PASSED:
             failed.append(run_index)
             continue
         observed += 1
         try:
-            summary = json.loads((passed_attempt / "percentiles.json").read_text())
+            summary = json.loads((attempts[0].path / "percentiles.json").read_text())
             p99_ns = int(summary["p99_ns"])
             count = int(summary["total_count"])
         except (OSError, ValueError, KeyError, TypeError):
@@ -3804,7 +3822,15 @@ def apply_capacity_knee_cooldown(
     )
 
 
-def write_status(path: Path, item: RunItem, status: str, detail: str = "") -> None:
+def write_status(
+    path: Path,
+    item: RunItem,
+    status: str,
+    detail: str = "",
+    *,
+    failure_class: str = INFRASTRUCTURE,
+    reasons: list[str] | None = None,
+) -> None:
     path.mkdir(parents=True, exist_ok=True)
     receipt = {
         "status": status,
@@ -3813,12 +3839,44 @@ def write_status(path: Path, item: RunItem, status: str, detail: str = "") -> No
         "run_index": item.run_index,
         "updated_at": utc_now(),
     }
+    if status == "failed":
+        receipt["failure_class"] = failure_class
+        receipt["reasons"] = reasons or ["harness-error"]
     if detail:
         receipt["detail"] = detail
     atomic_write_json(path / "canonical-status.json", receipt)
 
 
-def find_passed_attempt(condition_dir: Path, run_index: int) -> Path | None:
+class ContractViolation(RuntimeError):
+    """The result verifier rejected an attempt."""
+
+
+def finish_attempt(output: Path, item: RunItem) -> bool:
+    """Record a verified attempt as a clean pass or as an admitted system outcome."""
+    reasons = sut_outcome_reasons(output, item.experiment)
+    if reasons:
+        write_status(output, item, "failed", failure_class=SUT_OUTCOME, reasons=reasons)
+        print(f"[{utc_now()}] OUTCOME {item.result_key}: {', '.join(reasons)}", flush=True)
+    else:
+        write_status(output, item, "passed")
+        print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
+    return True
+
+
+def fail_attempt(output: Path, item: RunItem, error: BaseException) -> bool:
+    """Record an infrastructure failure; the unit may be retried in place."""
+    reason = "contract-violation" if isinstance(error, ContractViolation) else "harness-error"
+    write_status(output, item, "failed", str(error), reasons=[reason])
+    print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
+    return False
+
+
+def incomplete_run(output: Path, item: RunItem) -> bool:
+    """Whether the system under test stopped the run early, so only integrity is checked."""
+    return bool(INCOMPLETE_RUN_REASONS & set(sut_outcome_reasons(output, item.experiment)))
+
+
+def find_admitted_attempt(condition_dir: Path, run_index: int) -> Path | None:
     selection = select_attempt(condition_dir, run_index)
     return selection.path if selection.skip else None
 
@@ -3838,7 +3896,7 @@ def copy_shared_result(root: Path, batch_id: str, item: RunItem) -> Path:
         raise ValueError("shared result differs from the canonical alias mapping")
     layout = results_layout(root)
     source_dir = layout.raw_path(item.shared_from, batch_name(batch_id), item.condition)
-    source = find_passed_attempt(source_dir, item.run_index)
+    source = find_admitted_attempt(source_dir, item.run_index)
     if source is None:
         raise RuntimeError(f"shared source is incomplete: {source_dir}")
     status_path = source / "canonical-status.json"
@@ -3959,6 +4017,9 @@ def post_hot_swap(node_id: str, plugin: Path) -> dict:
     except urllib.error.HTTPError as error:
         body = error.read().decode(errors="replace")
         return {"http_status": error.code, "body": body}
+    except (OSError, http.client.HTTPException) as error:
+        # The runtime that should answer may have crashed; that is a failed request.
+        return {"http_status": None, "body": f"request failed: {error}"}
 
 
 def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
@@ -4092,48 +4153,6 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
                 runtime.terminate()
                 runtime_exit = runtime.wait(timeout=10)
             runtime = None
-        # Non-zero means the run failed (2 = invalid config, 3 = node panic or
-        # I/O init failure, see RESULT-CONTRACT "Runtime exit status").
-        if runtime_exit != 0:
-            raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
-        if (
-            item.experiment not in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT}
-            and not (output / "swap_timeline.json").is_file()
-        ):
-            (output / "swap_timeline.json").write_text(
-                json.dumps({"requests": requests}, indent=2) + "\n"
-            )
-        if item.experiment in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT}:
-            rolled_back = sum(
-                1
-                for request in requests
-                if request["http_status"] == 200
-                and isinstance(request["body"], dict)
-                and request["body"].get("status") == "rolled_back"
-            )
-            if rolled_back != len(requests):
-                raise RuntimeError(
-                    f"only {rolled_back}/{len(requests)} failed swaps rolled back"
-                )
-        else:
-            successful = sum(request["http_status"] == 200 for request in requests)
-            if successful != len(requests):
-                raise RuntimeError(f"only {successful}/{len(requests)} hot swaps succeeded")
-
-        sequence = _read_lossless_sequence(output / "sequence.csv")
-        if item.experiment == "e-swap-5":
-            rollback = build_swap5_rollback(requests, sequence)
-            (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
-        if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT:
-            rollback = build_candidate_rollback_evidence(
-                requests, item, results_layout(root).relative(output), sequence
-            )
-            rollback.update(
-                attempts=len(requests),
-                rolled_back=rolled_back,
-                all_rolled_back=rolled_back == len(requests),
-            )
-            (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
         stop_pi_telemetry(telemetry)
         finished_ns = time.time_ns()
         provenance_path = output / "runtime-provenance.json"
@@ -4152,18 +4171,45 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
             str(runtime_exit),
             provenance,
         )
+        # A crash or any exit but a startup refusal or an outside interrupt is an
+        # outcome (see RESULT-CONTRACT "Runtime exit status").
+        if runtime_exit != 0 and not runtime_exit_is_outcome(runtime_exit):
+            raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
+        if not incomplete_run(output, item):
+            if item.experiment not in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT} and not (
+                output / "swap_timeline.json"
+            ).is_file():
+                (output / "swap_timeline.json").write_text(
+                    json.dumps({"requests": requests}, indent=2) + "\n"
+                )
+            sequence = _read_sequence(output / "sequence.csv")
+            if item.experiment == "e-swap-5":
+                rollback = build_swap5_rollback(requests, sequence)
+                (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
+            if item.experiment == ROLLBACK_SESSIONS_EXPERIMENT:
+                rollback = build_candidate_rollback_evidence(
+                    requests, item, results_layout(root).relative(output), sequence
+                )
+                rollback.update(
+                    attempts=len(requests),
+                    rolled_back=len(requests),
+                    all_rolled_back=True,
+                )
+                (output / "rollback.json").write_text(json.dumps(rollback, indent=2) + "\n")
         postprocess_run(root, item, output)
         verify_result(root, output)
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as error:
         if runtime is not None and runtime.poll() is None:
             runtime.terminate()
         stop_pi_telemetry(telemetry)
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
 
 
 def wait_for_subscriber(process: subprocess.Popen, timeout: int = 30) -> int:
@@ -4486,12 +4532,8 @@ def run_restart_item(
             except subprocess.CalledProcessError as cleanup_error:
                 error = RuntimeError(f"{error}; eKuiper cleanup failed: {cleanup_error}")
         stop_pi_telemetry(telemetry)
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
 
 
 def _expand_cpu_list(value: str) -> set[int]:
@@ -4818,12 +4860,8 @@ def run_ekuiper_item(
         except subprocess.CalledProcessError as cleanup_error:
             error = RuntimeError(f"{error}; eKuiper cleanup failed: {cleanup_error}")
         stop_pi_telemetry(telemetry)
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
 
 
 def _running_sut_processes() -> list[dict]:
@@ -5361,7 +5399,18 @@ def run_rate_sweep_item(
                 )
             time.sleep(1)
             if runtime.poll() is not None:
-                raise RuntimeError("wafer runtime exited during startup")
+                runtime_exit = runtime.returncode
+                runtime = None
+                if item.experiment == "capacity-scout" or not runtime_exit_is_outcome(
+                    runtime_exit
+                ):
+                    raise RuntimeError(f"wafer runtime exited during startup with {runtime_exit}")
+                stop_pi_telemetry(telemetry)
+                telemetry = None
+                _merge_rate_sweep_metadata(output, item, started_at, started_ns, runtime_exit)
+                postprocess_run(root, item, output)
+                verify_result(root, output)
+                return finish_attempt(output, item)
             processes = _running_sut_processes()
             if {process["pid"] for process in processes} != {runtime.pid}:
                 raise RuntimeError(f"unexpected active SUT processes: {processes}")
@@ -5451,9 +5500,11 @@ def run_rate_sweep_item(
                 runtime.kill()
                 runtime_exit = runtime.wait(timeout=5)
             runtime = None
-            # A drained SIGTERM exits 0; any failure during the run is non-zero
-            # (see RESULT-CONTRACT "Runtime exit status").
-            if runtime_exit != 0:
+            # A drained SIGTERM exits 0; a failure during the run is an outcome of the
+            # system under test (see RESULT-CONTRACT "Runtime exit status").
+            if runtime_exit != 0 and (
+                item.experiment == "capacity-scout" or not runtime_exit_is_outcome(runtime_exit)
+            ):
                 raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
         if ekuiper_active:
             set_ekuiper_active(root, False)
@@ -5495,43 +5546,19 @@ def run_rate_sweep_item(
                 }
             (output / "metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
         else:
-            provenance_path = output / "runtime-provenance.json"
-            provenance = provenance_path.read_text() if provenance_path.is_file() else "null"
-            merge_metadata(
-                str(output / "metadata.json"),
-                item.experiment,
-                HOST.tag,
-                utc_now(),
-                started_at,
-                str(finished_ns - started_ns),
-                item.config,
-                config_sha,
-                json.dumps(
-                    {
-                        "profile_path": item.loadgen_profile,
-                        "warmup_secs": item.warmup_secs,
-                        "offered_rate_msg_s": item.offered_rate_msg_s,
-                    }
-                ),
-                json.dumps({"broker": "127.0.0.1:1883", "managed_by_harness": False}),
-                str(runtime_exit),
-                provenance,
-            )
+            _merge_rate_sweep_metadata(output, item, started_at, started_ns, runtime_exit)
         postprocess_run(root, item, output)
+        invocation = json.loads((output / "invocation-receipt.json").read_text())
         if item.experiment == "capacity-scout":
-            invocation = json.loads((output / "invocation-receipt.json").read_text())
             result = write_capacity_scout_result(
                 root, item, output, measurement_duration_ns, invocation["controlled_factors"]
             )
             if result["thermal"]["throttled"]:
                 raise RuntimeError("Pi throttling occurred during capacity-scout measurement")
-        elif final_capacity:
-            invocation = json.loads((output / "invocation-receipt.json").read_text())
-            write_capacity_result(item, output, invocation["controlled_factors"])
-            verify_result(root, output)
-        elif candidate_capacity:
-            invocation = json.loads((output / "invocation-receipt.json").read_text())
-            write_candidate_capacity_result(item, output, invocation["controlled_factors"])
+        else:
+            if not incomplete_run(output, item):
+                write = write_capacity_result if final_capacity else write_candidate_capacity_result
+                write(item, output, invocation["controlled_factors"])
             verify_result(root, output)
     except (
         OSError,
@@ -5550,12 +5577,35 @@ def run_rate_sweep_item(
         if ekuiper_active:
             set_ekuiper_active(root, False)
         stop_pi_telemetry(telemetry)
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
+
+
+def _merge_rate_sweep_metadata(
+    output: Path, item: RunItem, started_at: str, started_ns: int, runtime_exit: int
+) -> None:
+    provenance_path = output / "runtime-provenance.json"
+    provenance = provenance_path.read_text() if provenance_path.is_file() else "null"
+    merge_metadata(
+        str(output / "metadata.json"),
+        item.experiment,
+        HOST.tag,
+        utc_now(),
+        started_at,
+        str(time.time_ns() - started_ns),
+        item.config,
+        hashlib.sha256((output / "config.toml").read_bytes()).hexdigest(),
+        json.dumps(
+            {
+                "profile_path": item.loadgen_profile,
+                "warmup_secs": item.warmup_secs,
+                "offered_rate_msg_s": item.offered_rate_msg_s,
+            }
+        ),
+        json.dumps({"broker": "127.0.0.1:1883", "managed_by_harness": False}),
+        str(runtime_exit),
+        provenance,
+    )
 
 
 def static_host_metadata(facts: dict) -> dict:
@@ -5645,15 +5695,15 @@ def run_density_item(root: Path, item: RunItem, selection: AttemptSelection) -> 
         verify_result(root, output)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as error:
         stop_pi_telemetry(telemetry)
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
 
 
 def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
+    """Run one unit until an attempt is admitted or its infrastructure retries are spent.
+
+    A retry runs immediately, in the same place in the schedule.
+    """
     layout = results_layout(root)
     if item.shared_from:
         try:
@@ -5667,11 +5717,28 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
     condition_dir = layout.raw_path(
         item.experiment, batch_name(batch_id), item.condition
     )
-    selection = select_attempt(condition_dir, item.run_index)
-    if selection.skip:
-        print(f"[{utc_now()}] SKIP {item.result_key}: {selection.path}", flush=True)
-        return True
+    retries = attempt_retries(item)
+    budget = (retries or 0) + 1
+    while True:
+        selection = select_attempt(condition_dir, item.run_index, retries)
+        if selection.skip:
+            print(f"[{utc_now()}] SKIP {item.result_key}: {selection.path}", flush=True)
+            return True
+        if selection.missing:
+            print(
+                f"[{utc_now()}] MISSING {item.result_key}: infrastructure retries spent",
+                flush=True,
+            )
+            return False
+        if budget == 0:
+            return False
+        budget -= 1
+        if run_attempt(root, item, selection):
+            return True
 
+
+def run_attempt(root: Path, item: RunItem, selection: AttemptSelection) -> bool:
+    """Run one attempt; true when it was admitted as a pass or a system outcome."""
     if item.experiment in {"e-perf-10", "capacity-scout", CAPACITY_KNEE_EXPERIMENT}:
         return run_rate_sweep_item(root, item, selection)
     if item.experiment == "e-density-1":
@@ -5730,16 +5797,16 @@ def run_item(root: Path, batch_id: str, item: RunItem) -> bool:
     env["WAFER_LOADGEN_CPUSET"] = item.support_cpus
     print(f"[{utc_now()}] START {item.result_key} -> {output}", flush=True)
     try:
-        subprocess.run(command, cwd=root, env=env, check=True)
+        try:
+            subprocess.run(command, cwd=root, env=env, check=True)
+        except subprocess.CalledProcessError:
+            if not incomplete_run(output, item):
+                raise
         postprocess_run(root, item, output)
         verify_result(root, output)
-    except (OSError, ValueError, subprocess.CalledProcessError) as error:
-        write_status(output, item, "failed", str(error))
-        print(f"[{utc_now()}] FAIL {item.result_key}: {error}", flush=True)
-        return False
-    write_status(output, item, "passed")
-    print(f"[{utc_now()}] PASS {item.result_key}", flush=True)
-    return True
+    except (OSError, ValueError, ContractViolation, subprocess.CalledProcessError) as error:
+        return fail_attempt(output, item, error)
+    return finish_attempt(output, item)
 
 
 def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
@@ -5821,6 +5888,8 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             "source_nodes": {"branch_a": "source_a", "branch_b": "source_b"},
         }
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+    if incomplete_run(output, item):
+        return
 
     subscriber_metadata = output / "subscriber-metadata.json"
     if subscriber_metadata.is_file():
@@ -5916,7 +5985,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
         )
         if item.experiment == SWAP_SESSIONS_EXPERIMENT:
             evidence = stamp_candidate_swap_evidence(
-                evidence, item, _read_lossless_sequence(output / "sequence.csv")
+                evidence, item, _read_sequence(output / "sequence.csv")
             )
         (output / "hotswap-analysis.json").write_text(json.dumps(evidence, indent=2) + "\n")
         if item.experiment == "e-swap-4":
@@ -5955,7 +6024,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
             raise ValueError("E-Swap-5 must not contain a successful-v2 sink timeline")
         requests = json.loads((output / "swap_requests.json").read_text())
         rollback = json.loads((output / "rollback.json").read_text())
-        sequence = _read_lossless_sequence(output / "sequence.csv")
+        sequence = _read_sequence(output / "sequence.csv")
         interval_path = output / "interval-metrics.json"
         continuity = build_post_rollback_continuity(
             requests,
@@ -6086,7 +6155,7 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
 
 
 def verify_result(root: Path, output: Path) -> None:
-    subprocess.run(
+    completed = subprocess.run(
         [
             sys.executable,
             str(root / "eval/scripts/verify-result-contract.py"),
@@ -6094,8 +6163,21 @@ def verify_result(root: Path, output: Path) -> None:
             str(output),
         ],
         cwd=root,
-        check=True,
+        capture_output=True,
+        text=True,
+        check=False,
     )
+    print(completed.stdout, end="", flush=True)
+    print(completed.stderr, end="", file=sys.stderr, flush=True)
+    if completed.returncode != 0:
+        violations = [
+            line.split(": ", 1)[-1]
+            for line in completed.stdout.splitlines()
+            if line.startswith("VIOLATION")
+        ]
+        raise ContractViolation(
+            "; ".join(violations) or f"verifier exited with {completed.returncode}"
+        )
 
 
 def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
@@ -6107,9 +6189,8 @@ def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
         "epoch-loop-attack": [],
     }
     for path in result_root.rglob("branch-isolation.json"):
-        status_path = path.parent / "canonical-status.json"
         try:
-            if json.loads(status_path.read_text()).get("status") != "passed":
+            if read_attempt(path.parent).outcome not in ADMITTED:
                 continue
             result = json.loads(path.read_text())
             runs[result["condition"]].append(result)
@@ -6135,7 +6216,7 @@ def summarize_swap4(root: Path, batch_id: str) -> Path:
     for timeline_path in result_root.rglob("burst-timeline.json"):
         leaf = timeline_path.parent
         try:
-            if json.loads((leaf / "canonical-status.json").read_text()).get("status") != "passed":
+            if read_attempt(leaf).outcome not in ADMITTED:
                 continue
             run_match = re.fullmatch(r"run-(\d+)-attempt-\d+", leaf.name)
             if run_match is None:
@@ -6596,8 +6677,13 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
             except (OSError, ValueError, KeyError, TypeError):
                 continue
             by_system[result["system"]].append(result)
+        outcomes: Counter[tuple[str, int]] = Counter()
+        for unit in batch_units(result_root, None):
+            if unit.admitted is not None and unit.admitted.outcome == SUT_OUTCOME:
+                system, rate = unit.condition.split("/rate-")
+                outcomes[(system, int(rate))] += 1
         summary = {
-            **estimate_capacity_envelope(by_system),
+            **estimate_capacity_envelope(by_system, outcomes),
             "batch_id": batch_id,
             "criteria": {
                 "max_pooled_loss": RATE_SWEEP_MAX_LOSS_PERCENT / 100,
@@ -6726,13 +6812,13 @@ def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:
 
 
 def finished_evidence(layout: ResultsLayout, name: str, item: RunItem) -> Path | None:
-    """The alias receipt or passed attempt that completes a scheduled item."""
+    """The alias receipt or admitted attempt that completes a scheduled item."""
     if item.shared_from:
         receipt = layout.manifest_path(
             "aliases", item.experiment, name, item.condition, f"run-{item.run_index:02d}.json"
         )
         return receipt if receipt.is_file() else None
-    return find_passed_attempt(layout.raw_path(item.experiment, name, item.condition), item.run_index)
+    return find_admitted_attempt(layout.raw_path(item.experiment, name, item.condition), item.run_index)
 
 
 def batch_status(layout: ResultsLayout, batch_id: str) -> int:
@@ -6755,15 +6841,27 @@ def batch_status(layout: ResultsLayout, batch_id: str) -> int:
     totals = Counter(item.experiment for item in schedule)
     done: Counter[str] = Counter()
     pending: list[str] = []
+    missing: list[str] = []
     for item in schedule:
         if finished_evidence(layout, name, item) is not None:
             done[item.experiment] += 1
+        elif not item.shared_from and select_attempt(
+            layout.raw_path(item.experiment, name, item.condition),
+            item.run_index,
+            attempt_retries(item),
+        ).missing:
+            missing.append(item.result_key)
         else:
             pending.append(item.result_key)
     print(f"batch {name}")
     for experiment, total in totals.items():
         print(f"{experiment} {done[experiment]}/{total}")
-    print(f"done {len(schedule) - len(pending)}/{len(schedule)}, pending {len(pending)}")
+    print(
+        f"done {sum(done.values())}/{len(schedule)}, pending {len(pending)}, "
+        f"missing {len(missing)}"
+    )
+    for result_key in missing:
+        print(f"missing {result_key}")
     if pending:
         print(f"next {pending[0]}")
     progress = ledger / "progress.jsonl"
@@ -7332,7 +7430,7 @@ def main() -> int:
                 None, None,
             )
             passed = run_capacity_scout_item_with_timeout(root, batch_id, item)
-            accepted_path = find_passed_attempt(condition_dir, item.run_index) if passed else None
+            accepted_path = find_admitted_attempt(condition_dir, item.run_index) if passed else None
             result = (
                 json.loads((accepted_path / "capacity-scout.json").read_text())
                 if accepted_path is not None
@@ -7484,7 +7582,8 @@ def main() -> int:
             condition_dir = layout.raw_path(
                 item.experiment, batch_name(batch_id), item.condition
             )
-            if not select_attempt(condition_dir, item.run_index).skip:
+            selection = select_attempt(condition_dir, item.run_index, attempt_retries(item))
+            if not selection.skip and not selection.missing:
                 apply_capacity_knee_cooldown(
                     ledger, item, completed, total, len(failures)
                 )
@@ -7494,7 +7593,10 @@ def main() -> int:
         completed += 1
         write_progress(ledger, "item-finished", completed, total, item.result_key, len(failures))
     if args.repetitions is None:
-        summarise(root, batch_id, experiments)
+        try:
+            summarise(root, batch_id, experiments)
+        except ValueError as error:
+            print(f"[{utc_now()}] SUMMARY incomplete: {error}", flush=True)
     (ledger / "failures.json").write_text(json.dumps(failures, indent=2) + "\n")
     write_progress(ledger, "batch-finished", completed, total, failures=len(failures))
     return 1 if failures else 0

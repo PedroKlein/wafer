@@ -151,6 +151,9 @@ cat >"$harness_root/target/release/wafer" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'runtime\n' >>"${ORDER_LOG:?}"
+if [ -n "${FAKE_RUNTIME_EXIT:-}" ]; then
+  exit "$FAKE_RUNTIME_EXIT"
+fi
 cat >"${WAFER_STARTUP_OUTPUT:?}" <<JSON
 {
   "schema_version": 1,
@@ -249,5 +252,30 @@ assert json.load(open(sys.argv[1])) == {
 PY
 sed -n '1p' "$tmp/cold-order.log" | grep -Fq 'drop-cache sh -c sync; echo 3 > /proc/sys/vm/drop_caches'
 [ "$(sed -n '2p' "$tmp/cold-order.log")" = "runtime" ]
+
+for experiment in e-perf-9 e-iso-6; do
+  rm -rf "$tmp/crashed-result"
+  cache_state=()
+  [ "$experiment" = e-perf-9 ] && cache_state=(--startup-cache-state warm)
+  set +e
+  ORDER_LOG="$tmp/crash-order.log" FAKE_RUNTIME_EXIT=134 \
+  "$harness_root/eval/scripts/run-experiment.sh" \
+    --config "$harness_root/eval/startup.toml" \
+    --experiment "$experiment" \
+    ${cache_state[@]+"${cache_state[@]}"} \
+    --host shakedown-macos \
+    --skip-build \
+    --duration 5 \
+    --output-dir "$tmp/crashed-result" >"$tmp/crash.log" 2>&1
+  status=$?
+  set -e
+  [ "$status" -eq 5 ] || { echo "$experiment runtime crash exited $status" >&2; cat "$tmp/crash.log" >&2; exit 1; }
+  python3 - "$tmp/crashed-result/metadata.json" <<'PY'
+import json
+import sys
+assert json.load(open(sys.argv[1]))["exit_codes"]["wafer_runtime"] == 134
+PY
+  grep -q 'wafer-runtime exited with 134 before the run finished' "$tmp/crash.log"
+done
 
 echo 'canonical run-experiment tests: PASS'

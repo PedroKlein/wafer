@@ -449,6 +449,7 @@ RUNTIME_PID=$!
 _log "wafer-runtime pid=$RUNTIME_PID"
 runtime_finished_ns=""
 runtime_exit=0
+runtime_died=0
 # A19: runtime writes memory.csv via MemoryRecorder; no external sampler.
 
 # Trap-based cleanup so a Ctrl-C or unexpected exit still tears everything down.
@@ -470,15 +471,18 @@ if [ "$experiment" = "e-perf-9" ]; then
     RUNTIME_PID=""
     if [ "$runtime_exit" -ne 0 ]; then
         _log "wafer-runtime failed during startup measurement; see $OUT_DIR/stdout.log"
-        exit 5
+        runtime_died=1
+    else
+        _log "wafer-runtime completed startup measurement"
     fi
-    _log "wafer-runtime completed startup measurement"
 else
     # Give long-running pipelines time to surface startup traps before loadgen.
     sleep 1
     if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
         _log "wafer-runtime died during startup; see $OUT_DIR/stdout.log"
-        exit 5
+        wait "$RUNTIME_PID" 2>/dev/null || runtime_exit=$?
+        RUNTIME_PID=""
+        runtime_died=1
     fi
 fi
 
@@ -486,7 +490,8 @@ fi
 # MQTT warmup — publisher only, before the measured subscriber starts
 # ============================================================================
 
-if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ] && [ "$warmup_secs" -gt 0 ]; then
+if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ] \
+    && [ "$warmup_secs" -gt 0 ]; then
     _log "running MQTT warmup for ${warmup_secs}s"
     warmup_cmd=("$WAFER_LOADGEN_BIN" publish \
         --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
@@ -522,7 +527,7 @@ _stop_loadgen() {
     LOADGEN_SUB_PID=""
 }
 
-if [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
+if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     _log "launching wafer-loadgen subscribe topic=$subscribe_topic"
     sub_args=(subscribe --broker "$broker" --topic "$subscribe_topic" \
               --output-dir "$OUT_DIR" --host-tag "$host" \
@@ -539,7 +544,7 @@ if [ "$has_mqtt_sink" -eq 1 ] && [ -n "$subscribe_topic" ]; then
     sleep 0.5
 fi
 
-if [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ]; then
+if [ "$runtime_died" -eq 0 ] && [ "$has_mqtt_source" -eq 1 ] && [ -n "$loadgen_profile" ]; then
     _log "launching wafer-loadgen publish profile=$loadgen_profile"
     pub_args=(publish --broker-host "${broker%:*}" --broker-port "${broker#*:}" \
               --topic "$mqtt_source_topic" --profile-file "$loadgen_profile" \
@@ -705,6 +710,11 @@ metadata["power_measurement"] = boundary
 with open(metadata_path, "w") as stream:
     json.dump(metadata, stream, indent=2)
 PY
+fi
+
+if [ "$runtime_died" -eq 1 ]; then
+    _log "wafer-runtime exited with $runtime_exit before the run finished; see $OUT_DIR/stdout.log"
+    exit 5
 fi
 
 if [ "$defer_verification" -eq 0 ]; then

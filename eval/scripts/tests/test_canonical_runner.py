@@ -4478,15 +4478,23 @@ def test_resume_uses_next_numeric_attempt_after_a_gap() -> None:
         assert selection.path.name == "run-01-attempt-04"
 
 
-def test_resume_rejects_multiple_passed_attempts() -> None:
+RUNTIME_EXIT_RECEIPT = {
+    "status": "failed",
+    "failure_class": "sut_outcome",
+    "reasons": ["runtime-exit"],
+}
+
+
+@pytest.mark.parametrize("first", [{"status": "passed"}, RUNTIME_EXIT_RECEIPT])
+def test_resume_rejects_multiple_admitted_attempts(first: dict) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         condition = Path(tmp)
-        for attempt in (1, 2):
+        for attempt, receipt in ((1, first), (2, {"status": "passed"})):
             path = condition / f"run-01-attempt-{attempt:02d}"
             path.mkdir()
-            (path / "canonical-status.json").write_text('{"status":"passed"}')
+            (path / "canonical-status.json").write_text(json.dumps(receipt))
 
-        with pytest.raises(ValueError, match="multiple passed attempts"):
+        with pytest.raises(ValueError, match="multiple admitted attempts"):
             select_attempt(condition, 1)
 
 
@@ -4531,6 +4539,319 @@ def test_resume_skips_passed_attempt_and_preserves_failed_attempt() -> None:
         assert selection.skip is False
         assert selection.path.name == "run-02-attempt-02"
         assert failed.exists()
+
+
+def perf_item() -> RunItem:
+    return next(
+        item
+        for item in build_schedule({"e-perf-3"}, seed=1729)
+        if item.condition == "depth-1" and item.run_index == 1
+    )
+
+
+def receipts(condition: Path) -> list[dict | None]:
+    return [
+        json.loads((path / "canonical-status.json").read_text())
+        if (path / "canonical-status.json").is_file()
+        else None
+        for path in sorted(condition.iterdir())
+    ]
+
+
+@pytest.fixture
+def generic_runner(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Run the generic path without hardware; each run-experiment.sh launch is recorded."""
+    monkeypatch.delenv("WAFER_RESULTS_ROOT", raising=False)
+    monkeypatch.delenv("WAFER_DIAGNOSTIC_REPETITIONS", raising=False)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+    return []
+
+
+def fail_launches(monkeypatch: pytest.MonkeyPatch, launches: list, failures: int) -> None:
+    def launch(command, **kwargs):
+        launches.append(command)
+        if len(launches) <= failures:
+            raise subprocess.CalledProcessError(4, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, item, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+
+
+def test_infrastructure_failure_is_retried_once_in_place_then_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    generic_runner: list,
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = perf_item()
+
+    assert runner.run_item(tmp_path, "test", item) is False
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    assert [path.name for path in sorted(condition.iterdir())] == [
+        "run-01-attempt-01",
+        "run-01-attempt-02",
+    ]
+    assert [receipt["failure_class"] for receipt in receipts(condition)] == [
+        "infrastructure",
+        "infrastructure",
+    ]
+    assert receipts(condition)[0]["reasons"] == ["harness-error"]
+    assert len(generic_runner) == 2
+    assert "MISSING e-perf-3/depth-1/run-01: infrastructure retries spent" in (
+        capsys.readouterr().out
+    )
+
+
+def test_infrastructure_retry_that_passes_is_the_admitted_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=1)
+    item = perf_item()
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert runner.run_item(tmp_path, "test", item)
+
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    assert [receipt["status"] for receipt in receipts(condition)] == ["failed", "passed"]
+    assert len(generic_runner) == 2
+
+
+def test_interrupted_attempt_counts_as_one_infrastructure_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = perf_item()
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    interrupted = condition / "run-01-attempt-01"
+    interrupted.mkdir(parents=True)
+    (interrupted / "stdout.log").write_text("power lost\n")
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    assert receipts(condition)[0] is None
+    assert receipts(condition)[1]["failure_class"] == "infrastructure"
+    assert len(generic_runner) == 1
+
+
+def test_validation_gate_unit_is_never_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = next(iter(build_schedule({"e-val-1"}, seed=1729)))
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    assert len(generic_runner) == 1
+    condition = tmp_path / f"eval/results/e-val-1/rpi5-test/{item.condition}"
+    assert [path.name for path in condition.iterdir()] == [f"run-{item.run_index:02d}-attempt-01"]
+
+
+def write_stopped_runtime_leaf(output: Path, experiment: str, runtime_exit: int) -> None:
+    """What run-experiment.sh leaves when the runtime exits before the run finishes."""
+    output.mkdir(parents=True)
+    for name, content in {
+        "config.toml": "fixture\n",
+        "stdout.log": "fixture\n",
+        "runtime-provenance.json": "fixture\n",
+        "pmic-rails.csv": "fixture\n",
+        "power-boundary.json": '{"backend":"pi","measurement":"rpi5-pmic-internal-rail-proxy"}\n',
+        "pi-telemetry.csv": (
+            "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,"
+            "rail_proxy_watts\n100,50000,2400000000,performance,0x0,4.0\n"
+        ),
+        "measurement-window.json": '{"started_ns":100,"finished_ns":200}\n',
+    }.items():
+        (output / name).write_text(content)
+    metadata = {
+        "experiment": experiment,
+        "host_tag": "rpi5",
+        "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+        "arch": "aarch64",
+        "isolated_cpus": "1-3",
+        "cpu_governors": ["performance"],
+        "throttled": "0x0",
+        "git_sha": "1" * 40,
+        "git_dirty": False,
+        "git_tags": ["rpi5-eval-v1"],
+        "wasmtime_version": "43.0.0",
+        "wafer_runtime_sha256": "2" * 64,
+        "wafer_plugin_hashes": {"transform": "3" * 64},
+        "engine_fuel_budgets": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
+        "exit_codes": {"wafer_runtime": runtime_exit},
+    }
+    (output / "metadata.json").write_text(json.dumps(metadata))
+
+
+def test_forced_runtime_exit_in_containment_run_is_an_admitted_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    generic_runner: list,
+) -> None:
+    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval/scripts").symlink_to(ROOT / "eval/scripts")
+    item = next(item for item in build_schedule({"e-iso-6"}, seed=1729) if item.run_index == 1)
+    real_run = subprocess.run
+
+    def launch(command, **kwargs):
+        if not str(command[0]).endswith("run-experiment.sh"):
+            return real_run(command, **kwargs)
+        generic_runner.append(command)
+        output = Path(command[command.index("--output-dir") + 1])
+        write_stopped_runtime_leaf(output, "e-iso-6", runtime_exit=134)
+        raise subprocess.CalledProcessError(5, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert runner.run_item(tmp_path, "test", item)
+
+    condition = tmp_path / "eval/results/e-iso-6/rpi5-test/panic"
+    assert receipts(condition) == [
+        {
+            "status": "failed",
+            "experiment": "e-iso-6",
+            "condition": "panic",
+            "run_index": 1,
+            "updated_at": receipts(condition)[0]["updated_at"],
+            "failure_class": "sut_outcome",
+            "reasons": ["runtime-exit"],
+        }
+    ]
+    assert len(generic_runner) == 1
+    output = capsys.readouterr().out
+    assert "OUTCOME e-iso-6/panic/run-01: runtime-exit" in output
+    assert "SKIP e-iso-6/panic/run-01" in output
+
+
+def test_runtime_startup_refusal_stays_an_infrastructure_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval/scripts").symlink_to(ROOT / "eval/scripts")
+    item = next(item for item in build_schedule({"e-iso-6"}, seed=1729) if item.run_index == 1)
+    real_run = subprocess.run
+
+    def launch(command, **kwargs):
+        if not str(command[0]).endswith("run-experiment.sh"):
+            return real_run(command, **kwargs)
+        generic_runner.append(command)
+        output = Path(command[command.index("--output-dir") + 1])
+        write_stopped_runtime_leaf(output, "e-iso-6", runtime_exit=2)
+        raise subprocess.CalledProcessError(5, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    condition = tmp_path / "eval/results/e-iso-6/rpi5-test/panic"
+    assert [receipt["failure_class"] for receipt in receipts(condition)] == [
+        "infrastructure",
+        "infrastructure",
+    ]
+    assert len(generic_runner) == 2
+
+
+def test_one_dropped_message_in_a_burst_swap_is_an_admitted_outcome(tmp_path: Path) -> None:
+    timing, source, requests, sink, throughput, sequence = swap4_fixture()
+    for bucket in throughput["drain_buckets"][:1]:
+        bucket.update(received_unique=0, received_events=0, rate_msg_s=0)
+    throughput.update(
+        drain_received_unique=0,
+        drain_received_events=0,
+        drain_first_offset_ns=None,
+        drain_last_offset_ns=None,
+        max_arrival_offset_ns=throughput["primary_last_offset_ns"],
+        received_unique=129_999,
+        received_events=129_999,
+        phase_received_messages=[55_000, 20_000, 54_999],
+    )
+    sequence.update(total_received="129999", gap_msgs="1")
+    timeline = build_swap4_timeline(timing, source, requests, sink, throughput, sequence)
+    validate_swap4_artifacts(timeline, throughput, requests, sink)
+    assert timeline["loss"] == 1
+
+    item = next(iter(build_schedule({"e-swap-4"}, seed=1729)))
+    output = tmp_path / "burst-2x/run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "burst-timeline.json").write_text(json.dumps(timeline))
+    (output / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "130000,129999,129999-129999,1,0\n"
+    )
+
+    assert runner.finish_attempt(output, item)
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt["failure_class"] == "sut_outcome"
+    assert receipt["reasons"] == ["message-loss"]
+    assert select_attempt(output.parent, 1).skip is True
+
+
+@pytest.mark.parametrize(
+    ("strategy", "reasons"), [("wafer-hotswap", ["message-loss"]), ("wafer-restart", None)]
+)
+def test_disruption_loss_is_an_outcome_only_where_zero_loss_is_required(
+    tmp_path: Path, strategy: str, reasons: list[str] | None
+) -> None:
+    item = next(item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == strategy)
+    output = tmp_path / strategy / "run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "disruption-analysis.json").write_text(
+        json.dumps({"strategy": strategy, "loss": 1, "duplicates": 0})
+    )
+
+    assert runner.finish_attempt(output, item)
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt.get("reasons") == reasons
+
+
+def test_hot_swap_request_to_a_dead_runtime_is_a_failed_swap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def refused(request, timeout):
+        raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", refused)
+
+    response = runner.post_hot_swap("transform", tmp_path / "v2.wasm")
+
+    assert response["http_status"] is None
+    assert "Connection refused" in response["body"]
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "swap_requests.json").write_text(json.dumps([{"event_index": 0, **response}]))
+    assert runner.incomplete_run(output, item)
+
+
+def test_validation_gate_rejects_a_repetition_that_needed_a_retry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        failed = root / "run-01-attempt-01"
+        failed.mkdir()
+        (failed / "canonical-status.json").write_text(
+            json.dumps({"status": "failed", "failure_class": "infrastructure"})
+        )
+        retried = root / "run-01-attempt-02"
+        retried.mkdir()
+        (retried / "percentiles.json").write_text(
+            json.dumps({"total_count": 600, "p99_ns": 51_000_000})
+        )
+        (retried / "canonical-status.json").write_text(json.dumps({"status": "passed"}))
+
+        result = evaluate_validation_gate(root, expected_runs=1)
+
+    assert result.passed is False
+    assert result.failed_runs == [1]
 
 
 def test_validation_gate_rejects_one_bad_repetition() -> None:
