@@ -34,8 +34,10 @@ written once and marked passed or failed, and the batch ledger under
 # Start (or resume) a batch
 mise run run-canonical-pi5 -- --batch-id <id>
 
-# Stop at any time with Ctrl-C. Re-running the same command resumes: passed
-# runs are skipped and an interrupted run gets a new attempt directory.
+# Stop at any time with Ctrl-C. Re-running the same command resumes: admitted
+# runs (clean passes and system outcomes) are skipped, and an interrupted run
+# gets a new attempt directory. An infrastructure failure is retried once in
+# place; see eval/RESULT-CONTRACT.md#attempts-and-retries.
 mise run run-canonical-pi5 -- --batch-id <id>
 
 # Show done and pending runs per experiment, the next run and the last event

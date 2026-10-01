@@ -65,7 +65,7 @@ uv run jupyter nbconvert --execute --to notebook --output-dir executed \
   notebooks/09-saturation.ipynb
 ```
 
-`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the batch against its entry in `eval/final-batches.json`, Raspberry Pi 5 provenance, final-evidence labeling, a clean source, zero throttling, passed completion receipts, one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
+`WAFER_EVAL_BATCH_ID` resolves `eval/results/<experiment>/rpi5-<batch-id>/`. Canonical resolution verifies the batch against its entry in `eval/final-batches.json`, Raspberry Pi 5 provenance, final-evidence labeling, a clean source, zero throttling, one admitted completion receipt per unit (a clean pass or a system outcome), one source SHA, every required artifact, and the exact condition/run population declared by `eval/canonical-matrix.json`. It never selects the latest batch implicitly.
 
 `WAFER_EVAL_BATCH_ID=jetson-<batch-id>` or `x86-<batch-id>` selects that host's batch instead. Each host has its own entry in `eval/final-batches.json`, and every leaf must carry that host's `host_tag`. A batch is never validated against another host's entry, and `require_cross_architecture` checks the Pi and x86 E-Perf-5 batches each against their own. Power reports take their label from each leaf's `power-boundary.json` and refuse to mix hosts or measurements in one figure.
 
