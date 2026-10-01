@@ -1,7 +1,7 @@
 # ADR-0008: Five-Category Error Policy Engine with Per-Node Cascade
 
 - **Date**: 2026-07-06
-- **Status**: Implemented — five-category classification, per-node cascade (A6 closed 2026-07-20), retry-exhaustion (A7 closed 2026-07-21 via P0.11 residuals), recovery state (A7), and DLQ lineage enrichment (A13 closed 2026-07-20) are all live. See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status**: Implemented — five-category classification, per-node cascade (A6 closed 2026-07-20), retry-exhaustion (A7 closed 2026-07-21 via P0.11 residuals), recovery state (A7), and DLQ lineage enrichment (A13 closed 2026-07-20) are all live. See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md).
 - **Parent RFC**: [RFC-002](../rfcs/RFC-002-host-runtime.md)
 
 > **Implementation status.** The five error categories, `try_retry` /

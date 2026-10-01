@@ -2,7 +2,7 @@
 
 > **Archived, not current.** Diagnosis of the v11 Pi pilot eKuiper tail.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [eKuiper comparator](ekuiper-comparator.md).
+> paths or numbers. Current source: [eKuiper comparator](../../benchmarks/ekuiper-comparator.md).
 
 <!-- historical-diagnostic-file -->
 

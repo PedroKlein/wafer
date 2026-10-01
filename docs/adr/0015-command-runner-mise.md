@@ -61,8 +61,6 @@ Documentation swept: `.agents/AGENTS.md`, `.agents/skills/wafer-project/SKILL.md
 language removed or updated.
 
 Historical references to `justfile` in
-`docs/rfcs/source-decisions/2025-07-15-phase4-io-integration.md`,
-`docs/rfcs/RFC-011-doc-refactor.md`, `docs/adr/0006-workspace-architecture.md`,
-`docs/status/migration-audit.md`, and skill reference documents are
+`docs/adr/0006-workspace-architecture.md` and skill reference documents are
 preserved as historical accuracy — those documents describe past state,
 not current state.

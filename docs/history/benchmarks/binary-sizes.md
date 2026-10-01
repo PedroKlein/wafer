@@ -2,7 +2,7 @@
 
 > **Archived, not current.** Pre-final E-Density-1 sizes from the shakedown build.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
 >
 > The container floors and ratios below are estimates, not measurements, and
 > the reasons given for them do not hold: a `FROM scratch` image runs a

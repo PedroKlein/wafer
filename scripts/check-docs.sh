@@ -7,10 +7,7 @@
 #     resolves for the workspace. A documented `0.8` matches 0.8.x; a
 #     40-hex git revision in the row must be the locked source revision.
 #  2. A crates/wafer*/... path cited anywhere in docs/ that does not exist.
-#     Historical records are skipped: docs/history/,
-#     docs/rfcs/source-decisions/, docs/status/migration-audit.md and
-#     docs/status/implementation-gaps.md (whose entries keep the paths seen
-#     when each gap was filed).
+#     Historical records under docs/history/ are skipped.
 #  3. A relative Markdown link, in any tracked .md file outside docs/history/,
 #     whose target file does not exist. Anchors are not checked.
 set -euo pipefail
@@ -77,7 +74,7 @@ while IFS=: read -r file line path; do
         failed=1
     fi
 done < <(grep -rnoE 'crates/wafer[A-Za-z0-9_-]*(/[A-Za-z0-9_.-]*[A-Za-z0-9_])*' docs \
-    --exclude-dir=history --exclude-dir=source-decisions --exclude=migration-audit.md --exclude=implementation-gaps.md |
+    --exclude-dir=history |
     sort -t: -k1,1 -k2,2n | uniq)
 
 while IFS= read -r file; do

@@ -13,7 +13,7 @@
 //! delay-injector plugin. Passes iff (a) the pipeline completes without
 //! panicking and (b) the recorded median preserves the injected delay.
 //!
-//! See docs/status/implementation-gaps.md §A16.
+//! See docs/history/status/implementation-gaps-closed.md §A16.
 
 use std::num::NonZeroU64;
 use std::path::Path;
