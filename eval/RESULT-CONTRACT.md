@@ -524,7 +524,10 @@ consecutive probes are delivery-bad, then bisects that bracket. A run writes
 Decisions are hash-chained under `manifests/capacity-scout/<batch>/decisions/`, and
 `scout-complete.json` records the final state of every system. The frozen grid
 comes from batch `capacity-scout-v3-20260904T045000Z`; a later scout batch does not
-change it.
+change it. The grid's provenance is the summary and candidate hashes recorded in
+`eval/canonical-matrix.json`, not a replay of that batch: the runner replays a
+batch against its current system set, so a batch recorded before the diagnostic
+arm existed cannot be resumed with the current runner.
 
 Besides MQTT loopback, native, WAFER and eKuiper, the scout runs a diagnostic arm,
 `wafer-max-inflight-1`. It is the WAFER scout pipeline with `max_inflight = 1` on
