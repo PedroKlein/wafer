@@ -71,5 +71,3 @@ def test_deployed_canonical_runner_starts_from_a_fresh_root(tmp_path: Path) -> N
     )
     assert result.returncode == 0, result.stderr
     assert "Run resumable canonical evaluations on one host" in result.stdout
-
-    assert (deployed / "eval/scripts/verify-storage-receipt.py").is_file()

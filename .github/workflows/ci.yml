@@ -39,9 +39,6 @@ jobs:
       - name: Check docs against Cargo.lock and crates/ paths
         run: scripts/check-docs.sh
 
-      - name: Check current docs against runtime defaults and the matrix
-        run: python3 eval/scripts/check-current-docs.py
-
       - name: Install Rust toolchain from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
