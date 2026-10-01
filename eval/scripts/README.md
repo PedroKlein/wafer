@@ -25,13 +25,10 @@ Entry points of the evaluation harness. The Python modules they share live in
 | `run-rpi5-idle-baseline.sh`, `summarise-idle-baseline.py` | Diagnostic idle-power baseline (`mise run idle-baseline-pi5`). |
 | `run-rpi5-instrument-ab.sh`, `analyze-instrument-ab.py` | Sidecars on/off control pairs that measure the telemetry cost (`mise run instrument-ab-pi5`). |
 | `run-rpi5-smoke.sh`, `run-rpi5-validation.sh` | Short Pipeline C smoke run and the 50 ms honesty check. |
-| `characterize-rpi5-host.sh` | Host load ladder (`lib/host_characterization.py`). |
-| `qualify-results-storage.sh`, `verify-storage-receipt.py` | Results-disk qualification. |
 
 ## Other evidence and checks
 
 | File | Role |
 |---|---|
 | `run-attack-evidence.py` | Containment attack bundle (`mise run mandatory-attack-evidence`). |
-| `check-current-docs.py` | CI gate: current eval docs against runtime defaults and the matrix. |
 | `test-http-security.sh` | Runs the ignored outbound-HTTP capability tests with a built fixture. |

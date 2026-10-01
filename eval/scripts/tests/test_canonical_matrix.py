@@ -74,6 +74,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     }
     assert sweep["capacity_envelope"]["support_path_censoring"] == "mqtt-loopback"
     assert sweep["capacity_envelope"]["competitive_ratio_threshold"] == 0.70
+    assert sweep["capacity_envelope"]["delivery_ceiling"].startswith("bracketed by tested rates")
+    assert sweep["capacity_envelope"]["competitive_decision"] == (
+        "PASS if WAFER lower bound / eKuiper upper bound >= threshold; "
+        "FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
+    )
     assert {"publisher-summary.json", "capacity-run.json", "subscriber-metadata.json"} <= set(
         sweep["required_outputs"]
     )
