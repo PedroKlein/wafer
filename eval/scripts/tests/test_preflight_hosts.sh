@@ -193,4 +193,12 @@ if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
 fi
 grep -q '^FAIL  E-Density-1 container floor deployed — measure and commit eval/container-floor/linux-amd64.json' "$log"
 
+rm "$deployed/eval/container-floor/linux-arm64.json"
+if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=aarch64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$pi" "$ROOT/eval/scripts/preflight-pi5.sh" >"$log" 2>&1; then
+    echo 'pi preflight passed without the arm64 container floor' >&2
+    exit 1
+fi
+grep -q '^FAIL  E-Density-1 container floor deployed — measure and commit eval/container-floor/linux-arm64.json' "$log"
+
 echo 'host preflight tests: PASS'
