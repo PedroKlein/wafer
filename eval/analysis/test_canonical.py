@@ -1714,18 +1714,25 @@ def test_validation_gate_requires_full_n_unless_diagnostic() -> None:
     assert not validation_gate_table(validation_records([50_300_000] * 2), canonical=False)["thesis_evidence"].any()
 
 
-def test_density_table_labels_container_floors_as_estimates() -> None:
+def test_density_table_compares_components_with_the_measured_floor() -> None:
     rows = [
-        {"plugin": "pass-through", "wasm_bytes": "65536", "container_base": "alpine", "container_min_mb": "50"},
-        {"plugin": "tensor-prep", "wasm_bytes": "262144", "container_base": "alpine + ndarray", "container_min_mb": "70"},
+        {"plugin": "pass-through", "wasm_bytes": "65536", "wasm_kb": "64.0"},
+        {"plugin": "tensor-prep", "wasm_bytes": "262144", "wasm_kb": "256.0"},
     ]
-    table = density_table(rows).set_index("plugin")
-    assert table.loc["pass-through", "floor_to_wasm_ratio"] == pytest.approx(800)
-    assert "estimate, not a measurement" in table.loc["tensor-prep", "estimator"]
+    floor = {"base": "scratch", "image_bytes": 524_288}
+    table = density_table(rows, floor).set_index("plugin")
+    assert table.loc["pass-through", "container_floor_bytes"] == 524_288
+    assert table.loc["pass-through", "floor_to_wasm_ratio"] == pytest.approx(8)
+    assert table.loc["tensor-prep", "floor_to_wasm_ratio"] == pytest.approx(2)
+    assert "measured" in table.loc["tensor-prep", "estimator"]
+    assert "estimate" not in table.loc["tensor-prep", "estimator"]
     assert table["thesis_evidence"].all()
-    assert not density_table(rows, canonical=False)["thesis_evidence"].any()
+    assert not density_table(rows, floor, canonical=False)["thesis_evidence"].any()
     with pytest.raises(ValueError, match="one positive size"):
-        density_table(rows + rows[:1])
+        density_table(rows + rows[:1], floor)
+    for unmeasured in ({**floor, "base": "alpine"}, {**floor, "image_bytes": "50"}, {"base": "scratch"}):
+        with pytest.raises(ValueError, match="measured FROM scratch"):
+            density_table(rows, unmeasured)
 
 
 def startup_records(runs: int = 30, conditions: tuple[str, ...] | None = None) -> list[dict]:

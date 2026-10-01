@@ -11,6 +11,7 @@ The final Raspberry Pi 5 method is implemented through canonical analysis. The f
 | E-Perf-10 bounded capacity capture | implemented |
 | E-Swap-3 actual-t0 event buckets | implemented |
 | E-Swap-4 source-driven burst | implemented |
+| E-Density-1 measured container floor | tooling implemented; floor files pending |
 | Canonical analysis and approval gate | implemented |
 | WAFER/thesis documentation sync | WAFER reconciled; thesis pending |
 | Verified clean release commit | pending |

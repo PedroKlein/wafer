@@ -12,6 +12,7 @@ grep -q 'source_tags:' <<<"$deploy"
 grep -q 'target/release/wafer-loadgen' <<<"$deploy"
 grep -q 'plugins/\*/target/wasm32-wasip2/release/\*.wasm' <<<"$deploy"
 grep -q 'eval/canonical-matrix.json' <<<"$deploy"
+grep -q 'eval/container-floor' <<<"$deploy"
 
 smoke="$("$ROOT/eval/scripts/run-rpi5-smoke.sh" --dry-run)"
 grep -q 'WAFER_RUNTIME_CPUSET=1-3' <<<"$smoke"
