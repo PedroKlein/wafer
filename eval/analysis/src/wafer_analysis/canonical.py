@@ -1151,7 +1151,7 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         gc_runtime = record.get("gc_runtime_metrics")
         if gc_runtime != {
             "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
         }:
             raise ValueError("eKuiper profile record overstates GC/runtime evidence")
         interval = record.get("interval_alignment", {})

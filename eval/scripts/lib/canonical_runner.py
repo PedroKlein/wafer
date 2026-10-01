@@ -3481,7 +3481,7 @@ def write_ekuiper_profile_artifacts(
         "process_metrics": process_metrics,
         "gc_runtime_metrics": {
             "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
         },
         "claim_boundary": "diagnostic-association-only-not-gc-causality",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
