@@ -79,7 +79,7 @@ For every paired WAFER/eKuiper run:
 
 The v11 pilot omitted the eKuiper sink `qos` field, selecting QoS 0 and producing an approximately 20 ms periodic release pattern. A matched Raspberry Pi 5 diagnostic reproduced the pattern with sink QoS 0 and removed it with sink QoS 1. The old v11 eKuiper result is therefore not a valid comparator result and must not be pooled with corrected runs.
 
-See [Why the v11 eKuiper latency tail was misleading](ekuiper-tail-diagnostic.md) for the one-variable evidence, corrected small-N results, and claim boundaries.
+See [Why the v11 eKuiper latency tail was misleading](../history/benchmarks/ekuiper-tail-diagnostic.md) for the one-variable evidence, corrected small-N results, and claim boundaries.
 
 ## MQTT sink flow control
 

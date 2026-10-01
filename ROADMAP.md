@@ -16,21 +16,6 @@ The Jetson receipt confirms CUDA provider execution but not stable CUDA teardown
 or inference performance.
 The canonical-readiness matrix at [`docs/status/canonical-readiness.md`](docs/status/canonical-readiness.md) is the current operational boundary.
 
-Thesis-hardening plan **closed 2026-08-02** (9/9 tasks):
-
-- A17 process-time hot-swap rollback IMPLEMENTED with polish pass
-  (canary window + `HotSwapError::RolledBack` API + fuel-on-recover).
-  The original rollback-retry budget (`max_rollback_retries`) was later
-  removed; a canary now rolls back at most once per swap.
-- A19 runtime-side memory sampler + per-node metrics emitter LANDED.
-- aarch64-linux cross-compile SHIPPED (`mise run cross-build-pi`;
-  cross-arch CI workflow guards the recipe on every PR).
-- Thesis-grade PDF figure pipeline LANDED for the canonical
-  notebooks; LaTeX embed verified zero font substitution warnings.
-- Legacy shakedown metadata schema unified; `verify-result-contract.py`
-  WARNs on missing merged provenance keys.
-- Notebook ↔ experiment ↔ RQ traceability tables cross-linked.
-
 Remaining work for thesis-grade numbers:
 
 - Complete the isolated P3 PoC and decide whether the first release migrates to
@@ -53,25 +38,6 @@ Remaining work for thesis-grade numbers:
   reinstalls it with `eval/ekuiper/install-native.sh` before its batch.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
-
-## Runtime migration — closed
-
-The runtime uses `wafer-types` plus `wafer-config`; the legacy schema and prior
-A1–A19 gaps are closed. `docs/status/implementation-gaps.md` preserves their
-historical filing state.
-
-Only open gap is **A20**
-(Prometheus rollback counter, observability follow-up, ~1 h). The
-recovery-transition histogram (formerly A7 residual) landed via
-T4 alongside the `wafer_node_recovery_duration_ms` scrape hook.
-
-Historical open follow-ups (all closed):
-
-- **A7 residual 🟢** — recovery-duration histogram landed via T4.
-- **A3/A15 residual 🟢** — `hot_swap_phase_ns` labeled histogram
-  landed via P0.10; benchmarks re-run for thesis pending Pi hardware.
-- **A12 🟢** — `wit-contracts.md` field-path fixed in doc-refactor
-  cleanup.
 
 ## Medium-term — runtime enhancements
 

@@ -1,6 +1,6 @@
 # RFC-001: WIT Contracts & Envelope Design
 
-- **Status:** Implemented — WIT surface plus host lineage assignment (A13 closed 2026-07-20) and production guest lifecycle `validate()` / `init()` calls (A14 closed 2026-07-20). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md).
+- **Status:** Implemented — WIT surface plus host lineage assignment (A13 closed 2026-07-20) and production guest lifecycle `validate()` / `init()` calls (A14 closed 2026-07-20). See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md).
 - **Original session date:** 2026-07-05
 - **Amended by:** RFC-003 (§A1 removes Joiner world; §A2 replaces `process-outcome` wrapper with direct `result<output-message, process-error>` return); RFC-002 (§A3 replaces `list<u8>` host-side payload with `Arc<EnvelopeHeader> + Bytes` runtime envelope)
 

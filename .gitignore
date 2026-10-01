@@ -134,7 +134,6 @@ docker-compose.override.yml
 .chroma_db/
 
 # eval/ result trees — large generated artifacts.
-# Only fixture-style dirs are `git add -f`'d for documentation.
 eval/results/*/
 
 # Notebook outputs (mise run //eval:figures); thesis copies live in tcc-doc

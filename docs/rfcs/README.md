@@ -6,9 +6,7 @@ Notes. They complement the short Nygard-format ADRs under [`../adr/`](../adr/).
 
 The archive was migrated from `docs/decisions/` on 2026-07-18; each RFC
 preserves its original decision-session date in the header block but adopts a
-stable `RFC-NNN-<slug>` filename. Bit-for-bit copies of the original deleted
-source documents are preserved under [`source-decisions/`](source-decisions/)
-for provenance.
+stable `RFC-NNN-<slug>` filename. Git history keeps the original files.
 
 ## Index
 
@@ -24,7 +22,6 @@ for provenance.
 | [RFC-008](RFC-008-evaluation-harness.md) | Evaluation harness design | Implemented for final-campaign readiness | 2026-07-12 |
 | [RFC-009](RFC-009-implementation-architecture.md) | Implementation Architecture — Module Structure & Crate Boundaries | Implemented | 2026-07-12 |
 | [RFC-010](RFC-010-io-integration.md) | I/O Integration & First End-to-End Pipeline | Implemented | 2026-07-15 |
-| [RFC-011](RFC-011-doc-refactor.md) | Documentation Refactor Execution Plan | Superseded | 2026-07-18 |
 | [RFC-012](RFC-012-wasi-0.3-evaluation.md) | WASI 0.3 and Component Model Evolution | Async P2 and bounded outbound HTTP implemented; P3 PoC approved | 2026-09-25 |
 
 Titles, statuses, and dates are copied from each RFC's own header; the RFC's

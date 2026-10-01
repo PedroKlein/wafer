@@ -2,7 +2,7 @@
 
 > **Archived, not current.** macOS shakedown RQ tables; no final verdict.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
 
 <!-- historical-diagnostic-file -->
 
@@ -13,7 +13,7 @@
 > thesis claims. Canonical numbers require Raspberry Pi 5 4 GB with CPU pinning,
 > isolated cores, 60-second runs, and proper Linux scheduling.
 >
-> See [`docs/status/canonical-readiness.md`](../status/canonical-readiness.md)
+> See [`docs/status/canonical-readiness.md`](../../status/canonical-readiness.md)
 > for the per-experiment gap analysis.
 >
 > These are pre-fix diagnostic numbers. They predate latency measured from
@@ -33,13 +33,13 @@ eKuiper; per-hop <50 µs on Pi; per-node RSS <10 MB.
 
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
-| Throughput ratio (WAFER/eKuiper) | 0.905 | ✅ within 30% | MQTT dominates; Wasm boundary invisible | [`09-saturation`](../../eval/analysis/notebooks/09-saturation.ipynb) |
-| Throughput ratio (WAFER/native) | 0.996 | ✅ apples-to-apples | Native = JSON-decode + range compare (A18 closed) | [`09-saturation`](../../eval/analysis/notebooks/09-saturation.ipynb) |
-| Latency p95 ratio (WAFER/eKuiper) | 1.45× | ✅ within 2× | Higher tails from Store+epoch reset | [`01-latency-cdf`](../../eval/analysis/notebooks/01-latency-cdf.ipynb) |
-| Per-hop overhead | 15.2 µs/hop | TBD on Pi | macOS M-series; Pi expected 100–500 µs | [`02-per-hop-overhead`](../../eval/analysis/notebooks/02-per-hop-overhead.ipynb) |
-| Per-node RSS | 1.1 MB/hop | ✅ <10 MB | macOS over-reports shared libs | [`03-memory-scaling`](../../eval/analysis/notebooks/03-memory-scaling.ipynb) |
-| Depth scaling linearity | R² = 0.998 | ✅ | Overhead is additive, not multiplicative | [`08-depth-scaling`](../../eval/analysis/notebooks/08-depth-scaling.ipynb) |
-| Metering overhead (fuel+epoch) | <5 µs at p50 | ✅ negligible | Pass-through plugin; instruction-heavy may differ | [`07-metering-decomp`](../../eval/analysis/notebooks/07-metering-decomp.ipynb) |
+| Throughput ratio (WAFER/eKuiper) | 0.905 | ✅ within 30% | MQTT dominates; Wasm boundary invisible | [`09-saturation`](../../../eval/analysis/notebooks/09-saturation.ipynb) |
+| Throughput ratio (WAFER/native) | 0.996 | ✅ apples-to-apples | Native = JSON-decode + range compare (A18 closed) | [`09-saturation`](../../../eval/analysis/notebooks/09-saturation.ipynb) |
+| Latency p95 ratio (WAFER/eKuiper) | 1.45× | ✅ within 2× | Higher tails from Store+epoch reset | [`01-latency-cdf`](../../../eval/analysis/notebooks/01-latency-cdf.ipynb) |
+| Per-hop overhead | 15.2 µs/hop | TBD on Pi | macOS M-series; Pi expected 100–500 µs | [`02-per-hop-overhead`](../../../eval/analysis/notebooks/02-per-hop-overhead.ipynb) |
+| Per-node RSS | 1.1 MB/hop | ✅ <10 MB | macOS over-reports shared libs | [`03-memory-scaling`](../../../eval/analysis/notebooks/03-memory-scaling.ipynb) |
+| Depth scaling linearity | R² = 0.998 | ✅ | Overhead is additive, not multiplicative | [`08-depth-scaling`](../../../eval/analysis/notebooks/08-depth-scaling.ipynb) |
+| Metering overhead (fuel+epoch) | <5 µs at p50 | ✅ negligible | Pass-through plugin; instruction-heavy may differ | [`07-metering-decomp`](../../../eval/analysis/notebooks/07-metering-decomp.ipynb) |
 
 > **Note on WAFER/native.** Post-A18 (closed) the native baseline in
 > `pipeline-a-native.toml` runs the WIT-plugin-equivalent
@@ -65,10 +65,10 @@ healthy branches; sub-ms recovery.
 
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
-| Attack containment (6 scenarios) | 6/6 contained | ✅ | buffer-overflow, cross-read, fs-access, infinite-loop, memory-exhaust, panic. Judged by the old rule (any failure on the attack node); see the note below | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
-| Branch isolation (E-Iso-7) | Corrected independent-population Pi rerun pending | ⏳ | Earlier shared-source result cannot isolate fault-branch backpressure | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
-| Recovery time (E-Iso-8) | ~0.136 ms | ✅ sub-ms | InstancePre cache enables instant re-instantiation | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
-| Source throughput under attack | 100% across all 6 | ✅ | Channel buffer absorbs trap delay | [`06-fault-injection`](../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Attack containment (6 scenarios) | 6/6 contained | ✅ | buffer-overflow, cross-read, fs-access, infinite-loop, memory-exhaust, panic. Judged by the old rule (any failure on the attack node); see the note below | [`06-fault-injection`](../../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Branch isolation (E-Iso-7) | Corrected independent-population Pi rerun pending | ⏳ | Earlier shared-source result cannot isolate fault-branch backpressure | [`06-fault-injection`](../../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Recovery time (E-Iso-8) | ~0.136 ms | ✅ sub-ms | InstancePre cache enables instant re-instantiation | [`06-fault-injection`](../../../eval/analysis/notebooks/06-fault-injection.ipynb) |
+| Source throughput under attack | 100% across all 6 | ✅ | Channel buffer absorbs trap delay | [`06-fault-injection`](../../../eval/analysis/notebooks/06-fault-injection.ipynb) |
 
 **Containment verdict now.** The shakedown row above counted an attack as
 contained when the attack node failed at all. The current verdict
@@ -100,15 +100,15 @@ duplication; dip <5% vs full-restart.
 
 | Metric | Shakedown result | Pass? | Notes | Notebook |
 |--------|-----------------|-------|-------|----------|
-| Pause duration (p95) | 1.33 ms | ✅ <100 ms | watch-channel + InstancePre = fast swap | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Message loss | 0 across 51 swaps | ✅ | Watch-channel swap between messages; no queue drain, and a message dequeued after the signal goes to the new instance | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Duplicates | 0 across 51 swaps | ✅ | Single-writer channel semantics | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Burst swap (2×) pause p95 | 1.17 ms | ✅ | Bounded channels absorb burst | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + one rollback per swap + `HotSwapError::RolledBack` API surface | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Rollback time (E-Swap-5) | p50=74 µs, p99=98 µs, max=96 µs (n=12, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T22-11-06Z/`. Every swap returned HTTP 200 `status=rolled_back` (was `swap_converged` pre-B1). | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
-| Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) | [`05-hotswap-timeline`](../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Pause duration (p95) | 1.33 ms | ✅ <100 ms | watch-channel + InstancePre = fast swap | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Message loss | 0 across 51 swaps | ✅ | Watch-channel swap between messages; no queue drain, and a message dequeued after the signal goes to the new instance | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Duplicates | 0 across 51 swaps | ✅ | Single-writer channel semantics | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Burst swap (2×) pause p95 | 1.17 ms | ✅ | Bounded channels absorb burst | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| vs full-restart loss | 0 vs 27.2 msgs | ✅ | Full restart loses ~2.7% of messages | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| vs eKuiper restart | 0 vs 2.0 msgs | ✅ | Even eKuiper loses messages on restart | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Failed swap (E-Swap-5) | ✅ auto-rollback to v1 | ✅ PASS | A17 closed + polished: canary window + one rollback per swap + `HotSwapError::RolledBack` API surface | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Rollback time (E-Swap-5) | p50=74 µs, p99=98 µs, max=96 µs (n=12, macOS shakedown) | ✅ | Well under 10 s AC. `eval/results/e-swap-5/shakedown-macos-2026-08-02T22-11-06Z/`. Every swap returned HTTP 200 `status=rolled_back` (was `swap_converged` pre-B1). | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
+| Phase decomposition | Convergence dominant (~1.3 ms) | ✅ | Compile negligible after first swap (AOT cache) | [`05-hotswap-timeline`](../../../eval/analysis/notebooks/05-hotswap-timeline.ipynb) |
 
 **Key finding**: The watch-channel algorithm lost no messages across the
 51 shakedown swaps, at sub-2ms pause. The InstancePre cache makes compilation a
