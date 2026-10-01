@@ -3456,6 +3456,7 @@ def _ekuiper_gctrace_summary(
 
 def capture_ekuiper_gctrace(output: Path, since_ns: int, enabled: bool) -> dict:
     command = [
+        "sudo",
         "journalctl",
         "--unit=kuiper.service",
         f"--since=@{since_ns // 1_000_000_000}",

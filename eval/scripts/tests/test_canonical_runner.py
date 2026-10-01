@@ -497,6 +497,7 @@ def test_ekuiper_gctrace_summary_covers_only_the_measurement_window(
 
     assert calls == [
         [
+            "sudo",
             "journalctl",
             "--unit=kuiper.service",
             "--since=@5",
