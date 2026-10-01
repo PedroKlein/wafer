@@ -17,7 +17,7 @@ imports `backpressure`, `rollback` and `results_layout` from
 | `host_characterization.py` | Eight-phase host load ladder. | `characterize-rpi5-host.sh` |
 | `attack_evidence.py` | Manifest and validation helpers for the attack bundle. | `run-attack-evidence.py` |
 | `host_profiles.py` | Reads the expected host state (Pi 5, Jetson, x86) from the matrix `hosts` map. | runner, `validate-canonical.py`, verifier |
-| `host_facts.py` | Platform facts (CPU, SMT, turbo, OS, glibc, power mode) for `host-facts.json` and `metadata.json`. | runner, `write_metadata.py`, `validate-canonical.py` |
+| `host_facts.py` | Platform facts (CPU, SMT, turbo, OS, glibc, power mode) and CPU placement facts (isolated, housekeeping and default IRQ CPUs) for `host-facts.json` and `metadata.json`. | runner, `write_metadata.py`, `validate-canonical.py` |
 | `proc_telemetry.py` | Host-neutral `/proc` sampler (per-core CPU, scheduler and process counters) beside every run. | runner, `run-experiment.sh`, `run-rpi5-idle-baseline.sh` |
 | `provenance_match.py` | Checks that compared leaves share one source SHA and the same plugin bytes. | runner, verifier |
 | `preflight-common.sh` | Shared read-only preflight checks. | `preflight-pi5.sh`, `preflight-jetson.sh`, `preflight-x86.sh` |
