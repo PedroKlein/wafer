@@ -10,7 +10,7 @@ This record freezes the hardware and deployment choices for the canonical WAFER 
 |---|---|---|
 | Primary edge gateway | Raspberry Pi 4, 4 GB | Raspberry Pi 5, 4 GB |
 | Canonical host tag | `rpi4` | `rpi5` |
-| Comparator deployment | eKuiper 2.1.0 in Docker Compose | Native eKuiper 2.1.0 ARM64 package |
+| Comparator deployment | eKuiper 2.1.0 in Docker Compose | Native eKuiper 2.1.5 ARM64 package |
 | MQTT broker | Container or localhost | Native Mosquitto on the Pi |
 | CPU allocation | Conflicting documents: either one SUT core or cores 1–3 | CPU 0 for OS, Mosquitto, and load generation; CPUs 1–3 for the active SUT |
 | Synthetic input | `wafer-loadgen` | `wafer-loadgen` |
@@ -24,7 +24,7 @@ The 4 GB memory constraint preserves WAFER's gateway-class scope, but Raspberry 
 
 ## Comparator boundary
 
-WAFER, the native Rust baseline, and eKuiper run directly on the same Raspberry Pi OS installation. eKuiper is pinned to version 2.1.0 and installed from its official Linux ARM64 release package. All three systems use the same native Mosquitto broker, payloads, topics, load profile, measurement subscriber, CPU allocation, warmup, run length, and repetition count.
+WAFER, the native Rust baseline, and eKuiper run directly on the same Raspberry Pi OS installation. eKuiper is pinned to version 2.1.5 and installed from its official Linux ARM64 release package. This record first pinned 2.1.0, the first release of the 2.1 line, and the 2026-08-29 shakedown below ran that version. The pin moved to 2.1.5, the last patch release of the same line, before any final batch, because its fixes include the rule stop and start path that E-Swap-3 uses. All three systems use the same native Mosquitto broker, payloads, topics, load profile, measurement subscriber, CPU allocation, warmup, run length, and repetition count.
 
 Docker is excluded from the Pi because it would add a deployment and network boundary to only one system. Existing macOS Docker shakedowns remain development evidence and are not canonical results.
 
@@ -35,7 +35,7 @@ The canonical allocation is:
 - CPU 0: operating-system work, Mosquitto, and `wafer-loadgen` publisher/subscriber.
 - CPUs 1–3: exactly one active SUT—WAFER, the native Rust baseline, or eKuiper.
 
-The Pi boots with `isolcpus=1-3`. Each SUT is launched with `taskset -c 1-3`; Mosquitto and load generation use CPU 0. Systems run sequentially, never concurrently. This preserves the multi-threaded execution model while giving every comparator the same compute budget.
+The Pi keeps systemd (`CPUAffinity=0`) and interrupts (`irqaffinity=0`) on CPU 0, so Mosquitto, load generation and telemetry run there. Each SUT is launched with `taskset -c 1-3` (eKuiper through `CPUAffinity=1 2 3` in its unit). The Pi does not use `isolcpus`: its default domain isolation would stop load balancing on CPUs 1–3 and keep every thread of a SUT on one CPU. Systems run sequentially, never concurrently. This preserves the multi-threaded execution model while giving every comparator the same compute budget.
 
 ## Measurement scale
 

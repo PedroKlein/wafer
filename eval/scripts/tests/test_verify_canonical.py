@@ -339,7 +339,9 @@ def make_result(root: Path) -> Path:
         "host_tag": "rpi5",
         "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
         "arch": "aarch64",
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "cpu_governors": ["performance"],
         "throttled": "0x0",
         "git_sha": "1" * 40,
@@ -392,7 +394,9 @@ def test_canonical_static_density_result_accepts_release_component_sizes() -> No
                     "host_tag": "rpi5",
                     "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
                     "arch": "aarch64",
-                    "isolated_cpus": "1-3",
+                    "isolated_cpus": "",
+                    "housekeeping_cpus": "0",
+                    "irq_default_cpus": "0",
                     "cpu_governors": ["performance"],
                     "throttled": "0x0",
                     "git_sha": "1" * 40,
@@ -542,12 +546,41 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
             experiment="e-perf-1",
             condition="ekuiper",
             system="ekuiper",
-            ekuiper_version="2.1.0",
+            ekuiper_version="2.1.5",
             exit_codes={"ekuiper": 0},
         )
         metadata_path.write_text(json.dumps(metadata))
         completed = run(result)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        source = make_result(root)
+        result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
+        result.parent.mkdir(parents=True)
+        source.rename(result)
+        (result / "runtime-provenance.json").unlink()
+        metadata_path = result / "metadata.json"
+        metadata = json.loads(metadata_path.read_text())
+        metadata.update(
+            experiment="e-perf-1",
+            condition="ekuiper",
+            system="ekuiper",
+            ekuiper_version="2.1.5",
+            exit_codes={"ekuiper": 0},
+        )
+        metadata_path.write_text(json.dumps(metadata))
+        audit = {"service": {"properties": {"Environment": "HOME=/var/lib/kuiper"}}}
+        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+        clean = run(result)
+        audit["service"]["properties"]["Environment"] += " GODEBUG=gctrace=1"
+        (result / "ekuiper-audit.json").write_text(json.dumps(audit))
+        traced = run(result)
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert traced.returncode != 0
+    assert "GODEBUG" in traced.stdout + traced.stderr
 
 
 def test_historical_rate_sweep_contract_rejects_missing_resource_field() -> None:
@@ -1122,7 +1155,9 @@ def candidate_swap_leaf(tmp_path: Path, *, rollback: bool) -> tuple[Path, dict, 
         "host_tag": "rpi5",
         "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
         "arch": "aarch64",
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "cpu_governors": ["performance"],
         "throttled": "0x0",
         "git_sha": "1" * 40,
@@ -1816,6 +1851,9 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
         "status": "unavailable",
         "reason": "process-profiler-disabled-by-design",
     }
+    gctrace = leaf / "ekuiper-gctrace.log"
+    gctrace.write_text("")
+    gc_runtime = {"status": "unavailable", "reason": "gctrace-disabled-by-design"}
     if state == "profiled":
         profile = leaf / "resource-usage.csv"
         profile.write_text("header\nrow\n")
@@ -1825,6 +1863,24 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
             "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
             "row_count": 2,
             "maximum_rows": 62,
+        }
+        gctrace.write_text(
+            "8000000000 gc 2 @1.912s 1%: 0.020+1.2+0.030 ms clock, ...\n"
+            "20000000000 gc 3 @13.901s 1%: 0.015+2.1+0.003 ms clock, ...\n"
+        )
+        gc_runtime = {
+            "status": "available",
+            "source": "go-gctrace-journal",
+            "path": gctrace.name,
+            "sha256": hashlib.sha256(gctrace.read_bytes()).hexdigest(),
+            "trace_line_count": 2,
+            "missing_cycle_count": 0,
+            "cycle_count": 1,
+            "stw_pause_total_ns": 18_000,
+            "stw_pause_max_ns": 15_000,
+            "max_heap_at_start_mib": 6,
+            "max_live_heap_mib": 3,
+            "max_heap_goal_mib": 8,
         }
     runtime = {
         "schema_version": 1,
@@ -1856,10 +1912,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
             "p95": 200_000,
             "p99": 300_000,
         },
-        "gc_runtime_metrics": {
-            "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
-        },
+        "gc_runtime_metrics": gc_runtime,
         "claim_boundary": "diagnostic-association-only-not-gc-causality",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
     }
@@ -1922,6 +1975,48 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
     runtime["process_metrics"]["row_count"] = 63
     runtime_path.write_text(json.dumps(runtime))
     assert "unbounded" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
+
+
+def test_ekuiper_profile_verifier_checks_the_gctrace_summary(tmp_path: Path) -> None:
+    leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "unavailable", "profiled")
+    runtime_path = leaf / "ekuiper-runtime-summary.json"
+    runtime = json.loads(runtime_path.read_text())
+    runtime["gc_runtime_metrics"] = {
+        "status": "unavailable",
+        "reason": "gctrace-lines-missing-from-journal",
+    }
+    runtime_path.write_text(json.dumps(runtime))
+    assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
+
+    runtime["gc_runtime_metrics"]["reason"] = "gctrace-disabled-by-design"
+    runtime_path.write_text(json.dumps(runtime))
+    assert "availability" in " ".join(CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata))
+
+    leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "edited", "profiled")
+    with (leaf / "ekuiper-gctrace.log").open("a") as log:
+        log.write("30000000000 gc 4 @23.900s 1%: 0.015+2.1+0.003 ms clock, ...\n")
+    assert "summary is invalid" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
+
+    leaf, metadata = ekuiper_profile_contract_fixture(tmp_path / "leak", "unprofiled-control")
+    (leaf / "ekuiper-gctrace.log").write_text(
+        "20000000000 gc 3 @13.901s 1%: 0.015+2.1+0.003 ms clock, ...\n"
+    )
+    assert "control contains gctrace output" in " ".join(
+        CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
+    )
+
+    runtime_path = leaf / "ekuiper-runtime-summary.json"
+    runtime = json.loads(runtime_path.read_text())
+    profiled, _ = ekuiper_profile_contract_fixture(tmp_path / "source", "profiled")
+    runtime["gc_runtime_metrics"] = json.loads(
+        (profiled / "ekuiper-runtime-summary.json").read_text()
+    )["gc_runtime_metrics"]
+    runtime_path.write_text(json.dumps(runtime))
+    assert "summary is invalid" in " ".join(
         CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
     )
 
@@ -2115,6 +2210,16 @@ def test_canonical_leaf_is_checked_against_its_own_host_profile(tmp_path: Path) 
     (leaf / "power-boundary.json").write_text('{"measurement":"unavailable"}')
     completed = run(leaf.parents[1])
     assert "jetson power measurement is 'unavailable'" in completed.stdout
+
+
+def test_canonical_leaf_rejects_isolcpus_and_support_work_outside_cpu_0(tmp_path: Path) -> None:
+    leaf = make_result(tmp_path)
+    _set_metadata(leaf, isolated_cpus="1-3", housekeeping_cpus="0-3", irq_default_cpus="0-3")
+    completed = run(leaf.parents[1])
+    assert completed.returncode == 1
+    assert "rpi5 metadata: isolated CPUs must be empty, got '1-3'" in completed.stdout
+    assert "rpi5 metadata: housekeeping CPUs must be '0', got '0-3'" in completed.stdout
+    assert "rpi5 metadata: default IRQ CPUs must be '0', got '0-3'" in completed.stdout
 
 
 def test_canonical_leaf_rejects_throttling_seen_by_any_telemetry_sample(tmp_path: Path) -> None:

@@ -10,6 +10,7 @@ import math
 import os
 import random
 import re
+import shlex
 import shutil
 import signal
 import statistics
@@ -57,7 +58,7 @@ from results_layout import (
     validate_alias_mapping,
 )
 from containment import assess_containment
-from host_facts import PLATFORM_KEYS
+from host_facts import CPU_POLICY_KEYS, PLATFORM_KEYS
 from host_profiles import HostProfile, host_profile
 from interval_metrics import compose_interval_metrics
 import pi_telemetry
@@ -190,6 +191,14 @@ CANDIDATE_MEASUREMENT_SECS = 60
 CANDIDATE_RATE_MSG_S = 1_000
 EKUIPER_PROFILE_RATES = (1_000, 4_000, 8_000)
 EKUIPER_PROFILE_STATES = ("profiled", "unprofiled-control")
+EKUIPER_GCTRACE_DROP_IN = Path("/run/systemd/system/kuiper.service.d/wafer-gctrace.conf")
+EKUIPER_GCTRACE_PREFIX = re.compile(r"gc \d+ @")
+EKUIPER_GCTRACE_LINE = re.compile(
+    r"gc (?P<cycle>\d+) @[0-9.]+s \d+%: "
+    r"(?P<sweep_termination_ms>[0-9.]+)\+[0-9.]+\+(?P<mark_termination_ms>[0-9.]+) ms clock, "
+    r"[^,]+ ms cpu, (?P<heap_at_start_mib>\d+)->\d+->(?P<live_heap_mib>\d+) MB, "
+    r"(?P<heap_goal_mib>\d+) MB goal"
+)
 CAPACITY_KNEE_GRID = {
     "mqtt-loopback": (
         4_000, 5_000, 6_000, 7_000, 8_000, 9_000, 10_000, 11_000,
@@ -2392,7 +2401,7 @@ def validate_ekuiper_profile_definition(definition: dict) -> None:
             "kind": "external-procfs-process-sampler",
             "interval_secs": 1,
             "maximum_rows_per_run": 62,
-            "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+            "gc_runtime_metrics": "go-gctrace-from-kuiper-journal-in-profiled-state",
             "graceful_unavailable": True,
         },
         "ordering": {
@@ -2405,6 +2414,7 @@ def validate_ekuiper_profile_definition(definition: dict) -> None:
             "interval-metrics.json",
             "ekuiper-runtime-summary.json",
             "profiler-overhead.json",
+            "ekuiper-gctrace.log",
         ],
         "analysis": "ekuiper-tail-association",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
@@ -3414,6 +3424,87 @@ def _ekuiper_profile_process_summary(
     }
 
 
+def _ekuiper_gctrace_summary(
+    output: Path, context: dict, measurement_start_ns: int, measurement_end_ns: int
+) -> dict:
+    gctrace = context.get("gctrace", {})
+    path = output / "ekuiper-gctrace.log"
+    lines = path.read_text().splitlines()
+    if gctrace.get("collection_enabled") is not True:
+        if lines:
+            raise ValueError("eKuiper gctrace output exists while collection is disabled")
+        return {"status": "unavailable", "reason": "gctrace-disabled-by-design"}
+    if gctrace.get("journal_readable") is not True:
+        return {"status": "unavailable", "reason": "kuiper-journal-unreadable"}
+    if not lines:
+        return {"status": "unavailable", "reason": "gctrace-lines-missing-from-journal"}
+    cycles = []
+    for line in lines:
+        timestamp, _, message = line.partition(" ")
+        match = EKUIPER_GCTRACE_LINE.match(message)
+        if match is None or not timestamp.isdigit():
+            return {"status": "unavailable", "reason": "gctrace-format-unrecognized"}
+        cycles.append((int(timestamp), match))
+    numbers = {int(match["cycle"]) for _, match in cycles}
+    window = [
+        match
+        for timestamp, match in cycles
+        if measurement_start_ns <= timestamp < measurement_end_ns
+    ]
+    pauses = [
+        round(float(match[phase]) * 1_000_000)
+        for match in window
+        for phase in ("sweep_termination_ms", "mark_termination_ms")
+    ]
+    return {
+        "status": "available",
+        "source": "go-gctrace-journal",
+        "path": path.name,
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "trace_line_count": len(cycles),
+        "missing_cycle_count": max(numbers) - min(numbers) + 1 - len(numbers),
+        "cycle_count": len(window),
+        "stw_pause_total_ns": sum(pauses),
+        "stw_pause_max_ns": max(pauses, default=None),
+        "max_heap_at_start_mib": max(
+            (int(match["heap_at_start_mib"]) for match in window), default=None
+        ),
+        "max_live_heap_mib": max((int(match["live_heap_mib"]) for match in window), default=None),
+        "max_heap_goal_mib": max((int(match["heap_goal_mib"]) for match in window), default=None),
+    }
+
+
+def capture_ekuiper_gctrace(output: Path, since_ns: int, enabled: bool) -> dict:
+    command = [
+        "sudo",
+        "journalctl",
+        "--unit=kuiper.service",
+        f"--since=@{since_ns // 1_000_000_000}",
+        "--output=json",
+        "--no-pager",
+    ]
+    lines = []
+    try:
+        journal = subprocess.run(command, capture_output=True, text=True, check=True)
+        for entry in journal.stdout.splitlines():
+            record = json.loads(entry)
+            message = record.get("MESSAGE")
+            timestamp_ns = int(record["__REALTIME_TIMESTAMP"]) * 1_000
+            if (
+                timestamp_ns >= since_ns
+                and isinstance(message, str)
+                and EKUIPER_GCTRACE_PREFIX.match(message)
+            ):
+                lines.append(f"{timestamp_ns} {message}\n")
+    except (OSError, subprocess.CalledProcessError, KeyError, TypeError, ValueError):
+        readable = False
+        lines = []
+    else:
+        readable = True
+    (output / "ekuiper-gctrace.log").write_text("".join(lines))
+    return {"collection_enabled": enabled, "journal_readable": readable}
+
+
 def build_ekuiper_profile_context(
     item: RunItem, audit: dict, proc_root: Path = Path("/proc")
 ) -> tuple[dict | None, list[int]]:
@@ -3466,6 +3557,9 @@ def write_ekuiper_profile_artifacts(
     process_metrics = _ekuiper_profile_process_summary(
         output, context, interval_start_ns, interval_end_ns
     )
+    gc_runtime_metrics = _ekuiper_gctrace_summary(
+        output, context, interval_start_ns, interval_end_ns
+    )
     latency_count = int(percentiles["total_count"])
     if latency_count <= 0 or latency_count != int(intervals.get("aggregate_latency_count", -1)):
         raise ValueError("eKuiper profile latency population does not reconcile")
@@ -3499,10 +3593,7 @@ def write_ekuiper_profile_artifacts(
             "p99": int(percentiles["p99_ns"]),
         },
         "process_metrics": process_metrics,
-        "gc_runtime_metrics": {
-            "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
-        },
+        "gc_runtime_metrics": gc_runtime_metrics,
         "claim_boundary": "diagnostic-association-only-not-gc-causality",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],
     }
@@ -3956,7 +4047,13 @@ def start_pi_telemetry(root: Path, output: Path, item: RunItem) -> list[subproce
     """Start the Pi power sidecar and the host /proc sidecar for one leaf."""
     return [
         subprocess.Popen(
-            [sys.executable, str(root / "eval/scripts/lib/pi_telemetry.py"), str(output)],
+            [
+                sys.executable,
+                str(root / "eval/scripts/lib/pi_telemetry.py"),
+                str(output),
+                "--pin-cpus",
+                item.support_cpus,
+            ],
             cwd=root,
         ),
         subprocess.Popen(
@@ -4683,9 +4780,20 @@ def ekuiper_operator_concurrency(root: Path) -> int:
     return concurrency
 
 
-def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
+def capture_ekuiper_audit(
+    root: Path, output: Path, allowed_cpus: str, gctrace: bool = False
+) -> Path:
     operator_concurrency = ekuiper_operator_concurrency(root)
     service = _service_properties()
+    godebug = [
+        entry
+        for entry in shlex.split(service.get("Environment", ""))
+        if entry.startswith("GODEBUG=")
+    ]
+    if godebug != (["GODEBUG=gctrace=1"] if gctrace else []):
+        raise ValueError(
+            f"eKuiper service GODEBUG {godebug} does not match gctrace={gctrace}"
+        )
     main_pid = int(service.get("MainPID", "0"))
     snapshot = _process_snapshot(main_pid)
     validate_ekuiper_process_snapshot(snapshot, allowed_cpus)
@@ -4751,10 +4859,31 @@ def capture_ekuiper_audit(root: Path, output: Path, allowed_cpus: str) -> Path:
     return path
 
 
-def set_ekuiper_active(root: Path, active: bool) -> None:
-    action = "start" if active else "stop"
-    subprocess.run(["sudo", "systemctl", action, "kuiper.service"], check=True)
+def set_ekuiper_active(root: Path, active: bool, gctrace: bool = False) -> None:
+    installed = EKUIPER_GCTRACE_DROP_IN.exists()
+    wanted = active and gctrace
+    # start leaves a running unit alone, so it must stop before its environment changes.
+    if not active or installed != wanted:
+        subprocess.run(["sudo", "systemctl", "stop", "kuiper.service"], check=True)
+    if installed != wanted:
+        if wanted:
+            subprocess.run(
+                [
+                    "sudo",
+                    "install",
+                    "-D",
+                    "-m",
+                    "0644",
+                    str(root / "eval/ekuiper/gctrace-drop-in.conf"),
+                    str(EKUIPER_GCTRACE_DROP_IN),
+                ],
+                check=True,
+            )
+        else:
+            subprocess.run(["sudo", "rm", "-f", str(EKUIPER_GCTRACE_DROP_IN)], check=True)
+        subprocess.run(["sudo", "systemctl", "daemon-reload"], check=True)
     if active:
+        subprocess.run(["sudo", "systemctl", "start", "kuiper.service"], check=True)
         subprocess.run(
             [
                 str(root / "eval/ekuiper/seed-pipeline-a.sh"),
@@ -4781,8 +4910,9 @@ def run_ekuiper_item(
     telemetry = start_pi_telemetry(root, output, item)
     process_sampler: ProcessResourceSampler | None = None
     profile_context: dict | None = None
+    gctrace = is_ekuiper_profile_item(item) and ekuiper_profile_state(item) == "profiled"
     try:
-        set_ekuiper_active(root, True)
+        set_ekuiper_active(root, True, gctrace=gctrace)
         facts_path = output / "host-facts.json"
         subprocess.run(
             [
@@ -4802,7 +4932,9 @@ def run_ekuiper_item(
         )
         environment = os.environ.copy()
         environment["WAFER_GIT_SHA"] = json.loads(facts_path.read_text())["git_sha"]
-        ekuiper_audit = capture_ekuiper_audit(root, output, item.runtime_cpus)
+        ekuiper_audit = capture_ekuiper_audit(
+            root, output, item.runtime_cpus, gctrace=gctrace
+        )
         profile_context, pids = build_ekuiper_profile_context(
             item, json.loads(ekuiper_audit.read_text())
         )
@@ -4850,6 +4982,8 @@ def run_ekuiper_item(
                 f"loadgen failed: publisher={publisher.returncode}, subscriber={subscriber_code}"
             )
         set_ekuiper_active(root, False)
+        if profile_context is not None:
+            profile_context["gctrace"] = capture_ekuiper_gctrace(output, started_ns, gctrace)
         (output / "measurement-window.json").write_text(
             json.dumps(
                 {
@@ -5650,7 +5784,7 @@ def _merge_runtime_metadata(
 def static_host_metadata(facts: dict) -> dict:
     metadata = {
         key: facts[key]
-        for key in ("git_sha", "git_dirty", "git_tags", "arch", "isolated_cpus", "cpu_governors", "throttled")
+        for key in ("git_sha", "git_dirty", "git_tags", "arch", *CPU_POLICY_KEYS, "cpu_governors", "throttled")
     }
     metadata.update({key: facts.get(key) for key in PLATFORM_KEYS})
     return metadata

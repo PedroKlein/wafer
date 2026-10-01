@@ -1203,12 +1203,20 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
             or record.get("no_pool_with") != identity["no_pool_with"]
         ):
             raise ValueError("eKuiper profile record crosses the diagnostic boundary")
-        gc_runtime = record.get("gc_runtime_metrics")
-        if gc_runtime != {
-            "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
-        }:
-            raise ValueError("eKuiper profile record overstates GC/runtime evidence")
+        gc_runtime = record.get("gc_runtime_metrics", {})
+        if gc_runtime.get("status") == "available":
+            if key[1] != "profiled" or any(
+                type(gc_runtime.get(field)) is not int or gc_runtime[field] < 0
+                for field in ("cycle_count", "missing_cycle_count", "stw_pause_total_ns")
+            ):
+                raise ValueError("eKuiper profile GC trace evidence is invalid")
+        elif (
+            gc_runtime.get("status") != "unavailable"
+            or not gc_runtime.get("reason")
+            or (key[1] == "profiled")
+            == (gc_runtime["reason"] == "gctrace-disabled-by-design")
+        ):
+            raise ValueError("eKuiper profile GC trace availability is invalid")
         interval = record.get("interval_alignment", {})
         if (
             interval.get("clock") != "unix-epoch"
@@ -1272,6 +1280,10 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                 "process_status": process["status"],
                 "cpu_percent": process.get("cpu_percent"),
                 "max_rss_bytes": process.get("max_rss_bytes"),
+                "gc_status": gc_runtime["status"],
+                "gc_cycle_count": gc_runtime.get("cycle_count"),
+                "gc_stw_pause_total_ns": gc_runtime.get("stw_pause_total_ns"),
+                "gc_stw_pause_max_ns": gc_runtime.get("stw_pause_max_ns"),
                 "measurement_source_leaf": record["measurement_source_leaf"],
                 "interpretation": identity["claim_boundary"],
             }
@@ -1410,163 +1422,202 @@ def candidate_capacity_table(summary: dict) -> pd.DataFrame:
 
 
 CAPACITY_COMPETITIVE_THRESHOLD = 0.70
+CAPACITY_BASELINE_RATE = 1_000
+CAPACITY_RUN_METRICS = ("achieved_rate_msg_s", "achieved_ratio", "loss", "p99_ns")
 
 
-def _tested_grid_bounds(result: dict, tested_rates: list[int]) -> dict:
-    rates = result.get("rates")
-    invalid = {
-        "valid": False,
-        "lower_bound_msg_s": None,
-        "upper_bound_msg_s": None,
-        "support_confounded_rate_msg_s": None,
-    }
-    if not result.get("complete") or not isinstance(rates, list):
-        return {**invalid, "reason": "incomplete system population"}
-    if [rate.get("rate_msg_s") for rate in rates] != tested_rates:
-        return {**invalid, "reason": "system rates differ from tested grid"}
-    classifications = [rate.get("classification") for rate in rates]
-    if "incomplete" in classifications:
-        return {**invalid, "reason": "incomplete tested-rate cell"}
-    seen_bad = False
-    seen_censored = False
-    for classification in classifications:
-        if classification == "bad":
-            if seen_censored:
-                return {**invalid, "reason": "non-contiguous support censoring"}
-            seen_bad = True
-        elif classification == "good":
-            if seen_bad or seen_censored:
-                return {**invalid, "reason": "non-monotonic delivery classification"}
-        elif classification == "support-confounded":
-            seen_censored = True
-        else:
-            return {**invalid, "reason": "invalid delivery classification"}
-    good_rates = [
-        rate for rate, classification in zip(tested_rates, classifications, strict=True)
-        if classification == "good"
-    ]
-    unresolved = [
-        rate for rate, classification in zip(tested_rates, classifications, strict=True)
-        if classification == "support-confounded"
-    ]
-    lower = max(good_rates, default=0)
-    upper = max(unresolved) if unresolved else lower
+def _capacity_grid(summary: dict) -> list[int]:
+    grid = summary.get("rate_points_msg_s")
+    if (
+        not isinstance(grid, list)
+        or not grid
+        or any(type(rate) is not int or rate <= 0 for rate in grid)
+        or any(low >= high for low, high in zip(grid, grid[1:]))
+    ):
+        raise ValueError("capacity rate grid must be strictly increasing positive rates")
+    return grid
+
+
+def _capacity_cell_classes(summary: dict, systems: Iterable[str]) -> dict[str, list[str]]:
+    grid = _capacity_grid(summary)
+    results = summary.get("systems")
+    if not isinstance(results, dict):
+        raise ValueError("capacity population is malformed")
+    required = summary.get("required_runs_per_rate")
+
+    def classify(system: str, support_from: int | None) -> list[str]:
+        result = results.get(system)
+        rates = result.get("rates") if isinstance(result, dict) else None
+        if not isinstance(rates, list) or not result.get("complete"):
+            raise ValueError(f"{system}: incomplete system population")
+        if [rate.get("rate_msg_s") for rate in rates] != grid:
+            raise ValueError(f"{system}: system rates differ from tested grid")
+        classes = []
+        for rate in rates:
+            run_count = rate.get("run_count")
+            outcome_runs = rate.get("sut_outcome_runs", 0)
+            if (
+                type(run_count) is not int
+                or type(outcome_runs) is not int
+                or min(run_count, outcome_runs) < 0
+                or run_count + outcome_runs != required
+            ):
+                raise ValueError(f"{system}: incomplete tested-rate cell")
+            try:
+                good = (
+                    outcome_runs == 0
+                    and float(rate["pooled_loss"]) <= 0.01
+                    and float(rate["mean_achieved_ratio"]) >= 0.99
+                    and int(rate["total_duplicates"]) == 0
+                )
+            except (KeyError, TypeError, ValueError) as error:
+                raise ValueError(f"{system}: malformed delivery counters") from error
+            if support_from is not None and rate["rate_msg_s"] >= support_from:
+                classes.append("support-confounded")
+            else:
+                classes.append("good" if good else "bad")
+        return classes
+
+    support = classify("mqtt-loopback", None)
+    support_from = next(
+        (rate for rate, value in zip(grid, support, strict=True) if value == "bad"), None
+    )
     return {
-        "valid": True,
-        "reason": "tested-grid bounds derived without interpolation",
-        "lower_bound_msg_s": lower,
-        "upper_bound_msg_s": upper,
-        "support_confounded_rate_msg_s": min(unresolved, default=None),
+        system: support if system == "mqtt-loopback" else classify(system, support_from)
+        for system in systems
+    }
+
+
+def _ceiling_bounds(grid: list[int], classes: list[str]) -> dict:
+    good = [index for index, value in enumerate(classes) if value == "good"]
+    bad = [index for index, value in enumerate(classes) if value == "bad"]
+    highest_good = max(good, default=-1)
+    first_bad = min(bad, default=len(classes))
+    sustained = [index for index in good if index < first_bad]
+    above = [index for index in bad if index > highest_good]
+    confounded = [
+        rate
+        for rate, value in zip(grid, classes, strict=True)
+        if value == "support-confounded"
+    ]
+    return {
+        "lower_bound_msg_s": grid[sustained[-1]] if sustained else 0,
+        "upper_bound_msg_s": grid[above[0]] if above else math.inf,
+        "non_monotonic": first_bad < highest_good,
+        "support_confounded_rate_msg_s": confounded[0] if confounded else None,
     }
 
 
 def capacity_competitive_decision(summary: dict) -> dict:
-    tested_rates = summary.get("rate_points_msg_s")
-    systems = summary.get("systems")
-    if not isinstance(tested_rates, list) or not isinstance(systems, dict):
-        return {
-            "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
-            "branch": "invalid-population",
-            "status": "PENDING",
-            "reason": "capacity population is malformed",
-        }
-    bounds = {
-        system: _tested_grid_bounds(systems.get(system, {}), tested_rates)
-        for system in ("wafer", "ekuiper")
-    }
-    invalid = [system for system, value in bounds.items() if not value["valid"]]
+    grid = summary.get("rate_points_msg_s")
     common = {
         "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
+        "beyond_grid_limitation": (
+            f"tested-grid only; no claim beyond {max(grid)} msg/s"
+            if isinstance(grid, list) and grid and all(type(rate) is int for rate in grid)
+            else "tested grid is unavailable"
+        ),
+        "claim_boundary": (
+            "co-located gateway envelope; each delivery ceiling is bracketed by "
+            "tested rates and bounded by the MQTT support path"
+        ),
+    }
+    try:
+        classes = _capacity_cell_classes(summary, ("wafer", "ekuiper"))
+    except ValueError as error:
+        return {
+            **common,
+            "systems": {},
+            "support_confounded_rate_msg_s": None,
+            "ratio_lower_bound": None,
+            "ratio_upper_bound": None,
+            "branch": "invalid-population",
+            "status": "PENDING",
+            "reason": str(error),
+        }
+    bounds = {system: _ceiling_bounds(grid, value) for system, value in classes.items()}
+    wafer = bounds["wafer"]
+    ekuiper = bounds["ekuiper"]
+    worst = wafer["lower_bound_msg_s"] / ekuiper["upper_bound_msg_s"]
+    best = (
+        math.inf
+        if ekuiper["lower_bound_msg_s"] == 0
+        else wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
+    )
+    if worst >= CAPACITY_COMPETITIVE_THRESHOLD:
+        branch, status = "worst-case-pass", "PASS"
+        reason = "WAFER lower bound divided by eKuiper upper bound meets the threshold"
+    elif best < CAPACITY_COMPETITIVE_THRESHOLD:
+        branch, status = "best-case-fail", "FAIL"
+        reason = "WAFER upper bound divided by eKuiper lower bound misses the threshold"
+    else:
+        branch, status = "straddles-threshold", "CENSORED"
+        reason = "the tested grid allows ratios on both sides of the threshold"
+    return {
+        **common,
         "systems": bounds,
         "support_confounded_rate_msg_s": min(
             (
                 value["support_confounded_rate_msg_s"]
                 for value in bounds.values()
-                if value.get("support_confounded_rate_msg_s") is not None
+                if value["support_confounded_rate_msg_s"] is not None
             ),
             default=None,
         ),
-        "beyond_grid_limitation": (
-            f"tested-grid only; no claim beyond {max(tested_rates)} msg/s"
-            if tested_rates
-            else "tested grid is unavailable"
-        ),
-        "claim_boundary": (
-            "co-located gateway envelope; tested-grid delivery ceiling bounded by "
-            "the MQTT support path"
-        ),
+        "ratio_lower_bound": worst,
+        "ratio_upper_bound": best,
+        "branch": branch,
+        "status": status,
+        "reason": reason,
     }
-    if invalid:
-        return {
-            **common,
-            "ratio_lower_bound": None,
-            "ratio_upper_bound": None,
-            "branch": "invalid-population",
-            "status": "PENDING",
-            "reason": "; ".join(
-                f"{system}: {bounds[system]['reason']}" for system in invalid
-            ),
+
+
+def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
+    run_count = rate["run_count"]
+    if run_count == 0:
+        return {metric: np.asarray([], dtype=float) for metric in CAPACITY_RUN_METRICS}
+    run_summary = rate.get("run_summary")
+    if not isinstance(run_summary, dict):
+        raise TypeError(f"{system} rate summary is malformed")
+    try:
+        values = {
+            metric: np.asarray(
+                [float(value) for value in run_summary[metric]["values"]], dtype=float
+            )
+            for metric in CAPACITY_RUN_METRICS
         }
-    wafer = bounds["wafer"]
-    ekuiper = bounds["ekuiper"]
-    ratio_lower = (
-        wafer["lower_bound_msg_s"] / ekuiper["upper_bound_msg_s"]
-        if ekuiper["upper_bound_msg_s"] > 0
-        else None
-    )
-    ratio_upper = (
-        wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
-        if ekuiper["lower_bound_msg_s"] > 0
-        else None
-    )
-    collapsed = all(
-        value["lower_bound_msg_s"] == value["upper_bound_msg_s"]
-        for value in bounds.values()
-    )
-    if collapsed and ratio_lower is not None:
-        status = "PASS" if ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD else "FAIL"
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_lower,
-            "branch": f"identifiable-{status.lower()}",
-            "status": status,
-            "reason": "collapsed tested-grid bounds identify the competitive ratio",
-        }
-    if ratio_lower is not None and ratio_lower >= CAPACITY_COMPETITIVE_THRESHOLD:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "censored-worst-case-pass",
-            "status": "PASS",
-            "reason": "WAFER lower bound divided by eKuiper upper bound meets the threshold",
-        }
-    if ratio_upper is not None and ratio_upper < CAPACITY_COMPETITIVE_THRESHOLD:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "censored-best-case-fail",
-            "status": "FAIL",
-            "reason": "WAFER upper bound divided by eKuiper lower bound misses the threshold",
-        }
-    if ratio_lower is None or ratio_upper is None:
-        return {
-            **common,
-            "ratio_lower_bound": ratio_lower,
-            "ratio_upper_bound": ratio_upper,
-            "branch": "zero-denominator",
-            "status": "PENDING",
-            "reason": "eKuiper tested-grid bound is zero; competitive ratio is undefined",
-        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"{system} rate summary is malformed") from error
+    if any(len(samples) != run_count for samples in values.values()):
+        raise ValueError(f"{system} rate summary needs {run_count} run values per metric")
+    # Every admitted run at one rate offers the same intended count, so the
+    # pooled loss equals the mean run loss.
+    if not math.isclose(
+        float(rate["pooled_loss"]), float(np.mean(values["loss"])), abs_tol=1e-12
+    ) or not math.isclose(
+        float(rate["mean_achieved_ratio"]),
+        float(np.mean(values["achieved_ratio"])),
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"{system} rate {rate['rate_msg_s']} pooled counters disagree with its run values"
+        )
+    return values
+
+
+def _run_spread(metric: str, values: np.ndarray, interval: tuple[str, str]) -> dict:
+    if not len(values):
+        keys = (f"median_{metric}", *interval, *(f"{q}_{metric}" for q in ("min", "q1", "q3", "max")))
+        return dict.fromkeys(keys)
+    low, high = bootstrap_ci(values)
     return {
-        **common,
-        "ratio_lower_bound": ratio_lower,
-        "ratio_upper_bound": ratio_upper,
-        "branch": "censored-straddling",
-        "status": "CENSORED/PENDING",
-        "reason": "tested-grid ratio bounds do not determine the threshold",
+        f"median_{metric}": float(np.median(values)),
+        interval[0]: float(low),
+        interval[1]: float(high),
+        f"min_{metric}": float(np.min(values)),
+        f"q1_{metric}": float(np.quantile(values, 0.25)),
+        f"q3_{metric}": float(np.quantile(values, 0.75)),
+        f"max_{metric}": float(np.max(values)),
     }
 
 
@@ -1579,8 +1630,9 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         or summary.get("required_runs_per_rate") != 30
     ):
         raise ValueError("malformed final capacity summary")
-    if summary.get("rate_points_msg_s") != [1_000, 4_000, 8_000, 15_000, 16_000]:
-        raise ValueError("final capacity summary uses the wrong common rate grid")
+    grid = _capacity_grid(summary)
+    if CAPACITY_BASELINE_RATE not in grid:
+        raise ValueError("final capacity grid lacks the 1,000 msg/s baseline rate")
     systems = summary.get("systems")
     if not isinstance(systems, dict) or set(systems) != {
         "mqtt-loopback",
@@ -1589,87 +1641,104 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         "ekuiper",
     }:
         raise ValueError("final capacity summary requires all four systems")
+    classes = _capacity_cell_classes(summary, systems)
+    support_from = next(
+        (
+            rate
+            for rate, value in zip(grid, classes["mqtt-loopback"], strict=True)
+            if value == "bad"
+        ),
+        None,
+    )
+    run_values = {}
+    for system, result in systems.items():
+        for rate, classification in zip(result["rates"], classes[system], strict=True):
+            if rate.get("classification") != classification:
+                raise ValueError(
+                    f"{system} rate {rate['rate_msg_s']} classification disagrees "
+                    "with its delivery counters or MQTT censoring"
+                )
+        run_values[system] = [_capacity_run_values(system, rate) for rate in result["rates"]]
+        support = result.get("support_censoring")
+        if not isinstance(support, dict) or support.get("from_rate_msg_s") != support_from:
+            raise ValueError(
+                f"{system} MQTT support-path censoring disagrees with the loopback counters"
+            )
     decision = capacity_competitive_decision(summary)
     rate_rows = []
     boundary_rows = []
     for system, result in systems.items():
-        rates = result.get("rates")
-        if not result.get("complete") or not isinstance(rates, list) or len(rates) != 5:
-            raise ValueError(f"{system} capacity summary is incomplete")
-        if [rate.get("rate_msg_s") for rate in rates] != summary["rate_points_msg_s"]:
-            raise ValueError(f"{system} capacity rates differ from the common grid")
-        for rate in rates:
-            run_count = rate.get("run_count")
-            outcome_runs = rate.get("sut_outcome_runs", 0)
-            if (
-                not isinstance(run_count, int)
-                or not isinstance(outcome_runs, int)
-                or run_count + outcome_runs != 30
-            ):
-                raise ValueError(f"{system} rate requires 30 independent runs")
-            run_summary = rate.get("run_summary")
-            normalized = rate.get("normalized_p99")
-            if (run_count and not isinstance(run_summary, dict)) or not isinstance(
-                normalized, dict | None
-            ):
-                raise TypeError(f"{system} rate summary is malformed")
-            empty = {"median": None, "values": []}
-            try:
-                achieved = run_summary["achieved_rate_msg_s"] if run_count else empty
-                p99 = run_summary["p99_ns"] if run_count else empty
-                normalized = empty if normalized is None else normalized
-                samples = [
-                    [float(value) for value in item["values"]]
-                    for item in (achieved, p99, normalized)
-                ]
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError(f"{system} rate summary is malformed") from error
-            if len(samples[0]) != run_count or len(samples[1]) != run_count or len(
-                samples[2]
-            ) not in {0, run_count}:
-                raise ValueError(f"{system} rate summary needs {run_count} run values per metric")
-            achieved_ci, p99_ci, normalized_ci = (
-                _ci(values) if values else (None, None) for values in samples
+        rates = result["rates"]
+        values = run_values[system]
+        baseline_p99 = values[grid.index(CAPACITY_BASELINE_RATE)]["p99_ns"]
+        for rate, classification, runs in zip(rates, classes[system], values, strict=True):
+            completed = len(runs["loss"]) > 0
+            pooled_loss_ci = (
+                pooled_ratio_ci(runs["loss"], np.ones(len(runs["loss"])))
+                if completed
+                else (None, None)
             )
-            classification = rate.get("classification")
-            if classification not in {
-                "good",
-                "bad",
-                "support-confounded",
-                "incomplete",
-            }:
-                raise ValueError(f"{system} rate classification is invalid")
+            if completed and len(baseline_p99):
+                _, normalized_low, normalized_high = median_shift_ci(
+                    runs["p99_ns"], baseline_p99, relative=True
+                )
+                normalized = (
+                    float(np.median(runs["p99_ns"]) / np.median(baseline_p99)),
+                    1 + normalized_low,
+                    1 + normalized_high,
+                )
+            else:
+                normalized = (None, None, None)
             rate_rows.append(
                 {
                     "system": system,
                     "offered_rate_msg_s": int(rate["rate_msg_s"]),
                     "N_runs": 30,
-                    "sut_outcome_runs": outcome_runs,
-                    "median_achieved_rate_msg_s": _number(achieved["median"]),
-                    "achieved_ci95_low_msg_s": _number(achieved_ci[0]),
-                    "achieved_ci95_high_msg_s": _number(achieved_ci[1]),
-                    "pooled_loss": _number(rate["pooled_loss"]),
-                    "mean_achieved_ratio": _number(rate["mean_achieved_ratio"]),
-                    "median_p99_ns": _number(p99["median"]),
-                    "p99_ci95_low_ns": _number(p99_ci[0]),
-                    "p99_ci95_high_ns": _number(p99_ci[1]),
-                    "median_normalized_p99": _number(normalized["median"]),
-                    "normalized_p99_ci95_low": _number(normalized_ci[0]),
-                    "normalized_p99_ci95_high": _number(normalized_ci[1]),
+                    "sut_outcome_runs": rate.get("sut_outcome_runs", 0),
+                    **_run_spread(
+                        "achieved_rate_msg_s",
+                        runs["achieved_rate_msg_s"],
+                        ("achieved_ci95_low_msg_s", "achieved_ci95_high_msg_s"),
+                    ),
+                    **_run_spread(
+                        "achieved_ratio",
+                        runs["achieved_ratio"],
+                        ("achieved_ratio_ci95_low", "achieved_ratio_ci95_high"),
+                    ),
+                    **_run_spread("loss", runs["loss"], ("loss_ci95_low", "loss_ci95_high")),
+                    "pooled_loss": _number(rate["pooled_loss"] if completed else None),
+                    "pooled_loss_ci95_low": _number(pooled_loss_ci[0]),
+                    "pooled_loss_ci95_high": _number(pooled_loss_ci[1]),
+                    "mean_achieved_ratio": _number(
+                        rate["mean_achieved_ratio"] if completed else None
+                    ),
+                    "total_duplicates": int(rate["total_duplicates"]) if completed else None,
+                    **_run_spread("p99_ns", runs["p99_ns"], ("p99_ci95_low_ns", "p99_ci95_high_ns")),
+                    "median_normalized_p99": normalized[0],
+                    "normalized_p99_ci95_low": normalized[1],
+                    "normalized_p99_ci95_high": normalized[2],
                     "classification": classification,
                     "delivery_good": classification == "good",
                     "support_confounded": classification == "support-confounded",
-                    "units": "messages/second, fraction, nanoseconds",
-                    "estimator": "pooled loss; mean achieved ratio; median run p99 over the runs that completed; a run the system under test failed makes its rate delivery-bad",
+                    "units": "messages/second, fraction, nanoseconds, messages",
+                    "estimator": (
+                        "run-level min/quartiles/max with bootstrap 95% CI of the median; "
+                        "pooled loss with a run-resampling bootstrap 95% CI; mean achieved "
+                        "ratio; normalized p99 CI resamples this rate and the 1,000 msg/s runs; "
+                        "all over the runs that completed, and a run the system under test "
+                        "failed makes its rate delivery-bad"
+                    ),
                     "thesis_evidence": True,
                 }
             )
         support = result["support_censoring"]
+        bounds = _ceiling_bounds(grid, classes[system])
         boundary_rows.append(
             {
                 "system": system,
-                "delivery_ceiling_msg_s": result["delivery_ceiling"]["rate_msg_s"],
-                "delivery_ceiling_censoring": result["delivery_ceiling"]["censoring"],
+                "delivery_ceiling_lower_bound_msg_s": bounds["lower_bound_msg_s"],
+                "delivery_ceiling_upper_bound_msg_s": bounds["upper_bound_msg_s"],
+                "delivery_ceiling_non_monotonic": bounds["non_monotonic"],
                 "normalized_p99_knee_msg_s": result["normalized_p99_knee"][
                     "rate_msg_s"
                 ],

@@ -24,7 +24,8 @@ alwaysLoaded: true
   contribution; framing any single feature (isolation OR hot-swap OR performance) as "the main
   point" misrepresents the thesis
 - **NEVER position WAFER as competitive for arbitrary computation** — "competitive performance"
-  means a delivery ceiling within 30% of eKuiper's (>= 0.70x) on telemetry pipeline workloads specifically
+  means a tested-grid delivery ceiling at least 0.70x eKuiper's, with each ceiling bracketed by
+  tested rates, on telemetry pipeline workloads specifically
 - **NEVER suggest distributed deployment, K8s, or multi-process** — architectural invariant #1
   is non-negotiable; the single-process constraint is the thesis's edge viability claim
 - **NEVER use domain terms without scope qualifiers** — "pipeline", "isolation", "hot-swap",
@@ -69,7 +70,7 @@ on sub-8GB gateway hardware.
 
 | RQ | Question | Criterion (summary; authority is `tcc-doc/research/analysis/thesis-statement-v3.md`) |
 |----|----------|----------------|
-| **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | At 1,000 msg/s: median WAFER p95 / median eKuiper p95 <= 2.0, pooled loss <= 1%, mean achieved/offered >= 0.99. Capacity: WAFER delivery ceiling >= 0.70x eKuiper's, or `CENSORED/PENDING`. Per-hop cost is reported against a 50 µs reference, not passed or failed |
+| **RQ1** | What is the performance cost of typed Wasm boundaries on edge hardware? | At 1,000 msg/s: median WAFER p95 / median eKuiper p95 <= 2.0, pooled loss <= 1%, mean achieved/offered >= 0.99. Capacity: WAFER tested-grid delivery ceiling >= 0.70x eKuiper's across the bracketed ratio interval, or `CENSORED`. Per-hop cost is reported against a 50 µs reference, not passed or failed |
 | **RQ2** | Do per-stage sandboxes contain faults without pipeline-wide failure? | Each E-Iso-1..6 attack traps or is denied by the expected mechanism without a host-runtime panic; healthy-branch impact (E-Iso-7) and trap recovery (E-Iso-8) are measured at run level |
 | **RQ3** | What is the disruption cost of stateless stage replacement? | E-Swap-3: upper 95% CI of median dip below 5%, zero loss and duplication. E-Swap-4: across-run p95 sink gap below 100 ms, zero loss and duplication |
 
@@ -79,7 +80,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 ```
 
 **Hardware**: Raspberry Pi 5 4 GB (primary), Jetson Orin (optional inference validation), x86 (cross-validation).
-**Canonical allocation**: CPU 0 runs OS, native Mosquitto, and `wafer-loadgen`; isolated CPUs 1–3 run one active SUT. eKuiper 2.1.0 runs natively. ESP32 is excluded from measured experiments.
+**Canonical allocation**: CPU 0 runs OS, native Mosquitto, `wafer-loadgen` and telemetry (systemd `CPUAffinity=0`, `irqaffinity=0`, no `isolcpus`); CPUs 1–3 run one active SUT. eKuiper 2.1.5 runs natively. ESP32 is excluded from measured experiments.
 **Method**: N≥30 repetitions, open-loop load gen, Mann-Whitney U, HdrHistogram, Bootstrap CI95.
 
 ---
@@ -117,7 +118,7 @@ Native Rust (ceiling) ←── Gap A: "isolation tax" ──→ WAFER ←──
 | "Edge gateway" | Linux-capable, ≥4GB RAM (Raspberry Pi 5 4 GB, Jetson) | Microcontrollers (Cortex-M) |
 | "Isolation" | Memory containment + capability scoping | Information-flow control, covert-channel elimination |
 | "Hot-swap" | Stateless node replacement between messages | State-preserving live update |
-| "Competitive performance" | Delivery ceiling >= 0.70x eKuiper's on telemetry pipelines | Near-native for arbitrary computation |
+| "Competitive performance" | Tested-grid delivery ceiling >= 0.70x eKuiper's on telemetry pipelines | Near-native for arbitrary computation |
 | "Pipeline" | Stateless transform DAG (parse, filter, route) | Full stream processor with windowing/exactly-once |
 
 ---

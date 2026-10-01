@@ -13,7 +13,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -27,7 +27,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -48,7 +48,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -467,7 +467,7 @@
           "kind": "external-procfs-process-sampler",
           "interval_secs": 1,
           "maximum_rows_per_run": 62,
-          "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+          "gc_runtime_metrics": "go-gctrace-from-kuiper-journal-in-profiled-state",
           "graceful_unavailable": true
         },
         "ordering": {
@@ -479,7 +479,8 @@
           "throughput.csv",
           "interval-metrics.json",
           "ekuiper-runtime-summary.json",
-          "profiler-overhead.json"
+          "profiler-overhead.json",
+          "ekuiper-gctrace.log"
         ],
         "analysis": "ekuiper-tail-association",
         "no_pool_with": [
@@ -872,10 +873,11 @@
         "min_achieved_ratio": 0.99,
         "loss_aggregation": "sum(total_undelivered) / sum(intended)",
         "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "delivery_ceiling": "highest tested delivery-good rate",
+        "delivery_ceiling": "bracketed by tested rates: lower bound is the highest delivery-good rate with no delivery-bad rate below it, or 0; upper bound is the lowest delivery-bad rate above every delivery-good rate, or unbounded; support-confounded rates set neither bound",
         "normalized_p99_knee_multiplier": 2.0,
         "support_path_censoring": "mqtt-loopback",
-        "competitive_ratio_threshold": 0.7
+        "competitive_ratio_threshold": 0.7,
+        "competitive_decision": "PASS if WAFER lower bound / eKuiper upper bound >= threshold; FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
       }
     },
     "e-iso-1": {

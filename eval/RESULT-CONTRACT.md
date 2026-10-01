@@ -252,7 +252,8 @@ before reading. The matrix below is authoritative:
 | `host-load-ladder.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Append-only clean-boot session receipt with the exact eight-phase order, per-phase pass/fail/not-run status, 75 °C stop limit, boot identity, bounded sample counts, diagnostic/final admission decisions, source state, and the PMIC internal-rail boundary. |
 | `host-telemetry.csv` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | One-second phase-labeled temperature, CPU frequency, throttling, PMIC internal-rail proxy, memory availability/pressure, USB throughput, boot ID, wall-clock, and monotonic samples. No per-message data. |
 | `kernel-io.log`, `usb-integrity.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Bounded matching kernel I/O errors and per-USB-phase byte/duration/SHA-256 reconciliation. Any recorded kernel I/O error or hash mismatch stops the ladder and blocks final admission. |
-| `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and explicit eKuiper 2.1.0 GC/runtime-unavailability status. It never infers GC events from RSS or latency. |
+| `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and the Go GC trace summary for the measurement window (`gc_runtime_metrics`) when the profiled run logged one. It never infers GC events from RSS or latency. |
+| `ekuiper-gctrace.log` | E-Compare-eKuiper-Profile | `canonical_runner.py` | One line per Go GC cycle that the `kuiper.service` journal recorded from eKuiper start to stop: the journal receive time in Unix-epoch nanoseconds, a space, and the unchanged `GODEBUG=gctrace=1` line. Empty in the unprofiled control. |
 | `profiler-overhead.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Profiler state, matched rate/run pair, collection-enabled flag, and the run-level profiled-minus-control estimator label. It declares association-only interpretation and is not primary evidence. |
 | `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-3 (`wafer-hotswap`), E-Swap-4, E-Swap-5, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's typed internal outcome phases. E-Swap-3 records its one request with the plugin, HTTP status and response body only; `disruption-timeline.json` holds its action boundaries. E-Swap-5 requires 50 process-trap requests whose response status is `rolled_back`. |
 | `swap_timeline.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `BenchSink` | Sink-observed successful plugin-version transitions. Each `pause_ns` is an output interarrival gap and is not an internal swap duration. E-Swap-5 forbids this artifact because the rejected v2 never becomes sink-observed. |
@@ -295,7 +296,9 @@ before reading. The matrix below is authoritative:
   `cpu-cores.csv`, `host-sched.csv`, `sut-processes.csv` and
   `host-sidecar.json`. Both are sidecar processes the canonical runner and
   `run-experiment.sh --canonical` start before the runtime and stop after it
-  exits; neither reads or changes anything the runtime measures.
+  exits. Both pin themselves to the support CPUs (`--pin-cpus`) before they
+  start sampling, so neither they nor the commands they run share a CPU with
+  the SUT; neither reads or changes anything the runtime measures.
 
 ### Schema table
 
@@ -356,6 +359,10 @@ total_undelivered = rejected + downstream_lost
 
 It must contain no mandatory per-message traces. `check_capacity_run_result` rejects missing fields, inconsistent counters, non-final evidence labels, or trace mode.
 
+The batch summary `manifests/canonical-batches/<host-tag>-<batch-id>/rate-sweep-summary.json` carries, per system and rate, `run_count` (completed runs), `sut_outcome_runs`, `pooled_loss`, `mean_achieved_ratio`, `total_duplicates`, and one value per completed run of achieved rate, achieved ratio, loss, and p99; `run_count + sut_outcome_runs` is 30. Canonical analysis classifies every cell from these counters, never from the stored `classification` string: a cell is delivery-good when it has no outcome run, pooled loss is at most 0.01, mean achieved ratio is at least 0.99, and the duplicate total is zero, and a SUT cell at or above the lowest delivery-bad MQTT loopback rate is support-confounded. A stored classification or support-censoring rate that disagrees with the counters, or a pooled loss or mean achieved ratio that disagrees with the run values, rejects the summary. The rate table reports run-level min, quartiles, max, and a bootstrap 95% CI of the median for achieved rate, achieved ratio, loss, and p99; the pooled loss with a run-resampling bootstrap 95% CI; the mean achieved ratio; the duplicate total; and the normalized p99, whose interval resamples both that rate's runs and the 1,000 msg/s runs. These statistics cover the completed runs, and a rate with no completed run reports none. Any strictly increasing grid that contains 1,000 msg/s is accepted.
+
+Each system's delivery ceiling is bracketed by tested rates, not read as one grid point. The lower bound is the highest delivery-good tested rate with no delivery-bad tested rate below it, or zero. The upper bound is the lowest delivery-bad tested rate above every delivery-good one; it is unbounded when no such rate exists, as when the top of the grid is delivery-good. A delivery-bad rate below a delivery-good one is flagged as non-monotonic and widens the bracket to cover both readings instead of invalidating the population. Support-confounded cells set neither bound, so a ceiling with only support-confounded cells above its lower bound is unbounded above. The WAFER/eKuiper ratio interval runs from WAFER lower / eKuiper upper (worst case) to WAFER upper / eKuiper lower (best case, unbounded when the eKuiper lower bound is zero). The decision is `PASS` when the worst case is at least 0.70, `FAIL` when the best case is below 0.70, and `CENSORED` otherwise; an incomplete or malformed population is `PENDING`. The criterion is a statement about the tested grid: WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's, with each ceiling bracketed by tested rates. The claim-boundary table reports both systems' bounds, the ratio interval, and the verdict.
+
 Final E-Swap-3 requires `publisher-summary.json`, `subscriber-metadata.json`, 200 contiguous 100 ms buckets in `throughput-buckets.json`, 400 contiguous 10 ms buckets and 40 nested 100 ms parent buckets in `throughput-buckets-10ms.json`, `disruption-timeline.json`, and `disruption-analysis.json`. The 100 ms series stays aligned to the actual action-start `t0`, and the parent buckets equal the matching canonical event-window slice. `disruption-timeline.json` records the actual action start immediately before control issuance, the actual acknowledged/readiness wall-clock end, independent monotonic action duration, the scheduled measured t=60 target, actual event offset, signed alignment error, and a fixed 10 ms tolerance. `swap_timeline.json` is not a final E-Swap-3 artifact and must not remain in the admitted raw leaf. The leaf fails when the actual action start misses the scheduled target by more than 10 ms. Loss or duplication in a `wafer-hotswap` run is a `message-loss` or `duplicates` outcome; the restart comparators have no zero-loss criterion, so their loss is reported data. A `wafer-hotswap` run records its one request in `swap_requests.json`, and a request that does not return HTTP 200 is a `swap-failed` outcome. A runtime that exits during the run, including one restarted by `wafer-restart` that dies, is a `runtime-exit` outcome; a restarted runtime that keeps running without answering its control plane is an infrastructure failure.
 
 Final E-Swap-4 uses a source-driven 1,000→2,000→1,000 msg/s schedule over measured intervals `[0,55)`, `[55,65)`, and `[65,120)` after 30,000 warmup messages. Each independent run contains exactly 130,000 measured messages and one swap scheduled at measured t=60. `throughput-buckets.json` contains 1,200 contiguous source-origin 100 ms primary buckets over `[0,120s)` plus a separate 100-bucket drain series over `[120s,130s)`. Full-run counters reconcile primary, drain, and O(1) after-drain evidence; any after-drain receive or right-censored drain rejects the run. `swap-actual-t0.json` declares the single source-origin actual-`t0` receipt, and it must reconcile with `swap_requests.json`, `throughput-buckets-10ms.json`, `throughput-buckets.json`, and `burst-timeline.json` on source origin, scheduled t=60, actual request timestamp, alignment error, and the fixed 10 ms tolerance. `burst-timeline.json` records source and actual swap boundaries, monotonic source-completion offset, intended/emitted/received phase populations, sequence loss/duplication, primary/drain completion evidence, the sink-observed gap, and internal swap phases. The semantic verifier rejects wrong clocks, origins, phase rates or populations, zero or multiple swaps, a missing or inconsistent actual-`t0` receipt, a swap outside the burst, a non-centered scheduled swap, bucket gaps, clamped/misclassified tail evidence, completion at or after 130 s, or population mismatches. Loss or duplication is a `message-loss` or `duplicates` outcome and a failed swap a `swap-failed` outcome; the run is admitted and fails the zero-loss criterion. Batch analysis admits exactly one event from each of 30 distinct runs that kept running, counts every admitted run in the zero-loss criterion, before computing the across-run p95 and bootstrap median interval, and separately reports runs with drain arrivals and the maximum drain offset. Missing required files fail through the matrix contract; malformed files fail through experiment-specific semantic checks.
@@ -392,7 +399,7 @@ The candidate IDs and purposes are:
 | `e-swap-independent-sessions` | candidate-supplementary | Host run | Collect five independent swap sessions with 50 nested events each. |
 | `e-swap-rollback-sessions` | candidate-supplementary | Host run | Collect five independent rollback sessions with 50 nested events each. |
 | `e-host-thermal-storage` | diagnostic | Clean-boot host session | Characterize thermal and removable-storage headroom under a stop-on-failure load ladder. |
-| `e-compare-ekuiper-profile` | diagnostic | Host run at one rate and profiler state | Associate bounded eKuiper runtime/process summaries with tail latency using matched unprofiled controls. |
+| `e-compare-ekuiper-profile` | diagnostic | Host run at one rate and profiler state | Associate bounded eKuiper process and Go GC trace summaries with tail latency using matched unprofiled controls. |
 
 The exact condition grids, required outputs, no-pooling boundaries, and analysis
 consumers are machine-readable in `enhanced_candidate.experiments`. The
@@ -476,16 +483,40 @@ only report the corresponding evaluated gate decisions.
 `e-compare-ekuiper-profile` contains exactly five profiled and five unprofiled
 control runs at each of 1,000, 4,000, and 8,000 msg/s. A pair is the profiled
 and unprofiled run sharing one offered rate and run index; both use the same
-canonical eKuiper 2.1.0 config, load-generator profile, QoS, operator
+canonical eKuiper 2.1.5 config, load-generator profile, QoS, operator
 concurrency, 30-second warmup, and 60-second measurement. The profiled arm alone
 starts a one-second external `/proc` sampler bounded to at most 62 rows. If
 required process files are unreadable, the run continues and records process
 metrics as unavailable. The unprofiled control must not contain
 `resource-usage.csv`.
 
-The frozen eKuiper deployment has no validated GC-event interface. Every
-runtime summary therefore labels GC/runtime metrics unavailable with the exact
-version limitation instead of treating RSS or latency excursions as GC events.
+The profiled arm also starts eKuiper with `GODEBUG=gctrace=1`, through the
+runtime drop-in `/run/systemd/system/kuiper.service.d/wafer-gctrace.conf`
+installed from `eval/ekuiper/gctrace-drop-in.conf`, so the Go runtime writes one
+line per GC cycle to the unit's journal. After eKuiper stops, both arms read the
+`kuiper.service` journal since the run started and keep the GC lines in
+`ekuiper-gctrace.log`. `gc_runtime_metrics` in the runtime summary then counts
+the GC cycles whose journal time falls inside the 60-second measurement window
+(`cycle_count`), sums and maximizes their two stop-the-world pauses (sweep
+termination and mark termination wall clock, `stw_pause_total_ns` and
+`stw_pause_max_ns`), and records the largest heap at GC start, live heap, and
+heap goal in MiB. `trace_line_count` and `missing_cycle_count` cover the whole
+run, so gaps in the GC numbering are visible. A profiled run whose journal is
+unreadable, has no GC lines, or has lines in an unknown format keeps its other
+outputs and records `status=unavailable` with `kuiper-journal-unreadable`,
+`gctrace-lines-missing-from-journal`, or `gctrace-format-unrecognized`. The
+unprofiled control records `gctrace-disabled-by-design`, and any GC line in its
+log fails the run. Journal times are receive times, so a cycle is assigned to
+the window by when its line was logged, which is when the cycle ended. The cost
+of writing the trace is part of the profiled-minus-control difference, and GC
+summaries are diagnostic associations with tail latency, not causal evidence.
+
+The runner removes the drop-in, with eKuiper stopped, at the end of every
+profiled run, and again before any other eKuiper start if it is still present.
+Every eKuiper run outside the profiled arm must show no `GODEBUG` in the unit
+environment recorded in `ekuiper-audit.json`: the runner fails such a run at
+audit time and the verifier rejects its leaf.
+
 Analysis preserves all 30 independent host runs, forms 15 rate/run-index pairs,
 and reports profiled-minus-control differences as diagnostic associations only.
 The profile batch cannot be pooled with E-Perf-1, E-Perf-10, or prior diagnostic
@@ -562,16 +593,6 @@ artifacts are append-only, retain failed and interrupted attempts, and are never
 duplicated during host transfer. Analysis opens raw inputs read-only and writes
 only under `derived/` and `reports/`.
 
-Storage qualification is a staged, non-destructive gate. `prepared.json` binds
-one stable device identifier, UUID, `WAF_RESULTS` label, exFAT type, exact mount
-path, mount options, read-write state, available bytes, path-device identity, and
-a bounded large-file/many-small-file corpus manifest. The operator then stops
-writers, synchronizes, safely unmounts, and remounts the physical volume. A fresh
-mount identity is mandatory. `verified.json` records expected and observed file
-and byte counts plus missing, extra, and mismatched counts after full SHA-256
-verification; every error count must be zero. The qualification tooling does
-not format, relabel, mount, unmount, copy, or delete storage.
-
 ### Reduced-repetition diagnostic batches
 
 `canonical_runner.py --repetitions N` runs only runs 1 to N of the frozen
@@ -647,7 +668,9 @@ authoritative through cross-compilation.
   "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
   "memory_total_kib": 4194304,
   "cpu_governors": ["performance"],
-  "isolated_cpus": "1-3",
+  "isolated_cpus": "",
+  "housekeeping_cpus": "0",
+  "irq_default_cpus": "0",
   "temperature_millicelsius": 53800,
   "throttled": "0x0",
   "rustc_version": "rustc 1.85.0 (unknown)",
@@ -746,15 +769,25 @@ profile:
 | `arch` | `uname -m` | `aarch64` | `aarch64` | `x86_64` |
 | `hardware_model` | `/proc/device-tree/model` or DMI | contains `Raspberry Pi 5` | contains `Jetson Orin Nano` | any |
 | `cpu_governors` | `/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` | `performance` | `performance` | `performance` |
-| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | `1-3` | `1-3` | `1-3` |
+| `isolated_cpus` | `/sys/devices/system/cpu/isolated` | empty | empty | empty |
+| `housekeeping_cpus` | `Cpus_allowed_list` of PID 1 (systemd `CPUAffinity=`) | `0` | `0` | `0` |
+| `irq_default_cpus` | `/proc/irq/default_smp_affinity` as a CPU list (`irqaffinity=`) | `0` | `0` | `0` |
 | `throttled` | `pi_telemetry.py` backend | `0x0` | `0x0` | `0x0` |
 | `online_cpus` | `/sys/devices/system/cpu/online` | any | `0-3` | any |
 | `power_mode` | `nvpmodel -q` | any | `25W` | any |
 | `smt` | `/sys/devices/system/cpu/smt/control` | any | any | `off`, `forceoff` or `notsupported` |
 | `turbo` | `intel_pstate/no_turbo` or `cpufreq/boost` | any | any | `off` |
 
-The SUT runs on CPUs `1-3` and the load generator, broker and samplers on CPU
-`0` on every host. `memory_total_kib` (`/proc/meminfo`) and
+The SUT runs on CPUs `1-3` (`sut_cpus`) and the load generator, broker and
+samplers on CPU `0` on every host. The runner starts WAFER and the native
+baseline under `taskset -c 1-3`, and the eKuiper unit sets `CPUAffinity=1 2 3`.
+The runner pins the load generator and the host samplers to `support_cpus`.
+Everything else, Mosquitto included, inherits `housekeeping_cpus` from
+systemd, and the kernel sends new interrupts there too. No CPU is isolated
+with `isolcpus`: its default domain isolation stops load balancing on CPUs
+1-3, so every thread of a SUT would stay on the one CPU its process started
+on. A `null` value means the fact could not be read, which fails the check.
+`memory_total_kib` (`/proc/meminfo`) and
 `temperature_millicelsius` (the host's thermal zone at run completion) are
 recorded, not checked.
 

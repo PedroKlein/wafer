@@ -7,7 +7,7 @@
 
 ## Abstract
 
-The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
+The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.5 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
 The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
 
@@ -77,9 +77,9 @@ E-Perf-10 runs MQTT loopback, Native, protected WAFER, and eKuiper at the common
 [1,000, 4,000, 8,000, 15,000, 16,000] msg/s
 ```
 
-Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis reports the highest tested delivery-good rate and the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
+Every system-rate condition has 30 independent runs. A rate is delivery-good when pooled loss is at most 1 percent, the mean achieved/offered ratio is at least 0.99, and duplicate count is zero. Analysis brackets each delivery ceiling between tested rates and reports the first support-uncensored rate whose median normalized run p99 exceeds 2.0.
 
-A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. The pure decision uses only exact tested-grid lower/upper bounds and threshold 0.70; it does not interpolate. Identifiable and bounded worst/best cases can produce PASS or FAIL. Invalid/incomplete populations, zero denominators, no-good-rate cases, and bounds that straddle the threshold remain `CENSORED/PENDING` with an explicit reason.
+A delivery-bad MQTT loopback rate support-confounds SUT results at that rate and above. Each ceiling's lower bound is the highest delivery-good tested rate with no delivery-bad rate below it, or zero; its upper bound is the lowest delivery-bad rate above every delivery-good one, and stays open at the top of the grid or above support-confounded cells. The decision does not interpolate. `PASS` needs WAFER lower / eKuiper upper >= 0.70, `FAIL` needs WAFER upper / eKuiper lower < 0.70, and every other interval is `CENSORED`. Incomplete or malformed populations are `PENDING` with an explicit reason.
 
 ### Startup and cross-architecture boundaries
 
@@ -239,7 +239,7 @@ This is the Carbone 2015 gold standard: "reimplemented on the SAME RUNTIME."
 
 ### Decision 6: eKuiper Comparison Setup
 
-Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same native Mosquitto broker, same message format, same Raspberry Pi 5 4 GB host, and same load profile. eKuiper 2.1.0 runs from its official Linux ARM64 package rather than in Docker, so neither comparator receives an additional container or bridge-network boundary.
+Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same native Mosquitto broker, same message format, same Raspberry Pi 5 4 GB host, and same load profile. eKuiper 2.1.5 runs from its official Linux ARM64 package rather than in Docker, so neither comparator receives an additional container or bridge-network boundary.
 
 The Pi boots with CPUs 1–3 isolated. The operating system, Mosquitto, and `wafer-loadgen` use CPU 0; the active SUT—WAFER, the native Rust baseline, or eKuiper—uses CPUs 1–3. Only one SUT runs at a time.
 
@@ -299,7 +299,7 @@ One unified `PipelineBuilder` with pluggable source/sink types. `TestPipeline` a
 
 ## Canonical hardware amendment
 
-Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.0 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
+Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.5 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
 
 ## Related RFCs
 

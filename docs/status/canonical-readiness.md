@@ -24,14 +24,15 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 1. Synchronize WAFER and thesis methodology documents.
 2. Render and review the pre-final analysis preview.
 3. Verify one clean commit locally and deploy it.
-4. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
-5. Obtain all-PASS independent readiness review.
-6. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
+4. Reinstall eKuiper 2.1.5 on each host with `eval/ekuiper/install-native.sh` and run the comparator re-check from the runbook.
+5. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
+6. Obtain all-PASS independent readiness review.
+7. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
 
 ## Current claim boundaries
 
 - E-Perf-1 is a matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 reports exact tested-grid bounds without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; an unidentified comparison remains `CENSORED/PENDING`.
+- E-Perf-10 brackets each delivery ceiling between tested rates without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - Pipeline A is `MQTT source -> threshold filter -> MQTT sink`.
 - Hot-swap is stateless.
 - PMIC telemetry is an internal-rail proxy, not total board power.

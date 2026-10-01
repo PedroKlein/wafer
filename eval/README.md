@@ -8,7 +8,7 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 - UV (Python package manager) — for analysis notebooks
 - Mosquitto MQTT broker — for the MQTT-bookended experiments
 - Raspberry Pi 5 with 4 GB RAM — canonical measurement host
-- Native eKuiper 2.1.0 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
+- Native eKuiper 2.1.5 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
 
 ## Quick Start
 
