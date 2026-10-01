@@ -106,6 +106,7 @@ jobs:
           eval/scripts/tests/test_eval_portability.sh
           eval/scripts/tests/test_host_tags.sh
           eval/scripts/tests/test_pi5_tooling.sh
+          eval/scripts/tests/test_preflight_hosts.sh
           eval/scripts/tests/test_run_experiment_canonical.sh
           eval/ekuiper/test-native-scripts.sh
           uv run --directory eval/analysis --frozen pytest -q
