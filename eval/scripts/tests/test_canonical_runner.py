@@ -5273,6 +5273,19 @@ def _leaf(volume: Path, experiment: str) -> Path:
     return next((volume / "raw" / experiment / "rpi5-final").rglob("run-01-attempt-01"))
 
 
+def _exceed_retry_cap(volume: Path) -> None:
+    leaf = _leaf(volume, "e-perf-3")
+    leaf.rename(leaf.with_name("run-01-attempt-03"))
+    for number in (1, 2):
+        failed = leaf.with_name(f"run-01-attempt-{number:02d}")
+        failed.mkdir()
+        (failed / "canonical-status.json").write_text(
+            json.dumps(
+                {"status": "failed", "failure_class": "infrastructure", "reasons": ["harness-error"]}
+            )
+        )
+
+
 def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Path, Path]) -> None:
     _, _, ledger = final_batch
 
@@ -5475,6 +5488,10 @@ def test_approve_discloses_other_final_batches_of_the_host(
             ),
             "already approves rpi5 batch earlier",
         ),
+        (
+            lambda root, volume, ledger: _exceed_retry_cap(volume),
+            "used more attempts than its retry cap allows",
+        ),
     ],
     ids=[
         "incomplete",
@@ -5482,6 +5499,7 @@ def test_approve_discloses_other_final_batches_of_the_host(
         "leaf-sha",
         "e-val-1-gate",
         "other-approved",
+        "over-retry-cap",
     ],
 )
 def test_approve_refuses_a_batch_that_is_not_final_evidence(

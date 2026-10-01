@@ -213,7 +213,7 @@ It refuses the batch unless all of these hold:
 
 - the ledger is under `manifests/canonical-batches/`, and its `batch.json` marks thesis evidence with no repetition override;
 - the batch ran from one clean commit with the current matrix;
-- `schedule.json` is the full schedule for the batch seed, and every run has an admitted attempt (a clean pass or a system outcome) or an alias receipt;
+- `schedule.json` is the full schedule for the batch seed, and every run has an admitted attempt (a clean pass or a system outcome) within its retry cap, or an alias receipt;
 - `e-val-1-gate.json` reports a pass;
 - every admitted leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
 

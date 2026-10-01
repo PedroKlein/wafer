@@ -6945,6 +6945,9 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
     for item, leaf in evidence:
         if item.shared_from:
             continue
+        retries = attempt_retries(item)
+        if retries is not None and len(condition_attempts(leaf.parent, item.run_index)) > retries + 1:
+            raise ValueError(f"{item.result_key} used more attempts than its retry cap allows")
         metadata = json.loads((leaf / "metadata.json").read_text())
         if (
             metadata.get("git_sha") != sha
