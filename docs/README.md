@@ -68,7 +68,7 @@ docs/
 │   ├── shutdown-and-failure.md
 │   └── evaluation-harness.md
 ├── adr/                  Nygard-format decision records (0001–0018)
-├── rfcs/                 Long-form design records (RFC-001–012, source-decisions/)
+├── rfcs/                 Long-form design records (RFC-001–012)
 ├── operations/           Task-oriented how-tos (How-to)
 │   ├── README.md
 │   ├── getting-started.md          (Tutorial)
@@ -87,31 +87,25 @@ docs/
 │   ├── README.md
 │   ├── implementation-status.md
 │   ├── implementation-gaps.md
-│   ├── evaluation-progress.md
 │   ├── canonical-readiness.md
-│   ├── rpi5-canonical-transition.md
-│   └── migration-audit.md
+│   └── rpi5-canonical-transition.md
 ├── benchmarks/           Measurement notes; no final results yet
 │   ├── README.md
 │   ├── hot-swap.md
 │   ├── ekuiper-comparator.md
-│   ├── ekuiper-profile-diagnostic.md
-│   ├── rq-summary.md                (archived shakedown record)
-│   ├── rq2-attacks.md               (archived shakedown record)
-│   ├── binary-sizes.md              (archived shakedown record)
-│   ├── methodology-validation.md    (archived shakedown record)
-│   └── ekuiper-tail-diagnostic.md   (archived pilot diagnosis)
+│   └── ekuiper-profile-diagnostic.md
 ├── api/                  Machine-readable API artefacts
 │   ├── README.md
 │   ├── openapi.yaml
 │   └── bruno-collection/
 └── history/              Archive, not current: plans, pre-final status logs,
+                          closed gap entries, shakedown benchmark pages,
                           Phase 0 session recipes
 ```
 
-Files under `history/` and the benchmark pages marked archived open with an
-"Archived, not current" banner. They explain how the project got here; they do
-not describe the runtime or the evaluation as they are today.
+Files under `history/` open with an "Archived, not current" banner. They
+explain how the project got here; they do not describe the runtime or the
+evaluation as they are today.
 
 ## Reader profiles
 
@@ -129,24 +123,6 @@ not describe the runtime or the evaluation as they are today.
   `architecture/06-crosscutting-concepts.md`, then the relevant
   RFC(s) under `rfcs/`. Load the domain skills under
   `.agents/skills/` when editing code.
-
-## Historical note (2026-07-18 refactor)
-
-The previous monolithic layout (`docs/SPEC.md`, `docs/MVP.md`,
-`docs/api.md`, `docs/REGISTRY.md`, `docs/decisions/`) has been split
-into the arc42-lite tree above. Every legacy topic maps to a section
-in the new tree:
-
-| Legacy location | New home |
-|-----------------|----------|
-| `SPEC.md` §Architecture / §WIT contracts / §Node categories | `architecture/`, `interfaces/wit-contracts.md`, `interfaces/config-schema.md`. |
-| `SPEC.md` §Hot-swap mechanism | `architecture/04-runtime-view.md`, `adr/0003-hot-swap-mechanism.md`, `adr/0012-watch-channel-hot-swap.md`, `rfcs/RFC-005-orchestrator.md`. |
-| `MVP.md` | `status/implementation-status.md`. |
-| `api.md` | `interfaces/http-api.md`. |
-| `REGISTRY.md` | `operations/registry.md`. |
-| `decisions/` | `rfcs/` (renamed and harmonised into `RFC-NNN-<slug>.md`). |
-
-Legacy files are removed; git history preserves them if needed.
 
 ## Cross-repository pointers
 

@@ -2,7 +2,7 @@
 
 > **Archived, not current.** macOS shakedown attack-containment evidence.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [canonical readiness](../status/canonical-readiness.md).
+> paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
 
 <!-- historical-diagnostic-file -->
 

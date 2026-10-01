@@ -300,7 +300,7 @@ use crate::node::wasm::WasmFilterNode;
 
 /// Runner-side wrapper unifying Wasm and native filters, mirroring
 /// [`TransformNode`]. Unblocks the RQ1 apples-to-apples native filter
-/// path (`docs/status/implementation-gaps.md` A18).
+/// path (`docs/history/status/implementation-gaps-closed.md` A18).
 pub enum FilterNode {
     /// Full Wasm filter with sandboxing, hot-swap, and recovery.
     Wasm(Box<WasmFilterNode>),
