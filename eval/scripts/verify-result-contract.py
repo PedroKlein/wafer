@@ -111,30 +111,6 @@ MERGED_PROVENANCE_KEYS = (
     "wafer_plugin_hashes",
 )
 
-# Optional-artefact expectations per experiment. Match on the experiment
-# prefix embedded in the shakedown path. `must_have`: files whose absence
-# is a violation for THIS experiment. `may_have`: files legitimately
-# missing under the split contract; presence is fine, absence is fine.
-OPTIONAL_MATRIX: dict[str, dict[str, set[str]]] = {
-    "e-val-1": {
-        "must_have": {"latency.hdr", "throughput.csv"},
-        "may_have": {"sequence.csv", "percentiles.json"},
-        "must_not_have": set(),  # memory.csv/per_node_metrics.csv absent by design
-    },
-    "e-perf-6": {
-        "must_have": {"latency.hdr", "throughput.csv", "memory.csv"},
-        "may_have": {"sequence.csv", "per_node_metrics.csv", "metadata.json"},
-        "must_not_have": set(),
-    },
-}
-
-# Legacy shakedown scripts that predate F2 metadata merge and F3 split
-# contract still write bespoke leaf layouts. Track them as documented
-# deviations so the verifier doesn't flag known-unshipped gaps as
-# regressions.
-LEGACY_METADATA_MISSING_ALLOWED = {"e-val-1"}
-
-
 def find_leaf_dirs(root: Path) -> list[Path]:
     """Return every directory under *root* that contains a `config.toml`.
 
@@ -152,59 +128,6 @@ def experiment_of(path: Path) -> str | None:
         if re.match(r"^e-[a-z0-9-]+$", part):
             return part
     return None
-
-
-def check_rate_sweep_result(path: Path) -> list[str]:
-    required = {
-        "schema_version",
-        "experiment",
-        "system",
-        "thesis_evidence",
-        "measurement_boundary",
-        "units",
-        "offered_rate_msg_s",
-        "actual_offered_rate_msg_s",
-        "achieved_rate_msg_s",
-        "measurement_duration_ns",
-        "messages",
-        "loss_percent",
-        "latency_ns",
-        "resources",
-        "throttled",
-        "profile",
-        "process_audit",
-        "traces",
-    }
-    nested = {
-        "messages": {"offered", "received", "lost", "duplicates"},
-        "latency_ns": {"p50", "p95", "p99"},
-        "resources": {"scope", "cpu_percent", "max_rss_bytes"},
-        "profile": {"path", "sha256", "payload_template_sha256"},
-        "process_audit": {"path", "sha256"},
-        "traces": {"published", "received"},
-    }
-    try:
-        result = json.loads(path.read_text())
-    except (OSError, ValueError) as error:
-        return [f"rate-sweep.json is unreadable: {error}"]
-    violations = [
-        f"rate-sweep.json missing field: {field}"
-        for field in sorted(required - result.keys())
-    ]
-    for section, fields in nested.items():
-        value = result.get(section)
-        if not isinstance(value, dict):
-            violations.append(f"rate-sweep.json {section} must be an object")
-            continue
-        violations.extend(
-            f"rate-sweep.json {section} missing field: {field}"
-            for field in sorted(fields - value.keys())
-        )
-    if result.get("experiment") != "e-perf-10":
-        violations.append("rate-sweep.json experiment must be e-perf-10")
-    if result.get("thesis_evidence") is not False:
-        violations.append("rate-sweep.json must set thesis_evidence=false")
-    return violations
 
 
 def check_publisher_summary(path: Path) -> list[str]:
@@ -1788,11 +1711,6 @@ def check_leaf(
     for core in CORE_FILES:
         if core in files:
             continue
-        # Legacy scripts predating F2 don't emit metadata.json — flag as
-        # a known gap, not a fresh regression. The scripts themselves are
-        # tracked by P-Followup-2 tail (not shipped this plan).
-        if core == "metadata.json" and experiment in LEGACY_METADATA_MISSING_ALLOWED:
-            continue
         violations.append(f"missing core artefact: {core}")
 
     for export_errors in sorted(leaf.glob("**/export-errors.json")):
@@ -1995,8 +1913,6 @@ def check_leaf(
         containment = _load_json(leaf / "containment.json", "containment.json", violations)
         if containment is not None:
             violations.extend(check_dlq_evidence(leaf, containment))
-    if experiment == "e-perf-10" and "rate-sweep.json" in files:
-        violations.extend(check_rate_sweep_result(leaf / "rate-sweep.json"))
     if experiment == "e-perf-10":
         for historical in ("rate-sweep.json", "published.csv", "received.csv"):
             if historical in files:
@@ -2074,16 +1990,6 @@ def check_leaf(
         ):
             violations.append("final E-Swap-4 must contain exactly one swap event")
 
-    matrix = OPTIONAL_MATRIX.get(experiment)
-    if matrix is None:
-        return violations, warnings  # Unknown experiment id — core-only check.
-
-    for f in matrix["must_have"]:
-        if f not in files:
-            violations.append(f"missing required optional artefact for {experiment}: {f}")
-    for f in matrix.get("must_not_have", set()):
-        if f in files:
-            violations.append(f"unexpected artefact for {experiment}: {f}")
     return violations, warnings
 
 

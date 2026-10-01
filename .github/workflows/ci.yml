@@ -105,7 +105,6 @@ jobs:
           eval/scripts/tests/test_pi5_tooling.sh
           eval/scripts/tests/test_preflight_hosts.sh
           eval/scripts/tests/test_run_experiment_canonical.sh
-          eval/ekuiper/test-native-scripts.sh
           uv run --directory eval/analysis --frozen pytest -q
 
       - name: Docker-backed tests

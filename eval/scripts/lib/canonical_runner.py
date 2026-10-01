@@ -139,7 +139,6 @@ RATE_SWEEP_RATES = tuple(RATE_SWEEP_DEFINITION["rate_points_msg_s"])
 RATE_SWEEP_REPETITIONS = int(RATE_SWEEP_DEFINITION["repetitions"])
 RATE_SWEEP_WARMUP_SECS = int(RATE_SWEEP_DEFINITION["warmup_secs"])
 RATE_SWEEP_MEASUREMENT_SECS = int(RATE_SWEEP_DEFINITION["measurement_secs"])
-HISTORICAL_RATE_SWEEP_RATES = (500, 1_000, 2_000, 4_000, 8_000, 16_000)
 E_VAL_1_MIN_P99_NS = 45_000_000
 # HdrHistogram reports the upper bound of the 3-significant-digit bucket containing 55 ms.
 E_VAL_1_MAX_P99_NS = 55_017_471
@@ -1821,52 +1820,6 @@ def validate_swap4_artifacts(
         ).get("timeline", {}).get(field):
             raise ValueError("E-Swap-4 internal swap phases do not reconcile")
 
-def summarize_swap4_runs(runs: list[dict]) -> dict:
-    if len(runs) != 30 or {int(run.get("run_index", 0)) for run in runs} != set(range(1, 31)):
-        raise ValueError("E-Swap-4 summary requires 30 independent run indices")
-    gaps = []
-    drain_offsets = []
-    runs_with_drain = 0
-    for run in runs:
-        analysis = run.get("hotswap_analysis", {})
-        events = analysis.get("events")
-        if analysis.get("sample_count") != 1 or not isinstance(events, list) or len(events) != 1:
-            raise ValueError("E-Swap-4 requires one event from each run")
-        timeline = run.get("burst_timeline", {})
-        if timeline.get("successful_swaps") != 1:
-            raise ValueError("E-Swap-4 run is missing its successful swap")
-        if timeline.get("drain_right_censored") is not False:
-            raise ValueError("E-Swap-4 run has a right-censored drain")
-        drain_count = int(timeline.get("drain_received_events", -1))
-        drain_last = timeline.get("drain_last_offset_ns")
-        if drain_count > 0:
-            if type(drain_last) is not int:
-                raise ValueError("E-Swap-4 run is missing drain timing")
-            runs_with_drain += 1
-            drain_offsets.append(drain_last)
-        elif drain_count != 0 or drain_last is not None:
-            raise ValueError("E-Swap-4 run has invalid drain evidence")
-        gaps.append(int(events[0]["sink_observed_output_gap_ns"]))
-    ordered = sorted(gaps)
-    run_level = _run_summary([float(value) for value in gaps])
-    return {
-        "schema_version": 1,
-        "experiment": "e-swap-4",
-        "sample_unit": "run",
-        "n_runs": len(runs),
-        "n_events": len(gaps),
-        "median_sink_observed_output_gap_ns": statistics.median(ordered),
-        "iqr_sink_observed_output_gap_ns": run_level["q3"] - run_level["q1"],
-        "p95_sink_observed_output_gap_ns": ordered[math.ceil(len(ordered) * 0.95) - 1],
-        "total_loss": sum(int(run["burst_timeline"].get("loss", 0)) for run in runs),
-        "total_duplicates": sum(
-            int(run["burst_timeline"].get("sequence", {}).get("duplicates", 0)) for run in runs
-        ),
-        "runs_with_drain_arrivals": runs_with_drain,
-        "max_drain_arrival_offset_ns": max(drain_offsets, default=None),
-    }
-
-
 def analyze_swap3_disruption(
     throughput: dict,
     timeline: dict,
@@ -3105,66 +3058,6 @@ def derive_branch_isolation(
     }
 
 
-def compare_branch_a(control_runs: list[dict], attack_runs: list[dict]) -> dict:
-    if not control_runs or not attack_runs:
-        raise ValueError("branch-A comparison requires control and attack runs")
-
-    def condition_summary(runs: list[dict]) -> dict:
-        branches = [run["branches"]["branch_a"] for run in runs]
-        return {
-            "run_count": len(branches),
-            "median_throughput_messages_per_second": statistics.median(
-                branch["throughput"]["mean_messages_per_second"] for branch in branches
-            ),
-            "median_p95_latency_ns": statistics.median(
-                branch["latency_ns"]["p95"] for branch in branches
-            ),
-        }
-
-    control = condition_summary(control_runs)
-    attack = condition_summary(attack_runs)
-    control_throughput = control["median_throughput_messages_per_second"]
-    control_p95 = control["median_p95_latency_ns"]
-    return {
-        "control": control,
-        "attack": attack,
-        "branch_a_impact": {
-            "throughput_drop_percent": (
-                (control_throughput - attack["median_throughput_messages_per_second"])
-                / control_throughput
-                * 100
-                if control_throughput
-                else 0.0
-            ),
-            "p95_latency_increase_percent": (
-                (attack["median_p95_latency_ns"] - control_p95) / control_p95 * 100
-                if control_p95
-                else 0.0
-            ),
-        },
-        "units": {
-            "throughput": "messages_per_second",
-            "latency": "nanoseconds",
-            "impact": "percent",
-        },
-    }
-
-
-def compare_branch_conditions(runs: dict[str, list[dict]]) -> dict[str, dict]:
-    control = runs.get("control", [])
-    attacks = {
-        condition: samples
-        for condition, samples in runs.items()
-        if condition != "control"
-    }
-    if not attacks:
-        raise ValueError("branch-A comparison requires at least one attack condition")
-    return {
-        condition: compare_branch_a(control, samples)
-        for condition, samples in sorted(attacks.items())
-    }
-
-
 def derive_containment(output: Path, experiment: str, condition: str) -> dict:
     with (output / "per_node_metrics.csv").open(newline="") as stream:
         rows = [
@@ -3720,150 +3613,6 @@ def validate_startup_artifact(result: dict) -> None:
         raise ValueError("startup harness-overhead tolerance differs from the frozen value")
     if total - phase_total > STARTUP_HARNESS_OVERHEAD_TOLERANCE_NS:
         raise ValueError("startup unmeasured harness overhead exceeds tolerance")
-
-
-def validate_rate_sweep_result(result: dict) -> None:
-    required = {
-        "schema_version",
-        "experiment",
-        "system",
-        "thesis_evidence",
-        "measurement_boundary",
-        "units",
-        "offered_rate_msg_s",
-        "actual_offered_rate_msg_s",
-        "achieved_rate_msg_s",
-        "measurement_duration_ns",
-        "messages",
-        "loss_percent",
-        "latency_ns",
-        "resources",
-        "throttled",
-        "profile",
-        "process_audit",
-        "traces",
-    }
-    missing = sorted(required - result.keys())
-    if missing:
-        raise ValueError(f"rate-sweep result missing fields: {', '.join(missing)}")
-
-    nested = {
-        "messages": {"offered", "received", "lost", "duplicates"},
-        "latency_ns": {"p50", "p95", "p99"},
-        "resources": {"scope", "cpu_percent", "max_rss_bytes"},
-        "profile": {"path", "sha256", "payload_template_sha256"},
-        "process_audit": {"path", "sha256"},
-        "traces": {"published", "received"},
-    }
-    for section, fields in nested.items():
-        value = result.get(section)
-        if not isinstance(value, dict):
-            raise ValueError(f"rate-sweep result {section} must be an object")
-        absent = sorted(fields - value.keys())
-        if absent:
-            raise ValueError(
-                f"rate-sweep result {section} missing fields: {', '.join(absent)}"
-            )
-
-    if result["experiment"] != "e-perf-10":
-        raise ValueError("rate-sweep result experiment must be e-perf-10")
-    if result["system"] not in RATE_SWEEP_SYSTEMS:
-        raise ValueError(f"rate-sweep result has unknown system {result['system']!r}")
-    if result["thesis_evidence"] is not False:
-        raise ValueError("rate-sweep result must set thesis_evidence=false")
-    if result["offered_rate_msg_s"] not in HISTORICAL_RATE_SWEEP_RATES:
-        raise ValueError("historical rate-sweep result offered_rate_msg_s is not frozen")
-
-    messages = result["messages"]
-    numeric_values = (
-        result["actual_offered_rate_msg_s"],
-        result["achieved_rate_msg_s"],
-        result["measurement_duration_ns"],
-        result["loss_percent"],
-        messages["offered"],
-        messages["received"],
-        messages["lost"],
-        messages["duplicates"],
-        result["latency_ns"]["p50"],
-        result["latency_ns"]["p95"],
-        result["latency_ns"]["p99"],
-        result["resources"]["cpu_percent"],
-        result["resources"]["max_rss_bytes"],
-    )
-    if any(not isinstance(value, (int, float)) or value < 0 for value in numeric_values):
-        raise ValueError("rate-sweep result numeric fields must be non-negative")
-    if messages["lost"] != max(0, messages["offered"] - messages["received"]):
-        raise ValueError("rate-sweep result lost count is inconsistent")
-
-    for name, trace in result["traces"].items():
-        if not isinstance(trace, dict):
-            raise ValueError(f"rate-sweep result trace {name} must be an object")
-        absent = {"path", "sha256", "samples"} - trace.keys()
-        if absent:
-            raise ValueError(
-                f"rate-sweep result trace {name} missing fields: {', '.join(sorted(absent))}"
-            )
-        if not re.fullmatch(r"[0-9a-f]{64}", str(trace["sha256"])):
-            raise ValueError(f"rate-sweep result trace {name} has invalid sha256")
-
-
-def classify_sustainable_throughput(
-    samples: list[dict],
-    baseline_rate_msg_s: int = RATE_SWEEP_BASELINE,
-    p99_multiplier_limit: float = RATE_SWEEP_P99_MULTIPLIER,
-    max_loss_percent: float = RATE_SWEEP_MAX_LOSS_PERCENT,
-) -> dict:
-    by_rate: dict[int, list[dict]] = {}
-    for sample in samples:
-        by_rate.setdefault(int(sample["offered_rate_msg_s"]), []).append(sample)
-    if baseline_rate_msg_s not in by_rate:
-        raise ValueError(f"missing {baseline_rate_msg_s} msg/s baseline")
-
-    baseline_p99_ns = statistics.median(
-        int(sample["p99_ns"]) for sample in by_rate[baseline_rate_msg_s]
-    )
-    threshold_p99_ns = baseline_p99_ns * p99_multiplier_limit
-    rates = []
-    for rate, rate_samples in sorted(by_rate.items()):
-        p99_ns = statistics.median(int(sample["p99_ns"]) for sample in rate_samples)
-        offered = sum(int(sample["offered"]) for sample in rate_samples)
-        lost = sum(int(sample["lost"]) for sample in rate_samples)
-        loss_percent = 100.0 * lost / offered if offered else 100.0
-        breaches = []
-        if p99_ns > threshold_p99_ns:
-            breaches.append("p99")
-        if loss_percent > max_loss_percent:
-            breaches.append("loss")
-        rates.append(
-            {
-                "offered_rate_msg_s": rate,
-                "sample_count": len(rate_samples),
-                "median_p99_ns": p99_ns,
-                "loss_percent": loss_percent,
-                "breaches": breaches,
-                "sustainable": not breaches,
-            }
-        )
-
-    last_good = None
-    first_bad = None
-    for rate in (entry for entry in rates if entry["offered_rate_msg_s"] >= baseline_rate_msg_s):
-        if rate["sustainable"] and first_bad is None:
-            last_good = rate["offered_rate_msg_s"]
-        elif not rate["sustainable"] and first_bad is None:
-            first_bad = rate["offered_rate_msg_s"]
-
-    return {
-        "baseline_rate_msg_s": baseline_rate_msg_s,
-        "baseline_p99_ns": baseline_p99_ns,
-        "p99_threshold_ns": threshold_p99_ns,
-        "max_loss_percent": max_loss_percent,
-        "last_good_rate_msg_s": last_good,
-        "first_bad_rate_msg_s": first_bad,
-        "highest_tested_rate_msg_s": max(by_rate),
-        "no_saturation_within_range": first_bad is None,
-        "rates": rates,
-    }
 
 
 def utc_now() -> str:
@@ -6380,62 +6129,6 @@ def verify_result(root: Path, output: Path) -> None:
         )
 
 
-def summarize_branch_isolation(root: Path, batch_id: str) -> Path:
-    layout = results_layout(root)
-    result_root = layout.raw_path("e-iso-7", batch_name(batch_id))
-    runs: dict[str, list[dict]] = {
-        "control": [],
-        "panic-attack": [],
-        "epoch-loop-attack": [],
-    }
-    for path in result_root.rglob("branch-isolation.json"):
-        try:
-            if read_attempt(path.parent).outcome not in ADMITTED:
-                continue
-            result = json.loads(path.read_text())
-            runs[result["condition"]].append(result)
-        except (KeyError, OSError, TypeError, ValueError):
-            continue
-
-    summary = {
-        "schema_version": 1,
-        "experiment": "e-iso-7",
-        "batch_id": batch_id,
-        "sample_unit": "run",
-        "comparisons": compare_branch_conditions(runs),
-    }
-    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "branch-isolation-summary.json")
-    path.write_text(json.dumps(summary, indent=2) + "\n")
-    return path
-
-
-def summarize_swap4(root: Path, batch_id: str) -> Path:
-    layout = results_layout(root)
-    result_root = layout.raw_path("e-swap-4", batch_name(batch_id))
-    runs = []
-    for timeline_path in result_root.rglob("burst-timeline.json"):
-        leaf = timeline_path.parent
-        try:
-            if read_attempt(leaf).outcome not in ADMITTED:
-                continue
-            run_match = re.fullmatch(r"run-(\d+)-attempt-\d+", leaf.name)
-            if run_match is None:
-                raise ValueError(f"invalid E-Swap-4 leaf name: {leaf.name}")
-            runs.append(
-                {
-                    "run_index": int(run_match.group(1)),
-                    "burst_timeline": json.loads(timeline_path.read_text()),
-                    "hotswap_analysis": json.loads((leaf / "hotswap-analysis.json").read_text()),
-                }
-            )
-        except (OSError, ValueError, KeyError, TypeError):
-            continue
-    summary = {**summarize_swap4_runs(runs), "batch_id": batch_id}
-    path = layout.manifest_path("canonical-batches", batch_name(batch_id), "swap4-summary.json")
-    path.write_text(json.dumps(summary, indent=2) + "\n")
-    return path
-
-
 def _candidate_scaling_summary(root: Path, batch_id: str, experiment: str) -> dict:
     layout = results_layout(root)
     definition = json.loads(CANONICAL_MATRIX_PATH.read_text())["enhanced_candidate"]["experiments"][experiment]
@@ -6865,87 +6558,29 @@ def summarize_rate_sweep(root: Path, batch_id: str) -> Path:
     layout = results_layout(root)
     result_root = layout.raw_path("e-perf-10", batch_name(batch_id))
     by_system: dict[str, list[dict]] = {system: [] for system in RATE_SWEEP_SYSTEMS}
-    capacity_paths = list(result_root.rglob("capacity-run.json"))
-    if capacity_paths:
-        for path in capacity_paths:
-            status_path = path.parent / "canonical-status.json"
-            try:
-                if json.loads(status_path.read_text()).get("status") != "passed":
-                    continue
-                result = json.loads(path.read_text())
-                validate_capacity_run_result(result)
-            except (OSError, ValueError, KeyError, TypeError):
-                continue
-            by_system[result["system"]].append(result)
-        outcomes: Counter[tuple[str, int]] = Counter()
-        for unit in batch_units(result_root, None):
-            if unit.admitted is not None and unit.admitted.outcome == SUT_OUTCOME:
-                system, rate = unit.condition.split("/rate-")
-                outcomes[(system, int(rate))] += 1
-        summary = {
-            **estimate_capacity_envelope(by_system, outcomes),
-            "batch_id": batch_id,
-            "criteria": {
-                "max_pooled_loss": RATE_SWEEP_MAX_LOSS_PERCENT / 100,
-                "min_mean_achieved_ratio": 0.99,
-                "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
-            },
-        }
-        path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
-        path.write_text(json.dumps(summary, indent=2) + "\n")
-        return path
-
-    for path in result_root.rglob("rate-sweep.json"):
+    for path in result_root.rglob("capacity-run.json"):
         status_path = path.parent / "canonical-status.json"
         try:
             if json.loads(status_path.read_text()).get("status") != "passed":
                 continue
             result = json.loads(path.read_text())
-            validate_rate_sweep_result(result)
+            validate_capacity_run_result(result)
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        messages = result["messages"]
-        by_system[result["system"]].append(
-            {
-                "offered_rate_msg_s": result["offered_rate_msg_s"],
-                "p99_ns": result["latency_ns"]["p99"],
-                "offered": messages["offered"],
-                "lost": messages["lost"],
-            }
-        )
-
-    definition = json.loads((root / "eval/canonical-matrix.json").read_text())["experiments"]["e-perf-10"]
-    expected_repetitions = int(definition["repetitions"])
-    systems = {}
-    for system, samples in by_system.items():
-        observed = Counter(sample["offered_rate_msg_s"] for sample in samples)
-        complete = all(
-            observed[rate] == expected_repetitions for rate in RATE_SWEEP_RATES
-        )
-        if RATE_SWEEP_BASELINE not in observed:
-            systems[system] = {
-                "complete": False,
-                "error": f"missing {RATE_SWEEP_BASELINE} msg/s baseline",
-                "observed_samples": dict(sorted(observed.items())),
-            }
-            continue
-        systems[system] = {
-            "complete": complete,
-            "observed_samples": dict(sorted(observed.items())),
-            **classify_sustainable_throughput(samples),
-        }
-
+        by_system[result["system"]].append(result)
+    outcomes: Counter[tuple[str, int]] = Counter()
+    for unit in batch_units(result_root, None):
+        if unit.admitted is not None and unit.admitted.outcome == SUT_OUTCOME:
+            system, rate = unit.condition.split("/rate-")
+            outcomes[(system, int(rate))] += 1
     summary = {
-        "schema_version": 1,
-        "experiment": "e-perf-10",
+        **estimate_capacity_envelope(by_system, outcomes),
         "batch_id": batch_id,
-        "thesis_evidence": False,
         "criteria": {
-            "baseline_rate_msg_s": RATE_SWEEP_BASELINE,
-            "p99_multiplier_limit": RATE_SWEEP_P99_MULTIPLIER,
-            "max_loss_percent": RATE_SWEEP_MAX_LOSS_PERCENT,
+            "max_pooled_loss": RATE_SWEEP_MAX_LOSS_PERCENT / 100,
+            "min_mean_achieved_ratio": 0.99,
+            "normalized_p99_knee_multiplier": RATE_SWEEP_P99_MULTIPLIER,
         },
-        "systems": systems,
     }
     path = layout.manifest_path("canonical-batches", batch_name(batch_id), "rate-sweep-summary.json")
     path.write_text(json.dumps(summary, indent=2) + "\n")
@@ -6962,8 +6597,6 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
         SWAP_SESSIONS_EXPERIMENT: summarize_swap_sessions,
         ROLLBACK_SESSIONS_EXPERIMENT: summarize_rollback_sessions,
         EKUIPER_PROFILE_EXPERIMENT: summarize_ekuiper_profile,
-        "e-iso-7": summarize_branch_isolation,
-        "e-swap-4": summarize_swap4,
     }
     for experiment, summarize in summaries.items():
         if experiment not in experiments:

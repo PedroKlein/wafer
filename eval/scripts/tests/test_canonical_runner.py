@@ -37,9 +37,6 @@ from canonical_runner import (  # noqa: E402
     replay_capacity_scout_decisions,
     build_schedule,
     classify_capacity_scout_probe,
-    classify_sustainable_throughput,
-    compare_branch_a,
-    compare_branch_conditions,
     copy_shared_result,
     derive_branch_isolation,
     derive_hotswap_evidence,
@@ -56,10 +53,8 @@ from canonical_runner import (  # noqa: E402
     RunItem,
     select_attempt,
     source_state,
-    summarize_branch_isolation,
     summarize_capacity_knee,
     summarize_process_resources,
-    summarize_swap4_runs,
     summarize_rate_sweep,
     summarize_recovery,
     validate_backpressure_result,
@@ -74,7 +69,6 @@ from canonical_runner import (  # noqa: E402
     write_capacity_result,
     write_capacity_scout_result,
     validate_fine_event_buckets,
-    validate_rate_sweep_result,
     validate_startup_artifact,
     validate_swap3_artifacts,
     validate_swap4_artifacts,
@@ -2258,50 +2252,6 @@ def test_swap4_rejects_malformed_primary_and_drain_evidence() -> None:
         validate_swap4_artifacts(invalid_timeline, throughput, requests, sink)
 
 
-def test_swap4_summary_uses_one_event_from_each_of_30_runs() -> None:
-    runs = [
-        {
-            "run_index": index,
-            "burst_timeline": {
-                "successful_swaps": 1,
-                "sequence": {"gaps": 0, "duplicates": 0},
-                "drain_received_events": 1 if index % 2 else 0,
-                "drain_last_offset_ns": 120_000_000_000 + index if index % 2 else None,
-                "drain_right_censored": False,
-            },
-            "hotswap_analysis": {"sample_count": 1, "events": [{"sink_observed_output_gap_ns": index * 1_000_000}]},
-        }
-        for index in range(1, 31)
-    ]
-    summary = summarize_swap4_runs(runs)
-    assert summary["n_runs"] == 30
-    assert summary["n_events"] == 30
-    assert summary["p95_sink_observed_output_gap_ns"] == 29_000_000
-    assert summary["runs_with_drain_arrivals"] == 15
-    assert summary["max_drain_arrival_offset_ns"] == 120_000_000_029
-
-    runs[0]["hotswap_analysis"]["events"].append({"sink_observed_output_gap_ns": 1})
-    with pytest.raises(ValueError, match="one event"):
-        summarize_swap4_runs(runs)
-    runs = [
-        {
-            "run_index": index,
-            "burst_timeline": {
-                "successful_swaps": 1,
-                "sequence": {"gaps": 0, "duplicates": 0},
-                "drain_received_events": 0,
-                "drain_last_offset_ns": None,
-                "drain_right_censored": False,
-            },
-            "hotswap_analysis": {"sample_count": 1, "events": [{"sink_observed_output_gap_ns": index * 1_000_000}]},
-        }
-        for index in range(1, 31)
-    ]
-    runs[0]["run_index"] = 30
-    with pytest.raises(ValueError, match="30 independent run indices"):
-        summarize_swap4_runs(runs)
-
-
 def queue_sample(elapsed_ns: int, depth: int, accepted: int, processed: int) -> dict:
     return {
         "elapsed_ns": elapsed_ns,
@@ -4060,57 +4010,6 @@ def test_capacity_estimator_marks_sut_rates_support_censored() -> None:
     ]
 
 
-def test_rate_sweep_result_schema_rejects_every_required_field() -> None:
-    result = {
-        "schema_version": 1,
-        "experiment": "e-perf-10",
-        "system": "wafer",
-        "thesis_evidence": False,
-        "measurement_boundary": "publisher run window to subscriber receive timestamp",
-        "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
-        "offered_rate_msg_s": 1000,
-        "actual_offered_rate_msg_s": 999.0,
-        "achieved_rate_msg_s": 998.5,
-        "measurement_duration_ns": 60_000_000_000,
-        "messages": {"offered": 60_000, "received": 59_910, "lost": 90, "duplicates": 0},
-        "loss_percent": 0.15,
-        "latency_ns": {"p50": 100_000, "p95": 200_000, "p99": 300_000},
-        "resources": {"scope": "sut", "cpu_percent": 42.0, "max_rss_bytes": 32_000_000},
-        "throttled": False,
-        "profile": {
-            "path": "eval/loadgen/canonical-rate-sweep.toml",
-            "sha256": "1" * 64,
-            "payload_template_sha256": "4" * 64,
-        },
-        "process_audit": {"path": "process-audit.json", "sha256": "5" * 64},
-        "traces": {
-            "published": {"path": "published.csv", "sha256": "2" * 64, "samples": 60_000},
-            "received": {"path": "received.csv", "sha256": "3" * 64, "samples": 59_910},
-        },
-    }
-    validate_rate_sweep_result(result)
-
-    for field in tuple(result):
-        invalid = {**result}
-        invalid.pop(field)
-        with pytest.raises(ValueError, match=field):
-            validate_rate_sweep_result(invalid)
-
-    for section, fields in {
-        "messages": ("offered", "received", "lost", "duplicates"),
-        "latency_ns": ("p50", "p95", "p99"),
-        "resources": ("scope", "cpu_percent", "max_rss_bytes"),
-        "profile": ("path", "sha256", "payload_template_sha256"),
-        "process_audit": ("path", "sha256"),
-        "traces": ("published", "received"),
-    }.items():
-        for field in fields:
-            invalid = json.loads(json.dumps(result))
-            invalid[section].pop(field)
-            with pytest.raises(ValueError, match=field):
-                validate_rate_sweep_result(invalid)
-
-
 def test_process_resource_sampler_records_memory_regions_and_threads() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         proc = Path(tmp)
@@ -4154,82 +4053,6 @@ def test_process_resource_summary_reports_average_cpu_and_peak_rss() -> None:
         "cpu_percent": 100.0,
         "max_rss_bytes": 20_000_000,
     }
-
-
-def test_sustainable_throughput_classifies_last_good_and_first_bad() -> None:
-    samples = [
-        {"offered_rate_msg_s": 1000, "p99_ns": 1_000_000, "offered": 1000, "lost": 0},
-        {"offered_rate_msg_s": 2000, "p99_ns": 1_900_000, "offered": 2000, "lost": 10},
-        {"offered_rate_msg_s": 4000, "p99_ns": 2_100_000, "offered": 4000, "lost": 0},
-        {"offered_rate_msg_s": 8000, "p99_ns": 1_500_000, "offered": 8000, "lost": 200},
-    ]
-    result = classify_sustainable_throughput(samples)
-    assert result["baseline_p99_ns"] == 1_000_000
-    assert result["last_good_rate_msg_s"] == 2000
-    assert result["first_bad_rate_msg_s"] == 4000
-    assert result["no_saturation_within_range"] is False
-    assert result["rates"][2]["breaches"] == ["p99"]
-    assert result["rates"][3]["breaches"] == ["loss"]
-
-
-def test_sustainable_throughput_reports_no_saturation_within_range() -> None:
-    samples = [
-        {"offered_rate_msg_s": rate, "p99_ns": p99, "offered": rate, "lost": 0}
-        for rate, p99 in ((1000, 1_000_000), (2000, 1_500_000), (4000, 2_000_000))
-    ]
-    result = classify_sustainable_throughput(samples)
-    assert result["last_good_rate_msg_s"] == 4000
-    assert result["first_bad_rate_msg_s"] is None
-    assert result["highest_tested_rate_msg_s"] == 4000
-    assert result["no_saturation_within_range"] is True
-
-
-def test_rate_sweep_summary_uses_only_passed_attempts() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        ledger = root / "eval/results/canonical-batches/rpi5-test"
-        ledger.mkdir(parents=True)
-        matrix = root / "eval/canonical-matrix.json"
-        matrix.parent.mkdir(parents=True, exist_ok=True)
-        matrix.write_text((ROOT / "eval/canonical-matrix.json").read_text())
-        for rate, p99, status in ((1000, 1_000_000, "passed"), (2000, 3_000_000, "passed"), (4000, 500_000, "failed")):
-            run = root / f"eval/results/e-perf-10/rpi5-test/wafer/rate-{rate:05d}/run-01"
-            run.mkdir(parents=True)
-            result = {
-                "schema_version": 1,
-                "experiment": "e-perf-10",
-                "system": "wafer",
-                "thesis_evidence": False,
-                "measurement_boundary": "publisher run window to subscriber receive timestamp",
-                "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
-                "offered_rate_msg_s": rate,
-                "actual_offered_rate_msg_s": float(rate),
-                "achieved_rate_msg_s": float(rate),
-                "measurement_duration_ns": 1_000_000_000,
-                "messages": {"offered": rate, "received": rate, "lost": 0, "duplicates": 0},
-                "loss_percent": 0.0,
-                "latency_ns": {"p50": p99, "p95": p99, "p99": p99},
-                "resources": {"scope": "sut", "cpu_percent": 1.0, "max_rss_bytes": 1},
-                "throttled": False,
-                "profile": {
-                    "path": "profile.toml",
-                    "sha256": "1" * 64,
-                    "payload_template_sha256": "4" * 64,
-                },
-                "process_audit": {"path": "process-audit.json", "sha256": "5" * 64},
-                "traces": {
-                    "published": {"path": "published.csv", "sha256": "2" * 64, "samples": rate},
-                    "received": {"path": "received.csv", "sha256": "3" * 64, "samples": rate},
-                },
-            }
-            (run / "rate-sweep.json").write_text(json.dumps(result))
-            (run / "canonical-status.json").write_text(json.dumps({"status": status}))
-        summary_path = summarize_rate_sweep(root, "test")
-        summary = json.loads(summary_path.read_text())
-    wafer = summary["systems"]["wafer"]
-    assert wafer["first_bad_rate_msg_s"] == 2000
-    assert "4000" not in wafer["observed_samples"]
-    assert summary["thesis_evidence"] is False
 
 
 def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
@@ -4489,29 +4312,6 @@ def test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in() -> None:
         assert summary["measurement_boundary"]["warmup_secs"] == 30
         assert summary["measurement_boundary"]["measurement_secs"] == 60
 
-        attack = json.loads(json.dumps(summary))
-        attack["branches"]["branch_a"]["throughput"]["mean_messages_per_second"] = 900.0
-        attack["branches"]["branch_a"]["latency_ns"]["p95"] = 300000
-        comparison = compare_branch_a([summary], [attack])
-        assert comparison["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(10.0)
-        assert comparison["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(20.0)
-        assert comparison["units"]["latency"] == "nanoseconds"
-
-        epoch_attack = json.loads(json.dumps(attack))
-        epoch_attack["branches"]["branch_a"]["latency_ns"]["p95"] = 325000
-        comparisons = compare_branch_conditions(
-            {
-                "control": [summary],
-                "panic-attack": [attack],
-                "epoch-loop-attack": [epoch_attack],
-            }
-        )
-        assert set(comparisons) == {"panic-attack", "epoch-loop-attack"}
-        assert comparisons["panic-attack"]["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(10.0)
-        assert comparisons["epoch-loop-attack"]["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(30.0)
-        assert all(result["units"]["latency"] == "nanoseconds" for result in comparisons.values())
-
-
 def test_branch_isolation_distinguishes_target_from_actual_offered_population() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
@@ -4584,41 +4384,6 @@ def test_branch_isolation_loss_does_not_count_duplicates_as_received() -> None:
         assert branch_a["received_unique_messages"] == 59_995
         assert branch_a["lost_messages"] == 5
         assert branch_a["duplicates"] == 5
-
-
-def test_branch_isolation_batch_summary_contains_both_attack_rows() -> None:
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        batch = root / "eval/results/e-iso-7/rpi5-diagnostic"
-        for condition, throughput, p95 in (
-            ("control", 1000.0, 100000),
-            ("panic-attack", 990.0, 110000),
-            ("epoch-loop-attack", 950.0, 130000),
-        ):
-            run = batch / condition / "run-01-attempt-01"
-            run.mkdir(parents=True)
-            run.joinpath("canonical-status.json").write_text(json.dumps({"status": "passed"}))
-            run.joinpath("branch-isolation.json").write_text(
-                json.dumps(
-                    {
-                        "condition": condition,
-                        "branches": {
-                            "branch_a": {
-                                "throughput": {"mean_messages_per_second": throughput},
-                                "latency_ns": {"p95": p95},
-                            }
-                        },
-                    }
-                )
-            )
-        (root / "eval/results/canonical-batches/rpi5-diagnostic").mkdir(parents=True)
-        path = summarize_branch_isolation(root, "diagnostic")
-        summary = json.loads(path.read_text())
-
-    assert set(summary["comparisons"]) == {"panic-attack", "epoch-loop-attack"}
-    assert summary["comparisons"]["panic-attack"]["branch_a_impact"]["throughput_drop_percent"] == pytest.approx(1.0)
-    assert summary["comparisons"]["epoch-loop-attack"]["branch_a_impact"]["p95_latency_increase_percent"] == pytest.approx(30.0)
-    assert summary["sample_unit"] == "run"
 
 
 NODE_METRIC_COLUMNS = (
@@ -5447,13 +5212,12 @@ def test_summaries_continue_past_one_a_system_outcome_left_incomplete(
 
     monkeypatch.setattr(runner, "summarize_rate_sweep", incomplete)
     monkeypatch.setattr(
-        runner, "summarize_branch_isolation", lambda root, batch_id: written.append("e-iso-7")
+        runner, "summarize_capacity_knee", lambda root, batch_id: written.append("capacity-knee")
     )
-    monkeypatch.setattr(runner, "summarize_swap4", lambda root, batch_id: written.append("e-swap-4"))
 
-    runner.summarise(tmp_path, "test", {"e-perf-10", "e-iso-7", "e-swap-4"})
+    runner.summarise(tmp_path, "test", {"e-perf-10", runner.CAPACITY_KNEE_EXPERIMENT})
 
-    assert written == ["e-iso-7", "e-swap-4"]
+    assert written == ["capacity-knee"]
     assert "SUMMARY e-perf-10 incomplete: wafer rate 16000 lacks a run" in capsys.readouterr().out
 
 
@@ -5983,7 +5747,6 @@ if __name__ == "__main__":
     test_isolation_and_swap_schedule_preserves_experiment_semantics()
     test_isolation_derivations_use_raw_runtime_metrics()
     test_branch_isolation_uses_branch_artifacts_not_aggregate_fan_in()
-    test_branch_isolation_batch_summary_contains_both_attack_rows()
     test_canonical_configs_match_frozen_windows()
     test_external_subscriber_percentiles_do_not_parse_binary_hdr()
     test_progress_log_records_counts_and_temperature_field()

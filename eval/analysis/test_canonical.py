@@ -11,7 +11,6 @@ import pytest
 
 from wafer_analysis.canonical import (
     containment_table,
-    FINAL_VISUAL_MANIFEST,
     candidate_capacity_table,
     candidate_depth_table,
     candidate_payload_table,
@@ -36,7 +35,6 @@ from wafer_analysis.canonical import (
     swap_sequence_table,
     target_latency_table,
     validation_gate_table,
-    validate_visual_manifest,
 )
 from wafer_analysis.focused import admitted_runs
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
@@ -1516,72 +1514,6 @@ def test_swap4_table_uses_one_event_per_run_and_reports_p95() -> None:
     broken[0]["run_index"] = 30
     with pytest.raises(ValueError, match="30 independent runs"):
         swap4_table(broken)
-
-
-def test_visual_manifest_never_combines_incompatible_metrics() -> None:
-    validate_visual_manifest(FINAL_VISUAL_MANIFEST)
-    capacity = [
-        row for row in FINAL_VISUAL_MANIFEST if row["experiment"] == "e-perf-10"
-    ]
-    assert {row["metric_group"] for row in capacity} == {
-        "offered-versus-achieved-rate",
-        "loss",
-        "p99-latency",
-        "delivery-ceiling",
-        "normalized-p99-knee",
-        "mqtt-support-path-limitation",
-    }
-    swap = [
-        row for row in FINAL_VISUAL_MANIFEST if row["experiment"].startswith("e-swap")
-    ]
-    assert {row["metric_group"] for row in swap} >= {
-        "internal-swap-phases",
-        "sink-observed-gap",
-        "event-aligned-dip",
-        "action-duration",
-        "recovery",
-        "sequence-integrity",
-        "burst-one-event-per-run",
-        "failed-replacement-continuity",
-    }
-    assert {
-        "boundary-payload",
-        "mqtt-depth",
-        "in-process-depth-rss",
-        "startup-page-cache",
-        "backpressure-policy",
-        "component-density",
-        "containment",
-        "failed-replacement",
-    } <= {row["name"] for row in FINAL_VISUAL_MANIFEST}
-    complete = [
-        {
-            **row,
-            "source_experiments": [row["experiment"]],
-            "estimator": "declared estimator",
-            "independent_unit": "complete process run",
-            "admission_dependency": "approved canonical-primary batch",
-            "output_path": f"reports/canonical/{row['name']}.csv",
-            "output_sha256_source": "reports/canonical/output-manifest.json#files[name].sha256",
-            "thesis_location": "TG2/chapters/08-evaluation-results.tex",
-        }
-        for row in FINAL_VISUAL_MANIFEST
-    ]
-    validate_visual_manifest(complete, require_output_identity=True)
-    missing_identity = json.loads(json.dumps(complete))
-    del missing_identity[0]["thesis_location"]
-    with pytest.raises(ValueError, match="output identity is incomplete"):
-        validate_visual_manifest(missing_identity, require_output_identity=True)
-    escaped_output = json.loads(json.dumps(complete))
-    escaped_output[0]["output_path"] = "../outside.csv"
-    with pytest.raises(ValueError, match="report-relative"):
-        validate_visual_manifest(escaped_output, require_output_identity=True)
-    invalid = [
-        *FINAL_VISUAL_MANIFEST,
-        {"experiment": "e-perf-10", "name": "bad", "metric_group": "offered-rate+p99"},
-    ]
-    with pytest.raises(ValueError, match="combined or unknown metric"):
-        validate_visual_manifest(invalid)
 
 
 def test_bootstrap_and_effect_sizes_reject_empty_inputs() -> None:

@@ -646,40 +646,6 @@ def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace() -> None
     assert "GODEBUG" in traced.stdout + traced.stderr
 
 
-def test_historical_rate_sweep_contract_rejects_missing_resource_field() -> None:
-    result = {
-        "schema_version": 1,
-        "experiment": "e-perf-10",
-        "system": "mqtt-loopback",
-        "thesis_evidence": False,
-        "measurement_boundary": "publisher run window to subscriber receive timestamp",
-        "units": {"rate": "messages/second", "latency": "nanoseconds", "rss": "bytes"},
-        "offered_rate_msg_s": 1000,
-        "actual_offered_rate_msg_s": 1000.0,
-        "achieved_rate_msg_s": 999.0,
-        "measurement_duration_ns": 60_000_000_000,
-        "messages": {"offered": 60_000, "received": 60_000, "lost": 0, "duplicates": 0},
-        "loss_percent": 0.0,
-        "latency_ns": {"p50": 1, "p95": 2, "p99": 3},
-        "resources": {"scope": "no-sut", "cpu_percent": 0.0, "max_rss_bytes": 0},
-        "throttled": False,
-        "profile": {
-            "path": "profile.toml",
-            "sha256": "2" * 64,
-            "payload_template_sha256": "3" * 64,
-        },
-        "process_audit": {"path": "process-audit.json", "sha256": "4" * 64},
-        "traces": {"published": {}, "received": {}},
-    }
-    with tempfile.TemporaryDirectory() as tmp:
-        path = Path(tmp) / "rate-sweep.json"
-        path.write_text(json.dumps(result))
-        assert CONTRACT.check_rate_sweep_result(path) == []
-        result["resources"].pop("cpu_percent")
-        path.write_text(json.dumps(result))
-        violations = CONTRACT.check_rate_sweep_result(path)
-    assert "resources missing field: cpu_percent" in " ".join(violations)
-
 def test_canonical_result_rejects_dirty_source_and_missing_output() -> None:
     mutations = {
         "dirty source": lambda result, metadata: metadata.update(git_dirty=True),
