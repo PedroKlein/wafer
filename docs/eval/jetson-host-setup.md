@@ -10,13 +10,22 @@ Read-only preflight: `mise run preflight-jetson` or `./eval/scripts/preflight-je
 | OS | L4T R36 (Ubuntu 22.04, glibc 2.35) | `cat /etc/nv_tegra_release` |
 | Power mode | one fixed `nvpmodel` mode for the whole batch; default `25W` (`WAFER_JETSON_POWER_MODE` overrides) | `sudo nvpmodel -m <id>`, then `sudo jetson_clocks` |
 | Online CPUs | `0-3`: cores 4 and 5 offline, so the SUT budget matches the Pi 5's three cores | `echo 0 \| sudo tee /sys/devices/system/cpu/cpu{4,5}/online` |
-| Isolated CPUs | `1-3` | `isolcpus=1-3` in `/boot/extlinux/extlinux.conf` `APPEND`, then reboot |
+| CPU 0 for everything but the SUT | systemd affinity `0`; no isolated CPUs | `CPUAffinity=0` under `[Manager]` in `/etc/systemd/system.conf`, then reboot; drop any `isolcpus=` from the kernel command line |
+| IRQs on CPU 0 | `/proc/irq/default_smp_affinity` is CPU 0 only | add `irqaffinity=0` to `APPEND` in `/boot/extlinux/extlinux.conf`, then reboot |
+| SUT CPUs balanced | three busy loops under `taskset -c 1-3` run on three CPUs | follows from the two rows above |
 | Governor | `performance` on every online CPU | `jetson_clocks` sets it; verify with `cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor` |
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | `jetson_clocks` |
 | Thermal | a `cpu-thermal` thermal zone (`CPU-therm` on L4T R32) | present on L4T |
 | Power rails | INA3221 through hwmon | present on the developer kit |
 | Binaries | built on this host | `cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl`, then `mise run glibc-floor -- --max 2.35 target/release/wafer` |
 | Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` |
+
+The runner starts WAFER and the native baseline with `taskset -c 1-3` and pins
+`wafer-loadgen` and both telemetry samplers to CPU 0; the eKuiper unit sets
+`CPUAffinity=1 2 3`, and Mosquitto inherits CPU 0 from systemd. Do not use
+`isolcpus`: its default domain isolation stops load balancing on CPUs 1-3, so
+every thread of a system under test would stay on the single CPU its process
+started on.
 
 Do not deploy the aarch64 binaries from CI or from `cross-build-pi`: they
 need a newer glibc than L4T ships (see

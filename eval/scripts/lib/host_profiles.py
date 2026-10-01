@@ -21,7 +21,7 @@ class HostProfile:
     arch: str
     hardware_model_contains: str
     cpu_governors: tuple[str, ...]
-    isolated_cpus: str
+    housekeeping_cpus: str
     sut_cpus: str
     support_cpus: str
     throttled: str
@@ -34,11 +34,14 @@ class HostProfile:
         for label, key, value in (
             ("host tag", "host_tag", self.tag),
             ("architecture", "arch", self.arch),
-            ("isolated CPUs", "isolated_cpus", self.isolated_cpus),
+            ("housekeeping CPUs", "housekeeping_cpus", self.housekeeping_cpus),
+            ("default IRQ CPUs", "irq_default_cpus", self.housekeeping_cpus),
             ("throttling", "throttled", self.throttled),
         ):
             if facts.get(key) != value:
                 errors.append(f"{label} must be {value!r}, got {facts.get(key)!r}")
+        if facts.get("isolated_cpus") != "":
+            errors.append(f"isolated CPUs must be empty, got {facts.get('isolated_cpus')!r}")
         if self.hardware_model_contains not in str(facts.get("hardware_model", "")):
             errors.append(f"hardware model must contain {self.hardware_model_contains!r}")
         if list(facts.get("cpu_governors") or []) != list(self.cpu_governors):
@@ -60,7 +63,7 @@ def host_profiles(matrix: dict) -> dict[str, HostProfile]:
             arch=str(entry["arch"]),
             hardware_model_contains=str(entry["hardware_model_contains"]),
             cpu_governors=tuple(entry["cpu_governors"]),
-            isolated_cpus=str(entry["isolated_cpus"]),
+            housekeeping_cpus=str(entry["housekeeping_cpus"]),
             sut_cpus=str(entry["sut_cpus"]),
             support_cpus=str(entry["support_cpus"]),
             throttled=str(entry["throttled"]),

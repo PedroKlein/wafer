@@ -39,7 +39,9 @@ def facts(host: str, **changes: object) -> dict:
         "git_dirty": False,
         "git_tags": ["eval-v1"],
         "cpu_governors": ["performance"],
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "throttled": "0x0",
         "broker_ready": True,
         "ekuiper_ready": True,
@@ -68,7 +70,7 @@ def test_rpi5_profile_keeps_the_frozen_pi_host_policy() -> None:
         "aarch64",
         "Raspberry Pi 5",
     )
-    assert (profile.isolated_cpus, profile.sut_cpus, profile.support_cpus) == ("1-3", "1-3", "0")
+    assert (profile.housekeeping_cpus, profile.sut_cpus, profile.support_cpus) == ("0", "1-3", "0")
     assert profile.cpu_governors == ("performance",) and profile.throttled == "0x0"
     assert profile.allowed_facts == {}
     matrix = json.loads(MATRIX.read_text())
@@ -104,6 +106,19 @@ def test_host_specific_facts_are_enforced() -> None:
     assert unknown.returncode == 1 and "no host profile 'rpi4'" in unknown.stderr
 
 
+def test_every_host_requires_cpu_0_housekeeping_and_no_isolated_cpus() -> None:
+    for host in ("rpi5", "jetson", "x86"):
+        result = preflight(
+            host, facts(host, isolated_cpus="1-3", housekeeping_cpus="0-3", irq_default_cpus="0-3")
+        )
+        assert result.returncode == 1
+        assert "isolated CPUs must be empty, got '1-3'" in result.stderr
+        assert "housekeeping CPUs must be '0', got '0-3'" in result.stderr
+        assert "default IRQ CPUs must be '0', got '0-3'" in result.stderr
+        unreadable = preflight(host, facts(host, isolated_cpus=None))
+        assert "isolated CPUs must be empty, got None" in unreadable.stderr
+
+
 def test_matrix_validation_rejects_a_missing_or_overlapping_host() -> None:
     sys.path.insert(0, str(ROOT / "eval/scripts"))
     import importlib.util
@@ -118,6 +133,10 @@ def test_matrix_validation_rejects_a_missing_or_overlapping_host() -> None:
     matrix = json.loads(MATRIX.read_text())
     matrix["hosts"]["jetson"]["support_cpus"] = "1"
     assert any("jetson SUT and support CPUs overlap" in e for e in module.validate_hosts(matrix))
+    assert any("jetson support CPUs must be housekeeping CPUs" in e for e in module.validate_hosts(matrix))
+    matrix = json.loads(MATRIX.read_text())
+    matrix["hosts"]["x86"]["housekeeping_cpus"] = "0-1"
+    assert module.validate_hosts(matrix) == ["host x86 housekeeping and SUT CPUs overlap"]
     matrix["schema_version"] = 1
     assert module.validate_hosts(matrix) == ["schema_version must be 2"]
 

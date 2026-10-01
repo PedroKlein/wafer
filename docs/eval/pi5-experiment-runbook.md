@@ -89,7 +89,7 @@ Deploy the verified commit with `./eval/scripts/deploy-pi5.sh --host USER@wafer-
 ./eval/ekuiper/smoke-test.sh
 ```
 
-Do not continue if preflight reports a dirty source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
+Do not continue if preflight reports a dirty source, a non-performance governor, a failed CPU affinity or load-balancing check, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 

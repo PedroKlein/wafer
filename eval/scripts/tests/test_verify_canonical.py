@@ -339,7 +339,9 @@ def make_result(root: Path) -> Path:
         "host_tag": "rpi5",
         "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
         "arch": "aarch64",
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "cpu_governors": ["performance"],
         "throttled": "0x0",
         "git_sha": "1" * 40,
@@ -392,7 +394,9 @@ def test_canonical_static_density_result_accepts_release_component_sizes() -> No
                     "host_tag": "rpi5",
                     "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
                     "arch": "aarch64",
-                    "isolated_cpus": "1-3",
+                    "isolated_cpus": "",
+                    "housekeeping_cpus": "0",
+                    "irq_default_cpus": "0",
                     "cpu_governors": ["performance"],
                     "throttled": "0x0",
                     "git_sha": "1" * 40,
@@ -1070,7 +1074,9 @@ def candidate_swap_leaf(tmp_path: Path, *, rollback: bool) -> tuple[Path, dict, 
         "host_tag": "rpi5",
         "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
         "arch": "aarch64",
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "cpu_governors": ["performance"],
         "throttled": "0x0",
         "git_sha": "1" * 40,
@@ -2063,6 +2069,16 @@ def test_canonical_leaf_is_checked_against_its_own_host_profile(tmp_path: Path) 
     (leaf / "power-boundary.json").write_text('{"measurement":"unavailable"}')
     completed = run(leaf.parents[1])
     assert "jetson power measurement is 'unavailable'" in completed.stdout
+
+
+def test_canonical_leaf_rejects_isolcpus_and_support_work_outside_cpu_0(tmp_path: Path) -> None:
+    leaf = make_result(tmp_path)
+    _set_metadata(leaf, isolated_cpus="1-3", housekeeping_cpus="0-3", irq_default_cpus="0-3")
+    completed = run(leaf.parents[1])
+    assert completed.returncode == 1
+    assert "rpi5 metadata: isolated CPUs must be empty, got '1-3'" in completed.stdout
+    assert "rpi5 metadata: housekeeping CPUs must be '0', got '0-3'" in completed.stdout
+    assert "rpi5 metadata: default IRQ CPUs must be '0', got '0-3'" in completed.stdout
 
 
 def test_canonical_leaf_rejects_throttling_seen_by_any_telemetry_sample(tmp_path: Path) -> None:
