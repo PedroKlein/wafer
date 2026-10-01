@@ -81,12 +81,18 @@ The v11 pilot omitted the eKuiper sink `qos` field, selecting QoS 0 and producin
 
 See [Why the v11 eKuiper latency tail was misleading](../history/benchmarks/ekuiper-tail-diagnostic.md) for the one-variable evidence, corrected small-N results, and claim boundaries.
 
+## MQTT sink flow control
+
+The two MQTT sinks wait for broker acknowledgements differently. eKuiper's MQTT sink publishes from a single loop and, at QoS 1, waits for each PUBACK before it publishes the next message, so it keeps at most one publish in flight. WAFER's MQTT sink uses rumqttc, which keeps up to 100 unacknowledged publishes in flight by default. At high offered rates eKuiper therefore pays one broker round trip per output message. That may be what sets its delivery ceiling, but it is a hypothesis, not a measured result.
+
+E-Perf-10 compares both systems with these defaults. To test the hypothesis, the capacity scout runs a diagnostic arm, `wafer-max-inflight-1`: the WAFER scout pipeline with `max_inflight = 1` on its MQTT sink, on the same workload and rate search as the other systems. If the arm's delivery ceiling drops to eKuiper's, the publish window accounts for the gap; if it stays near WAFER's default ceiling, it does not. The arm is diagnostic only. It never enters the E-Perf-10 grid or decision and is not thesis evidence. See "Capacity scout" in `eval/RESULT-CONTRACT.md`.
+
 ## Known limitations
 
 - Corrected small-N diagnostics characterize the frozen default-style comparator, not eKuiper's best achievable tuning. A two-block diagnostic compared operator concurrency 1 and 3 at 1,000 messages/second. Both settings had a median p95 of 0.327 ms and similar throughput, CPU, and RSS. Concurrency 3 had a lower median p99, 2.411 ms versus 2.652 ms, but N=2 is insufficient to justify selecting a non-default setting after observation. The canonical comparator therefore freezes concurrency 1 regardless of ranking impact.
 - Native Pi 5 results are not directly comparable to the old Docker Desktop macOS shakedowns. The latter include a Linux VM and bridge-network overhead.
 - Raspberry Pi 5 results are not numerically interchangeable with Raspberry Pi 4 results from prior literature. Report absolute values and WAFER/native/eKuiper ratios.
-- eKuiper and WAFER/native Pipeline A all decode the telemetry field used by the filter. Their output schemas, predicate bounds, topics, and QoS are matched; their internal JSON implementations remain engine-specific.
+- eKuiper and WAFER/native Pipeline A all decode the telemetry field used by the filter. Their output schemas, predicate bounds, topics, and QoS are matched; their internal JSON implementations and their MQTT client flow control (see "MQTT sink flow control") remain engine-specific.
 - REST port 9081 is distinct from WAFER's port 9090 and Mosquitto's port 1883.
 
 ## Related files

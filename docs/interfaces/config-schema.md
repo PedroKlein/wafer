@@ -207,7 +207,7 @@ Sinks (`SinkDef`): `mqtt | file | stdout | http | bench-sink`.
 | Kind | Config fields |
 |------|---------------|
 | `mqtt` (source) | `broker`, `port` (default 1883), `topic`, `qos: u8` (default 0), optional `client_id` (default `wafer-<node id>`), optional `tls`, optional `auth`. `tls` and `auth` are accepted but not applied: the connection is always plain TCP without credentials. |
-| `mqtt` (sink) | Same as source + `retain: bool` (default `false`). `retain` is accepted but not applied: every message is published with retain off. `tls` and `auth` are not applied either. |
+| `mqtt` (sink) | Same as source + `retain: bool` (default `false`) + optional `max_inflight` (1 to 65535). `max_inflight` caps how many QoS 1 or 2 publishes may wait for a broker acknowledgement at once; `1` waits for each PUBACK before the next publish. Omitted, the sink keeps rumqttc's default of 100. A value outside 1 to 65535 is rejected while parsing. `retain` is accepted but not applied: every message is published with retain off. `tls` and `auth` are not applied either. |
 | `file` (source) | `path`. |
 | `file` (sink) | `path`, `append: bool` (default `true`). `append` is accepted but not applied: the sink truncates the file when it starts. |
 | `stdin` (source) | (no fields) |

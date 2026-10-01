@@ -4,15 +4,18 @@ from pathlib import Path
 import pytest
 
 from wafer_analysis.focused import (
+    admitted_artifacts,
+    admitted_runs,
     evidence_label,
-    passed_artifacts,
     pending_record,
     percentile_rows,
     target_load_rows,
 )
 
+OUTCOME = {"status": "failed", "failure_class": "sut_outcome", "reasons": ["runtime-exit"]}
 
-def test_passed_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None:
+
+def test_admitted_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None:
     passed = tmp_path / "wafer" / "run-01"
     failed = tmp_path / "wafer" / "run-02"
     incomplete = tmp_path / "wafer" / "run-03"
@@ -25,7 +28,7 @@ def test_passed_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None
     incomplete.mkdir(parents=True)
     (incomplete / "percentiles.json").write_text("{}")
 
-    artifacts = passed_artifacts(tmp_path, "percentiles.json")
+    artifacts = admitted_artifacts(tmp_path, "percentiles.json")
     assert [path.parent.name for path, _ in artifacts] == ["run-01"]
     rows = percentile_rows(tmp_path)
     assert rows.to_dict("records") == [
@@ -39,6 +42,37 @@ def test_passed_artifacts_exclude_failed_and_incomplete_leaves(tmp_path) -> None
             "p999_ns": None,
         }
     ]
+
+
+def test_admitted_runs_keep_outcome_runs_that_stopped_early(tmp_path) -> None:
+    retried = tmp_path / "panic" / "run-01-attempt-02"
+    for attempt, receipt in (
+        (tmp_path / "panic" / "run-01-attempt-01", {"status": "failed"}),
+        (retried, {"status": "passed"}),
+        (tmp_path / "panic" / "run-02-attempt-01", OUTCOME),
+    ):
+        attempt.mkdir(parents=True)
+        (attempt / "canonical-status.json").write_text(json.dumps(receipt))
+    (retried / "containment.json").write_text('{"contained": true}')
+
+    records = admitted_runs(tmp_path, "containment.json")
+
+    assert records == [
+        {"condition": "panic", "run_index": 1, "contained": True, "sut_outcome_reasons": []},
+        {"condition": "panic", "run_index": 2, "sut_outcome_reasons": ["runtime-exit"]},
+    ]
+    assert [path.parent.name for path, _ in admitted_artifacts(tmp_path, "containment.json")] == [
+        "run-01-attempt-02"
+    ]
+
+
+def test_admitted_runs_reject_a_complete_run_without_its_artifact(tmp_path) -> None:
+    leaf = tmp_path / "panic" / "run-01-attempt-01"
+    leaf.mkdir(parents=True)
+    (leaf / "canonical-status.json").write_text('{"status":"passed"}')
+
+    with pytest.raises(ValueError, match="admitted attempt lacks containment.json"):
+        admitted_runs(tmp_path, "containment.json")
 
 
 def test_target_load_rows_reconcile_delivery_and_duplicates(tmp_path) -> None:

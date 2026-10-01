@@ -3,6 +3,13 @@
 > **Archived, not current.** Pre-final E-Density-1 sizes from the shakedown build.
 > Kept as a historical record only. Do not use it for decisions, commands,
 > paths or numbers. Current source: [canonical readiness](../../status/canonical-readiness.md).
+>
+> The container floors and ratios below are estimates, not measurements, and
+> the reasons given for them do not hold: a `FROM scratch` image runs a
+> statically linked musl binary, and the 40 MB assumed for a static Rust
+> worker was never measured. E-Density-1 now measures the floor with
+> `eval/scripts/measure-container-floor.py`. The shakedown CSV this record
+> cites is no longer kept in the repository; Table 4 holds its rows.
 
 <!-- historical-diagnostic-file -->
 

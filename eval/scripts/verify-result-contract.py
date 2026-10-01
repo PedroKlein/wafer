@@ -13,7 +13,9 @@ is 'does the split-contract hold?' which is best answered by walking
 the manifest.
 
 Exit codes:
-    0  every leaf under the given experiment dirs conforms.
+    0  every leaf under the given experiment dirs conforms. A leaf whose
+       system under test failed a criterion it measures (an OUTCOME line)
+       still conforms: the failure is data, not a contract violation.
     1  at least one leaf violates core or optional contract in a way
        the split-contract permits (e.g. contract says memory.csv MUST
        exist for E-Perf-6 but it is absent).
@@ -45,6 +47,7 @@ ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
+from attempts import INCOMPLETE_RUN_REASONS, sut_outcome_reasons
 from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -66,6 +69,7 @@ HOST_PROFILES = host_profiles(json.loads(CANONICAL_MATRIX.read_text()))
 LATENCY_HIGHEST_NS = 3_600_000_000_000
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
+FINAL_CAPACITY_SYSTEMS = frozenset({"mqtt-loopback", "native", "wafer", "ekuiper"})
 CANDIDATE_SCALING_EXPERIMENTS = {
     "e-perf-payload-refinement",
     "e-perf-depth-extension",
@@ -367,6 +371,8 @@ def check_capacity_run_result(
                 violations.append("capacity-run.json message counters must be integers")
     if value.get("experiment") != expected_experiment:
         violations.append(f"capacity-run.json experiment must be {expected_experiment}")
+    if value.get("system") not in FINAL_CAPACITY_SYSTEMS:
+        violations.append("capacity-run.json system is not a capacity-grid system")
     try:
         if not 1 <= int(value.get("run_index")) <= repetitions:
             violations.append("capacity-run.json run_index is outside the frozen repetitions")
@@ -1427,15 +1433,10 @@ def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -
             "gaps": int(rows[0]["gap_msgs"]),
             "duplicates": int(rows[0]["duplicates_count"]),
         }
-        if (
-            sequence != expected_sequence
-            or expected_sequence["expected"] != expected_sequence["received"]
-            or expected_sequence["gaps"] != 0
-            or expected_sequence["duplicates"] != 0
-        ):
+        if sequence != expected_sequence:
             raise ValueError
     except (KeyError, OSError, TypeError, ValueError):
-        violations.append(f"{artifact_name} sequence evidence is not lossless or reconciled")
+        violations.append(f"{artifact_name} sequence evidence does not reconcile")
     required = (
         {"compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns", "first_post_replacement_local_outcome_ns", "http_total_ns", "sink_observed_output_gap_ns"}
         if experiment == "e-swap-independent-sessions"
@@ -1650,6 +1651,34 @@ def check_topology_manifest(path: Path, metadata: dict) -> list[str]:
     return violations
 
 
+CONTAINER_FLOOR_PLATFORMS = {"aarch64": "linux/arm64", "x86_64": "linux/amd64"}
+
+
+def check_container_floor(path: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "container-floor.json", violations)
+    if value is None:
+        return violations
+    if value.get("schema_version") != 1 or value.get("base") != "scratch" or value.get("layer_count") != 1:
+        violations.append("container-floor.json is not a one-layer FROM scratch image")
+    image_bytes = value.get("image_bytes")
+    binary_bytes = value.get("binary_bytes")
+    if not (
+        type(image_bytes) is int and type(binary_bytes) is int and 0 < binary_bytes <= image_bytes
+    ):
+        violations.append("container-floor.json sizes must be positive with the worker inside the image")
+    if value.get("platform") != CONTAINER_FLOOR_PLATFORMS.get(str(metadata.get("arch"))):
+        violations.append("container-floor.json platform differs from the host architecture")
+    if not re.fullmatch(r"rust:\S+-alpine@sha256:[0-9a-f]{64}", str(value.get("build_image", ""))):
+        violations.append("container-floor.json build image is not pinned by digest")
+    inputs = value.get("inputs_sha256")
+    if not isinstance(inputs, dict) or not inputs or not all(
+        re.fullmatch(r"[0-9a-f]{64}", str(digest)) for digest in inputs.values()
+    ):
+        violations.append("container-floor.json lacks the hashes of its build inputs")
+    return violations
+
+
 def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
     if experiment == "e-perf-7":
         values = matrix["experiments"][experiment]["metering_modes"][condition]
@@ -1726,10 +1755,17 @@ def check_leaf(
     canonical: bool = False,
     canonical_matrix: dict | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return (violations, warnings). Empty lists = fully conformant."""
+    """Return (violations, warnings). Empty lists = fully conformant.
+
+    A failed criterion of the system under test is an outcome, not a violation. When the
+    system stopped the run early (it exited, or a swap or rollback failed), only the
+    artefacts the harness owns are checked: core files, provenance, host and telemetry.
+    """
     files = {f.name for f in leaf.iterdir() if f.is_file()}
     violations: list[str] = []
     warnings: list[str] = []
+    outcomes = sut_outcome_reasons(leaf, experiment)
+    incomplete = bool(INCOMPLETE_RUN_REASONS & set(outcomes))
 
     for core in CORE_FILES:
         if core in files:
@@ -1799,7 +1835,7 @@ def check_leaf(
                 elif metadata.get("system") == "static":
                     if exit_codes.get("collector") != 0:
                         violations.append("Pi 5 metadata records a non-zero static collector exit")
-                elif exit_codes.get("wafer_runtime") != 0:
+                elif exit_codes.get("wafer_runtime") != 0 and "runtime-exit" not in outcomes:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
                 diagnostic = "diagnostic_repetitions" in metadata
                 if diagnostic and metadata.get("thesis_evidence") is not False:
@@ -1873,6 +1909,9 @@ def check_leaf(
         if window_path.is_file():
             violations.extend(check_measurement_window(window_path))
 
+    if incomplete:
+        return violations, warnings
+
     if canonical and canonical_matrix is not None:
         experiment_contract = (
             canonical_matrix.get("experiments", {}).get(experiment)
@@ -1924,6 +1963,8 @@ def check_leaf(
         violations.extend(check_payload_manifest(leaf / "payload-manifest.json", metadata))
     if experiment == "e-perf-depth-extension" and "topology-manifest.json" in files:
         violations.extend(check_topology_manifest(leaf / "topology-manifest.json", metadata))
+    if experiment == "e-density-1" and "container-floor.json" in files:
+        violations.extend(check_container_floor(leaf / "container-floor.json", metadata))
     if experiment in CANDIDATE_SWAP_EXPERIMENTS:
         violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
     if experiment == EKUIPER_PROFILE_EXPERIMENT:
@@ -2073,6 +2114,7 @@ def main() -> int:
 
     all_violations: list[tuple[Path, str]] = []
     all_warnings: list[tuple[Path, str]] = []
+    all_outcomes: list[tuple[Path, str]] = []
     provenance_leaves: list[Path] = []
     checked = 0
 
@@ -2121,6 +2163,9 @@ def main() -> int:
                 all_violations.append((leaf, v))
             for w in warnings:
                 all_warnings.append((leaf, w))
+            outcomes = sut_outcome_reasons(leaf, experiment)
+            if outcomes:
+                all_outcomes.append((leaf, ", ".join(outcomes)))
 
     matched_leaves: list[Path] = []
     for other in args.match:
@@ -2135,6 +2180,8 @@ def main() -> int:
 
     for leaf, w in all_warnings:
         print(f"WARN       {leaf}: {w}")
+    for leaf, reasons in all_outcomes:
+        print(f"OUTCOME    {leaf}: system under test failed {reasons}")
 
     if all_violations:
         for leaf, v in all_violations:

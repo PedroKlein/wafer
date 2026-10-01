@@ -2,33 +2,44 @@
 # eval/scripts/collect-binary-sizes.sh
 #
 # E-Density-1 (RFC-008): measure the wire-image size of every first-party
-# WAFER plugin (Wasm component under wasm32-wasip2/release/) and emit a
-# CSV comparing it to the smallest realistic container image that could
-# host the equivalent behaviour.
+# WAFER plugin (Wasm component under wasm32-wasip2/release/) and copy the
+# measured container floor for this machine's architecture next to it.
 #
-# Container estimates are documented lower bounds derived from Docker
-# Hub's minimum viable image for a Rust static binary. Sources are
-# listed in the header of eval/scripts/binary-sizes.index.
-#
-# The point of E-Density-1 is orders of magnitude, not decimal accuracy.
+# The floor is one FROM scratch image holding a statically linked Rust
+# pass-through worker. eval/scripts/measure-container-floor.py builds and
+# measures it on a machine with Docker and writes
+# eval/container-floor/linux-<arch>.json.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 OUT_DIR="${1:-eval/results/e-density-1}"
+
+case "$(uname -m)" in
+    aarch64|arm64) floor_arch=arm64 ;;
+    x86_64|amd64) floor_arch=amd64 ;;
+    *) printf 'no container floor for architecture %s\n' "$(uname -m)" >&2; exit 1 ;;
+esac
+FLOOR="eval/container-floor/linux-$floor_arch.json"
+if [ ! -f "$FLOOR" ]; then
+    printf 'missing %s: run eval/scripts/measure-container-floor.py --platform linux/%s on a machine with Docker and commit the result\n' \
+        "$FLOOR" "$floor_arch" >&2
+    exit 1
+fi
+
 mkdir -p "$OUT_DIR"
 OUT_CSV="$OUT_DIR/binary-sizes.csv"
 INDEX="$REPO_ROOT/eval/scripts/binary-sizes.index"
 
-printf 'plugin,wasm_bytes,wasm_kb,container_base,container_min_mb,ratio_min,container_rationale\n' > "$OUT_CSV"
+printf 'plugin,wasm_bytes,wasm_kb\n' > "$OUT_CSV"
 
 # stat -f%z (BSD/macOS) vs stat -c%s (GNU/Linux)
 _stat_size() {
     stat -f%z "$1" 2>/dev/null || stat -c%s "$1"
 }
 
-while IFS='|' read -r name path base min_mb rationale; do
+while IFS='|' read -r name path; do
     # Skip blank lines and comments in the index.
     case "${name:-}" in
         ''|\#*) continue ;;
@@ -38,12 +49,12 @@ while IFS='|' read -r name path base min_mb rationale; do
         continue
     fi
     bytes=$(_stat_size "$path")
-    # KB with one decimal, MB→bytes ratio as integer, all with awk to
-    # avoid bash floating-point issues.
+    # KB with one decimal, with awk to avoid bash floating-point issues.
     kb=$(awk "BEGIN {printf \"%.1f\", $bytes/1024}")
-    ratio=$(awk "BEGIN {printf \"%d\", ($min_mb*1024*1024)/$bytes}")
-    printf '%s,%s,%s,%s,%s,%s,"%s"\n' "$name" "$bytes" "$kb" "$base" "$min_mb" "$ratio" "$rationale" >> "$OUT_CSV"
+    printf '%s,%s,%s\n' "$name" "$bytes" "$kb" >> "$OUT_CSV"
 done < "$INDEX"
+
+cp "$FLOOR" "$OUT_DIR/container-floor.json"
 
 # Manifest metadata matches the result-directory contract so downstream
 # analysis can join this artefact to the rest of a shakedown run.
@@ -55,10 +66,10 @@ cat > "$OUT_DIR/metadata.json" <<META
   "host_tag": "shakedown-macos",
   "generated_at": "$TS",
   "git_sha": "$GIT_SHA",
-  "methodology": "Measure Wasm component bytes (stat) and quote the smallest realistic container image (Docker Hub, 2025-Q1) that could host an equivalent worker.",
-  "notes": "Container floors are lower bounds. Production images are 2-5x larger once observability, health probes, and CI provenance are added."
+  "methodology": "Measure Wasm component bytes (stat) and copy the measured FROM scratch container floor for this architecture ($FLOOR)."
 }
 META
 
 printf 'Wrote %s\n' "$OUT_CSV"
+printf 'Wrote %s/container-floor.json\n' "$OUT_DIR"
 printf 'Wrote %s/metadata.json\n' "$OUT_DIR"

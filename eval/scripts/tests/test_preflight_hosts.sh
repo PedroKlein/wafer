@@ -27,6 +27,9 @@ for binary in wafer wafer-loadgen waferctl; do
     printf '#!/bin/sh\n' > "$deployed/target/release/$binary"
     chmod +x "$deployed/target/release/$binary"
 done
+mkdir -p "$deployed/eval/container-floor"
+echo '{}' > "$deployed/eval/container-floor/linux-arm64.json"
+echo '{}' > "$deployed/eval/container-floor/linux-amd64.json"
 touch "$deployed/plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm" \
     "$deployed/plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
 echo '{"git_sha":"a","git_dirty":false,"git_tags":["v1"]}' > "$deployed/SOURCE_STATE.json"
@@ -181,5 +184,25 @@ fi
 
 deploy="$("$ROOT/eval/scripts/deploy-pi5.sh" --host jetson@example --bin-dir "$deployed/target/release" --dry-run)"
 grep -q "bin_dir: $deployed/target/release" <<<"$deploy"
+
+rm "$deployed/eval/container-floor/linux-amd64.json"
+PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1 \
+    || true
+grep -q '^WARN  E-Density-1 container floor not deployed: E-Density-1 fails until eval/container-floor/linux-amd64.json is measured' "$log"
+if grep -q '^FAIL  E-Density-1' "$log"; then
+    echo 'preflight failed on a missing container floor' >&2
+    exit 1
+fi
+
+rm "$deployed/eval/container-floor/linux-arm64.json"
+PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=aarch64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$pi" "$ROOT/eval/scripts/preflight-pi5.sh" >"$log" 2>&1 \
+    || true
+grep -q '^WARN  E-Density-1 container floor not deployed: E-Density-1 fails until eval/container-floor/linux-arm64.json is measured' "$log"
+if grep -q '^FAIL  E-Density-1' "$log"; then
+    echo 'preflight failed on a missing container floor' >&2
+    exit 1
+fi
 
 echo 'host preflight tests: PASS'
