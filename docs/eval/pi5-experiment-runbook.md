@@ -20,7 +20,7 @@ A directory name does not determine evidence class. Canonical-primary evidence r
 - Raspberry Pi 5 4 GB, stock clocks, active cooling, Raspberry Pi OS Lite 64-bit.
 - CPU 0: Linux support work, Mosquitto, load generation, subscription, and telemetry.
 - CPUs 1-3: exactly one active SUT.
-- Native eKuiper 2.1.0; no container in canonical comparisons.
+- Native eKuiper 2.1.5; no container in canonical comparisons.
 - Pipeline A: `MQTT source -> threshold filter -> MQTT sink`.
 - PMIC data: internal-rail proxy only, not total board or USB-C input power.
 
@@ -106,6 +106,23 @@ Also measure what the host telemetry sidecars cost on the Pi:
 ```
 
 It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measurement, 60,000 messages, same cpusets), one with the Pi and `/proc` sidecars on and one with them off (`WAFER_HOST_SIDECARS=off`), alternating which goes first and pausing 60 s between runs, with eKuiper stopped in both arms. `analyze-instrument-ab.py` writes `instrument-ab.json` with the paired on-minus-off differences of p50, p95, p99 and achieved rate and the `/proc` sampler's CPU share, and exits non-zero unless the median p95 and achieved-rate differences are within 5%, every run is lossless and the sampler used at most 1% of one core. The pairs are diagnostic and never pooled with the final batch. About 25 minutes of Pi time.
+
+## Re-check the eKuiper comparator before each batch
+
+Run this on every host (Raspberry Pi 5, Jetson and x86) after deploying the commit it will measure and before its diagnostic batch, and again whenever its eKuiper package, OS, or deployed commit changes. A host that still runs an older eKuiper package gets 2.1.5 from `./eval/ekuiper/install-native.sh`, which upgrades it in place and restarts the service. Then run on that host:
+
+```sh
+./eval/ekuiper/seed-pipeline-a.sh
+./eval/ekuiper/smoke-test.sh
+./eval/scripts/run-rpi5-canonical.sh \
+  --execute \
+  --host rpi5 \
+  --batch-id ekuiper-recheck-<date> \
+  --experiments e-swap-3 \
+  --repetitions 5
+```
+
+Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits 0 only when every run passed; otherwise the batch's `failures.json` lists the failed runs. Investigate any failure before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
 
 ## Run the diagnostic batch
 

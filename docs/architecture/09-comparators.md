@@ -27,7 +27,7 @@ and `tcc-doc/research/analysis/positioning-matrix.md`.*
 
 ### eKuiper
 
-The **primary RQ1 comparator**. Native eKuiper 2.1.0 runs on the same
+The **primary RQ1 comparator**. Native eKuiper 2.1.5 runs on the same
 Raspberry Pi 5 CPUs 1–3 with the same native Mosquitto broker, MQTT
 sources and sinks, and telemetry pipeline semantics. eKuiper's `goroutine-per-op` execution model gives it a
 lower per-hop cost than WAFER's Wasm boundary, so the RQ1 pass

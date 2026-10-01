@@ -75,7 +75,7 @@ The active deployment targets differ in hardware and operational controls. Every
 - No IPC across processes, no container boundary, no supervisor
   managing peer nodes.
 
-Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the native eKuiper 2.1.0 ARM64 package, not a container. WAFER remains a single process on every target.
+Comparator systems deploy differently. The Raspberry Pi 5 evaluation uses the native eKuiper 2.1.5 ARM64 package, not a container. WAFER remains a single process on every target.
 
 ## Operational touchpoints
 
