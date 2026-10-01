@@ -1362,6 +1362,10 @@
     "ekuiper_operator_concurrency": 1,
     "support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
     "diagnostic_batches_excluded": true,
+    "attempt_policy": {
+      "infrastructure_retries": 1,
+      "gate_experiments": ["e-val-1"]
+    },
     "wafer_config_catalog": [
       {
         "experiment": "e-backpressure",
