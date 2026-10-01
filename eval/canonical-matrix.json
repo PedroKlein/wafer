@@ -873,10 +873,11 @@
         "min_achieved_ratio": 0.99,
         "loss_aggregation": "sum(total_undelivered) / sum(intended)",
         "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "delivery_ceiling": "highest tested delivery-good rate",
+        "delivery_ceiling": "bracketed by tested rates: lower bound is the highest delivery-good rate with no delivery-bad rate below it, or 0; upper bound is the lowest delivery-bad rate above every delivery-good rate, or unbounded; support-confounded rates set neither bound",
         "normalized_p99_knee_multiplier": 2.0,
         "support_path_censoring": "mqtt-loopback",
-        "competitive_ratio_threshold": 0.7
+        "competitive_ratio_threshold": 0.7,
+        "competitive_decision": "PASS if WAFER lower bound / eKuiper upper bound >= threshold; FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
       }
     },
     "e-iso-1": {

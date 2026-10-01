@@ -32,7 +32,7 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 ## Current claim boundaries
 
 - E-Perf-1 is a matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 reports exact tested-grid bounds without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; an unidentified comparison remains `CENSORED/PENDING`.
+- E-Perf-10 brackets each delivery ceiling between tested rates without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - Pipeline A is `MQTT source -> threshold filter -> MQTT sink`.
 - Hot-swap is stateless.
 - PMIC telemetry is an internal-rail proxy, not total board power.
