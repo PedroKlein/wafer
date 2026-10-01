@@ -1,4 +1,4 @@
-"""Presentation labels and passed-leaf readers for the analysis notebooks."""
+"""Presentation labels and admitted-leaf readers for the analysis notebooks."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import re
 from pathlib import Path
 
 import pandas as pd
+
+from .attempts import INCOMPLETE_RUN_REASONS, batch_units
 
 def evidence_label(sample_count: int, units: str, thesis_evidence: bool) -> str:
     evidence = "thesis" if thesis_evidence else "diagnostic"
@@ -28,17 +30,49 @@ def pending_record(question: str, reason: str, units: str) -> dict:
     }
 
 
-def passed_artifacts(batch: Path, artifact: str) -> list[tuple[Path, dict]]:
+def admitted_artifacts(batch: Path, artifact: str) -> list[tuple[Path, dict]]:
+    """The artifact of each unit's admitted attempt, a clean pass or a system outcome.
+
+    A unit whose system under test stopped the run early may lack the artifact; use
+    ``admitted_runs`` where such a unit must count against a criterion.
+    """
     results = []
-    for path in sorted(batch.rglob(artifact)):
-        status_path = path.parent / "canonical-status.json"
-        if not status_path.is_file():
+    for unit in batch_units(batch, None):
+        if unit.admitted is None:
             continue
-        status = json.loads(status_path.read_text())
-        if status.get("status") != "passed":
-            continue
-        results.append((path, json.loads(path.read_text())))
+        path = unit.admitted.path / artifact
+        if path.is_file():
+            results.append((path, json.loads(path.read_text())))
     return results
+
+
+def admitted_runs(batch: Path, artifact: str) -> list[dict]:
+    """One record per admitted unit: its artifact, run identity and outcome reasons.
+
+    The record of a unit whose system under test stopped the run early holds only
+    ``condition``, ``run_index`` and ``sut_outcome_reasons`` when the artifact is absent.
+    """
+    records = []
+    for unit in batch_units(batch, None):
+        attempt = unit.admitted
+        if attempt is None:
+            continue
+        path = attempt.path / artifact
+        if path.is_file():
+            value = json.loads(path.read_text())
+        elif INCOMPLETE_RUN_REASONS & set(attempt.reasons):
+            value = {}
+        else:
+            raise ValueError(f"admitted attempt lacks {artifact}: {attempt.path}")
+        records.append(
+            {
+                "condition": unit.condition,
+                "run_index": unit.run_index,
+                **value,
+                "sut_outcome_reasons": list(attempt.reasons),
+            }
+        )
+    return records
 
 
 def run_index(leaf: Path) -> int:
@@ -51,7 +85,7 @@ def run_index(leaf: Path) -> int:
 
 def percentile_rows(batch: Path) -> pd.DataFrame:
     rows = []
-    for path, values in passed_artifacts(batch, "percentiles.json"):
+    for path, values in admitted_artifacts(batch, "percentiles.json"):
         relative = path.relative_to(batch)
         rows.append(
             {
@@ -74,7 +108,7 @@ def target_load_rows(
 ) -> pd.DataFrame:
     rows = []
     intended = rate_msg_s * measurement_secs
-    for path, values in passed_artifacts(batch, "percentiles.json"):
+    for path, values in admitted_artifacts(batch, "percentiles.json"):
         throughput_path = path.parent / "throughput.csv"
         sequence_path = path.parent / "sequence.csv"
         if not throughput_path.is_file() or not sequence_path.is_file():

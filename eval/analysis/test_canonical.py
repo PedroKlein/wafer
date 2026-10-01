@@ -35,6 +35,7 @@ from wafer_analysis.canonical import (
     validation_gate_table,
     validate_visual_manifest,
 )
+from wafer_analysis.focused import admitted_runs
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 
 
@@ -1796,3 +1797,168 @@ def test_bucket_band_summarises_each_bucket_across_runs() -> None:
     assert band["N_runs"].eq(3).all()
     with pytest.raises(ValueError, match="one value per bucket"):
         bucket_band([0, 1], [[1, 2], [1]])
+
+
+def test_runtime_exit_in_a_containment_run_counts_as_not_contained(tmp_path: Path) -> None:
+    batch = tmp_path / "e-iso-6/rpi5-batch-a"
+    for record in containment_records():
+        if record["experiment"] != "e-iso-6":
+            continue
+        leaf = batch / "panic" / f"run-{record['run_index']:02d}-attempt-01"
+        leaf.mkdir(parents=True)
+        if record["run_index"] == 7:
+            receipt = {"status": "failed", "failure_class": "sut_outcome", "reasons": ["runtime-exit"]}
+        else:
+            receipt = {"status": "passed"}
+            (leaf / "containment.json").write_text(json.dumps(record))
+        (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+    records = [record for record in containment_records() if record["experiment"] != "e-iso-6"]
+    records += [
+        {**value, "experiment": "e-iso-6"} for value in admitted_runs(batch, "containment.json")
+    ]
+
+    table = containment_table(records).set_index("experiment")
+
+    assert table.loc["e-iso-6", "N_runs"] == 30
+    assert table.loc["e-iso-6", "contained_runs"] == 29
+    assert table.loc["e-iso-6", "runs_stopped_early"] == 1
+    assert not table.loc["e-iso-6", "all_contained"]
+    assert table.drop("e-iso-6")["all_contained"].all()
+
+
+def test_one_lost_message_fails_the_burst_swap_zero_loss_criterion() -> None:
+    runs = swap4_runs()
+    runs[4].update(loss=1, sut_outcome_reasons=["message-loss"])
+
+    row = swap4_table(runs).iloc[0]
+
+    assert row["N_runs"] == 30
+    assert row["total_loss"] == 1
+    assert row["lossless_runs"] == 29
+    assert not row["zero_loss_and_duplication"]
+
+
+def test_burst_swap_run_stopped_by_a_failed_swap_counts_against_zero_loss() -> None:
+    runs = swap4_runs()
+    runs[0] = {"condition": "burst-2x", "run_index": 1, "sut_outcome_reasons": ["swap-failed"]}
+
+    row = swap4_table(runs).iloc[0]
+
+    assert row["N_runs"] == 30
+    assert row["N_events"] == 29
+    assert row["runs_stopped_early"] == 1
+    assert row["lossless_runs"] == 29
+    assert not row["zero_loss_and_duplication"]
+
+
+def test_hot_swap_disruption_run_the_runtime_did_not_survive_fails_zero_loss() -> None:
+    runs = swap3_runs()
+    runs[0] = {"condition": "wafer-hotswap", "run_index": 1, "sut_outcome_reasons": ["runtime-exit"]}
+
+    table = swap3_table(runs).set_index("strategy")
+
+    assert table.loc["wafer-hotswap", "N_runs"] == 30
+    assert table.loc["wafer-hotswap", "runs_stopped_early"] == 1
+    assert not table.loc["wafer-hotswap", "zero_loss_and_duplication"]
+    assert table.loc["wafer-restart", "zero_loss_and_duplication"]
+
+
+def test_failed_rollback_is_reported_as_an_unsuccessful_run() -> None:
+    record = swap5_record()
+    requests = record["requests"]
+    requests[3] = {**requests[3], "http_status": 500, "body": {"error": "trap"}}
+    stopped = {
+        "condition": "process-trap-rollback",
+        "run_index": 1,
+        "requests": requests,
+        "sut_outcome_reasons": ["rollback-failed"],
+    }
+
+    row = failed_replacement_table([stopped]).iloc[0]
+
+    assert row["N_nested_events"] == 50
+    assert row["rolled_back_events"] == 49
+    assert not row["all_rolled_back"]
+    assert row["sut_outcome_reasons"] == "rollback-failed"
+
+
+def test_slow_policy_loss_is_admitted_and_reported() -> None:
+    records = backpressure_records()
+    lossy = next(record for record in records if record["policy"] == "slow")
+    lossy["counts"].update(accepted=999, processed=999, delivered=999)
+    lossy["rates_msg_s"].update(accepted=999.0, processed=999.0)
+    lossy["sequence"].update(received=999, gaps=1)
+    lossy["accounting"]["reconciled"] = False
+    lossy["sut_outcome_reasons"] = ["message-loss"]
+
+    slow = backpressure_table(records).set_index("policy").loc["slow"]
+
+    assert slow["N_runs"] == 30
+    assert slow["sut_outcome_runs"] == 1
+    assert slow["total_attempted"] - slow["total_delivered"] == 1
+
+
+def test_capacity_tables_count_a_run_the_system_under_test_failed() -> None:
+    summary = capacity_summary()
+    top = summary["systems"]["wafer"]["rates"][3]
+    top.update(run_count=29, sut_outcome_runs=1, classification="bad")
+    for metric in top["run_summary"].values():
+        metric["values"].pop()
+    top["normalized_p99"]["values"].pop()
+
+    rates, _ = capacity_tables(summary)
+
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 15_000)].iloc[0]
+    assert (row["N_runs"], row["sut_outcome_runs"]) == (30, 1)
+    assert not row["delivery_good"]
+
+
+def test_capacity_tables_report_a_rate_where_every_run_failed() -> None:
+    summary = capacity_summary()
+    top = summary["systems"]["wafer"]["rates"][3]
+    top.update(
+        run_count=0,
+        sut_outcome_runs=30,
+        classification="bad",
+        pooled_loss=None,
+        mean_achieved_ratio=None,
+        run_summary=None,
+        normalized_p99=None,
+    )
+
+    rates, _ = capacity_tables(summary)
+
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 15_000)].iloc[0]
+    assert (row["N_runs"], row["sut_outcome_runs"]) == (30, 30)
+    assert not row["delivery_good"]
+    assert pd.isna(row["median_p99_ns"]) and pd.isna(row["pooled_loss"])
+
+
+def test_branch_isolation_counts_an_attack_run_the_runtime_did_not_survive() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 1_000, "epoch-loop-attack": 1_000})
+    crashed = next(
+        index
+        for index, record in enumerate(records)
+        if record["condition"] == "panic-attack" and record["run_index"] == 7
+    )
+    records[crashed] = {
+        "condition": "panic-attack",
+        "run_index": 7,
+        "sut_outcome_reasons": ["runtime-exit"],
+    }
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["panic-attack", "N_runs"] == 30
+    assert table.loc["panic-attack", "runs_stopped_early"] == 1
+    assert not table.loc["panic-attack", "isolated"]
+    assert table.loc["epoch-loop-attack", "isolated"]
+
+
+def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
+    records = recovery_records()
+    records[4] = {"condition": "panic-recovery", "run_index": 5, "sut_outcome_reasons": ["runtime-exit"]}
+
+    row = recovery_table(records).iloc[0]
+
+    assert (row["N_runs"], row["runs_stopped_early"], row["recovery_samples"]) == (30, 1, 87)

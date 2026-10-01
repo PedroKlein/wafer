@@ -13,7 +13,9 @@ is 'does the split-contract hold?' which is best answered by walking
 the manifest.
 
 Exit codes:
-    0  every leaf under the given experiment dirs conforms.
+    0  every leaf under the given experiment dirs conforms. A leaf whose
+       system under test failed a criterion it measures (an OUTCOME line)
+       still conforms: the failure is data, not a contract violation.
     1  at least one leaf violates core or optional contract in a way
        the split-contract permits (e.g. contract says memory.csv MUST
        exist for E-Perf-6 but it is absent).
@@ -45,6 +47,7 @@ ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src" / "wafer
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
+from attempts import INCOMPLETE_RUN_REASONS, sut_outcome_reasons
 from results_layout import resolve_alias_receipt, validate_alias_mapping
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
@@ -1430,15 +1433,10 @@ def check_candidate_swap_evidence(leaf: Path, metadata: dict, experiment: str) -
             "gaps": int(rows[0]["gap_msgs"]),
             "duplicates": int(rows[0]["duplicates_count"]),
         }
-        if (
-            sequence != expected_sequence
-            or expected_sequence["expected"] != expected_sequence["received"]
-            or expected_sequence["gaps"] != 0
-            or expected_sequence["duplicates"] != 0
-        ):
+        if sequence != expected_sequence:
             raise ValueError
     except (KeyError, OSError, TypeError, ValueError):
-        violations.append(f"{artifact_name} sequence evidence is not lossless or reconciled")
+        violations.append(f"{artifact_name} sequence evidence does not reconcile")
     required = (
         {"compile_ns", "instantiate_ns", "signal_ns", "replacement_adopted_ns", "first_post_replacement_local_outcome_ns", "http_total_ns", "sink_observed_output_gap_ns"}
         if experiment == "e-swap-independent-sessions"
@@ -1757,10 +1755,17 @@ def check_leaf(
     canonical: bool = False,
     canonical_matrix: dict | None = None,
 ) -> tuple[list[str], list[str]]:
-    """Return (violations, warnings). Empty lists = fully conformant."""
+    """Return (violations, warnings). Empty lists = fully conformant.
+
+    A failed criterion of the system under test is an outcome, not a violation. When the
+    system stopped the run early (it exited, or a swap or rollback failed), only the
+    artefacts the harness owns are checked: core files, provenance, host and telemetry.
+    """
     files = {f.name for f in leaf.iterdir() if f.is_file()}
     violations: list[str] = []
     warnings: list[str] = []
+    outcomes = sut_outcome_reasons(leaf, experiment)
+    incomplete = bool(INCOMPLETE_RUN_REASONS & set(outcomes))
 
     for core in CORE_FILES:
         if core in files:
@@ -1830,7 +1835,7 @@ def check_leaf(
                 elif metadata.get("system") == "static":
                     if exit_codes.get("collector") != 0:
                         violations.append("Pi 5 metadata records a non-zero static collector exit")
-                elif exit_codes.get("wafer_runtime") != 0:
+                elif exit_codes.get("wafer_runtime") != 0 and "runtime-exit" not in outcomes:
                     violations.append("Pi 5 metadata records a non-zero runtime exit")
                 diagnostic = "diagnostic_repetitions" in metadata
                 if diagnostic and metadata.get("thesis_evidence") is not False:
@@ -1903,6 +1908,9 @@ def check_leaf(
         window_path = leaf / "measurement-window.json"
         if window_path.is_file():
             violations.extend(check_measurement_window(window_path))
+
+    if incomplete:
+        return violations, warnings
 
     if canonical and canonical_matrix is not None:
         experiment_contract = (
@@ -2106,6 +2114,7 @@ def main() -> int:
 
     all_violations: list[tuple[Path, str]] = []
     all_warnings: list[tuple[Path, str]] = []
+    all_outcomes: list[tuple[Path, str]] = []
     provenance_leaves: list[Path] = []
     checked = 0
 
@@ -2154,6 +2163,9 @@ def main() -> int:
                 all_violations.append((leaf, v))
             for w in warnings:
                 all_warnings.append((leaf, w))
+            outcomes = sut_outcome_reasons(leaf, experiment)
+            if outcomes:
+                all_outcomes.append((leaf, ", ".join(outcomes)))
 
     matched_leaves: list[Path] = []
     for other in args.match:
@@ -2168,6 +2180,8 @@ def main() -> int:
 
     for leaf, w in all_warnings:
         print(f"WARN       {leaf}: {w}")
+    for leaf, reasons in all_outcomes:
+        print(f"OUTCOME    {leaf}: system under test failed {reasons}")
 
     if all_violations:
         for leaf, v in all_violations:

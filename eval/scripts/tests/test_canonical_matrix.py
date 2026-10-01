@@ -8,6 +8,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 MATRIX = ROOT / "eval/canonical-matrix.json"
 VALIDATOR = ROOT / "eval/scripts/validate-canonical.py"
@@ -58,6 +60,10 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "epoch_tick_ms": 10,
     }
     assert campaign["ekuiper_operator_concurrency"] == 1
+    assert campaign["attempt_policy"] == {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }
     assert len(campaign["wafer_config_catalog"]) == 55
     assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
     assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
@@ -252,6 +258,25 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
             result = run_validator("matrix", str(path))
         assert result.returncode == 1, expected
         assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"infrastructure_retries": 2, "gate_experiments": ["e-val-1"]},
+        {"infrastructure_retries": 1, "gate_experiments": []},
+        None,
+    ],
+)
+def test_final_matrix_rejects_attempt_policy_drift(policy: dict | None) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["final_campaign"]["attempt_policy"] = policy
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "attempt policy" in result.stderr
 
 
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:

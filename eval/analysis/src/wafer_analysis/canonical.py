@@ -10,6 +10,7 @@ from collections.abc import Iterable
 import numpy as np
 import pandas as pd
 
+from .attempts import INCOMPLETE_RUN_REASONS
 from .backpressure import BACKPRESSURE_POLICIES, validate_backpressure_result
 from .rollback import validate_swap5_artifacts
 from .stats import (
@@ -198,6 +199,19 @@ def _ci(values: list[float]) -> tuple[float, float]:
     return bootstrap_ci(np.asarray(values, dtype=float))
 
 
+def _stopped_early(record: dict) -> bool:
+    """Whether the system under test ended this admitted run before its evidence was complete."""
+    return bool(INCOMPLETE_RUN_REASONS & set(record.get("sut_outcome_reasons", ())))
+
+
+def _median(values: list[float]) -> float | None:
+    return float(np.median(values)) if values else None
+
+
+def _number(value: float | None) -> float | None:
+    return None if value is None else float(value)
+
+
 def target_latency_table(records: list[dict]) -> pd.DataFrame:
     conditions = ("wafer", "native", "ekuiper")
     grouped = _require_runs(records, conditions)
@@ -348,9 +362,10 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
             _require_runs(runs, (condition,))
         if not runs:
             continue
-        if any(run.get("contained") is None for run in runs):
+        complete = [run for run in runs if not _stopped_early(run)]
+        if any(run.get("contained") is None for run in complete):
             raise ValueError(f"{experiment} has a run without a containment verdict")
-        contained = sum(bool(run["contained"]) for run in runs)
+        contained = sum(bool(run["contained"]) for run in complete)
         low, high = clopper_pearson(contained, len(runs))
         rows.append(
             {
@@ -363,13 +378,18 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
                 "containment_ci95_low": low,
                 "containment_ci95_high": high,
                 "escape_probability_upper975": 1 - low,
-                "median_mechanism_count": float(np.median([run["expected_count"] for run in runs])),
-                "max_unexpected_outcomes": max(int(run["unexpected_outcomes"]) for run in runs),
-                "runtime_panics": sum(bool(run["runtime_panic"]) for run in runs),
-                "median_healthy_messages_out": float(np.median([run["healthy_messages_out"] for run in runs])),
+                "median_mechanism_count": _median([run["expected_count"] for run in complete]),
+                "max_unexpected_outcomes": max(
+                    (int(run["unexpected_outcomes"]) for run in complete), default=None
+                ),
+                "runtime_panics": sum(bool(run["runtime_panic"]) for run in complete),
+                "runs_stopped_early": len(runs) - len(complete),
+                "median_healthy_messages_out": _median(
+                    [run["healthy_messages_out"] for run in complete]
+                ),
                 "all_contained": contained == len(runs),
                 "units": "runs, events, messages",
-                "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a two-sided Clopper-Pearson 95% interval; its lower end gives the one-sided 97.5% upper bound on the escape probability",
+                "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a two-sided Clopper-Pearson 95% interval; its lower end gives the one-sided 97.5% upper bound on the escape probability; a run the runtime did not survive counts as not contained",
                 "threshold": "every run contained",
                 "claim_boundary": "per attack on this host; the escape bound covers this attack only",
                 "thesis_evidence": canonical,
@@ -401,11 +421,18 @@ BRANCH_ISOLATION_CONDITIONS = ("control", "panic-attack", "epoch-loop-attack")
 def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """Branch-A throughput, p95 and loss per E-Iso-7 condition, contrasted with the control.
 
-    ``records`` are the runs' ``branch-isolation.json`` documents.
+    ``records`` are the runs' ``branch-isolation.json`` documents. A run the runtime did not
+    survive has no branch measurement; it counts in ``N_runs`` and an attack condition with
+    such a run is not isolated.
     """
     grouped = _group_runs(records, BRANCH_ISOLATION_CONDITIONS, canonical=canonical)
     if not grouped["control"]:
         return pd.DataFrame()
+    admitted = {condition: len(runs) for condition, runs in grouped.items()}
+    grouped = {
+        condition: [run for run in runs if not _stopped_early(run)]
+        for condition, runs in grouped.items()
+    }
 
     def branch_a(run: dict, *keys: str) -> float:
         value = run["branches"]["branch_a"]
@@ -423,7 +450,24 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
     rows = []
     for condition in BRANCH_ISOLATION_CONDITIONS:
         runs = grouped[condition]
+        if not admitted[condition]:
+            continue
+        stopped = admitted[condition] - len(runs)
         if not runs:
+            rows.append(
+                {
+                    "condition": condition,
+                    "N_runs": admitted[condition],
+                    "runs_stopped_early": stopped,
+                    "isolated": None if condition == "control" else False,
+                    "reference_condition": "control",
+                    "units": "runs",
+                    "estimator": "every run of this condition stopped before its branch measurement",
+                    "threshold": "branch-A throughput drop < 1 percent",
+                    "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
+                    "thesis_evidence": canonical,
+                }
+            )
             continue
         throughput, p95 = metrics(runs)
         offered = [int(run["branches"]["branch_a"]["offered_messages"]) for run in runs]
@@ -433,7 +477,8 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
         loss_low, loss_high = pooled_ratio_ci(lost, offered)
         row = {
             "condition": condition,
-            "N_runs": len(runs),
+            "N_runs": admitted[condition],
+            "runs_stopped_early": stopped,
             "median_throughput_msg_s": float(np.median(throughput)),
             "throughput_ci95_low_msg_s": throughput_low,
             "throughput_ci95_high_msg_s": throughput_high,
@@ -460,7 +505,9 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                 )
             ),
         }
-        if condition != "control":
+        if condition != "control" and not len(control_throughput):
+            row["isolated"] = False if stopped else None
+        elif condition != "control":
             drop, drop_low, drop_high = median_shift_ci(throughput, control_throughput, relative=True)
             increase, increase_low, increase_high = median_shift_ci(p95, control_p95, relative=True)
             delta, magnitude = cliffs_delta(throughput, control_throughput)
@@ -477,13 +524,13 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low": delta_low,
                     "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
-                    "isolated": -100 * drop < 1.0,
+                    "isolated": -100 * drop < 1.0 and not stopped,
                 }
             )
         row.update(
             {
                 "units": "messages/second, nanoseconds, percent, fraction",
-                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI",
+                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; a run the runtime did not survive is not isolated",
                 "threshold": "branch-A throughput drop < 1 percent",
                 "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
                 "thesis_evidence": canonical,
@@ -497,36 +544,44 @@ def recovery_table(records: list[dict], *, canonical: bool = True) -> pd.DataFra
     """E-Iso-8 trap-to-running durations: per-run statistics over runs, and pooled percentiles.
 
     Each record carries a run's ``run_index``, ``condition`` and the
-    ``durations_ns`` read from its ``recovery.csv``.
+    ``durations_ns`` read from its ``recovery.csv``. A run the runtime did not survive has
+    no durations; it counts in ``N_runs`` and ``runs_stopped_early``.
     """
-    runs = _group_runs(records, ("panic-recovery",), canonical=canonical)["panic-recovery"]
-    if not runs:
+    admitted = _group_runs(records, ("panic-recovery",), canonical=canonical)["panic-recovery"]
+    if not admitted:
         return pd.DataFrame()
+    runs = [run for run in admitted if not _stopped_early(run)]
     if any(not run["durations_ns"] for run in runs):
         raise ValueError("every E-Iso-8 run needs at least one recovery sample")
-    medians = np.asarray([np.median(run["durations_ns"]) for run in runs], dtype=float)
-    p95s = np.asarray([np.percentile(run["durations_ns"], 95) for run in runs], dtype=float)
-    pooled = np.concatenate([np.asarray(run["durations_ns"], dtype=float) for run in runs])
-    median_low, median_high = bootstrap_ci(medians)
-    p95_low, p95_high = bootstrap_ci(p95s)
+    summary = {}
+    if runs:
+        medians = np.asarray([np.median(run["durations_ns"]) for run in runs], dtype=float)
+        p95s = np.asarray([np.percentile(run["durations_ns"], 95) for run in runs], dtype=float)
+        pooled = np.concatenate([np.asarray(run["durations_ns"], dtype=float) for run in runs])
+        median_low, median_high = bootstrap_ci(medians)
+        p95_low, p95_high = bootstrap_ci(p95s)
+        summary = {
+            "recovery_samples": len(pooled),
+            "min_samples_per_run": min(len(run["durations_ns"]) for run in runs),
+            "median_run_median_ns": float(np.median(medians)),
+            "median_ci95_low_ns": median_low,
+            "median_ci95_high_ns": median_high,
+            "median_run_p95_ns": float(np.median(p95s)),
+            "p95_ci95_low_ns": p95_low,
+            "p95_ci95_high_ns": p95_high,
+            "pooled_p50_ns": float(np.percentile(pooled, 50)),
+            "pooled_p99_ns": float(np.percentile(pooled, 99)),
+            "pooled_max_ns": float(pooled.max()),
+        }
     return pd.DataFrame(
         [
             {
                 "condition": "panic-recovery",
-                "N_runs": len(runs),
-                "recovery_samples": len(pooled),
-                "min_samples_per_run": min(len(run["durations_ns"]) for run in runs),
-                "median_run_median_ns": float(np.median(medians)),
-                "median_ci95_low_ns": median_low,
-                "median_ci95_high_ns": median_high,
-                "median_run_p95_ns": float(np.median(p95s)),
-                "p95_ci95_low_ns": p95_low,
-                "p95_ci95_high_ns": p95_high,
-                "pooled_p50_ns": float(np.percentile(pooled, 50)),
-                "pooled_p99_ns": float(np.percentile(pooled, 99)),
-                "pooled_max_ns": float(pooled.max()),
+                "N_runs": len(admitted),
+                "runs_stopped_early": len(admitted) - len(runs),
+                **summary,
                 "units": "nanoseconds, samples",
-                "estimator": "median over runs of each run's median and p95 recovery, with bootstrap 95% CIs over runs; pooled percentiles are descriptive because samples within a run are not independent",
+                "estimator": "median over the completed runs of each run's median and p95 recovery, with bootstrap 95% CIs over runs; pooled percentiles are descriptive because samples within a run are not independent",
                 "threshold": "none; descriptive recovery time",
                 "claim_boundary": "trap to running for the declared panic stimulus on this host",
                 "thesis_evidence": canonical,
@@ -1395,11 +1450,19 @@ def _capacity_cell_classes(summary: dict, systems: Iterable[str]) -> dict[str, l
             raise ValueError(f"{system}: system rates differ from tested grid")
         classes = []
         for rate in rates:
-            if rate.get("run_count") != required:
+            run_count = rate.get("run_count")
+            outcome_runs = rate.get("sut_outcome_runs", 0)
+            if (
+                type(run_count) is not int
+                or type(outcome_runs) is not int
+                or min(run_count, outcome_runs) < 0
+                or run_count + outcome_runs != required
+            ):
                 raise ValueError(f"{system}: incomplete tested-rate cell")
             try:
                 good = (
-                    float(rate["pooled_loss"]) <= 0.01
+                    outcome_runs == 0
+                    and float(rate["pooled_loss"]) <= 0.01
                     and float(rate["mean_achieved_ratio"]) >= 0.99
                     and int(rate["total_duplicates"]) == 0
                 )
@@ -1506,6 +1569,9 @@ def capacity_competitive_decision(summary: dict) -> dict:
 
 
 def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
+    run_count = rate["run_count"]
+    if run_count == 0:
+        return {metric: np.asarray([], dtype=float) for metric in CAPACITY_RUN_METRICS}
     run_summary = rate.get("run_summary")
     if not isinstance(run_summary, dict):
         raise TypeError(f"{system} rate summary is malformed")
@@ -1518,8 +1584,8 @@ def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
         }
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError(f"{system} rate summary is malformed") from error
-    if any(len(samples) != 30 for samples in values.values()):
-        raise ValueError(f"{system} rate summary needs 30 run values per metric")
+    if any(len(samples) != run_count for samples in values.values()):
+        raise ValueError(f"{system} rate summary needs {run_count} run values per metric")
     # Every admitted run at one rate offers the same intended count, so the
     # pooled loss equals the mean run loss.
     if not math.isclose(
@@ -1536,6 +1602,9 @@ def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
 
 
 def _run_spread(metric: str, values: np.ndarray, interval: tuple[str, str]) -> dict:
+    if not len(values):
+        keys = (f"median_{metric}", *interval, *(f"{q}_{metric}" for q in ("min", "q1", "q3", "max")))
+        return dict.fromkeys(keys)
     low, high = bootstrap_ci(values)
     return {
         f"median_{metric}": float(np.median(values)),
@@ -1599,15 +1668,29 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         values = run_values[system]
         baseline_p99 = values[grid.index(CAPACITY_BASELINE_RATE)]["p99_ns"]
         for rate, classification, runs in zip(rates, classes[system], values, strict=True):
-            pooled_loss_ci = pooled_ratio_ci(runs["loss"], np.ones(len(runs["loss"])))
-            _, normalized_low, normalized_high = median_shift_ci(
-                runs["p99_ns"], baseline_p99, relative=True
+            completed = len(runs["loss"]) > 0
+            pooled_loss_ci = (
+                pooled_ratio_ci(runs["loss"], np.ones(len(runs["loss"])))
+                if completed
+                else (None, None)
             )
+            if completed and len(baseline_p99):
+                _, normalized_low, normalized_high = median_shift_ci(
+                    runs["p99_ns"], baseline_p99, relative=True
+                )
+                normalized = (
+                    float(np.median(runs["p99_ns"]) / np.median(baseline_p99)),
+                    1 + normalized_low,
+                    1 + normalized_high,
+                )
+            else:
+                normalized = (None, None, None)
             rate_rows.append(
                 {
                     "system": system,
                     "offered_rate_msg_s": int(rate["rate_msg_s"]),
                     "N_runs": 30,
+                    "sut_outcome_runs": rate.get("sut_outcome_runs", 0),
                     **_run_spread(
                         "achieved_rate_msg_s",
                         runs["achieved_rate_msg_s"],
@@ -1619,17 +1702,17 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                         ("achieved_ratio_ci95_low", "achieved_ratio_ci95_high"),
                     ),
                     **_run_spread("loss", runs["loss"], ("loss_ci95_low", "loss_ci95_high")),
-                    "pooled_loss": float(rate["pooled_loss"]),
-                    "pooled_loss_ci95_low": float(pooled_loss_ci[0]),
-                    "pooled_loss_ci95_high": float(pooled_loss_ci[1]),
-                    "mean_achieved_ratio": float(rate["mean_achieved_ratio"]),
-                    "total_duplicates": int(rate["total_duplicates"]),
-                    **_run_spread("p99_ns", runs["p99_ns"], ("p99_ci95_low_ns", "p99_ci95_high_ns")),
-                    "median_normalized_p99": float(
-                        np.median(runs["p99_ns"]) / np.median(baseline_p99)
+                    "pooled_loss": _number(rate["pooled_loss"] if completed else None),
+                    "pooled_loss_ci95_low": _number(pooled_loss_ci[0]),
+                    "pooled_loss_ci95_high": _number(pooled_loss_ci[1]),
+                    "mean_achieved_ratio": _number(
+                        rate["mean_achieved_ratio"] if completed else None
                     ),
-                    "normalized_p99_ci95_low": 1 + normalized_low,
-                    "normalized_p99_ci95_high": 1 + normalized_high,
+                    "total_duplicates": int(rate["total_duplicates"]) if completed else None,
+                    **_run_spread("p99_ns", runs["p99_ns"], ("p99_ci95_low_ns", "p99_ci95_high_ns")),
+                    "median_normalized_p99": normalized[0],
+                    "normalized_p99_ci95_low": normalized[1],
+                    "normalized_p99_ci95_high": normalized[2],
                     "classification": classification,
                     "delivery_good": classification == "good",
                     "support_confounded": classification == "support-confounded",
@@ -1637,7 +1720,9 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "estimator": (
                         "run-level min/quartiles/max with bootstrap 95% CI of the median; "
                         "pooled loss with a run-resampling bootstrap 95% CI; mean achieved "
-                        "ratio; normalized p99 CI resamples this rate and the 1,000 msg/s runs"
+                        "ratio; normalized p99 CI resamples this rate and the 1,000 msg/s runs; "
+                        "all over the runs that completed, and a run the system under test "
+                        "failed makes its rate delivery-bad"
                     ),
                     "thesis_evidence": True,
                 }
@@ -1693,38 +1778,37 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
 def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     grouped = _require_runs(records, BACKPRESSURE_POLICIES)
     rows = []
-    for policy, runs in grouped.items():
+    for policy, admitted in grouped.items():
+        runs = [run for run in admitted if not _stopped_early(run)]
         for run in runs:
             validate_backpressure_result(run, policy)
         counts = [run["counts"] for run in runs]
         rows.append(
             {
                 "policy": policy,
-                "N_runs": len(runs),
-                "median_peak_occupancy": float(
-                    np.median([run["peak_occupancy"] for run in runs])
+                "N_runs": len(admitted),
+                "runs_stopped_early": len(admitted) - len(runs),
+                "sut_outcome_runs": sum(bool(run.get("sut_outcome_reasons")) for run in admitted),
+                "median_peak_occupancy": _median([run["peak_occupancy"] for run in runs]),
+                "median_offered_msg_s": _median([run["rates_msg_s"]["offered"] for run in runs]),
+                "median_accepted_msg_s": _median(
+                    [run["rates_msg_s"]["accepted"] for run in runs]
                 ),
-                "median_offered_msg_s": float(
-                    np.median([run["rates_msg_s"]["offered"] for run in runs])
+                "median_processed_msg_s": _median(
+                    [run["rates_msg_s"]["processed"] for run in runs]
                 ),
-                "median_accepted_msg_s": float(
-                    np.median([run["rates_msg_s"]["accepted"] for run in runs])
-                ),
-                "median_processed_msg_s": float(
-                    np.median([run["rates_msg_s"]["processed"] for run in runs])
-                ),
-                "median_drained_msg_s": float(
-                    np.median([run["rates_msg_s"]["drained"] for run in runs])
-                ),
+                "median_drained_msg_s": _median([run["rates_msg_s"]["drained"] for run in runs]),
                 "total_attempted": sum(value["attempted"] for value in counts),
                 "total_delivered": sum(value["delivered"] for value in counts),
                 "total_dropped": sum(value["dropped"] for value in counts),
                 "total_dead_lettered": sum(value["dead_lettered"] for value in counts),
                 "total_dlq_full": sum(value["dlq_full"] for value in counts),
                 "total_dlq_closed": sum(value["dlq_closed"] for value in counts),
-                "accounting_equation": runs[0]["accounting"]["equation"],
-                "producer_progress": runs[0]["producer_progress"],
-                "rss_within_limit": all(run["memory"]["within_limit"] for run in runs),
+                "accounting_equation": runs[0]["accounting"]["equation"] if runs else None,
+                "producer_progress": runs[0]["producer_progress"] if runs else None,
+                "total_duplicates": sum(run["sequence"]["duplicates"] for run in runs),
+                "rss_within_limit": len(runs) == len(admitted)
+                and all(run["memory"]["within_limit"] for run in runs),
                 "units": "occupancy ratio, messages/second, messages, boolean",
                 "estimator": "run-level medians with exact policy-specific counter totals",
                 "claim_boundary": "bounded internal queue under deterministic slow-consumer pressure",
@@ -1738,37 +1822,41 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
     strategies = ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
     grouped = {strategy: [] for strategy in strategies}
     for run in runs:
-        strategy = run.get("strategy")
+        strategy = run.get("strategy", run.get("condition"))
         if strategy not in grouped:
             raise ValueError(f"unexpected E-Swap-3 strategy: {strategy}")
         grouped[str(strategy)].append(run)
     rows = []
-    for strategy, values in grouped.items():
-        indices = {int(run.get("run_index", 0)) for run in values}
-        if len(values) != 30 or indices != set(range(1, 31)):
+    for strategy, admitted in grouped.items():
+        indices = {int(run.get("run_index", 0)) for run in admitted}
+        if len(admitted) != 30 or indices != set(range(1, 31)):
             raise ValueError(f"{strategy} requires 30 independent runs")
+        values = [run for run in admitted if not _stopped_early(run)]
         dips = [float(run["dip_percent"]) for run in values]
         interruptions = [float(run["interruption_ns"]) for run in values]
         actions = [float(run["action_duration_ns"]) for run in values]
         recoveries = [float(run["recovery_ns"]) for run in values]
-        dip_low, dip_high = _ci(dips)
-        interruption_low, interruption_high = _ci(interruptions)
-        action_low, action_high = _ci(actions)
-        recovery_low, recovery_high = _ci(recoveries)
+        dip_low, dip_high = _ci(dips) if values else (None, None)
+        interruption_low, interruption_high = _ci(interruptions) if values else (None, None)
+        action_low, action_high = _ci(actions) if values else (None, None)
+        recovery_low, recovery_high = _ci(recoveries) if values else (None, None)
+        lossless_runs = sum(
+            int(run["loss"]) == 0 and int(run["duplicates"]) == 0 for run in values
+        )
         rows.append(
             {
                 "strategy": strategy,
-                "N_runs": len(values),
-                "median_dip_percent": float(np.median(dips)),
+                "N_runs": len(admitted),
+                "median_dip_percent": _median(dips),
                 "dip_ci95_low_percent": dip_low,
                 "dip_ci95_high_percent": dip_high,
-                "median_interruption_ns": float(np.median(interruptions)),
+                "median_interruption_ns": _median(interruptions),
                 "interruption_ci95_low_ns": interruption_low,
                 "interruption_ci95_high_ns": interruption_high,
-                "median_action_duration_ns": float(np.median(actions)),
+                "median_action_duration_ns": _median(actions),
                 "action_duration_ci95_low_ns": action_low,
                 "action_duration_ci95_high_ns": action_high,
-                "median_recovery_ns": float(np.median(recoveries)),
+                "median_recovery_ns": _median(recoveries),
                 "recovery_ci95_low_ns": recovery_low,
                 "recovery_ci95_high_ns": recovery_high,
                 "right_censored_runs": sum(
@@ -1776,8 +1864,11 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 ),
                 "total_loss": sum(int(run["loss"]) for run in values),
                 "total_duplicates": sum(int(run["duplicates"]) for run in values),
+                "lossless_runs": lossless_runs,
+                "runs_stopped_early": len(admitted) - len(values),
+                "zero_loss_and_duplication": lossless_runs == len(admitted),
                 "units": "percent, nanoseconds, messages",
-                "estimator": "run-level median with bootstrap 95% CI",
+                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs",
                 "threshold": (
                     "upper bootstrap CI for median dip < 5%; zero loss; zero duplication"
                     if strategy == "wafer-hotswap"
@@ -1803,14 +1894,23 @@ SWAP_EVENT_CLASSES = {"compiled": "first-use", "memory_hit": "cached", "disk_hit
 def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """E-Swap-1/6: internal phases, HTTP duration and sink gap per compile-cache class.
 
-    ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added.
+    ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added. A run the
+    system under test stopped early (a failed swap, a runtime exit) has no phases and
+    gets its own row, so the failure is reported rather than dropped.
     """
     if canonical and (
-        len(runs) != 1 or runs[0].get("run_index") != 1 or len(runs[0]["events"]) != 50
+        len(runs) != 1
+        or runs[0].get("run_index") != 1
+        or (not _stopped_early(runs[0]) and len(runs[0]["events"]) != 50)
     ):
         raise ValueError("E-Swap-1 requires one run with 50 nested swap events")
+    reasons = ", ".join(
+        sorted({reason for run in runs for reason in run.get("sut_outcome_reasons", ())})
+    )
     events = []
     for run in runs:
+        if _stopped_early(run):
+            continue
         for event in run["events"]:
             event_class = SWAP_EVENT_CLASSES.get(event.get("compile_cache"))
             if event_class is None:
@@ -1848,9 +1948,25 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
         rows.append(
             row
             | {
+                "sut_outcome_reasons": reasons,
                 "units": "nanoseconds, runs, swap events",
                 "estimator": "quantiles over nested swap events; one run, so the spread is within-run, not a between-run interval",
                 "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
+                "thesis_evidence": canonical,
+            }
+        )
+    stopped = [run for run in runs if _stopped_early(run)]
+    if stopped:
+        rows.append(
+            {
+                "experiment": "e-swap-1",
+                "event_class": "stopped early",
+                "N_runs": len(stopped),
+                "N_nested_events": 0,
+                "sut_outcome_reasons": reasons,
+                "units": "runs",
+                "estimator": "runs the system under test stopped before their swap evidence was complete",
+                "claim_boundary": "a failed swap or runtime exit fails the swap criteria; no phase durations exist",
                 "thesis_evidence": canonical,
             }
         )
@@ -1883,6 +1999,32 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
             canonical and record.get("run_index") != 1
         ):
             raise ValueError("E-Swap-5 run identity is invalid")
+        reasons = ", ".join(record.get("sut_outcome_reasons", ()))
+        if _stopped_early(record):
+            requests = record.get("requests") or []
+            rows.append(
+                {
+                    "experiment": "e-swap-5",
+                    "condition": "process-trap-rollback",
+                    "run_index": record["run_index"],
+                    "N_runs": 1,
+                    "N_nested_events": len(requests),
+                    "rolled_back_events": sum(
+                        request.get("http_status") == 200
+                        and isinstance(request.get("body"), dict)
+                        and request["body"].get("status") == "rolled_back"
+                        for request in requests
+                    ),
+                    "all_rolled_back": False,
+                    "sut_outcome_reasons": reasons,
+                    "units": "rollback events, runs",
+                    "estimator": "a run the system under test stopped early; no rollback durations",
+                    "threshold": "50 successful rollbacks; post-rollback output; zero loss and duplication",
+                    "claim_boundary": "failed replacement rollback and observed continuity without a successful v2 transition",
+                    "thesis_evidence": canonical,
+                }
+            )
+            continue
         requests = record.get("requests")
         rollback = record.get("rollback")
         continuity = record.get("continuity")
@@ -1903,6 +2045,9 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
                 "run_index": record["run_index"],
                 "N_runs": 1,
                 "N_nested_events": len(durations),
+                "rolled_back_events": len(durations),
+                "all_rolled_back": True,
+                "sut_outcome_reasons": reasons,
                 "median_rollback_ns": float(np.median(durations)),
                 "p95_rollback_ns": float(np.percentile(durations, 95)),
                 "max_rollback_ns": float(durations.max()),
@@ -1921,12 +2066,14 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
 
 
 def swap4_table(runs: list[dict]) -> pd.DataFrame:
+    """E-Swap-4 over every admitted run; a run that lost, duplicated or stopped early fails the zero-loss criterion."""
     indices = {int(run.get("run_index", 0)) for run in runs}
     if len(runs) != 30 or indices != set(range(1, 31)):
         raise ValueError("E-Swap-4 requires 30 independent runs")
-    if any(run.get("successful_swaps") != 1 for run in runs):
+    complete = [run for run in runs if not _stopped_early(run)]
+    if any(run.get("successful_swaps") != 1 for run in complete):
         raise ValueError("E-Swap-4 requires one successful swap per run")
-    if any(run.get("drain_right_censored") is not False for run in runs):
+    if any(run.get("drain_right_censored") is not False for run in complete):
         raise ValueError("E-Swap-4 requires complete drain evidence")
     required_drain = {
         "primary_received_events",
@@ -1936,13 +2083,13 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
         "drain_duration_after_window_ns",
         "max_arrival_offset_ns",
     }
-    if any(not required_drain <= run.keys() for run in runs):
+    if any(not required_drain <= run.keys() for run in complete):
         raise ValueError("E-Swap-4 lacks run-level drain evidence")
-    gaps = sorted(float(run["sink_observed_output_gap_ns"]) for run in runs)
-    low, high = _ci(gaps)
+    gaps = sorted(float(run["sink_observed_output_gap_ns"]) for run in complete)
+    low, high = _ci(gaps) if gaps else (None, None)
     phase_medians = {
-        f"median_{phase}": float(
-            np.median([run["internal_swap_phases_ns"][phase] for run in runs])
+        f"median_{phase}": _median(
+            [run["internal_swap_phases_ns"][phase] for run in complete]
         )
         for phase in (
             "compile_ns",
@@ -1952,6 +2099,9 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
             "first_post_replacement_local_outcome_ns",
         )
     }
+    lossless_runs = sum(
+        int(run["loss"]) == 0 and int(run["sequence"]["duplicates"]) == 0 for run in complete
+    )
     return pd.DataFrame(
         [
             {
@@ -1959,44 +2109,50 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
                 "condition": "burst-2x",
                 "N_runs": len(runs),
                 "N_events": len(gaps),
-                "median_sink_gap_ns": float(np.median(gaps)),
+                "median_sink_gap_ns": _median(gaps),
                 "iqr_sink_gap_ns": float(
                     np.percentile(gaps, 75) - np.percentile(gaps, 25)
-                ),
-                "p95_sink_gap_ns": gaps[math.ceil(len(gaps) * 0.95) - 1],
+                )
+                if gaps
+                else None,
+                "p95_sink_gap_ns": gaps[math.ceil(len(gaps) * 0.95) - 1] if gaps else None,
                 "bootstrap_median_ci95_low_ns": low,
                 "bootstrap_median_ci95_high_ns": high,
                 **phase_medians,
-                "total_loss": sum(int(run["loss"]) for run in runs),
+                "total_loss": sum(int(run["loss"]) for run in complete),
                 "total_duplicates": sum(
-                    int(run["sequence"]["duplicates"]) for run in runs
+                    int(run["sequence"]["duplicates"]) for run in complete
                 ),
+                "lossless_runs": lossless_runs,
+                "runs_stopped_early": len(runs) - len(complete),
+                "zero_loss_and_duplication": lossless_runs == len(runs),
                 "runs_with_drain_arrivals": sum(
-                    int(run["drain_received_events"]) > 0 for run in runs
+                    int(run["drain_received_events"]) > 0 for run in complete
                 ),
-                "median_primary_received_events": float(
-                    np.median([run["primary_received_events"] for run in runs])
+                "median_primary_received_events": _median(
+                    [run["primary_received_events"] for run in complete]
                 ),
-                "median_drain_received_events": float(
-                    np.median([run["drain_received_events"] for run in runs])
+                "median_drain_received_events": _median(
+                    [run["drain_received_events"] for run in complete]
                 ),
                 "max_drain_arrival_offset_ns": max(
                     (
                         int(run["drain_last_offset_ns"])
-                        for run in runs
+                        for run in complete
                         if run["drain_last_offset_ns"] is not None
                     ),
                     default=None,
                 ),
                 "max_drain_duration_after_window_ns": max(
-                    int(run["drain_duration_after_window_ns"]) for run in runs
+                    (int(run["drain_duration_after_window_ns"]) for run in complete),
+                    default=None,
                 ),
                 "max_arrival_offset_ns": max(
-                    int(run["max_arrival_offset_ns"]) for run in runs
+                    (int(run["max_arrival_offset_ns"]) for run in complete), default=None
                 ),
                 "drain_right_censored_runs": 0,
                 "units": "nanoseconds, messages, runs",
-                "estimator": "one sink gap and one internal-phase vector per run; source-origin primary/drain completion counts",
+                "estimator": "one sink gap and one internal-phase vector per run that kept running; source-origin primary/drain completion counts; lossless runs out of all admitted runs",
                 "threshold": "across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s",
                 "claim_boundary": "one stateless swap centered in one source-driven burst per run; drain excluded from t=60 disruption estimator",
                 "thesis_evidence": True,

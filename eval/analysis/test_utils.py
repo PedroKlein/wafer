@@ -11,6 +11,10 @@ import pytest
 from wafer_analysis import paths as utils
 from wafer_analysis import results_layout
 
+FINAL_CAMPAIGN = {
+    "attempt_policy": {"infrastructure_retries": 1, "gate_experiments": ["e-val-1"]}
+}
+
 
 @pytest.fixture
 def fake_results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
@@ -19,6 +23,7 @@ def fake_results(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "eval" / "canonical-matrix.json").write_text(
         json.dumps(
             {
+                "final_campaign": FINAL_CAMPAIGN,
                 "experiments": {
                     "e-val-1": {
                         "conditions": ["delay-50ms"],
@@ -284,6 +289,7 @@ def write_swap3_canonical_leaf(
     matrix_path.write_text(
         json.dumps(
             {
+                "final_campaign": FINAL_CAMPAIGN,
                 "experiments": {
                     "e-swap-3": {
                         "conditions": ["wafer-hotswap"],
@@ -470,14 +476,105 @@ def test_canonical_batch_rejects_failed_leaf(fake_results: pathlib.Path):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
-def test_canonical_batch_selects_one_passed_retry_without_pooling_failed_attempt(
-    fake_results: pathlib.Path,
-):
+INFRASTRUCTURE_FAILURE = {
+    "status": "failed",
+    "failure_class": "infrastructure",
+    "reasons": ["harness-error"],
+}
+RUNTIME_EXIT = {
+    "status": "failed",
+    "failure_class": "sut_outcome",
+    "reasons": ["runtime-exit"],
+}
+
+
+def perf_unit(fake_results: pathlib.Path, *receipts: dict | None) -> pathlib.Path:
+    """One E-Perf-5 unit whose attempts end with these receipts; None leaves no receipt."""
+    matrix_path = fake_results / "eval/canonical-matrix.json"
+    matrix = json.loads(matrix_path.read_text())
+    matrix["experiments"] = {"e-perf-5": matrix["experiments"]["e-val-1"]}
+    matrix_path.write_text(json.dumps(matrix))
+    refresh_approval_matrix_hash(fake_results)
+    batch = fake_results / "eval/results/e-perf-5/rpi5-batch-a"
+    for number, receipt in enumerate(receipts, start=1):
+        leaf = batch / f"delay-50ms/run-01-attempt-{number:02d}"
+        write_canonical_leaf(leaf)
+        metadata = json.loads((leaf / "metadata.json").read_text())
+        metadata["experiment"] = "e-perf-5"
+        (leaf / "metadata.json").write_text(json.dumps(metadata))
+        if receipt is None:
+            (leaf / "canonical-status.json").unlink()
+        else:
+            (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+    return batch
+
+
+def test_gate_batch_rejects_a_retried_unit(fake_results: pathlib.Path):
     batch = canonical_batch(fake_results)
     next(batch.rglob("canonical-status.json")).write_text('{"status":"failed"}')
     write_canonical_leaf(batch / "delay-50ms/run-01-attempt-02")
 
-    assert utils.validate_canonical_batch(batch, "e-val-1") == "1" * 40
+    with pytest.raises(ValueError, match="exceeds its retry policy"):
+        utils.validate_canonical_batch(batch, "e-val-1")
+
+
+def test_canonical_batch_admits_one_retry_after_an_infrastructure_failure(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, INFRASTRUCTURE_FAILURE, {"status": "passed"})
+
+    assert utils.validate_canonical_batch(batch, "e-perf-5") == "1" * 40
+
+
+def test_canonical_batch_admits_a_retry_after_an_interrupted_attempt(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, None, {"status": "passed"})
+
+    assert utils.validate_canonical_batch(batch, "e-perf-5") == "1" * 40
+
+
+def test_canonical_batch_counts_an_interrupted_attempt_against_the_retry_cap(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, None, INFRASTRUCTURE_FAILURE, {"status": "passed"})
+
+    with pytest.raises(ValueError, match="exceeds its retry policy"):
+        utils.validate_canonical_batch(batch, "e-perf-5")
+
+
+def test_canonical_batch_rejects_a_unit_whose_retry_also_failed(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, INFRASTRUCTURE_FAILURE, INFRASTRUCTURE_FAILURE)
+
+    with pytest.raises(ValueError, match="failed canonical input"):
+        utils.validate_canonical_batch(batch, "e-perf-5")
+
+
+def test_canonical_batch_admits_a_system_outcome_that_stopped_the_run(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, RUNTIME_EXIT)
+    leaf = batch / "delay-50ms/run-01-attempt-01"
+    with pytest.raises(ValueError, match="differs from its outcome evidence"):
+        utils.validate_canonical_batch(batch, "e-perf-5")
+
+    metadata = json.loads((leaf / "metadata.json").read_text())
+    metadata["exit_codes"] = {"wafer_runtime": 134}
+    (leaf / "metadata.json").write_text(json.dumps(metadata))
+    (leaf / "percentiles.json").unlink()
+
+    assert utils.validate_canonical_batch(batch, "e-perf-5") == "1" * 40
+
+
+def test_canonical_batch_rejects_a_retry_after_a_system_outcome(
+    fake_results: pathlib.Path,
+):
+    batch = perf_unit(fake_results, RUNTIME_EXIT, {"status": "passed"})
+
+    with pytest.raises(ValueError, match="multiple admitted attempts"):
+        utils.validate_canonical_batch(batch, "e-perf-5")
 
 
 def test_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
@@ -486,7 +583,7 @@ def test_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
     batch = canonical_batch(fake_results)
     write_canonical_leaf(batch / "delay-50ms/run-01-attempt-02")
 
-    with pytest.raises(ValueError, match="duplicate canonical run"):
+    with pytest.raises(ValueError, match="multiple admitted attempts"):
         utils.validate_canonical_batch(batch, "e-val-1")
 
 
@@ -497,6 +594,7 @@ def test_canonical_analysis_rejects_semantically_invalid_swap5_artifacts(
     matrix_path.write_text(
         json.dumps(
             {
+                "final_campaign": FINAL_CAMPAIGN,
                 "experiments": {
                     "e-swap-5": {
                         "conditions": ["process-trap-rollback"],
@@ -562,7 +660,7 @@ def test_swap3_canonical_batch_rejects_multiple_passed_attempts_for_one_run(
     write_swap3_canonical_leaf(batch / "wafer-hotswap/run-01-attempt-01")
     write_swap3_canonical_leaf(batch / "wafer-hotswap/run-01-attempt-02")
 
-    with pytest.raises(ValueError, match="duplicate canonical run"):
+    with pytest.raises(ValueError, match="multiple admitted attempts"):
         utils.validate_canonical_batch(batch, "e-swap-3")
 
 
@@ -776,6 +874,7 @@ def test_cross_architecture_validates_each_side_against_its_own_host(
     fake_results.joinpath("eval/canonical-matrix.json").write_text(
         json.dumps(
             {
+                "final_campaign": FINAL_CAMPAIGN,
                 "experiments": {
                     "e-perf-5": {
                         "conditions": ["delay-50ms"],

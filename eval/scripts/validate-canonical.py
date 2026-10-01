@@ -300,6 +300,14 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign eKuiper operator concurrency must be 1")
     if campaign.get("diagnostic_batches_excluded") is not True:
         errors.append("final_campaign must exclude diagnostic batches")
+    if campaign.get("attempt_policy") != {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }:
+        errors.append(
+            "final_campaign attempt policy must allow one in-place infrastructure retry "
+            "and none for the E-Val-1 gate"
+        )
 
     expected_metering_exceptions = {
         "e-perf-5": {
