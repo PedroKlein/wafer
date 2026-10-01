@@ -1230,7 +1230,7 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
     gc_runtime = runtime.get("gc_runtime_metrics")
     if gc_runtime != {
         "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
     }:
         violations.append("eKuiper GC/runtime limitation is missing or overstated")
     latency = runtime.get("latency_ns", {})

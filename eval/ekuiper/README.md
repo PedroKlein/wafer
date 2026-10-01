@@ -1,6 +1,6 @@
 # Native eKuiper comparator
 
-The evaluation hosts run eKuiper 2.1.0 directly from its official Linux Debian package (`install-native.sh` picks the ARM64 or amd64 build). No evaluation path uses Docker.
+The evaluation hosts run eKuiper 2.1.5 directly from its official Linux Debian package (`install-native.sh` picks the ARM64 or amd64 build). No evaluation path uses Docker.
 
 ## Install on the Pi
 
@@ -9,7 +9,7 @@ The evaluation hosts run eKuiper 2.1.0 directly from its official Linux Debian p
 ./eval/ekuiper/install-native.sh
 ```
 
-The installer downloads both the pinned package and its published SHA256 file, verifies the package, installs the canonical MQTT source configuration, writes an installation receipt, and assigns the service to CPUs 1–3.
+The installer downloads the pinned package and its published SHA256 file and checks both against the SHA256 pinned in the script for that architecture. It then installs the package, installs the canonical MQTT source configuration, writes an installation receipt, assigns the service to CPUs 1–3, and restarts the service so an upgraded host runs the new package.
 
 ## Register Pipeline A
 
@@ -36,7 +36,7 @@ MQTT wafer/telemetry → JSON decode → 50 ≤ temperature ≤ 99999 → MQTT w
 
 The optional `e-compare-ekuiper-profile` batch is isolated from canonical comparisons. It schedules five profiled and five unprofiled-control host runs at each of 1,000, 4,000, and 8,000 messages per second. Paired runs share the same rate, run index, Pipeline A config, QoS 1 transport, operator concurrency 1, 30-second warmup, and 60-second measurement.
 
-Only the profiled arm starts the bounded one-second external `/proc` sampler. If those process files are unavailable, the run retains latency, throughput, interval, and host telemetry while marking process metrics unavailable. The frozen eKuiper 2.1.0 deployment has no validated GC-event interface, so it records that limitation rather than inferring GC events. Results describe run-level associations and profiler overhead; they do not establish GC causality and are never pooled with E-Perf-1, E-Perf-10, or prior diagnostics. See `docs/benchmarks/ekuiper-profile-diagnostic.md`.
+Only the profiled arm starts the bounded one-second external `/proc` sampler. If those process files are unavailable, the run retains latency, throughput, interval, and host telemetry while marking process metrics unavailable. The frozen eKuiper 2.1.5 deployment has no validated GC-event interface, so it records that limitation rather than inferring GC events. Results describe run-level associations and profiler overhead; they do not establish GC causality and are never pooled with E-Perf-1, E-Perf-10, or prior diagnostics. See `docs/benchmarks/ekuiper-profile-diagnostic.md`.
 
 ## Smoke test
 

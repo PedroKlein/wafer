@@ -16,7 +16,7 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | follows from the governor and turbo settings |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
 | Binaries | built on this host | `mise run build-release-x86` |
-| Services | Mosquitto and native eKuiper 2.1.0 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
+| Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
 
 The runner starts WAFER and the native baseline with `taskset -c 1-3` and pins
 `wafer-loadgen` and both telemetry samplers to CPU 0; the eKuiper unit sets
@@ -43,6 +43,10 @@ throttle signal is a core below 95% of its pinned clock or a moved
 `x86-rapl-package-energy` or `unavailable`.
 
 ## Running a batch
+
+Before each batch on this host, re-check the eKuiper comparator as the
+[runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)
+describes, with `--host x86`.
 
 The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
 Pass it to the runner and the validator; results land under

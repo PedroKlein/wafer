@@ -494,7 +494,7 @@ def test_canonical_ekuiper_result_does_not_require_wasmtime_provenance() -> None
             experiment="e-perf-1",
             condition="ekuiper",
             system="ekuiper",
-            ekuiper_version="2.1.0",
+            ekuiper_version="2.1.5",
             exit_codes={"ekuiper": 0},
         )
         metadata_path.write_text(json.dumps(metadata))
@@ -1812,7 +1812,7 @@ def ekuiper_profile_contract_fixture(tmp_path: Path, state: str) -> tuple[Path, 
         },
         "gc_runtime_metrics": {
             "status": "unavailable",
-            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
         },
         "claim_boundary": "diagnostic-association-only-not-gc-causality",
         "no_pool_with": ["e-perf-1", "e-perf-10", "prior diagnostic rehearsals"],

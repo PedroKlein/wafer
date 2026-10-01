@@ -770,7 +770,7 @@ def ekuiper_profile_summary() -> dict:
                         ),
                         "gc_runtime_metrics": {
                             "status": "unavailable",
-                            "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+                            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
                         },
                         "claim_boundary": "diagnostic-association-only-not-gc-causality",
                         "profiler_overhead": {

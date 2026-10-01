@@ -25,7 +25,7 @@ Does a Wasm-isolated pipeline achieve competitive throughput and latency compare
 | RQ1d | Cross-architecture WAFER/native ratio | PENDING until matched Raspberry Pi 5 and x86 Linux evidence exists |
 | RQ1e | Linux filesystem page-cache effect on startup | Report cold/warm phases with the disk compiled-component cache disabled |
 
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. Native Rust executes equivalent filter logic, while eKuiper 2.1.0 is the external edge stream-processing reference. E-Perf-1 is the matched 1,000 msg/s operating point. E-Perf-10 is the capacity envelope over `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. A delivery-bad MQTT loopback point censors SUT-only capacity claims at that rate and above.
+Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. Native Rust executes equivalent filter logic, while eKuiper 2.1.5 is the external edge stream-processing reference. E-Perf-1 is the matched 1,000 msg/s operating point. E-Perf-10 is the capacity envelope over `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. A delivery-bad MQTT loopback point censors SUT-only capacity claims at that rate and above.
 
 ### RQ2: Do per-stage sandboxes contain faults without pipeline-wide failure?
 

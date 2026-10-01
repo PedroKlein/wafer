@@ -7,7 +7,7 @@
 
 ## Abstract
 
-The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.0 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
+The evaluation harness measures the production WAFER runtime on a Raspberry Pi 5 4 GB gateway. It uses the real Wasm Component Model path, bounded open-loop generators, HdrHistogram latency recording, sequence accounting, process and thermal telemetry, and a native eKuiper 2.1.5 comparator. The final schedule and experiment parameters come from `eval/canonical-matrix.json`; artifact schemas come from `eval/RESULT-CONTRACT.md`.
 
 The independent unit is a complete process run unless the matrix explicitly declares a static or repeated-event experiment. Evidence classes are `canonical-primary`, `candidate-supplementary`, `diagnostic`, and `future-work`. Diagnostic scout, shakedown, diagnostic-batch, and candidate-supplementary batches remain separate from canonical-primary evidence. A candidate is not automatically admitted to N=30; it enters the final campaign only by moving into the matrix's final `experiments` list before a final batch starts.
 
@@ -239,7 +239,7 @@ This is the Carbone 2015 gold standard: "reimplemented on the SAME RUNTIME."
 
 ### Decision 6: eKuiper Comparison Setup
 
-Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same native Mosquitto broker, same message format, same Raspberry Pi 5 4 GB host, and same load profile. eKuiper 2.1.0 runs from its official Linux ARM64 package rather than in Docker, so neither comparator receives an additional container or bridge-network boundary.
+Use WAFER's `wafer-loadgen` to drive MQTT messages to both systems identically. Same native Mosquitto broker, same message format, same Raspberry Pi 5 4 GB host, and same load profile. eKuiper 2.1.5 runs from its official Linux ARM64 package rather than in Docker, so neither comparator receives an additional container or bridge-network boundary.
 
 The Pi boots with CPUs 1–3 isolated. The operating system, Mosquitto, and `wafer-loadgen` use CPU 0; the active SUT—WAFER, the native Rust baseline, or eKuiper—uses CPUs 1–3. Only one SUT runs at a time.
 
@@ -299,7 +299,7 @@ One unified `PipelineBuilder` with pluggable source/sink types. `TestPipeline` a
 
 ## Canonical hardware amendment
 
-Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.0 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
+Raspberry Pi 5 with 4 GB RAM is the canonical gateway target. Native eKuiper 2.1.5 replaces the Docker comparator on that host. CPU 0 runs operating-system work, native Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one active SUT. The rationale, comparability limitation, and migration scope are frozen in [`docs/status/rpi5-canonical-transition.md`](../status/rpi5-canonical-transition.md) before Pi 5 measurements begin.
 
 ## Related RFCs
 

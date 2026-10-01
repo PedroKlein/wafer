@@ -138,6 +138,7 @@ ENHANCED_METHOD_REQUIREMENTS = {
         "writes only to `derived/` and `reports/`",
         "not total input power",
         "no threshold waiver",
+        "Re-check the eKuiper comparator before each batch",
     ),
     "docs/eval/pi5-host-setup.md": (
         "one physical exFAT filesystem labeled `WAF_RESULTS`",

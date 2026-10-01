@@ -45,7 +45,7 @@ def facts(host: str, **changes: object) -> dict:
         "throttled": "0x0",
         "broker_ready": True,
         "ekuiper_ready": True,
-        "ekuiper_version": "2.1.0",
+        "ekuiper_version": "2.1.5",
         **changes,
     }
 

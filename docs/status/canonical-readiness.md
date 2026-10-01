@@ -24,9 +24,10 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 1. Synchronize WAFER and thesis methodology documents.
 2. Render and review the pre-final analysis preview.
 3. Verify one clean commit locally and deploy it.
-4. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
-5. Obtain all-PASS independent readiness review.
-6. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
+4. Reinstall eKuiper 2.1.5 on each host with `eval/ekuiper/install-native.sh` and run the comparator re-check from the runbook.
+5. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
+6. Obtain all-PASS independent readiness review.
+7. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
 
 ## Current claim boundaries
 

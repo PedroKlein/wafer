@@ -516,9 +516,9 @@ def validate_preflight(
     if require_ekuiper:
         if facts.get("ekuiper_ready") is not True:
             errors.append("eKuiper is not ready")
-        if facts.get("ekuiper_version") != "2.1.0":
+        if facts.get("ekuiper_version") != "2.1.5":
             errors.append(
-                f"eKuiper version must be '2.1.0', got {facts.get('ekuiper_version')!r}"
+                f"eKuiper version must be '2.1.5', got {facts.get('ekuiper_version')!r}"
             )
     return errors
 

@@ -375,7 +375,7 @@ def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic
     assert runtime["process_metrics"]["maximum_rows"] == 62
     assert runtime["gc_runtime_metrics"] == {
         "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
     }
     assert runtime["interval_alignment"]["row_count"] == 60
     assert overhead["paired_condition"] == "rate-01000/unprofiled-control"
@@ -4355,6 +4355,7 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
         capture_output=True,
         text=True,
     ).stdout
+    assert f"version: {comparator['version']}\n" in install
     assert "CPUAffinity=1 2 3" in install
     assert "MQTT_SOURCE__DEFAULT__SERVER=tcp://127.0.0.1:1883" in install
     assert "mqtt_source_config: /etc/kuiper/mqtt_source.yaml" in install
