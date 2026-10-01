@@ -26,7 +26,8 @@ mise run run-canonical-pi5 -- --batch-id <id>
 ## Run, stop, resume and check a batch
 
 A batch is identified by its `--batch-id`. Every run is a leaf that is
-written once and marked passed or failed, and the batch ledger under
+written once and marked as a clean pass, a system outcome or an infrastructure
+failure, and the batch ledger under
 `manifests/canonical-batches/<host>-<batch-id>/` keeps `schedule.json` and a
 `progress.jsonl` event log.
 

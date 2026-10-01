@@ -3876,6 +3876,20 @@ def incomplete_run(output: Path, item: RunItem) -> bool:
     return bool(INCOMPLETE_RUN_REASONS & set(sut_outcome_reasons(output, item.experiment)))
 
 
+def write_attempt_window(output: Path, started_ns: int, finished_ns: int | None = None) -> None:
+    """Bound a run the runtime did not survive by the attempt's own wall clock.
+
+    The sink exports ``measurement-window.json`` only when it reaches its export, so a
+    crashed runtime leaves none; the verifier requires one on every canonical leaf.
+    """
+    window = output / "measurement-window.json"
+    if window.is_file():
+        return
+    if finished_ns is None:
+        finished_ns = time.time_ns()
+    window.write_text(json.dumps({"started_ns": started_ns, "finished_ns": finished_ns}) + "\n")
+
+
 def find_admitted_attempt(condition_dir: Path, run_index: int) -> Path | None:
     selection = select_attempt(condition_dir, run_index)
     return selection.path if selection.skip else None
@@ -4175,7 +4189,9 @@ def run_hot_swap_item(root: Path, item: RunItem, selection: AttemptSelection) ->
         # outcome (see RESULT-CONTRACT "Runtime exit status").
         if runtime_exit != 0 and not runtime_exit_is_outcome(runtime_exit):
             raise RuntimeError(f"wafer runtime exited with {runtime_exit}")
-        if not incomplete_run(output, item):
+        if incomplete_run(output, item):
+            write_attempt_window(output, started_ns, finished_ns)
+        else:
             if item.experiment not in {"e-swap-5", ROLLBACK_SESSIONS_EXPERIMENT} and not (
                 output / "swap_timeline.json"
             ).is_file():
@@ -5407,6 +5423,7 @@ def run_rate_sweep_item(
                     raise RuntimeError(f"wafer runtime exited during startup with {runtime_exit}")
                 stop_pi_telemetry(telemetry)
                 telemetry = None
+                write_attempt_window(output, started_ns)
                 _merge_rate_sweep_metadata(output, item, started_at, started_ns, runtime_exit)
                 postprocess_run(root, item, output)
                 verify_result(root, output)

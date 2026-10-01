@@ -4759,6 +4759,82 @@ def test_runtime_startup_refusal_stays_an_infrastructure_failure(
     assert len(generic_runner) == 2
 
 
+class StoppedRuntime:
+    """A runtime process that has already exited with this code."""
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.pid = 4242
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        pass
+
+
+def stub_runner_host(monkeypatch: pytest.MonkeyPatch, runtime_exit: int) -> None:
+    """Stand in for the host gates, telemetry and the runtime of a runner-driven item."""
+
+    def fake_run(command, **kwargs):
+        if "--output" in command and "validate-canonical.py" in " ".join(map(str, command)):
+            Path(command[command.index("--output") + 1]).write_text(
+                json.dumps({"git_sha": "1" * 40})
+            )
+        return subprocess.CompletedProcess(command, 0)
+
+    def fake_merge(path, *args):
+        Path(path).write_text(json.dumps({"exit_codes": {"wafer_runtime": int(args[9])}}))
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runner.subprocess, "Popen", lambda command, **kwargs: StoppedRuntime(runtime_exit)
+    )
+    monkeypatch.setattr(runner, "merge_metadata", fake_merge)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
+    monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, item, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
+
+
+def test_rate_sweep_runtime_that_dies_at_startup_is_a_bounded_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=134)
+    monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
+    item = next(item for item in build_schedule({"e-perf-10"}, seed=1729) if item.system == "wafer")
+    output = tmp_path / "wafer/rate-01000/run-01-attempt-01"
+
+    assert runner.run_rate_sweep_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["runtime-exit"])
+    window = json.loads((output / "measurement-window.json").read_text())
+    assert window["started_ns"] < window["finished_ns"]
+
+
+def test_hot_swap_run_the_runtime_did_not_survive_keeps_its_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=134)
+    monkeypatch.setattr(runner, "wait_for_api", lambda url: None)
+    monkeypatch.setattr(runner, "post_hot_swap", lambda node, plugin: {"http_status": 200, "body": {}})
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+
+    assert runner.run_hot_swap_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["runtime-exit"])
+    window = json.loads((output / "measurement-window.json").read_text())
+    assert window["started_ns"] < window["finished_ns"]
+
+
 def test_one_dropped_message_in_a_burst_swap_is_an_admitted_outcome(tmp_path: Path) -> None:
     timing, source, requests, sink, throughput, sequence = swap4_fixture()
     for bucket in throughput["drain_buckets"][:1]:

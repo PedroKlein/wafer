@@ -459,6 +459,12 @@ def test_runtime_exit_is_an_outcome_checked_only_for_harness_evidence(tmp_path: 
     assert rejected.returncode == 1
     assert "missing canonical Pi telemetry artefact: pi-telemetry.csv" in rejected.stdout
 
+    unbounded = stopped_containment_run(tmp_path / "unbounded", runtime_exit=134)
+    (unbounded / "measurement-window.json").unlink()
+    rejected = run(unbounded)
+    assert rejected.returncode == 1
+    assert "missing canonical Pi telemetry artefact: measurement-window.json" in rejected.stdout
+
 
 def test_runtime_startup_refusal_is_a_violation(tmp_path: Path) -> None:
     result = stopped_containment_run(tmp_path, runtime_exit=2)
