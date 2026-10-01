@@ -136,7 +136,6 @@ docker-compose.override.yml
 # eval/ result trees — large generated artifacts.
 # Only fixture-style dirs are `git add -f`'d for documentation.
 eval/results/*/
-!eval/results/e-density-1/
 
 # Notebook outputs (mise run //eval:figures); thesis copies live in tcc-doc
 eval/analysis/figures/
