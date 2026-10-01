@@ -1357,6 +1357,23 @@ def test_capacity_tables_reject_schema_drift_from_the_producer() -> None:
         capacity_tables(summary)
 
 
+def test_scout_diagnostic_arm_never_enters_the_capacity_decision() -> None:
+    summary = capacity_summary()
+    expected = capacity_competitive_decision(summary)
+    summary["systems"]["wafer-max-inflight-1"] = json.loads(
+        json.dumps(summary["systems"]["wafer"])
+    )
+    set_capacity_cells(summary, "wafer-max-inflight-1", ["bad"] * 5)
+    assert capacity_competitive_decision(summary) == expected
+    with pytest.raises(ValueError, match="requires all four systems"):
+        capacity_tables(summary)
+
+    candidate = candidate_capacity_summary()
+    candidate["systems"]["wafer-max-inflight-1"] = candidate["systems"]["wafer"]
+    with pytest.raises(ValueError, match="requires all four systems"):
+        candidate_capacity_table(candidate)
+
+
 def test_capacity_intervals_bootstrap_the_run_values() -> None:
     summary = capacity_summary()
     rates, _ = capacity_tables(summary)

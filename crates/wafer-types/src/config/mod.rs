@@ -763,4 +763,61 @@ to = "out"
         };
         assert!(transform.config.is_some());
     }
+
+    fn mqtt_sink_pipeline(extra: &str) -> String {
+        format!(
+            r#"
+[nodes.in]
+type = "source"
+kind = "stdin"
+
+[nodes.out]
+type = "sink"
+kind = "mqtt"
+broker = "localhost"
+topic = "out"
+qos = 1
+{extra}
+
+[[edges]]
+from = "in"
+to = "out"
+"#
+        )
+    }
+
+    fn mqtt_sink_max_inflight(config: &Config) -> Option<u16> {
+        let NodeDef::Sink(SinkDef::Mqtt(sink)) = &config.nodes["out"] else {
+            panic!("out must be an MQTT sink");
+        };
+        sink.max_inflight.map(std::num::NonZeroU16::get)
+    }
+
+    #[test]
+    fn mqtt_sink_max_inflight_is_optional_and_round_trips() {
+        let config: Config = toml::from_str(&mqtt_sink_pipeline("")).unwrap();
+        assert_eq!(mqtt_sink_max_inflight(&config), None);
+
+        for value in [1, 100, 65_535] {
+            let config: Config =
+                toml::from_str(&mqtt_sink_pipeline(&format!("max_inflight = {value}"))).unwrap();
+            assert_eq!(mqtt_sink_max_inflight(&config), Some(value));
+            let reparsed: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+            assert_eq!(mqtt_sink_max_inflight(&reparsed), Some(value));
+        }
+    }
+
+    #[test]
+    fn mqtt_sink_max_inflight_outside_one_to_65535_is_rejected() {
+        for value in ["0", "65536", "-1"] {
+            let err =
+                toml::from_str::<Config>(&mqtt_sink_pipeline(&format!("max_inflight = {value}")))
+                    .expect_err("an out-of-range max_inflight must be rejected");
+            assert!(
+                err.to_string()
+                    .contains(&format!("max_inflight must be between 1 and 65535, got {value}")),
+                "{value}: {err}"
+            );
+        }
+    }
 }

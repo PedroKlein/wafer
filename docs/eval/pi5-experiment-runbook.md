@@ -279,3 +279,4 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 - PMIC remains an internal-rail proxy, not total input power. External USB-C input-power capture is `future-work`.
 - Admission with the retained 5 V / 4.2 A supply is empirical. It receives no threshold waiver for throttling, temperature, reboot, or I/O failure.
 - Diagnostic scout, v11-v17, diagnostic-batch, laptop, synthetic, and candidate-supplementary data are not pooled with canonical-primary results.
+- The capacity scout's `wafer-max-inflight-1` arm runs WAFER with one MQTT publish in flight. It only tests whether eKuiper's one-at-a-time QoS 1 sink explains a capacity gap; it never feeds the E-Perf-10 grid or decision.

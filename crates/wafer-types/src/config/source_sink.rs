@@ -1,4 +1,6 @@
-use serde::{Deserialize, Serialize};
+use std::num::NonZeroU16;
+
+use serde::{Deserialize, Deserializer, Serialize};
 
 use super::engine::{default_mqtt_port, default_true};
 
@@ -71,6 +73,9 @@ pub struct MqttSinkConfig {
     #[serde(default)]
     pub retain: bool,
 
+    #[serde(default, deserialize_with = "deserialize_max_inflight")]
+    pub max_inflight: Option<NonZeroU16>,
+
     #[serde(default)]
     pub tls: Option<TlsConfig>,
 
@@ -138,6 +143,19 @@ pub struct TlsConfig {
 pub struct AuthConfig {
     pub username: String,
     pub password: String,
+}
+
+fn deserialize_max_inflight<'de, D>(deserializer: D) -> Result<Option<NonZeroU16>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = i64::deserialize(deserializer)?;
+    u16::try_from(value).ok().and_then(NonZeroU16::new).map(Some).ok_or_else(|| {
+        serde::de::Error::custom(format!(
+            "max_inflight must be between 1 and {}, got {value}",
+            u16::MAX
+        ))
+    })
 }
 
 fn default_http_source_bind() -> String {

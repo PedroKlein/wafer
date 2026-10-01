@@ -1,6 +1,7 @@
 //! MQTT-based sink implementation using rumqttc.
 
 use std::future::Future;
+use std::num::NonZeroU16;
 use std::pin::Pin;
 use std::time::Duration;
 
@@ -29,6 +30,7 @@ pub struct MqttSink {
     topic: String,
     qos: QoS,
     client_id: String,
+    max_inflight: Option<NonZeroU16>,
     client: Option<AsyncClient>,
     eventloop_handle: Option<JoinHandle<()>>,
     batch_config: MqttSinkBatchConfig,
@@ -59,6 +61,7 @@ impl MqttSink {
             topic: topic.into(),
             qos,
             client_id: client_id.into(),
+            max_inflight: None,
             client: None,
             eventloop_handle: None,
             batch_config: MqttSinkBatchConfig::default(),
@@ -91,12 +94,21 @@ impl MqttSink {
             topic: topic.into(),
             qos,
             client_id: client_id.into(),
+            max_inflight: None,
             client: None,
             eventloop_handle: None,
             batch_config,
             batch_buffer: None,
             batch_stats: BatchStats::default(),
         }
+    }
+
+    /// Limit how many QoS 1 or 2 publishes may wait for a broker acknowledgement.
+    /// Without it the client keeps rumqttc's default of 100.
+    #[must_use]
+    pub const fn with_max_inflight(mut self, max_inflight: NonZeroU16) -> Self {
+        self.max_inflight = Some(max_inflight);
+        self
     }
 
     /// Publish a batch of messages to the MQTT broker.
@@ -164,6 +176,9 @@ impl Lifecycle for MqttSink {
         Box::pin(async move {
             let mut mqtt_options = MqttOptions::new(&self.client_id, &self.broker, self.port);
             mqtt_options.set_keep_alive(Duration::from_secs(30));
+            if let Some(max_inflight) = self.max_inflight {
+                mqtt_options.set_inflight(max_inflight.get());
+            }
 
             let (client, eventloop) = AsyncClient::new(mqtt_options, 10);
 
