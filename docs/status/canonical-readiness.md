@@ -13,6 +13,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 - E-Swap-5: final leaves require request, rollback, sequence, and `post-rollback-continuity.json`; a successful-v2 sink timeline is forbidden after rollback.
 - E-Backpressure: separate `slow`, `drop`, and `dead-letter` conditions with policy-specific accounting are implemented; final evidence remains pending.
 - E-Perf-9: Linux filesystem page-cache method; disk compiled-component cache disabled.
+- E-Density-1: release component sizes beside a measured `FROM scratch` container floor. The floor files `eval/container-floor/linux-arm64.json` (Pi 5 and Jetson) and `linux-amd64.json` (x86) are not measured yet; they must be measured and committed before deployment.
 - E-Perf-5: `PENDING` until matched x86 Linux evidence exists.
 - Analysis: canonical approval/provenance/completeness gates implemented; complete and missing fixture execution passes.
 - Final campaign: not approved and not started (`campaign_started=false`).
@@ -24,16 +25,18 @@ No final numerical RQ conclusion exists yet. Scout, v11-v17, local shakedown, an
 1. Synchronize WAFER and thesis methodology documents.
 2. Render and review the pre-final analysis preview.
 3. Verify one clean commit locally and deploy it.
-4. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
-5. Obtain all-PASS independent readiness review.
-6. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
+4. Reinstall eKuiper 2.1.5 on each host with `eval/ekuiper/install-native.sh` and run the comparator re-check from the runbook.
+5. Run the `--repetitions 3` diagnostic batch and verify additive retrieval.
+6. Obtain all-PASS independent readiness review.
+7. Launch the final batch from the same commit. When it finishes, run `mise run approve-batch` and commit `eval/final-batches.json`.
 
 ## Current claim boundaries
 
 - E-Perf-1 is a matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 reports exact tested-grid bounds without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; an unidentified comparison remains `CENSORED/PENDING`.
+- E-Perf-10 brackets each delivery ceiling between tested rates without interpolation. A delivery-bad MQTT loopback point censors higher SUT-only claims; a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - Pipeline A is `MQTT source -> threshold filter -> MQTT sink`.
 - Hot-swap is stateless.
+- The E-Density-1 container floor is one measured `FROM scratch` image of a Rust pass-through worker, not an image per plugin.
 - PMIC telemetry is an internal-rail proxy, not total board power.
 
 The pre-final shakedown readiness log that used to follow here is archived in

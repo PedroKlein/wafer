@@ -27,13 +27,13 @@ and `tcc-doc/research/analysis/positioning-matrix.md`.*
 
 ### eKuiper
 
-The **primary RQ1 comparator**. Native eKuiper 2.1.0 runs on the same
+The **primary RQ1 comparator**. Native eKuiper 2.1.5 runs on the same
 Raspberry Pi 5 CPUs 1–3 with the same native Mosquitto broker, MQTT
 sources and sinks, and telemetry pipeline semantics. eKuiper's `goroutine-per-op` execution model gives it a
-lower per-hop cost than WAFER's Wasm boundary, so the RQ1 pass
-criterion ("within 30 % of eKuiper throughput, p95 within 2×") is a
-deliberately hard target that answers *"what does per-operator
-isolation cost?"*, not *"faster than native"*.
+lower per-hop cost than WAFER's Wasm boundary, so the RQ1 criteria
+(target-load p95 within 2× of eKuiper, and a tested-grid delivery
+ceiling at least 0.70 of eKuiper's) are deliberately hard targets that
+answer *"what does per-operator isolation cost?"*, not *"faster than native"*.
 
 ### Azure IoT Operations (dataflow graphs)
 

@@ -12,6 +12,7 @@ grep -q 'source_tags:' <<<"$deploy"
 grep -q 'target/release/wafer-loadgen' <<<"$deploy"
 grep -q 'plugins/\*/target/wasm32-wasip2/release/\*.wasm' <<<"$deploy"
 grep -q 'eval/canonical-matrix.json' <<<"$deploy"
+grep -q 'eval/container-floor' <<<"$deploy"
 
 smoke="$("$ROOT/eval/scripts/run-rpi5-smoke.sh" --dry-run)"
 grep -q 'WAFER_RUNTIME_CPUSET=1-3' <<<"$smoke"
@@ -38,7 +39,9 @@ cat >"$result/metadata.json" <<'JSON'
   "host_tag": "rpi5",
   "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
   "arch": "aarch64",
-  "isolated_cpus": "1-3",
+  "isolated_cpus": "",
+  "housekeeping_cpus": "0",
+  "irq_default_cpus": "0",
   "cpu_governors": ["performance"],
   "throttled": "0x0",
   "git_sha": "1111111111111111111111111111111111111111",

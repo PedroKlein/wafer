@@ -299,7 +299,12 @@ def write_ekuiper_profile_fixture(
             "reason": None if process_available else "procfs-process-metrics-unavailable",
             "collection_enabled": process_available,
         },
+        "gctrace": {
+            "collection_enabled": runner.ekuiper_profile_state(item) == "profiled",
+            "journal_readable": True,
+        },
     }
+    (output / "ekuiper-gctrace.log").write_text("")
     if process_available:
         (output / "resource-usage.csv").write_text(
             "timestamp_ns,cpu_time_ticks,rss_bytes,process_count,thread_count,"
@@ -375,7 +380,7 @@ def test_ekuiper_profile_artifacts_are_bounded_aligned_and_explicitly_diagnostic
     assert runtime["process_metrics"]["maximum_rows"] == 62
     assert runtime["gc_runtime_metrics"] == {
         "status": "unavailable",
-        "reason": "ekuiper-2.1.0-has-no-validated-gc-event-interface",
+        "reason": "gctrace-lines-missing-from-journal",
     }
     assert runtime["interval_alignment"]["row_count"] == 60
     assert overhead["paired_condition"] == "rate-01000/unprofiled-control"
@@ -430,6 +435,155 @@ def test_ekuiper_profile_artifacts_gracefully_record_unavailable_process_metrics
     }
     assert overhead["profile_collection_enabled"] is False
     assert overhead["overhead_role"] == "sampler-skipped-unavailable"
+
+
+def journal_entry(timestamp_s: float, message: str) -> str:
+    return json.dumps(
+        {"__REALTIME_TIMESTAMP": str(round(timestamp_s * 1_000_000)), "MESSAGE": message}
+    )
+
+
+def gctrace_line(cycle: int, clock_ms: str, heap_mb: str, goal_mb: int) -> str:
+    return (
+        f"gc {cycle} @{cycle}.012s 1%: {clock_ms} ms clock, "
+        f"0.06+0.45/1.8/0.62+0.012 ms cpu, {heap_mb} MB, {goal_mb} MB goal, "
+        "0 MB stacks, 0 MB globals, 4 P"
+    )
+
+
+def fake_journalctl(
+    monkeypatch: pytest.MonkeyPatch, entries: list[str], returncode: int = 0
+) -> list[list[str]]:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        if kwargs.get("check") and returncode:
+            raise subprocess.CalledProcessError(returncode, command)
+        return subprocess.CompletedProcess(command, returncode, "\n".join(entries) + "\n", "")
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    return calls
+
+
+def profile_item(condition: str) -> runner.RunItem:
+    return next(
+        item
+        for item in runner.build_ekuiper_profile_schedule(seed=1729)
+        if item.condition == condition and item.run_index == 1
+    )
+
+
+def test_ekuiper_gctrace_summary_covers_only_the_measurement_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = profile_item("rate-04000/profiled")
+    output = tmp_path / "profiled"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    calls = fake_journalctl(
+        monkeypatch,
+        [
+            journal_entry(4.0, gctrace_line(1, "0.010+1.0+0.010", "4->4->1", 4)),
+            journal_entry(6.0, "Started kuiper.service"),
+            journal_entry(8.0, gctrace_line(2, "0.020+1.2+0.030", "4->4->2", 5)),
+            journal_entry(20.0, gctrace_line(3, "0.015+2.1+0.003", "6->7->3", 8)),
+            journal_entry(40.0, gctrace_line(5, "0.12+3.0+0.45", "9->10->4", 9)),
+            journal_entry(75.0, gctrace_line(6, "12+4.0+0.050", "11->12->5", 10) + " (forced)"),
+        ],
+    )
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, True)
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert calls == [
+        [
+            "sudo",
+            "journalctl",
+            "--unit=kuiper.service",
+            "--since=@5",
+            "--output=json",
+            "--no-pager",
+        ]
+    ]
+    log = (output / "ekuiper-gctrace.log").read_text().splitlines()
+    assert [line.split(" ", 2)[:2] for line in log] == [
+        ["8000000000", "gc"],
+        ["20000000000", "gc"],
+        ["40000000000", "gc"],
+        ["75000000000", "gc"],
+    ]
+    assert runtime["gc_runtime_metrics"] == {
+        "status": "available",
+        "source": "go-gctrace-journal",
+        "path": "ekuiper-gctrace.log",
+        "sha256": hashlib.sha256((output / "ekuiper-gctrace.log").read_bytes()).hexdigest(),
+        "trace_line_count": 4,
+        "missing_cycle_count": 1,
+        "cycle_count": 2,
+        "stw_pause_total_ns": 15_000 + 3_000 + 120_000 + 450_000,
+        "stw_pause_max_ns": 450_000,
+        "max_heap_at_start_mib": 9,
+        "max_live_heap_mib": 4,
+        "max_heap_goal_mib": 9,
+    }
+
+
+@pytest.mark.parametrize(
+    ("entries", "returncode", "reason"),
+    [
+        ([journal_entry(20.0, "Started kuiper.service")], 0, "gctrace-lines-missing-from-journal"),
+        ([], 1, "kuiper-journal-unreadable"),
+        ([journal_entry(20.0, "gc 3 @13.901s 1%: unexpected")], 0, "gctrace-format-unrecognized"),
+    ],
+)
+def test_ekuiper_gctrace_problems_become_unavailable_markers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entries: list[str],
+    returncode: int,
+    reason: str,
+) -> None:
+    item = profile_item("rate-01000/profiled")
+    output = tmp_path / "profiled"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    fake_journalctl(monkeypatch, entries, returncode)
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, True)
+    runtime, _ = runner.write_ekuiper_profile_artifacts(item, output, context)
+
+    assert runtime["gc_runtime_metrics"] == {"status": "unavailable", "reason": reason}
+
+
+def test_ekuiper_gctrace_capture_survives_a_missing_journalctl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def missing(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        raise FileNotFoundError(command[0])
+
+    monkeypatch.setattr(runner.subprocess, "run", missing)
+
+    assert runner.capture_ekuiper_gctrace(tmp_path, 5_000_000_000, True) == {
+        "collection_enabled": True,
+        "journal_readable": False,
+    }
+    assert (tmp_path / "ekuiper-gctrace.log").read_text() == ""
+
+
+def test_unprofiled_control_rejects_gctrace_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    item = profile_item("rate-01000/unprofiled-control")
+    output = tmp_path / "control"
+    context = write_ekuiper_profile_fixture(output, item, process_available=False)
+    fake_journalctl(
+        monkeypatch,
+        [journal_entry(20.0, gctrace_line(3, "0.015+2.1+0.003", "6->7->3", 8))],
+    )
+
+    context["gctrace"] = runner.capture_ekuiper_gctrace(output, 5_000_000_000, False)
+
+    with pytest.raises(ValueError, match="gctrace output exists"):
+        runner.write_ekuiper_profile_artifacts(item, output, context)
 
 
 def candidate_ekuiper_profile_summary() -> dict:
@@ -1600,15 +1754,28 @@ def test_swap3_stops_subscriber_when_publisher_window_ends(
     assert ekuiper_states == [True, False]
 
 
+def test_both_host_samplers_pin_themselves_to_the_support_cpus(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda command, **kwargs: commands.append(command))
+    item = RunItem("e-perf-1", "wafer", 1, "c.toml", 30, 60, runtime_cpus="1-3", support_cpus="0")
+    runner.start_pi_telemetry(tmp_path, tmp_path / "leaf", item)
+    assert [Path(command[1]).name for command in commands] == ["pi_telemetry.py", "proc_telemetry.py"]
+    for command in commands:
+        assert command[command.index("--pin-cpus") + 1] == "0"
+
+
+@pytest.mark.parametrize(
+    ("state", "gctrace"), [("unprofiled-control", False), ("profiled", True)]
+)
 def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, state: str, gctrace: bool
 ) -> None:
     output = tmp_path / "attempt"
     config = tmp_path / "ekuiper.toml"
     config.write_text("[comparator]\n")
     item = RunItem(
         experiment="e-compare-ekuiper-profile",
-        condition="rate-08000/unprofiled-control",
+        condition=f"rate-08000/{state}",
         run_index=1,
         config=config.name,
         warmup_secs=30,
@@ -1624,7 +1791,8 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
 
     subscriber = Process()
     observed_timeouts: list[int] = []
-    ekuiper_states: list[bool] = []
+    ekuiper_states: list[tuple[bool, bool]] = []
+    audited_gctrace: list[bool] = []
 
     def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
         if "validate-canonical.py" in " ".join(command):
@@ -1632,7 +1800,8 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
             output_arg.write_text(json.dumps({"git_sha": "test-sha"}))
         return subprocess.CompletedProcess(command, 0)
 
-    def fake_audit(root: Path, destination: Path, cpus: str) -> Path:
+    def fake_audit(root: Path, destination: Path, cpus: str, gctrace: bool = False) -> Path:
+        audited_gctrace.append(gctrace)
         path = destination / "ekuiper-audit.json"
         path.write_text('{"process_snapshot":{"processes":[]}}\n')
         return path
@@ -1644,7 +1813,11 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
 
     monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
     monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
-    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: ekuiper_states.append(active))
+    monkeypatch.setattr(
+        runner,
+        "set_ekuiper_active",
+        lambda root, active, gctrace=False: ekuiper_states.append((active, gctrace)),
+    )
     monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
     monkeypatch.setattr(runner, "build_ekuiper_profile_context", lambda item, audit: (None, []))
     monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
@@ -1660,7 +1833,177 @@ def test_ekuiper_profile_stops_subscriber_when_publisher_window_ends(
     )
 
     assert observed_timeouts == [0]
-    assert ekuiper_states == [True, False]
+    assert ekuiper_states == [(True, gctrace), (False, False)]
+    assert audited_gctrace == [gctrace]
+
+
+def test_profiled_ekuiper_run_reads_gctrace_after_ekuiper_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "attempt"
+    config = tmp_path / "ekuiper.toml"
+    config.write_text("[comparator]\n")
+    item = RunItem(
+        experiment="e-compare-ekuiper-profile",
+        condition="rate-01000/profiled",
+        run_index=1,
+        config=config.name,
+        warmup_secs=30,
+        measurement_secs=60,
+        loadgen_profile="unused.toml",
+        offered_rate_msg_s=1_000,
+        total_messages=60_000,
+        system="ekuiper",
+    )
+    events: list[tuple] = []
+
+    class Process:
+        returncode = 0
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        if "validate-canonical.py" in " ".join(command):
+            output_arg = Path(command[command.index("--output") + 1])
+            output_arg.write_text(json.dumps({"git_sha": "test-sha"}))
+        return subprocess.CompletedProcess(command, 0)
+
+    def fake_audit(root: Path, destination: Path, cpus: str, gctrace: bool = False) -> Path:
+        path = destination / "ekuiper-audit.json"
+        path.write_text('{"process_snapshot":{"processes":[]}}\n')
+        return path
+
+    def fake_capture(destination: Path, since_ns: int, enabled: bool) -> dict:
+        events.append(("journal", enabled))
+        return {"collection_enabled": enabled, "journal_readable": True}
+
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
+    monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
+    monkeypatch.setattr(
+        runner,
+        "set_ekuiper_active",
+        lambda root, active, gctrace=False: events.append(("active", active, gctrace)),
+    )
+    monkeypatch.setattr(runner, "capture_ekuiper_audit", fake_audit)
+    monkeypatch.setattr(runner, "capture_ekuiper_gctrace", fake_capture)
+    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, candidate, destination: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, destination: None)
+
+    assert runner.run_ekuiper_item(
+        tmp_path,
+        item,
+        runner.AttemptSelection(path=output, skip=False),
+    )
+
+    assert events == [("active", True, True), ("active", False, False), ("journal", True)]
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert metadata["profile"]["gctrace"] == {
+        "collection_enabled": True,
+        "journal_readable": True,
+    }
+
+
+@pytest.fixture
+def systemctl_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[Path, list[list[str]]]:
+    drop_in = tmp_path / "run/kuiper.service.d/wafer-gctrace.conf"
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess:
+        calls.append(command)
+        if command[:2] == ["sudo", "install"]:
+            drop_in.parent.mkdir(parents=True, exist_ok=True)
+            drop_in.write_bytes(Path(command[-2]).read_bytes())
+        elif command[:3] == ["sudo", "rm", "-f"]:
+            drop_in.unlink(missing_ok=True)
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(runner, "EKUIPER_GCTRACE_DROP_IN", drop_in)
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    return drop_in, calls
+
+
+def test_profiled_ekuiper_start_traces_gc_and_stop_removes_the_drop_in(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    drop_in, calls = systemctl_calls
+
+    runner.set_ekuiper_active(ROOT, True, gctrace=True)
+
+    assert drop_in.read_text() == "[Service]\nEnvironment=GODEBUG=gctrace=1\n"
+    assert [command[:3] for command in calls[:4]] == [
+        ["sudo", "systemctl", "stop"],
+        ["sudo", "install", "-D"],
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "start"],
+    ]
+    assert calls[4][0].endswith("seed-pipeline-a.sh")
+
+    calls.clear()
+    runner.set_ekuiper_active(ROOT, False)
+
+    assert not drop_in.exists()
+    assert calls == [
+        ["sudo", "systemctl", "stop", "kuiper.service"],
+        ["sudo", "rm", "-f", str(drop_in)],
+        ["sudo", "systemctl", "daemon-reload"],
+    ]
+
+
+def test_ekuiper_start_without_gctrace_removes_a_leftover_drop_in(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    drop_in, calls = systemctl_calls
+    drop_in.parent.mkdir(parents=True)
+    drop_in.write_text("[Service]\nEnvironment=GODEBUG=gctrace=1\n")
+
+    runner.set_ekuiper_active(ROOT, True)
+
+    assert not drop_in.exists()
+    assert calls[:4] == [
+        ["sudo", "systemctl", "stop", "kuiper.service"],
+        ["sudo", "rm", "-f", str(drop_in)],
+        ["sudo", "systemctl", "daemon-reload"],
+        ["sudo", "systemctl", "start", "kuiper.service"],
+    ]
+
+
+def test_ekuiper_start_without_gctrace_keeps_the_plain_start_sequence(
+    systemctl_calls: tuple[Path, list[list[str]]],
+) -> None:
+    _, calls = systemctl_calls
+
+    runner.set_ekuiper_active(ROOT, True)
+    runner.set_ekuiper_active(ROOT, False)
+
+    assert calls[0] == ["sudo", "systemctl", "start", "kuiper.service"]
+    assert calls[1][0].endswith("seed-pipeline-a.sh")
+    assert calls[2:] == [["sudo", "systemctl", "stop", "kuiper.service"]]
+
+
+@pytest.mark.parametrize(
+    ("environment", "gctrace"),
+    [
+        ("HOME=/var/lib/kuiper GODEBUG=gctrace=1", False),
+        ("HOME=/var/lib/kuiper", True),
+        ("HOME=/var/lib/kuiper GODEBUG=gctrace=1,madvdontneed=1", True),
+    ],
+)
+def test_ekuiper_audit_rejects_godebug_that_does_not_match_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, environment: str, gctrace: bool
+) -> None:
+    monkeypatch.setattr(
+        runner,
+        "_service_properties",
+        lambda: {"MainPID": "100", "Environment": environment},
+    )
+
+    with pytest.raises(ValueError, match="GODEBUG"):
+        runner.capture_ekuiper_audit(ROOT, tmp_path, "1-3", gctrace=gctrace)
 
 
 def swap4_fixture() -> tuple[dict, dict, list[dict], dict, dict, dict]:
@@ -3115,6 +3458,16 @@ def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
     attempt = results / first.experiment / "rpi5-test" / first.condition / "run-01-attempt-01"
     attempt.mkdir(parents=True)
     (attempt / "canonical-status.json").write_text('{"status":"passed"}')
+    spent = schedule[2]
+    for number in (1, 2):
+        failed = (
+            results / spent.experiment / "rpi5-test" / spent.condition
+            / f"run-{spent.run_index:02d}-attempt-{number:02d}"
+        )
+        failed.mkdir(parents=True)
+        (failed / "canonical-status.json").write_text(
+            '{"status":"failed","failure_class":"infrastructure","reasons":["harness-error"]}'
+        )
     environment = {key: value for key, value in os.environ.items() if key != "WAFER_RESULTS_ROOT"}
 
     def runner_in_tmp(*args: str) -> subprocess.CompletedProcess[str]:
@@ -3140,7 +3493,8 @@ def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
 
     assert status.returncode == 0, status.stderr
     assert "e-perf-1 1/3" in status.stdout
-    assert "done 1/3, pending 2" in status.stdout
+    assert "done 1/3, pending 1, missing 1" in status.stdout
+    assert f"missing {spent.result_key}" in status.stdout
     assert f"next {schedule[1].result_key}" in status.stdout
     assert '"event":"item-finished"' in status.stdout
     assert resumed.returncode == 2
@@ -3559,6 +3913,20 @@ def test_capacity_estimator_handles_all_rates_good() -> None:
     }
 
 
+def test_capacity_estimator_normalizes_against_a_baseline_with_an_outcome_run() -> None:
+    rates = {rate: (0.0, 1.0, 1_000_000) for rate in (1000, 4000, 8000, 15000, 16000)}
+    runs = capacity_batch({system: rates for system in ("mqtt-loopback", "native", "wafer", "ekuiper")})
+    runs["wafer"] = [
+        run for run in runs["wafer"] if (run["rate_msg_s"], run["run_index"]) != (1000, 30)
+    ]
+
+    summary = estimate_capacity_envelope(runs, {("wafer", 1000): 1})
+
+    wafer = summary["systems"]["wafer"]
+    assert wafer["rates"][0]["classification"] == "bad"
+    assert len(wafer["rates"][1]["normalized_p99"]["values"]) == 30
+
+
 def test_capacity_estimator_flags_non_contiguous_good_rates() -> None:
     rates = {
         1000: (0.0, 1.0, 1_000_000),
@@ -3785,6 +4153,51 @@ def test_rate_sweep_summary_uses_only_passed_attempts() -> None:
     assert wafer["first_bad_rate_msg_s"] == 2000
     assert "4000" not in wafer["observed_samples"]
     assert summary["thesis_evidence"] is False
+
+
+def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "results"
+    volume.mkdir()
+    layout = runner.ResultsLayout.resolve(tmp_path, volume, mount_check=lambda _: True)
+    layout.prepare()
+    monkeypatch.setattr(runner, "results_layout", lambda _: layout)
+    layout.manifest_path("canonical-batches", "rpi5-test").mkdir(parents=True)
+    crashed = ("wafer", runner.RATE_SWEEP_RATES[-1], 30)
+    for system in runner.RATE_SWEEP_SYSTEMS:
+        for rate in runner.RATE_SWEEP_RATES:
+            for run_index in range(1, 31):
+                leaf = layout.raw_path(
+                    "e-perf-10", "rpi5-test", f"{system}/rate-{rate:05d}/run-{run_index:02d}"
+                )
+                leaf.mkdir(parents=True)
+                if (system, rate, run_index) == crashed:
+                    receipt = {
+                        "status": "failed",
+                        "failure_class": "sut_outcome",
+                        "reasons": ["runtime-exit"],
+                    }
+                else:
+                    (leaf / "capacity-run.json").write_text(
+                        json.dumps(capacity_run_fixture(system, rate, run_index=run_index))
+                    )
+                    receipt = {"status": "passed"}
+                (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+
+    summary = json.loads(summarize_rate_sweep(tmp_path, "test").read_text())
+
+    wafer = summary["systems"]["wafer"]
+    top = wafer["rates"][-1]
+    assert (top["run_count"], top["sut_outcome_runs"], top["classification"]) == (29, 1, "bad")
+    assert wafer["complete"] is True
+    assert wafer["delivery_ceiling"] == {
+        "rate_msg_s": runner.RATE_SWEEP_RATES[-2],
+        "censoring": "none",
+    }
+    assert summary["systems"]["mqtt-loopback"]["delivery_ceiling"]["censoring"] == (
+        f"right-censored-above-{runner.RATE_SWEEP_RATES[-1]}"
+    )
 
 
 def test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial() -> None:
@@ -4345,6 +4758,7 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
         capture_output=True,
         text=True,
     ).stdout
+    assert f"version: {comparator['version']}\n" in install
     assert "CPUAffinity=1 2 3" in install
     assert "MQTT_SOURCE__DEFAULT__SERVER=tcp://127.0.0.1:1883" in install
     assert "mqtt_source_config: /etc/kuiper/mqtt_source.yaml" in install
@@ -4478,15 +4892,23 @@ def test_resume_uses_next_numeric_attempt_after_a_gap() -> None:
         assert selection.path.name == "run-01-attempt-04"
 
 
-def test_resume_rejects_multiple_passed_attempts() -> None:
+RUNTIME_EXIT_RECEIPT = {
+    "status": "failed",
+    "failure_class": "sut_outcome",
+    "reasons": ["runtime-exit"],
+}
+
+
+@pytest.mark.parametrize("first", [{"status": "passed"}, RUNTIME_EXIT_RECEIPT])
+def test_resume_rejects_multiple_admitted_attempts(first: dict) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         condition = Path(tmp)
-        for attempt in (1, 2):
+        for attempt, receipt in ((1, first), (2, {"status": "passed"})):
             path = condition / f"run-01-attempt-{attempt:02d}"
             path.mkdir()
-            (path / "canonical-status.json").write_text('{"status":"passed"}')
+            (path / "canonical-status.json").write_text(json.dumps(receipt))
 
-        with pytest.raises(ValueError, match="multiple passed attempts"):
+        with pytest.raises(ValueError, match="multiple admitted attempts"):
             select_attempt(condition, 1)
 
 
@@ -4531,6 +4953,526 @@ def test_resume_skips_passed_attempt_and_preserves_failed_attempt() -> None:
         assert selection.skip is False
         assert selection.path.name == "run-02-attempt-02"
         assert failed.exists()
+
+
+def perf_item() -> RunItem:
+    return next(
+        item
+        for item in build_schedule({"e-perf-3"}, seed=1729)
+        if item.condition == "depth-1" and item.run_index == 1
+    )
+
+
+def receipts(condition: Path) -> list[dict | None]:
+    return [
+        json.loads((path / "canonical-status.json").read_text())
+        if (path / "canonical-status.json").is_file()
+        else None
+        for path in sorted(condition.iterdir())
+    ]
+
+
+@pytest.fixture
+def generic_runner(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
+    """Run the generic path without hardware; each run-experiment.sh launch is recorded."""
+    monkeypatch.delenv("WAFER_RESULTS_ROOT", raising=False)
+    monkeypatch.delenv("WAFER_DIAGNOSTIC_REPETITIONS", raising=False)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+    return []
+
+
+def fail_launches(monkeypatch: pytest.MonkeyPatch, launches: list, failures: int) -> None:
+    def launch(command, **kwargs):
+        launches.append(command)
+        if len(launches) <= failures:
+            raise subprocess.CalledProcessError(4, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, item, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+
+
+def test_infrastructure_failure_is_retried_once_in_place_then_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    generic_runner: list,
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = perf_item()
+
+    assert runner.run_item(tmp_path, "test", item) is False
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    assert [path.name for path in sorted(condition.iterdir())] == [
+        "run-01-attempt-01",
+        "run-01-attempt-02",
+    ]
+    assert [receipt["failure_class"] for receipt in receipts(condition)] == [
+        "infrastructure",
+        "infrastructure",
+    ]
+    assert receipts(condition)[0]["reasons"] == ["harness-error"]
+    assert len(generic_runner) == 2
+    assert "MISSING e-perf-3/depth-1/run-01: infrastructure retries spent" in (
+        capsys.readouterr().out
+    )
+
+
+def test_infrastructure_retry_that_passes_is_the_admitted_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=1)
+    item = perf_item()
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert runner.run_item(tmp_path, "test", item)
+
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    assert [receipt["status"] for receipt in receipts(condition)] == ["failed", "passed"]
+    assert len(generic_runner) == 2
+
+
+def test_interrupted_attempt_counts_as_one_infrastructure_attempt(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = perf_item()
+    condition = tmp_path / "eval/results/e-perf-3/rpi5-test/depth-1"
+    interrupted = condition / "run-01-attempt-01"
+    interrupted.mkdir(parents=True)
+    (interrupted / "stdout.log").write_text("power lost\n")
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    assert receipts(condition)[0] is None
+    assert receipts(condition)[1]["failure_class"] == "infrastructure"
+    assert len(generic_runner) == 1
+
+
+def test_validation_gate_unit_is_never_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    fail_launches(monkeypatch, generic_runner, failures=3)
+    item = next(iter(build_schedule({"e-val-1"}, seed=1729)))
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    assert len(generic_runner) == 1
+    condition = tmp_path / f"eval/results/e-val-1/rpi5-test/{item.condition}"
+    assert [path.name for path in condition.iterdir()] == [f"run-{item.run_index:02d}-attempt-01"]
+
+
+def write_stopped_runtime_leaf(output: Path, experiment: str, runtime_exit: int) -> None:
+    """What run-experiment.sh leaves when the runtime exits before the run finishes."""
+    output.mkdir(parents=True)
+    for name, content in {
+        "config.toml": "fixture\n",
+        "stdout.log": "fixture\n",
+        "runtime-provenance.json": "fixture\n",
+        "pmic-rails.csv": "fixture\n",
+        "power-boundary.json": '{"backend":"pi","measurement":"rpi5-pmic-internal-rail-proxy"}\n',
+        "pi-telemetry.csv": (
+            "timestamp_ns,temperature_millicelsius,cpu_frequency_hz,governor,throttled,"
+            "rail_proxy_watts\n100,50000,2400000000,performance,0x0,4.0\n"
+        ),
+        "measurement-window.json": '{"started_ns":100,"finished_ns":200}\n',
+    }.items():
+        (output / name).write_text(content)
+    metadata = {
+        "experiment": experiment,
+        "host_tag": "rpi5",
+        "hardware_model": "Raspberry Pi 5 Model B Rev 1.0",
+        "arch": "aarch64",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
+        "cpu_governors": ["performance"],
+        "throttled": "0x0",
+        "git_sha": "1" * 40,
+        "git_dirty": False,
+        "git_tags": ["rpi5-eval-v1"],
+        "wasmtime_version": "43.0.0",
+        "wafer_runtime_sha256": "2" * 64,
+        "wafer_plugin_hashes": {"transform": "3" * 64},
+        "engine_fuel_budgets": {"transform": 10_000_000, "filter": 500_000, "router": 500_000},
+        "epoch_deadline": 100,
+        "epoch_tick_ms": 10,
+        "effective_metering_mode": "fuel-and-epoch",
+        "exit_codes": {"wafer_runtime": runtime_exit},
+    }
+    (output / "metadata.json").write_text(json.dumps(metadata))
+
+
+def test_forced_runtime_exit_in_containment_run_is_an_admitted_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    generic_runner: list,
+) -> None:
+    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval/scripts").symlink_to(ROOT / "eval/scripts")
+    item = next(item for item in build_schedule({"e-iso-6"}, seed=1729) if item.run_index == 1)
+    real_run = subprocess.run
+
+    def launch(command, **kwargs):
+        if not str(command[0]).endswith("run-experiment.sh"):
+            return real_run(command, **kwargs)
+        generic_runner.append(command)
+        output = Path(command[command.index("--output-dir") + 1])
+        write_stopped_runtime_leaf(output, "e-iso-6", runtime_exit=134)
+        raise subprocess.CalledProcessError(5, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+
+    assert runner.run_item(tmp_path, "test", item)
+    assert runner.run_item(tmp_path, "test", item)
+
+    condition = tmp_path / "eval/results/e-iso-6/rpi5-test/panic"
+    assert receipts(condition) == [
+        {
+            "status": "failed",
+            "experiment": "e-iso-6",
+            "condition": "panic",
+            "run_index": 1,
+            "updated_at": receipts(condition)[0]["updated_at"],
+            "failure_class": "sut_outcome",
+            "reasons": ["runtime-exit"],
+        }
+    ]
+    assert len(generic_runner) == 1
+    output = capsys.readouterr().out
+    assert "OUTCOME e-iso-6/panic/run-01: runtime-exit" in output
+    assert "SKIP e-iso-6/panic/run-01" in output
+
+
+def test_runtime_startup_refusal_stays_an_infrastructure_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, generic_runner: list
+) -> None:
+    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval/scripts").symlink_to(ROOT / "eval/scripts")
+    item = next(item for item in build_schedule({"e-iso-6"}, seed=1729) if item.run_index == 1)
+    real_run = subprocess.run
+
+    def launch(command, **kwargs):
+        if not str(command[0]).endswith("run-experiment.sh"):
+            return real_run(command, **kwargs)
+        generic_runner.append(command)
+        output = Path(command[command.index("--output-dir") + 1])
+        write_stopped_runtime_leaf(output, "e-iso-6", runtime_exit=2)
+        raise subprocess.CalledProcessError(5, command)
+
+    monkeypatch.setattr(runner.subprocess, "run", launch)
+
+    assert runner.run_item(tmp_path, "test", item) is False
+
+    condition = tmp_path / "eval/results/e-iso-6/rpi5-test/panic"
+    assert [receipt["failure_class"] for receipt in receipts(condition)] == [
+        "infrastructure",
+        "infrastructure",
+    ]
+    assert len(generic_runner) == 2
+
+
+class StoppedRuntime:
+    """A runtime process that has already exited with this code."""
+
+    def __init__(self, returncode: int) -> None:
+        self.returncode = returncode
+        self.pid = 4242
+
+    def poll(self) -> int:
+        return self.returncode
+
+    def wait(self, timeout: float | None = None) -> int:
+        return self.returncode
+
+    def terminate(self) -> None:
+        pass
+
+
+def stub_runner_host(monkeypatch: pytest.MonkeyPatch, runtime_exit: int) -> None:
+    """Stand in for the host gates, telemetry and the runtime of a runner-driven item."""
+
+    def fake_run(command, **kwargs):
+        if "--output" in command and "validate-canonical.py" in " ".join(map(str, command)):
+            Path(command[command.index("--output") + 1]).write_text(
+                json.dumps({"git_sha": "1" * 40})
+            )
+        return subprocess.CompletedProcess(command, 0)
+
+    def fake_merge(path, *args):
+        Path(path).write_text(json.dumps({"exit_codes": {"wafer_runtime": int(args[9])}}))
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        runner.subprocess, "Popen", lambda command, **kwargs: StoppedRuntime(runtime_exit)
+    )
+    monkeypatch.setattr(runner, "merge_metadata", fake_merge)
+    monkeypatch.setattr(runner, "set_ekuiper_active", lambda root, active: None)
+    monkeypatch.setattr(runner, "start_pi_telemetry", lambda root, destination, item=None: [])
+    monkeypatch.setattr(runner, "stop_pi_telemetry", lambda telemetry: None)
+    monkeypatch.setattr(runner, "postprocess_run", lambda root, item, output: None)
+    monkeypatch.setattr(runner, "verify_result", lambda root, output: None)
+    monkeypatch.setattr(runner.time, "sleep", lambda seconds: None)
+
+
+def test_rate_sweep_runtime_that_dies_at_startup_is_a_bounded_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=134)
+    monkeypatch.setattr(runner, "_running_sut_processes", lambda: [])
+    item = next(item for item in build_schedule({"e-perf-10"}, seed=1729) if item.system == "wafer")
+    output = tmp_path / "wafer/rate-01000/run-01-attempt-01"
+
+    assert runner.run_rate_sweep_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["runtime-exit"])
+    window = json.loads((output / "measurement-window.json").read_text())
+    assert window["started_ns"] < window["finished_ns"]
+
+
+def test_hot_swap_run_the_runtime_did_not_survive_keeps_its_window(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=134)
+    monkeypatch.setattr(runner, "wait_for_api", lambda url: None)
+    monkeypatch.setattr(runner, "post_hot_swap", lambda node, plugin: {"http_status": 200, "body": {}})
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+
+    assert runner.run_hot_swap_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["runtime-exit"])
+    window = json.loads((output / "measurement-window.json").read_text())
+    assert window["started_ns"] < window["finished_ns"]
+
+
+@pytest.mark.parametrize(
+    ("runtime_exit", "failure_class", "reasons"),
+    [(134, "sut_outcome", ["runtime-exit"]), (2, "infrastructure", ["harness-error"])],
+)
+def test_hot_swap_runtime_that_dies_before_its_control_plane_answers(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runtime_exit: int,
+    failure_class: str,
+    reasons: list[str],
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=runtime_exit)
+
+    def unanswered(url: str, timeout_secs: float = 10.0) -> None:
+        raise RuntimeError(f"{url} did not answer")
+
+    monkeypatch.setattr(runner, "wait_for_api", unanswered)
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+
+    admitted = runner.run_hot_swap_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (admitted, receipt["failure_class"], receipt["reasons"]) == (
+        failure_class == "sut_outcome",
+        failure_class,
+        reasons,
+    )
+
+
+@pytest.mark.parametrize(
+    ("runtime_exit", "failure_class", "reasons"),
+    [(134, "sut_outcome", ["runtime-exit"]), (2, "infrastructure", ["harness-error"])],
+)
+def test_disruption_runtime_that_dies_at_startup_is_judged_by_its_exit(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    runtime_exit: int,
+    failure_class: str,
+    reasons: list[str],
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=runtime_exit)
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-restart"
+    )
+    output = tmp_path / "wafer-restart/run-01-attempt-01"
+
+    admitted = runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (admitted, receipt["failure_class"], receipt["reasons"]) == (
+        failure_class == "sut_outcome",
+        failure_class,
+        reasons,
+    )
+
+
+def test_disruption_hot_swap_request_that_fails_is_a_failed_swap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    stub_runner_host(monkeypatch, runtime_exit=0)
+    clock = iter(range(1_000_000_000_000, 2_000_000_000_000, 1_000))
+    monkeypatch.setattr(runner.time, "time_ns", lambda: next(clock))
+    item = next(
+        item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == "wafer-hotswap"
+    )
+    output = tmp_path / "wafer-hotswap/run-01-attempt-01"
+
+    class Process:
+        returncode: int | None = None
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            self.returncode = 0
+            return 0
+
+        def terminate(self) -> None:
+            self.returncode = 0
+
+    def launch(command: list[str], **kwargs: object) -> Process:
+        if command == ["publish"]:
+            now = next(clock)
+            (output / "publisher-timing.json").write_text(
+                json.dumps(
+                    {
+                        "measurement_started_unix_epoch_ns": now,
+                        "event_unix_epoch_ns": now,
+                        "event_offset_ns": runner.SWAP3_EVENT_OFFSET_NS,
+                    }
+                )
+            )
+        return Process()
+
+    monkeypatch.setattr(runner.subprocess, "Popen", launch)
+    monkeypatch.setattr(runner, "loadgen_command", lambda root, candidate, action, **kwargs: [action])
+    monkeypatch.setattr(
+        runner, "post_hot_swap", lambda node, plugin: {"http_status": 500, "body": "rejected"}
+    )
+    monkeypatch.setattr(runner, "wait_for_subscriber", lambda process, timeout=30: 0)
+
+    assert runner.run_restart_item(ROOT, item, runner.AttemptSelection(output, False))
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("sut_outcome", ["swap-failed"])
+    assert json.loads((output / "swap_requests.json").read_text())[0]["http_status"] == 500
+
+
+def test_summaries_continue_past_one_a_system_outcome_left_incomplete(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    written: list[str] = []
+
+    def incomplete(root: Path, batch_id: str) -> None:
+        raise ValueError("wafer rate 16000 lacks a run")
+
+    monkeypatch.setattr(runner, "summarize_rate_sweep", incomplete)
+    monkeypatch.setattr(
+        runner, "summarize_branch_isolation", lambda root, batch_id: written.append("e-iso-7")
+    )
+    monkeypatch.setattr(runner, "summarize_swap4", lambda root, batch_id: written.append("e-swap-4"))
+
+    runner.summarise(tmp_path, "test", {"e-perf-10", "e-iso-7", "e-swap-4"})
+
+    assert written == ["e-iso-7", "e-swap-4"]
+    assert "SUMMARY e-perf-10 incomplete: wafer rate 16000 lacks a run" in capsys.readouterr().out
+
+
+def test_one_dropped_message_in_a_burst_swap_is_an_admitted_outcome(tmp_path: Path) -> None:
+    timing, source, requests, sink, throughput, sequence = swap4_fixture()
+    for bucket in throughput["drain_buckets"][:1]:
+        bucket.update(received_unique=0, received_events=0, rate_msg_s=0)
+    throughput.update(
+        drain_received_unique=0,
+        drain_received_events=0,
+        drain_first_offset_ns=None,
+        drain_last_offset_ns=None,
+        max_arrival_offset_ns=throughput["primary_last_offset_ns"],
+        received_unique=129_999,
+        received_events=129_999,
+        phase_received_messages=[55_000, 20_000, 54_999],
+    )
+    sequence.update(total_received="129999", gap_msgs="1")
+    timeline = build_swap4_timeline(timing, source, requests, sink, throughput, sequence)
+    validate_swap4_artifacts(timeline, throughput, requests, sink)
+    assert timeline["loss"] == 1
+
+    item = next(iter(build_schedule({"e-swap-4"}, seed=1729)))
+    output = tmp_path / "burst-2x/run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "burst-timeline.json").write_text(json.dumps(timeline))
+    (output / "sequence.csv").write_text(
+        "total_expected,total_received,gap_ranges,gap_msgs,duplicates_count\n"
+        "130000,129999,129999-129999,1,0\n"
+    )
+
+    assert runner.finish_attempt(output, item)
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt["failure_class"] == "sut_outcome"
+    assert receipt["reasons"] == ["message-loss"]
+    assert select_attempt(output.parent, 1).skip is True
+
+
+@pytest.mark.parametrize(
+    ("strategy", "reasons"), [("wafer-hotswap", ["message-loss"]), ("wafer-restart", None)]
+)
+def test_disruption_loss_is_an_outcome_only_where_zero_loss_is_required(
+    tmp_path: Path, strategy: str, reasons: list[str] | None
+) -> None:
+    item = next(item for item in build_schedule({"e-swap-3"}, seed=1729) if item.condition == strategy)
+    output = tmp_path / strategy / "run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "disruption-analysis.json").write_text(
+        json.dumps({"strategy": strategy, "loss": 1, "duplicates": 0})
+    )
+
+    assert runner.finish_attempt(output, item)
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert receipt.get("reasons") == reasons
+
+
+def test_hot_swap_request_to_a_dead_runtime_is_a_failed_swap(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    def refused(request, timeout):
+        raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    monkeypatch.setattr(runner.urllib.request, "urlopen", refused)
+
+    response = runner.post_hot_swap("transform", tmp_path / "v2.wasm")
+
+    assert response["http_status"] is None
+    assert "Connection refused" in response["body"]
+    item = next(iter(build_schedule({"e-swap-1"}, seed=1729)))
+    output = tmp_path / "steady/run-01-attempt-01"
+    output.mkdir(parents=True)
+    (output / "swap_requests.json").write_text(json.dumps([{"event_index": 0, **response}]))
+    assert runner.incomplete_run(output, item)
+
+
+def test_validation_gate_rejects_a_repetition_that_needed_a_retry() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        failed = root / "run-01-attempt-01"
+        failed.mkdir()
+        (failed / "canonical-status.json").write_text(
+            json.dumps({"status": "failed", "failure_class": "infrastructure"})
+        )
+        retried = root / "run-01-attempt-02"
+        retried.mkdir()
+        (retried / "percentiles.json").write_text(
+            json.dumps({"total_count": 600, "p99_ns": 51_000_000})
+        )
+        (retried / "canonical-status.json").write_text(json.dumps({"status": "passed"}))
+
+        result = evaluate_validation_gate(root, expected_runs=1)
+
+    assert result.passed is False
+    assert result.failed_runs == [1]
 
 
 def test_validation_gate_rejects_one_bad_repetition() -> None:
@@ -4675,6 +5617,19 @@ def _set_json(path: Path, **changes: object) -> None:
 
 def _leaf(volume: Path, experiment: str) -> Path:
     return next((volume / "raw" / experiment / "rpi5-final").rglob("run-01-attempt-01"))
+
+
+def _exceed_retry_cap(volume: Path) -> None:
+    leaf = _leaf(volume, "e-perf-3")
+    leaf.rename(leaf.with_name("run-01-attempt-03"))
+    for number in (1, 2):
+        failed = leaf.with_name(f"run-01-attempt-{number:02d}")
+        failed.mkdir()
+        (failed / "canonical-status.json").write_text(
+            json.dumps(
+                {"status": "failed", "failure_class": "infrastructure", "reasons": ["harness-error"]}
+            )
+        )
 
 
 def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Path, Path]) -> None:
@@ -4879,6 +5834,10 @@ def test_approve_discloses_other_final_batches_of_the_host(
             ),
             "already approves rpi5 batch earlier",
         ),
+        (
+            lambda root, volume, ledger: _exceed_retry_cap(volume),
+            "used more attempts than its retry cap allows",
+        ),
     ],
     ids=[
         "incomplete",
@@ -4886,6 +5845,7 @@ def test_approve_discloses_other_final_batches_of_the_host(
         "leaf-sha",
         "e-val-1-gate",
         "other-approved",
+        "over-retry-cap",
     ],
 )
 def test_approve_refuses_a_batch_that_is_not_final_evidence(

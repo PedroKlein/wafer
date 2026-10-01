@@ -11,6 +11,7 @@ The final Raspberry Pi 5 method is implemented through canonical analysis. The f
 | E-Perf-10 bounded capacity capture | implemented |
 | E-Swap-3 actual-t0 event buckets | implemented |
 | E-Swap-4 source-driven burst | implemented |
+| E-Density-1 measured container floor | tooling implemented; floor files pending |
 | Canonical analysis and approval gate | implemented |
 | WAFER/thesis documentation sync | WAFER reconciled; thesis pending |
 | Verified clean release commit | pending |
@@ -31,7 +32,7 @@ The matrix contains 2,201 schedule records and 1,971 executed or static leaves. 
 - E-Swap-4 measures one true 1,000/2,000/1,000 msg/s burst and one stateless swap in each of 30 runs, with separate source-origin primary and bounded drain sink series.
 - E-Swap-5 requires request, rollback, sequence, and post-rollback continuity evidence and forbids a fabricated successful-v2 sink timeline.
 - E-Backpressure contains distinct `slow`, `drop`, and `dead-letter` conditions with policy-specific accounting; no universal lossless criterion is applied.
-- E-Perf-10 reports tested-grid bounds without interpolation; straddling or support-censored comparisons remain `CENSORED/PENDING`.
+- E-Perf-10 brackets each delivery ceiling between tested rates without interpolation; a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - PMIC telemetry is an internal-rail proxy, not total board power.
 
 See [canonical readiness](canonical-readiness.md), [RFC-008](../rfcs/RFC-008-evaluation-harness.md), and [the Pi 5 runbook](../eval/pi5-experiment-runbook.md).

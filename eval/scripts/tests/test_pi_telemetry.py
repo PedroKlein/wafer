@@ -86,6 +86,48 @@ def test_sampler_flushes_on_termination_and_marks_failures_separately() -> None:
         assert not (output / "telemetry-error.json").exists()
 
 
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="needs Linux CPU affinity")
+def test_sampler_pins_itself_and_its_backend_commands_to_the_support_cpus(tmp_path: Path) -> None:
+    cpu = max(os.sched_getaffinity(0))
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    child_affinity = tmp_path / "vcgencmd-affinity"
+    fake = binary / "vcgencmd"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/$$/status >> {child_affinity}\n"
+        "case \"$1\" in\n"
+        "  pmic_read_adc) printf '3V3_SYS_A current(1)=0.10000000A\\n3V3_SYS_V volt(9)=3.30000000V\\n' ;;\n"
+        "  get_throttled) echo throttled=0x0 ;;\n"
+        "esac\n"
+    )
+    fake.chmod(0o755)
+    output = tmp_path / "output"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(ROOT / "eval/scripts/lib/pi_telemetry.py"),
+            str(output),
+            "0.05",
+            "--pin-cpus",
+            str(cpu),
+        ],
+        env={**os.environ, "PATH": f"{binary}:{os.environ['PATH']}"},
+    )
+    telemetry = output / "pi-telemetry.csv"
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and process.poll() is None:
+        if telemetry.is_file() and len(telemetry.read_text().splitlines()) >= 2:
+            break
+        time.sleep(0.02)
+    assert process.poll() is None, "telemetry sampler exited before becoming ready"
+    status = Path(f"/proc/{process.pid}/status").read_text()
+    process.terminate()
+    assert process.wait(timeout=5) == 0
+    assert f"Cpus_allowed_list:\t{cpu}\n" in status
+    assert set(child_affinity.read_text().split()) == {str(cpu)}
+
+
 def test_power_summary_integrates_proxy_energy_and_idle_adjustment() -> None:
     samples = [
         {

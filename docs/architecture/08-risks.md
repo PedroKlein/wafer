@@ -8,7 +8,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Impact:** High. A delivery-bad MQTT loopback point prevents attribution of loss or achieved-rate collapse to WAFER, Native, or eKuiper.
 
-**Mitigation:** E-Perf-10 runs MQTT loopback at every common rate and reports delivery ceiling and normalized p99 knee separately. All systems use the same five rates and support-process allocation.
+**Mitigation:** E-Perf-10 runs MQTT loopback at every common rate and reports delivery-ceiling brackets and normalized p99 knee separately. All systems use the same five rates and support-process allocation.
 
 **Residual:** Native, WAFER, and eKuiper may remain right-censored above the highest support-uncensored rate. The thesis must not report an exact SUT ceiling in that region.
 
@@ -98,7 +98,7 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Impact:** Schedule delay and partial attempts.
 
-**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, and never overwrites passed attempts. Retrieval is additive and verified path-for-path with SHA-256 manifests.
+**Mitigation:** The runner is sequential and resumable, writes incremental progress and thermal logs, never overwrites an attempt, and retries an infrastructure failure once in place. A failure of the system under test is admitted as data, not retried. Retrieval is additive and verified path-for-path with SHA-256 manifests.
 
 **Residual:** Repeated systemic failure blocks admission. Thresholds and system settings are not tuned from failed or diagnostic-batch outcomes.
 
@@ -108,9 +108,9 @@ These risks can invalidate an evaluation claim or block a final batch. The canon
 
 **Impact:** High for the competitive-capacity claim.
 
-**Mitigation:** E-Perf-10 reports lower/upper bounds only at tested rates, uses no interpolation, and applies the frozen 0.70 decision branches including zero-denominator and invalid-population handling.
+**Mitigation:** E-Perf-10 brackets each delivery ceiling between tested rates without interpolation. The upper bound stays open at the top of the grid and above support-confounded cells, and the 0.70 decision passes or fails only when the whole WAFER/eKuiper ratio interval lies on one side of the threshold.
 
-**Residual:** A straddling or support-censored ratio remains `CENSORED/PENDING`; evidence beyond the tested grid requires a new experiment.
+**Residual:** A ratio interval that straddles 0.70 is `CENSORED`; resolving it needs tested rates between the bracketing ones, and evidence beyond the tested grid requires a new experiment.
 
 ## R12: local replacement telemetry is mistaken for delivery evidence
 

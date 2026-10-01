@@ -19,7 +19,8 @@ from .canonical import (
 )
 from .focused import (
     evidence_label,
-    passed_artifacts,
+    admitted_artifacts,
+    admitted_runs,
     pending_record,
     percentile_rows,
 )
@@ -51,7 +52,8 @@ __all__ = [
     "evidence_label",
     "find_canonical_batch",
     "metering_table",
-    "passed_artifacts",
+    "admitted_artifacts",
+    "admitted_runs",
     "pending_record",
     "percentile_rows",
     "require_cross_architecture",

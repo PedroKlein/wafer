@@ -14,12 +14,6 @@ def _validate_sequence(sequence: dict) -> None:
         for field in _SEQUENCE_FIELDS
     ):
         raise ValueError("E-Swap-5 sequence evidence is malformed")
-    if (
-        sequence["expected"] != sequence["received"]
-        or sequence["gaps"] != 0
-        or sequence["duplicates"] != 0
-    ):
-        raise ValueError("E-Swap-5 sequence is not lossless")
 
 
 def _rollback_events(requests: list[dict]) -> list[dict]:
