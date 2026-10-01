@@ -151,9 +151,9 @@ goes through every check. The verifier prints an `OUTCOME` line for each system
 outcome and still exits 0 when nothing else is wrong. Two paths still end as
 infrastructure failures although the system under test may have caused them: a
 runtime that exits before its control plane answers in a run the runner drives
-itself (E-Swap-1, E-Swap-3, E-Swap-4, E-Swap-5 and the candidate swap and rollback
-sessions), and a
-hot-swap request or restart that fails during the E-Swap-3 action.
+itself (E-Swap-1, E-Swap-3, E-Swap-4, E-Swap-5 and the candidate swap and
+rollback sessions), and a hot-swap request or restart that fails during the
+E-Swap-3 action.
 
 `final_campaign.attempt_policy` in `canonical-matrix.json` sets the retry cap: one
 infrastructure retry per unit, and none for the experiments in `gate_experiments`

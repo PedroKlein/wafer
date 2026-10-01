@@ -3115,6 +3115,16 @@ def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
     attempt = results / first.experiment / "rpi5-test" / first.condition / "run-01-attempt-01"
     attempt.mkdir(parents=True)
     (attempt / "canonical-status.json").write_text('{"status":"passed"}')
+    spent = schedule[2]
+    for number in (1, 2):
+        failed = (
+            results / spent.experiment / "rpi5-test" / spent.condition
+            / f"run-{spent.run_index:02d}-attempt-{number:02d}"
+        )
+        failed.mkdir(parents=True)
+        (failed / "canonical-status.json").write_text(
+            '{"status":"failed","failure_class":"infrastructure","reasons":["harness-error"]}'
+        )
     environment = {key: value for key, value in os.environ.items() if key != "WAFER_RESULTS_ROOT"}
 
     def runner_in_tmp(*args: str) -> subprocess.CompletedProcess[str]:
@@ -3140,7 +3150,8 @@ def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(
 
     assert status.returncode == 0, status.stderr
     assert "e-perf-1 1/3" in status.stdout
-    assert "done 1/3, pending 2" in status.stdout
+    assert "done 1/3, pending 1, missing 1" in status.stdout
+    assert f"missing {spent.result_key}" in status.stdout
     assert f"next {schedule[1].result_key}" in status.stdout
     assert '"event":"item-finished"' in status.stdout
     assert resumed.returncode == 2
@@ -3785,6 +3796,51 @@ def test_rate_sweep_summary_uses_only_passed_attempts() -> None:
     assert wafer["first_bad_rate_msg_s"] == 2000
     assert "4000" not in wafer["observed_samples"]
     assert summary["thesis_evidence"] is False
+
+
+def test_rate_sweep_summary_counts_a_system_outcome_against_its_rate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    volume = tmp_path / "results"
+    volume.mkdir()
+    layout = runner.ResultsLayout.resolve(tmp_path, volume, mount_check=lambda _: True)
+    layout.prepare()
+    monkeypatch.setattr(runner, "results_layout", lambda _: layout)
+    layout.manifest_path("canonical-batches", "rpi5-test").mkdir(parents=True)
+    crashed = ("wafer", runner.RATE_SWEEP_RATES[-1], 30)
+    for system in runner.RATE_SWEEP_SYSTEMS:
+        for rate in runner.RATE_SWEEP_RATES:
+            for run_index in range(1, 31):
+                leaf = layout.raw_path(
+                    "e-perf-10", "rpi5-test", f"{system}/rate-{rate:05d}/run-{run_index:02d}"
+                )
+                leaf.mkdir(parents=True)
+                if (system, rate, run_index) == crashed:
+                    receipt = {
+                        "status": "failed",
+                        "failure_class": "sut_outcome",
+                        "reasons": ["runtime-exit"],
+                    }
+                else:
+                    (leaf / "capacity-run.json").write_text(
+                        json.dumps(capacity_run_fixture(system, rate, run_index=run_index))
+                    )
+                    receipt = {"status": "passed"}
+                (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+
+    summary = json.loads(summarize_rate_sweep(tmp_path, "test").read_text())
+
+    wafer = summary["systems"]["wafer"]
+    top = wafer["rates"][-1]
+    assert (top["run_count"], top["sut_outcome_runs"], top["classification"]) == (29, 1, "bad")
+    assert wafer["complete"] is True
+    assert wafer["delivery_ceiling"] == {
+        "rate_msg_s": runner.RATE_SWEEP_RATES[-2],
+        "censoring": "none",
+    }
+    assert summary["systems"]["mqtt-loopback"]["delivery_ceiling"]["censoring"] == (
+        f"right-censored-above-{runner.RATE_SWEEP_RATES[-1]}"
+    )
 
 
 def test_comparator_schedule_is_native_and_cross_arch_is_explicitly_partial() -> None:
