@@ -4345,6 +4345,7 @@ def test_ekuiper_rule_and_service_dry_runs_reconstruct_matched_config() -> None:
         capture_output=True,
         text=True,
     ).stdout
+    assert f"version: {comparator['version']}\n" in install
     assert "CPUAffinity=1 2 3" in install
     assert "MQTT_SOURCE__DEFAULT__SERVER=tcp://127.0.0.1:1883" in install
     assert "mqtt_source_config: /etc/kuiper/mqtt_source.yaml" in install

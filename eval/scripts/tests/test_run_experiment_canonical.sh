@@ -22,7 +22,7 @@ cat >"$tmp/facts.json" <<'JSON'
   "throttled": "0x0",
   "broker_ready": true,
   "ekuiper_ready": true,
-  "ekuiper_version": "2.1.0"
+  "ekuiper_version": "2.1.5"
 }
 JSON
 
@@ -108,7 +108,7 @@ cat >"$tmp/dirty.json" <<'JSON'
   "throttled": "0x0",
   "broker_ready": true,
   "ekuiper_ready": true,
-  "ekuiper_version": "2.1.0"
+  "ekuiper_version": "2.1.5"
 }
 JSON
 if "$ROOT/eval/scripts/run-experiment.sh" \

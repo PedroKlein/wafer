@@ -377,7 +377,7 @@ def valid_facts() -> dict:
         "throttled": "0x0",
         "broker_ready": True,
         "ekuiper_ready": True,
-        "ekuiper_version": "2.1.0",
+        "ekuiper_version": "2.1.5",
     }
 
 
@@ -408,7 +408,7 @@ def test_preflight_rejects_each_provenance_and_host_violation() -> None:
         "throttling": ("throttled", "0x50000"),
         "broker": ("broker_ready", False),
         "eKuiper": ("ekuiper_ready", False),
-        "eKuiper version": ("ekuiper_version", "2.2.0"),
+        "eKuiper version": ("ekuiper_version", "2.1.0"),
     }
     for expected, (key, value) in invalid.items():
         facts = valid_facts()
