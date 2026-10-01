@@ -35,7 +35,7 @@ from wafer_analysis.canonical import (
     validation_gate_table,
     validate_visual_manifest,
 )
-from wafer_analysis.stats import bootstrap_ci, cliffs_delta
+from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 
 
 def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
@@ -239,6 +239,8 @@ def capacity_summary(grid: tuple[int, ...] = FROZEN_CAPACITY_GRID) -> dict:
                             "median": rate if rate < top else rate * 0.97,
                             "values": [rate * (0.98 + index / 1_500) for index in range(30)],
                         },
+                        "achieved_ratio": {"median": ratio, "values": [ratio] * 30},
+                        "loss": {"median": loss, "values": [loss] * 30},
                         "p99_ns": {
                             "median": 100_000 + rate,
                             "values": [90_000 + rate + 1_000 * index for index in range(30)],
@@ -276,6 +278,8 @@ def set_capacity_cells(summary: dict, system: str, cells: list[str]) -> None:
         loss, ratio = DELIVERY_COUNTERS[cell]
         rate["pooled_loss"] = loss
         rate["mean_achieved_ratio"] = ratio
+        rate["run_summary"]["loss"]["values"] = [loss] * 30
+        rate["run_summary"]["achieved_ratio"]["values"] = [ratio] * 30
         rate["classification"] = cell
     if system == "mqtt-loopback":
         grid = summary["rate_points_msg_s"]
@@ -449,6 +453,8 @@ def test_capacity_decision_recomputes_delivery_from_the_counters() -> None:
     set_capacity_cells(summary, "ekuiper", ["good", "bad", "bad", "bad", "bad"])
     for rate in summary["systems"]["wafer"]["rates"][1:]:
         rate.update(pooled_loss=0.75, mean_achieved_ratio=0.10, total_duplicates=999)
+        rate["run_summary"]["loss"]["values"] = [0.75] * 30
+        rate["run_summary"]["achieved_ratio"]["values"] = [0.10] * 30
     decision = capacity_competitive_decision(summary)
     assert ceiling(decision, "wafer") == (1_000, 4_000)
     assert decision["status"] == "CENSORED"
@@ -509,6 +515,18 @@ def test_capacity_tables_reject_support_censoring_that_disagrees_with_the_loopba
     summary = capacity_summary()
     summary["systems"]["native"]["support_censoring"]["from_rate_msg_s"] = None
     with pytest.raises(ValueError, match="support-path censoring disagrees"):
+        capacity_tables(summary)
+
+
+def test_capacity_tables_reject_pooled_counters_that_disagree_with_their_runs() -> None:
+    summary = capacity_summary()
+    summary["systems"]["wafer"]["rates"][0]["run_summary"]["loss"]["values"] = [0.5] * 30
+    with pytest.raises(ValueError, match="pooled counters disagree"):
+        capacity_tables(summary)
+
+    summary = capacity_summary()
+    summary["systems"]["ekuiper"]["rates"][1]["mean_achieved_ratio"] = 0.995
+    with pytest.raises(ValueError, match="ekuiper rate 4000 pooled counters disagree"):
         capacity_tables(summary)
 
 
@@ -1163,17 +1181,49 @@ def test_capacity_tables_reject_schema_drift_from_the_producer() -> None:
     with pytest.raises(ValueError, match="differ from tested grid"):
         capacity_tables(summary)
 
+    summary = capacity_summary((4_000, 8_000, 15_000, 16_000))
+    with pytest.raises(ValueError, match="1,000 msg/s baseline"):
+        capacity_tables(summary)
+
 
 def test_capacity_intervals_bootstrap_the_run_values() -> None:
     summary = capacity_summary()
     rates, _ = capacity_tables(summary)
-    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 1_000)].iloc[0]
-    values = summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"]
-    assert (row["p99_ci95_low_ns"], row["p99_ci95_high_ns"]) == bootstrap_ci(
-        np.asarray(values, dtype=float)
+    wafer = rates[rates["system"] == "wafer"].set_index("offered_rate_msg_s")
+    baseline = np.asarray(
+        summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"], dtype=float
     )
+    row = wafer.loc[1_000]
+    assert (row["p99_ci95_low_ns"], row["p99_ci95_high_ns"]) == bootstrap_ci(baseline)
+    assert [row[f"{stat}_p99_ns"] for stat in ("min", "q1", "median", "q3", "max")] == [
+        baseline.min(),
+        np.quantile(baseline, 0.25),
+        np.median(baseline),
+        np.quantile(baseline, 0.75),
+        baseline.max(),
+    ]
+    assert row["total_duplicates"] == 0
+    assert {
+        "min_loss",
+        "max_loss",
+        "loss_ci95_low",
+        "pooled_loss_ci95_high",
+        "q1_achieved_ratio",
+        "achieved_ratio_ci95_high",
+        "q3_achieved_rate_msg_s",
+    } <= set(rates.columns)
 
-    summary["systems"]["wafer"]["rates"][0]["normalized_p99"]["values"].pop()
+    loaded = np.asarray(
+        summary["systems"]["wafer"]["rates"][2]["run_summary"]["p99_ns"]["values"], dtype=float
+    )
+    _, low, high = median_shift_ci(loaded, baseline, relative=True)
+    assert wafer.loc[8_000, "median_normalized_p99"] == np.median(loaded) / np.median(baseline)
+    assert (
+        wafer.loc[8_000, "normalized_p99_ci95_low"],
+        wafer.loc[8_000, "normalized_p99_ci95_high"],
+    ) == (1 + low, 1 + high)
+
+    summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"].pop()
     with pytest.raises(ValueError, match="30 run values"):
         capacity_tables(summary)
 

@@ -1355,6 +1355,8 @@ def candidate_capacity_table(summary: dict) -> pd.DataFrame:
 
 
 CAPACITY_COMPETITIVE_THRESHOLD = 0.70
+CAPACITY_BASELINE_RATE = 1_000
+CAPACITY_RUN_METRICS = ("achieved_rate_msg_s", "achieved_ratio", "loss", "p99_ns")
 
 
 def _capacity_grid(summary: dict) -> list[int]:
@@ -1495,6 +1497,48 @@ def capacity_competitive_decision(summary: dict) -> dict:
     }
 
 
+def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
+    run_summary = rate.get("run_summary")
+    if not isinstance(run_summary, dict):
+        raise TypeError(f"{system} rate summary is malformed")
+    try:
+        values = {
+            metric: np.asarray(
+                [float(value) for value in run_summary[metric]["values"]], dtype=float
+            )
+            for metric in CAPACITY_RUN_METRICS
+        }
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"{system} rate summary is malformed") from error
+    if any(len(samples) != 30 for samples in values.values()):
+        raise ValueError(f"{system} rate summary needs 30 run values per metric")
+    # Every admitted run at one rate offers the same intended count, so the
+    # pooled loss equals the mean run loss.
+    if not math.isclose(
+        float(rate["pooled_loss"]), float(np.mean(values["loss"])), abs_tol=1e-12
+    ) or not math.isclose(
+        float(rate["mean_achieved_ratio"]),
+        float(np.mean(values["achieved_ratio"])),
+        abs_tol=1e-12,
+    ):
+        raise ValueError(
+            f"{system} rate {rate['rate_msg_s']} pooled counters disagree with its run values"
+        )
+    return values
+
+
+def _run_spread(metric: str, values: np.ndarray) -> dict:
+    # The median comes last so that save_table folds the CI columns that follow it
+    # into the median instead of the maximum.
+    return {
+        f"min_{metric}": float(np.min(values)),
+        f"q1_{metric}": float(np.quantile(values, 0.25)),
+        f"q3_{metric}": float(np.quantile(values, 0.75)),
+        f"max_{metric}": float(np.max(values)),
+        f"median_{metric}": float(np.median(values)),
+    }
+
+
 def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     if (
         summary.get("schema_version") != 1
@@ -1505,6 +1549,8 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     ):
         raise ValueError("malformed final capacity summary")
     grid = _capacity_grid(summary)
+    if CAPACITY_BASELINE_RATE not in grid:
+        raise ValueError("final capacity grid lacks the 1,000 msg/s baseline rate")
     systems = summary.get("systems")
     if not isinstance(systems, dict) or set(systems) != {
         "mqtt-loopback",
@@ -1522,6 +1568,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         ),
         None,
     )
+    run_values = {}
     for system, result in systems.items():
         for rate, classification in zip(result["rates"], classes[system], strict=True):
             if rate.get("classification") != classification:
@@ -1529,6 +1576,7 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     f"{system} rate {rate['rate_msg_s']} classification disagrees "
                     "with its delivery counters or MQTT censoring"
                 )
+        run_values[system] = [_capacity_run_values(system, rate) for rate in result["rates"]]
         support = result.get("support_censoring")
         if not isinstance(support, dict) or support.get("from_rate_msg_s") != support_from:
             raise ValueError(
@@ -1538,45 +1586,53 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
     rate_rows = []
     boundary_rows = []
     for system, result in systems.items():
-        for rate, classification in zip(result["rates"], classes[system], strict=True):
-            run_summary = rate.get("run_summary")
-            normalized = rate.get("normalized_p99")
-            if not isinstance(run_summary, dict) or not isinstance(normalized, dict):
-                raise TypeError(f"{system} rate summary is malformed")
-            try:
-                achieved = run_summary["achieved_rate_msg_s"]
-                p99 = run_summary["p99_ns"]
-                samples = [
-                    [float(value) for value in item["values"]]
-                    for item in (achieved, p99, normalized)
-                ]
-            except (KeyError, TypeError, ValueError) as error:
-                raise ValueError(f"{system} rate summary is malformed") from error
-            if any(len(values) != 30 for values in samples):
-                raise ValueError(f"{system} rate summary needs 30 run values per metric")
-            achieved_ci, p99_ci, normalized_ci = (_ci(values) for values in samples)
+        rates = result["rates"]
+        values = run_values[system]
+        baseline_p99 = values[grid.index(CAPACITY_BASELINE_RATE)]["p99_ns"]
+        for rate, classification, runs in zip(rates, classes[system], values, strict=True):
+            achieved_ci, ratio_ci, loss_ci, p99_ci = (
+                bootstrap_ci(runs[metric]) for metric in CAPACITY_RUN_METRICS
+            )
+            pooled_loss_ci = pooled_ratio_ci(runs["loss"], np.ones(len(runs["loss"])))
+            _, normalized_low, normalized_high = median_shift_ci(
+                runs["p99_ns"], baseline_p99, relative=True
+            )
             rate_rows.append(
                 {
                     "system": system,
                     "offered_rate_msg_s": int(rate["rate_msg_s"]),
                     "N_runs": 30,
-                    "median_achieved_rate_msg_s": float(achieved["median"]),
+                    **_run_spread("achieved_rate_msg_s", runs["achieved_rate_msg_s"]),
                     "achieved_ci95_low_msg_s": float(achieved_ci[0]),
                     "achieved_ci95_high_msg_s": float(achieved_ci[1]),
+                    **_run_spread("achieved_ratio", runs["achieved_ratio"]),
+                    "achieved_ratio_ci95_low": float(ratio_ci[0]),
+                    "achieved_ratio_ci95_high": float(ratio_ci[1]),
+                    **_run_spread("loss", runs["loss"]),
+                    "loss_ci95_low": float(loss_ci[0]),
+                    "loss_ci95_high": float(loss_ci[1]),
                     "pooled_loss": float(rate["pooled_loss"]),
+                    "pooled_loss_ci95_low": float(pooled_loss_ci[0]),
+                    "pooled_loss_ci95_high": float(pooled_loss_ci[1]),
                     "mean_achieved_ratio": float(rate["mean_achieved_ratio"]),
                     "total_duplicates": int(rate["total_duplicates"]),
-                    "median_p99_ns": float(p99["median"]),
+                    **_run_spread("p99_ns", runs["p99_ns"]),
                     "p99_ci95_low_ns": float(p99_ci[0]),
                     "p99_ci95_high_ns": float(p99_ci[1]),
-                    "median_normalized_p99": float(normalized["median"]),
-                    "normalized_p99_ci95_low": float(normalized_ci[0]),
-                    "normalized_p99_ci95_high": float(normalized_ci[1]),
+                    "median_normalized_p99": float(
+                        np.median(runs["p99_ns"]) / np.median(baseline_p99)
+                    ),
+                    "normalized_p99_ci95_low": 1 + normalized_low,
+                    "normalized_p99_ci95_high": 1 + normalized_high,
                     "classification": classification,
                     "delivery_good": classification == "good",
                     "support_confounded": classification == "support-confounded",
                     "units": "messages/second, fraction, nanoseconds, messages",
-                    "estimator": "pooled loss; mean achieved ratio; median run p99",
+                    "estimator": (
+                        "run-level min/quartiles/max with bootstrap 95% CI of the median; "
+                        "pooled loss with a run-resampling bootstrap 95% CI; mean achieved "
+                        "ratio; normalized p99 CI resamples this rate and the 1,000 msg/s runs"
+                    ),
                     "thesis_evidence": True,
                 }
             )
