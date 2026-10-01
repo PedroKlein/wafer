@@ -82,6 +82,8 @@ if grep -q 'pub_args.*total-messages\|pub_args+=(--total-messages' "$ROOT/eval/s
 fi
 grep -Fq -- "--hotswap-result-path \"\$OUT_DIR/swap_timeline.json\"" \
   "$ROOT/eval/scripts/run-experiment.sh"
+[ "$(grep -Fc -- '--pin-cpus "${WAFER_LOADGEN_CPUSET:-}"' "$ROOT/eval/scripts/run-experiment.sh")" -eq 2 ] \
+  || { echo 'both host samplers must pin themselves to the load-generator CPUs' >&2; exit 1; }
 [ ! -e "$tmp/planned-output" ] || { echo 'explicit dry-run output was created' >&2; exit 1; }
 
 if "$ROOT/eval/scripts/run-experiment.sh" \
@@ -134,6 +136,7 @@ cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experi
 cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
 cp "$ROOT/eval/scripts/lib/host_facts.py" "$harness_root/eval/scripts/lib/host_facts.py"
 cp "$ROOT/eval/scripts/lib/pi_telemetry.py" "$harness_root/eval/scripts/lib/pi_telemetry.py"
+cp "$ROOT/eval/scripts/lib/proc_telemetry.py" "$harness_root/eval/scripts/lib/proc_telemetry.py"
 cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]

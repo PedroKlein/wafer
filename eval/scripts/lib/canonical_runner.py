@@ -3882,7 +3882,13 @@ def start_pi_telemetry(root: Path, output: Path, item: RunItem) -> list[subproce
     """Start the Pi power sidecar and the host /proc sidecar for one leaf."""
     return [
         subprocess.Popen(
-            [sys.executable, str(root / "eval/scripts/lib/pi_telemetry.py"), str(output)],
+            [
+                sys.executable,
+                str(root / "eval/scripts/lib/pi_telemetry.py"),
+                str(output),
+                "--pin-cpus",
+                item.support_cpus,
+            ],
             cwd=root,
         ),
         subprocess.Popen(
