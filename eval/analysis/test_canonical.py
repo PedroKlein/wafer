@@ -1229,7 +1229,7 @@ def test_scout_diagnostic_arm_never_enters_the_capacity_decision() -> None:
     summary["systems"]["wafer-max-inflight-1"] = json.loads(
         json.dumps(summary["systems"]["wafer"])
     )
-    set_capacity_classifications(summary, "wafer-max-inflight-1", ["bad"] * 5)
+    set_capacity_cells(summary, "wafer-max-inflight-1", ["bad"] * 5)
     assert capacity_competitive_decision(summary) == expected
     with pytest.raises(ValueError, match="requires all four systems"):
         capacity_tables(summary)
