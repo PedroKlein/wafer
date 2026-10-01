@@ -690,28 +690,24 @@ def validation_gate_table(records: list[dict], *, canonical: bool = True) -> pd.
     )
 
 
-def density_table(rows: list[dict], *, canonical: bool = True) -> pd.DataFrame:
-    """E-Density-1: release Wasm component size beside a documented container-image floor."""
+def density_table(rows: list[dict], floor: dict, *, canonical: bool = True) -> pd.DataFrame:
+    """E-Density-1: release Wasm component size beside the measured FROM scratch container floor."""
+    floor_bytes = floor.get("image_bytes")
+    if floor.get("base") != "scratch" or type(floor_bytes) is not int or floor_bytes <= 0:
+        raise ValueError("the container floor needs a measured FROM scratch image size")
     table = pd.DataFrame(
-        [
-            {
-                "plugin": row["plugin"],
-                "wasm_bytes": int(row["wasm_bytes"]),
-                "container_base": row["container_base"],
-                "container_floor_bytes": int(float(row["container_min_mb"]) * 1_048_576),
-            }
-            for row in rows
-        ]
+        [{"plugin": row["plugin"], "wasm_bytes": int(row["wasm_bytes"])} for row in rows]
     )
     if table.empty:
         return table
     if (table.wasm_bytes <= 0).any() or table.plugin.duplicated().any():
         raise ValueError("binary sizes need one positive size per plugin")
     return table.assign(
-        floor_to_wasm_ratio=table.container_floor_bytes / table.wasm_bytes,
+        container_floor_bytes=floor_bytes,
+        floor_to_wasm_ratio=floor_bytes / table.wasm_bytes,
         units="bytes",
-        estimator="stat size of each release component; container floor is a documented lower-bound estimate, not a measurement",
-        claim_boundary="orders of magnitude only; production images are larger than the floor",
+        estimator="stat size of each release component; container floor is the measured uncompressed size of one FROM scratch image",
+        claim_boundary="one FROM scratch image of a statically linked Rust stdin-to-stdout pass-through, not an image per plugin; the WAFER runtime and the container engine are outside both sizes",
         thesis_evidence=canonical,
     )
 
