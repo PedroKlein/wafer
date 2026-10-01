@@ -1749,6 +1749,7 @@ SWAP_PHASES = (
 )
 SWAP_EVENT_CLASSES = {"compiled": "first-use", "memory_hit": "cached", "disk_hit": "cached"}
 SWAP_METRICS = (*SWAP_PHASES, "phase_total_ns", "http_total_ns", "sink_observed_output_gap_ns")
+SWAP_TAIL_METRICS = ("phase_total_ns", "sink_observed_output_gap_ns")
 SWAP_SESSION_RUNS = 10
 SWAP_SESSION_EVENTS = 50
 
@@ -1786,8 +1787,9 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
     """E-Swap-1/6: internal phases, HTTP duration and sink gap per compile-cache class.
 
     ``runs`` are ``hotswap-analysis.json`` documents with ``run_index`` added.
-    Each run is first reduced to the median of its events in a class; the table
-    gives the median of those run medians with a bootstrap 95% CI over runs.
+    Each run is first reduced to the median of its events in a class, and its
+    cached swaps also to their p95 phase total and sink gap; the table gives the
+    median of those run values with a bootstrap 95% CI over runs.
     """
     by_class: dict[str, list[list[dict]]] = {"first-use": [], "cached": []}
     for run in _swap_session_runs(runs, "E-Swap-1", canonical=canonical):
@@ -1796,6 +1798,7 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
                 f"E-Swap-1 run {run['run_index']} requires {SWAP_SESSION_EVENTS} nested swap events"
             )
         classes: dict[str, list[dict]] = {"first-use": [], "cached": []}
+        first_use = []
         for event in run["events"]:
             values = {phase: event[phase] for phase in SWAP_PHASES}
             values |= {
@@ -1805,9 +1808,11 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
             }
             event_class = _swap_event_class(event.get("compile_cache"), event.get("event_index"))
             classes[event_class].append(values)
-        if canonical and len(classes["first-use"]) != 1:
+            if event_class == "first-use":
+                first_use.append(event.get("event_index"))
+        if canonical and first_use != [0]:
             raise ValueError(
-                f"E-Swap-1 run {run['run_index']} requires exactly one first-use swap event"
+                f"E-Swap-1 run {run['run_index']} requires exactly one first-use swap event, its first"
             )
         for event_class, events in classes.items():
             if events:
@@ -1827,11 +1832,17 @@ def swap_phase_table(runs: list[dict], *, canonical: bool = True) -> pd.DataFram
                 metric,
                 [float(np.median([event[metric] for event in events])) for events in runs_events],
             )
+        if event_class == "cached":
+            for metric in SWAP_TAIL_METRICS:
+                row |= _median_over_runs(
+                    f"run_p95_{metric}",
+                    [float(np.percentile([event[metric] for event in events], 95)) for events in runs_events],
+                )
         rows.append(
             row
             | {
                 "units": "nanoseconds, runs, swap events",
-                "estimator": "median over runs of each run's median per compile-cache class, with a bootstrap 95% CI over runs; the first-use class holds the one compiling swap of each run",
+                "estimator": "median over runs of each run's median per compile-cache class and of each run's p95 cached phase total and sink gap, each with a bootstrap 95% CI over runs; the first-use class holds the one compiling swap of each run",
                 "claim_boundary": "internal phases, HTTP duration and sink-observed gap are separate measurements; queued output can hide internal disruption from the sink",
                 "thesis_evidence": canonical,
             }
@@ -1910,13 +1921,15 @@ def failed_replacement_table(records: list[dict], *, canonical: bool = True) -> 
             raise ValueError("E-Swap-5 analysis input is malformed")
         validate_swap5_artifacts(requests, rollback, continuity, sequence)
         durations = {"first-use": [], "cached": []}
+        first_use = []
         for request, event in zip(requests, rollback["events"], strict=True):
-            durations[
-                _swap_event_class(request["body"].get("compile_cache"), event["event_index"])
-            ].append(event["rollback_ns"])
-        if canonical and len(durations["first-use"]) != 1:
+            event_class = _swap_event_class(request["body"].get("compile_cache"), event["event_index"])
+            durations[event_class].append(event["rollback_ns"])
+            if event_class == "first-use":
+                first_use.append(event["event_index"])
+        if canonical and first_use != [0]:
             raise ValueError(
-                f"E-Swap-5 run {record['run_index']} requires exactly one first-use rollback event"
+                f"E-Swap-5 run {record['run_index']} requires exactly one first-use rollback event, its first"
             )
         rows.append(
             {

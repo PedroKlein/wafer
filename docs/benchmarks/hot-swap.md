@@ -22,7 +22,7 @@ The replacement is stateless. Guest memory is not transferred between versions. 
 
 ### Repeated swap
 
-E-Swap-1 measures 50 repeated swaps in each of 10 independent process runs for phase and sink-gap evidence. The first swap of each run compiles its replacement and the later swaps reuse the cached component, so the first-use swap is reported apart from the cached swaps. Each run is reduced to its first-use value and its cached median first, and the result is the median over runs with a bootstrap 95% CI over runs. E-Swap-2 and E-Swap-6 share those measurements through explicit matrix aliases rather than multiplying samples. E-Swap-2 requires zero loss and duplication in every run.
+E-Swap-1 measures 50 repeated swaps in each of 10 independent process runs for phase and sink-gap evidence. The first swap of each run compiles its replacement and the later swaps reuse the cached component, so the first-use swap is reported apart from the cached swaps. Each run is reduced first to its first-use value, its cached median, and the p95 of its cached phase totals and sink gaps, and the result is the median over runs with a bootstrap 95% CI over runs. E-Swap-2 and E-Swap-6 share those measurements through explicit matrix aliases rather than multiplying samples. E-Swap-2 requires zero loss and duplication in every run.
 
 ### Restart comparison
 

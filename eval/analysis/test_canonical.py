@@ -516,6 +516,12 @@ def test_failed_replacement_table_separates_the_first_use_rollback_of_each_run()
     with pytest.raises(ValueError, match="run 5 requires exactly one first-use rollback"):
         failed_replacement_table(twice_compiled)
 
+    late_compile = swap5_records()
+    late_compile[1]["requests"][0]["body"]["compile_cache"] = "memory_hit"
+    late_compile[1]["requests"][2]["body"]["compile_cache"] = "compiled"
+    with pytest.raises(ValueError, match="run 2 requires exactly one first-use rollback event, its first"):
+        failed_replacement_table(late_compile)
+
 
 def test_failed_replacement_table_requires_ten_runs_unless_diagnostic() -> None:
     with pytest.raises(ValueError, match="requires 10 independent runs"):
@@ -588,6 +594,25 @@ def test_swap_phase_table_summarises_each_run_before_pooling_runs() -> None:
     ) == bootstrap_ci(run_medians)
 
 
+def test_swap_phase_table_reports_the_run_level_tail_of_cached_swaps() -> None:
+    runs = swap_runs()
+    for run in runs:
+        for event in run["events"][26:]:
+            event["sink_observed_output_gap_ns"] = 1_000_000 * run["run_index"]
+    table = swap_phase_table(runs).set_index("event_class")
+    run_p95 = np.asarray([1_000_000.0 * run for run in range(1, 11)])
+    assert table.loc["cached", "median_sink_observed_output_gap_ns"] == 5_500
+    assert table.loc["cached", "median_run_p95_sink_observed_output_gap_ns"] == np.median(run_p95)
+    assert (
+        table.loc["cached", "run_p95_sink_observed_output_gap_ci95_low_ns"],
+        table.loc["cached", "run_p95_sink_observed_output_gap_ci95_high_ns"],
+    ) == bootstrap_ci(run_p95)
+    assert table.loc["cached", "median_run_p95_phase_total_ns"] == pytest.approx(
+        10_000 + 200_000 + 5_000 + 100_046.6 + 50_000
+    )
+    assert pd.isna(table.loc["first-use", "median_run_p95_sink_observed_output_gap_ns"])
+
+
 def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
     with pytest.raises(ValueError, match="requires 10 independent runs"):
         swap_phase_table([swap_evidence()])
@@ -597,6 +622,11 @@ def test_swap_phase_table_requires_ten_full_runs_unless_diagnostic() -> None:
     recompiled[6]["events"][3]["compile_cache"] = "compiled"
     with pytest.raises(ValueError, match="run 7 requires exactly one first-use"):
         swap_phase_table(recompiled)
+    late_compile = swap_runs()
+    late_compile[2]["events"][0]["compile_cache"] = "memory_hit"
+    late_compile[2]["events"][3]["compile_cache"] = "compiled"
+    with pytest.raises(ValueError, match="run 3 requires exactly one first-use swap event, its first"):
+        swap_phase_table(late_compile)
     table = swap_phase_table([swap_evidence(3), swap_evidence(3, run_index=2)], canonical=False)
     assert table.set_index("event_class").loc["first-use", "N_runs"] == 2
     assert not table["thesis_evidence"].any()
