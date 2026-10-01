@@ -35,7 +35,7 @@ The canonical allocation is:
 - CPU 0: operating-system work, Mosquitto, and `wafer-loadgen` publisher/subscriber.
 - CPUs 1–3: exactly one active SUT—WAFER, the native Rust baseline, or eKuiper.
 
-The Pi boots with `isolcpus=1-3`. Each SUT is launched with `taskset -c 1-3`; Mosquitto and load generation use CPU 0. Systems run sequentially, never concurrently. This preserves the multi-threaded execution model while giving every comparator the same compute budget.
+The Pi keeps systemd (`CPUAffinity=0`) and interrupts (`irqaffinity=0`) on CPU 0, so Mosquitto, load generation and telemetry run there. Each SUT is launched with `taskset -c 1-3` (eKuiper through `CPUAffinity=1 2 3` in its unit). The Pi does not use `isolcpus`: its default domain isolation would stop load balancing on CPUs 1–3 and keep every thread of a SUT on one CPU. Systems run sequentially, never concurrently. This preserves the multi-threaded execution model while giving every comparator the same compute budget.
 
 ## Measurement scale
 
