@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="2.1.0"
+VERSION="2.1.5"
 case "$(uname -m)" in
-    aarch64 | arm64) PACKAGE_ARCH="arm64" ;;
-    x86_64) PACKAGE_ARCH="amd64" ;;
+    aarch64 | arm64)
+        PACKAGE_ARCH="arm64"
+        PACKAGE_SHA256="917579fdd8683e047c43d01a694180ae73ca234bd0727e11deb3a902e1556d49"
+        ;;
+    x86_64)
+        PACKAGE_ARCH="amd64"
+        PACKAGE_SHA256="9ec8f68e23f507d0e02e6bb45ff61ed904443c84ef0f6288b00d6b19ea66f12b"
+        ;;
     *) echo "error: no native eKuiper package for $(uname -m)" >&2; exit 1 ;;
 esac
 ARCHIVE="kuiper-${VERSION}-linux-${PACKAGE_ARCH}.deb"
@@ -42,6 +48,7 @@ version: $VERSION
 artifact: $ARCHIVE
 artifact_url: $BASE_URL/$ARCHIVE
 checksum_url: $BASE_URL/$ARCHIVE.sha256
+sha256: $PACKAGE_SHA256
 install_root: $INSTALL_ROOT
 service: kuiper.service
 broker: tcp://127.0.0.1:1883
@@ -61,9 +68,13 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 curl -fL "$BASE_URL/$ARCHIVE" -o "$tmp/$ARCHIVE"
 curl -fL "$BASE_URL/$ARCHIVE.sha256" -o "$tmp/$ARCHIVE.sha256"
-expected="$(tr -d '[:space:]' < "$tmp/$ARCHIVE.sha256")"
+published="$(tr -d '[:space:]' < "$tmp/$ARCHIVE.sha256")"
+[ "$published" = "$PACKAGE_SHA256" ] || {
+    echo "error: published checksum for $ARCHIVE differs from the pinned one" >&2
+    exit 1
+}
 actual="$(sha256sum "$tmp/$ARCHIVE" | awk '{print $1}')"
-[ "$actual" = "$expected" ] || {
+[ "$actual" = "$PACKAGE_SHA256" ] || {
     echo "error: checksum mismatch for $ARCHIVE" >&2
     exit 1
 }
