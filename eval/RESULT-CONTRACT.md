@@ -402,7 +402,7 @@ only report the corresponding evaluated gate decisions.
 `e-compare-ekuiper-profile` contains exactly five profiled and five unprofiled
 control runs at each of 1,000, 4,000, and 8,000 msg/s. A pair is the profiled
 and unprofiled run sharing one offered rate and run index; both use the same
-canonical eKuiper 2.1.0 config, load-generator profile, QoS, operator
+canonical eKuiper 2.1.5 config, load-generator profile, QoS, operator
 concurrency, 30-second warmup, and 60-second measurement. The profiled arm alone
 starts a one-second external `/proc` sampler bounded to at most 62 rows. If
 required process files are unreadable, the run continues and records process

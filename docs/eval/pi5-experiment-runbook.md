@@ -20,7 +20,7 @@ A directory name does not determine evidence class. Canonical-primary evidence r
 - Raspberry Pi 5 4 GB, stock clocks, active cooling, Raspberry Pi OS Lite 64-bit.
 - CPU 0: Linux support work, Mosquitto, load generation, subscription, and telemetry.
 - CPUs 1-3: exactly one active SUT.
-- Native eKuiper 2.1.0; no container in canonical comparisons.
+- Native eKuiper 2.1.5; no container in canonical comparisons.
 - Pipeline A: `MQTT source -> threshold filter -> MQTT sink`.
 - PMIC data: internal-rail proxy only, not total board or USB-C input power.
 

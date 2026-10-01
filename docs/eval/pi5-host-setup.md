@@ -106,7 +106,7 @@ cd ~/wafer
 ./eval/ekuiper/smoke-test.sh
 ```
 
-The installer verifies the official SHA256 before installing eKuiper 2.1.0. Docker is not installed or used.
+The installer checks the package against the SHA256 pinned for its architecture and the release's published checksum before installing eKuiper 2.1.5. On a host that still runs 2.1.0, run the same commands: the installer upgrades the package in place and restarts the service. Docker is not installed or used.
 
 ## 7. Deploy WAFER from the development machine
 

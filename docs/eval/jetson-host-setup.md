@@ -16,7 +16,7 @@ Read-only preflight: `mise run preflight-jetson` or `./eval/scripts/preflight-je
 | Thermal | a `cpu-thermal` thermal zone (`CPU-therm` on L4T R32) | present on L4T |
 | Power rails | INA3221 through hwmon | present on the developer kit |
 | Binaries | built on this host | `cargo build --locked --release -p wafer-runtime -p wafer-loadgen -p waferctl`, then `mise run glibc-floor -- --max 2.35 target/release/wafer` |
-| Services | Mosquitto and native eKuiper 2.1.0 | `eval/ekuiper/install-native.sh` |
+| Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` |
 
 Do not deploy the aarch64 binaries from CI or from `cross-build-pi`: they
 need a newer glibc than L4T ships (see

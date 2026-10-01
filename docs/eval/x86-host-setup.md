@@ -14,7 +14,7 @@ Read-only preflight: `mise run preflight-x86` or `./eval/scripts/preflight-x86.s
 | Clocks | `scaling_cur_freq` within 5% of `scaling_max_freq` on CPUs 1-3 | follows from the governor and turbo settings |
 | Temperature | `x86_pkg_temp` thermal zone (Intel) or `k10temp`/`coretemp` hwmon | kernel modules `coretemp` or `k10temp` |
 | Binaries | built on this host | `mise run build-release-x86` |
-| Services | Mosquitto and native eKuiper 2.1.0 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
+| Services | Mosquitto and native eKuiper 2.1.5 | `eval/ekuiper/install-native.sh` picks the `amd64` package |
 
 Deploy the evaluation tree with
 `./eval/scripts/deploy-pi5.sh --host user@box --bin-dir target/release` from

@@ -43,8 +43,10 @@ Remaining work for thesis-grade numbers:
   ([`docs/eval/jetson-host-setup.md`](docs/eval/jetson-host-setup.md),
   [`docs/eval/x86-host-setup.md`](docs/eval/x86-host-setup.md)).
   Pi 5 host setup (`isolcpus=1-3`, performance governor) and the native
-  eKuiper 2.1.0 install and smoke path are done; see
+  eKuiper install and smoke path are done; see
   [`docs/status/rpi5-canonical-transition.md`](docs/status/rpi5-canonical-transition.md).
+  The comparator has since moved from eKuiper 2.1.0 to 2.1.5, so each host
+  reinstalls it with `eval/ekuiper/install-native.sh` before its batch.
 - A20 (Prometheus `wafer_hot_swap_rollbacks_total` counter) —
   observability follow-up, ~1 h, not blocking thesis numbers.
 
