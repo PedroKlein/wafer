@@ -36,6 +36,7 @@ import hashlib
 import json
 import math
 import re
+import shlex
 import sys
 import tomllib
 from pathlib import Path
@@ -1227,12 +1228,44 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
             violations.append("eKuiper runtime summary interval alignment is invalid")
     except (KeyError, OSError, TypeError, ValueError):
         violations.append("eKuiper runtime summary interval alignment is invalid")
-    gc_runtime = runtime.get("gc_runtime_metrics")
-    if gc_runtime != {
-        "status": "unavailable",
-        "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
-    }:
-        violations.append("eKuiper GC/runtime limitation is missing or overstated")
+    gc_runtime = runtime.get("gc_runtime_metrics", {})
+    gctrace_path = leaf / "ekuiper-gctrace.log"
+    if gc_runtime.get("status") == "available":
+        try:
+            counts = [
+                gc_runtime[field]
+                for field in (
+                    "trace_line_count",
+                    "missing_cycle_count",
+                    "cycle_count",
+                    "stw_pause_total_ns",
+                )
+            ]
+            if (
+                state != "profiled"
+                or gc_runtime.get("source") != "go-gctrace-journal"
+                or gc_runtime.get("path") != gctrace_path.name
+                or hashlib.sha256(gctrace_path.read_bytes()).hexdigest()
+                != gc_runtime.get("sha256")
+                or any(type(count) is not int or count < 0 for count in counts)
+                or len(gctrace_path.read_text().splitlines())
+                != gc_runtime["trace_line_count"]
+                or gc_runtime["trace_line_count"] < 1
+                or gc_runtime["cycle_count"] > gc_runtime["trace_line_count"]
+                or (gc_runtime["stw_pause_max_ns"] is None)
+                != (gc_runtime["cycle_count"] == 0)
+            ):
+                violations.append("eKuiper GC trace summary is invalid")
+        except (KeyError, OSError, TypeError, ValueError):
+            violations.append("eKuiper GC trace summary is invalid")
+    elif (
+        gc_runtime.get("status") != "unavailable"
+        or not gc_runtime.get("reason")
+        or (state == "profiled") == (gc_runtime["reason"] == "gctrace-disabled-by-design")
+    ):
+        violations.append("eKuiper GC trace availability is invalid")
+    if state == "unprofiled-control" and gctrace_path.is_file() and gctrace_path.read_text():
+        violations.append("eKuiper unprofiled control contains gctrace output")
     latency = runtime.get("latency_ns", {})
     try:
         interval_document = json.loads(interval_path.read_text())
@@ -1303,6 +1336,23 @@ def check_ekuiper_profile_artifacts(leaf: Path, metadata: dict) -> list[str]:
         or process.get("status") == "unavailable"
     ) and (leaf / "resource-usage.csv").exists():
         violations.append("eKuiper leaf contains profiler output while collection is disabled")
+    return violations
+
+
+def check_ekuiper_godebug(leaf: Path, metadata: dict, experiment: str) -> list[str]:
+    violations: list[str] = []
+    audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", violations)
+    if audit is None:
+        return violations
+    environment = audit.get("service", {}).get("properties", {}).get("Environment", "")
+    godebug = [
+        entry for entry in shlex.split(str(environment)) if entry.startswith("GODEBUG=")
+    ]
+    profiled = experiment == EKUIPER_PROFILE_EXPERIMENT and str(
+        metadata.get("condition", "")
+    ).endswith("/profiled")
+    if godebug != (["GODEBUG=gctrace=1"] if profiled else []):
+        violations.append(f"eKuiper service GODEBUG {godebug} does not belong to this run")
     return violations
 
 
@@ -1878,6 +1928,8 @@ def check_leaf(
         violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
     if experiment == EKUIPER_PROFILE_EXPERIMENT:
         violations.extend(check_ekuiper_profile_artifacts(leaf, metadata))
+    if "ekuiper-audit.json" in files:
+        violations.extend(check_ekuiper_godebug(leaf, metadata, experiment))
     if experiment in DLQ_CONTAINMENT_EXPERIMENTS and "containment.json" in files:
         containment = _load_json(leaf / "containment.json", "containment.json", violations)
         if containment is not None:

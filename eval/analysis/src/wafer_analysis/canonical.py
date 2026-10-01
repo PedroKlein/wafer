@@ -1148,12 +1148,20 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
             or record.get("no_pool_with") != identity["no_pool_with"]
         ):
             raise ValueError("eKuiper profile record crosses the diagnostic boundary")
-        gc_runtime = record.get("gc_runtime_metrics")
-        if gc_runtime != {
-            "status": "unavailable",
-            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
-        }:
-            raise ValueError("eKuiper profile record overstates GC/runtime evidence")
+        gc_runtime = record.get("gc_runtime_metrics", {})
+        if gc_runtime.get("status") == "available":
+            if key[1] != "profiled" or any(
+                type(gc_runtime.get(field)) is not int or gc_runtime[field] < 0
+                for field in ("cycle_count", "missing_cycle_count", "stw_pause_total_ns")
+            ):
+                raise ValueError("eKuiper profile GC trace evidence is invalid")
+        elif (
+            gc_runtime.get("status") != "unavailable"
+            or not gc_runtime.get("reason")
+            or (key[1] == "profiled")
+            == (gc_runtime["reason"] == "gctrace-disabled-by-design")
+        ):
+            raise ValueError("eKuiper profile GC trace availability is invalid")
         interval = record.get("interval_alignment", {})
         if (
             interval.get("clock") != "unix-epoch"
@@ -1217,6 +1225,10 @@ def ekuiper_profile_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                 "process_status": process["status"],
                 "cpu_percent": process.get("cpu_percent"),
                 "max_rss_bytes": process.get("max_rss_bytes"),
+                "gc_status": gc_runtime["status"],
+                "gc_cycle_count": gc_runtime.get("cycle_count"),
+                "gc_stw_pause_total_ns": gc_runtime.get("stw_pause_total_ns"),
+                "gc_stw_pause_max_ns": gc_runtime.get("stw_pause_max_ns"),
                 "measurement_source_leaf": record["measurement_source_leaf"],
                 "interpretation": identity["claim_boundary"],
             }

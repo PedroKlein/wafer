@@ -662,10 +662,27 @@ def ekuiper_profile_summary() -> dict:
                                 "reason": "process-profiler-disabled-by-design",
                             }
                         ),
-                        "gc_runtime_metrics": {
-                            "status": "unavailable",
-                            "reason": "ekuiper-2.1.5-has-no-validated-gc-event-interface",
-                        },
+                        "gc_runtime_metrics": (
+                            {
+                                "status": "available",
+                                "source": "go-gctrace-journal",
+                                "path": "ekuiper-gctrace.log",
+                                "sha256": "c" * 64,
+                                "trace_line_count": 90,
+                                "missing_cycle_count": 0,
+                                "cycle_count": 60,
+                                "stw_pause_total_ns": 6_000_000,
+                                "stw_pause_max_ns": 400_000,
+                                "max_heap_at_start_mib": 12,
+                                "max_live_heap_mib": 6,
+                                "max_heap_goal_mib": 12,
+                            }
+                            if state == "profiled"
+                            else {
+                                "status": "unavailable",
+                                "reason": "gctrace-disabled-by-design",
+                            }
+                        ),
                         "claim_boundary": "diagnostic-association-only-not-gc-causality",
                         "profiler_overhead": {
                             "experiment": "e-compare-ekuiper-profile",
@@ -726,6 +743,26 @@ def test_ekuiper_profile_tables_keep_thirty_runs_and_fifteen_pairs() -> None:
     assert runs.loc[runs.profiler_state == "unprofiled-control", "process_status"].eq(
         "unavailable"
     ).all()
+    profiled = runs[runs.profiler_state == "profiled"]
+    assert profiled["gc_status"].eq("available").all()
+    assert profiled["gc_cycle_count"].eq(60).all()
+    assert profiled["gc_stw_pause_max_ns"].eq(400_000).all()
+    assert runs.loc[runs.profiler_state == "unprofiled-control", "gc_status"].eq(
+        "unavailable"
+    ).all()
+
+
+def test_ekuiper_profile_tables_reject_gc_traces_in_the_unprofiled_control() -> None:
+    summary = ekuiper_profile_summary()
+    control = next(
+        record
+        for record in summary["records"]
+        if record["profiler_state"] == "unprofiled-control"
+    )
+    control["gc_runtime_metrics"] = {**summary["records"][0]["gc_runtime_metrics"]}
+
+    with pytest.raises(ValueError, match="GC trace evidence"):
+        ekuiper_profile_tables(summary)
 
 
 def test_canonical_ekuiper_profile_remains_single_release_only() -> None:

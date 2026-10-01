@@ -178,7 +178,8 @@ before reading. The matrix below is authoritative:
 | `host-load-ladder.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Append-only clean-boot session receipt with the exact eight-phase order, per-phase pass/fail/not-run status, 75 °C stop limit, boot identity, bounded sample counts, diagnostic/final admission decisions, source state, and the PMIC internal-rail boundary. |
 | `host-telemetry.csv` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | One-second phase-labeled temperature, CPU frequency, throttling, PMIC internal-rail proxy, memory availability/pressure, USB throughput, boot ID, wall-clock, and monotonic samples. No per-message data. |
 | `kernel-io.log`, `usb-integrity.json` | E-Host-Thermal-Storage | `characterize-rpi5-host.sh` | Bounded matching kernel I/O errors and per-USB-phase byte/duration/SHA-256 reconciliation. Any recorded kernel I/O error or hash mismatch stops the ladder and blocks final admission. |
-| `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and explicit eKuiper 2.1.5 GC/runtime-unavailability status. It never infers GC events from RSS or latency. |
+| `ekuiper-runtime-summary.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Diagnostic run identity, interval alignment, latency percentiles, bounded external `/proc` process summary when available, and the Go GC trace summary for the measurement window (`gc_runtime_metrics`) when the profiled run logged one. It never infers GC events from RSS or latency. |
+| `ekuiper-gctrace.log` | E-Compare-eKuiper-Profile | `canonical_runner.py` | One line per Go GC cycle that the `kuiper.service` journal recorded from eKuiper start to stop: the journal receive time in Unix-epoch nanoseconds, a space, and the unchanged `GODEBUG=gctrace=1` line. Empty in the unprofiled control. |
 | `profiler-overhead.json` | E-Compare-eKuiper-Profile | `canonical_runner.py` | Profiler state, matched rate/run pair, collection-enabled flag, and the run-level profiled-minus-control estimator label. It declares association-only interpretation and is not primary evidence. |
 | `swap_requests.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-5, E-Swap-6 | `canonical_runner.py` HTTP client | One record per API request with request boundaries, monotonic `request_duration_ns`, HTTP status, and the runtime's typed internal outcome phases. E-Swap-5 requires 50 process-trap requests whose response status is `rolled_back`. |
 | `swap_timeline.json` | E-Swap-1, E-Swap-2, E-Swap-4, E-Swap-6 | `BenchSink` | Sink-observed successful plugin-version transitions. Each `pause_ns` is an output interarrival gap and is not an internal swap duration. E-Swap-5 forbids this artifact because the rejected v2 never becomes sink-observed. |
@@ -320,7 +321,7 @@ The candidate IDs and purposes are:
 | `e-swap-independent-sessions` | candidate-supplementary | Host run | Collect five independent swap sessions with 50 nested events each. |
 | `e-swap-rollback-sessions` | candidate-supplementary | Host run | Collect five independent rollback sessions with 50 nested events each. |
 | `e-host-thermal-storage` | diagnostic | Clean-boot host session | Characterize thermal and removable-storage headroom under a stop-on-failure load ladder. |
-| `e-compare-ekuiper-profile` | diagnostic | Host run at one rate and profiler state | Associate bounded eKuiper runtime/process summaries with tail latency using matched unprofiled controls. |
+| `e-compare-ekuiper-profile` | diagnostic | Host run at one rate and profiler state | Associate bounded eKuiper process and Go GC trace summaries with tail latency using matched unprofiled controls. |
 
 The exact condition grids, required outputs, no-pooling boundaries, and analysis
 consumers are machine-readable in `enhanced_candidate.experiments`. The
@@ -411,9 +412,33 @@ required process files are unreadable, the run continues and records process
 metrics as unavailable. The unprofiled control must not contain
 `resource-usage.csv`.
 
-The frozen eKuiper deployment has no validated GC-event interface. Every
-runtime summary therefore labels GC/runtime metrics unavailable with the exact
-version limitation instead of treating RSS or latency excursions as GC events.
+The profiled arm also starts eKuiper with `GODEBUG=gctrace=1`, through the
+runtime drop-in `/run/systemd/system/kuiper.service.d/wafer-gctrace.conf`
+installed from `eval/ekuiper/gctrace-drop-in.conf`, so the Go runtime writes one
+line per GC cycle to the unit's journal. After eKuiper stops, both arms read the
+`kuiper.service` journal since the run started and keep the GC lines in
+`ekuiper-gctrace.log`. `gc_runtime_metrics` in the runtime summary then counts
+the GC cycles whose journal time falls inside the 60-second measurement window
+(`cycle_count`), sums and maximizes their two stop-the-world pauses (sweep
+termination and mark termination wall clock, `stw_pause_total_ns` and
+`stw_pause_max_ns`), and records the largest heap at GC start, live heap, and
+heap goal in MiB. `trace_line_count` and `missing_cycle_count` cover the whole
+run, so gaps in the GC numbering are visible. A profiled run whose journal is
+unreadable, has no GC lines, or has lines in an unknown format keeps its other
+outputs and records `status=unavailable` with `kuiper-journal-unreadable`,
+`gctrace-lines-missing-from-journal`, or `gctrace-format-unrecognized`. The
+unprofiled control records `gctrace-disabled-by-design`, and any GC line in its
+log fails the run. Journal times are receive times, so a cycle is assigned to
+the window by when its line was logged, which is when the cycle ended. The cost
+of writing the trace is part of the profiled-minus-control difference, and GC
+summaries are diagnostic associations with tail latency, not causal evidence.
+
+The runner removes the drop-in, with eKuiper stopped, at the end of every
+profiled run, and again before any other eKuiper start if it is still present.
+Every eKuiper run outside the profiled arm must show no `GODEBUG` in the unit
+environment recorded in `ekuiper-audit.json`: the runner fails such a run at
+audit time and the verifier rejects its leaf.
+
 Analysis preserves all 30 independent host runs, forms 15 rate/run-index pairs,
 and reports profiled-minus-control differences as diagnostic associations only.
 The profile batch cannot be pooled with E-Perf-1, E-Perf-10, or prior diagnostic
