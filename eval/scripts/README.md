@@ -13,6 +13,7 @@ Entry points of the evaluation harness. The Python modules they share live in
 | `verify-result-contract.py` | Checks every artifact of a result leaf against `eval/RESULT-CONTRACT.md`. |
 | `collect-results.sh` | Names a fresh result directory from host tag and timestamp. |
 | `collect-binary-sizes.sh`, `binary-sizes.index` | E-Density-1 plugin and container sizes. |
+| `measure-container-floor.py` | Builds the E-Density-1 `FROM scratch` container floor from `eval/container-floor/` with Docker and records its size; run it before tagging and commit the JSON it writes. |
 | `summarise-e-perf-4.sh`, `summarise-e-perf-6-8.sh`, `summarise-e-perf-7.sh` | HDR percentile roll-ups via `wafer-loadgen hdr-summary`, called by the runner. |
 
 ## Host setup and gates (run by the operator, see `docs/eval/`)
