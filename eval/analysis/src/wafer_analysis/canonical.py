@@ -1527,15 +1527,16 @@ def _capacity_run_values(system: str, rate: dict) -> dict[str, np.ndarray]:
     return values
 
 
-def _run_spread(metric: str, values: np.ndarray) -> dict:
-    # The median comes last so that save_table folds the CI columns that follow it
-    # into the median instead of the maximum.
+def _run_spread(metric: str, values: np.ndarray, interval: tuple[str, str]) -> dict:
+    low, high = bootstrap_ci(values)
     return {
+        f"median_{metric}": float(np.median(values)),
+        interval[0]: float(low),
+        interval[1]: float(high),
         f"min_{metric}": float(np.min(values)),
         f"q1_{metric}": float(np.quantile(values, 0.25)),
         f"q3_{metric}": float(np.quantile(values, 0.75)),
         f"max_{metric}": float(np.max(values)),
-        f"median_{metric}": float(np.median(values)),
     }
 
 
@@ -1590,9 +1591,6 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
         values = run_values[system]
         baseline_p99 = values[grid.index(CAPACITY_BASELINE_RATE)]["p99_ns"]
         for rate, classification, runs in zip(rates, classes[system], values, strict=True):
-            achieved_ci, ratio_ci, loss_ci, p99_ci = (
-                bootstrap_ci(runs[metric]) for metric in CAPACITY_RUN_METRICS
-            )
             pooled_loss_ci = pooled_ratio_ci(runs["loss"], np.ones(len(runs["loss"])))
             _, normalized_low, normalized_high = median_shift_ci(
                 runs["p99_ns"], baseline_p99, relative=True
@@ -1602,23 +1600,23 @@ def capacity_tables(summary: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
                     "system": system,
                     "offered_rate_msg_s": int(rate["rate_msg_s"]),
                     "N_runs": 30,
-                    **_run_spread("achieved_rate_msg_s", runs["achieved_rate_msg_s"]),
-                    "achieved_ci95_low_msg_s": float(achieved_ci[0]),
-                    "achieved_ci95_high_msg_s": float(achieved_ci[1]),
-                    **_run_spread("achieved_ratio", runs["achieved_ratio"]),
-                    "achieved_ratio_ci95_low": float(ratio_ci[0]),
-                    "achieved_ratio_ci95_high": float(ratio_ci[1]),
-                    **_run_spread("loss", runs["loss"]),
-                    "loss_ci95_low": float(loss_ci[0]),
-                    "loss_ci95_high": float(loss_ci[1]),
+                    **_run_spread(
+                        "achieved_rate_msg_s",
+                        runs["achieved_rate_msg_s"],
+                        ("achieved_ci95_low_msg_s", "achieved_ci95_high_msg_s"),
+                    ),
+                    **_run_spread(
+                        "achieved_ratio",
+                        runs["achieved_ratio"],
+                        ("achieved_ratio_ci95_low", "achieved_ratio_ci95_high"),
+                    ),
+                    **_run_spread("loss", runs["loss"], ("loss_ci95_low", "loss_ci95_high")),
                     "pooled_loss": float(rate["pooled_loss"]),
                     "pooled_loss_ci95_low": float(pooled_loss_ci[0]),
                     "pooled_loss_ci95_high": float(pooled_loss_ci[1]),
                     "mean_achieved_ratio": float(rate["mean_achieved_ratio"]),
                     "total_duplicates": int(rate["total_duplicates"]),
-                    **_run_spread("p99_ns", runs["p99_ns"]),
-                    "p99_ci95_low_ns": float(p99_ci[0]),
-                    "p99_ci95_high_ns": float(p99_ci[1]),
+                    **_run_spread("p99_ns", runs["p99_ns"], ("p99_ci95_low_ns", "p99_ci95_high_ns")),
                     "median_normalized_p99": float(
                         np.median(runs["p99_ns"]) / np.median(baseline_p99)
                     ),

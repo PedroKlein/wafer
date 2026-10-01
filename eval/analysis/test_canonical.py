@@ -1203,15 +1203,24 @@ def test_capacity_intervals_bootstrap_the_run_values() -> None:
         baseline.max(),
     ]
     assert row["total_duplicates"] == 0
-    assert {
-        "min_loss",
-        "max_loss",
-        "loss_ci95_low",
-        "pooled_loss_ci95_high",
-        "q1_achieved_ratio",
-        "achieved_ratio_ci95_high",
-        "q3_achieved_rate_msg_s",
-    } <= set(rates.columns)
+    columns = list(rates.columns)
+    for metric, low, high in (
+        ("achieved_rate_msg_s", "achieved_ci95_low_msg_s", "achieved_ci95_high_msg_s"),
+        ("achieved_ratio", "achieved_ratio_ci95_low", "achieved_ratio_ci95_high"),
+        ("loss", "loss_ci95_low", "loss_ci95_high"),
+        ("p99_ns", "p99_ci95_low_ns", "p99_ci95_high_ns"),
+    ):
+        start = columns.index(f"median_{metric}")
+        assert columns[start : start + 7] == [
+            f"median_{metric}",
+            low,
+            high,
+            f"min_{metric}",
+            f"q1_{metric}",
+            f"q3_{metric}",
+            f"max_{metric}",
+        ]
+    assert "pooled_loss_ci95_high" in columns
 
     loaded = np.asarray(
         summary["systems"]["wafer"]["rates"][2]["run_summary"]["p99_ns"]["values"], dtype=float
