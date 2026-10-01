@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "eval/scripts/lib"))
 
-from host_facts import PLATFORM_KEYS, platform_facts  # noqa: E402
+from host_facts import CPU_POLICY_KEYS, PLATFORM_KEYS, cpu_policy_facts, platform_facts  # noqa: E402
 import canonical_runner  # noqa: E402
 
 KEYS = {
@@ -117,10 +117,35 @@ def test_disabled_pstate_reports_the_real_scaling_driver() -> None:
     assert facts["cpufreq_driver"] == "acpi-cpufreq"
 
 
+def test_cpu_policy_reads_systemd_and_irq_affinity_and_empty_isolation() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write(root, "sys/devices/system/cpu/isolated", "\n")
+        write(root, "proc/1/status", "Name:\tsystemd\nCpus_allowed:\t1\nCpus_allowed_list:\t0\n")
+        write(root, "proc/irq/default_smp_affinity", "00000000,00000001\n")
+        assert cpu_policy_facts(root) == {
+            "isolated_cpus": "", "housekeeping_cpus": "0", "irq_default_cpus": "0",
+        }
+        write(root, "sys/devices/system/cpu/isolated", "1-3\n")
+        write(root, "proc/1/status", "Cpus_allowed_list:\t0-3\n")
+        write(root, "proc/irq/default_smp_affinity", "d\n")
+        assert cpu_policy_facts(root) == {
+            "isolated_cpus": "1-3", "housekeeping_cpus": "0-3", "irq_default_cpus": "0,2-3",
+        }
+
+
+def test_cpu_policy_facts_are_null_when_unreadable() -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        facts = cpu_policy_facts(Path(tmp))
+    assert tuple(facts) == CPU_POLICY_KEYS
+    assert set(facts.values()) == {None}
+
+
 def test_static_measurement_metadata_carries_platform_facts() -> None:
     facts = {
         "git_sha": "a" * 40, "git_dirty": False, "git_tags": ["v1"], "arch": "aarch64",
-        "isolated_cpus": "1-3", "cpu_governors": ["performance"], "throttled": "0x0",
+        "isolated_cpus": "", "housekeeping_cpus": "0", "irq_default_cpus": "0",
+        "cpu_governors": ["performance"], "throttled": "0x0",
         "hardware_model": "Raspberry Pi 5 Model B Rev 1.0", "cpu_model": None,
         "physical_cores": 4, "online_cpus": "0-3", "smt": None, "turbo": None,
         "cpufreq_driver": "cpufreq-dt", "os_release": "Debian GNU/Linux 13 (trixie)",
@@ -132,6 +157,7 @@ def test_static_measurement_metadata_carries_platform_facts() -> None:
     assert metadata["glibc_version"] == "2.41"
     assert metadata["power_mode"] is None
     assert metadata["git_tags"] == ["v1"]
+    assert [metadata[key] for key in CPU_POLICY_KEYS] == ["", "0", "0"]
 
 
 def test_empty_root_yields_all_keys_as_null() -> None:
