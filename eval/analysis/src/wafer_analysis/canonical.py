@@ -653,7 +653,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
         delta_low, delta_high = cliffs_delta_ci(service["wafer"]["p50"], service["native"]["p50"])
         row.update(
             {
-                "cliffs_delta": delta,
+                "cliffs_delta_vs_native": delta,
                 "cliffs_delta_ci95_low": delta_low,
                 "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,

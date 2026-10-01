@@ -1481,7 +1481,7 @@ def test_payload_table_pairs_wafer_and_native_runs_by_run_index() -> None:
     assert 15_000 <= table.loc["10kb", "boundary_p50_ci95_low_ns"]
     assert table.loc["10kb", "boundary_p50_ci95_high_ns"] <= 17_000
     assert table.loc["10kb", "native_median_service_p50_ns"] == pytest.approx(35_500)
-    assert table.loc["10kb", "cliffs_delta"] > 0
+    assert table.loc["10kb", "cliffs_delta_vs_native"] > 0
     assert table.loc["10kb", "below_per_hop_reference"]
     assert not table.loc["100kb", "below_per_hop_reference"]
     assert table.loc["1kb", "wafer_pooled_loss"] == pytest.approx(1 / (30 * 60_000))
