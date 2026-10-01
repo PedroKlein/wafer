@@ -114,6 +114,8 @@ def measure(platform: str, root: Path = ROOT) -> dict:
     tag = f"wafer-container-floor:{platform.replace('/', '-')}"
     docker(
         "build",
+        "--network",
+        "none",
         "--platform",
         platform,
         "--build-arg",

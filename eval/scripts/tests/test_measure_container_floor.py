@@ -152,6 +152,7 @@ def test_records_the_measured_scratch_image_and_its_build_inputs(
     assert record["docker_server_version"] == "29.0.0"
     build = next(call for call in calls if call[0] == "build")
     assert f"BUILD_IMAGE={build_image}" in build
+    assert build[build.index("--network") + 1] == "none"
     assert build[-1] == str(ROOT / "eval/container-floor")
     assert any(call[0] == "run" and "none" in call for call in calls)
 
