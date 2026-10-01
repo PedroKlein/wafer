@@ -47,11 +47,18 @@ while [ "$#" -gt 0 ]; do
 done
 case "$url" in
     *.sha256) printf '%s\n' "$FAKE_PUBLISHED_SHA256" > "$out" ;;
-    *) printf 'not the release package\n' > "$out" ;;
+    *.deb) printf 'not the release package\n' > "$out" ;;
 esac
 CURL
-printf '#!/usr/bin/env bash\necho "sudo reached" >&2\nexit 99\n' > "$TMP/sudo"
-chmod +x "$TMP/curl" "$TMP/sudo"
+cat > "$TMP/sudo" <<'SUDO'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$SUDO_LOG"
+[ "$1" = tee ] && cat >/dev/null
+exit 0
+SUDO
+printf '#!/usr/bin/env bash\necho 2.1.5\n' > "$TMP/dpkg-query"
+chmod +x "$TMP/curl" "$TMP/sudo" "$TMP/dpkg-query"
+export SUDO_LOG="$TMP/sudo.log"
 fake_uname aarch64
 
 if output="$(FAKE_PUBLISHED_SHA256="$AMD64_SHA256" PATH="$TMP:$PATH" "$INSTALL" 2>&1)"; then
@@ -65,5 +72,17 @@ if output="$(FAKE_PUBLISHED_SHA256="$ARM64_SHA256" PATH="$TMP:$PATH" "$INSTALL" 
     exit 1
 fi
 grep -q 'checksum mismatch for kuiper-2.1.5-linux-arm64.deb' <<<"$output" || { echo "unexpected failure: $output" >&2; exit 1; }
+[ ! -e "$SUDO_LOG" ] || { echo "a rejected package reached a privileged step" >&2; exit 1; }
+
+mkdir "$TMP/matching-hash"
+printf '#!/usr/bin/env bash\necho "%s  $1"\n' "$ARM64_SHA256" > "$TMP/matching-hash/sha256sum"
+chmod +x "$TMP/matching-hash/sha256sum"
+FAKE_PUBLISHED_SHA256="$ARM64_SHA256" PATH="$TMP/matching-hash:$TMP:$PATH" "$INSTALL" >/dev/null
+installed="$(grep -n '^apt install -y .*/kuiper-2.1.5-linux-arm64.deb$' "$SUDO_LOG" | cut -d: -f1 || true)"
+restarted="$(grep -n '^systemctl restart kuiper.service$' "$SUDO_LOG" | cut -d: -f1 || true)"
+[ -n "$installed" ] && [ -n "$restarted" ] && [ "$restarted" -gt "$installed" ] || {
+    echo "the installer does not restart eKuiper after installing the package" >&2
+    exit 1
+}
 
 printf 'ekuiper installer tests: PASS\n'

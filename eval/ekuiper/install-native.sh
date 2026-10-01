@@ -96,7 +96,8 @@ printf '{"version":"%s","artifact":"%s","sha256":"%s","source":"%s"}\n' \
 sudo chown kuiper:kuiper /var/lib/kuiper/wafer-install-receipt.json
 sudo systemctl daemon-reload
 sudo systemctl reset-failed kuiper.service
-sudo systemctl enable --now kuiper.service
+sudo systemctl enable kuiper.service
+sudo systemctl restart kuiper.service
 
 for _ in $(seq 1 30); do
     if curl -fsS http://127.0.0.1:9081/ >/dev/null 2>&1; then
