@@ -12,7 +12,7 @@ for tool in mosquitto_pub mosquitto_sub; do
 done
 # taskset prints the CPUs the spread probe's busy loops ran on, one sample per line.
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "${PREFLIGHT_SPREAD:-1 2 3}"\n' > "$tmp/bin/taskset"
-printf '#!/usr/bin/env bash\n[ "$1" = show ] && echo 4242\nexit 0\n' > "$tmp/bin/systemctl"
+printf '#!/usr/bin/env bash\n[ "$1" = show ] && echo "${PREFLIGHT_MOSQUITTO_PID:-4242}"\nexit 0\n' > "$tmp/bin/systemctl"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/bin/curl"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$tmp/bin/swapon"
 printf '#!/usr/bin/env bash\necho "NV Power Mode: 25W"\necho 1\n' > "$tmp/bin/nvpmodel"
@@ -126,13 +126,14 @@ assert_cpu_affinity_passed "$log"
 
 write "$x86/sys/devices/system/cpu/smt/control" "on"
 write "$x86/sys/devices/system/cpu/cpufreq/boost" "1"
-if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
+if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" PREFLIGHT_MOSQUITTO_PID=0 \
     WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1; then
-    echo 'x86 preflight passed with SMT and turbo enabled' >&2
+    echo 'x86 preflight passed with SMT and turbo enabled and no Mosquitto process' >&2
     exit 1
 fi
 grep -q '^FAIL  SMT off — detected: on' "$log"
 grep -q '^FAIL  turbo off — turbo is enabled' "$log"
+grep -q '^FAIL  Mosquitto CPU affinity — mosquitto.service is not running' "$log"
 
 pi="$tmp/pi"
 mkdir -p "$pi/proc/device-tree"
@@ -156,19 +157,20 @@ assert_cpu_affinity_passed "$log"
 
 write "$pi/sys/devices/system/cpu/isolated" "1-3"
 write "$pi/proc/1/status" "Cpus_allowed_list:	0-3"
+write "$pi/proc/4242/status" "Cpus_allowed_list:	0-3"
 write "$pi/proc/irq/default_smp_affinity" "f"
 write "$pi/proc/irq/11/effective_affinity_list" "0-3"
 if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=aarch64 WAFER_PI_ROOT="$deployed" PREFLIGHT_SPREAD=$'2 2 2\n2 2 2\n2 2 2' \
     WAFER_PREFLIGHT_SYSROOT="$pi" "$ROOT/eval/scripts/preflight-pi5.sh" >"$log" 2>&1; then
-    echo 'pi preflight passed with isolcpus, systemd and IRQs on every CPU, and one busy SUT core' >&2
+    echo 'pi preflight passed with isolcpus, systemd, Mosquitto and IRQs on every CPU, and one busy SUT core' >&2
     exit 1
 fi
 grep -q '^FAIL  no isolated CPUs — detected: 1-3' "$log"
 grep -q '^FAIL  systemd CPU affinity — expected 0, detected: 0-3' "$log"
+grep -q '^FAIL  Mosquitto CPU affinity — expected 0, detected: 0-3' "$log"
 grep -q '^FAIL  default IRQ affinity — expected CPU 0, detected mask: f' "$log"
 grep -q '^WARN  IRQs still allowed on SUT CPUs .*: 11$' "$log"
 grep -q '^FAIL  SUT CPUs load-balanced — 3 busy loops under CPUs 1-3 ran on CPUs: 2 2 2' "$log"
-grep -q '^PASS  Mosquitto CPU affinity: 0' "$log"
 
 if command -v taskset >/dev/null 2>&1 && [ -r /proc/self/status ]; then
     cpu="$(sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status | cut -d, -f1 | cut -d- -f1)"

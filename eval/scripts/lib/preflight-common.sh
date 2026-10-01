@@ -37,7 +37,7 @@ allowed_cpus() { sysread "/proc/$1/status" | sed -n 's/^Cpus_allowed_list:[[:spa
 
 check_process_affinity() {
     local label="$1" pid="$2" expected="$3" hint="$4" allowed
-    allowed="$(allowed_cpus "${pid:-0}")"
+    allowed="$(allowed_cpus "$pid")"
     if [ -n "$allowed" ] && [ "$(expand_cpu_list "$allowed")" = "$(expand_cpu_list "$expected")" ]; then
         pass "$label: $expected"
     else
@@ -80,14 +80,16 @@ check_sut_spread() {
     samples="$(taskset -c "$sut" bash -c '
         pids=()
         for _ in $1; do
-            ( end=$((SECONDS + 5)); while ((SECONDS < end)); do :; done ) &
+            ( end=$((SECONDS + 7)); while ((SECONDS < end)); do :; done ) &
             pids+=("$!")
         done
-        for _ in 1 2 3; do
+        for _ in 1 2 3 4 5; do
             sleep 1
-            echo $(ps -o psr= -p "$(IFS=,; echo "${pids[*]}")")
+            sample=$(ps -o psr= -p "$(IFS=,; echo "${pids[*]}")")
+            echo $sample
+            [ "$(printf "%s\n" $sample | sort -u | wc -l)" -eq "$2" ] && break
         done
-        kill "${pids[@]}" 2>/dev/null' spread-probe "$cpus" 2>/dev/null)"
+        kill "${pids[@]}" 2>/dev/null' spread-probe "$cpus" "$count" 2>/dev/null)"
     while read -r line; do
         [ -n "$line" ] || continue
         last="$line"
@@ -98,7 +100,7 @@ check_sut_spread() {
     if [ -n "$spread" ]; then
         pass "SUT CPUs load-balanced: busy loops ran on CPUs $spread"
     else
-        fail "SUT CPUs load-balanced" "$count busy loops under CPUs $sut ran on CPUs: ${last:-unknown}; remove isolcpus from the kernel command line"
+        fail "SUT CPUs load-balanced" "$count busy loops under CPUs $sut ran on CPUs: ${last:-unknown}; remove isolcpus from the kernel command line, or stop other work on CPUs $sut and run the preflight again"
     fi
 }
 
@@ -107,7 +109,7 @@ check_sut_spread() {
 # its default domain isolation stops load balancing on the SUT CPUs, so every
 # thread of a SUT would stay on the one CPU its process started on.
 check_cpu_affinity() {
-    local housekeeping="$1" sut="$2" isolated
+    local housekeeping="$1" sut="$2" isolated mosquitto_pid
     if [ ! -e "$SYSROOT/sys/devices/system/cpu/isolated" ]; then
         fail "no isolated CPUs" "/sys/devices/system/cpu/isolated not readable"
     else
@@ -120,9 +122,13 @@ check_cpu_affinity() {
     fi
     check_process_affinity "systemd CPU affinity" 1 "$housekeeping" \
         "set CPUAffinity=$housekeeping for systemd and reboot"
-    check_process_affinity "Mosquitto CPU affinity" \
-        "$(systemctl show --property MainPID --value mosquitto.service 2>/dev/null)" "$housekeeping" \
-        "check mosquitto.service for a CPUAffinity= override"
+    mosquitto_pid="$(systemctl show --property MainPID --value mosquitto.service 2>/dev/null)"
+    if [ "${mosquitto_pid:-0}" = 0 ]; then
+        fail "Mosquitto CPU affinity" "mosquitto.service is not running"
+    else
+        check_process_affinity "Mosquitto CPU affinity" "$mosquitto_pid" "$housekeeping" \
+            "check mosquitto.service for a CPUAffinity= override"
+    fi
     check_irq_affinity "$housekeeping" "$sut"
     check_sut_spread "$sut"
 }
