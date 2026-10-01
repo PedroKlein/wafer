@@ -31,7 +31,7 @@ Missing and failed diagnostic conditions remain `PENDING` with a null value. The
 - E-Perf-1/2 run-level target-load latency;
 - E-Perf-7 metering effect;
 - E-Perf-10 offered versus achieved rate, pooled loss, p99 latency, delivery ceiling, normalized p99 knee, and MQTT support-path limitation;
-- E-Swap internal phases and sink-observed gaps;
+- E-Swap internal phases and sink-observed gaps, with E-Swap-1 and E-Swap-5 summarised per run before they are summarised over their 10 runs, and the first-use swap of each run kept apart from the cached swaps;
 - E-Swap-3 event-aligned dip, action duration, recovery, and sequence integrity;
 - E-Swap-4 one event from each independent burst run, plus separately reported source-origin `[0,120s)` primary and `[120s,130s)` drain completion evidence.
 
