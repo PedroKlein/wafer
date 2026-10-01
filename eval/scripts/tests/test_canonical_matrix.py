@@ -390,6 +390,18 @@ def test_preflight_accepts_canonical_facts() -> None:
     assert "canonical preflight: PASS" in result.stdout
 
 
+def test_preflight_requires_the_comparator_config_version(tmp_path: Path) -> None:
+    comparator = tomllib.loads(
+        (ROOT / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
+    )["comparator"]
+    path = tmp_path / "facts.json"
+    write_json(path, {**valid_facts(), "ekuiper_version": comparator["version"]})
+
+    result = run_validator("preflight", str(path), "--require-ekuiper")
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_preflight_accepts_an_untagged_clean_source(tmp_path: Path) -> None:
     path = tmp_path / "facts.json"
     write_json(path, {**valid_facts(), "git_tags": []})
