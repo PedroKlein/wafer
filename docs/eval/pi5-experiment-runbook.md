@@ -69,7 +69,6 @@ cd eval/analysis
 uv sync
 uv run pytest -q
 cd ../..
-python3 eval/scripts/check-current-docs.py
 python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
 ```
 

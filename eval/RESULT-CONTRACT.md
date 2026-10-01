@@ -515,16 +515,6 @@ artifacts are append-only, retain failed and interrupted attempts, and are never
 duplicated during host transfer. Analysis opens raw inputs read-only and writes
 only under `derived/` and `reports/`.
 
-Storage qualification is a staged, non-destructive gate. `prepared.json` binds
-one stable device identifier, UUID, `WAF_RESULTS` label, exFAT type, exact mount
-path, mount options, read-write state, available bytes, path-device identity, and
-a bounded large-file/many-small-file corpus manifest. The operator then stops
-writers, synchronizes, safely unmounts, and remounts the physical volume. A fresh
-mount identity is mandatory. `verified.json` records expected and observed file
-and byte counts plus missing, extra, and mismatched counts after full SHA-256
-verification; every error count must be zero. The qualification tooling does
-not format, relabel, mount, unmount, copy, or delete storage.
-
 ### Reduced-repetition diagnostic batches
 
 `canonical_runner.py --repetitions N` runs only runs 1 to N of the frozen

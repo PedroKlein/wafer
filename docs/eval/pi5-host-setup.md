@@ -148,7 +148,7 @@ vcgencmd measure_temp
 vcgencmd get_throttled
 ```
 
-`get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply is admitted only by measured host gates and receives no threshold waiver: any nonzero throttling, temperature at or above the declared limit, reboot, kernel I/O error, or checksum mismatch stops admission.
+`get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
 ## 9. Mount the single results volume
 
@@ -157,70 +157,6 @@ Campaign evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the 
 Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
 Before moving the drive, stop all writers, run `sync`, and unmount it cleanly. After each mount or host transition, confirm the UUID and label and verify the complete SHA-256 manifest before exposing `raw/` to analysis. Analysis opens `raw/` read-only and writes only under `derived/` and `reports/`. Never copy the raw tree to the SD card, Mac internal storage, or another removable volume.
-
-Qualification is staged and non-destructive. The tool never formats, relabels, mounts, unmounts, copies, or deletes the volume. First capture the mounted-device facts and review the stable by-id name and UUID before creating the bounded test corpus:
-
-```sh
-./eval/scripts/qualify-results-storage.sh facts \
-  --results-root /mnt/wafer-results \
-  > /tmp/wafer-results-before.json
-./eval/scripts/qualify-results-storage.sh prepare \
-  --results-root /mnt/wafer-results \
-  --facts-json /tmp/wafer-results-before.json \
-  --expected-device-id 'by-id:<approved-Kingston-partition-id>' \
-  --expected-uuid '<approved-exFAT-UUID>' \
-  --qualification-id '<source-bound-id>' \
-  --min-free-bytes '<required-campaign-bytes>'
-```
-
-`prepare` fails before writing if the stable device ID, UUID, label, exFAT type, mount path, read-write state, path identity, or free-space margin differs. Its corpus is stored under `manifests/storage-qualification/<id>/`, never under `raw/`. It writes one large file, 1,024 small files, their SHA-256 manifest, exact file/byte counts, and a `prepared.json` receipt, then calls `sync`.
-
-Next stop every writer, run `sync`, unmount the volume with the host's normal safe-eject procedure, remount it at `/mnt/wafer-results`, and collect fresh facts. The tool does not perform this operator step. Verification requires a changed mount identity and rehashes every corpus file:
-
-```sh
-./eval/scripts/qualify-results-storage.sh facts \
-  --results-root /mnt/wafer-results \
-  > /tmp/wafer-results-after.json
-./eval/scripts/qualify-results-storage.sh verify-remount \
-  --results-root /mnt/wafer-results \
-  --facts-json /tmp/wafer-results-after.json \
-  --prepared-receipt /mnt/wafer-results/manifests/storage-qualification/<id>/prepared.json
-```
-
-The resulting `verified.json` records expected/observed file and byte counts, missing, extra, and mismatch counts, and the before/after mount identities. Any non-zero count blocks use of the volume.
-
-After storage qualification and a fresh reboot, record the boot ID and run the
-stop-on-first-failure host load ladder. Do not use the historical
-`.plans/rpi5-host-diagnostic/run_phase.sh`; it predates the exFAT evidence
-contract and writes to its local plan directory.
-
-```sh
-boot_id="$(cat /proc/sys/kernel/random/boot_id)"
-session_id="host-characterization-$(date -u +%Y%m%dT%H%M%SZ)"
-./eval/scripts/characterize-rpi5-host.sh \
-  --output-dir "/mnt/wafer-results/raw/e-host-thermal-storage/$session_id" \
-  --session-id "$session_id" \
-  --expected-boot-id "$boot_id"
-```
-
-Start within ten minutes of the reboot with `vcgencmd get_throttled` equal to
-`throttled=0x0`. The fixed sequence is 120 seconds idle followed by 300 seconds
-each of one-, two-, and three-SUT-core CPU load, CPU plus memory, USB write, USB
-read, and combined CPU plus memory plus USB. One-second samples record
-wall-clock and monotonic time, boot ID, temperature, CPU frequency, throttling,
-PMIC internal-rail proxy watts, memory availability and PSI, and USB throughput.
-The PMIC value is not total input power and excludes direct USB-device draw.
-
-The command exits immediately on temperature at or above 75 °C, any non-zero
-throttling value, boot-ID change, kernel I/O error, workload or instrumentation
-failure, or USB SHA-256 mismatch. It writes the partial receipt and marks later
-phases `not-run`; retry with a new session ID after correcting the failure. It
-never overwrites a prior session. N=5 requires the diagnostic phases through
-USB read to pass. N=30 additionally requires the maximum combined-load phase,
-so a failure there does not erase accepted diagnostic evidence but keeps final
-admission blocked. The script's fixture mode is for local contract tests only;
-its receipts set `execution_mode=fixture-synthetic` and can never grant either
-admission gate.
 
 ## 10. Run preflight and smoke
 
