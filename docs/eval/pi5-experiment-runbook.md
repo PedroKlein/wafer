@@ -82,7 +82,7 @@ python3 eval/scripts/measure-container-floor.py --platform linux/arm64   # Pi 5 
 python3 eval/scripts/measure-container-floor.py --platform linux/amd64   # x86
 ```
 
-The tool builds a `FROM scratch` image that holds only a statically linked Rust pass-through worker (`eval/container-floor/`), checks that the image passes its input through, and writes `eval/container-floor/linux-arm64.json` or `linux-amd64.json` with the image size and the pinned build inputs. The E-Density-1 collector copies the file for its host into the result and fails without it, and host preflight reports a missing file as a failure. `python3 -m pytest -q eval/scripts/tests` fails when a committed floor no longer matches the worker sources, the Dockerfile or `rust-toolchain.toml`; measure again after changing any of them.
+The tool builds a `FROM scratch` image that holds only a statically linked Rust pass-through worker (`eval/container-floor/`), checks that the image passes its input through, and writes `eval/container-floor/linux-arm64.json` or `linux-amd64.json` with the image size and the pinned build inputs. The E-Density-1 collector copies the file for its host into the result and fails without it, and host preflight warns when it is missing, so the other experiments can still run. `python3 -m pytest -q eval/scripts/tests` fails when a committed floor no longer matches the worker sources, the Dockerfile or `rust-toolchain.toml`; measure again after changing any of them.
 
 Any source, config, or documentation change after this point is a new commit. Run the gates again and start a new batch. The runner refuses to resume a batch from another commit or another `eval/canonical-matrix.json`.
 

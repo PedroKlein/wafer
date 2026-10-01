@@ -225,7 +225,7 @@ check_deployment() {
     if [ -f "$ROOT/$floor" ]; then
         pass "E-Density-1 container floor deployed"
     else
-        fail "E-Density-1 container floor deployed" "measure and commit $floor with eval/scripts/measure-container-floor.py, then deploy"
+        warn "E-Density-1 container floor not deployed: E-Density-1 fails until $floor is measured with eval/scripts/measure-container-floor.py, committed and deployed"
     fi
 
     if [ -f "$ROOT/SOURCE_STATE.json" ]; then

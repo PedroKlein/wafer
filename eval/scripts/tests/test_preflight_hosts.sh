@@ -186,19 +186,23 @@ deploy="$("$ROOT/eval/scripts/deploy-pi5.sh" --host jetson@example --bin-dir "$d
 grep -q "bin_dir: $deployed/target/release" <<<"$deploy"
 
 rm "$deployed/eval/container-floor/linux-amd64.json"
-if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
-    WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1; then
-    echo 'x86 preflight passed without the x86_64 container floor' >&2
+PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1 \
+    || true
+grep -q '^WARN  E-Density-1 container floor not deployed: E-Density-1 fails until eval/container-floor/linux-amd64.json is measured' "$log"
+if grep -q '^FAIL  E-Density-1' "$log"; then
+    echo 'preflight failed on a missing container floor' >&2
     exit 1
 fi
-grep -q '^FAIL  E-Density-1 container floor deployed — measure and commit eval/container-floor/linux-amd64.json' "$log"
 
 rm "$deployed/eval/container-floor/linux-arm64.json"
-if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=aarch64 WAFER_PI_ROOT="$deployed" \
-    WAFER_PREFLIGHT_SYSROOT="$pi" "$ROOT/eval/scripts/preflight-pi5.sh" >"$log" 2>&1; then
-    echo 'pi preflight passed without the arm64 container floor' >&2
+PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=aarch64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$pi" "$ROOT/eval/scripts/preflight-pi5.sh" >"$log" 2>&1 \
+    || true
+grep -q '^WARN  E-Density-1 container floor not deployed: E-Density-1 fails until eval/container-floor/linux-arm64.json is measured' "$log"
+if grep -q '^FAIL  E-Density-1' "$log"; then
+    echo 'preflight failed on a missing container floor' >&2
     exit 1
 fi
-grep -q '^FAIL  E-Density-1 container floor deployed — measure and commit eval/container-floor/linux-arm64.json' "$log"
 
 echo 'host preflight tests: PASS'
