@@ -27,6 +27,9 @@ for binary in wafer wafer-loadgen waferctl; do
     printf '#!/bin/sh\n' > "$deployed/target/release/$binary"
     chmod +x "$deployed/target/release/$binary"
 done
+mkdir -p "$deployed/eval/container-floor"
+echo '{}' > "$deployed/eval/container-floor/linux-arm64.json"
+echo '{}' > "$deployed/eval/container-floor/linux-amd64.json"
 touch "$deployed/plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm" \
     "$deployed/plugins/delay-injector/target/wasm32-wasip2/release/wafer_delay_injector.wasm"
 echo '{"git_sha":"a","git_dirty":false,"git_tags":["v1"]}' > "$deployed/SOURCE_STATE.json"
@@ -181,5 +184,13 @@ fi
 
 deploy="$("$ROOT/eval/scripts/deploy-pi5.sh" --host jetson@example --bin-dir "$deployed/target/release" --dry-run)"
 grep -q "bin_dir: $deployed/target/release" <<<"$deploy"
+
+rm "$deployed/eval/container-floor/linux-amd64.json"
+if PATH="$tmp/bin:$PATH" PREFLIGHT_UNAME_M=x86_64 WAFER_PI_ROOT="$deployed" \
+    WAFER_PREFLIGHT_SYSROOT="$x86" "$ROOT/eval/scripts/preflight-x86.sh" >"$log" 2>&1; then
+    echo 'x86 preflight passed without the x86_64 container floor' >&2
+    exit 1
+fi
+grep -q '^FAIL  E-Density-1 container floor deployed — measure and commit eval/container-floor/linux-amd64.json' "$log"
 
 echo 'host preflight tests: PASS'

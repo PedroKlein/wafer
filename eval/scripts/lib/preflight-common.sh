@@ -198,7 +198,7 @@ check_tools_and_services() {
 }
 
 check_deployment() {
-    local deploy_hint="$1" binary plugin source_dirty
+    local deploy_hint="$1" binary plugin source_dirty floor
     for binary in wafer wafer-loadgen waferctl; do
         if [ -x "$ROOT/target/release/$binary" ]; then
             pass "$binary deployed"
@@ -217,6 +217,16 @@ check_deployment() {
             fail "$(basename "$plugin") deployed" "build and deploy evaluation plugins"
         fi
     done
+
+    case "$(uname -m)" in
+        aarch64|arm64) floor=eval/container-floor/linux-arm64.json ;;
+        *) floor=eval/container-floor/linux-amd64.json ;;
+    esac
+    if [ -f "$ROOT/$floor" ]; then
+        pass "E-Density-1 container floor deployed"
+    else
+        fail "E-Density-1 container floor deployed" "measure and commit $floor with eval/scripts/measure-container-floor.py, then deploy"
+    fi
 
     if [ -f "$ROOT/SOURCE_STATE.json" ]; then
         source_dirty="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["git_dirty"]).lower())' "$ROOT/SOURCE_STATE.json" 2>/dev/null || echo unknown)"
