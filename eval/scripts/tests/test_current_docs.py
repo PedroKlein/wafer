@@ -31,6 +31,18 @@ def test_stale_current_claims_fail_but_historical_suffix_is_excluded(
     assert DOCS.stale_claims(DOCS.current_text(path)) == []
 
 
+def test_documented_schedule_counts_must_match_the_matrix() -> None:
+    current = "The matrix contains 2,201 schedule records and 1,971 executed or static leaves."
+    assert DOCS.schedule_count_errors(current, 2_201, 1_971) == []
+    assert DOCS.schedule_count_errors(
+        "2,165 schedule records, and 1,953 executed or static measurement leaves", 2_201, 1_971
+    ) == [
+        "schedule record count 2,165 differs from the matrix count 2,201",
+        "measured leaf count 1,953 differs from the matrix count 1,971",
+    ]
+    assert DOCS.schedule_count_errors("one table holds 9 records", 2_201, 1_971) == []
+
+
 def test_documented_config_values_match_source_and_final_configs() -> None:
     assert DOCS.config_errors() == []
 

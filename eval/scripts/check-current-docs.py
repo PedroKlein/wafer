@@ -205,6 +205,19 @@ def stale_claims(text: str) -> list[str]:
     return [message for pattern, message in FORBIDDEN if pattern.search(text)]
 
 
+def schedule_count_errors(text: str, records: int, leaves: int) -> list[str]:
+    counts = (
+        (r"(?:schedule )?records", records, "schedule record"),
+        (r"(?:executed or static|measured-or-static) (?:measurement )?leaves", leaves, "measured leaf"),
+    )
+    return [
+        f"{label} count {found} differs from the matrix count {expected:,}"
+        for pattern, expected, label in counts
+        for found in re.findall(rf"\b(\d{{1,3}}(?:,\d{{3}})+) {pattern}\b", text)
+        if int(found.replace(",", "")) != expected
+    ]
+
+
 def enhanced_method_text_errors(text: str, label: str) -> list[str]:
     return [
         f"{label}: forbidden enhanced-method claim: {message}"
@@ -342,6 +355,18 @@ def audit() -> list[str]:
         path = ROOT / relative
         if not path.is_file() or HISTORICAL_FILE_MARKER not in path.read_text():
             errors.append(f"historical diagnostic document lacks marker: {relative}")
+    campaign = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["final_campaign"]
+    for relative in (*CURRENT_DOCS, "eval/RESULT-CONTRACT.md"):
+        path = ROOT / relative
+        if path.is_file():
+            errors.extend(
+                f"{relative}: {error}"
+                for error in schedule_count_errors(
+                    current_text(path),
+                    campaign["expected_schedule_records"],
+                    campaign["expected_measured_leaves"],
+                )
+            )
     corpus = "\n".join(combined)
     for required in REQUIRED:
         if required not in corpus:

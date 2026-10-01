@@ -19,7 +19,7 @@ The final Raspberry Pi 5 method is implemented through canonical analysis. The f
 | Full N=30 campaign | not started |
 | Batch approval (`mise run approve-batch`) | pending |
 
-The matrix contains 2,165 schedule records and 1,953 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
+The matrix contains 2,201 schedule records and 1,971 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
 
 ## Current experiment boundaries
 

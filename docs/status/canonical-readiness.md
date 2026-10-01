@@ -5,7 +5,7 @@ This is the current readiness boundary for the Raspberry Pi 5 4 GB final evaluat
 ## Current status
 
 - Final matrix: frozen before execution, seed 1729.
-- Schedule: 2,165 records; 1,953 executed or static leaves. Shared-result aliases contribute zero independent N and point directly to one admitted final source.
+- Schedule: 2,201 records; 1,971 executed or static leaves. Shared-result aliases contribute zero independent N and point directly to one admitted final source.
 - Capacity grid: `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper, with 30 runs per system/rate.
 - Metering: ordinary WAFER leaves explicitly use fuel plus epoch; runtime defaults remain unmetered.
 - E-Swap-3: actual-t0-aligned event series implemented; `disruption-timeline.json` is the only final action timeline, while `publisher-timing.json` is transient and legacy `swap_timeline.json` is rejected.

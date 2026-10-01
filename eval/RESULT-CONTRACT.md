@@ -266,7 +266,7 @@ The runtime adopted this async P2 path. The A/B tooling that produced
 
 ### Final amended contract
 
-The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,165 schedule records, and 1,953 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`.
+The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,201 schedule records, and 1,971 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`.
 
 Final E-Perf-5 uses explicit transform fuel and epoch protection. Its transform-only pipeline records `filter = null` and `router = null` because those node categories are absent; this is a declared matrix exception, not an unmetered WAFER run.
 
