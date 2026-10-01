@@ -39,42 +39,34 @@ Apply it:
 sudo systemctl reload ssh
 ```
 
-## 4. Reserve CPUs for the active system under test
+## 4. Keep CPU 0 for everything except the system under test
 
-Edit `/boot/firmware/cmdline.txt`. Keep the file on one line and append:
+CPU 0 runs operating-system work, Mosquitto, `wafer-loadgen`, and the telemetry samplers; CPUs 1–3 run exactly one of WAFER, the native Rust baseline, or eKuiper.
+
+Set systemd's default CPU affinity, which every service and login session inherits. In `/etc/systemd/system.conf`, under `[Manager]`, set:
+
+```ini
+CPUAffinity=0
+```
+
+Then edit `/boot/firmware/cmdline.txt` so that new interrupts go to CPU 0. Keep the file on one line, remove any `isolcpus=` left from an earlier setup, and append:
 
 ```text
-isolcpus=1-3
+irqaffinity=0
 ```
 
 Reboot and verify:
 
 ```sh
 sudo reboot
+grep Cpus_allowed_list /proc/1/status
+cat /proc/irq/default_smp_affinity
 cat /sys/devices/system/cpu/isolated
 ```
 
-The expected value is `1-3`. CPU 0 is reserved for operating-system work, Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one of WAFER, the native Rust baseline, or eKuiper.
+The expected values are `Cpus_allowed_list: 0`, a mask of CPU 0 only (`1`), and an empty line. Mosquitto inherits CPU 0 from systemd, and the runner pins `wafer-loadgen` and both telemetry samplers to CPU 0. The runner starts WAFER and the native baseline with `taskset -c 1-3`, and the eKuiper unit sets `CPUAffinity=1 2 3`, which takes precedence over the systemd default. `preflight-pi5.sh` checks all of this, warns about interrupts that cannot leave CPUs 1–3 (per-CPU timers, for example), and starts three busy loops under the CPU 1–3 mask to confirm that the kernel spreads them over three CPUs.
 
-Pin Mosquitto to CPU 0:
-
-```sh
-sudo systemctl edit mosquitto
-```
-
-Add:
-
-```ini
-[Service]
-CPUAffinity=0
-```
-
-Then apply it:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl restart mosquitto
-```
+Do not use `isolcpus`. Its default domain isolation takes CPUs 1–3 out of scheduler load balancing, so every thread of a system started under `taskset -c 1-3` would stay on the single CPU its process started on. The `isolcpus=nohz,managed_irq,...` form is no alternative: it needs a kernel built with `NO_HZ_FULL`, and the stock Raspberry Pi kernel, built without it, rejects the whole parameter.
 
 ## 5. Remove avoidable noise
 
@@ -247,7 +239,8 @@ These commands must succeed before longer test runs:
 
 ```sh
 [ "$(uname -m)" = aarch64 ]
-[ "$(cat /sys/devices/system/cpu/isolated)" = 1-3 ]
+[ -z "$(cat /sys/devices/system/cpu/isolated)" ]
+grep -q '^Cpus_allowed_list:[[:space:]]*0$' /proc/1/status
 [ "$(sort -u /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)" = performance ]
 [ "$(vcgencmd get_throttled)" = throttled=0x0 ]
 systemctl is-active --quiet mosquitto kuiper
