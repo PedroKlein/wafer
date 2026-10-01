@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import contextlib
 import hashlib
 import importlib.util
 import json
@@ -7,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -362,7 +364,21 @@ def make_result(root: Path) -> Path:
     return result
 
 
-def test_canonical_static_density_result_accepts_release_component_sizes() -> None:
+CONTAINER_FLOOR = {
+    "schema_version": 1,
+    "base": "scratch",
+    "platform": "linux/arm64",
+    "build_image": "rust:1.98.1-alpine@sha256:" + "4" * 64,
+    "rust_toolchain": "1.98.1",
+    "inputs_sha256": {"Dockerfile": "5" * 64, "worker/src/main.rs": "6" * 64},
+    "layer_count": 1,
+    "image_bytes": 420_352,
+    "binary_bytes": 419_328,
+}
+
+
+@contextlib.contextmanager
+def density_result(floor: dict | None = CONTAINER_FLOOR) -> Iterator[Path]:
     with tempfile.TemporaryDirectory() as tmp:
         result = (
             Path(tmp)
@@ -381,6 +397,8 @@ def test_canonical_static_density_result_accepts_release_component_sizes() -> No
             "power-boundary.json",
         ):
             (result / name).write_text(FIXTURE_CONTENT.get(name, "fixture\n"))
+        if floor is not None:
+            (result / "container-floor.json").write_text(json.dumps(floor))
         (result / "measurement-window.json").write_text(
             '{"started_ns":100,"finished_ns":200}\n'
         )
@@ -406,8 +424,34 @@ def test_canonical_static_density_result_accepts_release_component_sizes() -> No
                 }
             )
         )
+        yield result
+
+
+def test_canonical_static_density_result_accepts_release_component_sizes() -> None:
+    with density_result() as result:
         completed = run(result)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("floor", "message"),
+    [
+        (None, "missing required canonical artefact for e-density-1: container-floor.json"),
+        ({**CONTAINER_FLOOR, "platform": "linux/amd64"}, "platform differs from the host architecture"),
+        ({**CONTAINER_FLOOR, "base": "alpine"}, "not a one-layer FROM scratch image"),
+        ({**CONTAINER_FLOOR, "layer_count": 2}, "not a one-layer FROM scratch image"),
+        ({**CONTAINER_FLOOR, "binary_bytes": 500_000}, "worker inside the image"),
+        ({**CONTAINER_FLOOR, "build_image": "rust:1.98.1-alpine"}, "not pinned by digest"),
+        ({**CONTAINER_FLOOR, "inputs_sha256": {}}, "hashes of its build inputs"),
+    ],
+)
+def test_canonical_density_result_requires_the_measured_container_floor(
+    floor: dict | None, message: str
+) -> None:
+    with density_result(floor) as result:
+        completed = run(result)
+    assert completed.returncode == 1
+    assert message in completed.stdout
 
 
 def test_canonical_result_accepts_complete_leaf() -> None:

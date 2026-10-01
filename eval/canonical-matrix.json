@@ -1313,7 +1313,7 @@
     },
     "e-density-1": {
       "research_question": "all",
-      "purpose": "Record release Wasm component sizes for the isolation-unit density comparison.",
+      "purpose": "Record release Wasm component sizes beside the measured FROM scratch container floor for the isolation-unit density comparison.",
       "sample_unit": "static",
       "repetitions": 1,
       "warmup_secs": 0,
@@ -1323,7 +1323,8 @@
         "release-components"
       ],
       "required_outputs": [
-        "binary-sizes.csv"
+        "binary-sizes.csv",
+        "container-floor.json"
       ],
       "analysis": "10-summary-stats.ipynb",
       "thesis_evidence": true,

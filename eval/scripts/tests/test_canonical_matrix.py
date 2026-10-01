@@ -331,6 +331,17 @@ def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
     assert "Compares sustainable throughput" not in notebook_text
 
 
+def test_density_requires_the_measured_container_floor() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "e-density-1 required outputs differ" in result.stderr
+
+
 def test_final_capacity_repetitions_cannot_drop_below_30() -> None:
     matrix = json.loads(MATRIX.read_text())
     matrix["experiments"]["e-perf-10"]["repetitions"] = 29

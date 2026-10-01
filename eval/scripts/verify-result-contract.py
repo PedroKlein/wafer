@@ -1650,6 +1650,34 @@ def check_topology_manifest(path: Path, metadata: dict) -> list[str]:
     return violations
 
 
+CONTAINER_FLOOR_PLATFORMS = {"aarch64": "linux/arm64", "x86_64": "linux/amd64"}
+
+
+def check_container_floor(path: Path, metadata: dict) -> list[str]:
+    violations: list[str] = []
+    value = _load_json(path, "container-floor.json", violations)
+    if value is None:
+        return violations
+    if value.get("schema_version") != 1 or value.get("base") != "scratch" or value.get("layer_count") != 1:
+        violations.append("container-floor.json is not a one-layer FROM scratch image")
+    image_bytes = value.get("image_bytes")
+    binary_bytes = value.get("binary_bytes")
+    if not (
+        type(image_bytes) is int and type(binary_bytes) is int and 0 < binary_bytes <= image_bytes
+    ):
+        violations.append("container-floor.json sizes must be positive with the worker inside the image")
+    if value.get("platform") != CONTAINER_FLOOR_PLATFORMS.get(str(metadata.get("arch"))):
+        violations.append("container-floor.json platform differs from the host architecture")
+    if not re.fullmatch(r"rust:\S+-alpine@sha256:[0-9a-f]{64}", str(value.get("build_image", ""))):
+        violations.append("container-floor.json build image is not pinned by digest")
+    inputs = value.get("inputs_sha256")
+    if not isinstance(inputs, dict) or not inputs or not all(
+        re.fullmatch(r"[0-9a-f]{64}", str(digest)) for digest in inputs.values()
+    ):
+        violations.append("container-floor.json lacks the hashes of its build inputs")
+    return violations
+
+
 def expected_metering(matrix: dict, experiment: str, condition: str) -> dict:
     if experiment == "e-perf-7":
         values = matrix["experiments"][experiment]["metering_modes"][condition]
@@ -1924,6 +1952,8 @@ def check_leaf(
         violations.extend(check_payload_manifest(leaf / "payload-manifest.json", metadata))
     if experiment == "e-perf-depth-extension" and "topology-manifest.json" in files:
         violations.extend(check_topology_manifest(leaf / "topology-manifest.json", metadata))
+    if experiment == "e-density-1" and "container-floor.json" in files:
+        violations.extend(check_container_floor(leaf / "container-floor.json", metadata))
     if experiment in CANDIDATE_SWAP_EXPERIMENTS:
         violations.extend(check_candidate_swap_evidence(leaf, metadata, experiment))
     if experiment == EKUIPER_PROFILE_EXPERIMENT:
