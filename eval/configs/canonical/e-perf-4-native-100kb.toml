@@ -1,0 +1,34 @@
+[pipeline]
+name = "e-perf-4-native-100kb"
+description = "Native pass-through baseline for the boundary benchmark with 100 KiB payload"
+
+[dead_letter]
+kind = "file"
+path = "dlq.jsonl"
+
+[nodes.source]
+type = "source"
+kind = "bench-source"
+rate = 1000.0
+total_messages = 90000
+warmup_messages = 30000
+payload_size = 102400
+
+[nodes.transform]
+type = "transform"
+plugin = { kind = "native", function = "passthrough" }
+
+[nodes.sink]
+type = "sink"
+kind = "bench-sink"
+warmup_secs = 30
+track_sequences = true
+track_hotswap = false
+
+[[edges]]
+from = "source"
+to = "transform"
+
+[[edges]]
+from = "transform"
+to = "sink"

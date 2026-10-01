@@ -23,7 +23,7 @@ SHAKE_DIR="${1:?Usage: summarise-e-perf-4.sh <shakedown-dir>}"
 WAFER_LOADGEN="$REPO_ROOT/target/release/wafer-loadgen"
 [ -x "$WAFER_LOADGEN" ] || { printf 'wafer-loadgen missing (run: cargo build --locked --release -p wafer-loadgen)\n' >&2; exit 3; }
 
-for size_dir in "$SHAKE_DIR"/{120b,1kb,10kb,100kb}; do
+for size_dir in "$SHAKE_DIR"/{,native-}{120b,1kb,10kb,100kb}; do
     [ -d "$size_dir" ] || continue
     size_label="$(basename "$size_dir")"
     per_run_dir="$size_dir/per-run-percentiles"

@@ -2560,9 +2560,11 @@ CONDITIONS: dict[str, tuple[Condition, ...]] = {
     ),
     "e-perf-4": tuple(
         Condition(
-            size,
-            f"eval/configs/canonical/e-perf-4-{size}.toml",
+            f"{prefix}{size}",
+            f"eval/configs/canonical/e-perf-4-{prefix}{size}.toml",
+            system=system,
         )
+        for system, prefix in (("wafer", ""), ("native", "native-"))
         for size in ("120b", "1kb", "10kb", "100kb")
     ),
     "e-perf-6": tuple(
@@ -6065,6 +6067,18 @@ def postprocess_run(root: Path, item: RunItem, output: Path) -> None:
     elif hdr.is_file():
         subprocess.run(
             [str(loadgen), "hdr-summary", "--hdr", str(hdr), "--output", str(output / "percentiles.json")],
+            check=True,
+        )
+    if item.experiment == "e-perf-4":
+        subprocess.run(
+            [
+                str(loadgen),
+                "hdr-summary",
+                "--hdr",
+                str(output / "service.hdr"),
+                "--output",
+                str(output / "service-percentiles.json"),
+            ],
             check=True,
         )
     compose_interval_metrics(output, required=True)

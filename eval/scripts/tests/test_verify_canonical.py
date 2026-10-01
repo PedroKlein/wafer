@@ -287,6 +287,11 @@ def make_result(root: Path) -> Path:
     (result / "measurement-window.json").write_text(
         '{"started_ns":100,"finished_ns":200}\n'
     )
+    (result / "service.hdr").write_text("fixture\n")
+    for name in ("percentiles.json", "service-percentiles.json"):
+        (result / name).write_text(
+            json.dumps({"total_count": 1, "p50_ns": 1, "p95_ns": 1, "p99_ns": 1, "p999_ns": 1})
+        )
     interval_fragment = {
         "schema_version": 1,
         "interval_clock": "monotonic-elapsed",
@@ -422,6 +427,20 @@ def test_canonical_result_accepts_an_untagged_clean_source(tmp_path: Path) -> No
 
     assert completed.returncode == 0, completed.stdout + completed.stderr
 
+
+
+def test_payload_result_requires_service_time_for_every_measured_message(tmp_path: Path) -> None:
+    result = make_result(tmp_path)
+    service = result / "service-percentiles.json"
+    service.write_text(json.dumps({**json.loads(service.read_text()), "total_count": 0}))
+    partial = run(result)
+    service.unlink()
+    missing = run(result)
+
+    assert partial.returncode == 1
+    assert "service-percentiles.json counts 0 messages, percentiles.json counts 1" in partial.stdout
+    assert missing.returncode == 1
+    assert "missing required canonical artefact for e-perf-4: service-percentiles.json" in missing.stdout
 
 
 def test_final_wafer_result_rejects_metering_provenance_mismatch() -> None:

@@ -122,6 +122,10 @@ def build_complete_fixture(root: Path) -> None:
         "1kb": 110_000,
         "10kb": 120_000,
         "100kb": 130_000,
+        "native-120b": 90_000,
+        "native-1kb": 95_000,
+        "native-10kb": 100_000,
+        "native-100kb": 105_000,
         "depth-1": 100_000,
         "depth-3": 120_000,
         "depth-5": 140_000,
@@ -136,7 +140,16 @@ def build_complete_fixture(root: Path) -> None:
         "e-perf-1": ["wafer", "native", "ekuiper"],
         "e-perf-2": ["wafer", "native", "ekuiper"],
         "e-perf-3": ["depth-1", "depth-3", "depth-5", "depth-10"],
-        "e-perf-4": ["120b", "1kb", "10kb", "100kb"],
+        "e-perf-4": [
+            "120b",
+            "1kb",
+            "10kb",
+            "100kb",
+            "native-120b",
+            "native-1kb",
+            "native-10kb",
+            "native-100kb",
+        ],
         "e-perf-5": ["wafer", "native"],
         "e-perf-6": ["depth-1", "depth-3", "depth-5", "depth-10"],
         "e-perf-7": ["neither", "fuel-only", "epoch-only", "both"],
@@ -160,6 +173,18 @@ def build_complete_fixture(root: Path) -> None:
             (leaf / "sequence.csv").write_text(
                 "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n60000,60000,60000,0,0\n"
             )
+            if experiment == "e-perf-4":
+                (leaf / "service-percentiles.json").write_text(
+                    json.dumps(
+                        {
+                            "total_count": 60_000,
+                            "p50_ns": p50 - 20_000,
+                            "p95_ns": p50,
+                            "p99_ns": p50 + 20_000,
+                            "p999_ns": p50 + 60_000,
+                        }
+                    )
+                )
             if experiment == "e-perf-6":
                 (leaf / "memory.csv").write_text(
                     "elapsed_ms,rss_bytes\n0,60000000\n30000,67108864\n31000,67108864\n"

@@ -642,7 +642,7 @@ def test_schedule_covers_performance_matrix() -> None:
     assert schedule[0].experiment == "e-val-1"
     assert len(by_experiment["e-val-1"]) == 30
     assert len(by_experiment["e-perf-3"]) == 4 * 30
-    assert len(by_experiment["e-perf-4"]) == 4 * 30
+    assert len(by_experiment["e-perf-4"]) == 8 * 30
     assert len(by_experiment["e-perf-6"]) == 4 * 30
     assert len(by_experiment["e-perf-8"]) == 0 or all(
         item.shared_from == "e-perf-6" for item in by_experiment["e-perf-8"]
@@ -676,6 +676,50 @@ def test_schedule_covers_performance_matrix() -> None:
         for item in schedule
         if item.system == "wafer" and item.config
     )
+
+
+def test_payload_schedule_runs_each_native_arm_in_the_block_of_its_wafer_arm() -> None:
+    schedule = build_schedule({"e-perf-4"}, seed=1729)
+    sizes = ("120b", "1kb", "10kb", "100kb")
+    for run_index in range(1, 31):
+        block = [item for item in schedule if item.run_index == run_index]
+        assert sorted(item.condition for item in block) == sorted(
+            [*sizes, *(f"native-{size}" for size in sizes)]
+        )
+        for item in block:
+            native = item.condition.startswith("native-")
+            assert item.system == ("native" if native else "wafer")
+            assert item.config == f"eval/configs/canonical/e-perf-4-{item.condition}.toml"
+
+
+def test_payload_postprocess_summarises_service_time(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    item = next(
+        item
+        for item in build_schedule({"e-perf-4"}, seed=1729)
+        if item.condition == "native-10kb" and item.run_index == 1
+    )
+    (tmp_path / "metadata.json").write_text('{"experiment":"e-perf-4"}')
+    (tmp_path / "latency.hdr").write_text("fixture")
+    summaries: dict[str, str] = {}
+
+    def fake_run(command: list[str], **_: object) -> None:
+        if "hdr-summary" in command:
+            summaries[Path(command[command.index("--output") + 1]).name] = Path(
+                command[command.index("--hdr") + 1]
+            ).name
+
+    monkeypatch.setattr(runner.subprocess, "run", fake_run)
+    monkeypatch.setattr(runner, "compose_interval_metrics", lambda output, required: None)
+
+    postprocess_run(ROOT, item, tmp_path)
+
+    assert summaries == {
+        "percentiles.json": "latency.hdr",
+        "service-percentiles.json": "service.hdr",
+    }
+    assert json.loads((tmp_path / "metadata.json").read_text())["system"] == "native"
 
 
 def test_final_wafer_catalog_exactly_matches_runner_schedule() -> None:
@@ -2877,7 +2921,7 @@ def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free(
 def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
     schedule = build_schedule(set(matrix["experiments"]), seed=1729)
-    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_165
+    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_285
     keys = [item.result_key for item in schedule]
     assert len(keys) == len(set(keys))
     for experiment, definition in matrix["experiments"].items():

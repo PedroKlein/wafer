@@ -31,8 +31,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2165" in result.stdout
-    assert "measured_leaves=1953" in result.stdout
+    assert "schedule_records=2285" in result.stdout
+    assert "measured_leaves=2073" in result.stdout
 
 
 def test_final_campaign_policy_is_frozen_in_matrix() -> None:
@@ -43,8 +43,8 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["status"] == "frozen-before-execution"
     assert campaign["seed"] == 1729
     assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2165
-    assert campaign["expected_measured_leaves"] == 1953
+    assert campaign["expected_schedule_records"] == 2285
+    assert campaign["expected_measured_leaves"] == 2073
     assert campaign["capacity_grid"] == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -312,6 +312,43 @@ def test_backpressure_freezes_policy_specific_internal_queue_contract() -> None:
         assert config["edges"][0]["overflow"] == policy
         assert config["edges"][1]["overflow"] == "slow"
         assert config["dead_letter"]["kind"] == "file", "every run records dead-lettered messages"
+
+
+def test_payload_sizes_pair_a_wafer_arm_with_a_matching_native_arm() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    payload = matrix["experiments"]["e-perf-4"]
+    sizes = ["120b", "1kb", "10kb", "100kb"]
+    assert payload["conditions"] == [*sizes, *(f"native-{size}" for size in sizes)]
+    assert {"service.hdr", "service-percentiles.json"} <= set(payload["required_outputs"])
+
+    def mutated(change) -> subprocess.CompletedProcess[str]:
+        candidate = copy.deepcopy(matrix)
+        change(candidate)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "matrix.json"
+            write_json(path, candidate)
+            return run_validator("matrix", str(path))
+
+    def drop_native_arm(candidate: dict) -> None:
+        candidate["experiments"]["e-perf-4"]["conditions"].remove("native-10kb")
+
+    def drop_service_time(candidate: dict) -> None:
+        candidate["experiments"]["e-perf-4"]["required_outputs"].remove("service.hdr")
+
+    def mismatch_payload(candidate: dict) -> None:
+        for entry in candidate["final_campaign"]["wafer_config_catalog"]:
+            if (entry["experiment"], entry["condition"]) == ("e-perf-4", "120b"):
+                entry["config"] = "eval/configs/canonical/e-perf-4-1kb.toml"
+
+    expected = {
+        drop_native_arm: "e-perf-4 must pair every WAFER payload size with a native arm",
+        drop_service_time: "e-perf-4 required outputs lack the service-time histogram and summary",
+        mismatch_payload: "e-perf-4 120b native arm differs from the WAFER arm beyond the transform",
+    }
+    for change, message in expected.items():
+        result = mutated(change)
+        assert result.returncode == 1
+        assert message in result.stderr
 
 
 def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
