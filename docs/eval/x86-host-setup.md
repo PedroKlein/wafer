@@ -30,6 +30,12 @@ Deploy the evaluation tree with
 a checkout on the machine, or run from the checkout directly with
 `WAFER_PI_ROOT` pointing at it.
 
+E-Density-1 on this host uses the x86_64 container floor,
+`eval/container-floor/linux-amd64.json`. Measure it with
+`python3 eval/scripts/measure-container-floor.py --platform linux/amd64` and
+commit it before deploying, as described in the
+[runbook](pi5-experiment-runbook.md).
+
 ## Telemetry
 
 `eval/scripts/lib/pi_telemetry.py` picks its `x86` backend on an `x86_64`

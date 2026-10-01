@@ -486,6 +486,11 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
     if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
         errors.append("e-perf-5 must remain incomplete until matching x86 Linux batch")
+    if set(experiments.get("e-density-1", {}).get("required_outputs", [])) != {
+        "binary-sizes.csv",
+        "container-floor.json",
+    }:
+        errors.append("e-density-1 required outputs differ from the measured container-floor contract")
 
     records = 0
     for experiment_id, definition in experiments.items():

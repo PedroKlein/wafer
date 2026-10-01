@@ -45,7 +45,7 @@ With the runtime architecture fully designed (Sessions 1–5 covering WIT contra
 
 The key thesis narrative motivating complex plugins: simple telemetry filtering doesn't need WAFER — eKuiper's SQL handles it. But modern IoT gateways increasingly run multi-vendor decoders, statistical anomaly detectors, signal processing algorithms, and ML models. These are complex, frequently-updated, potentially untrusted workloads that justify per-stage isolation and zero-downtime hot-swap.
 
-Binary size provides an additional argument: Wasm components are 5KB–300KB versus 50–200MB for containers — 10,000× less overhead for per-stage isolation on constrained edge hardware.
+Binary size was a further motivation, because the unit of per-stage isolation is a Wasm component rather than a container image. E-Density-1 measures that difference against a `FROM scratch` container floor instead of assuming it; see [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md).
 
 ## Decisions
 
