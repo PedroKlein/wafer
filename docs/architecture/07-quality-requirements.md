@@ -6,7 +6,7 @@ These non-functional requirements define the current evaluation boundaries. `eva
 
 | ID | Requirement | Final method and criterion |
 |---|---|---|
-| NFR-PERF-1 | Bound the typed Wasm call cost. | E-Perf-4 reports run-level empty pass-through latency; median per-hop latency must be below 50 µs on Raspberry Pi 5. |
+| NFR-PERF-1 | Bound the typed Wasm call cost. | E-Perf-4 pairs each WAFER pass-through run with a native pass-through run of the same payload size and run index and reports the difference in service time; the median difference must be below 50 µs on Raspberry Pi 5. The path is in-process only, because the MQTT adapters keep rumqttc's 10 KiB packet limit. |
 | NFR-PERF-2 | Compare matched Pipeline A at the target load. | E-Perf-1 uses 30 runs per SUT at 1,000 msg/s. Pooled loss must be at most 1 percent, mean achieved/offered at least 0.99, and median WAFER p95 divided by median eKuiper p95 at most 2.0. |
 | NFR-PERF-3 | Measure the co-located gateway-capacity envelope. | E-Perf-10 uses 30 runs for every system-rate pair on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. Report delivery ceiling and normalized p99 knee with MQTT support-path censoring. Compare WAFER/eKuiper ceilings against 0.70 only when the ratio is identifiable. |
 | NFR-PERF-4 | Bound memory growth with pipeline depth. | E-Perf-6 reports total RSS for five nodes and the run-level slope; limits are 150 MB total and 10 MB per added node. |

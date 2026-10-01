@@ -104,6 +104,7 @@ REQUIRED = (
     "[1,000, 4,000, 8,000, 15,000, 16,000]",
     "E-Perf-1 is a matched 1,000 msg/s operating point, not capacity",
     "E-Perf-9 is Linux filesystem page-cache evidence",
+    "E-Perf-4 payload results describe the in-process path only",
     "E-Perf-5 remains `PENDING`",
     "PMIC telemetry is an internal-rail proxy",
     "Pipeline A is `MQTT source -> threshold filter -> MQTT sink`",

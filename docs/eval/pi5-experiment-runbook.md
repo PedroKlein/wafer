@@ -40,19 +40,19 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2165
-measured_leaves=1953
+schedule_records=2285
+measured_leaves=2073
 ```
 
-The 2,165 records include shared-result aliases with `independent_n_contribution=0`. The 1,953 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,285 records include shared-result aliases with `independent_n_contribution=0`. The 2,073 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
 | Estimate | Value | Basis |
 |---|---:|---|
-| Nominal active-run time | 45.52 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
-| Operational estimate | 50.07 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
-| Storage estimate | 43,433,437,093 bytes | Current primary N=30 estimate over all 2,165 schedule records, including the three E-Backpressure policies; regenerate before execution |
+| Nominal active-run time | 48.68 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 53.55 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs, so regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
 Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.

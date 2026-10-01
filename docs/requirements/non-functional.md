@@ -6,7 +6,7 @@ This reference lists the current quantitative requirements. The narrative explan
 
 | ID | Statement | Criterion | Experiment |
 |---|---|---|---|
-| NFR-PERF-1 | Typed Wasm boundary cost is bounded. | Median empty pass-through hop < 50 µs on Raspberry Pi 5. | E-Perf-4 |
+| NFR-PERF-1 | Typed Wasm boundary cost is bounded. | Median paired WAFER-minus-native service time of an empty pass-through hop < 50 µs on Raspberry Pi 5, on the in-process path. | E-Perf-4 |
 | NFR-PERF-2 | Matched target-load latency and delivery are bounded against eKuiper. | At 1,000 msg/s: pooled loss <= 1 percent, mean achieved/offered >= 0.99, median WAFER p95 / median eKuiper p95 <= 2.0. | E-Perf-1 |
 | NFR-PERF-3 | Gateway capacity is measured on one common grid. | Report delivery ceiling and normalized p99 knee for all systems on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. WAFER/eKuiper competitive ratio >= 0.70 only when identifiable after MQTT censoring. | E-Perf-10 |
 | NFR-PERF-4 | Pipeline memory growth is bounded. | Five-node RSS < 150 MB and incremental slope < 10 MB/node. | E-Perf-6 |

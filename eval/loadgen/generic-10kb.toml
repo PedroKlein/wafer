@@ -1,4 +1,5 @@
-# WAFER load profile: 10 KiB deterministic payload for E-Perf-4 payload sweep.
+# WAFER load profile: 10 KiB deterministic payload for MQTT load runs.
+# WAFER's MQTT source keeps rumqttc's 10 KiB packet limit and cannot receive it.
 #
 # Rendered by `wafer_loadgen::PayloadTemplate::Generic10kb`. Schema is telemetry
 # + a `pad` field of BLAKE3-derived hex. Deterministic across runs.

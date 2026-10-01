@@ -19,12 +19,13 @@ The final Raspberry Pi 5 method is implemented through canonical analysis. The f
 | Full N=30 campaign | not started |
 | Batch approval (`mise run approve-batch`) | pending |
 
-The matrix contains 2,165 schedule records and 1,953 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
+The matrix contains 2,285 schedule records and 2,073 executed or static leaves. The final capacity grid is `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s for MQTT loopback, Native, protected WAFER, and eKuiper.
 
 ## Current experiment boundaries
 
 - E-Perf-1 is the 1,000 msg/s target-load comparison.
 - E-Perf-10 is the common-grid gateway-capacity envelope with MQTT support censoring.
+- E-Perf-4 measures Wasm boundary cost as the paired WAFER-minus-native service time at 120 B, 1 KiB, 10 KiB and 100 KiB on the in-process path only; the MQTT adapters keep rumqttc's 10 KiB packet limit.
 - E-Perf-5 remains `PENDING` until matching x86 Linux evidence exists.
 - E-Perf-9 measures Linux filesystem page-cache state with the disk compiled-component cache disabled.
 - E-Swap-3 measures one event-aligned disruption in each of 30 runs per strategy. Final leaves retain only `disruption-timeline.json`; publisher timing is transient and legacy swap timelines are rejected.

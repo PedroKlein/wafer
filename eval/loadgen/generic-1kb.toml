@@ -1,4 +1,4 @@
-# WAFER load profile: 1 KiB deterministic payload for E-Perf-4 payload sweep.
+# WAFER load profile: 1 KiB deterministic payload for MQTT load runs.
 #
 # Rendered by `wafer_loadgen::PayloadTemplate::Generic1kb`. Schema is telemetry
 # + a `pad` field of BLAKE3-derived hex. Padding is deterministic (not `x`
