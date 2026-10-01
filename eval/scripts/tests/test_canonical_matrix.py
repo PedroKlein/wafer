@@ -31,8 +31,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2165" in result.stdout
-    assert "measured_leaves=1953" in result.stdout
+    assert "schedule_records=2201" in result.stdout
+    assert "measured_leaves=1971" in result.stdout
 
 
 def test_final_campaign_policy_is_frozen_in_matrix() -> None:
@@ -43,8 +43,8 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["status"] == "frozen-before-execution"
     assert campaign["seed"] == 1729
     assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2165
-    assert campaign["expected_measured_leaves"] == 1953
+    assert campaign["expected_schedule_records"] == 2201
+    assert campaign["expected_measured_leaves"] == 1971
     assert campaign["capacity_grid"] == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -131,7 +131,9 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     }
     for experiment in ("e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"):
         definition = matrix["experiments"][experiment]
-        assert definition["sample_unit"] == "event"
+        assert definition["sample_unit"] == "run"
+        assert definition["repetitions"] == 10
+        assert definition["events_per_run"] == 50
         assert definition["independent_unit"] == "complete process run"
         assert "within run" in definition["nested_unit"]
     assert burst["independent_unit"] == "complete process run"
@@ -237,6 +239,24 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
                 drain_end_secs=131
             ),
         ),
+    )
+    for expected, mutate in mutations:
+        matrix = json.loads(MATRIX.read_text())
+        mutate(matrix)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "matrix.json"
+            write_json(path, matrix)
+            result = run_validator("matrix", str(path))
+        assert result.returncode == 1, expected
+        assert expected in result.stderr
+
+
+def test_final_matrix_rejects_swap_session_drift() -> None:
+    mutations = (
+        ("e-swap-1 repetitions must be exactly 10", lambda value: value["experiments"]["e-swap-1"].update(repetitions=1)),
+        ("e-swap-5 repetitions must be exactly 10", lambda value: value["experiments"]["e-swap-5"].update(repetitions=30)),
+        ("e-swap-5 events_per_run must be exactly 50", lambda value: value["experiments"]["e-swap-5"].update(events_per_run=10)),
+        ("e-swap-1 has invalid sample_unit 'event'", lambda value: value["experiments"]["e-swap-1"].update(sample_unit="event")),
     )
     for expected, mutate in mutations:
         matrix = json.loads(MATRIX.read_text())

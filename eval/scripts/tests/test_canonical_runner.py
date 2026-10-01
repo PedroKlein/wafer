@@ -2877,7 +2877,7 @@ def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free(
 def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())
     schedule = build_schedule(set(matrix["experiments"]), seed=1729)
-    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_165
+    assert len(schedule) == matrix["final_campaign"]["expected_schedule_records"] == 2_201
     keys = [item.result_key for item in schedule]
     assert len(keys) == len(set(keys))
     for experiment, definition in matrix["experiments"].items():
@@ -3823,14 +3823,14 @@ def test_isolation_and_swap_schedule_preserves_experiment_semantics() -> None:
         "panic-attack",
         "epoch-loop-attack",
     }
-    assert len(by_experiment["e-swap-1"]) == 1
-    assert len(by_experiment["e-swap-2"]) == 1
+    for experiment in ("e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"):
+        items = by_experiment[experiment]
+        assert [item.run_index for item in items] == list(range(1, 11)), experiment
+        assert all(item.events_per_run == 50 for item in items), experiment
     assert len(by_experiment["e-swap-4"]) == 30
     assert all(item.events_per_run is None for item in by_experiment["e-swap-4"])
-    assert len(by_experiment["e-swap-5"]) == 1
-    assert len(by_experiment["e-swap-6"]) == 1
-    assert by_experiment["e-swap-2"][0].shared_from == "e-swap-1"
-    assert by_experiment["e-swap-6"][0].shared_from == "e-swap-1"
+    assert all(item.shared_from is None for item in by_experiment["e-swap-1"] + by_experiment["e-swap-5"])
+    assert all(item.shared_from == "e-swap-1" for item in by_experiment["e-swap-2"] + by_experiment["e-swap-6"])
     assert all("shakedown-macos" not in item.result_key for item in schedule)
 
     matrix = json.loads((ROOT / "eval/canonical-matrix.json").read_text())["experiments"]
