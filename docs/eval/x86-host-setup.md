@@ -35,6 +35,10 @@ throttle signal is a core below 95% of its pinned clock or a moved
 
 ## Running a batch
 
+Before each batch on this host, re-check the eKuiper comparator as the
+[runbook](pi5-experiment-runbook.md#re-check-the-ekuiper-comparator-before-each-batch)
+describes, with `--host x86`.
+
 The host profile lives in the `hosts` map of `eval/canonical-matrix.json`.
 Pass it to the runner and the validator; results land under
 `x86-<batch-id>` directories and are checked against this profile only:
