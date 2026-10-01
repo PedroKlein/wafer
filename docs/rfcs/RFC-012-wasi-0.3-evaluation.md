@@ -250,8 +250,8 @@ Controlled factors for every run are fixed as follows:
   arguments, pass-through artifact bytes, and no unrelated workload; and
 - one condition completed before moving to the next condition.
 
-The baseline and candidate run commands and the non-thesis artifact schema are
-specified in [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md#production-p2-async-ab-experiment).
+The A/B tooling and its non-thesis artifact schema have been retired; the
+decision table below records the gates and the outcome.
 
 #### Metrics and fail-closed decision
 

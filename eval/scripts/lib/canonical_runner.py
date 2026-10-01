@@ -6972,22 +6972,6 @@ def summarise(root: Path, batch_id: str, experiments: set[str]) -> None:
             summarize(root, batch_id)
         except ValueError as error:
             print(f"[{utc_now()}] SUMMARY {experiment} incomplete: {error}", flush=True)
-    scripts = {
-        "e-perf-4": "summarise-e-perf-4.sh",
-        "e-perf-6": "summarise-e-perf-6-8.sh",
-        "e-perf-8": "summarise-e-perf-6-8.sh",
-        "e-perf-7": "summarise-e-perf-7.sh",
-    }
-    for experiment in EXPERIMENT_ORDER:
-        script = scripts.get(experiment)
-        if (
-            experiment not in experiments
-            or experiment in CANONICAL_ALIASES
-            or script is None
-        ):
-            continue
-        result_root = results_layout(root).raw_path(experiment, batch_name(batch_id))
-        subprocess.run([str(root / "eval/scripts" / script), str(result_root)], check=True)
 
 
 def print_plan(schedule: list[RunItem], seed: int, batch_id: str) -> None:

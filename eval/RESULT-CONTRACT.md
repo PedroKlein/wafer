@@ -323,26 +323,6 @@ writers and this document in step:
 `startup.json` and `swap_timeline.json` are left out: they need a Wasm plugin
 and have their own tests (`startup_phases.rs`, `hotswap_success.rs`).
 
-### Production P2 async A/B experiment
-
-This checked-in specification freezes the host-only asynchronous Preview 2
-candidate. It does not change `wafer:pipeline@0.1.0`, guest WIT, plugin bytes,
-existing evaluation results, or the separately planned P3 PoC.
-
-The workspace and lockfile pin Wasmtime 48.0.2 to
-`e9f1ea232fd245aea338ab3eb7d73487ae75cab1`. At that revision the candidate
-uses `wasmtime_wasi::p2::add_to_linker_async`; host `bindgen!` invocations use
-`imports: { default: async }`, `exports: { default: async }`, and
-`require_store_data_send: true`; generated typed pre-instances use
-`instantiate_async`; and lifecycle and processing calls are awaited.
-`Config::async_support(true)` is excluded because it is a deprecated no-op at
-the pinned revision. The existing synchronous `wasmtime_wasi_nn` linker wiring
-remains, while inference instantiation and exports follow the same async
-Component Model path as Transform.
-
-The runtime adopted this async P2 path. The A/B tooling that produced
-`p2-decision.json` has been retired.
-
 ### Final amended contract
 
 The `final_campaign` object in `eval/canonical-matrix.json` is the executable source of truth. It fixes seed 1729, explicit fuel-plus-epoch metering, eKuiper concurrency 1, the five-rate common capacity grid, 2,321 schedule records, and 2,091 executed or static measurement leaves. Every final experiment has `thesis_evidence=true`.
@@ -730,7 +710,7 @@ authoritative through cross-compilation.
   "epoch_tick_ms": 10,
   "effective_metering_mode": "fuel-and-epoch",
   "loadgen": {
-    "profile_path": "eval/loadgen/generic-1kb.toml",
+    "profile_path": "eval/loadgen/telemetry-120b.toml",
     "subscribe_topic": "wafer/bench/output"
   },
   "mosquitto": {
