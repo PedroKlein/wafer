@@ -49,6 +49,8 @@ from canonical_runner import (  # noqa: E402
     hot_swap_offsets,
     loadgen_command,
     postprocess_run,
+    CAPACITY_SCOUT_DIAGNOSTIC_ARM,
+    CAPACITY_SCOUT_SUTS,
     CAPACITY_SCOUT_SYSTEMS,
     ProcessResourceSampler,
     RunItem,
@@ -2603,14 +2605,16 @@ def test_capacity_scout_replay_starts_with_full_500_block_and_resumes_incomplete
     assert first["action"] == "launch"
     assert first["decision"]["kind"] == "geometric"
     assert first["decision"]["rate_msg_s"] == 500
-    assert set(first["decision"]["systems"]) == {"mqtt-loopback", "native", "wafer", "ekuiper"}
+    assert set(first["decision"]["systems"]) == {
+        "mqtt-loopback", "native", "wafer", "ekuiper", "wafer-max-inflight-1"
+    }
     one_item = first["decision"]["schedule"][0]
     key = f"{one_item['experiment']}/{one_item['condition']}/run-{one_item['run_index']:02d}"
     accepted = {key: scout_result(one_item["system"], 500)}
     resumed = replay_capacity_scout_decisions([first["decision"]], accepted)
     assert resumed["action"] == "resume"
     assert key not in resumed["pending_result_keys"]
-    assert len(resumed["pending_result_keys"]) == 11
+    assert len(resumed["pending_result_keys"]) == 14
     with pytest.raises(ValueError, match="lack a decision"):
         replay_capacity_scout_decisions([], accepted)
 
@@ -2703,14 +2707,14 @@ def test_capacity_scout_replay_mqtt_bad_confirmation_censors_suts() -> None:
     second = replay_capacity_scout_decisions(decisions, accepted)
     accept_capacity_scout_decision(
         decisions, accepted, second["decision"],
-        {"mqtt-loopback": "bad", "native": "good", "wafer": "good", "ekuiper": "good"},
+        {"mqtt-loopback": "bad"} | {system: "good" for system in CAPACITY_SCOUT_SUTS},
     )
     confirmation = replay_capacity_scout_decisions(decisions, accepted)
     assert confirmation["decision"]["kind"] == "mqtt-confirmation"
     assert confirmation["decision"]["systems"] == ["mqtt-loopback"]
     classified = confirmation["decision"]["state_before"]["classifications"][-1]["results"]
     assert classified["mqtt-loopback"] == "bad"
-    assert all(classified[system] == "support-confounded" for system in ("native", "wafer", "ekuiper"))
+    assert all(classified[system] == "support-confounded" for system in CAPACITY_SCOUT_SUTS)
     accept_capacity_scout_decision(
         decisions, accepted, confirmation["decision"], {"mqtt-loopback": "bad"}
     )
@@ -2718,6 +2722,9 @@ def test_capacity_scout_replay_mqtt_bad_confirmation_censors_suts() -> None:
     assert after_confirmation["action"] == "stop"
     states = after_confirmation["states"]
     assert all(states[system] == {"phase": "support-censored", "censor_above_rate_msg_s": 500} for system in ("native", "wafer", "ekuiper"))
+    assert after_confirmation["diagnostic_states"] == {
+        "wafer-max-inflight-1": {"phase": "support-censored", "censor_above_rate_msg_s": 500}
+    }
     assert states["mqtt-loopback"] == {
         "phase": "resolved",
         "lower_good_rate_msg_s": 500,
@@ -2733,11 +2740,11 @@ def test_capacity_scout_replay_refines_each_sut_then_stops() -> None:
     for rate, sut_classification in ((500, "good"), (1000, "good"), (2000, "bad"), (4000, "bad")):
         assert outcome["decision"]["rate_msg_s"] == rate
         classifications = {"mqtt-loopback": "good"} | {
-            system: sut_classification for system in ("native", "wafer", "ekuiper")
+            system: sut_classification for system in CAPACITY_SCOUT_SUTS
         }
         accept_capacity_scout_decision(decisions, accepted, outcome["decision"], classifications)
         outcome = replay_capacity_scout_decisions(decisions, accepted)
-    for system in ("native", "wafer", "ekuiper"):
+    for system in CAPACITY_SCOUT_SUTS:
         assert outcome["decision"]["kind"] == "refinement"
         assert outcome["decision"]["systems"] == [system]
         assert outcome["decision"]["rate_msg_s"] == 1500
@@ -2747,6 +2754,14 @@ def test_capacity_scout_replay_refines_each_sut_then_stops() -> None:
         outcome = replay_capacity_scout_decisions(decisions, accepted)
     assert outcome["action"] == "stop"
     assert outcome["reason"] == "all-suts-resolved-or-support-censored"
+    assert set(outcome["states"]) == {"mqtt-loopback", "native", "wafer", "ekuiper"}
+    assert outcome["diagnostic_states"] == {
+        "wafer-max-inflight-1": {
+            "phase": "resolved",
+            "lower_good_rate_msg_s": 1000,
+            "upper_bad_rate_msg_s": 1500,
+        }
+    }
 
 
 def test_capacity_scout_invalid_counter_attempt_is_a_hard_stop() -> None:
@@ -2838,9 +2853,11 @@ def test_capacity_scout_state_machine_doubles_refines_and_censors() -> None:
 
 def test_capacity_scout_rate_block_is_seeded_balanced_and_positive() -> None:
     block = build_capacity_scout_rate_block(3000)
-    assert len(block) == 12
-    assert [item.system for item in block[:4]] == ["wafer", "mqtt-loopback", "ekuiper", "native"]
-    positions = {index: [] for index in range(4)}
+    assert len(block) == 15
+    assert [item.system for item in block[:5]] == [
+        "wafer", "wafer-max-inflight-1", "mqtt-loopback", "ekuiper", "native"
+    ]
+    positions = {index: [] for index in range(5)}
     for run_index in range(1, 4):
         run = [item for item in block if item.run_index == run_index]
         for position, item in enumerate(run):
@@ -2862,16 +2879,20 @@ def test_capacity_scout_decision_is_persisted_once() -> None:
 
 
 def test_capacity_scout_invocations_match_controlled_factors_and_are_trace_free() -> None:
-    receipts = [build_capacity_scout_invocation(ROOT, system, 3000, 2, Path("/tmp/scout")) for system in ("mqtt-loopback", "native", "wafer", "ekuiper")]
+    receipts = [build_capacity_scout_invocation(ROOT, system, 3000, 2, Path("/tmp/scout")) for system in CAPACITY_SCOUT_SYSTEMS]
     controlled = [receipt["controlled_factors"] for receipt in receipts]
     assert all(value == controlled[0] for value in controlled[1:])
-    assert {receipt["system"] for receipt in receipts} == {"mqtt-loopback", "native", "wafer", "ekuiper"}
+    assert {receipt["system"] for receipt in receipts} == {
+        "mqtt-loopback", "native", "wafer", "ekuiper", "wafer-max-inflight-1"
+    }
     assert all("--trace-file" not in receipt["publisher_command"] for receipt in receipts)
     assert all("--trace-file" not in receipt["subscriber_command"] for receipt in receipts)
     assert all("--sequence-example-limit" in receipt["subscriber_command"] for receipt in receipts)
     assert all(receipt["publisher_command"][receipt["publisher_command"].index("--rate") + 1] == "3000" for receipt in receipts)
     wafer = next(receipt for receipt in receipts if receipt["system"] == "wafer")
     assert wafer["config"] == "eval/configs/capacity-scout-wafer.toml"
+    arm = next(receipt for receipt in receipts if receipt["system"] == "wafer-max-inflight-1")
+    assert arm["config"] == "eval/configs/capacity-scout-wafer-max-inflight-1.toml"
 
 
 def test_final_schedule_contains_every_declared_condition_once_per_run() -> None:
@@ -3434,6 +3455,18 @@ def test_capacity_knee_summary_is_manifest_only_and_uses_passed_attempts(
     missing.write_text('{"status":"failed"}')
     incomplete = json.loads(summarize_capacity_knee(tmp_path, "test").read_text())
     assert incomplete["systems"]["wafer"]["complete"] is False
+
+
+def test_capacity_scout_diagnostic_arm_is_never_capacity_evidence() -> None:
+    validate_capacity_scout_result(scout_result(CAPACITY_SCOUT_DIAGNOSTIC_ARM, 4_000))
+
+    candidate = candidate_capacity_run_fixture("wafer", 9_000)
+    candidate["system"] = CAPACITY_SCOUT_DIAGNOSTIC_ARM
+    with pytest.raises(ValueError, match="unknown system"):
+        validate_candidate_capacity_run_result(candidate)
+
+    with pytest.raises(ValueError, match="unknown system"):
+        validate_capacity_run_result(capacity_run_fixture(CAPACITY_SCOUT_DIAGNOSTIC_ARM, 4_000))
 
 
 def test_candidate_capacity_result_rejects_evidence_promotion_and_threshold_drift() -> None:
