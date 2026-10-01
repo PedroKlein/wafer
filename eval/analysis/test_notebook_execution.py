@@ -34,6 +34,7 @@ def capacity_envelope_fixture() -> dict:
                     "run_count": 30,
                     "pooled_loss": 0.0 if rate < 16_000 else 0.02,
                     "mean_achieved_ratio": 1.0 if rate < 16_000 else 0.97,
+                    "total_duplicates": 0,
                     "classification": "good"
                     if rate < 16_000
                     else ("bad" if system == "mqtt-loopback" else "support-confounded"),
@@ -42,6 +43,10 @@ def capacity_envelope_fixture() -> dict:
                             "median": rate,
                             "values": [rate * (0.98 + index / 1_500) for index in range(30)],
                         },
+                        "achieved_ratio": {
+                            "values": [1.0 if rate < 16_000 else 0.97] * 30,
+                        },
+                        "loss": {"values": [0.0 if rate < 16_000 else 0.02] * 30},
                         "p99_ns": {
                             "median": 100_000 + rate,
                             "values": [90_000 + 1_000 * index for index in range(30)],
@@ -84,6 +89,7 @@ def write_swap5_fixture(leaf: Path) -> None:
             "http_status": 200,
             "body": {
                 "status": "rolled_back",
+                "compile_cache": "compiled" if index == 0 else "memory_hit",
                 "timeline": {"compile_ns": 1_000, "instantiate_ns": 2_000, "signal_ns": 3_000, "rollback_ns": 4_000_000 + index},
             },
         }
@@ -194,9 +200,12 @@ def build_complete_fixture(root: Path) -> None:
     density.mkdir(parents=True)
     (density / "canonical-status.json").write_text('{"status":"passed"}')
     (density / "binary-sizes.csv").write_text(
-        "plugin,wasm_bytes,wasm_kb,container_base,container_min_mb,ratio_min,container_rationale\n"
-        "pass-through,90000,87.9,alpine + static Rust binary,50,582,alpine\n"
-        "json-parse,180000,175.8,alpine + static Rust binary + serde_json,60,349,serde_json\n"
+        "plugin,wasm_bytes,wasm_kb\n"
+        "pass-through,90000,87.9\n"
+        "json-parse,180000,175.8\n"
+    )
+    (density / "container-floor.json").write_text(
+        json.dumps({"base": "scratch", "platform": "linux/arm64", "image_bytes": 450_000})
     )
 
     for system in ("wafer", "native"):
@@ -251,6 +260,9 @@ def build_complete_fixture(root: Path) -> None:
                 "events": hotswap_events,
             },
         )
+    (root / "e-swap-1" / "steady" / "run-01" / "sequence.csv").write_text(
+        "total_expected,total_received,received_unique,gap_msgs,duplicates_count\n120000,120000,120000,0,0\n"
+    )
     write_swap5_fixture(root / "e-swap-5" / "process-trap-rollback" / "run-01-attempt-01")
     write_passed_artifact(
         root / "e-swap-4" / "burst-2x" / "run-01",
@@ -587,11 +599,15 @@ def test_all_notebooks_execute_against_complete_fixture(
     assert (rendered / "rq3/swap-fine-timeline.pdf").stat().st_size > 1_000
     assert (rendered / "rq3/burst-timeline.pdf").stat().st_size > 1_000
     assert (rendered / "rq3-rollback.csv").is_file()
+    assert (rendered / "rq3-rollback-runs.csv").is_file()
+    assert (rendered / "rq3-swap-sequence.csv").is_file()
     assert (rendered / "rq1/validation-gate.pdf").stat().st_size > 1_000
     assert (rendered / "rq1-validation-gate.csv").is_file()
     assert "\\label{tab:rq1-validation-gate}" in (rendered / "rq1-validation-gate.tex").read_text()
     assert (rendered / "rq1/density.pdf").stat().st_size > 1_000
-    assert (rendered / "rq1-density.csv").is_file()
+    density = (rendered / "rq1-density.csv").read_text().splitlines()
+    assert density[0].startswith("plugin,wasm_bytes,container_floor_bytes,floor_to_wasm_ratio,")
+    assert all(",450000," in row for row in density[1:])
     assert (rendered / "rq1/core-utilisation.pdf").stat().st_size > 1_000
     assert (rendered / "e-perf-10-core-utilisation.csv").is_file()
     assert (rendered / "campaign/temperature.pdf").stat().st_size > 1_000

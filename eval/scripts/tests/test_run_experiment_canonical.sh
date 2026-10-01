@@ -18,11 +18,13 @@ cat >"$tmp/facts.json" <<'JSON'
   "git_dirty": false,
   "git_tags": ["rpi5-eval-v1"],
   "cpu_governors": ["performance"],
-  "isolated_cpus": "1-3",
+  "isolated_cpus": "",
+  "housekeeping_cpus": "0",
+  "irq_default_cpus": "0",
   "throttled": "0x0",
   "broker_ready": true,
   "ekuiper_ready": true,
-  "ekuiper_version": "2.1.0"
+  "ekuiper_version": "2.1.5"
 }
 JSON
 
@@ -80,6 +82,8 @@ if grep -q 'pub_args.*total-messages\|pub_args+=(--total-messages' "$ROOT/eval/s
 fi
 grep -Fq -- "--hotswap-result-path \"\$OUT_DIR/swap_timeline.json\"" \
   "$ROOT/eval/scripts/run-experiment.sh"
+[ "$(grep -Fc -- '--pin-cpus "${WAFER_LOADGEN_CPUSET:-}"' "$ROOT/eval/scripts/run-experiment.sh")" -eq 2 ] \
+  || { echo 'both host samplers must pin themselves to the load-generator CPUs' >&2; exit 1; }
 [ ! -e "$tmp/planned-output" ] || { echo 'explicit dry-run output was created' >&2; exit 1; }
 
 if "$ROOT/eval/scripts/run-experiment.sh" \
@@ -104,11 +108,13 @@ cat >"$tmp/dirty.json" <<'JSON'
   "git_dirty": true,
   "git_tags": ["rpi5-eval-v1"],
   "cpu_governors": ["performance"],
-  "isolated_cpus": "1-3",
+  "isolated_cpus": "",
+  "housekeeping_cpus": "0",
+  "irq_default_cpus": "0",
   "throttled": "0x0",
   "broker_ready": true,
   "ekuiper_ready": true,
-  "ekuiper_version": "2.1.0"
+  "ekuiper_version": "2.1.5"
 }
 JSON
 if "$ROOT/eval/scripts/run-experiment.sh" \
@@ -130,6 +136,7 @@ cp "$ROOT/eval/scripts/run-experiment.sh" "$harness_root/eval/scripts/run-experi
 cp "$ROOT/eval/scripts/lib/write_metadata.py" "$harness_root/eval/scripts/lib/write_metadata.py"
 cp "$ROOT/eval/scripts/lib/host_facts.py" "$harness_root/eval/scripts/lib/host_facts.py"
 cp "$ROOT/eval/scripts/lib/pi_telemetry.py" "$harness_root/eval/scripts/lib/pi_telemetry.py"
+cp "$ROOT/eval/scripts/lib/proc_telemetry.py" "$harness_root/eval/scripts/lib/proc_telemetry.py"
 cp "$ROOT/eval/scripts/lib/interval_metrics.py" "$harness_root/eval/scripts/lib/interval_metrics.py"
 cat >"$harness_root/eval/startup.toml" <<'TOML'
 [pipeline]
@@ -151,6 +158,9 @@ cat >"$harness_root/target/release/wafer" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 printf 'runtime\n' >>"${ORDER_LOG:?}"
+if [ -n "${FAKE_RUNTIME_EXIT:-}" ]; then
+  exit "$FAKE_RUNTIME_EXIT"
+fi
 cat >"${WAFER_STARTUP_OUTPUT:?}" <<JSON
 {
   "schema_version": 1,
@@ -249,5 +259,30 @@ assert json.load(open(sys.argv[1])) == {
 PY
 sed -n '1p' "$tmp/cold-order.log" | grep -Fq 'drop-cache sh -c sync; echo 3 > /proc/sys/vm/drop_caches'
 [ "$(sed -n '2p' "$tmp/cold-order.log")" = "runtime" ]
+
+for experiment in e-perf-9 e-iso-6; do
+  rm -rf "$tmp/crashed-result"
+  cache_state=()
+  [ "$experiment" = e-perf-9 ] && cache_state=(--startup-cache-state warm)
+  set +e
+  ORDER_LOG="$tmp/crash-order.log" FAKE_RUNTIME_EXIT=134 \
+  "$harness_root/eval/scripts/run-experiment.sh" \
+    --config "$harness_root/eval/startup.toml" \
+    --experiment "$experiment" \
+    ${cache_state[@]+"${cache_state[@]}"} \
+    --host shakedown-macos \
+    --skip-build \
+    --duration 5 \
+    --output-dir "$tmp/crashed-result" >"$tmp/crash.log" 2>&1
+  status=$?
+  set -e
+  [ "$status" -eq 5 ] || { echo "$experiment runtime crash exited $status" >&2; cat "$tmp/crash.log" >&2; exit 1; }
+  python3 - "$tmp/crashed-result/metadata.json" <<'PY'
+import json
+import sys
+assert json.load(open(sys.argv[1]))["exit_codes"]["wafer_runtime"] == 134
+PY
+  grep -q 'wafer-runtime exited with 134 before the run finished' "$tmp/crash.log"
+done
 
 echo 'canonical run-experiment tests: PASS'

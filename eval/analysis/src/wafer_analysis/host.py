@@ -1,17 +1,26 @@
-"""Host-side evidence: per-core CPU use, attempt ledger and batch progress."""
+"""Host-side evidence: per-core CPU use, the attempts table and batch progress."""
 
 from __future__ import annotations
 
 import datetime as dt
 import json
-import re
+from collections.abc import Mapping
 from pathlib import Path
 
 import pandas as pd
 
+from .attempts import (
+    INFRASTRUCTURE,
+    PASSED,
+    SUT_OUTCOME,
+    Attempt,
+    batch_units,
+    infrastructure_retries,
+)
+from .paths import _expected_units
+
 _BUSY_FIELDS = ("user", "nice", "system", "irq", "softirq", "steal")
 _TOTAL_FIELDS = (*_BUSY_FIELDS, "idle", "iowait")
-_LEAF = re.compile(r"run-(\d+)(?:-attempt-(\d+))?")
 
 
 def core_utilisation(rows: list[dict]) -> pd.DataFrame:
@@ -46,32 +55,50 @@ def cpu_list(text: str) -> set[int]:
     return cpus
 
 
-def attempt_ledger(batches: dict[str, Path]) -> pd.DataFrame:
-    """Runs, attempts, passes, failed attempts and retried runs per experiment."""
+def attempts_table(batches: dict[str, Path], matrix: Mapping) -> pd.DataFrame:
+    """Units, attempts and attempt classes per experiment, system and condition.
+
+    Every attempt directory counts, with or without a receipt. A scheduled unit without an
+    admitted attempt is missing, whether its retries are spent or it never ran.
+    """
     rows = []
     for experiment, batch in batches.items():
-        attempts: dict[tuple[str, int], list[bool]] = {}
-        for status_path in sorted(batch.rglob("canonical-status.json")):
-            match = _LEAF.fullmatch(status_path.parent.name)
-            if match is None:
-                continue
-            condition = "/".join(status_path.parent.relative_to(batch).parts[:-1])
-            passed = json.loads(status_path.read_text()).get("status") == "passed"
-            attempts.setdefault((condition, int(match.group(1))), []).append(passed)
-        if not attempts:
-            continue
-        outcomes = [outcome for run in attempts.values() for outcome in run]
-        rows.append(
-            {
-                "experiment": experiment,
-                "runs": len(attempts),
-                "attempts": len(outcomes),
-                "passed_runs": sum(any(run) for run in attempts.values()),
-                "failed_attempts": outcomes.count(False),
-                "retried_runs": sum(len(run) > 1 for run in attempts.values()),
-            }
-        )
+        retries = infrastructure_retries(matrix, experiment)
+        scheduled = _expected_units(matrix["experiments"][experiment])
+        units = {(unit.condition, unit.run_index): unit for unit in batch_units(batch, retries)}
+        for condition in sorted({condition for condition, _ in scheduled | units.keys()}):
+            due = [key for key in scheduled if key[0] == condition]
+            present = [unit for (name, _), unit in units.items() if name == condition]
+            attempts = [attempt for unit in present for attempt in unit.attempts]
+            outcomes = [attempt.outcome for attempt in attempts]
+            rows.append(
+                {
+                    "experiment": experiment,
+                    "system": _system(attempts),
+                    "condition": condition,
+                    "units": len(due),
+                    "attempts": len(attempts),
+                    "passed": outcomes.count(PASSED),
+                    "sut_outcome": outcomes.count(SUT_OUTCOME),
+                    "infrastructure": outcomes.count(INFRASTRUCTURE),
+                    "retries": sum(unit.retries for unit in present),
+                    "missing": sum(
+                        key not in units or units[key].admitted is None for key in due
+                    ),
+                }
+            )
     return pd.DataFrame(rows)
+
+
+def _system(attempts: list[Attempt]) -> str | None:
+    for attempt in reversed(attempts):
+        try:
+            system = json.loads((attempt.path / "metadata.json").read_text()).get("system")
+        except (OSError, ValueError, AttributeError):
+            continue
+        if isinstance(system, str):
+            return system
+    return None
 
 
 def item_progress(progress: list[dict]) -> pd.DataFrame:

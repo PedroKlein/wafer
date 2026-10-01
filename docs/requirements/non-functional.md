@@ -8,12 +8,12 @@ This reference lists the current quantitative requirements. The narrative explan
 |---|---|---|---|
 | NFR-PERF-1 | Typed Wasm boundary cost is bounded. | Median paired WAFER-minus-native service time of an empty pass-through hop < 50 µs on Raspberry Pi 5, on the in-process path. | E-Perf-4 |
 | NFR-PERF-2 | Matched target-load latency and delivery are bounded against eKuiper. | At 1,000 msg/s: pooled loss <= 1 percent, mean achieved/offered >= 0.99, median WAFER p95 / median eKuiper p95 <= 2.0. | E-Perf-1 |
-| NFR-PERF-3 | Gateway capacity is measured on one common grid. | Report delivery ceiling and normalized p99 knee for all systems on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. WAFER/eKuiper competitive ratio >= 0.70 only when identifiable after MQTT censoring. | E-Perf-10 |
+| NFR-PERF-3 | Gateway capacity is measured on one common grid. | Report each system's delivery ceiling, bracketed by tested rates, and the normalized p99 knee on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. WAFER's tested-grid delivery ceiling is at least 0.70 of eKuiper's across the whole bracketed ratio interval. | E-Perf-10 |
 | NFR-PERF-4 | Pipeline memory growth is bounded. | Five-node RSS < 150 MB and incremental slope < 10 MB/node. | E-Perf-6 |
 | NFR-PERF-5 | Isolation-cost ratios are portable across architectures. | `PENDING` until matched Raspberry Pi 5 and x86 Linux blocks exist. | E-Perf-5 |
 | NFR-PERF-6 | Linux filesystem page-cache startup effect is reported honestly. | Cold/warm phase estimates with disk compiled-component cache disabled. No AOT-cache claim. | E-Perf-9 |
 
-E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-10 uses exact tested-grid bounds without interpolation; an invalid, support-censored, or threshold-straddling ratio remains `CENSORED/PENDING`.
+E-Perf-1 is a matched operating point, not capacity. Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-10 brackets each delivery ceiling between tested rates without interpolation; a ratio interval that straddles 0.70 is `CENSORED`, and an incomplete population is `PENDING`.
 
 E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each policy reconciles the source-authoritative offered population with delivered and policy-specific disposition counters; no universal lossless criterion applies.
 

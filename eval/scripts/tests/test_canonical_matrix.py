@@ -8,6 +8,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 MATRIX = ROOT / "eval/canonical-matrix.json"
 VALIDATOR = ROOT / "eval/scripts/validate-canonical.py"
@@ -31,8 +33,8 @@ def test_matrix_accepts_frozen_experiments() -> None:
     result = run_validator("matrix", str(MATRIX))
     assert result.returncode == 0, result.stderr
     assert "27 experiments" in result.stdout
-    assert "schedule_records=2285" in result.stdout
-    assert "measured_leaves=2073" in result.stdout
+    assert "schedule_records=2321" in result.stdout
+    assert "measured_leaves=2091" in result.stdout
 
 
 def test_final_campaign_policy_is_frozen_in_matrix() -> None:
@@ -43,8 +45,8 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     assert campaign["status"] == "frozen-before-execution"
     assert campaign["seed"] == 1729
     assert campaign["thesis_evidence"] is True
-    assert campaign["expected_schedule_records"] == 2285
-    assert campaign["expected_measured_leaves"] == 2073
+    assert campaign["expected_schedule_records"] == 2321
+    assert campaign["expected_measured_leaves"] == 2091
     assert campaign["capacity_grid"] == {
         "source_batch_id": "capacity-scout-v3-20260904T045000Z",
         "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -58,6 +60,10 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "epoch_tick_ms": 10,
     }
     assert campaign["ekuiper_operator_concurrency"] == 1
+    assert campaign["attempt_policy"] == {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }
     assert len(campaign["wafer_config_catalog"]) == 55
     assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
     assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
@@ -74,6 +80,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     }
     assert sweep["capacity_envelope"]["support_path_censoring"] == "mqtt-loopback"
     assert sweep["capacity_envelope"]["competitive_ratio_threshold"] == 0.70
+    assert sweep["capacity_envelope"]["delivery_ceiling"].startswith("bracketed by tested rates")
+    assert sweep["capacity_envelope"]["competitive_decision"] == (
+        "PASS if WAFER lower bound / eKuiper upper bound >= threshold; "
+        "FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
+    )
     assert {"publisher-summary.json", "capacity-run.json", "subscriber-metadata.json"} <= set(
         sweep["required_outputs"]
     )
@@ -131,7 +142,9 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     }
     for experiment in ("e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"):
         definition = matrix["experiments"][experiment]
-        assert definition["sample_unit"] == "event"
+        assert definition["sample_unit"] == "run"
+        assert definition["repetitions"] == 10
+        assert definition["events_per_run"] == 50
         assert definition["independent_unit"] == "complete process run"
         assert "within run" in definition["nested_unit"]
     assert burst["independent_unit"] == "complete process run"
@@ -247,6 +260,43 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
             result = run_validator("matrix", str(path))
         assert result.returncode == 1, expected
         assert expected in result.stderr
+
+
+def test_final_matrix_rejects_swap_session_drift() -> None:
+    mutations = (
+        ("e-swap-1 repetitions must be exactly 10", lambda value: value["experiments"]["e-swap-1"].update(repetitions=1)),
+        ("e-swap-5 repetitions must be exactly 10", lambda value: value["experiments"]["e-swap-5"].update(repetitions=30)),
+        ("e-swap-5 events_per_run must be exactly 50", lambda value: value["experiments"]["e-swap-5"].update(events_per_run=10)),
+        ("e-swap-1 has invalid sample_unit 'event'", lambda value: value["experiments"]["e-swap-1"].update(sample_unit="event")),
+    )
+    for expected, mutate in mutations:
+        matrix = json.loads(MATRIX.read_text())
+        mutate(matrix)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "matrix.json"
+            write_json(path, matrix)
+            result = run_validator("matrix", str(path))
+        assert result.returncode == 1, expected
+        assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"infrastructure_retries": 2, "gate_experiments": ["e-val-1"]},
+        {"infrastructure_retries": 1, "gate_experiments": []},
+        None,
+    ],
+)
+def test_final_matrix_rejects_attempt_policy_drift(policy: dict | None) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["final_campaign"]["attempt_policy"] = policy
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "attempt policy" in result.stderr
 
 
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
@@ -368,6 +418,17 @@ def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
     assert "Compares sustainable throughput" not in notebook_text
 
 
+def test_density_requires_the_measured_container_floor() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "e-density-1 required outputs differ" in result.stderr
+
+
 def test_final_capacity_repetitions_cannot_drop_below_30() -> None:
     matrix = json.loads(MATRIX.read_text())
     matrix["experiments"]["e-perf-10"]["repetitions"] = 29
@@ -410,11 +471,13 @@ def valid_facts() -> dict:
         "git_dirty": False,
         "git_tags": ["rpi5-eval-v1"],
         "cpu_governors": ["performance"],
-        "isolated_cpus": "1-3",
+        "isolated_cpus": "",
+        "housekeeping_cpus": "0",
+        "irq_default_cpus": "0",
         "throttled": "0x0",
         "broker_ready": True,
         "ekuiper_ready": True,
-        "ekuiper_version": "2.1.0",
+        "ekuiper_version": "2.1.5",
     }
 
 
@@ -425,6 +488,18 @@ def test_preflight_accepts_canonical_facts() -> None:
         result = run_validator("preflight", str(path), "--require-ekuiper")
     assert result.returncode == 0, result.stderr
     assert "canonical preflight: PASS" in result.stdout
+
+
+def test_preflight_requires_the_comparator_config_version(tmp_path: Path) -> None:
+    comparator = tomllib.loads(
+        (ROOT / "eval/configs/canonical/e-perf-1-ekuiper.toml").read_text()
+    )["comparator"]
+    path = tmp_path / "facts.json"
+    write_json(path, {**valid_facts(), "ekuiper_version": comparator["version"]})
+
+    result = run_validator("preflight", str(path), "--require-ekuiper")
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_preflight_accepts_an_untagged_clean_source(tmp_path: Path) -> None:
@@ -441,11 +516,13 @@ def test_preflight_rejects_each_provenance_and_host_violation() -> None:
         "dirty source": ("git_dirty", True),
         "host tag": ("host_tag", "shakedown-macos"),
         "CPU governor": ("cpu_governors", ["ondemand"]),
-        "isolated CPUs": ("isolated_cpus", ""),
+        "isolated CPUs": ("isolated_cpus", "1-3"),
+        "housekeeping CPUs": ("housekeeping_cpus", "0-3"),
+        "default IRQ CPUs": ("irq_default_cpus", "0-3"),
         "throttling": ("throttled", "0x50000"),
         "broker": ("broker_ready", False),
         "eKuiper": ("ekuiper_ready", False),
-        "eKuiper version": ("ekuiper_version", "2.2.0"),
+        "eKuiper version": ("ekuiper_version", "2.1.0"),
     }
     for expected, (key, value) in invalid.items():
         facts = valid_facts()

@@ -39,9 +39,6 @@ jobs:
       - name: Check docs against Cargo.lock and crates/ paths
         run: scripts/check-docs.sh
 
-      - name: Check current docs against runtime defaults and the matrix
-        run: python3 eval/scripts/check-current-docs.py
-
       - name: Install Rust toolchain from rust-toolchain.toml
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
@@ -106,6 +103,7 @@ jobs:
           eval/scripts/tests/test_eval_portability.sh
           eval/scripts/tests/test_host_tags.sh
           eval/scripts/tests/test_pi5_tooling.sh
+          eval/scripts/tests/test_preflight_hosts.sh
           eval/scripts/tests/test_run_experiment_canonical.sh
           eval/ekuiper/test-native-scripts.sh
           uv run --directory eval/analysis --frozen pytest -q

@@ -10,6 +10,7 @@ FAIL=0
 pass() { printf 'PASS  %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf 'FAIL  %s — %s\n' "$1" "$2"; FAIL=$((FAIL + 1)); }
 info() { printf 'INFO  %s\n' "$1"; }
+warn() { printf 'WARN  %s\n' "$1"; }
 check_command() {
     if command -v "$1" >/dev/null 2>&1; then pass "$1 available"; else fail "$1 available" "install package: $2"; fi
 }
@@ -25,14 +26,111 @@ check_architecture() {
     fi
 }
 
-check_isolated_cpus() {
-    local expected="$1" isolated
-    isolated="$(sysread /sys/devices/system/cpu/isolated)"
-    if [ "$isolated" = "$expected" ]; then
-        pass "isolated CPUs: $expected"
+expand_cpu_list() {
+    local part cpu
+    for part in ${1//,/ }; do
+        for ((cpu = ${part%-*}; cpu <= ${part#*-}; cpu++)); do printf '%s ' "$cpu"; done
+    done
+}
+
+allowed_cpus() { sysread "/proc/$1/status" | sed -n 's/^Cpus_allowed_list:[[:space:]]*//p'; }
+
+check_process_affinity() {
+    local label="$1" pid="$2" expected="$3" hint="$4" allowed
+    allowed="$(allowed_cpus "$pid")"
+    if [ -n "$allowed" ] && [ "$(expand_cpu_list "$allowed")" = "$(expand_cpu_list "$expected")" ]; then
+        pass "$label: $expected"
     else
-        fail "isolated CPUs" "expected $expected, detected: ${isolated:-none}"
+        fail "$label" "expected $expected, detected: ${allowed:-unknown}; $hint"
     fi
+}
+
+check_irq_affinity() {
+    local housekeeping="$1" sut_cpus=" $(expand_cpu_list "$2")" cpu expected=0 mask dir irq list on_sut=""
+    for cpu in $(expand_cpu_list "$housekeeping"); do expected=$((expected | 1 << cpu)); done
+    mask="$(sysread /proc/irq/default_smp_affinity | tr -d ',')"
+    if [ -n "$mask" ] && [ "${mask#"${mask%%[!0]*}"}" = "$(printf '%x' "$expected")" ]; then
+        pass "default IRQ affinity: $housekeeping"
+    else
+        fail "default IRQ affinity" "expected CPU $housekeeping, detected mask: ${mask:-unknown}; add irqaffinity=$housekeeping to the kernel command line"
+    fi
+    for dir in "$SYSROOT"/proc/irq/[0-9]*; do
+        [ -d "$dir" ] || continue
+        irq="${dir##*/}"
+        if [ -e "$dir/effective_affinity_list" ]; then
+            list="$(sysread "/proc/irq/$irq/effective_affinity_list")"
+        else
+            list="$(sysread "/proc/irq/$irq/smp_affinity_list")"
+        fi
+        for cpu in $(expand_cpu_list "$list"); do
+            case "$sut_cpus" in *" $cpu "*) on_sut="$on_sut $irq"; break ;; esac
+        done
+    done
+    [ -z "$on_sut" ] || warn "IRQs still allowed on SUT CPUs (per-CPU or kernel-managed; see /proc/interrupts):$on_sut"
+}
+
+# The busy loops are forked by one process started under the SUT mask, the
+# way each system under test starts its threads. Separate taskset calls would
+# land on different CPUs even when the kernel does not balance load between
+# them.
+check_sut_spread() {
+    local sut="$1" cpus count samples line last="" spread=""
+    cpus="$(expand_cpu_list "$sut")"
+    count="$(wc -w <<<"$cpus")"
+    samples="$(taskset -c "$sut" bash -c '
+        pids=()
+        for _ in $1; do
+            ( end=$((SECONDS + 7)); while ((SECONDS < end)); do :; done ) &
+            pids+=("$!")
+        done
+        for _ in 1 2 3 4 5; do
+            sleep 1
+            sample=$(ps -o psr= -p "$(IFS=,; echo "${pids[*]}")")
+            echo $sample
+            [ "$(printf "%s\n" $sample | sort -u | wc -l)" -eq "$2" ] && break
+        done
+        kill "${pids[@]}" 2>/dev/null' spread-probe "$cpus" "$count" 2>/dev/null)"
+    while read -r line; do
+        [ -n "$line" ] || continue
+        last="$line"
+        if [ "$(wc -w <<<"$line")" -eq "$count" ] && [ "$(tr ' ' '\n' <<<"$line" | sort -u | wc -l)" -eq "$count" ]; then
+            spread="$line"
+        fi
+    done <<<"$samples"
+    if [ -n "$spread" ]; then
+        pass "SUT CPUs load-balanced: busy loops ran on CPUs $spread"
+    else
+        fail "SUT CPUs load-balanced" "$count busy loops under CPUs $sut ran on CPUs: ${last:-unknown}; remove isolcpus from the kernel command line, or stop other work on CPUs $sut and run the preflight again"
+    fi
+}
+
+# Everything but the system under test stays on the housekeeping CPUs through
+# systemd's CPUAffinity= and the kernel's irqaffinity=. isolcpus is not used:
+# its default domain isolation stops load balancing on the SUT CPUs, so every
+# thread of a SUT would stay on the one CPU its process started on.
+check_cpu_affinity() {
+    local housekeeping="$1" sut="$2" isolated mosquitto_pid
+    if [ ! -e "$SYSROOT/sys/devices/system/cpu/isolated" ]; then
+        fail "no isolated CPUs" "/sys/devices/system/cpu/isolated not readable"
+    else
+        isolated="$(sysread /sys/devices/system/cpu/isolated)"
+        if [ -z "$isolated" ]; then
+            pass "no isolated CPUs"
+        else
+            fail "no isolated CPUs" "detected: $isolated; remove isolcpus from the kernel command line"
+        fi
+    fi
+    check_process_affinity "systemd CPU affinity" 1 "$housekeeping" \
+        "set CPUAffinity=$housekeeping for systemd and reboot"
+    mosquitto_pid="$(systemctl show --property MainPID --value mosquitto.service 2>/dev/null)"
+    if [ "${mosquitto_pid:-0}" = 0 ]; then
+        fail "Mosquitto CPU affinity" "mosquitto.service is not running"
+    else
+        check_process_affinity "Mosquitto CPU affinity" "$mosquitto_pid" "$housekeeping" \
+            "check mosquitto.service for a CPUAffinity= override"
+    fi
+    check_irq_affinity "$housekeeping" "$sut"
+    check_sut_spread "$sut"
 }
 
 check_online_cpus() {
@@ -100,7 +198,7 @@ check_tools_and_services() {
 }
 
 check_deployment() {
-    local deploy_hint="$1" binary plugin source_dirty
+    local deploy_hint="$1" binary plugin source_dirty floor
     for binary in wafer wafer-loadgen waferctl; do
         if [ -x "$ROOT/target/release/$binary" ]; then
             pass "$binary deployed"
@@ -119,6 +217,16 @@ check_deployment() {
             fail "$(basename "$plugin") deployed" "build and deploy evaluation plugins"
         fi
     done
+
+    case "$(uname -m)" in
+        aarch64|arm64) floor=eval/container-floor/linux-arm64.json ;;
+        *) floor=eval/container-floor/linux-amd64.json ;;
+    esac
+    if [ -f "$ROOT/$floor" ]; then
+        pass "E-Density-1 container floor deployed"
+    else
+        warn "E-Density-1 container floor not deployed: E-Density-1 fails until $floor is measured with eval/scripts/measure-container-floor.py, committed and deployed"
+    fi
 
     if [ -f "$ROOT/SOURCE_STATE.json" ]; then
         source_dirty="$(python3 -c 'import json,sys; print(str(json.load(open(sys.argv[1]))["git_dirty"]).lower())' "$ROOT/SOURCE_STATE.json" 2>/dev/null || echo unknown)"

@@ -8,7 +8,7 @@ Reproducible experiment automation for thesis evaluation (3 Research Questions).
 - UV (Python package manager) — for analysis notebooks
 - Mosquitto MQTT broker — for the MQTT-bookended experiments
 - Raspberry Pi 5 with 4 GB RAM — canonical measurement host
-- Native eKuiper 2.1.0 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
+- Native eKuiper 2.1.5 ARM64 — comparator for E-Perf-1/2 and E-Swap-3
 
 ## Quick Start
 
@@ -26,7 +26,8 @@ mise run run-canonical-pi5 -- --batch-id <id>
 ## Run, stop, resume and check a batch
 
 A batch is identified by its `--batch-id`. Every run is a leaf that is
-written once and marked passed or failed, and the batch ledger under
+written once and marked as a clean pass, a system outcome or an infrastructure
+failure, and the batch ledger under
 `manifests/canonical-batches/<host>-<batch-id>/` keeps `schedule.json` and a
 `progress.jsonl` event log.
 
@@ -34,8 +35,10 @@ written once and marked passed or failed, and the batch ledger under
 # Start (or resume) a batch
 mise run run-canonical-pi5 -- --batch-id <id>
 
-# Stop at any time with Ctrl-C. Re-running the same command resumes: passed
-# runs are skipped and an interrupted run gets a new attempt directory.
+# Stop at any time with Ctrl-C. Re-running the same command resumes: admitted
+# runs (clean passes and system outcomes) are skipped, and an interrupted run
+# gets a new attempt directory. An infrastructure failure is retried once in
+# place; see eval/RESULT-CONTRACT.md#attempts-and-retries.
 mise run run-canonical-pi5 -- --batch-id <id>
 
 # Show done and pending runs per experiment, the next run and the last event

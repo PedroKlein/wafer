@@ -13,7 +13,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -27,7 +27,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -48,7 +48,7 @@
       "cpu_governors": [
         "performance"
       ],
-      "isolated_cpus": "1-3",
+      "housekeeping_cpus": "0",
       "sut_cpus": "1-3",
       "support_cpus": "0",
       "throttled": "0x0",
@@ -69,19 +69,9 @@
     "schema_version": 1,
     "id": "rpi5-v10-enhanced-candidate",
     "status": "architecture-frozen-before-n5",
-    "release_lineage": "v10",
-    "signed_v4_immutable": true,
-    "signed_v5_immutable": true,
-    "signed_v6_immutable": true,
-    "signed_v7_immutable": true,
-    "signed_v8_immutable": true,
-    "signed_v9_immutable": true,
-    "supersedes_release_tag": "rpi5-final-rc-v9",
-    "supersession_reason": "v9 downstream eKuiper consumers reject contract-valid bounded terminal partial intervals",
     "thesis_evidence": false,
     "campaign_started": false,
     "n30_admitted": false,
-    "selection_receipt_required": ".plans/rpi5-v5-enhanced-experiment-readiness/n30-selection.json",
     "capabilities": [
       "bounded-interval-metrics",
       "multi-resolution-swap-buckets",
@@ -95,7 +85,7 @@
     ],
     "evidence_classes": {
       "canonical_primary": "Existing final estimands; unchanged by candidate instrumentation.",
-      "candidate_supplementary": "Diagnostic N=5 evidence pending post-rehearsal selection.",
+      "candidate_supplementary": "Diagnostic N=5 evidence kept out of the final campaign.",
       "diagnostic": "Host qualification and profiler evidence excluded from thesis estimators.",
       "future_work": "Evidence that is not collected in the Raspberry Pi 5 candidate campaign."
     },
@@ -477,7 +467,7 @@
           "kind": "external-procfs-process-sampler",
           "interval_secs": 1,
           "maximum_rows_per_run": 62,
-          "gc_runtime_metrics": "unavailable-unless-validated-runtime-interface",
+          "gc_runtime_metrics": "go-gctrace-from-kuiper-journal-in-profiled-state",
           "graceful_unavailable": true
         },
         "ordering": {
@@ -489,7 +479,8 @@
           "throughput.csv",
           "interval-metrics.json",
           "ekuiper-runtime-summary.json",
-          "profiler-overhead.json"
+          "profiler-overhead.json",
+          "ekuiper-gctrace.log"
         ],
         "analysis": "ekuiper-tail-association",
         "no_pool_with": [
@@ -889,10 +880,11 @@
         "min_achieved_ratio": 0.99,
         "loss_aggregation": "sum(total_undelivered) / sum(intended)",
         "achieved_aggregation": "mean(run achieved_rate / intended_rate)",
-        "delivery_ceiling": "highest tested delivery-good rate",
+        "delivery_ceiling": "bracketed by tested rates: lower bound is the highest delivery-good rate with no delivery-bad rate below it, or 0; upper bound is the lowest delivery-bad rate above every delivery-good rate, or unbounded; support-confounded rates set neither bound",
         "normalized_p99_knee_multiplier": 2.0,
         "support_path_censoring": "mqtt-loopback",
-        "competitive_ratio_threshold": 0.7
+        "competitive_ratio_threshold": 0.7,
+        "competitive_decision": "PASS if WAFER lower bound / eKuiper upper bound >= threshold; FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
       }
     },
     "e-iso-1": {
@@ -1080,8 +1072,8 @@
     "e-swap-1": {
       "research_question": "rq3",
       "purpose": "Measure pause duration across repeated hot swaps.",
-      "sample_unit": "event",
-      "repetitions": 1,
+      "sample_unit": "run",
+      "repetitions": 10,
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
@@ -1109,8 +1101,8 @@
     "e-swap-2": {
       "research_question": "rq3",
       "purpose": "Verify zero loss and zero duplication across repeated hot swaps.",
-      "sample_unit": "event",
-      "repetitions": 1,
+      "sample_unit": "run",
+      "repetitions": 10,
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
@@ -1240,8 +1232,8 @@
     "e-swap-5": {
       "research_question": "rq3",
       "purpose": "Measure process-time failure rollback and post-rollback continuity.",
-      "sample_unit": "event",
-      "repetitions": 1,
+      "sample_unit": "run",
+      "repetitions": 10,
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 300,
@@ -1265,8 +1257,8 @@
     "e-swap-6": {
       "research_question": "rq3",
       "purpose": "Decompose compile, instantiate, signal, acknowledgement, and convergence phases.",
-      "sample_unit": "event",
-      "repetitions": 1,
+      "sample_unit": "run",
+      "repetitions": 10,
       "events_per_run": 50,
       "warmup_secs": 30,
       "measurement_secs": 120,
@@ -1329,7 +1321,7 @@
     },
     "e-density-1": {
       "research_question": "all",
-      "purpose": "Record release Wasm component sizes for the isolation-unit density comparison.",
+      "purpose": "Record release Wasm component sizes beside the measured FROM scratch container floor for the isolation-unit density comparison.",
       "sample_unit": "static",
       "repetitions": 1,
       "warmup_secs": 0,
@@ -1339,7 +1331,8 @@
         "release-components"
       ],
       "required_outputs": [
-        "binary-sizes.csv"
+        "binary-sizes.csv",
+        "container-floor.json"
       ],
       "analysis": "10-summary-stats.ipynb",
       "thesis_evidence": true,
@@ -1352,8 +1345,8 @@
     "status": "frozen-before-execution",
     "seed": 1729,
     "thesis_evidence": true,
-    "expected_schedule_records": 2285,
-    "expected_measured_leaves": 2073,
+    "expected_schedule_records": 2321,
+    "expected_measured_leaves": 2091,
     "capacity_grid": {
       "source_batch_id": "capacity-scout-v3-20260904T045000Z",
       "source_summary_sha256": "04531979da50f882eee2e0d04ab6f25d4002af21519a4c8b5ada6c88c13452b5",
@@ -1379,6 +1372,10 @@
     "ekuiper_operator_concurrency": 1,
     "support_path_censoring": "MQTT-loopback delivery-bad rates censor SUT-only capacity at that rate and above",
     "diagnostic_batches_excluded": true,
+    "attempt_policy": {
+      "infrastructure_retries": 1,
+      "gate_experiments": ["e-val-1"]
+    },
     "wafer_config_catalog": [
       {
         "experiment": "e-backpressure",

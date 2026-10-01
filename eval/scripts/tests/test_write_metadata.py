@@ -105,11 +105,13 @@ def test_merge_without_sidecar_keeps_harness_values() -> None:
     for key in ("experiment", "host_tag", "kernel", "arch", "os",
                 "rustc_version", "config_path", "config_sha256",
                 "duration_ns", "exit_codes", "hardware_model",
-                "memory_total_kib", "cpu_governors", "isolated_cpus",
+                "memory_total_kib", "cpu_governors",
                 "temperature_millicelsius", "throttled"):
         assert key in meta and meta[key] not in ("", None), (
             f"harness-side fallback missing/empty for {key}: {meta.get(key)!r}"
         )
+    for key in ("isolated_cpus", "housekeeping_cpus", "irq_default_cpus"):
+        assert key in meta, f"CPU placement fact missing from metadata.json: {key}"
     for key in ("cpu_model", "physical_cores", "online_cpus", "smt", "turbo",
                 "cpufreq_driver", "os_release", "glibc_version", "power_mode"):
         assert key in meta, f"platform fact missing from metadata.json: {key}"

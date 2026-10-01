@@ -272,8 +272,11 @@ def resolve_alias_receipt(receipt_path: Path) -> tuple[dict, Path]:
         raise ValueError(f"alias source has no terminal receipt: {source}") from error
     except json.JSONDecodeError as error:
         raise ValueError(f"alias source metadata or status is malformed: {source}") from error
-    if status_value.get("status") != "passed":
-        raise ValueError(f"alias source is not passed: {source}")
+    if status_value.get("status") != "passed" and not (
+        status_value.get("status") == "failed"
+        and status_value.get("failure_class") == "sut_outcome"
+    ):
+        raise ValueError(f"alias source is not an admitted attempt: {source}")
     if (
         metadata.get("experiment") != value.get("shared_from_experiment")
         or metadata.get("evidence_class") != "final"

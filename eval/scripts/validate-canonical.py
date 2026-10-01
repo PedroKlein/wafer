@@ -12,7 +12,7 @@ import tomllib
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "lib"))
-from host_facts import platform_facts  # noqa: E402
+from host_facts import cpu_policy_facts, platform_facts  # noqa: E402
 from host_profiles import HostProfile, host_profile, host_profiles  # noqa: E402
 from pi_telemetry import host_snapshot  # noqa: E402
 
@@ -40,14 +40,17 @@ REQUIRED_FIELDS = {
     "evidence_class",
 }
 FINAL_CAPACITY_RATES = [1_000, 4_000, 8_000, 15_000, 16_000]
-FINAL_SCHEDULE_RECORDS = 2_285
-FINAL_MEASURED_LEAVES = 2_073
+FINAL_SCHEDULE_RECORDS = 2_321
+FINAL_MEASURED_LEAVES = 2_091
 PAYLOAD_SIZES = ("120b", "1kb", "10kb", "100kb")
 NATIVE_PASS_THROUGH = {"kind": "native", "function": "passthrough"}
 PAYLOAD_BOUNDARY = (
     "in-process path from bench-source through one pass-through transform to bench-sink; "
     "no MQTT adapter"
 )
+SWAP_SESSION_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"}
+SWAP_SESSION_RUNS = 10
+SWAP_SESSION_EVENTS = 50
 
 
 def load_object(path: Path) -> dict:
@@ -147,7 +150,7 @@ def collect_host_facts(root: Path, host: str = "rpi5") -> dict:
         "git_dirty": dirty,
         "git_tags": tags,
         "cpu_governors": governors,
-        "isolated_cpus": read_text(Path("/sys/devices/system/cpu/isolated")),
+        **cpu_policy_facts(),
         "throttled": throttled,
         "broker_ready": broker_ready,
         "ekuiper_ready": ekuiper_ready,
@@ -175,8 +178,10 @@ def validate_hosts(matrix: dict) -> list[str]:
             errors.append(f"host {tag} must require no throttling and the performance governor")
         if _cpu_set(profile.sut_cpus) & _cpu_set(profile.support_cpus):
             errors.append(f"host {tag} SUT and support CPUs overlap")
-        if profile.isolated_cpus != profile.sut_cpus:
-            errors.append(f"host {tag} must isolate exactly its SUT CPUs")
+        if _cpu_set(profile.housekeeping_cpus) & _cpu_set(profile.sut_cpus):
+            errors.append(f"host {tag} housekeeping and SUT CPUs overlap")
+        if not _cpu_set(profile.support_cpus) <= _cpu_set(profile.housekeeping_cpus):
+            errors.append(f"host {tag} support CPUs must be housekeeping CPUs")
     return errors
 
 
@@ -224,16 +229,17 @@ def validate_matrix(matrix: dict) -> list[str]:
         conditions = experiment["conditions"]
         outputs = experiment["required_outputs"]
 
-        if sample_unit not in {"run", "event", "static"}:
+        if sample_unit not in {"run", "static"}:
             errors.append(f"{experiment_id} has invalid sample_unit {sample_unit!r}")
         if not isinstance(repetitions, int) or repetitions < 1:
             errors.append(f"{experiment_id} repetitions must be a positive integer")
+        elif experiment_id in SWAP_SESSION_EXPERIMENTS:
+            if repetitions != SWAP_SESSION_RUNS:
+                errors.append(f"{experiment_id} repetitions must be exactly {SWAP_SESSION_RUNS}")
+            if experiment.get("events_per_run") != SWAP_SESSION_EVENTS:
+                errors.append(f"{experiment_id} events_per_run must be exactly {SWAP_SESSION_EVENTS}")
         elif sample_unit == "run" and repetitions < 30:
             errors.append(f"{experiment_id} repetitions must be >= 30")
-        if sample_unit == "event":
-            events = experiment.get("events_per_run")
-            if not isinstance(events, int) or events < 50:
-                errors.append(f"{experiment_id} events_per_run must be >= 50")
         if sample_unit == "static" and repetitions != 1:
             errors.append(f"{experiment_id} static measurement must have one repetition")
         if experiment_id in {"e-swap-1", "e-swap-2", "e-swap-4", "e-swap-5", "e-swap-6"}:
@@ -304,6 +310,14 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign eKuiper operator concurrency must be 1")
     if campaign.get("diagnostic_batches_excluded") is not True:
         errors.append("final_campaign must exclude diagnostic batches")
+    if campaign.get("attempt_policy") != {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }:
+        errors.append(
+            "final_campaign attempt policy must allow one in-place infrastructure retry "
+            "and none for the E-Val-1 gate"
+        )
 
     expected_metering_exceptions = {
         "e-perf-5": {
@@ -492,6 +506,11 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
     if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
         errors.append("e-perf-5 must remain incomplete until matching x86 Linux batch")
+    if set(experiments.get("e-density-1", {}).get("required_outputs", [])) != {
+        "binary-sizes.csv",
+        "container-floor.json",
+    }:
+        errors.append("e-density-1 required outputs differ from the measured container-floor contract")
 
     records = 0
     for experiment_id, definition in experiments.items():
@@ -569,9 +588,9 @@ def validate_preflight(
     if require_ekuiper:
         if facts.get("ekuiper_ready") is not True:
             errors.append("eKuiper is not ready")
-        if facts.get("ekuiper_version") != "2.1.0":
+        if facts.get("ekuiper_version") != "2.1.5":
             errors.append(
-                f"eKuiper version must be '2.1.0', got {facts.get('ekuiper_version')!r}"
+                f"eKuiper version must be '2.1.5', got {facts.get('ekuiper_version')!r}"
             )
     return errors
 

@@ -1,6 +1,6 @@
 # RFC-004: Config File Schema & Pipeline UX
 
-- **Status:** Implemented in `wafer-types` + `wafer-config` and wired into the runtime binary (see gap **A1** — Closed 2026-07-19 — in [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md#a1--two-config-schemas-coexist-runtime-uses-the-legacy-one-)).
+- **Status:** Implemented in `wafer-types` + `wafer-config` and wired into the runtime binary (see gap **A1** — Closed 2026-07-19 — in [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md#a1--two-config-schemas-coexist-runtime-uses-the-legacy-one-closed-2026-07-19-)).
 - **Original session date:** 2026-07-06
 - **Depends on:** RFC-001 (WIT contracts), RFC-002 (host runtime), RFC-003 (node type architecture)
 

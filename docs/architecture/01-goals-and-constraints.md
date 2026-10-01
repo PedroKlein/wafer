@@ -20,12 +20,12 @@ Does a Wasm-isolated pipeline achieve competitive throughput and latency compare
 |---|---|---|
 | RQ1a | Microseconds per WIT boundary crossing on the empty pass-through path | < 50 µs on Raspberry Pi 5 |
 | RQ1b target load | Run-level delivery and p95 latency for Pipeline A at 1,000 msg/s | pooled loss <= 1 %, mean achieved/offered >= 0.99, and median WAFER p95 / median eKuiper p95 <= 2.0 |
-| RQ1b capacity | Common-grid gateway delivery ceiling and normalized p99 knee | WAFER/eKuiper ceiling ratio >= 0.70 only when identifiable; otherwise report censoring |
+| RQ1b capacity | Common-grid gateway delivery ceiling, bracketed by tested rates, and normalized p99 knee | WAFER's tested-grid delivery ceiling >= 0.70 of eKuiper's across the bracketed ratio interval; `CENSORED` when the interval straddles 0.70 |
 | RQ1c | RSS for a 5-node pipeline and incremental node cost | < 150 MB total and < 10 MB per added node |
 | RQ1d | Cross-architecture WAFER/native ratio | PENDING until matched Raspberry Pi 5 and x86 Linux evidence exists |
 | RQ1e | Linux filesystem page-cache effect on startup | Report cold/warm phases with the disk compiled-component cache disabled |
 
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. Native Rust executes equivalent filter logic, while eKuiper 2.1.0 is the external edge stream-processing reference. E-Perf-1 is the matched 1,000 msg/s operating point. E-Perf-10 is the capacity envelope over `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. A delivery-bad MQTT loopback point censors SUT-only capacity claims at that rate and above.
+Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. Native Rust executes equivalent filter logic, while eKuiper 2.1.5 is the external edge stream-processing reference. E-Perf-1 is the matched 1,000 msg/s operating point. E-Perf-10 is the capacity envelope over `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. A delivery-bad MQTT loopback point censors SUT-only capacity claims at that rate and above.
 
 ### RQ2: Do per-stage sandboxes contain faults without pipeline-wide failure?
 
@@ -67,7 +67,7 @@ Baselines: full pipeline restart (naive) and eKuiper rule restart.
 
 1. **Fault containment**: a misbehaving plugin must not crash the host or corrupt sibling nodes.
 2. **Bounded resource consumption**: memory and CPU usage must remain predictable regardless of plugin behaviour.
-3. **Competitive performance**: target-load latency is bounded against eKuiper, while capacity is compared only when the shared MQTT support path leaves both ceilings identifiable.
+3. **Competitive performance**: target-load latency is bounded against eKuiper, while capacity compares delivery ceilings bracketed by tested rates below the shared MQTT support limit.
 4. **Operational evolvability**: individual stages must be replaceable at runtime without pipeline downtime.
 5. **Simplicity of deployment**: a single binary, a single TOML file, no container orchestrator.
 
@@ -110,7 +110,7 @@ These terms have bounded meanings throughout the architecture:
 - **"Edge gateway"** = Linux-capable devices with ≥ 4 GB RAM. Not microcontrollers.
 - **"Isolation"** = memory containment + capability scoping. Not information-flow control or covert-channel elimination.
 - **"Hot-swap"** = stateless node replacement. Not state-preserving live update.
-- **"Competitive performance"** = target-load p95 within 2x eKuiper and, when support permits an identifiable comparison, WAFER delivery ceiling at least 70 percent of eKuiper's. Not near-native performance for arbitrary computation.
+- **"Competitive performance"** = target-load p95 within 2x eKuiper and a WAFER tested-grid delivery ceiling at least 0.70 of eKuiper's, with each ceiling bracketed by tested rates. Not near-native performance for arbitrary computation.
 - **"Pipeline"** = stateless processing DAG (parse, filter, route, capability-gated inference, and optionally bounded outbound HTTP). Windowing and exactly-once semantics are outside the current release.
 
 ## Related documents

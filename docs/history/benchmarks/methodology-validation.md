@@ -2,7 +2,7 @@
 
 > **Archived, not current.** Shakedown E-Val-1 results.
 > Kept as a historical record only. Do not use it for decisions, commands,
-> paths or numbers. Current source: [the Pi 5 runbook](../eval/pi5-experiment-runbook.md).
+> paths or numbers. Current source: [the Pi 5 runbook](../../eval/pi5-experiment-runbook.md).
 
 <!-- historical-diagnostic-file -->
 

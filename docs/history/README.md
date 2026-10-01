@@ -11,7 +11,8 @@ folder, so paths inside it may point at files that no longer exist.
 | Folder | What it holds |
 |---|---|
 | `plans/` | Planning scratchpads from the implementation phase |
-| `status/` | Pre-final readiness and progress logs split out of `docs/status/` |
+| `status/` | Pre-final readiness and progress logs split out of `docs/status/`, and the closed implementation-gap entries |
+| `benchmarks/` | macOS shakedown and pilot benchmark pages |
 | `workflows/` | Phase 0 session recipes |
 
 For the current state, start at [docs/README.md](../README.md) and

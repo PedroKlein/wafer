@@ -1,7 +1,7 @@
 # ADR-0003: Watch-Channel Between-Messages Hot-Swap
 
 - **Date**: 2026-07-12
-- **Status**: Implemented — the watch-channel between-messages mechanism and all peripheral wiring (A3, A4, A5, A10, A14, A17) are closed via runtime-migration plan 2026-07-19 through 2026-07-20 and thesis-hardening T1 (2026-08-02). See [`docs/status/implementation-gaps.md`](../status/implementation-gaps.md). Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
+- **Status**: Implemented — the watch-channel between-messages mechanism and all peripheral wiring (A3, A4, A5, A10, A14, A17) are closed via runtime-migration plan 2026-07-19 through 2026-07-20 and thesis-hardening T1 (2026-08-02). See [`docs/history/status/implementation-gaps-closed.md`](../history/status/implementation-gaps-closed.md). Supersedes the earlier drain-and-flip mechanism from 2026-02-14.
 - **Parent RFC**: [RFC-005](../rfcs/RFC-005-orchestrator.md)
 
 > **Implementation status.** The `watch::channel(None)` primitive, the

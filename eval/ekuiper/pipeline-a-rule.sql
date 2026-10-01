@@ -1,4 +1,4 @@
--- Pipeline A equivalent for eKuiper 2.1.x LTS.
+-- Pipeline A equivalent for eKuiper 2.1.5.
 --
 -- Registered via seed-pipeline-a.sh; this .sql file is the
 -- human-readable reference of what the seed script pushes to the

@@ -13,14 +13,14 @@ Launching the final batch is a human decision, taken after the diagnostic batch 
 | `diagnostic` | Check deployment, host admission, storage, profiling, or a changed path | no |
 | `future-work` | Record evidence that is outside the current Raspberry Pi 5 campaign | no |
 
-A directory name does not determine evidence class. Canonical-primary evidence requires one clean source commit for the whole batch, an entry for the batch in `eval/final-batches.json`, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30. A post-rehearsal selection receipt must record `include`, `defer`, or `reject` before any candidate can enter a later campaign.
+A directory name does not determine evidence class. Canonical-primary evidence requires one clean source commit for the whole batch, an entry for the batch in `eval/final-batches.json`, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30; a candidate enters the final campaign only by moving it into the matrix's final `experiments` list before a final batch starts.
 
 ## Fixed host boundary
 
 - Raspberry Pi 5 4 GB, stock clocks, active cooling, Raspberry Pi OS Lite 64-bit.
 - CPU 0: Linux support work, Mosquitto, load generation, subscription, and telemetry.
 - CPUs 1-3: exactly one active SUT.
-- Native eKuiper 2.1.0; no container in canonical comparisons.
+- Native eKuiper 2.1.5; no container in canonical comparisons.
 - Pipeline A: `MQTT source -> threshold filter -> MQTT sink`.
 - PMIC data: internal-rail proxy only, not total board or USB-C input power.
 
@@ -40,19 +40,19 @@ Expected matrix output:
 
 ```text
 27 experiments
-schedule_records=2285
-measured_leaves=2073
+schedule_records=2321
+measured_leaves=2091
 ```
 
-The 2,285 records include shared-result aliases with `independent_n_contribution=0`. The 2,073 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
+The 2,321 records include shared-result aliases with `independent_n_contribution=0`. The 2,091 measured-or-static leaves are the processes/static measurements that produce new evidence. The deterministic schedule is written only during execution, under `eval/results/canonical-batches/rpi5-<batch-id>/schedule.json`.
 
 The current estimate is:
 
 | Estimate | Value | Basis |
 |---|---:|---|
-| Nominal active-run time | 48.68 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
-| Operational estimate | 53.55 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
-| Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs, so regenerate before execution |
+| Nominal active-run time | 49.88 h | Sum of matrix warmup and measurement durations for executed leaves; static E-Density-1 has zero duration |
+| Operational estimate | 54.87 h | Nominal time plus 10 percent for setup, teardown, validation, and cooling |
+| Storage estimate | 43,433,437,093 bytes | Primary N=30 estimate over the earlier 2,165 schedule records, including the three E-Backpressure policies; it predates the 120 E-Perf-4 native runs and the ten-run E-Swap-1 and E-Swap-5 sessions, so regenerate before execution |
 | Required free space | at least 50 GiB; 60 GiB preferred | Allows attempt evidence and operational headroom |
 
 Reserve a three-day window so the run can stop safely and resume without compressing cooling periods.
@@ -69,11 +69,19 @@ cd eval/analysis
 uv sync
 uv run pytest -q
 cd ../..
-python3 eval/scripts/check-current-docs.py
 python3 eval/scripts/validate-canonical.py matrix eval/canonical-matrix.json
 ```
 
 The first `cargo test` downloads the pinned ONNX Runtime archive (default `ort-download` feature). Without network access, set `ORT_LIB_LOCATION` to a local ONNX Runtime build first; see [ONNX Runtime](../operations/dependencies.md#onnx-runtime).
+
+E-Density-1 compares the plugin components with a measured container floor, and that floor must be committed before these gates run. On a machine with Docker that can run images for the platform (natively or through QEMU emulation), measure it for each host architecture and commit the files it writes:
+
+```sh
+python3 eval/scripts/measure-container-floor.py --platform linux/arm64   # Pi 5 and Jetson
+python3 eval/scripts/measure-container-floor.py --platform linux/amd64   # x86
+```
+
+The tool builds a `FROM scratch` image that holds only a statically linked Rust pass-through worker (`eval/container-floor/`), checks that the image passes its input through, and writes `eval/container-floor/linux-arm64.json` or `linux-amd64.json` with the image size and the pinned build inputs. The E-Density-1 collector copies the file for its host into the result and fails without it, and host preflight warns when it is missing, so the other experiments can still run. `python3 -m pytest -q eval/scripts/tests` fails when a committed floor no longer matches the worker sources, the Dockerfile or `rust-toolchain.toml`; measure again after changing any of them.
 
 Any source, config, or documentation change after this point is a new commit. Run the gates again and start a new batch. The runner refuses to resume a batch from another commit or another `eval/canonical-matrix.json`.
 
@@ -89,7 +97,7 @@ Deploy the verified commit with `./eval/scripts/deploy-pi5.sh --host USER@wafer-
 ./eval/ekuiper/smoke-test.sh
 ```
 
-Do not continue if preflight reports a dirty source, a non-performance governor, missing CPU isolation, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
+Do not continue if preflight reports a dirty source, a non-performance governor, a failed CPU affinity or load-balancing check, an active competing SUT, insufficient disk, unavailable telemetry, or a nonzero throttling state.
 
 Before the final batch, record the idle-power baseline once on the same host state (broker up, no pipeline):
 
@@ -107,6 +115,23 @@ Also measure what the host telemetry sidecars cost on the Pi:
 
 It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measurement, 60,000 messages, same cpusets), one with the Pi and `/proc` sidecars on and one with them off (`WAFER_HOST_SIDECARS=off`), alternating which goes first and pausing 60 s between runs, with eKuiper stopped in both arms. `analyze-instrument-ab.py` writes `instrument-ab.json` with the paired on-minus-off differences of p50, p95, p99 and achieved rate and the `/proc` sampler's CPU share, and exits non-zero unless the median p95 and achieved-rate differences are within 5%, every run is lossless and the sampler used at most 1% of one core. The pairs are diagnostic and never pooled with the final batch. About 25 minutes of Pi time.
 
+## Re-check the eKuiper comparator before each batch
+
+Run this on every host (Raspberry Pi 5, Jetson and x86) after deploying the commit it will measure and before its diagnostic batch, and again whenever its eKuiper package, OS, or deployed commit changes. A host that still runs an older eKuiper package gets 2.1.5 from `./eval/ekuiper/install-native.sh`, which upgrades it in place and restarts the service. Then run on that host:
+
+```sh
+./eval/ekuiper/seed-pipeline-a.sh
+./eval/ekuiper/smoke-test.sh
+./eval/scripts/run-rpi5-canonical.sh \
+  --execute \
+  --host rpi5 \
+  --batch-id ekuiper-recheck-<date> \
+  --experiments e-swap-3 \
+  --repetitions 5
+```
+
+Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits 0 only when every run passed; otherwise the batch's `failures.json` lists the failed runs. Investigate any failure before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
+
 ## Run the diagnostic batch
 
 Before the final batch, run the first three repetitions of every experiment from the deployed commit:
@@ -119,7 +144,7 @@ Before the final batch, run the first three repetitions of every experiment from
   --repetitions 3
 ```
 
-That is 210 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 214 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;
@@ -129,7 +154,7 @@ That is 210 runs and about five hours of nominal run time. The batch is diagnost
 
 Stop and preserve the failed attempt if metering truth, capacity counters, event alignment, E-Swap-4 phase or drain boundaries, provenance, or throttling fails. Fix it in a new commit, verify and deploy that commit, and run a new diagnostic batch. E-Swap-4 must retain 1,200 source-origin primary buckets over `[0,120s)` and 100 separate drain buckets over `[120s,130s)`; full-run counters reconcile both regions. Reconciled drain arrivals are reported, while an after-drain receive, source completion at or after 130 seconds, or incomplete population fails closed.
 
-The diagnostic batch must also demonstrate resume behavior: stop it with SIGINT after a declared leaf, rerun the same command, and confirm with `mise run campaign-status -- --batch-id diag-<date>` that passed attempts are skipped rather than duplicated.
+The diagnostic batch must also demonstrate resume behavior: stop it with SIGINT after a declared leaf, rerun the same command, and confirm with `mise run campaign-status -- --batch-id diag-<date>` that admitted attempts are skipped rather than duplicated.
 
 ## Launch and resume the final batch
 
@@ -144,7 +169,7 @@ Launch only after the diagnostic batch passes review, from the same deployed com
 
 `mise run run-campaign -- --batch-id <id>` runs the same command, and `mise run campaign-status -- --batch-id <id>` lists its done and pending runs. On the Jetson and x86 replication hosts add `--host jetson` or `--host x86`.
 
-On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, and the start time. The runner executes sequentially, writes `progress.jsonl`, creates a new attempt directory after failure, and skips a run index once a passed attempt exists. Reusing the same command and batch ID resumes the batch. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
+On the first start the runner writes `batch.json` into the batch ledger. It records the batch ID, host, source SHA and dirty flag, the SHA-256 of `eval/canonical-matrix.json`, the seed, the experiments, the repetition override, whether the batch can become thesis evidence, and the start time. The runner executes sequentially and writes `progress.jsonl`. Each attempt ends as a clean pass, a system outcome, or an infrastructure failure, and its `canonical-status.json` records the class and reasons; [Attempts and retries](../../eval/RESULT-CONTRACT.md#attempts-and-retries) defines them. A clean pass or a system outcome is admitted and the run index is skipped from then on. A system outcome, such as a runtime exit or a containment escape, is data and is never retried. An infrastructure failure is retried once, immediately and in a new attempt directory; when the retry also fails, the run is missing and is not run again. E-Val-1 is never retried: any failed or interrupted repetition fails the gate, and a new gate needs a new batch. Reusing the same command and batch ID resumes the batch; an interrupted attempt counts as one infrastructure attempt. `--status` lists done, pending and missing runs. A resume from another commit or matrix is refused. A final batch also refuses to start or resume from a dirty source tree, and a batch that `approve-batch` has sealed cannot be resumed.
 
 To dry-run one experiment without execution:
 
@@ -167,17 +192,17 @@ tail -f eval/results/canonical-batches/rpi5-<batch-id>/progress.jsonl
 find eval/results -path "*rpi5-<batch-id>*" -name canonical-status.json -print
 ```
 
-Stop the runner normally with SIGINT. Do not delete partial attempts. Stop admission immediately for:
+Stop the runner normally with SIGINT. Do not delete partial attempts. The runner records a system outcome and moves on; it does not stop for one. Stop admission immediately for:
 
 - thermal throttling or missing telemetry;
 - provenance, config, binary, or plugin drift;
 - free disk space below the required free space in the estimate above;
-- repeated systemic harness failure;
+- repeated systemic harness failure, including missing runs whose retry also failed;
 - counter or schema mismatch;
 - missed E-Swap event alignment;
 - unexpected concurrent SUT activity.
 
-A threshold miss by a valid SUT run is data, not a reason to tune the threshold or system during the batch.
+A threshold miss, a crash, or a containment escape by the system under test is data, not a reason to rerun the unit or to tune the threshold or system during the batch.
 
 ## Move the single evidence volume between hosts
 
@@ -213,9 +238,9 @@ It refuses the batch unless all of these hold:
 
 - the ledger is under `manifests/canonical-batches/`, and its `batch.json` marks thesis evidence with no repetition override;
 - the batch ran from one clean commit with the current matrix;
-- `schedule.json` is the full schedule for the batch seed, and every run has a passed attempt or an alias receipt;
+- `schedule.json` is the full schedule for the batch seed, and every run has an admitted attempt (a clean pass or a system outcome) within its retry cap, or an alias receipt;
 - `e-val-1-gate.json` reports a pass;
-- every passed leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
+- every admitted leaf has the batch SHA, a clean tree, `throttled=0x0`, and no `thesis_evidence=false`.
 
 It then writes `raw.sha256` into the ledger. That file holds the SHA-256 of every file of the batch under `raw/`, its alias receipts, and its ledger, with paths relative to the volume root. Check it at any time:
 
@@ -243,13 +268,15 @@ Canonical analysis reads the host entry in `eval/final-batches.json`. It rejects
 ## Experiment boundaries to retain
 
 - E-Perf-1 is the matched 1,000 msg/s operating point, not capacity.
-- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates.
+- E-Perf-10 is the common-grid gateway envelope with MQTT support censoring. Delivery-good remains pooled loss at or below 1 percent, mean achieved/offered ratio at least 0.99, and zero duplicates. Each delivery ceiling is bracketed by tested rates, and a WAFER/eKuiper ratio interval that straddles 0.70 is `CENSORED`.
 - E-Perf-7 disables mechanisms by TOML omission.
 - E-Perf-9 is Linux filesystem page-cache evidence with disk compiled-component cache disabled.
 - E-Perf-5 remains `PENDING` until the matched x86 Linux block exists; x86 execution and any cross-architecture conclusion are `future-work`.
 - E-Swap-3 uses actual-t0-aligned 100 ms output buckets.
+- E-Swap-1 and E-Swap-5 have ten independent process runs with 50 nested swap or rollback events each. Analysis summarises each run first and reports the first-use (compiling) event of each run apart from the cached events.
 - E-Swap-4 has one source-driven burst and one stateless swap per independent run; primary `[0,120s)` and drain `[120s,130s)` sink evidence remain separate and strictly reconciled, with zero after-drain arrivals and no right censoring.
 - E-Perf-2 remains an alias view of E-Perf-1, E-Perf-8 of E-Perf-6, and E-Swap-2/E-Swap-6 of E-Swap-1. Aliases never add independent samples.
 - PMIC remains an internal-rail proxy, not total input power. External USB-C input-power capture is `future-work`.
 - Admission with the retained 5 V / 4.2 A supply is empirical. It receives no threshold waiver for throttling, temperature, reboot, or I/O failure.
 - Diagnostic scout, v11-v17, diagnostic-batch, laptop, synthetic, and candidate-supplementary data are not pooled with canonical-primary results.
+- The capacity scout's `wafer-max-inflight-1` arm runs WAFER with one MQTT publish in flight. It only tests whether eKuiper's one-at-a-time QoS 1 sink explains a capacity gap; it never feeds the E-Perf-10 grid or decision.

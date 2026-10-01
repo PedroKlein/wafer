@@ -9,6 +9,7 @@ from .canonical import (
     backpressure_table,
     capacity_tables,
     ekuiper_profile_tables,
+    failed_replacement_summary,
     failed_replacement_table,
     metering_table,
     swap3_table,
@@ -18,7 +19,8 @@ from .canonical import (
 )
 from .focused import (
     evidence_label,
-    passed_artifacts,
+    admitted_artifacts,
+    admitted_runs,
     pending_record,
     percentile_rows,
 )
@@ -45,11 +47,13 @@ __all__ = [
     "capacity_tables",
     "cliffs_delta",
     "ekuiper_profile_tables",
+    "failed_replacement_summary",
     "failed_replacement_table",
     "evidence_label",
     "find_canonical_batch",
     "metering_table",
-    "passed_artifacts",
+    "admitted_artifacts",
+    "admitted_runs",
     "pending_record",
     "percentile_rows",
     "require_cross_architecture",

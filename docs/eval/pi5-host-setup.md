@@ -39,42 +39,34 @@ Apply it:
 sudo systemctl reload ssh
 ```
 
-## 4. Reserve CPUs for the active system under test
+## 4. Keep CPU 0 for everything except the system under test
 
-Edit `/boot/firmware/cmdline.txt`. Keep the file on one line and append:
+CPU 0 runs operating-system work, Mosquitto, `wafer-loadgen`, and the telemetry samplers; CPUs 1–3 run exactly one of WAFER, the native Rust baseline, or eKuiper.
+
+Set systemd's default CPU affinity, which every service and login session inherits. In `/etc/systemd/system.conf`, under `[Manager]`, set:
+
+```ini
+CPUAffinity=0
+```
+
+Then edit `/boot/firmware/cmdline.txt` so that new interrupts go to CPU 0. Keep the file on one line, remove any `isolcpus=` left from an earlier setup, and append:
 
 ```text
-isolcpus=1-3
+irqaffinity=0
 ```
 
 Reboot and verify:
 
 ```sh
 sudo reboot
+grep Cpus_allowed_list /proc/1/status
+cat /proc/irq/default_smp_affinity
 cat /sys/devices/system/cpu/isolated
 ```
 
-The expected value is `1-3`. CPU 0 is reserved for operating-system work, Mosquitto, and `wafer-loadgen`; CPUs 1–3 run exactly one of WAFER, the native Rust baseline, or eKuiper.
+The expected values are `Cpus_allowed_list: 0`, a mask of CPU 0 only (`1`), and an empty line. Mosquitto inherits CPU 0 from systemd, and the runner pins `wafer-loadgen` and both telemetry samplers to CPU 0. The runner starts WAFER and the native baseline with `taskset -c 1-3`, and the eKuiper unit sets `CPUAffinity=1 2 3`, which takes precedence over the systemd default. `preflight-pi5.sh` checks all of this, warns about interrupts that cannot leave CPUs 1–3 (per-CPU timers, for example), and starts three busy loops under the CPU 1–3 mask to confirm that the kernel spreads them over three CPUs.
 
-Pin Mosquitto to CPU 0:
-
-```sh
-sudo systemctl edit mosquitto
-```
-
-Add:
-
-```ini
-[Service]
-CPUAffinity=0
-```
-
-Then apply it:
-
-```sh
-sudo systemctl daemon-reload
-sudo systemctl restart mosquitto
-```
+Do not use `isolcpus`. Its default domain isolation takes CPUs 1–3 out of scheduler load balancing, so every thread of a system started under `taskset -c 1-3` would stay on the single CPU its process started on. The `isolcpus=nohz,managed_irq,...` form is no alternative: it needs a kernel built with `NO_HZ_FULL`, and the stock Raspberry Pi kernel, built without it, rejects the whole parameter.
 
 ## 5. Remove avoidable noise
 
@@ -106,7 +98,7 @@ cd ~/wafer
 ./eval/ekuiper/smoke-test.sh
 ```
 
-The installer verifies the official SHA256 before installing eKuiper 2.1.0. Docker is not installed or used.
+The installer checks the package against the SHA256 pinned for its architecture and the release's published checksum before installing eKuiper 2.1.5. On a host that still runs 2.1.0, run the same commands: the installer upgrades the package in place and restarts the service. Docker is not installed or used.
 
 ## 7. Deploy WAFER from the development machine
 
@@ -156,79 +148,15 @@ vcgencmd measure_temp
 vcgencmd get_throttled
 ```
 
-`get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply is admitted only by measured host gates and receives no threshold waiver: any nonzero throttling, temperature at or above the declared limit, reboot, kernel I/O error, or checksum mismatch stops admission.
+`get_throttled` must report `throttled=0x0`. Active cooling is required. The retained 5 V / 4.2 A supply gets no threshold waiver: every final run must record `throttled=0x0`, and `approve-batch` refuses a batch with any other value.
 
 ## 9. Mount the single results volume
 
-Enhanced v10 evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
+Campaign evidence uses one physical exFAT filesystem labeled `WAF_RESULTS`; the label fits exFAT's 11 UTF-16 code-unit limit. The Pi and Jetson mount it at `/mnt/wafer-results`; macOS mounts the same volume at `/Volumes/WAF_RESULTS`. The volume contains `raw/`, `manifests/`, `derived/`, and `reports/`. Evidence manifests store paths relative to this volume root so the same manifest verifies on every host.
 
 Do not format or relabel a device from this guide. Formatting requires the separate destructive-operation gate and a fresh confirmation of the exact device identity. Before any run, verify the expected UUID, label, filesystem, mount path, free space, and read/write state. Create raw attempts additively; never overwrite an existing path. exFAT does not preserve POSIX ownership semantics, so admission depends on path identity and checksums rather than mode bits, hardlinks, or symlinks.
 
 Before moving the drive, stop all writers, run `sync`, and unmount it cleanly. After each mount or host transition, confirm the UUID and label and verify the complete SHA-256 manifest before exposing `raw/` to analysis. Analysis opens `raw/` read-only and writes only under `derived/` and `reports/`. Never copy the raw tree to the SD card, Mac internal storage, or another removable volume.
-
-Qualification is staged and non-destructive. The tool never formats, relabels, mounts, unmounts, copies, or deletes the volume. First capture the mounted-device facts and review the stable by-id name and UUID before creating the bounded test corpus:
-
-```sh
-./eval/scripts/qualify-results-storage.sh facts \
-  --results-root /mnt/wafer-results \
-  > /tmp/wafer-results-before.json
-./eval/scripts/qualify-results-storage.sh prepare \
-  --results-root /mnt/wafer-results \
-  --facts-json /tmp/wafer-results-before.json \
-  --expected-device-id 'by-id:<approved-Kingston-partition-id>' \
-  --expected-uuid '<approved-exFAT-UUID>' \
-  --qualification-id '<source-bound-id>' \
-  --min-free-bytes '<required-campaign-bytes>'
-```
-
-`prepare` fails before writing if the stable device ID, UUID, label, exFAT type, mount path, read-write state, path identity, or free-space margin differs. Its corpus is stored under `manifests/storage-qualification/<id>/`, never under `raw/`. It writes one large file, 1,024 small files, their SHA-256 manifest, exact file/byte counts, and a `prepared.json` receipt, then calls `sync`.
-
-Next stop every writer, run `sync`, unmount the volume with the host's normal safe-eject procedure, remount it at `/mnt/wafer-results`, and collect fresh facts. The tool does not perform this operator step. Verification requires a changed mount identity and rehashes every corpus file:
-
-```sh
-./eval/scripts/qualify-results-storage.sh facts \
-  --results-root /mnt/wafer-results \
-  > /tmp/wafer-results-after.json
-./eval/scripts/qualify-results-storage.sh verify-remount \
-  --results-root /mnt/wafer-results \
-  --facts-json /tmp/wafer-results-after.json \
-  --prepared-receipt /mnt/wafer-results/manifests/storage-qualification/<id>/prepared.json
-```
-
-The resulting `verified.json` records expected/observed file and byte counts, missing, extra, and mismatch counts, and the before/after mount identities. Any non-zero count blocks use of the volume.
-
-After storage qualification and a fresh reboot, record the boot ID and run the
-stop-on-first-failure host load ladder. Do not use the historical
-`.plans/rpi5-host-diagnostic/run_phase.sh`; it predates the exFAT evidence
-contract and writes to its local plan directory.
-
-```sh
-boot_id="$(cat /proc/sys/kernel/random/boot_id)"
-session_id="host-characterization-$(date -u +%Y%m%dT%H%M%SZ)"
-./eval/scripts/characterize-rpi5-host.sh \
-  --output-dir "/mnt/wafer-results/raw/e-host-thermal-storage/$session_id" \
-  --session-id "$session_id" \
-  --expected-boot-id "$boot_id"
-```
-
-Start within ten minutes of the reboot with `vcgencmd get_throttled` equal to
-`throttled=0x0`. The fixed sequence is 120 seconds idle followed by 300 seconds
-each of one-, two-, and three-SUT-core CPU load, CPU plus memory, USB write, USB
-read, and combined CPU plus memory plus USB. One-second samples record
-wall-clock and monotonic time, boot ID, temperature, CPU frequency, throttling,
-PMIC internal-rail proxy watts, memory availability and PSI, and USB throughput.
-The PMIC value is not total input power and excludes direct USB-device draw.
-
-The command exits immediately on temperature at or above 75 °C, any non-zero
-throttling value, boot-ID change, kernel I/O error, workload or instrumentation
-failure, or USB SHA-256 mismatch. It writes the partial receipt and marks later
-phases `not-run`; retry with a new session ID after correcting the failure. It
-never overwrites a prior session. N=5 requires the diagnostic phases through
-USB read to pass. N=30 additionally requires the maximum combined-load phase,
-so a failure there does not erase accepted diagnostic evidence but keeps final
-admission blocked. The script's fixture mode is for local contract tests only;
-its receipts set `execution_mode=fixture-synthetic` and can never grant either
-admission gate.
 
 ## 10. Run preflight and smoke
 
@@ -239,7 +167,7 @@ cd ~/wafer
 ./eval/scripts/run-rpi5-validation.sh
 ```
 
-Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the approved v10 campaign storage path.
+Preflight must report zero failures. The smoke command prints a result directory under the selected results root and runs the result-contract verifier against it. Repository-local `eval/results/` remains a local-test fallback, not the campaign storage path.
 
 ## Final checklist
 
@@ -247,7 +175,8 @@ These commands must succeed before longer test runs:
 
 ```sh
 [ "$(uname -m)" = aarch64 ]
-[ "$(cat /sys/devices/system/cpu/isolated)" = 1-3 ]
+[ -z "$(cat /sys/devices/system/cpu/isolated)" ]
+grep -q '^Cpus_allowed_list:[[:space:]]*0$' /proc/1/status
 [ "$(sort -u /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor)" = performance ]
 [ "$(vcgencmd get_throttled)" = throttled=0x0 ]
 systemctl is-active --quiet mosquitto kuiper

@@ -8,12 +8,12 @@ These non-functional requirements define the current evaluation boundaries. `eva
 |---|---|---|
 | NFR-PERF-1 | Bound the typed Wasm call cost. | E-Perf-4 pairs each WAFER pass-through run with a native pass-through run of the same payload size and run index and reports the difference in service time; the median difference must be below 50 µs on Raspberry Pi 5. The path is in-process only, because the MQTT adapters keep rumqttc's 10 KiB packet limit. |
 | NFR-PERF-2 | Compare matched Pipeline A at the target load. | E-Perf-1 uses 30 runs per SUT at 1,000 msg/s. Pooled loss must be at most 1 percent, mean achieved/offered at least 0.99, and median WAFER p95 divided by median eKuiper p95 at most 2.0. |
-| NFR-PERF-3 | Measure the co-located gateway-capacity envelope. | E-Perf-10 uses 30 runs for every system-rate pair on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. Report delivery ceiling and normalized p99 knee with MQTT support-path censoring. Compare WAFER/eKuiper ceilings against 0.70 only when the ratio is identifiable. |
+| NFR-PERF-3 | Measure the co-located gateway-capacity envelope. | E-Perf-10 uses 30 runs for every system-rate pair on `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s. Report each delivery ceiling, bracketed by tested rates, and the normalized p99 knee with MQTT support-path censoring. WAFER's tested-grid delivery ceiling must be at least 0.70 of eKuiper's across the whole bracketed ratio interval. |
 | NFR-PERF-4 | Bound memory growth with pipeline depth. | E-Perf-6 reports total RSS for five nodes and the run-level slope; limits are 150 MB total and 10 MB per added node. |
 | NFR-PERF-5 | Compare architecture-specific isolation cost. | E-Perf-5 requires matched Raspberry Pi 5 and x86 Linux runs at the same source and method. It remains `PENDING` without both. |
 | NFR-PERF-6 | Measure startup cache-state effects. | E-Perf-9 compares Linux filesystem page-cache cold/warm conditions. The runtime disk compiled-component cache is disabled, so no AOT-cache criterion is derived from this experiment. |
 
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 uses tested-grid bounds without interpolation and cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point; unresolved ratios remain `CENSORED/PENDING`.
+Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. E-Perf-1 is not a capacity experiment. E-Perf-10 uses tested-grid bounds without interpolation and cannot assign an exact SUT ceiling beyond a delivery-bad MQTT loopback point; a ratio interval that straddles 0.70 is `CENSORED`.
 
 E-Backpressure evaluates `slow`, `drop`, and `dead-letter` with separate equations over source-authoritative offered counts, delivered counts, and the applicable dropped/dead-lettered/DLQ-failure counters. No universal lossless criterion applies.
 
