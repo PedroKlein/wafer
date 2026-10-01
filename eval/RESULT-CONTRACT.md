@@ -221,7 +221,9 @@ before reading. The matrix below is authoritative:
   `cpu-cores.csv`, `host-sched.csv`, `sut-processes.csv` and
   `host-sidecar.json`. Both are sidecar processes the canonical runner and
   `run-experiment.sh --canonical` start before the runtime and stop after it
-  exits; neither reads or changes anything the runtime measures.
+  exits. Both pin themselves to the support CPUs (`--pin-cpus`) before they
+  start sampling, so neither they nor the commands they run share a CPU with
+  the SUT; neither reads or changes anything the runtime measures.
 
 ### Schema table
 
