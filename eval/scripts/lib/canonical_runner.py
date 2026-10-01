@@ -229,14 +229,16 @@ HOTSWAP_PHASE_FIELDS = (
     "first_post_replacement_local_outcome_ns",
 )
 DIAGNOSTIC_REPETITIONS_ENV = "WAFER_DIAGNOSTIC_REPETITIONS"
-CAPACITY_SCOUT_SYSTEMS = RATE_SWEEP_SYSTEMS
-CAPACITY_SCOUT_SUTS = ("native", "wafer", "ekuiper")
+CAPACITY_SCOUT_DIAGNOSTIC_ARM = "wafer-max-inflight-1"
+CAPACITY_SCOUT_SYSTEMS = (*RATE_SWEEP_SYSTEMS, CAPACITY_SCOUT_DIAGNOSTIC_ARM)
+CAPACITY_SCOUT_SUTS = ("native", "wafer", "ekuiper", CAPACITY_SCOUT_DIAGNOSTIC_ARM)
 CAPACITY_SCOUT_BASE_RATE = 500
 CAPACITY_SCOUT_REPETITIONS = 3
 CAPACITY_SCOUT_WARMUP_SECS = 30
 CAPACITY_SCOUT_MEASUREMENT_SECS = 60
 CAPACITY_SCOUT_SEED = 1729
 CAPACITY_SCOUT_WAFER_CONFIG = "eval/configs/capacity-scout-wafer.toml"
+CAPACITY_SCOUT_DIAGNOSTIC_ARM_CONFIG = "eval/configs/capacity-scout-wafer-max-inflight-1.toml"
 CAPACITY_SCOUT_ATTEMPT_TIMEOUT_SECS = 240
 CAPACITY_SCOUT_BATCH_TIMEOUT_SECS = 18 * 60 * 60
 CAPACITY_SCOUT_DISK_FLOOR_BYTES = 2 * 1024 * 1024 * 1024
@@ -448,6 +450,8 @@ def validate_candidate_capacity_run_result(result: dict) -> None:
         raise ValueError("candidate capacity result requires candidate-supplementary evidence")
     if result.get("n30_admitted") is not False:
         raise ValueError("candidate capacity result requires n30_admitted=false")
+    if result["system"] not in CAPACITY_KNEE_GRID:
+        raise ValueError("candidate capacity result has an unknown system")
     if result.get("rate_msg_s") not in CAPACITY_KNEE_GRID[result["system"]]:
         raise ValueError("candidate capacity result rate is outside the system grid")
     if result["controlled_factors"].get("warmup_secs") != CAPACITY_KNEE_WARMUP_SECS:
@@ -946,6 +950,8 @@ def capacity_scout_next_rate(history: list[tuple[int, str]], mqtt: bool = False)
 
 
 def _capacity_scout_config(system: str) -> str:
+    if system == CAPACITY_SCOUT_DIAGNOSTIC_ARM:
+        return CAPACITY_SCOUT_DIAGNOSTIC_ARM_CONFIG
     return CAPACITY_SCOUT_WAFER_CONFIG if system == "wafer" else _rate_sweep_config(system)
 
 
@@ -1241,7 +1247,14 @@ def replay_capacity_scout_decisions(decisions: list[dict], accepted: dict[str, d
         return {
             "action": "stop",
             "reason": "all-suts-resolved-or-support-censored",
-            "states": states,
+            "states": {
+                system: state
+                for system, state in states.items()
+                if system != CAPACITY_SCOUT_DIAGNOSTIC_ARM
+            },
+            "diagnostic_states": {
+                CAPACITY_SCOUT_DIAGNOSTIC_ARM: states[CAPACITY_SCOUT_DIAGNOSTIC_ARM]
+            },
             "classifications": classifications,
         }
     raise ValueError("capacity-scout replay reached an unhandled state")
@@ -5556,7 +5569,7 @@ def run_rate_sweep_item(
         environment["WAFER_BENCH_OUTPUT_DIR"] = str(output)
         environment["WAFER_MEASUREMENT_SECS"] = str(item.measurement_secs)
 
-        if item.system in {"wafer", "native"}:
+        if item.system in {"wafer", "native", CAPACITY_SCOUT_DIAGNOSTIC_ARM}:
             with (output / "stdout.log").open("ab") as log:
                 runtime = subprocess.Popen(
                     [

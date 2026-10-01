@@ -963,6 +963,11 @@ def test_final_capacity_and_publisher_schemas_reject_counter_drift() -> None:
         path = Path(tmp) / "capacity-run.json"
         path.write_text(json.dumps(capacity))
         assert CONTRACT.check_capacity_run_result(path) == []
+        path.write_text(json.dumps({**capacity, "system": "wafer-max-inflight-1"}))
+        assert "not a capacity-grid system" in " ".join(
+            CONTRACT.check_capacity_run_result(path)
+        )
+        path.write_text(json.dumps(capacity))
 
         candidate = json.loads(json.dumps(capacity))
         candidate.update(

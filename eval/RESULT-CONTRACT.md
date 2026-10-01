@@ -609,6 +609,36 @@ verifier warns on every such leaf and rejects one that sets
 analysis gate never admits it, because it rejects `thesis_evidence=false` and
 requires the matrix's full run population.
 
+### Capacity scout
+
+`canonical_runner.py --capacity-scout --batch-id ID` runs the diagnostic search
+that chose the E-Perf-10 rate grid. Each probe is three runs of one system at one
+offered rate on the Pipeline A MQTT workload, with a 30-second warmup and a
+60-second measurement. The search starts at 500 msg/s, doubles the rate until two
+consecutive probes are delivery-bad, then bisects that bracket. A run writes
+`capacity-scout.json` under `raw/capacity-scout/<batch>/<system>/`, with
+`batch_class=capacity-scout`, `thesis_evidence=false` and no per-message traces.
+Decisions are hash-chained under `manifests/capacity-scout/<batch>/decisions/`, and
+`scout-complete.json` records the final state of every system. The frozen grid
+comes from batch `capacity-scout-v3-20260904T045000Z`; a later scout batch does not
+change it. The grid's provenance is the summary and candidate hashes recorded in
+`eval/canonical-matrix.json`, not a replay of that batch: the runner replays a
+batch against its current system set, so a batch recorded before the diagnostic
+arm existed cannot be resumed with the current runner.
+
+Besides MQTT loopback, native, WAFER and eKuiper, the scout runs a diagnostic arm,
+`wafer-max-inflight-1`. It is the WAFER scout pipeline with `max_inflight = 1` on
+its MQTT sink (`eval/configs/capacity-scout-wafer-max-inflight-1.toml`), so WAFER
+waits for each QoS 1 PUBACK before the next publish, as the eKuiper 2.1 MQTT sink
+does. WAFER otherwise keeps up to 100 publishes in flight. The arm tests one
+hypothesis: that this flow-control difference, rather than the engine, explains a
+capacity gap between WAFER and eKuiper. It goes through the same search, rate
+blocks and MQTT support-path censoring as the other systems. `scout-complete.json`
+reports its state under `diagnostic_states`, apart from the `states` that informed
+the grid. The arm is never thesis evidence and has no verdict: it is not an E-Perf-10
+or capacity-knee system, the runner and the result verifier reject a
+`capacity-run.json` that names it, and the analysis never reads it.
+
 ### `startup.json` schema
 
 E-Perf-9 measures startup from runtime process entry through the first successful

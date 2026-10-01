@@ -69,6 +69,7 @@ HOST_PROFILES = host_profiles(json.loads(CANONICAL_MATRIX.read_text()))
 LATENCY_HIGHEST_NS = 3_600_000_000_000
 FINAL_CAPACITY_REPETITIONS = 30
 FINAL_CAPACITY_MEASUREMENT_SECS = 60
+FINAL_CAPACITY_SYSTEMS = frozenset({"mqtt-loopback", "native", "wafer", "ekuiper"})
 CANDIDATE_SCALING_EXPERIMENTS = {
     "e-perf-payload-refinement",
     "e-perf-depth-extension",
@@ -370,6 +371,8 @@ def check_capacity_run_result(
                 violations.append("capacity-run.json message counters must be integers")
     if value.get("experiment") != expected_experiment:
         violations.append(f"capacity-run.json experiment must be {expected_experiment}")
+    if value.get("system") not in FINAL_CAPACITY_SYSTEMS:
+        violations.append("capacity-run.json system is not a capacity-grid system")
     try:
         if not 1 <= int(value.get("run_index")) <= repetitions:
             violations.append("capacity-run.json run_index is outside the frozen repetitions")
