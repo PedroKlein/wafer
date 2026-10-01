@@ -119,7 +119,7 @@ Before the final batch, run the first three repetitions of every experiment from
   --repetitions 3
 ```
 
-That is 198 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
+That is 210 runs and about five hours of nominal run time. The batch is diagnostic. Its `batch.json` records `repetitions=3` and `thesis_evidence=false`, every leaf carries `thesis_evidence=false`, and `approve-batch` refuses it. Its results are never pooled with the final batch. Review at least:
 
 - E-Val-1;
 - all four E-Perf-7 modes;
