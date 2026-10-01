@@ -109,7 +109,7 @@ It runs six pairs of E-Perf-1 WAFER runs (the canonical 30 s warmup, 60 s measur
 
 ## Re-check the eKuiper comparator before each batch
 
-Repeat this on every host (Raspberry Pi 5, Jetson and x86) shortly before that host's final batch, and again whenever its eKuiper package, OS, or deployed commit changes. A host that still runs an older eKuiper package gets 2.1.5 from `./eval/ekuiper/install-native.sh`, which upgrades it in place and restarts the service. Then run on that host:
+Run this on every host (Raspberry Pi 5, Jetson and x86) after deploying the commit it will measure and before its diagnostic batch, and again whenever its eKuiper package, OS, or deployed commit changes. A host that still runs an older eKuiper package gets 2.1.5 from `./eval/ekuiper/install-native.sh`, which upgrades it in place and restarts the service. Then run on that host:
 
 ```sh
 ./eval/ekuiper/seed-pipeline-a.sh
@@ -122,7 +122,7 @@ Repeat this on every host (Raspberry Pi 5, Jetson and x86) shortly before that h
   --repetitions 5
 ```
 
-Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits 0 only when every run passed; otherwise the batch's `failures.json` lists the failed runs. Investigate any failure before launching that host's final batch. The batch is diagnostic: `--repetitions` keeps it out of thesis evidence, and it is never pooled with the final batch.
+Use `--host jetson` or `--host x86` on the replication hosts. The smoke test confirms that the rule passes only the boundary record, with its schema and `ts`/`seq` unchanged. The E-Swap-3 batch then stops and starts `pipeline_a` once in each of five `ekuiper-restart` runs under the 1,000 msg/s Pipeline A load, and runs the two WAFER strategies alongside: 15 runs, about 45 minutes. Each eKuiper run first refuses a package other than 2.1.5, and a restart fails its run if either REST call fails or the rule does not report `running` within 10 seconds. The command exits 0 only when every run passed; otherwise the batch's `failures.json` lists the failed runs. Investigate any failure before running that host's diagnostic or final batch. The re-check batch is diagnostic: its `batch.json` records `repetitions=5` and `thesis_evidence=false`, `approve-batch` refuses it, and it is never pooled with the final batch.
 
 ## Run the diagnostic batch
 
