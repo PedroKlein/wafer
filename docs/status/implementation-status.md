@@ -200,8 +200,9 @@ text. See [`../interfaces/http-api.md`](../interfaces/http-api.md).
 - E-Swap-5 requires request, rollback, sequence, and
   `post-rollback-continuity.json`; it rejects a fabricated successful-v2 timeline.
 - E-Backpressure has separate `slow`, `drop`, and `dead-letter` conditions and policy-specific accounting.
-- E-Perf-10 reports only tested-grid bounds. Unidentified ratios remain
-  `CENSORED/PENDING`; no interpolation is used.
+- E-Perf-10 brackets each delivery ceiling between tested rates and recomputes
+  every cell from its counters. A ratio interval that straddles 0.70 is
+  `CENSORED`; no interpolation is used.
 - Aliases add zero independent N and may reference only one direct admitted final source.
 - The final N=30 campaign and matched x86 E-Perf-5 evidence remain pending.
 

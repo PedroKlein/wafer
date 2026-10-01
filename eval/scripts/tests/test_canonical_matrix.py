@@ -8,6 +8,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[3]
 MATRIX = ROOT / "eval/canonical-matrix.json"
 VALIDATOR = ROOT / "eval/scripts/validate-canonical.py"
@@ -58,6 +60,10 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
         "epoch_tick_ms": 10,
     }
     assert campaign["ekuiper_operator_concurrency"] == 1
+    assert campaign["attempt_policy"] == {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }
     assert len(campaign["wafer_config_catalog"]) == 55
     assert all(set(entry) == {"experiment", "condition", "config"} for entry in campaign["wafer_config_catalog"])
     assert matrix["experiments"]["e-iso-4"]["metering_exceptions"]["infinite-loop"]["epoch_deadline"] == 1
@@ -74,6 +80,11 @@ def test_final_campaign_policy_is_frozen_in_matrix() -> None:
     }
     assert sweep["capacity_envelope"]["support_path_censoring"] == "mqtt-loopback"
     assert sweep["capacity_envelope"]["competitive_ratio_threshold"] == 0.70
+    assert sweep["capacity_envelope"]["delivery_ceiling"].startswith("bracketed by tested rates")
+    assert sweep["capacity_envelope"]["competitive_decision"] == (
+        "PASS if WAFER lower bound / eKuiper upper bound >= threshold; "
+        "FAIL if WAFER upper bound / eKuiper lower bound < threshold; otherwise CENSORED"
+    )
     assert {"publisher-summary.json", "capacity-run.json", "subscriber-metadata.json"} <= set(
         sweep["required_outputs"]
     )
@@ -249,6 +260,25 @@ def test_final_matrix_rejects_capacity_or_burst_drift() -> None:
         assert expected in result.stderr
 
 
+@pytest.mark.parametrize(
+    "policy",
+    [
+        {"infrastructure_retries": 2, "gate_experiments": ["e-val-1"]},
+        {"infrastructure_retries": 1, "gate_experiments": []},
+        None,
+    ],
+)
+def test_final_matrix_rejects_attempt_policy_drift(policy: dict | None) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["final_campaign"]["attempt_policy"] = policy
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "attempt policy" in result.stderr
+
+
 def test_eiso7_has_matched_control_panic_and_epoch_loop_conditions() -> None:
     matrix = json.loads(MATRIX.read_text())["experiments"]["e-iso-7"]
     assert matrix["conditions"] == ["control", "panic-attack", "epoch-loop-attack"]
@@ -329,6 +359,17 @@ def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
     assert "target-load comparison" in notebook_text.lower()
     assert "target-load delivery summary" in notebook_text.lower()
     assert "Compares sustainable throughput" not in notebook_text
+
+
+def test_density_requires_the_measured_container_floor() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert "e-density-1 required outputs differ" in result.stderr
 
 
 def test_final_capacity_repetitions_cannot_drop_below_30() -> None:

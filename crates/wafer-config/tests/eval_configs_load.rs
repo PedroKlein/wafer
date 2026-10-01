@@ -185,6 +185,25 @@ fn capacity_scout_wafer_is_explicitly_metered() {
 }
 
 #[test]
+fn capacity_scout_inflight_arm_changes_only_the_sink_publish_window() {
+    let root = workspace_root();
+    let scout = load_config(&root.join("eval/configs/capacity-scout-wafer.toml"))
+        .expect("load capacity scout config");
+    let arm = load_config(&root.join("eval/configs/capacity-scout-wafer-max-inflight-1.toml"))
+        .expect("load capacity scout inflight arm config");
+    let mut scout = toml::Value::try_from(&scout).expect("serialize scout config");
+    let mut arm = toml::Value::try_from(&arm).expect("serialize arm config");
+
+    let arm_sink = arm["nodes"]["mqtt-out"].as_table_mut().expect("mqtt-out table");
+    assert_eq!(arm_sink.remove("max_inflight").and_then(|value| value.as_integer()), Some(1));
+    assert!(scout["nodes"]["mqtt-out"].get("max_inflight").is_none());
+    for config in [&mut scout, &mut arm] {
+        config.as_table_mut().expect("config table").remove("pipeline");
+    }
+    assert_eq!(scout, arm);
+}
+
+#[test]
 fn e_iso_7_uses_independent_source_and_sink_populations() {
     let root = workspace_root();
     let control = load_config(&root.join("eval/configs/e-iso-7/pipeline-control.toml"))

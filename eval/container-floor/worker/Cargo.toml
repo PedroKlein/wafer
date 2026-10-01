@@ -1,0 +1,13 @@
+[package]
+name = "container-floor-worker"
+version = "0.1.0"
+edition = "2024"
+description = "Stdin-to-stdout pass-through stage measured as the E-Density-1 container floor"
+publish = false
+
+[workspace]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = "debuginfo"

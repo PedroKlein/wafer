@@ -35,7 +35,8 @@ from wafer_analysis.canonical import (
     validation_gate_table,
     validate_visual_manifest,
 )
-from wafer_analysis.stats import bootstrap_ci, cliffs_delta
+from wafer_analysis.focused import admitted_runs
+from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 
 
 def percentile_runs(conditions: tuple[str, ...], n: int = 30) -> list[dict]:
@@ -213,34 +214,37 @@ def test_backpressure_table_rejects_each_policy_malformed_accounting() -> None:
             backpressure_table(records)
 
 
-def capacity_summary() -> dict:
+FROZEN_CAPACITY_GRID = (1_000, 4_000, 8_000, 15_000, 16_000)
+DELIVERY_COUNTERS = {"good": (0.0, 1.0), "bad": (0.02, 0.97)}
+
+
+def capacity_summary(grid: tuple[int, ...] = FROZEN_CAPACITY_GRID) -> dict:
+    top = grid[-1]
     systems = {}
     for system in ("mqtt-loopback", "native", "wafer", "ekuiper"):
         rates = []
-        for rate in (1_000, 4_000, 8_000, 15_000, 16_000):
+        for rate in grid:
+            loss, ratio = DELIVERY_COUNTERS["good" if rate < top else "bad"]
             rates.append(
                 {
                     "rate_msg_s": rate,
                     "run_count": 30,
-                    "pooled_loss": 0.0 if rate < 16_000 else 0.02,
-                    "mean_achieved_ratio": 1.0 if rate < 16_000 else 0.97,
+                    "pooled_loss": loss,
+                    "mean_achieved_ratio": ratio,
+                    "total_duplicates": 0,
                     "classification": "good"
-                    if rate < 16_000
+                    if rate < top
                     else ("bad" if system == "mqtt-loopback" else "support-confounded"),
                     "run_summary": {
                         "achieved_rate_msg_s": {
-                            "median": rate if rate < 16_000 else rate * 0.97,
-                            "iqr": [rate * 0.99, rate],
-                            "min": rate * 0.98,
-                            "max": rate,
+                            "median": rate if rate < top else rate * 0.97,
                             "values": [rate * (0.98 + index / 1_500) for index in range(30)],
                         },
+                        "achieved_ratio": {"median": ratio, "values": [ratio] * 30},
+                        "loss": {"median": loss, "values": [loss] * 30},
                         "p99_ns": {
                             "median": 100_000 + rate,
-                            "iqr": [100_000, 120_000],
-                            "min": 90_000,
-                            "max": 130_000,
-                            "values": [90_000 + 1_000 * index for index in range(30)],
+                            "values": [90_000 + rate + 1_000 * index for index in range(30)],
                         },
                     },
                     "normalized_p99": {
@@ -251,11 +255,11 @@ def capacity_summary() -> dict:
             )
         systems[system] = {
             "complete": True,
-            "delivery_ceiling": {"rate_msg_s": 15_000, "censoring": "right-censored"},
+            "delivery_ceiling": {"rate_msg_s": grid[-2], "censoring": "right-censored"},
             "normalized_p99_knee": {"rate_msg_s": 8_000, "censoring": "none"},
             "support_censoring": {
-                "from_rate_msg_s": 16_000,
-                "highest_support_uncensored_rate_msg_s": 15_000,
+                "from_rate_msg_s": top,
+                "highest_support_uncensored_rate_msg_s": grid[-2],
             },
             "rates": rates,
         }
@@ -265,18 +269,49 @@ def capacity_summary() -> dict:
         "thesis_evidence": True,
         "sample_unit": "run",
         "required_runs_per_rate": 30,
-        "rate_points_msg_s": [1_000, 4_000, 8_000, 15_000, 16_000],
+        "rate_points_msg_s": list(grid),
         "systems": systems,
     }
 
 
-def set_capacity_classifications(
-    summary: dict, system: str, classifications: list[str]
-) -> None:
-    for rate, classification in zip(
-        summary["systems"][system]["rates"], classifications, strict=True
-    ):
-        rate["classification"] = classification
+def set_capacity_cells(summary: dict, system: str, cells: list[str]) -> None:
+    for rate, cell in zip(summary["systems"][system]["rates"], cells, strict=True):
+        loss, ratio = DELIVERY_COUNTERS[cell]
+        rate["pooled_loss"] = loss
+        rate["mean_achieved_ratio"] = ratio
+        rate["run_summary"]["loss"]["values"] = [loss] * 30
+        rate["run_summary"]["achieved_ratio"]["values"] = [ratio] * 30
+        rate["classification"] = cell
+    if system == "mqtt-loopback":
+        grid = summary["rate_points_msg_s"]
+        first_bad = next((rate for rate, cell in zip(grid, cells) if cell == "bad"), None)
+        for result in summary["systems"].values():
+            result["support_censoring"] = {
+                "from_rate_msg_s": first_bad,
+                "highest_support_uncensored_rate_msg_s": max(
+                    (rate for rate in grid if first_bad is None or rate < first_bad),
+                    default=None,
+                ),
+            }
+
+
+def capacity_decision(
+    wafer: list[str],
+    ekuiper: list[str],
+    *,
+    support: list[str] | None = None,
+    grid: tuple[int, ...] = FROZEN_CAPACITY_GRID,
+) -> dict:
+    summary = capacity_summary(grid)
+    set_capacity_cells(summary, "mqtt-loopback", support or ["good"] * len(grid))
+    set_capacity_cells(summary, "wafer", wafer)
+    set_capacity_cells(summary, "ekuiper", ekuiper)
+    return capacity_competitive_decision(summary)
+
+
+def ceiling(decision: dict, system: str) -> tuple[float, float]:
+    bounds = decision["systems"][system]
+    return bounds["lower_bound_msg_s"], bounds["upper_bound_msg_s"]
 
 
 def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
@@ -287,12 +322,16 @@ def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
         "offered_rate_msg_s",
         "median_achieved_rate_msg_s",
         "pooled_loss",
+        "total_duplicates",
         "median_p99_ns",
         "median_normalized_p99",
     } <= set(rates.columns)
     assert "achieved_rate_msg_s" not in boundaries.columns
+    assert "delivery_ceiling_msg_s" not in boundaries.columns
     assert {
-        "delivery_ceiling_msg_s",
+        "delivery_ceiling_lower_bound_msg_s",
+        "delivery_ceiling_upper_bound_msg_s",
+        "delivery_ceiling_non_monotonic",
         "normalized_p99_knee_msg_s",
         "mqtt_support_path_limitation",
         "wafer_lower_bound_msg_s",
@@ -310,118 +349,186 @@ def test_capacity_tables_keep_metrics_and_support_limitation_separate() -> None:
         "claim_boundary",
     } <= set(boundaries.columns)
     assert boundaries["claim_boundary"].str.contains("support").all()
+    by_system = boundaries.set_index("system")
+    assert by_system.loc["mqtt-loopback", "delivery_ceiling_lower_bound_msg_s"] == 15_000
+    assert by_system.loc["mqtt-loopback", "delivery_ceiling_upper_bound_msg_s"] == 16_000
+    assert by_system.loc["native", "delivery_ceiling_upper_bound_msg_s"] == np.inf
     assert boundaries["wafer_lower_bound_msg_s"].eq(15_000).all()
-    assert boundaries["wafer_upper_bound_msg_s"].eq(16_000).all()
+    assert boundaries["wafer_upper_bound_msg_s"].eq(np.inf).all()
     assert boundaries["ekuiper_lower_bound_msg_s"].eq(15_000).all()
-    assert boundaries["ekuiper_upper_bound_msg_s"].eq(16_000).all()
-    assert boundaries["competitive_ratio_lower_bound"].eq(15_000 / 16_000).all()
-    assert boundaries["competitive_ratio_upper_bound"].eq(16_000 / 15_000).all()
+    assert boundaries["ekuiper_upper_bound_msg_s"].eq(np.inf).all()
+    assert boundaries["competitive_ratio_lower_bound"].eq(0.0).all()
+    assert boundaries["competitive_ratio_upper_bound"].eq(np.inf).all()
     assert boundaries["competitive_threshold"].eq(0.70).all()
-    assert boundaries["competitive_status"].eq("PASS").all()
-    assert boundaries["competitive_branch"].eq("censored-worst-case-pass").all()
-    assert boundaries["competitive_reason"].str.contains("meets").all()
+    assert boundaries["competitive_status"].eq("CENSORED").all()
+    assert boundaries["competitive_branch"].eq("straddles-threshold").all()
     assert boundaries["support_confounded_rate_msg_s"].eq(16_000).all()
     assert boundaries["beyond_grid_limitation"].str.contains("16000").all()
     assert set(rates["classification"]) == {"good", "bad", "support-confounded"}
 
 
-def capacity_decision(
-    wafer: list[str], ekuiper: list[str]
-) -> dict:
-    summary = capacity_summary()
-    set_capacity_classifications(summary, "wafer", wafer)
-    set_capacity_classifications(summary, "ekuiper", ekuiper)
-    return capacity_competitive_decision(summary)
+def test_capacity_decision_brackets_each_ceiling_between_tested_rates() -> None:
+    both_good = capacity_decision(["good"] * 5, ["good"] * 5)
+    assert ceiling(both_good, "wafer") == ceiling(both_good, "ekuiper") == (16_000, np.inf)
+    assert (both_good["ratio_lower_bound"], both_good["ratio_upper_bound"]) == (0.0, np.inf)
+    assert both_good["status"] == "CENSORED"
 
-
-def test_tested_grid_capacity_identifiable_pass_and_fail() -> None:
-    passed = capacity_decision(
+    adjacent = capacity_decision(
         ["good", "good", "good", "bad", "bad"],
-        ["good", "good", "good", "bad", "bad"],
+        ["good", "good", "good", "good", "bad"],
     )
-    assert passed["branch"] == "identifiable-pass"
+    assert ceiling(adjacent, "wafer") == (8_000, 15_000)
+    assert ceiling(adjacent, "ekuiper") == (15_000, 16_000)
+    assert (adjacent["ratio_lower_bound"], adjacent["ratio_upper_bound"]) == (0.5, 1.0)
+    assert adjacent["branch"] == "straddles-threshold"
+    assert adjacent["status"] == "CENSORED"
+
+    passed = capacity_decision(["good"] * 5, ["good", "bad", "bad", "bad", "bad"])
+    assert ceiling(passed, "ekuiper") == (1_000, 4_000)
+    assert passed["ratio_lower_bound"] == 4.0
+    assert passed["branch"] == "worst-case-pass"
     assert passed["status"] == "PASS"
-    assert passed["ratio_lower_bound"] == passed["ratio_upper_bound"] == 1.0
 
     failed = capacity_decision(
-        ["good", "good", "bad", "bad", "bad"],
-        ["good", "good", "good", "bad", "bad"],
+        ["good", "bad", "bad", "bad", "bad"],
+        ["good", "good", "good", "good", "bad"],
     )
-    assert failed["systems"]["wafer"]["lower_bound_msg_s"] == 4_000
-    assert failed["systems"]["wafer"]["upper_bound_msg_s"] == 4_000
-    assert failed["systems"]["ekuiper"]["lower_bound_msg_s"] == 8_000
-    assert failed["ratio_lower_bound"] == failed["ratio_upper_bound"] == 0.5
-    assert failed["branch"] == "identifiable-fail"
+    assert ceiling(failed, "wafer") == (1_000, 4_000)
+    assert failed["ratio_upper_bound"] == pytest.approx(0.267, abs=1e-3)
+    assert failed["branch"] == "best-case-fail"
     assert failed["status"] == "FAIL"
 
 
-def test_tested_grid_capacity_censored_branches() -> None:
-    worst_case_pass = capacity_decision(
-        ["good", "good", "good", "good", "support-confounded"],
-        ["good", "good", "good", "support-confounded", "support-confounded"],
-    )
-    assert worst_case_pass["ratio_lower_bound"] == 15_000 / 16_000
-    assert worst_case_pass["branch"] == "censored-worst-case-pass"
-    assert worst_case_pass["status"] == "PASS"
+def test_capacity_decision_handles_a_failing_lowest_rate() -> None:
+    ekuiper_fails = capacity_decision(["good", "good", "bad", "bad", "bad"], ["bad"] * 5)
+    assert ceiling(ekuiper_fails, "ekuiper") == (0, 1_000)
+    assert ekuiper_fails["ratio_lower_bound"] == 4.0
+    assert ekuiper_fails["status"] == "PASS"
 
-    best_case_fail = capacity_decision(
-        ["good", "good", "good", "bad", "bad"],
-        ["good", "good", "good", "good", "support-confounded"],
-    )
-    assert best_case_fail["ratio_upper_bound"] == 8_000 / 15_000
-    assert best_case_fail["branch"] == "censored-best-case-fail"
-    assert best_case_fail["status"] == "FAIL"
+    wafer_fails = capacity_decision(["bad"] * 5, ["good", "good", "bad", "bad", "bad"])
+    assert ceiling(wafer_fails, "wafer") == (0, 1_000)
+    assert wafer_fails["ratio_upper_bound"] == 0.25
+    assert wafer_fails["status"] == "FAIL"
 
-    straddling = capacity_decision(
-        ["good", "good", "support-confounded", "support-confounded", "support-confounded"],
-        ["good", "good", "good", "bad", "bad"],
-    )
-    assert straddling["ratio_lower_bound"] == 0.5
-    assert straddling["ratio_upper_bound"] == 2.0
-    assert straddling["branch"] == "censored-straddling"
-    assert straddling["status"] == "CENSORED/PENDING"
+    both_fail = capacity_decision(["bad"] * 5, ["bad"] * 5)
+    assert (both_fail["ratio_lower_bound"], both_fail["ratio_upper_bound"]) == (0.0, np.inf)
+    assert both_fail["status"] == "CENSORED"
 
 
-def test_tested_grid_capacity_rejects_incomplete_and_non_monotonic_population() -> None:
-    incomplete = capacity_decision(
-        ["good", "good", "incomplete", "bad", "bad"],
+def test_capacity_decision_widens_a_non_monotonic_ceiling_over_every_reading() -> None:
+    dip = capacity_decision(
+        ["good", "bad", "good", "bad", "bad"],
         ["good", "good", "good", "bad", "bad"],
     )
-    assert incomplete["branch"] == "invalid-population"
-    assert incomplete["status"] == "PENDING"
-    assert "incomplete" in incomplete["reason"]
+    assert ceiling(dip, "wafer") == (1_000, 15_000)
+    assert dip["systems"]["wafer"]["non_monotonic"] is True
+    assert dip["systems"]["ekuiper"]["non_monotonic"] is False
+    assert dip["status"] == "CENSORED"
 
-    non_monotonic_summary = capacity_summary()
-    set_capacity_classifications(
-        non_monotonic_summary, "wafer", ["good", "bad", "good", "bad", "bad"]
+    robust = capacity_decision(["good", "good", "bad", "good", "good"], ["bad"] * 5)
+    assert ceiling(robust, "wafer") == (4_000, np.inf)
+    assert robust["systems"]["wafer"]["non_monotonic"] is True
+    assert robust["status"] == "PASS"
+
+
+def test_capacity_decision_support_confounded_cells_set_no_bound() -> None:
+    support = ["good", "good", "bad", "bad", "bad"]
+    passed = capacity_decision(
+        ["good"] * 5, ["good", "bad", "good", "good", "good"], support=support
     )
-    non_monotonic = capacity_competitive_decision(non_monotonic_summary)
-    assert non_monotonic["branch"] == "invalid-population"
-    assert non_monotonic["status"] == "PENDING"
-    assert "non-monotonic" in non_monotonic["reason"]
-    _, rendered = capacity_tables(non_monotonic_summary)
-    assert rendered["competitive_status"].eq("PENDING").all()
-    assert rendered["competitive_branch"].eq("invalid-population").all()
+    assert ceiling(passed, "wafer") == (4_000, np.inf)
+    assert ceiling(passed, "ekuiper") == (1_000, 4_000)
+    assert passed["support_confounded_rate_msg_s"] == 8_000
+    assert passed["ratio_lower_bound"] == 1.0
+    assert passed["status"] == "PASS"
+
+    censored = capacity_decision(["good"] * 5, ["good"] * 5, support=support)
+    assert ceiling(censored, "ekuiper") == (4_000, np.inf)
+    assert censored["status"] == "CENSORED"
 
 
-def test_tested_grid_capacity_handles_no_good_rate_and_zero_denominator() -> None:
-    no_good_wafer = capacity_decision(
-        ["bad", "bad", "bad", "bad", "bad"],
-        ["good", "good", "bad", "bad", "bad"],
+def test_capacity_decision_recomputes_delivery_from_the_counters() -> None:
+    summary = capacity_summary()
+    for system in ("mqtt-loopback", "native", "wafer"):
+        set_capacity_cells(summary, system, ["good"] * 5)
+    set_capacity_cells(summary, "ekuiper", ["good", "bad", "bad", "bad", "bad"])
+    for rate in summary["systems"]["wafer"]["rates"][1:]:
+        rate.update(pooled_loss=0.75, mean_achieved_ratio=0.10, total_duplicates=999)
+        rate["run_summary"]["loss"]["values"] = [0.75] * 30
+        rate["run_summary"]["achieved_ratio"]["values"] = [0.10] * 30
+    decision = capacity_competitive_decision(summary)
+    assert ceiling(decision, "wafer") == (1_000, 4_000)
+    assert decision["status"] == "CENSORED"
+    with pytest.raises(ValueError, match="wafer rate 4000 classification disagrees"):
+        capacity_tables(summary)
+
+    duplicated = capacity_summary()
+    set_capacity_cells(duplicated, "mqtt-loopback", ["good"] * 5)
+    set_capacity_cells(duplicated, "wafer", ["good", "good", "good", "bad", "bad"])
+    duplicated["systems"]["wafer"]["rates"][2]["total_duplicates"] = 1
+    assert ceiling(capacity_competitive_decision(duplicated), "wafer") == (4_000, 8_000)
+
+
+def test_capacity_decision_accepts_any_sorted_grid() -> None:
+    grid = (1_000, 4_000, 6_000, 8_000, 15_000, 16_000)
+    decision = capacity_decision(
+        ["good", "good", "good", "bad", "bad", "bad"],
+        ["good", "good", "bad", "bad", "bad", "bad"],
+        grid=grid,
     )
-    assert no_good_wafer["systems"]["wafer"]["lower_bound_msg_s"] == 0
-    assert no_good_wafer["ratio_lower_bound"] == 0.0
-    assert no_good_wafer["branch"] == "identifiable-fail"
-    assert no_good_wafer["status"] == "FAIL"
+    assert ceiling(decision, "wafer") == (6_000, 8_000)
+    assert ceiling(decision, "ekuiper") == (4_000, 6_000)
+    assert decision["ratio_lower_bound"] == 1.0
+    assert decision["status"] == "PASS"
 
-    zero_denominator = capacity_decision(
-        ["bad", "bad", "bad", "bad", "bad"],
-        ["bad", "bad", "bad", "bad", "bad"],
-    )
-    assert zero_denominator["ratio_lower_bound"] is None
-    assert zero_denominator["ratio_upper_bound"] is None
-    assert zero_denominator["branch"] == "zero-denominator"
-    assert zero_denominator["status"] == "PENDING"
+    rates, boundaries = capacity_tables(capacity_summary(grid))
+    assert len(rates) == 24
+    assert boundaries["beyond_grid_limitation"].str.contains("16000").all()
+
+
+def test_capacity_decision_rejects_incomplete_or_malformed_population() -> None:
+    incomplete = capacity_summary()
+    incomplete["systems"]["wafer"]["rates"][2]["run_count"] = 29
+    decision = capacity_competitive_decision(incomplete)
+    assert decision["branch"] == "invalid-population"
+    assert decision["status"] == "PENDING"
+    assert "incomplete tested-rate cell" in decision["reason"]
+
+    support_incomplete = capacity_summary()
+    support_incomplete["systems"]["mqtt-loopback"]["rates"][0]["run_count"] = 29
+    assert "mqtt-loopback" in capacity_competitive_decision(support_incomplete)["reason"]
+
+    missing_duplicates = capacity_summary()
+    del missing_duplicates["systems"]["ekuiper"]["rates"][0]["total_duplicates"]
+    assert "malformed delivery counters" in capacity_competitive_decision(
+        missing_duplicates
+    )["reason"]
+
+    unsorted = capacity_summary()
+    unsorted["rate_points_msg_s"] = [4_000, 1_000, 8_000, 15_000, 16_000]
+    decision = capacity_competitive_decision(unsorted)
+    assert decision["status"] == "PENDING"
+    assert "strictly increasing" in decision["reason"]
+    assert decision["ratio_lower_bound"] is decision["ratio_upper_bound"] is None
+
+
+def test_capacity_tables_reject_support_censoring_that_disagrees_with_the_loopback() -> None:
+    summary = capacity_summary()
+    summary["systems"]["native"]["support_censoring"]["from_rate_msg_s"] = None
+    with pytest.raises(ValueError, match="support-path censoring disagrees"):
+        capacity_tables(summary)
+
+
+def test_capacity_tables_reject_pooled_counters_that_disagree_with_their_runs() -> None:
+    summary = capacity_summary()
+    summary["systems"]["wafer"]["rates"][0]["run_summary"]["loss"]["values"] = [0.5] * 30
+    with pytest.raises(ValueError, match="pooled counters disagree"):
+        capacity_tables(summary)
+
+    summary = capacity_summary()
+    summary["systems"]["ekuiper"]["rates"][1]["mean_achieved_ratio"] = 0.995
+    with pytest.raises(ValueError, match="ekuiper rate 4000 pooled counters disagree"):
+        capacity_tables(summary)
 
 
 def swap5_record(run_index: int = 1) -> dict:
@@ -1109,20 +1216,78 @@ def test_capacity_tables_reject_schema_drift_from_the_producer() -> None:
 
     summary = capacity_summary()
     summary["rate_points_msg_s"][-1] = 32_000
-    with pytest.raises(ValueError, match="wrong common rate grid"):
+    with pytest.raises(ValueError, match="differ from tested grid"):
         capacity_tables(summary)
+
+    summary = capacity_summary((4_000, 8_000, 15_000, 16_000))
+    with pytest.raises(ValueError, match="1,000 msg/s baseline"):
+        capacity_tables(summary)
+
+
+def test_scout_diagnostic_arm_never_enters_the_capacity_decision() -> None:
+    summary = capacity_summary()
+    expected = capacity_competitive_decision(summary)
+    summary["systems"]["wafer-max-inflight-1"] = json.loads(
+        json.dumps(summary["systems"]["wafer"])
+    )
+    set_capacity_cells(summary, "wafer-max-inflight-1", ["bad"] * 5)
+    assert capacity_competitive_decision(summary) == expected
+    with pytest.raises(ValueError, match="requires all four systems"):
+        capacity_tables(summary)
+
+    candidate = candidate_capacity_summary()
+    candidate["systems"]["wafer-max-inflight-1"] = candidate["systems"]["wafer"]
+    with pytest.raises(ValueError, match="requires all four systems"):
+        candidate_capacity_table(candidate)
 
 
 def test_capacity_intervals_bootstrap_the_run_values() -> None:
     summary = capacity_summary()
     rates, _ = capacity_tables(summary)
-    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 1_000)].iloc[0]
-    values = summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"]
-    assert (row["p99_ci95_low_ns"], row["p99_ci95_high_ns"]) == bootstrap_ci(
-        np.asarray(values, dtype=float)
+    wafer = rates[rates["system"] == "wafer"].set_index("offered_rate_msg_s")
+    baseline = np.asarray(
+        summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"], dtype=float
     )
+    row = wafer.loc[1_000]
+    assert (row["p99_ci95_low_ns"], row["p99_ci95_high_ns"]) == bootstrap_ci(baseline)
+    assert [row[f"{stat}_p99_ns"] for stat in ("min", "q1", "median", "q3", "max")] == [
+        baseline.min(),
+        np.quantile(baseline, 0.25),
+        np.median(baseline),
+        np.quantile(baseline, 0.75),
+        baseline.max(),
+    ]
+    assert row["total_duplicates"] == 0
+    columns = list(rates.columns)
+    for metric, low, high in (
+        ("achieved_rate_msg_s", "achieved_ci95_low_msg_s", "achieved_ci95_high_msg_s"),
+        ("achieved_ratio", "achieved_ratio_ci95_low", "achieved_ratio_ci95_high"),
+        ("loss", "loss_ci95_low", "loss_ci95_high"),
+        ("p99_ns", "p99_ci95_low_ns", "p99_ci95_high_ns"),
+    ):
+        start = columns.index(f"median_{metric}")
+        assert columns[start : start + 7] == [
+            f"median_{metric}",
+            low,
+            high,
+            f"min_{metric}",
+            f"q1_{metric}",
+            f"q3_{metric}",
+            f"max_{metric}",
+        ]
+    assert "pooled_loss_ci95_high" in columns
 
-    summary["systems"]["wafer"]["rates"][0]["normalized_p99"]["values"].pop()
+    loaded = np.asarray(
+        summary["systems"]["wafer"]["rates"][2]["run_summary"]["p99_ns"]["values"], dtype=float
+    )
+    _, low, high = median_shift_ci(loaded, baseline, relative=True)
+    assert wafer.loc[8_000, "median_normalized_p99"] == np.median(loaded) / np.median(baseline)
+    assert (
+        wafer.loc[8_000, "normalized_p99_ci95_low"],
+        wafer.loc[8_000, "normalized_p99_ci95_high"],
+    ) == (1 + low, 1 + high)
+
+    summary["systems"]["wafer"]["rates"][0]["run_summary"]["p99_ns"]["values"].pop()
     with pytest.raises(ValueError, match="30 run values"):
         capacity_tables(summary)
 
@@ -1550,18 +1715,25 @@ def test_validation_gate_requires_full_n_unless_diagnostic() -> None:
     assert not validation_gate_table(validation_records([50_300_000] * 2), canonical=False)["thesis_evidence"].any()
 
 
-def test_density_table_labels_container_floors_as_estimates() -> None:
+def test_density_table_compares_components_with_the_measured_floor() -> None:
     rows = [
-        {"plugin": "pass-through", "wasm_bytes": "65536", "container_base": "alpine", "container_min_mb": "50"},
-        {"plugin": "tensor-prep", "wasm_bytes": "262144", "container_base": "alpine + ndarray", "container_min_mb": "70"},
+        {"plugin": "pass-through", "wasm_bytes": "65536", "wasm_kb": "64.0"},
+        {"plugin": "tensor-prep", "wasm_bytes": "262144", "wasm_kb": "256.0"},
     ]
-    table = density_table(rows).set_index("plugin")
-    assert table.loc["pass-through", "floor_to_wasm_ratio"] == pytest.approx(800)
-    assert "estimate, not a measurement" in table.loc["tensor-prep", "estimator"]
+    floor = {"base": "scratch", "image_bytes": 524_288}
+    table = density_table(rows, floor).set_index("plugin")
+    assert table.loc["pass-through", "container_floor_bytes"] == 524_288
+    assert table.loc["pass-through", "floor_to_wasm_ratio"] == pytest.approx(8)
+    assert table.loc["tensor-prep", "floor_to_wasm_ratio"] == pytest.approx(2)
+    assert "measured" in table.loc["tensor-prep", "estimator"]
+    assert "estimate" not in table.loc["tensor-prep", "estimator"]
     assert table["thesis_evidence"].all()
-    assert not density_table(rows, canonical=False)["thesis_evidence"].any()
+    assert not density_table(rows, floor, canonical=False)["thesis_evidence"].any()
     with pytest.raises(ValueError, match="one positive size"):
-        density_table(rows + rows[:1])
+        density_table(rows + rows[:1], floor)
+    for unmeasured in ({**floor, "base": "alpine"}, {**floor, "image_bytes": "50"}, {"base": "scratch"}):
+        with pytest.raises(ValueError, match="measured FROM scratch"):
+            density_table(rows, unmeasured)
 
 
 def startup_records(runs: int = 30, conditions: tuple[str, ...] | None = None) -> list[dict]:
@@ -1625,3 +1797,168 @@ def test_bucket_band_summarises_each_bucket_across_runs() -> None:
     assert band["N_runs"].eq(3).all()
     with pytest.raises(ValueError, match="one value per bucket"):
         bucket_band([0, 1], [[1, 2], [1]])
+
+
+def test_runtime_exit_in_a_containment_run_counts_as_not_contained(tmp_path: Path) -> None:
+    batch = tmp_path / "e-iso-6/rpi5-batch-a"
+    for record in containment_records():
+        if record["experiment"] != "e-iso-6":
+            continue
+        leaf = batch / "panic" / f"run-{record['run_index']:02d}-attempt-01"
+        leaf.mkdir(parents=True)
+        if record["run_index"] == 7:
+            receipt = {"status": "failed", "failure_class": "sut_outcome", "reasons": ["runtime-exit"]}
+        else:
+            receipt = {"status": "passed"}
+            (leaf / "containment.json").write_text(json.dumps(record))
+        (leaf / "canonical-status.json").write_text(json.dumps(receipt))
+    records = [record for record in containment_records() if record["experiment"] != "e-iso-6"]
+    records += [
+        {**value, "experiment": "e-iso-6"} for value in admitted_runs(batch, "containment.json")
+    ]
+
+    table = containment_table(records).set_index("experiment")
+
+    assert table.loc["e-iso-6", "N_runs"] == 30
+    assert table.loc["e-iso-6", "contained_runs"] == 29
+    assert table.loc["e-iso-6", "runs_stopped_early"] == 1
+    assert not table.loc["e-iso-6", "all_contained"]
+    assert table.drop("e-iso-6")["all_contained"].all()
+
+
+def test_one_lost_message_fails_the_burst_swap_zero_loss_criterion() -> None:
+    runs = swap4_runs()
+    runs[4].update(loss=1, sut_outcome_reasons=["message-loss"])
+
+    row = swap4_table(runs).iloc[0]
+
+    assert row["N_runs"] == 30
+    assert row["total_loss"] == 1
+    assert row["lossless_runs"] == 29
+    assert not row["zero_loss_and_duplication"]
+
+
+def test_burst_swap_run_stopped_by_a_failed_swap_counts_against_zero_loss() -> None:
+    runs = swap4_runs()
+    runs[0] = {"condition": "burst-2x", "run_index": 1, "sut_outcome_reasons": ["swap-failed"]}
+
+    row = swap4_table(runs).iloc[0]
+
+    assert row["N_runs"] == 30
+    assert row["N_events"] == 29
+    assert row["runs_stopped_early"] == 1
+    assert row["lossless_runs"] == 29
+    assert not row["zero_loss_and_duplication"]
+
+
+def test_hot_swap_disruption_run_the_runtime_did_not_survive_fails_zero_loss() -> None:
+    runs = swap3_runs()
+    runs[0] = {"condition": "wafer-hotswap", "run_index": 1, "sut_outcome_reasons": ["runtime-exit"]}
+
+    table = swap3_table(runs).set_index("strategy")
+
+    assert table.loc["wafer-hotswap", "N_runs"] == 30
+    assert table.loc["wafer-hotswap", "runs_stopped_early"] == 1
+    assert not table.loc["wafer-hotswap", "zero_loss_and_duplication"]
+    assert table.loc["wafer-restart", "zero_loss_and_duplication"]
+
+
+def test_failed_rollback_is_reported_as_an_unsuccessful_run() -> None:
+    record = swap5_record()
+    requests = record["requests"]
+    requests[3] = {**requests[3], "http_status": 500, "body": {"error": "trap"}}
+    stopped = {
+        "condition": "process-trap-rollback",
+        "run_index": 1,
+        "requests": requests,
+        "sut_outcome_reasons": ["rollback-failed"],
+    }
+
+    row = failed_replacement_table([stopped]).iloc[0]
+
+    assert row["N_nested_events"] == 50
+    assert row["rolled_back_events"] == 49
+    assert not row["all_rolled_back"]
+    assert row["sut_outcome_reasons"] == "rollback-failed"
+
+
+def test_slow_policy_loss_is_admitted_and_reported() -> None:
+    records = backpressure_records()
+    lossy = next(record for record in records if record["policy"] == "slow")
+    lossy["counts"].update(accepted=999, processed=999, delivered=999)
+    lossy["rates_msg_s"].update(accepted=999.0, processed=999.0)
+    lossy["sequence"].update(received=999, gaps=1)
+    lossy["accounting"]["reconciled"] = False
+    lossy["sut_outcome_reasons"] = ["message-loss"]
+
+    slow = backpressure_table(records).set_index("policy").loc["slow"]
+
+    assert slow["N_runs"] == 30
+    assert slow["sut_outcome_runs"] == 1
+    assert slow["total_attempted"] - slow["total_delivered"] == 1
+
+
+def test_capacity_tables_count_a_run_the_system_under_test_failed() -> None:
+    summary = capacity_summary()
+    top = summary["systems"]["wafer"]["rates"][3]
+    top.update(run_count=29, sut_outcome_runs=1, classification="bad")
+    for metric in top["run_summary"].values():
+        metric["values"].pop()
+    top["normalized_p99"]["values"].pop()
+
+    rates, _ = capacity_tables(summary)
+
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 15_000)].iloc[0]
+    assert (row["N_runs"], row["sut_outcome_runs"]) == (30, 1)
+    assert not row["delivery_good"]
+
+
+def test_capacity_tables_report_a_rate_where_every_run_failed() -> None:
+    summary = capacity_summary()
+    top = summary["systems"]["wafer"]["rates"][3]
+    top.update(
+        run_count=0,
+        sut_outcome_runs=30,
+        classification="bad",
+        pooled_loss=None,
+        mean_achieved_ratio=None,
+        run_summary=None,
+        normalized_p99=None,
+    )
+
+    rates, _ = capacity_tables(summary)
+
+    row = rates[(rates["system"] == "wafer") & (rates["offered_rate_msg_s"] == 15_000)].iloc[0]
+    assert (row["N_runs"], row["sut_outcome_runs"]) == (30, 30)
+    assert not row["delivery_good"]
+    assert pd.isna(row["median_p99_ns"]) and pd.isna(row["pooled_loss"])
+
+
+def test_branch_isolation_counts_an_attack_run_the_runtime_did_not_survive() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 1_000, "epoch-loop-attack": 1_000})
+    crashed = next(
+        index
+        for index, record in enumerate(records)
+        if record["condition"] == "panic-attack" and record["run_index"] == 7
+    )
+    records[crashed] = {
+        "condition": "panic-attack",
+        "run_index": 7,
+        "sut_outcome_reasons": ["runtime-exit"],
+    }
+
+    table = branch_isolation_table(records).set_index("condition")
+
+    assert table.loc["panic-attack", "N_runs"] == 30
+    assert table.loc["panic-attack", "runs_stopped_early"] == 1
+    assert not table.loc["panic-attack", "isolated"]
+    assert table.loc["epoch-loop-attack", "isolated"]
+
+
+def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
+    records = recovery_records()
+    records[4] = {"condition": "panic-recovery", "run_index": 5, "sut_outcome_reasons": ["runtime-exit"]}
+
+    row = recovery_table(records).iloc[0]
+
+    assert (row["N_runs"], row["runs_stopped_early"], row["recovery_samples"]) == (30, 1, 87)

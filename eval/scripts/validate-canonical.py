@@ -300,6 +300,14 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("final_campaign eKuiper operator concurrency must be 1")
     if campaign.get("diagnostic_batches_excluded") is not True:
         errors.append("final_campaign must exclude diagnostic batches")
+    if campaign.get("attempt_policy") != {
+        "infrastructure_retries": 1,
+        "gate_experiments": ["e-val-1"],
+    }:
+        errors.append(
+            "final_campaign attempt policy must allow one in-place infrastructure retry "
+            "and none for the E-Val-1 gate"
+        )
 
     expected_metering_exceptions = {
         "e-perf-5": {
@@ -486,6 +494,11 @@ def validate_matrix(matrix: dict) -> list[str]:
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
     if experiments.get("e-perf-5", {}).get("incomplete_until") != "matching x86 Linux batch":
         errors.append("e-perf-5 must remain incomplete until matching x86 Linux batch")
+    if set(experiments.get("e-density-1", {}).get("required_outputs", [])) != {
+        "binary-sizes.csv",
+        "container-floor.json",
+    }:
+        errors.append("e-density-1 required outputs differ from the measured container-floor contract")
 
     records = 0
     for experiment_id, definition in experiments.items():
