@@ -2,7 +2,7 @@
 
 Every WAFER experiment run produces one self-contained raw leaf beneath the
 selected results layout. Repository-local tests use
-`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; v10 campaign runs use
+`eval/results/<experiment-id>/<host-tag>-<UTC-timestamp>/`; campaign runs use
 `<results-root>/raw/<experiment-id>/<host-tag>-<batch-id>/...`. This document is
 the authoritative manifest for both layouts.
 
@@ -39,7 +39,7 @@ eval/results/
         └── branch-b/                   ← E-Iso-7 only; same branch-local files
 ```
 
-Prospective v10 runs pass an explicit results root. The approved volume layout is:
+Campaign runs pass an explicit results root. The approved volume layout is:
 
 ```
 <results-root>/
@@ -292,28 +292,19 @@ Final E-Swap-5 contains one independent process run with 50 nested failed-replac
 
 Final E-Density-1 is a static source-bound measurement. The canonical runner invokes `eval/scripts/collect-binary-sizes.sh` instead of `run-experiment.sh`, requires one `binary-sizes.csv` row for every non-comment entry in `eval/scripts/binary-sizes.index`, and records Pi host, source provenance, governor, throttling, telemetry, and measurement-window evidence. Its metadata uses `system = "static"` and `exit_codes.collector = 0`; runtime/Wasmtime provenance is intentionally inapplicable because no WAFER runtime process executes.
 
-### v10 enhanced candidate contract
+### Candidate experiment contract
 
-The signed v4 final campaign remains immutable. The signed v5 candidate is retained
-as a rejected pre-format artifact because its volume label exceeds exFAT's 11
-UTF-16 code-unit limit. The signed v6 candidate is retained as a rejected
-pre-workload artifact because its deployment payload omits the results-layout module
-required by the canonical runner. The signed v7 candidate is retained as a rejected
-targeted-validation artifact because its eKuiper diagnostic validator rejects a
-contract-valid bounded terminal partial interval. The signed v8 candidate is retained
-as a rejected targeted-validation artifact because its E-Swap-3 fine-bucket producer
-omits metadata required by the shared validator. The signed v9 candidate is retained
-as a rejected targeted-validation artifact because downstream eKuiper consumers
-reject contract-valid bounded terminal partial intervals. Enhanced work uses the
-separate `enhanced_candidate` object in `eval/canonical-matrix.json` and the corrective
-v10 release lineage. It does not modify or supersede the existing primary estimands.
+Candidate experiments live in the separate `enhanced_candidate` object in
+`eval/canonical-matrix.json`. They do not modify or supersede the primary
+estimands.
 
-Every enhanced experiment is either `candidate-supplementary` or diagnostic,
-sets `thesis_evidence=false` and `n30_admitted=false`, and remains outside the
-final campaign until a post-rehearsal selection receipt records an explicit
-include, defer, or reject disposition. The expanded N=5 rehearsal is diagnostic;
-its runs, attempts, intervals, and events must not be pooled with the signed v4
-campaign, prior rehearsals, or one another as independent replicates. The
+Every candidate experiment is either `candidate-supplementary` or diagnostic and
+sets `thesis_evidence=false` and `n30_admitted=false`. Candidates run as their own
+batch with `--experiments candidates`, and the runner refuses to mix them with
+final experiments. A candidate becomes thesis evidence only by moving it into the
+final `experiments` list before a final batch starts; the batch then records the
+changed matrix hash. Candidate runs, attempts, intervals, and events must not be
+pooled with final batches or with one another as independent replicates. The
 independent sample unit is the host run unless the matrix explicitly declares a
 clean-boot host session. Intervals and events are nested observations.
 
@@ -488,7 +479,7 @@ no waiver from throttle, temperature, reboot, or I/O gates.
 
 #### Single-volume evidence storage
 
-Prospective v10 evidence uses one physical exFAT volume labeled
+Campaign evidence uses one physical exFAT volume labeled
 `WAF_RESULTS`, an 11-code-unit label that the filesystem can represent. It is
 mounted at `/mnt/wafer-results` on Pi/Jetson and `/Volumes/WAF_RESULTS` on macOS.
 Manifests store volume-root-relative paths.

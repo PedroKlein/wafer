@@ -13,7 +13,7 @@ Launching the final batch is a human decision, taken after the diagnostic batch 
 | `diagnostic` | Check deployment, host admission, storage, profiling, or a changed path | no |
 | `future-work` | Record evidence that is outside the current Raspberry Pi 5 campaign | no |
 
-A directory name does not determine evidence class. Canonical-primary evidence requires one clean source commit for the whole batch, an entry for the batch in `eval/final-batches.json`, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30. A post-rehearsal selection receipt must record `include`, `defer`, or `reject` before any candidate can enter a later campaign.
+A directory name does not determine evidence class. Canonical-primary evidence requires one clean source commit for the whole batch, an entry for the batch in `eval/final-batches.json`, no throttling, complete matrix N, valid artifacts, and fail-closed canonical analysis. Candidate-supplementary and diagnostic runs remain separate from canonical-primary results and prior rehearsals. Candidates are not automatically admitted to N=30; a candidate enters the final campaign only by moving it into the matrix's final `experiments` list before a final batch starts.
 
 ## Fixed host boundary
 
