@@ -21,6 +21,8 @@ def test_stale_current_claims_fail_but_historical_suffix_is_excluded(
     assert DOCS.stale_claims("E-Perf-9 proves an AOT cache benefit")
     assert DOCS.stale_claims("Pipeline A is a four-stage chain")
     assert DOCS.stale_claims("E-Swap-4 performs 50 swaps at constant 2000 msg/s")
+    assert DOCS.stale_claims("WAFER stays within 30% of eKuiper throughput")
+    assert DOCS.stale_claims("at less than 30 percent throughput loss versus native eKuiper")
 
     path = tmp_path / "doc.md"
     path.write_text(

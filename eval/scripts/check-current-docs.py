@@ -28,6 +28,7 @@ CURRENT_DOCS = (
     "docs/architecture/06-crosscutting-concepts.md",
     "docs/architecture/07-quality-requirements.md",
     "docs/architecture/08-risks.md",
+    "docs/architecture/09-comparators.md",
     "docs/eval/pi5-experiment-runbook.md",
     "docs/operations/configuration.md",
     "docs/status/evaluation-progress.md",
@@ -97,6 +98,12 @@ FORBIDDEN = (
     (
         re.compile(r"Wasm\s+plugins are pure transforms", re.IGNORECASE),
         "processing guests described as pure transforms despite bounded outbound HTTP",
+    ),
+    (
+        re.compile(
+            r"(?:within|less than)\s+30\s*(?:%|percent)[^\n]{0,60}eKuiper", re.IGNORECASE
+        ),
+        "capacity criterion stated as a throughput percentage of eKuiper",
     ),
 )
 REQUIRED = (
