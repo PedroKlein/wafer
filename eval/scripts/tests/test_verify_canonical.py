@@ -1044,13 +1044,16 @@ def make_replacement_health(result: Path) -> dict:
     (result / "measurement-window.json").write_text(
         json.dumps({"started_ns": 2_000_000_000_000, "finished_ns": 2_150_000_000_000})
     )
+    (result / "disruption-timeline.json").write_text(
+        json.dumps({"action_start_timestamp_ns": 2_060_000_000_000})
+    )
     health = {
         "schema_version": 1,
         "unit": "kuiper.service",
         "rule": "pipeline_a",
         "replacement_rule": "pipeline_a_v2",
         "before": ekuiper_snapshot(1_990_000_000_000),
-        "after": ekuiper_snapshot(2_160_000_000_000, {"lastStartTimestamp": 2_090_000}),
+        "after": ekuiper_snapshot(2_160_000_000_000, {"lastStartTimestamp": 2_060_001}),
     }
     (result / "ekuiper-health.json").write_text(json.dumps(health))
     return metadata
@@ -1074,7 +1077,11 @@ def test_swap3_rule_replacement_is_judged_by_the_replacement_rule(tmp_path: Path
     [
         (
             lambda health: health["after"]["rule_status"].update(lastStartTimestamp=1_000),
-            "the eKuiper replacement rule did not start during the run",
+            "the eKuiper replacement rule started before the E-Swap-3 action",
+        ),
+        (
+            lambda health: health["after"]["rule_status"].update(lastStartTimestamp=2_000_000),
+            "the eKuiper replacement rule started before the E-Swap-3 action",
         ),
         (
             lambda health: health.pop("replacement_rule"),

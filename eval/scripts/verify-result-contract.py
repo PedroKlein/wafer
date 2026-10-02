@@ -1466,7 +1466,7 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
     starts the rule again during the run, so elsewhere a new rule start time without a unit
     restart means something outside the run started it. The make-before-break arm deletes
     pipeline_a during the run, so its ``after`` snapshot is of the replacement rule, which
-    must have started after ``before``.
+    must have started at the action in ``disruption-timeline.json``.
     """
     path = leaf / "ekuiper-health.json"
     if not path.is_file():
@@ -1529,11 +1529,19 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
             "lastStartTimestamp"
         )
         if replaces_rule:
+            timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
+            action_started_ns = (
+                timeline.get("action_start_timestamp_ns") if isinstance(timeline, dict) else None
+            )
+            if type(action_started_ns) is not int:
+                action_started_ns = before["captured_at_ns"]
             started_at_ms = rule_after.get("lastStartTimestamp")
-            if type(started_at_ms) is not int or started_at_ms * 1_000_000 < before[
-                "captured_at_ns"
-            ] - 1_000_000:
-                violations.append("the eKuiper replacement rule did not start during the run")
+            # eKuiper keeps the start time in whole milliseconds of the same wall clock.
+            if (
+                type(started_at_ms) is not int
+                or started_at_ms * 1_000_000 < action_started_ns - 1_000_000
+            ):
+                violations.append("the eKuiper replacement rule started before the E-Swap-3 action")
         elif experiment == "e-swap-3" and not started_again:
             violations.append("E-Swap-3 restarted the eKuiper rule but its start time did not move")
         elif experiment != "e-swap-3" and started_again:

@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import importlib.util
 import io
 import json
 import os
@@ -1776,7 +1777,7 @@ class FakeEkuiper:
             self.replacement = {
                 "status": "running",
                 "message": "",
-                "lastStartTimestamp": 61_000,
+                "lastStartTimestamp": runner.time.time_ns() // 1_000_000,
                 "lastStopTimestamp": 0,
                 "sink_mqtt_0_0_records_out_total": 0,
                 "sql": payload["sql"],
@@ -5810,7 +5811,14 @@ def test_swap3_make_before_break_deletes_pipeline_a_only_after_the_replacement_e
     assert offsets == sorted(offsets)
     health = json.loads((output / "ekuiper-health.json").read_text())
     assert (health["rule"], health["replacement_rule"]) == ("pipeline_a", "pipeline_a_v2")
-    assert health["after"]["rule_status"]["lastStartTimestamp"] == 61_000
+    spec = importlib.util.spec_from_file_location(
+        "verify_result_contract", ROOT / "eval/scripts/verify-result-contract.py"
+    )
+    assert spec is not None and spec.loader is not None
+    contract = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(contract)
+    metadata = json.loads((output / "metadata.json").read_text())
+    assert contract.check_ekuiper_health(output, metadata, "e-swap-3") == []
     receipt = json.loads((output / "canonical-status.json").read_text())
     assert receipt["status"] == "passed"
 

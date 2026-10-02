@@ -861,7 +861,8 @@ malformed, do not bracket `measurement-window.json`, show a rule that was not
 running cleanly before warm-up, disagree with `exit_codes.ekuiper`, or name another
 main PID than `ekuiper-audit.json`. Only the `ekuiper-make-before-break` arm may name
 a `replacement_rule`, and it must name `pipeline_a_v2`; that rule must have started
-after the snapshot before warm-up. The `ekuiper-restart` arm stops and starts the
+no earlier than the action start in `disruption-timeline.json`, allowing for the
+whole milliseconds of `lastStartTimestamp`. The `ekuiper-restart` arm stops and starts the
 rule itself, so there `lastStartTimestamp` must move; in every other experiment a
 moved `lastStartTimestamp` without a unit restart means something outside the run
 started the rule, and the leaf is rejected.
