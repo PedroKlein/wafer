@@ -10,6 +10,9 @@ MEASUREMENT_LABELS = {
     "jetson-ina3221-rail-proxy": "Jetson INA3221 rail proxy",
     "x86-rapl-package-energy": "x86 RAPL package power",
 }
+# Two periods of the sampler's default 1 s interval: the runner may stop the sampler
+# just before the window's recorded end.
+MAX_EDGE_GAP_NS = 2_000_000_000
 
 
 def measurement_label(leaf: Path) -> str:
@@ -51,10 +54,11 @@ def clip_to_window(
     if finished_ns <= started_ns:
         raise ValueError("measurement window must finish after it starts")
     ordered = sorted(samples, key=lambda sample: int(sample["timestamp_ns"]))
-    started_ns = max(started_ns, int(ordered[0]["timestamp_ns"]))
-    finished_ns = min(finished_ns, int(ordered[-1]["timestamp_ns"]))
-    if finished_ns <= started_ns:
-        raise ValueError("measurement window does not overlap power telemetry")
+    if (
+        int(ordered[0]["timestamp_ns"]) - started_ns > MAX_EDGE_GAP_NS
+        or finished_ns - int(ordered[-1]["timestamp_ns"]) > MAX_EDGE_GAP_NS
+    ):
+        raise ValueError("power telemetry does not cover the measurement window")
 
     def boundary(timestamp_ns: int) -> dict[str, float | int | str]:
         left = ordered[0]
