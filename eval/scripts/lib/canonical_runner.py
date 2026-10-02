@@ -3940,8 +3940,13 @@ def ekuiper_run_start() -> dict:
     publish; every run starts from pipeline_a alone.
     """
     wait_for_ekuiper_rule_ready("pipeline_a")
-    rules = _url_value("http://127.0.0.1:9081/rules")
-    rule_ids = [rule.get("id") for rule in rules] if isinstance(rules, list) else rules
+    try:
+        rules = _url_value("http://127.0.0.1:9081/rules")
+    except http.client.HTTPException as error:
+        raise RuntimeError(f"eKuiper broke off its rule list: {error!r}") from error
+    if not isinstance(rules, list) or not all(isinstance(rule, dict) for rule in rules):
+        raise RuntimeError(f"eKuiper listed its rules as {rules!r}")
+    rule_ids = [rule.get("id") for rule in rules]
     if rule_ids != ["pipeline_a"]:
         raise RuntimeError(f"eKuiper must hold only pipeline_a before warm-up, not {rule_ids}")
     before = ekuiper_health_snapshot()
@@ -3980,6 +3985,8 @@ def _ekuiper_request(method: str, path: str, payload: dict | None = None) -> tup
             return response.status, response.read().decode(errors="replace")
     except urllib.error.HTTPError as error:
         return error.code, error.read().decode(errors="replace")
+    except http.client.HTTPException as error:
+        raise RuntimeError(f"eKuiper broke off its answer to {method} {path}: {error!r}") from error
 
 
 def ekuiper_rule_emitted(status: int, body: str) -> bool:
@@ -4736,7 +4743,14 @@ def run_restart_item(
             )
         postprocess_run(root, item, output)
         verify_result(root, output)
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except (
+        OSError,
+        ValueError,
+        RuntimeError,
+        http.client.HTTPException,
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+    ) as error:
         for process in (publisher, subscriber, runtime):
             if process is not None and process.poll() is None:
                 process.terminate()

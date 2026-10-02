@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import http.client
 import importlib.util
 import io
 import json
@@ -1749,7 +1750,8 @@ class FakeEkuiper:
     The REST API also lists the rules, creates the replacement rule, which starts emitting
     after ``replacement_quiet_polls`` status reads, updates pipeline_a in place, which then
     publishes after ``update_quiet_polls`` status reads, and deletes rules. ``update_status``
-    is the HTTP status the update answers with.
+    is the HTTP status the update answers with. ``broken_off`` names the calls whose answer
+    ends early, and ``rule_list`` replaces the rule list with another body.
     """
 
     def __init__(self) -> None:
@@ -1768,6 +1770,8 @@ class FakeEkuiper:
         self.updated_rule: dict | None = None
         self.update_quiet_polls = 1
         self.update_status = 200
+        self.broken_off: set[tuple[str, str]] = set()
+        self.rule_list: object | None = None
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
         if str(command[0]).endswith("seed-pipeline-a.sh"):
@@ -1781,8 +1785,13 @@ class FakeEkuiper:
         else:
             method, url = "GET", request
         path = url.removeprefix("http://127.0.0.1:9081")
+        if (method, path) in self.broken_off:
+            self.events.append(f"{method} {path} broken off")
+            raise http.client.IncompleteRead(b"Rule pipeline_a", 24)
         if (method, path) == ("GET", "/rules"):
             self.events.append("rule-list")
+            if self.rule_list is not None:
+                return io.BytesIO(json.dumps(self.rule_list).encode())
             rules = ["pipeline_a"] if self.rule is not None else []
             rules += self.leftover_rules + (["pipeline_a_v2"] if self.replacement else [])
             return io.BytesIO(json.dumps([{"id": rule, "status": "running"} for rule in rules]).encode())
@@ -5988,6 +5997,26 @@ def test_both_ekuiper_swap3_arms_wait_for_the_same_emission_signal(
     assert runner.ekuiper_rule_emitted(status, text) is emitted
 
 
+def test_swap3_rule_update_whose_answer_breaks_off_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+) -> None:
+    stub_ekuiper_run(monkeypatch, ekuiper)
+    ekuiper.broken_off.add(("PUT", "/rules/pipeline_a"))
+    output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
+    stub_swap3_publisher(monkeypatch, output)
+
+    assert not runner.run_restart_item(
+        ROOT,
+        ekuiper_item("e-swap-3", "ekuiper-rule-update"),
+        runner.AttemptSelection(output, False),
+    )
+
+    receipt = json.loads((output / "canonical-status.json").read_text())
+    assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
+    assert "eKuiper broke off its answer to PUT /rules/pipeline_a" in receipt["detail"]
+    assert json.loads((output / "rule-update.json").read_text())["calls"] == []
+
+
 def test_swap3_rule_update_needs_the_audited_v1_rule(tmp_path: Path) -> None:
     seeded = seeded_rules()["rule_payload"]
     audit = tmp_path / "ekuiper-audit.json"
@@ -6066,6 +6095,25 @@ def test_ekuiper_run_refuses_a_rule_left_by_an_earlier_run(ekuiper: FakeEkuiper)
     ekuiper.leftover_rules = ["pipeline_a_v2"]
 
     with pytest.raises(RuntimeError, match="must hold only pipeline_a"):
+        runner.ekuiper_run_start()
+
+
+@pytest.mark.parametrize(
+    ("rule_list", "broken_off", "message"),
+    [
+        (["pipeline_a"], False, "eKuiper listed its rules as"),
+        ({"pipeline_a": "running"}, False, "eKuiper listed its rules as"),
+        (None, True, "eKuiper broke off its rule list"),
+    ],
+)
+def test_ekuiper_run_refuses_a_rule_list_it_cannot_read(
+    ekuiper: FakeEkuiper, rule_list: object, broken_off: bool, message: str
+) -> None:
+    ekuiper.rule_list = rule_list
+    if broken_off:
+        ekuiper.broken_off.add(("GET", "/rules"))
+
+    with pytest.raises(RuntimeError, match=message):
         runner.ekuiper_run_start()
 
 
