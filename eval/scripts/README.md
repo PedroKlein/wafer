@@ -30,4 +30,3 @@ Entry points of the evaluation harness. The Python modules they share live in
 | File | Role |
 |---|---|
 | `run-attack-evidence.py` | Containment attack bundle (`mise run mandatory-attack-evidence`). |
-| `test-http-security.sh` | Runs the ignored outbound-HTTP capability tests with a built fixture. |
