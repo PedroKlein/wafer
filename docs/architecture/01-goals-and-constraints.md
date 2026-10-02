@@ -8,58 +8,19 @@ WAFER (WebAssembly Flow Execution Runtime) is a single-process DAG pipeline runt
 
 The evaluated contribution is the integration of typed DAG composition, per-stage fault isolation, and stateless live stage replacement on Linux gateways with at least 4 GB RAM. Performance, isolation, and hot-swap are evaluated as separate claim families.
 
-## Research questions and pass criteria
+## Research questions
 
-The final evaluation validates each primary architectural property on a Raspberry Pi 5 4 GB, with a matched x86 Linux block for E-Perf-5. Jetson MNIST inference is separate diagnostic architecture validation and does not add a research question or performance result.
+The Raspberry Pi 5 4 GB decides every verdict. A Jetson Orin Nano (CPU only) and an x86-64 Linux host repeat the same experiments as replication strata. [07. Quality requirements](07-quality-requirements.md) maps each question to its experiments, and `verdict_rules` in `eval/canonical-matrix.json` holds the thresholds.
 
-### RQ1: What is the performance cost of typed Wasm boundaries on edge hardware?
-
-Does a Wasm-isolated pipeline achieve competitive throughput and latency compared to an established edge stream processor on the same constrained hardware?
-
-| Sub-question | Metric | Pass criterion |
-|---|---|---|
-| RQ1a | Microseconds per WIT boundary crossing on the empty pass-through path | < 50 µs on Raspberry Pi 5 |
-| RQ1b target load | Run-level delivery and p95 latency for Pipeline A at 1,000 msg/s | pooled loss <= 1 %, mean achieved/offered >= 0.99, and median WAFER p95 / median eKuiper p95 <= 2.0 |
-| RQ1b capacity | Common-grid gateway delivery ceiling, bracketed by tested rates, and normalized p99 knee | WAFER's tested-grid delivery ceiling >= 0.70 of eKuiper's across the bracketed ratio interval; `CENSORED` when the interval straddles 0.70 |
-| RQ1c | RSS for a 5-node pipeline and incremental node cost | < 150 MB total and < 10 MB per added node |
-| RQ1d | Cross-architecture WAFER/native ratio | PENDING until matched Raspberry Pi 5 and x86 Linux evidence exists |
-| RQ1e | Linux filesystem page-cache effect on startup | Report cold/warm phases with the disk compiled-component cache disabled |
-
-Pipeline A is `MQTT source -> threshold filter -> MQTT sink`. Native Rust executes equivalent filter logic, while eKuiper 2.1.5 is the external edge stream-processing reference. E-Perf-1 is the matched 1,000 msg/s operating point. E-Perf-10 is the capacity envelope over the common grid `[1,000, 4,000, 8,000, 15,000, 16,000]` msg/s plus the bracket rates each host's capacity scout sets around the WAFER and eKuiper ceilings. A delivery-bad MQTT loopback point censors SUT-only capacity claims at that rate and above.
-
-### RQ2: Do per-stage sandboxes contain faults without pipeline-wide failure?
-
-Do Wasm capability-scoped boundaries contain misbehaving nodes without affecting healthy stages or host integrity?
-
-| Sub-question | Metric | Pass criterion |
-|---|---|---|
-| RQ2a | Memory isolation (buffer overflow, cross-stage read, OOB) | All trapped |
-| RQ2b | CPU exhaustion (infinite loop) | Epoch interrupt within configured budget |
-| RQ2c | Resource limits (excess allocation, unauthorized FS/net) | Trap before damage |
-| RQ2d | Throughput of healthy stages during fault | < 1 % drop |
-| RQ2e | Cross-contamination (state leakage after crash) | Zero leakage |
-
-Attack scenarios S1–S6 are six dedicated components under `plugins/attacks/`. The mandatory pre-campaign target builds and validates all six plus a healthy reference, executes every scenario without skipping, and records explicit filesystem-read denial. Those local receipts are prerequisites, not final campaign evidence.
-
-### RQ3: What is the disruption cost of replacing a stage at runtime?
-
-Does hot-swap achieve bounded pause duration and zero message loss when replacing a node under sustained load?
-
-| Sub-question | Metric | Pass criterion |
-|---|---|---|
-| RQ3a | Pause duration (last msg v1 -> first msg v2) | < 100 ms at p95 |
-| RQ3b | Message accounting (loss + duplication) | Zero loss, zero duplication |
-| RQ3c | Event-aligned output dip for one disruption at measured t=60 | Upper bootstrap CI for median WAFER dip < 5 %, with zero loss and duplication |
-| RQ3d | One stateless swap centered in a 1,000 to 2,000 to 1,000 msg/s burst | Across-run p95 sink gap < 100 ms, with zero loss and duplication |
-| RQ3e | Failed swap recovery (v2 traps on first message) | Pipeline survives, 0 messages lost |
-
-Comparators: WAFER full pipeline restart (naive), eKuiper rule update (PUT with `triggered` false, then start) and eKuiper make-before-break rule replacement.
+- **RQ1:** What is the performance cost of typed Wasm boundaries on edge hardware?
+- **RQ2:** Do per-stage sandboxes contain faults without pipeline-wide failure?
+- **RQ3:** What is the disruption cost of replacing a stage at runtime?
 
 ## Stakeholders
 
 | Stakeholder | Concern | Addressed by |
 |---|---|---|
-| **Thesis reader / evaluator** | Reproducible evidence that the three RQ pass criteria hold | Evaluation harness, quantitative benchmarks, documented methodology |
+| **Thesis reader / evaluator** | Reproducible evidence for the three research questions | Evaluation harness, quantitative benchmarks, documented methodology |
 | **Edge-gateway operator** | 24/7 uptime on constrained hardware with safe updates | Single-process deployment, hot-swap, bounded memory, DLQ for failures |
 | **Plugin author** | Ship logic in any Component-Model language without knowing the host | WIT-typed contracts, `wafer-plugin` guest SDK, per-node capability scoping |
 
@@ -93,7 +54,7 @@ Every processing stage (transform, filter, router) runs in its own `wasmtime::St
 
 ### C5: Edge hardware target
 
-The primary deployment target is a Linux-capable device with at least 4 GB RAM (Raspberry Pi 5 4 GB). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. The restored inference path has separate functional validation on Jetson but is not part of the canonical performance campaign.
+The primary deployment target is a Linux-capable device with at least 4 GB RAM (Raspberry Pi 5 4 GB). The architecture does not assume cloud-scale resources, Kubernetes, or more than a single machine. Jetson Orin Nano and x86-64 Linux hosts replicate the evaluation; the CUDA inference path on Jetson is a separate diagnostic.
 
 ### C6: Stateless node replacement
 
