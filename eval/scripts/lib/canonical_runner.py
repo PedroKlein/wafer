@@ -4887,6 +4887,22 @@ def capture_ekuiper_audit(
     rule = _url_value("http://127.0.0.1:9081/rules/pipeline_a")
     if not isinstance(rule, dict) or rule.get("options", {}).get("concurrency") != operator_concurrency:
         raise ValueError("active eKuiper rule does not use the frozen operator concurrency")
+    seed_dry_run = json.loads(
+        subprocess.check_output(
+            [
+                str(root / "eval/ekuiper/seed-pipeline-a.sh"),
+                "--concurrency",
+                str(operator_concurrency),
+                "--dry-run",
+            ],
+            cwd=root,
+            text=True,
+        )
+    )
+    # eKuiper keeps a rule's last definition across restarts, and the E-Swap-3 rule update
+    # leaves pipeline_a with the raised bound.
+    if rule != seed_dry_run["rule_payload"]:
+        raise ValueError(f"active eKuiper pipeline_a is not the seeded rule: {rule.get('sql')}")
     audit = {
         "captured_at": utc_now(),
         "system": "ekuiper",
@@ -4914,18 +4930,7 @@ def capture_ekuiper_audit(
         "process_snapshot": snapshot,
         "stream": _url_value("http://127.0.0.1:9081/streams/wafer_telemetry"),
         "rule": rule,
-        "seed_dry_run": json.loads(
-            subprocess.check_output(
-                [
-                    str(root / "eval/ekuiper/seed-pipeline-a.sh"),
-                    "--concurrency",
-                    str(operator_concurrency),
-                    "--dry-run",
-                ],
-                cwd=root,
-                text=True,
-            )
-        ),
+        "seed_dry_run": seed_dry_run,
     }
     path = output / "ekuiper-audit.json"
     path.write_text(json.dumps(audit, indent=2) + "\n")

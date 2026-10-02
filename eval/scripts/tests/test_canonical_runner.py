@@ -4863,6 +4863,73 @@ def test_ekuiper_seed_drops_the_replacement_rule_before_recreating_pipeline_a(
     ]
 
 
+STATEFUL_EKUIPER_CURL = """#!/usr/bin/env python3
+import json, os, pathlib, sys
+
+arguments, method, data, url = sys.argv[1:], "GET", None, ""
+while arguments:
+    argument = arguments.pop(0)
+    if argument == "-X":
+        method = arguments.pop(0)
+    elif argument == "-d":
+        data = arguments.pop(0)
+    elif argument.startswith("http"):
+        url = argument
+rules = pathlib.Path(os.environ["EKUIPER_RULES"])
+path = url.split("://", 1)[1].split("/", 1)[1] if url.count("/") > 2 else ""
+if method == "DELETE" and path.startswith("rules/"):
+    if os.environ.get("EKUIPER_DELETE_FAILS") or not (rules / path[6:]).exists():
+        sys.exit(22)
+    (rules / path[6:]).unlink()
+elif (method, path) == ("POST", "rules"):
+    rule = json.loads(data)
+    if (rules / rule["id"]).exists():
+        print('{"error":1000,"message":"rule already exists"}', file=sys.stderr)
+        sys.exit(22)
+    (rules / rule["id"]).write_text(data)
+print("{}")
+"""
+
+
+@pytest.mark.parametrize("delete_fails", [False, True])
+def test_ekuiper_seed_restores_pipeline_a_after_a_rule_update_or_fails(
+    tmp_path: Path, delete_fails: bool
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(STATEFUL_EKUIPER_CURL)
+    curl.chmod(0o755)
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    seeded = seeded_rules()["rule_payload"]
+    audit = tmp_path / "ekuiper-audit.json"
+    audit.write_text(json.dumps({"rule": seeded}))
+    updated = runner.ekuiper_updated_rule(audit)
+    (rules / "pipeline_a").write_text(json.dumps(updated))
+    environment = {
+        **os.environ,
+        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        "EKUIPER_RULES": str(rules),
+    }
+    if delete_fails:
+        environment["EKUIPER_DELETE_FAILS"] = "1"
+
+    seed = subprocess.run(
+        [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh")],
+        capture_output=True,
+        env=environment,
+    )
+
+    left = json.loads((rules / "pipeline_a").read_text())
+    if delete_fails:
+        assert seed.returncode != 0
+        assert left == updated
+    else:
+        assert seed.returncode == 0, seed.stderr
+        assert left == seeded
+
+
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
     item = next(
         item
@@ -5973,9 +6040,11 @@ def test_ekuiper_run_refuses_a_rule_left_by_an_earlier_run(ekuiper: FakeEkuiper)
         runner.ekuiper_run_start()
 
 
-def test_ekuiper_audit_hashes_the_engine_configuration(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def stub_ekuiper_host(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rule: dict) -> str:
+    """An eKuiper host whose audit inputs are canonical and whose pipeline_a is ``rule``.
+
+    Returns the CPU list the test process may run on, which the audit checks.
+    """
     config = tmp_path / "etc/kuiper"
     config.mkdir(parents=True)
     shutil.copy(ROOT / "eval/ekuiper/mqtt-source-default.yaml", config / "mqtt_source.yaml")
@@ -6004,19 +6073,42 @@ def test_ekuiper_audit_hashes_the_engine_configuration(
         return real_check_output(command, **kwargs)
 
     def urlopen(url: str, timeout: float | None = None) -> io.BytesIO:
-        body = {"options": {"concurrency": 1}} if url.endswith("/rules/pipeline_a") else {}
+        body = rule if url.endswith("/rules/pipeline_a") else {}
         return io.BytesIO(json.dumps(body).encode())
 
     monkeypatch.setattr(runner.subprocess, "check_output", check_output)
     monkeypatch.setattr(runner.urllib.request, "urlopen", urlopen)
+    return affinity
+
+
+def test_ekuiper_audit_hashes_the_engine_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    affinity = stub_ekuiper_host(monkeypatch, tmp_path, seeded_rules()["rule_payload"])
 
     audit = json.loads(runner.capture_ekuiper_audit(ROOT, tmp_path, affinity).read_text())
 
+    config = tmp_path / "etc/kuiper"
     assert audit["kuiper_config"] == {
         "path": str(config / "kuiper.yaml"),
         "sha256": hashlib.sha256(b"basic:\n  restPort: 9081\n").hexdigest(),
     }
     assert audit["mqtt_source_config"]["path"] == str(config / "mqtt_source.yaml")
+    assert audit["rule"] == audit["seed_dry_run"]["rule_payload"]
+
+
+def test_ekuiper_audit_refuses_a_pipeline_a_left_at_the_updated_bound(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    audit = tmp_path / "before-update.json"
+    audit.write_text(json.dumps({"rule": seeded_rules()["rule_payload"]}))
+    updated = runner.ekuiper_updated_rule(audit)
+    affinity = stub_ekuiper_host(monkeypatch, tmp_path, updated)
+
+    with pytest.raises(ValueError, match="pipeline_a is not the seeded rule: .*temperature >= 60"):
+        runner.capture_ekuiper_audit(ROOT, tmp_path, affinity)
+
+    assert not (tmp_path / "ekuiper-audit.json").exists()
 
 
 def test_summaries_continue_past_one_a_system_outcome_left_incomplete(
