@@ -439,6 +439,19 @@ def test_matrix_declares_every_verdict_threshold_with_its_origin() -> None:
     assert all(row["origin"] and row["pilot_data_visible"] in (True, False, "unknown") for row in rules["thresholds"])
 
 
+def test_runner_validation_band_matches_the_declared_thresholds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.syspath_prepend(str(ROOT / "eval/scripts/lib"))
+    import canonical_runner
+
+    matrix = json.loads(MATRIX.read_text())
+    assert (canonical_runner.E_VAL_1_MIN_P99_NS, canonical_runner.E_VAL_1_MAX_P99_NS) == (
+        verdict_row(matrix, "e-val-1-p99-low")["value"],
+        verdict_row(matrix, "e-val-1-p99-high")["value"],
+    )
+
+
 @pytest.mark.parametrize(
     ("mutate", "message"),
     [
