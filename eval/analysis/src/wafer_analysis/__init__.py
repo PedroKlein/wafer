@@ -1,7 +1,6 @@
 """WAFER thesis analysis utilities."""
 
 from .canonical import (
-    FINAL_VISUAL_MANIFEST,
     candidate_capacity_table,
     candidate_depth_table,
     candidate_payload_table,
@@ -15,7 +14,6 @@ from .canonical import (
     swap3_table,
     swap4_table,
     target_latency_table,
-    validate_visual_manifest,
 )
 from .focused import (
     evidence_label,
@@ -36,7 +34,6 @@ from .plots import save_figure, setup_thesis_style
 from .stats import bootstrap_ci, cliffs_delta
 
 __all__ = [
-    "FINAL_VISUAL_MANIFEST",
     "analysis_evidence_status",
     "bootstrap_ci",
     "candidate_capacity_table",
@@ -65,5 +62,4 @@ __all__ = [
     "swap3_table",
     "swap4_table",
     "target_latency_table",
-    "validate_visual_manifest",
 ]
