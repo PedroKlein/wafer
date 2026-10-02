@@ -23,6 +23,13 @@ from .stats import (
     pooled_ratio_ci,
     stratified_slope,
 )
+from .verdicts import (
+    bound_verdict,
+    combined_verdict,
+    count_verdict,
+    declared_thresholds,
+    no_verdict,
+)
 
 def _require_runs(
     records: list[dict], conditions: tuple[str, ...]
@@ -58,9 +65,19 @@ def _number(value: float | None) -> float | None:
     return None if value is None else float(value)
 
 
+def _nearest_rank_p95(values) -> float:
+    ordered = np.sort(np.asarray(values, dtype=float))
+    return float(ordered[math.ceil(len(ordered) * 0.95) - 1])
+
+
 def target_latency_table(records: list[dict]) -> pd.DataFrame:
     conditions = ("wafer", "native", "ekuiper")
     grouped = _require_runs(records, conditions)
+    rules = declared_thresholds()
+    ratio_rule = rules["e-perf-1-p95-ratio"]
+    loss_rule = rules["e-perf-1-pooled-loss"]
+    achieved_rule = rules["e-perf-1-achieved-ratio"]
+    duplicate_rule = rules["e-perf-1-duplicates"]
     reference = np.asarray([run["p95_ns"] for run in grouped["ekuiper"]], dtype=float)
     reference_median = float(np.median(reference))
     rows = []
@@ -87,14 +104,33 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         intended = sum(int(run["intended_messages"]) for run in condition_runs)
         received = sum(int(run["received_unique"]) for run in condition_runs)
         pooled_loss = (intended - received) / intended
-        loss_low, loss_high = pooled_ratio_ci(
-            [max(0, int(run["intended_messages"]) - int(run["received_unique"])) for run in condition_runs],
-            [int(run["intended_messages"]) for run in condition_runs],
-        )
-        mean_achieved_ratio = float(
-            np.mean([run["achieved_ratio"] for run in condition_runs])
-        )
+        lost = [max(0, int(run["intended_messages"]) - int(run["received_unique"])) for run in condition_runs]
+        offered = [int(run["intended_messages"]) for run in condition_runs]
+        loss_low, loss_high = pooled_ratio_ci(lost, offered)
+        achieved_ratios = np.asarray([run["achieved_ratio"] for run in condition_runs], dtype=float)
+        mean_achieved_ratio = float(np.mean(achieved_ratios))
         total_duplicates = sum(int(run["duplicates"]) for run in condition_runs)
+        delivery = {
+            **bound_verdict("loss", loss_rule, pooled_ratio_ci(lost, offered, ci=loss_rule.interval)),
+            **bound_verdict(
+                "achieved_ratio",
+                achieved_rule,
+                bootstrap_ci(achieved_ratios, ci=achieved_rule.interval, statistic=np.mean),
+            ),
+        }
+        delivery["delivery_verdict"] = combined_verdict(
+            delivery["loss_verdict"],
+            delivery["achieved_ratio_verdict"],
+            count_verdict(duplicate_rule, total_duplicates),
+        )
+        if condition == "wafer":
+            _, ratio_low, ratio_high = median_shift_ci(
+                values, reference, relative=True, ci=ratio_rule.interval
+            )
+            ratio = bound_verdict("p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high))
+            verdict = combined_verdict(ratio["p95_ratio_verdict"], delivery["delivery_verdict"])
+        else:
+            ratio, verdict = no_verdict("p95_ratio"), None
         rows.append(
             {
                 "condition": condition,
@@ -116,9 +152,6 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "pooled_loss_ci95_high": loss_high,
                 "mean_achieved_ratio": mean_achieved_ratio,
                 "total_duplicates": total_duplicates,
-                "delivery_good": pooled_loss <= 0.01
-                and mean_achieved_ratio >= 0.99
-                and total_duplicates == 0,
                 "reference_condition": "ekuiper",
                 "median_ratio_vs_reference": float(np.median(values))
                 / reference_median,
@@ -126,9 +159,15 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "cliffs_delta_ci95_low": delta_low,
                 "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,
+                **ratio,
+                **delivery,
+                "verdict": verdict,
                 "units": "nanoseconds, messages/second, fraction, messages",
-                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI",
-                "threshold": "median(WAFER p95) / median(eKuiper p95) <= 2.0; pooled loss <= 0.01; mean achieved/offered >= 0.99; zero duplicates",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI; verdicts from one-sided 95% bounds resampling runs, each system's runs apart for the p95 ratio",
+                "threshold": (
+                    f"one-sided 95% bounds: median(WAFER p95) / median(eKuiper p95) <= {ratio_rule.value:g}; "
+                    f"pooled loss <= {loss_rule.value:g}; mean achieved/offered >= {achieved_rule.value:g}; zero duplicates"
+                ),
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
                 "thesis_evidence": True,
             }
@@ -197,6 +236,7 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
     A canonical table needs all six attacks at 30 runs; ``canonical=False``
     summarises whatever runs exist and marks the rows as non-evidence.
     """
+    escapes = declared_thresholds()["e-iso-containment"]
     rows = []
     for experiment, condition in CONTAINMENT_ATTACKS.items():
         runs = [record for record in records if record.get("experiment") == experiment]
@@ -233,7 +273,7 @@ def containment_table(records: list[dict], *, canonical: bool = True) -> pd.Data
                 "median_healthy_messages_out": _median(
                     [run["healthy_messages_out"] for run in complete]
                 ),
-                "all_contained": contained == len(runs),
+                "all_contained": escapes.holds(len(runs) - contained),
                 "units": "runs, events, messages",
                 "estimator": "runs in which the expected mechanism stopped the attack and nothing else happened, with a two-sided Clopper-Pearson 95% interval; its lower end gives the one-sided 97.5% upper bound on the escape probability; a run the runtime did not survive counts as not contained",
                 "threshold": "every run contained",
@@ -269,11 +309,18 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
 
     ``records`` are the runs' ``branch-isolation.json`` documents. A run the runtime did not
     survive has no branch measurement; it counts in ``N_runs`` and an attack condition with
-    such a run is not isolated.
+    such a run fails its condition.
     """
     grouped = _group_runs(records, BRANCH_ISOLATION_CONDITIONS, canonical=canonical)
     if not grouped["control"]:
         return pd.DataFrame()
+    rules = declared_thresholds()
+    drop_rule = rules["e-iso-7-throughput-drop"]
+    stopped_rule = rules["e-iso-7-stopped-runs"]
+    threshold = (
+        f"one-sided 95% upper bound of the branch-A throughput drop < {drop_rule.value:g} percent; "
+        "no run stopped early"
+    )
     admitted = {condition: len(runs) for condition, runs in grouped.items()}
     grouped = {
         condition: [run for run in runs if not _stopped_early(run)]
@@ -305,11 +352,16 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "condition": condition,
                     "N_runs": admitted[condition],
                     "runs_stopped_early": stopped,
-                    "isolated": None if condition == "control" else False,
+                    **(
+                        no_verdict("drop")
+                        if condition == "control"
+                        else bound_verdict("drop", drop_rule, None)
+                    ),
+                    "verdict": None if condition == "control" else "FAIL",
                     "reference_condition": "control",
                     "units": "runs",
                     "estimator": "every run of this condition stopped before its branch measurement",
-                    "threshold": "branch-A throughput drop < 1 percent",
+                    "threshold": threshold,
                     "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
                     "thesis_evidence": canonical,
                 }
@@ -347,14 +399,21 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low",
                     "cliffs_delta_ci95_high",
                     "effect_magnitude",
-                    "isolated",
+                    "verdict",
                 )
             ),
+            **no_verdict("drop"),
         }
         if condition != "control" and not len(control_throughput):
-            row["isolated"] = False if stopped else None
+            row.update(bound_verdict("drop", drop_rule, None))
+            row["verdict"] = combined_verdict(
+                row["drop_verdict"], count_verdict(stopped_rule, stopped)
+            )
         elif condition != "control":
             drop, drop_low, drop_high = median_shift_ci(throughput, control_throughput, relative=True)
+            _, bound_low, bound_high = median_shift_ci(
+                throughput, control_throughput, relative=True, ci=drop_rule.interval
+            )
             increase, increase_low, increase_high = median_shift_ci(p95, control_p95, relative=True)
             delta, magnitude = cliffs_delta(throughput, control_throughput)
             delta_low, delta_high = cliffs_delta_ci(throughput, control_throughput)
@@ -370,14 +429,17 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low": delta_low,
                     "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
-                    "isolated": -100 * drop < 1.0 and not stopped,
+                    **bound_verdict("drop", drop_rule, (-100 * bound_high, -100 * bound_low)),
                 }
+            )
+            row["verdict"] = combined_verdict(
+                row["drop_verdict"], count_verdict(stopped_rule, stopped)
             )
         row.update(
             {
                 "units": "messages/second, nanoseconds, percent, fraction",
-                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; a run the runtime did not survive is not isolated",
-                "threshold": "branch-A throughput drop < 1 percent",
+                "estimator": "branch-A median run throughput and p95 with bootstrap 95% CIs over the runs that completed; drop and increase relative to the control median with a two-group bootstrap 95% CI; Cliff's delta with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; verdict from the one-sided 95% upper bound of the drop, resampling each condition's runs apart; a run the runtime did not survive fails its condition",
+                "threshold": threshold,
                 "claim_boundary": "independently sourced branch A on the same runtime; no claim about branch B",
                 "thesis_evidence": canonical,
             }
@@ -496,7 +558,6 @@ def depth_tables(
 
 PAYLOAD_CONDITIONS = {"120b": 120, "1kb": 1_024, "10kb": 10_240, "100kb": 102_400}
 NATIVE_PAYLOAD_PREFIX = "native-"
-PER_HOP_REFERENCE_NS = 50_000
 
 
 def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
@@ -512,6 +573,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
         *(f"{NATIVE_PAYLOAD_PREFIX}{size}" for size in PAYLOAD_CONDITIONS),
     )
     grouped = _group_runs(records, conditions, canonical=canonical)
+    reference = declared_thresholds()["e-perf-4-boundary-p50"]
     rows = []
     for size, payload_bytes in PAYLOAD_CONDITIONS.items():
         wafer_runs = {int(run["run_index"]): run for run in grouped[size]}
@@ -540,6 +602,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
                     f"{arm}_service_p50_ci95_high_ns": high,
                 }
             )
+        boundary_p50 = service["wafer"]["p50"] - service["native"]["p50"]
         for name in ("p50", "p95", "p99"):
             difference = service["wafer"][name] - service["native"][name]
             low, high = bootstrap_ci(difference)
@@ -558,7 +621,11 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
                 "cliffs_delta_ci95_low": delta_low,
                 "cliffs_delta_ci95_high": delta_high,
                 "effect_magnitude": magnitude,
-                "below_per_hop_reference": row["boundary_p50_ns"] < PER_HOP_REFERENCE_NS,
+                **bound_verdict(
+                    "per_hop_reference",
+                    reference,
+                    bootstrap_ci(boundary_p50, ci=reference.interval),
+                ),
             }
         )
         for arm, runs in (("wafer", wafer), ("native", native)):
@@ -576,8 +643,11 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
         row.update(
             {
                 "units": "bytes, nanoseconds, fraction, messages",
-                "estimator": "median over run pairs of the WAFER-minus-native service-time p50, p95 and p99, pairing runs by index within the randomised block, with a bootstrap 95% CI over pairs; per-arm median service p50 with bootstrap 95% CIs; Cliff's delta of WAFER against native service p50 with bootstrap 95% CI; pooled loss per arm with a run-resampling bootstrap 95% CI",
-                "threshold": "median WAFER-minus-native service p50 < 50 microseconds per hop (reference)",
+                "estimator": "median over run pairs of the WAFER-minus-native service-time p50, p95 and p99, pairing runs by index within the randomised block, with a bootstrap 95% CI over pairs; per-arm median service p50 with bootstrap 95% CIs; Cliff's delta of WAFER against native service p50 with bootstrap 95% CI; pooled loss per arm with a run-resampling bootstrap 95% CI; reference verdict from one-sided 95% bounds over pairs",
+                "threshold": (
+                    "one-sided 95% upper bound of the median WAFER-minus-native service p50 "
+                    f"< {reference.value / 1_000:g} microseconds per hop (a reference, not a pass criterion)"
+                ),
                 "claim_boundary": "in-process path only: bench-source, one pass-through transform, bench-sink; the MQTT adapters keep rumqttc's 10 KiB packet limit and are not measured. The difference covers the whole Wasm stage, including metering and copies into and out of guest memory",
                 "thesis_evidence": canonical,
             }
@@ -586,18 +656,16 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
     return pd.DataFrame(rows)
 
 
-VALIDATION_P99_BAND_NS = (45_000_000, 55_017_471)
-
-
 def validation_gate_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
     """E-Val-1: how many runs recovered the injected 50 ms delay inside the runner's p99 band."""
     runs = _group_runs(records, ("delay-50ms",), canonical=canonical)["delay-50ms"]
     if not runs:
         return pd.DataFrame()
-    low_bound, high_bound = VALIDATION_P99_BAND_NS
+    rules = declared_thresholds()
+    low_bound, high_bound = rules["e-val-1-p99-low"], rules["e-val-1-p99-high"]
     p50 = np.asarray([run["p50_ns"] for run in runs], dtype=float)
     p99 = np.asarray([run["p99_ns"] for run in runs], dtype=float)
-    inside = int(np.sum((p99 >= low_bound) & (p99 <= high_bound)))
+    inside = sum(low_bound.holds(value) and high_bound.holds(value) for value in p99)
     p50_low, p50_high = bootstrap_ci(p50)
     p99_low, p99_high = bootstrap_ci(p99)
     return pd.DataFrame(
@@ -615,7 +683,10 @@ def validation_gate_table(records: list[dict], *, canonical: bool = True) -> pd.
                 "gate_passed": inside == len(runs),
                 "units": "nanoseconds, runs",
                 "estimator": "count of runs whose p99 lies in the band; median run p50 and p99 with bootstrap 95% CIs",
-                "threshold": "every run's p99 between 45 ms and 55,017,471 ns (the HdrHistogram bucket holding 55 ms)",
+                "threshold": (
+                    f"every run's p99 between {low_bound.value / 1_000_000:g} ms and "
+                    f"{high_bound.value:,.0f} ns (the HdrHistogram bucket holding 55 ms)"
+                ),
                 "claim_boundary": "the harness recovers a known 50 ms delay; it gates the other measurements and is not a WAFER result",
                 "thesis_evidence": canonical,
             }
@@ -1295,7 +1366,6 @@ def candidate_capacity_table(summary: dict) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-CAPACITY_COMPETITIVE_THRESHOLD = 0.70
 CAPACITY_BASELINE_RATE = 1_000
 CAPACITY_RUN_METRICS = ("achieved_rate_msg_s", "achieved_ratio", "loss", "p99_ns")
 
@@ -1318,6 +1388,10 @@ def _capacity_cell_classes(summary: dict, systems: Iterable[str]) -> dict[str, l
     if not isinstance(results, dict):
         raise ValueError("capacity population is malformed")
     required = summary.get("required_runs_per_rate")
+    rules = declared_thresholds()
+    loss_rule = rules["e-perf-10-cell-loss"]
+    achieved_rule = rules["e-perf-10-cell-achieved-ratio"]
+    duplicate_rule = rules["e-perf-10-cell-duplicates"]
 
     def classify(system: str, support_from: int | None) -> list[str]:
         result = results.get(system)
@@ -1340,9 +1414,9 @@ def _capacity_cell_classes(summary: dict, systems: Iterable[str]) -> dict[str, l
             try:
                 good = (
                     outcome_runs == 0
-                    and float(rate["pooled_loss"]) <= 0.01
-                    and float(rate["mean_achieved_ratio"]) >= 0.99
-                    and int(rate["total_duplicates"]) == 0
+                    and loss_rule.holds(float(rate["pooled_loss"]))
+                    and achieved_rule.holds(float(rate["mean_achieved_ratio"]))
+                    and duplicate_rule.holds(int(rate["total_duplicates"]))
                 )
             except (KeyError, TypeError, ValueError) as error:
                 raise ValueError(f"{system}: malformed delivery counters") from error
@@ -1384,8 +1458,9 @@ def _ceiling_bounds(grid: list[int], classes: list[str]) -> dict:
 
 def capacity_competitive_decision(summary: dict) -> dict:
     grid = summary.get("rate_points_msg_s")
+    rule = declared_thresholds()["e-perf-10-competitive-ratio"]
     common = {
-        "threshold": CAPACITY_COMPETITIVE_THRESHOLD,
+        "threshold": rule.value,
         "beyond_grid_limitation": (
             f"tested-grid only; no claim beyond {max(grid)} msg/s"
             if isinstance(grid, list) and grid and all(type(rate) is int for rate in grid)
@@ -1418,10 +1493,10 @@ def capacity_competitive_decision(summary: dict) -> dict:
         if ekuiper["lower_bound_msg_s"] == 0
         else wafer["upper_bound_msg_s"] / ekuiper["lower_bound_msg_s"]
     )
-    if worst >= CAPACITY_COMPETITIVE_THRESHOLD:
+    if rule.holds(worst):
         branch, status = "worst-case-pass", "PASS"
         reason = "WAFER lower bound divided by eKuiper upper bound meets the threshold"
-    elif best < CAPACITY_COMPETITIVE_THRESHOLD:
+    elif not rule.holds(best):
         branch, status = "best-case-fail", "FAIL"
         reason = "WAFER upper bound divided by eKuiper lower bound misses the threshold"
     else:
@@ -1698,6 +1773,9 @@ def backpressure_table(records: list[dict], *, canonical: bool = True) -> pd.Dat
 
 def swap3_table(runs: list[dict]) -> pd.DataFrame:
     strategies = ("wafer-hotswap", "wafer-restart", "ekuiper-restart")
+    rules = declared_thresholds()
+    dip_rule = rules["e-swap-3-dip"]
+    lossless_rule = rules["e-swap-3-lossless"]
     grouped = {strategy: [] for strategy in strategies}
     for run in runs:
         strategy = run.get("strategy", run.get("condition"))
@@ -1721,6 +1799,17 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
         lossless_runs = sum(
             int(run["loss"]) == 0 and int(run["duplicates"]) == 0 for run in values
         )
+        if strategy == "wafer-hotswap":
+            dip = bound_verdict(
+                "dip",
+                dip_rule,
+                bootstrap_ci(np.asarray(dips), ci=dip_rule.interval) if dips else None,
+            )
+            verdict = combined_verdict(
+                dip["dip_verdict"], count_verdict(lossless_rule, len(admitted) - lossless_runs)
+            )
+        else:
+            dip, verdict = no_verdict("dip"), None
         rows.append(
             {
                 "strategy": strategy,
@@ -1745,10 +1834,12 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 "lossless_runs": lossless_runs,
                 "runs_stopped_early": len(admitted) - len(values),
                 "zero_loss_and_duplication": lossless_runs == len(admitted),
+                **dip,
+                "verdict": verdict,
                 "units": "percent, nanoseconds, messages",
-                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs",
+                "estimator": "run-level median with bootstrap 95% CI over runs that kept running; lossless runs out of all admitted runs; dip verdict from the one-sided 95% upper bound over runs",
                 "threshold": (
-                    "upper bootstrap CI for median dip < 5%; zero loss; zero duplication"
+                    f"one-sided 95% upper bound of the median dip < {dip_rule.value:g} percent; zero loss; zero duplication"
                     if strategy == "wafer-hotswap"
                     else "measured comparator; no predeclared pass threshold"
                 ),
@@ -2110,6 +2201,9 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
     }
     if any(not required_drain <= run.keys() for run in complete):
         raise ValueError("E-Swap-4 lacks run-level drain evidence")
+    rules = declared_thresholds()
+    gap_rule = rules["e-swap-4-p95-gap"]
+    lossless_rule = rules["e-swap-4-lossless"]
     gaps = sorted(float(run["sink_observed_output_gap_ns"]) for run in complete)
     low, high = _ci(gaps) if gaps else (None, None)
     phase_medians = {
@@ -2127,6 +2221,13 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
     lossless_runs = sum(
         int(run["loss"]) == 0 and int(run["sequence"]["duplicates"]) == 0 for run in complete
     )
+    gap = bound_verdict(
+        "p95_gap",
+        gap_rule,
+        bootstrap_ci(np.asarray(gaps), ci=gap_rule.interval, statistic=_nearest_rank_p95)
+        if gaps
+        else None,
+    )
     return pd.DataFrame(
         [
             {
@@ -2140,7 +2241,7 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
                 )
                 if gaps
                 else None,
-                "p95_sink_gap_ns": gaps[math.ceil(len(gaps) * 0.95) - 1] if gaps else None,
+                "p95_sink_gap_ns": _nearest_rank_p95(gaps) if gaps else None,
                 "bootstrap_median_ci95_low_ns": low,
                 "bootstrap_median_ci95_high_ns": high,
                 **phase_medians,
@@ -2176,9 +2277,16 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
                     (int(run["max_arrival_offset_ns"]) for run in complete), default=None
                 ),
                 "drain_right_censored_runs": 0,
+                **gap,
+                "verdict": combined_verdict(
+                    gap["p95_gap_verdict"], count_verdict(lossless_rule, len(runs) - lossless_runs)
+                ),
                 "units": "nanoseconds, messages, runs",
-                "estimator": "one sink gap and one internal-phase vector per run that kept running; source-origin primary/drain completion counts; lossless runs out of all admitted runs",
-                "threshold": "across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s",
+                "estimator": "one sink gap and one internal-phase vector per run that kept running; source-origin primary/drain completion counts; lossless runs out of all admitted runs; gap verdict from the one-sided 95% upper bound of the nearest-rank p95 over runs",
+                "threshold": (
+                    f"one-sided 95% upper bound of the across-run p95 sink gap < {gap_rule.value / 1_000_000:g} ms; "
+                    "zero full-run loss; zero duplication; no receive at or after 130 s"
+                ),
                 "claim_boundary": "one stateless swap centered in one source-driven burst per run; drain excluded from t=60 disruption estimator",
                 "thesis_evidence": True,
             }
