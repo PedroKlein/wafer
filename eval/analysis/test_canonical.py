@@ -451,6 +451,25 @@ def test_capacity_decision_support_confounded_cells_set_no_bound() -> None:
     assert censored["status"] == "CENSORED"
 
 
+def test_bracket_rates_tighten_both_ceilings_into_a_decision() -> None:
+    common = capacity_decision(
+        ["good", "good", "bad", "bad", "bad"], ["good", "good", "bad", "bad", "bad"]
+    )
+    assert (ceiling(common, "wafer"), ceiling(common, "ekuiper")) == ((4_000, 8_000), (4_000, 8_000))
+    assert common["status"] == "CENSORED"
+
+    grid = (1_000, 4_000, 4_500, 5_700, 6_300, 8_000, 15_000, 16_000)
+    bracketed = capacity_decision(
+        ["good", "good", "good", "bad", "bad", "bad", "bad", "bad"],
+        ["good", "good", "good", "good", "bad", "bad", "bad", "bad"],
+        grid=grid,
+    )
+    assert ceiling(bracketed, "wafer") == (4_500, 5_700)
+    assert ceiling(bracketed, "ekuiper") == (5_700, 6_300)
+    assert bracketed["ratio_lower_bound"] == 4_500 / 6_300
+    assert bracketed["status"] == "PASS"
+
+
 def test_capacity_decision_recomputes_delivery_from_the_counters() -> None:
     summary = capacity_summary()
     for system in ("mqtt-loopback", "native", "wafer"):

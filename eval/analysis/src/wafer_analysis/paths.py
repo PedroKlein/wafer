@@ -17,6 +17,7 @@ from .attempts import (
     sut_outcome_reasons,
 )
 from .backpressure import validate_backpressure_result
+from .capacity_brackets import frozen_bracket_rates
 from .results_layout import CANONICAL_ALIASES, ResultsLayout, resolve_alias_receipt
 from .rollback import validate_swap5_artifacts
 
@@ -89,6 +90,18 @@ def find_canonical_batch(
     if experiment_id in CANONICAL_ALIASES:
         return _resolve_alias_batch(layout, experiment_id, name)
     raise FileNotFoundError(f"Canonical batch does not exist: {path}")
+
+
+def batch_bracket_rates(
+    batch: pathlib.Path, matrix: Mapping, results_root: pathlib.Path | str | None = None
+) -> list[int]:
+    """The E-Perf-10 bracket rates that the batch's batch.json froze; none without a record."""
+    layout = ResultsLayout.resolve(_find_repo_root(), results_root)
+    path = layout.manifest_path("canonical-batches", batch.name, "batch.json")
+    record = _read_object(path, "batch.json") if path.is_file() else {}
+    if record.get("capacity_brackets") is None:
+        return []
+    return frozen_bracket_rates(record, matrix)
 
 
 def find_canonical_ledger(
@@ -254,7 +267,10 @@ def _final_batch(repo: pathlib.Path, host: str, batch_id: str) -> dict:
     return entry
 
 
-def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
+def _expected_units(
+    definition: Mapping[str, object], bracket_rates: list[int] | None = None
+) -> set[tuple[str, int]]:
+    """Scheduled (condition, run) units; ``bracket_rates`` join a capacity design's common grid."""
     repetitions = int(definition.get("repetitions", 0))
     if repetitions <= 0:
         raise ValueError("canonical matrix declares an invalid repetition count")
@@ -266,7 +282,7 @@ def _expected_units(definition: Mapping[str, object]) -> set[tuple[str, int]]:
         return {
             (f"{system}/rate-{int(rate):05d}", run)
             for system in systems
-            for rate in rates
+            for rate in [*rates, *(bracket_rates or [])]
             for run in range(1, repetitions + 1)
         }
     conditions = definition.get("conditions")
@@ -415,7 +431,13 @@ def validate_canonical_batch(
     if not isinstance(definition, dict):
         raise TypeError(f"canonical matrix experiment {experiment} is malformed")
 
-    expected = _expected_units(definition)
+    try:
+        bracket_rates = (
+            frozen_bracket_rates(batch, matrix) if experiment == "e-perf-10" else None
+        )
+    except (KeyError, StopIteration, TypeError) as error:
+        raise ValueError(f"canonical matrix lacks the capacity bracket rule: {error}") from error
+    expected = _expected_units(definition, bracket_rates)
     status_paths = sorted(path.rglob("canonical-status.json"))
     if not status_paths:
         raise ValueError(f"canonical batch has no completion receipts: {path}")

@@ -509,6 +509,69 @@ def perf_unit(fake_results: pathlib.Path, *receipts: dict | None) -> pathlib.Pat
     return batch
 
 
+def capacity_unit_batch(
+    fake_results: pathlib.Path, recorded: list[int] | None, rates: list[int]
+) -> pathlib.Path:
+    """An E-Perf-10 batch with one WAFER run per rate and these bracket rates in batch.json."""
+    matrix_path = fake_results / "eval/canonical-matrix.json"
+    matrix = json.loads(matrix_path.read_text())
+    matrix["experiments"] = {
+        "e-perf-10": {
+            "systems": ["wafer"],
+            "rate_points_msg_s": [1_000],
+            "repetitions": 1,
+            "required_outputs": ["percentiles.json"],
+        }
+    }
+    matrix["final_campaign"]["capacity_grid"] = {
+        "common_rate_points_msg_s": [1_000],
+        "bracket_rates": {"competitive_threshold": "competitive", "max_extra_rates": 2},
+    }
+    matrix["verdict_rules"] = {"thresholds": [{"criterion": "competitive", "value": 0.7}]}
+    matrix_path.write_text(json.dumps(matrix))
+    refresh_approval_matrix_hash(fake_results)
+    record_path = fake_results / "eval/results/canonical-batches/rpi5-batch-a/batch.json"
+    record = json.loads(record_path.read_text())
+    if recorded is not None:
+        record["capacity_brackets"] = {"rates_msg_s": recorded}
+    record_path.write_text(json.dumps(record))
+    batch = fake_results / "eval/results/e-perf-10/rpi5-batch-a"
+    for rate in rates:
+        condition = f"wafer/rate-{rate:05d}"
+        leaf = batch / condition / "run-01-attempt-01"
+        write_canonical_leaf(leaf)
+        metadata = json.loads((leaf / "metadata.json").read_text())
+        metadata.update(experiment="e-perf-10", condition=condition)
+        (leaf / "metadata.json").write_text(json.dumps(metadata))
+    return batch
+
+
+def test_capacity_batch_expects_the_bracket_rates_its_batch_json_froze(
+    fake_results: pathlib.Path,
+):
+    batch = capacity_unit_batch(fake_results, [1_500], [1_000, 1_500])
+
+    assert utils.validate_canonical_batch(batch, "e-perf-10") == "1" * 40
+
+
+@pytest.mark.parametrize(
+    ("recorded", "rates", "message"),
+    [
+        ([], [1_000, 1_500], "unexpected canonical attempt"),
+        ([1_500, 2_000], [1_000, 1_500], "incomplete canonical batch"),
+        (None, [1_000], "no valid E-Perf-10 bracket rates"),
+        ([1_000], [1_000], "no valid E-Perf-10 bracket rates"),
+    ],
+)
+def test_capacity_batch_rejects_runs_that_differ_from_its_bracket_rates(
+    fake_results: pathlib.Path, recorded: list[int] | None, rates: list[int], message: str
+):
+    batch = capacity_unit_batch(fake_results, recorded, rates)
+
+    with pytest.raises(ValueError, match=message):
+        utils.validate_canonical_batch(batch, "e-perf-10")
+
+
 def test_gate_batch_rejects_a_retried_unit(fake_results: pathlib.Path):
     batch = canonical_batch(fake_results)
     next(batch.rglob("canonical-status.json")).write_text('{"status":"failed"}')
