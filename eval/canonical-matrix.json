@@ -690,7 +690,7 @@
     },
     "e-perf-10": {
       "research_question": "rq1",
-      "purpose": "Confirm the co-located Raspberry Pi 5 gateway-capacity envelope over the scout-derived common rate grid.",
+      "purpose": "Confirm the co-located Raspberry Pi 5 gateway-capacity envelope over the scout-derived common rate grid plus the bracket rates from the host's capacity scout.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,
@@ -1205,7 +1205,7 @@
       ],
       "bracket_rates": {
         "purpose": "Per-host E-Perf-10 rates that bracket the WAFER and eKuiper delivery ceilings and place a tested rate at each side of the competitive-ratio threshold",
-        "source": "states of scout-complete.json from the host's capacity-scout batch; batch.json freezes the rates and the summary SHA-256 before the batch's first run",
+        "source": "states of scout-complete.json from the host's capacity-scout batch; batch.json freezes the rates and the summary SHA-256 before the batch's first run, and the batch ledger keeps a copy of the summary",
         "scout_ceiling": "lower_good_rate_msg_s of a resolved WAFER or eKuiper state; a censored state adds no rate",
         "ceiling_multipliers": [
           0.95,

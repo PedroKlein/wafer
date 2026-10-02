@@ -67,7 +67,8 @@ copy. `BenchSink`, `BenchSource`, and the `wafer-loadgen` subscriber artifacts,
 hidden `.<name>.tmp` file beside the destination, synced, then renamed.
 
 Each batch ledger under `manifests/canonical-batches/` or `manifests/candidate-batches/`
-holds `schedule.json`, `progress.jsonl`, and `batch.json`. The runner writes `batch.json`
+holds `schedule.json`, `progress.jsonl`, and `batch.json`, plus `scout-complete.json` when
+the batch has bracket rates. The runner writes `batch.json`
 once, when the batch starts: `schema_version`, `batch_id`, `host`, `source_git_sha`,
 `source_dirty`, `canonical_matrix_sha256`, `seed`, sorted `experiments`, `repetitions`
 (the diagnostic override or `null`), `thesis_evidence` (true only for a
@@ -75,8 +76,8 @@ once, when the batch starts: `schema_version`, `batch_id`, `host`, `source_git_s
 E-Perf-10, `capacity_brackets` (see [Per-host bracket rates](#per-host-bracket-rates)). A
 resume from another source SHA or matrix hash is refused. `mise run approve-batch` adds
 `raw.sha256`: one `sha256sum` line per file of the batch under `raw/`, its alias receipts,
-its ledger, and the scout summary its bracket rates came from, sorted, with
-volume-relative paths. It records the batch and the SHA-256 of `raw.sha256`
+and its ledger, including the copy of the scout summary its bracket rates came from,
+sorted, with volume-relative paths. It records the batch and the SHA-256 of `raw.sha256`
 in the repository file `eval/final-batches.json`, which canonical analysis reads.
 
 Raw attempts are additive. A failed or interrupted attempt remains in place and the
@@ -685,20 +686,26 @@ censors bracket rates the same way. The competitive rule and its threshold do no
 root and writes the rates into `batch.json` before the first run, as
 `capacity_brackets`: `scout_batch_id`, `scout_summary` (the volume-relative path),
 `scout_summary_sha256`, `rates_msg_s`, and what the rates add to this batch's schedule,
-`added_measured_leaves` and `added_nominal_hours` (warmup plus measurement time). A resume
-derives the rates again from the recorded scout and refuses the batch when the scout
-batch, the summary's SHA-256 or the rates differ, including when another
-`--scout-batch-id` is given. A final batch refuses to start without a usable scout
+`added_measured_leaves` and `added_nominal_hours` (warmup plus measurement time). It also
+copies the summary, byte for byte, to `scout-complete.json` in the batch ledger. A resume
+derives the rates again from that copy and refuses the batch when the scout batch, the
+copy's SHA-256 or the rates differ, including when another `--scout-batch-id` is given.
+Running the scout command again later, which rewrites the scout's own summary, does not
+affect a batch that has started. A final batch refuses to start without a usable scout
 summary for its host: a missing or malformed file, a scout that has not stopped, a
-missing WAFER or eKuiper state, or no delivery-good MQTT-loopback rate. A diagnostic
-`--repetitions` batch may run without one; it then runs the common grid only and records
-`capacity_brackets` as `null`. A batch without E-Perf-10 has no `capacity_brackets`.
-`--dry-run` with `--scout-batch-id` prints the rates and what they add.
+missing WAFER or eKuiper state, or no delivery-good MQTT-loopback rate. The refusal names
+the scout command to run when the summary is missing or the scout has not stopped. A
+diagnostic `--repetitions` batch may run without one; it then runs the common grid only
+and records `capacity_brackets` as `null`. A batch without E-Perf-10 has no
+`capacity_brackets`. `--dry-run` with `--scout-batch-id` prints the rates and what they
+add. A dry run of a final batch without it prints the common schedule and a `NOTE` that
+`--execute` refuses to start that batch.
 
 The rates need no commit to the repository. `approve-batch` derives them again from the
-scout summary and refuses the batch when they no longer match `batch.json`, checks
-`schedule.json` against the schedule with those rates, and lists the scout summary in
-`raw.sha256`, whose hash `eval/final-batches.json` records. Canonical analysis expects
+ledger copy of the scout summary and refuses the batch when they no longer match
+`batch.json`, and checks `schedule.json` against the schedule with those rates. The copy
+is part of the ledger, so `raw.sha256` lists it, and `eval/final-batches.json` records the
+hash of `raw.sha256`. Canonical analysis expects
 the common grid plus the rates in `batch.json` and rejects an E-Perf-10 batch whose
 `batch.json` records none; the attempts table counts the bracket rates as scheduled units.
 The result verifier checks each capacity leaf against its own rate.

@@ -5987,6 +5987,7 @@ def test_execute_records_the_batch_source_and_matrix(final_batch: tuple[Path, Pa
             "added_nominal_hours": 18.0,
         },
     }
+    assert (ledger / "scout-complete.json").read_bytes() == (volume / scout).read_bytes()
     schedule = json.loads((ledger / "schedule.json").read_text())
     assert len(schedule) == 2_321 + 6 * 4 * 30
 
@@ -6095,8 +6096,9 @@ def test_approve_writes_a_verifiable_manifest_and_the_final_batch_entry(
     assert listed == sorted(
         path.relative_to(volume).as_posix()
         for path in volume.rglob("*")
-        if path.is_file() and path.name != "raw.sha256"
+        if path.is_file() and path.name != "raw.sha256" and "capacity-scout" not in path.parts
     )
+    assert "manifests/canonical-batches/rpi5-final/scout-complete.json" in listed
     assert any(path.startswith("manifests/aliases/e-perf-2/rpi5-final/") for path in listed)
     checker = ["sha256sum"] if shutil.which("sha256sum") else ["shasum", "-a", "256"]
     checked = subprocess.run(
@@ -6176,10 +6178,13 @@ def test_approve_discloses_other_final_batches_of_the_host(
             "used more attempts than its retry cap allows",
         ),
         (
-            lambda root, volume, ledger: write_scout_summary(
-                volume, wafer={"phase": "support-censored", "censor_above_rate_msg_s": 15_500}
+            lambda root, volume, ledger: shutil.copy(
+                write_scout_summary(
+                    volume, "later", wafer={"phase": "support-censored", "censor_above_rate_msg_s": 15_500}
+                ),
+                ledger / "scout-complete.json",
             ),
-            "no longer follow from manifests/capacity-scout/rpi5-scout/scout-complete.json",
+            "no longer follow from manifests/canonical-batches/rpi5-final/scout-complete.json",
         ),
         (
             lambda root, volume, ledger: _set_json(ledger / "batch.json", capacity_brackets=None),
@@ -6258,19 +6263,31 @@ def test_final_batch_refuses_e_perf_10_without_a_usable_scout_summary(
     root, volume, ledger = final_batch
     unfinished = write_scout_summary(volume, "unfinished")
     _set_json(unfinished, action="launch")
+    write_scout_summary(volume, "unusable", **{"mqtt-loopback": {"phase": "left-censored"}})
     execute = ("--root", str(root), "--execute", "--batch-id")
+    scout_command = "./eval/scripts/run-rpi5-canonical.sh --execute --host rpi5 --capacity-scout"
 
+    preview = run_main(monkeypatch, capsys, "--root", str(root), "--dry-run", "--batch-id", "fresh")
     without = run_main(monkeypatch, capsys, *execute, "fresh")
     missing = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "absent")
     partial = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "unfinished")
+    unusable = run_main(monkeypatch, capsys, *execute, "fresh", "--scout-batch-id", "unusable")
 
+    assert preview[0] == 0, preview[2]
+    assert "NOTE --execute refuses this batch: final batch rpi5-fresh cannot start" in preview[1]
+    assert "runs the common grid only" not in preview[1]
     assert without[0] == 2
     assert "cannot start E-Perf-10 without the rpi5 capacity scout" in without[2]
-    for code, _, err in (missing, partial):
+    assert f"run {scout_command} --batch-id <scout-id> until" in without[2]
+    for code, _, err in (missing, partial, unusable):
         assert code == 2
         assert "no usable capacity scout summary" in err
     assert "manifests/capacity-scout/rpi5-absent/scout-complete.json" in missing[2]
     assert "not from a finished scout" in partial[2]
+    for _, _, err in (missing, partial):
+        assert f"run {scout_command} --batch-id " in err
+    assert "no delivery-good MQTT-loopback rate" in unusable[2]
+    assert scout_command not in unusable[2]
     assert not (ledger.parent / "rpi5-fresh/batch.json").exists()
     assert not (volume / "raw/e-val-1/rpi5-fresh").exists()
 
@@ -6309,8 +6326,8 @@ def test_resume_keeps_the_bracket_rates_and_scout_summary_it_started_with(
     same = run_main(monkeypatch, capsys, *resume)
     named = run_main(monkeypatch, capsys, *resume, "--scout-batch-id", "scout")
     other = run_main(monkeypatch, capsys, *resume, "--scout-batch-id", "later")
-    summary = volume / "manifests/capacity-scout/rpi5-scout/scout-complete.json"
-    summary.write_text(summary.read_text() + "\n")
+    frozen = volume / "manifests/canonical-batches/rpi5-final/scout-complete.json"
+    frozen.write_text(frozen.read_text() + "\n")
     edited = run_main(monkeypatch, capsys, *resume)
 
     assert same[0] == 0, same[2]
@@ -6318,6 +6335,28 @@ def test_resume_keeps_the_bracket_rates_and_scout_summary_it_started_with(
     for code, _, err in (other, edited):
         assert code == 2
         assert "keeps the bracket rates it started with" in err
+
+
+def test_a_rewritten_scout_summary_leaves_a_started_batch_alone(
+    final_batch: tuple[Path, Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    root, volume, ledger = final_batch
+    frozen = (ledger / "scout-complete.json").read_bytes()
+    write_scout_summary(
+        volume, ekuiper={"phase": "resolved", "lower_good_rate_msg_s": 7_000, "upper_bad_rate_msg_s": 7_500}
+    )
+
+    resumed = run_main(monkeypatch, capsys, "--root", str(root), "--execute", "--batch-id", "final")
+    approved = run_main(monkeypatch, capsys, "--root", str(root), "--approve", "--batch-id", "final")
+
+    assert resumed[0] == 0, resumed[2]
+    assert approved[0] == 0, approved[2]
+    assert (ledger / "scout-complete.json").read_bytes() == frozen
+    assert f"{hashlib.sha256(frozen).hexdigest()}  manifests/canonical-batches/rpi5-final/scout-complete.json" in (
+        ledger / "raw.sha256"
+    ).read_text()
 
 
 def test_bracket_rates_join_the_common_grid_for_every_e_perf_10_system() -> None:

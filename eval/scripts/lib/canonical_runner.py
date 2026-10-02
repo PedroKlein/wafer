@@ -6856,11 +6856,11 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
         raise ValueError("the batch ran with a different eval/canonical-matrix.json than this checkout")
     bracket_rates = frozen_bracket_rates(batch, json.loads(CANONICAL_MATRIX_PATH.read_text()))
     recorded = batch["capacity_brackets"]
-    if bracket_origin(capacity_brackets(layout, recorded["scout_batch_id"])) != bracket_origin(
-        recorded
-    ):
+    frozen = ledger / SCOUT_SUMMARY
+    derived, _ = capacity_brackets(layout, recorded["scout_batch_id"], frozen)
+    if bracket_origin(derived) != bracket_origin(recorded):
         raise ValueError(
-            f"the bracket rates in batch.json no longer follow from {recorded['scout_summary']}"
+            f"the bracket rates in batch.json no longer follow from {layout.relative(frozen)}"
         )
     schedule = [RunItem(**item) for item in json.loads((ledger / "schedule.json").read_text())]
     if schedule != build_schedule(parse_experiments("all"), int(batch["seed"]), bracket_rates):
@@ -6913,7 +6913,6 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
         )
 
     manifest = ledger / "raw.sha256"
-    scout_summary = scout_summary_path(layout, recorded["scout_batch_id"])
     directories = {ledger} | {
         layout.manifest_path("aliases", item.experiment, name)
         if item.shared_from
@@ -6921,15 +6920,12 @@ def approve_batch(root: Path, layout: ResultsLayout, batch_id: str) -> None:
         for item in schedule
     }
     files = sorted(
-        [
-            (layout.relative(path), path)
-            for directory in directories
-            for path in directory.rglob("*")
-            if path.is_file()
-            and path != manifest
-            and not any(part.startswith(".") for part in path.relative_to(directory).parts)
-        ]
-        + [(layout.relative(scout_summary), scout_summary)]
+        (layout.relative(path), path)
+        for directory in directories
+        for path in directory.rglob("*")
+        if path.is_file()
+        and path != manifest
+        and not any(part.startswith(".") for part in path.relative_to(directory).parts)
     )
     lines = []
     for relative, path in files:
@@ -7238,30 +7234,48 @@ def run_capacity_scout_item_with_timeout(root: Path, batch_id: str, item: RunIte
         signal.signal(signal.SIGALRM, previous)
 
 
+SCOUT_SUMMARY = "scout-complete.json"
+
+
 def scout_summary_path(layout: ResultsLayout, scout_batch_id: str) -> Path:
-    return layout.manifest_path("capacity-scout", batch_name(scout_batch_id), "scout-complete.json")
+    return layout.manifest_path("capacity-scout", batch_name(scout_batch_id), SCOUT_SUMMARY)
 
 
-def capacity_brackets(layout: ResultsLayout, scout_batch_id: str) -> dict:
-    """The E-Perf-10 bracket rates this host's finished capacity scout gives."""
-    path = scout_summary_path(layout, scout_batch_id)
+def scout_command(scout_batch_id: str) -> str:
+    return (
+        f"./eval/scripts/run-rpi5-canonical.sh --execute --host {HOST.tag} --capacity-scout "
+        f"--batch-id {scout_batch_id}"
+    )
+
+
+def capacity_brackets(
+    layout: ResultsLayout, scout_batch_id: str, frozen: Path | None = None
+) -> tuple[dict, bytes]:
+    """The E-Perf-10 bracket rates this host's finished capacity scout gives.
+
+    ``frozen`` is the copy of the summary a batch keeps in its ledger; without it the rates
+    come from the scout's own summary. Returns the bracket record and the summary bytes.
+    """
+    path = frozen or scout_summary_path(layout, scout_batch_id)
+    scout = None
     try:
         content = path.read_bytes()
-        rates = derive_bracket_rates(
-            json.loads(content), json.loads(CANONICAL_MATRIX_PATH.read_text())
-        )
+        scout = json.loads(content)
+        rates = derive_bracket_rates(scout, json.loads(CANONICAL_MATRIX_PATH.read_text()))
     except (AttributeError, OSError, TypeError, ValueError) as error:
-        raise ValueError(
-            f"no usable capacity scout summary at {layout.relative(path)}: {error}. "
-            "E-Perf-10 takes its bracket rates from this host's finished scout; run "
-            f"--capacity-scout --batch-id {scout_batch_id} --host {HOST.tag} to the end first"
-        ) from error
+        message = f"no usable capacity scout summary at {layout.relative(path)}: {error}"
+        if frozen is None and not (isinstance(scout, dict) and scout.get("action") == "stop"):
+            message += (
+                f". E-Perf-10 takes its bracket rates from this host's finished scout; run "
+                f"{scout_command(scout_batch_id)} until it prints \"action\": \"stop\""
+            )
+        raise ValueError(message) from error
     return {
         "scout_batch_id": scout_batch_id,
-        "scout_summary": layout.relative(path),
+        "scout_summary": layout.relative(scout_summary_path(layout, scout_batch_id)),
         "scout_summary_sha256": hashlib.sha256(content).hexdigest(),
         "rates_msg_s": rates,
-    }
+    }, content
 
 
 def bracket_origin(brackets: dict | None) -> tuple | None:
@@ -7507,11 +7521,14 @@ def main() -> int:
     started = json.loads(batch_path.read_text()) if batch_path.is_file() else None
     thesis_evidence = ledger_group == "canonical-batches" and args.repetitions is None
     brackets = None
+    scout_summary = None
     if "e-perf-10" in experiments:
         recorded = (started or {}).get("capacity_brackets")
         scout_batch_id = args.scout_batch_id or (recorded or {}).get("scout_batch_id")
+        frozen = ledger / SCOUT_SUMMARY if recorded else None
         try:
-            brackets = capacity_brackets(layout, scout_batch_id) if scout_batch_id else None
+            if scout_batch_id:
+                brackets, scout_summary = capacity_brackets(layout, scout_batch_id, frozen)
         except ValueError as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
@@ -7544,6 +7561,13 @@ def main() -> int:
         parser.error(str(error))
     if brackets is not None:
         brackets.update(bracket_additions(schedule, brackets["rates_msg_s"]))
+    missing_scout = (
+        f"final batch {batch_name(batch_id)} cannot start E-Perf-10 without the {HOST.tag} "
+        f"capacity scout that sets its bracket rates; run {scout_command('<scout-id>')} until "
+        'it prints "action": "stop", then start the batch with --scout-batch-id <scout-id>'
+        if thesis_evidence and started is None and "e-perf-10" in experiments and brackets is None
+        else None
+    )
 
     print_plan(schedule, args.seed, batch_id)
     if brackets is not None:
@@ -7553,6 +7577,9 @@ def main() -> int:
             f"added_measured_leaves={brackets['added_measured_leaves']} "
             f"added_nominal_hours={brackets['added_nominal_hours']}"
         )
+    elif missing_scout is not None:
+        if args.dry_run:
+            print(f"NOTE --execute refuses this batch: {missing_scout}")
     elif "e-perf-10" in experiments:
         print(
             "NOTE e-perf-10 runs the common grid only; --scout-batch-id adds this host's "
@@ -7610,15 +7637,11 @@ def main() -> int:
             )
             return 2
     else:
-        if thesis_evidence and "e-perf-10" in experiments and brackets is None:
-            print(
-                f"error: final batch {batch_name(batch_id)} cannot start E-Perf-10 without "
-                f"the {HOST.tag} capacity scout that sets its bracket rates; run "
-                f"--capacity-scout --batch-id <scout-id> --host {HOST.tag} to the end on this "
-                "host, then start the batch with --scout-batch-id <scout-id>",
-                file=sys.stderr,
-            )
+        if missing_scout is not None:
+            print(f"error: {missing_scout}", file=sys.stderr)
             return 2
+        if scout_summary is not None:
+            (ledger / SCOUT_SUMMARY).write_bytes(scout_summary)
         atomic_write_json(
             batch_path,
             {
