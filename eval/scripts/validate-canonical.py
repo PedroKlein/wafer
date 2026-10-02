@@ -90,6 +90,38 @@ FROZEN_VERDICT_THRESHOLDS = {
     "e-swap-4-lossless": (["e-swap-4"], 0, "runs", "<=", "exact-count", "criterion"),
     "e-swap-5-rollback": (["e-swap-5"], 0, "runs", "<=", "exact-count", "criterion"),
 }
+FROZEN_REPLICATION_CONCORDANCE = {
+    "schema_version": 1,
+    "canonical_host": "rpi5",
+    "replication_hosts": ["jetson", "x86"],
+    "criteria_rules": ["one-sided-bound", "exact-count"],
+    "direction": (
+        "the side of the declared threshold on which a host's point estimate falls, "
+        "the count itself for an exact count: it meets the threshold or misses it"
+    ),
+    "classes": [
+        {
+            "class": "not-estimable",
+            "rule": "either host lacks the criterion, reports it PENDING or has no point estimate",
+        },
+        {
+            "class": "same-verdict",
+            "rule": "both hosts report the same PASS, FAIL or INCONCLUSIVE verdict",
+        },
+        {
+            "class": "same-direction",
+            "rule": "the verdicts differ and both point estimates fall on the same side of the threshold",
+        },
+        {
+            "class": "opposite-direction",
+            "rule": "the verdicts differ and the point estimates fall on opposite sides of the threshold",
+        },
+    ],
+    "precedence": "the first class in the listed order whose rule holds",
+    "canonical_verdict": (
+        "unchanged: replication reports agreement with the canonical host and never alters its verdict"
+    ),
+}
 
 
 def load_object(path: Path) -> dict:
@@ -543,6 +575,7 @@ def validate_matrix(matrix: dict) -> list[str]:
 
     errors.extend(validate_payload_arms(experiments.get("e-perf-4", {}), campaign))
     errors.extend(validate_verdict_rules(matrix))
+    errors.extend(validate_replication_concordance(matrix))
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
@@ -644,6 +677,23 @@ def validate_verdict_rules(matrix: dict) -> list[str]:
     for name, value in restated.items():
         if name in declared and declared[name][1] != value:
             errors.append(f"verdict threshold {name} disagrees with the value the experiment declares")
+    return errors
+
+
+def validate_replication_concordance(matrix: dict) -> list[str]:
+    rule = matrix.get("replication_concordance")
+    if not isinstance(rule, dict):
+        return ["replication_concordance must be an object declaring how replication hosts agree"]
+    errors = []
+    if rule != FROZEN_REPLICATION_CONCORDANCE:
+        errors.append("replication_concordance differs from the frozen rule")
+    hosts = matrix.get("hosts", {})
+    if rule.get("canonical_host") != matrix.get("canonical_host"):
+        errors.append("replication_concordance canonical_host must be the matrix canonical_host")
+    if rule.get("replication_hosts") != [
+        name for name, host in hosts.items() if isinstance(host, dict) and host.get("role") == "replication"
+    ]:
+        errors.append("replication_concordance replication_hosts must list every replication host")
     return errors
 
 

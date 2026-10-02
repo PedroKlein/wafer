@@ -96,6 +96,28 @@ def test_median_shift_interval_covers_zero_for_one_population() -> None:
     assert low < 0 < high and low <= estimate <= high
 
 
+def test_paired_median_shift_cancels_an_effect_each_pair_shares() -> None:
+    block = np.random.default_rng(5).uniform(100_000, 500_000, 30)
+    unpaired = median_shift_ci(1.9 * block, block, relative=True)
+    paired = median_shift_ci(1.9 * block, block, relative=True, paired=True)
+    assert paired == pytest.approx((0.9, 0.9, 0.9))
+    assert unpaired[2] - unpaired[1] > 0.5
+
+
+def test_paired_cliffs_delta_interval_is_zero_when_every_pair_ties() -> None:
+    block = np.random.default_rng(5).uniform(100_000, 500_000, 30)
+    assert cliffs_delta_ci(block, block.copy(), paired=True) == (0.0, 0.0)
+    low, high = cliffs_delta_ci(block, block.copy())
+    assert low < 0 < high
+
+
+def test_paired_resampling_needs_one_value_per_pair() -> None:
+    with pytest.raises(ValueError, match="one b value per a value"):
+        median_shift_ci(np.ones(3), np.ones(4), paired=True)
+    with pytest.raises(ValueError, match="one b value per a value"):
+        cliffs_delta_ci(np.ones(3), np.ones(4), paired=True)
+
+
 def test_relative_median_shift_needs_a_nonzero_reference() -> None:
     with pytest.raises(ValueError, match="non-zero reference"):
         median_shift_ci(np.ones(3), np.zeros(3), relative=True)

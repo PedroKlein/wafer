@@ -70,16 +70,31 @@ def _nearest_rank_p95(values) -> float:
     return float(ordered[math.ceil(len(ordered) * 0.95) - 1])
 
 
-def target_latency_table(records: list[dict]) -> pd.DataFrame:
+TARGET_LOAD_CRITERIA = {
+    "p95_ratio": "e-perf-1-p95-ratio",
+    "loss": "e-perf-1-pooled-loss",
+    "achieved_ratio": "e-perf-1-achieved-ratio",
+    "duplicates": "e-perf-1-duplicates",
+}
+
+
+def target_latency_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-1 latency and delivery per system at the matched 1,000 msg/s target load.
+
+    The three systems run in one randomised block per run index, so every
+    comparison with eKuiper pairs each run with the eKuiper run of the same
+    index and resamples those pairs.
+    """
     conditions = ("wafer", "native", "ekuiper")
-    grouped = _require_runs(records, conditions)
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    if not all(grouped.values()):
+        raise ValueError("target load needs runs of every system")
     rules = declared_thresholds()
     ratio_rule = rules["e-perf-1-p95-ratio"]
     loss_rule = rules["e-perf-1-pooled-loss"]
     achieved_rule = rules["e-perf-1-achieved-ratio"]
     duplicate_rule = rules["e-perf-1-duplicates"]
-    reference = np.asarray([run["p95_ns"] for run in grouped["ekuiper"]], dtype=float)
-    reference_median = float(np.median(reference))
+    reference = {int(run["run_index"]): float(run["p95_ns"]) for run in grouped["ekuiper"]}
     rows = []
     for condition in conditions:
         condition_runs = grouped[condition]
@@ -99,8 +114,17 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         )
         low, high = bootstrap_ci(values)
         achieved_low, achieved_high = bootstrap_ci(achieved)
-        delta, magnitude = cliffs_delta(values, reference)
-        delta_low, delta_high = cliffs_delta_ci(values, reference)
+        pairs = sorted(reference.keys() & {int(run["run_index"]) for run in condition_runs})
+        if not pairs:
+            raise ValueError(f"{condition} shares no run index with ekuiper")
+        p95 = {int(run["run_index"]): float(run["p95_ns"]) for run in condition_runs}
+        paired = np.asarray([p95[index] for index in pairs])
+        paired_reference = np.asarray([reference[index] for index in pairs])
+        shift, shift_low, shift_high = median_shift_ci(
+            paired, paired_reference, relative=True, paired=True
+        )
+        delta, magnitude = cliffs_delta(paired, paired_reference)
+        delta_low, delta_high = cliffs_delta_ci(paired, paired_reference, paired=True)
         intended = sum(int(run["intended_messages"]) for run in condition_runs)
         received = sum(int(run["received_unique"]) for run in condition_runs)
         pooled_loss = (intended - received) / intended
@@ -111,23 +135,34 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
         mean_achieved_ratio = float(np.mean(achieved_ratios))
         total_duplicates = sum(int(run["duplicates"]) for run in condition_runs)
         delivery = {
-            **bound_verdict("loss", loss_rule, pooled_ratio_ci(lost, offered, ci=loss_rule.interval)),
+            **bound_verdict(
+                "loss",
+                loss_rule,
+                pooled_ratio_ci(lost, offered, ci=loss_rule.interval),
+                estimate=pooled_loss,
+            ),
             **bound_verdict(
                 "achieved_ratio",
                 achieved_rule,
                 bootstrap_ci(achieved_ratios, ci=achieved_rule.interval, statistic=np.mean),
+                estimate=mean_achieved_ratio,
             ),
+            "duplicates_verdict": count_verdict(duplicate_rule, total_duplicates),
+            "duplicates_estimate": total_duplicates,
+            "duplicates_threshold": duplicate_rule.value,
         }
         delivery["delivery_verdict"] = combined_verdict(
             delivery["loss_verdict"],
             delivery["achieved_ratio_verdict"],
-            count_verdict(duplicate_rule, total_duplicates),
+            delivery["duplicates_verdict"],
         )
         if condition == "wafer":
             _, ratio_low, ratio_high = median_shift_ci(
-                values, reference, relative=True, ci=ratio_rule.interval
+                paired, paired_reference, relative=True, paired=True, ci=ratio_rule.interval
             )
-            ratio = bound_verdict("p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high))
+            ratio = bound_verdict(
+                "p95_ratio", ratio_rule, (1 + ratio_low, 1 + ratio_high), estimate=1 + shift
+            )
             verdict = combined_verdict(ratio["p95_ratio_verdict"], delivery["delivery_verdict"])
         else:
             ratio, verdict = no_verdict("p95_ratio"), None
@@ -153,8 +188,9 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 "mean_achieved_ratio": mean_achieved_ratio,
                 "total_duplicates": total_duplicates,
                 "reference_condition": "ekuiper",
-                "median_ratio_vs_reference": float(np.median(values))
-                / reference_median,
+                "median_ratio_vs_reference": 1 + shift,
+                "ratio_ci95_low": 1 + shift_low,
+                "ratio_ci95_high": 1 + shift_high,
                 "cliffs_delta_vs_reference": delta,
                 "cliffs_delta_ci95_low": delta_low,
                 "cliffs_delta_ci95_high": delta_high,
@@ -163,16 +199,110 @@ def target_latency_table(records: list[dict]) -> pd.DataFrame:
                 **delivery,
                 "verdict": verdict,
                 "units": "nanoseconds, messages/second, fraction, messages",
-                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; Cliff's delta with bootstrap 95% CI; verdicts from one-sided 95% bounds resampling runs, each system's runs apart for the p95 ratio",
+                "estimator": "median run p95 and achieved rate with bootstrap 95% CI; pooled loss with a run-resampling bootstrap 95% CI; mean achieved ratio; ratio of median run p95 to eKuiper's and Cliff's delta against eKuiper with bootstrap 95% CIs over run pairs, pairing runs by index within the randomised block; verdicts from one-sided 95% bounds, resampling run pairs for the p95 ratio and runs for delivery",
                 "threshold": (
                     f"one-sided 95% bounds: median(WAFER p95) / median(eKuiper p95) <= {ratio_rule.value:g}; "
                     f"pooled loss <= {loss_rule.value:g}; mean achieved/offered >= {achieved_rule.value:g}; zero duplicates"
                 ),
                 "claim_boundary": "matched 1,000 msg/s target load; not capacity",
-                "thesis_evidence": True,
+                "thesis_evidence": canonical,
             }
         )
     return pd.DataFrame(rows)
+
+
+MDD_ALPHA = 0.05
+MDD_POWER = 0.80
+_MDD_Z = statistics.NormalDist().inv_cdf(1 - MDD_ALPHA / 2) + statistics.NormalDist().inv_cdf(
+    MDD_POWER
+)
+
+
+def _wafer_native_contrast(
+    records: list[dict],
+    conditions: tuple[str, ...],
+    percentiles: tuple[str, ...],
+    *,
+    canonical: bool,
+    claim_boundary: str,
+) -> pd.DataFrame:
+    grouped = _group_runs(records, conditions, canonical=canonical)
+    arms = [grouped["wafer"], grouped["native"]]
+    stopped = sum(_stopped_early(run) for runs in arms for run in runs)
+    wafer_runs, native_runs = (
+        {int(run["run_index"]): run for run in runs if not _stopped_early(run)} for runs in arms
+    )
+    pairs = sorted(wafer_runs.keys() & native_runs.keys())
+    if not pairs:
+        return pd.DataFrame()
+    rows = []
+    for percentile in percentiles:
+        wafer = np.asarray([wafer_runs[index][f"{percentile}_ns"] for index in pairs], dtype=float)
+        native = np.asarray([native_runs[index][f"{percentile}_ns"] for index in pairs], dtype=float)
+        difference = wafer - native
+        low, high = bootstrap_ci(difference)
+        shift, shift_low, shift_high = median_shift_ci(wafer, native, relative=True, paired=True)
+        paired_sd = float(np.std(difference, ddof=1)) if len(pairs) > 1 else None
+        rows.append(
+            {
+                "statistic": percentile,
+                "condition": "wafer",
+                "reference_condition": "native",
+                "N_pairs": len(pairs),
+                "runs_stopped_early": stopped,
+                "wafer_median_ns": float(np.median(wafer)),
+                "native_median_ns": float(np.median(native)),
+                "median_ratio": 1 + shift,
+                "ratio_ci95_low": 1 + shift_low,
+                "ratio_ci95_high": 1 + shift_high,
+                "difference_ns": float(np.median(difference)),
+                "difference_ci95_low_ns": low,
+                "difference_ci95_high_ns": high,
+                "difference_ci_half_width_ns": (high - low) / 2,
+                "paired_sd_ns": paired_sd,
+                "mdd_ns": None if paired_sd is None else _MDD_Z * paired_sd / math.sqrt(len(pairs)),
+                "units": "nanoseconds, ratio, run pairs",
+                "estimator": (
+                    f"WAFER and native run {percentile} paired by run index within the randomised block, "
+                    "leaving out runs the system under test stopped early and their partners; "
+                    "median over pairs of WAFER minus native with a bootstrap 95% CI over pairs and its half-width; "
+                    "median WAFER over median native with a bootstrap 95% CI over pairs; "
+                    "minimum detectable difference (z(0.975) + z(0.80)) x paired SD / sqrt(N pairs), "
+                    f"two-sided alpha {MDD_ALPHA:g} and power {MDD_POWER:.2f}, normal approximation"
+                ),
+                "uncertainty": "bootstrap 95% CIs over run pairs",
+                "threshold": "none: descriptive contrast without a verdict",
+                "claim_boundary": claim_boundary,
+                "thesis_evidence": canonical,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def target_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-1: paired WAFER minus native run p95 and p50 at the matched target load.
+
+    Each record is one run's ``p95_ns`` and ``p50_ns``; eKuiper runs may be
+    present and are not part of the contrast.
+    """
+    return _wafer_native_contrast(
+        records,
+        ("wafer", "native", "ekuiper"),
+        ("p95", "p50"),
+        canonical=canonical,
+        claim_boundary="matched 1,000 msg/s target load over MQTT; descriptive, no verdict",
+    )
+
+
+def overhead_contrast_table(records: list[dict], *, canonical: bool = True) -> pd.DataFrame:
+    """E-Perf-5 on one host: paired WAFER/native ratio and WAFER minus native run p50."""
+    return _wafer_native_contrast(
+        records,
+        ("wafer", "native"),
+        ("p50",),
+        canonical=canonical,
+        claim_boundary="in-process path on one host; descriptive, no verdict; no cross-architecture claim",
+    )
 
 
 def metering_table(records: list[dict]) -> pd.DataFrame:
@@ -355,7 +485,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     **(
                         no_verdict("drop")
                         if condition == "control"
-                        else bound_verdict("drop", drop_rule, None)
+                        else bound_verdict("drop", drop_rule, None, estimate=None)
                     ),
                     "verdict": None if condition == "control" else "FAIL",
                     "reference_condition": "control",
@@ -405,7 +535,7 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
             **no_verdict("drop"),
         }
         if condition != "control" and not len(control_throughput):
-            row.update(bound_verdict("drop", drop_rule, None))
+            row.update(bound_verdict("drop", drop_rule, None, estimate=None))
             row["verdict"] = combined_verdict(
                 row["drop_verdict"], count_verdict(stopped_rule, stopped)
             )
@@ -429,7 +559,9 @@ def branch_isolation_table(records: list[dict], *, canonical: bool = True) -> pd
                     "cliffs_delta_ci95_low": delta_low,
                     "cliffs_delta_ci95_high": delta_high,
                     "effect_magnitude": magnitude,
-                    **bound_verdict("drop", drop_rule, (-100 * bound_high, -100 * bound_low)),
+                    **bound_verdict(
+                        "drop", drop_rule, (-100 * bound_high, -100 * bound_low), estimate=-100 * drop
+                    ),
                 }
             )
             row["verdict"] = combined_verdict(
@@ -625,6 +757,7 @@ def payload_table(records: list[dict], *, canonical: bool = True) -> pd.DataFram
                     "per_hop_reference",
                     reference,
                     bootstrap_ci(boundary_p50, ci=reference.interval),
+                    estimate=float(np.median(boundary_p50)),
                 ),
             }
         )
@@ -1804,6 +1937,7 @@ def swap3_table(runs: list[dict]) -> pd.DataFrame:
                 "dip",
                 dip_rule,
                 bootstrap_ci(np.asarray(dips), ci=dip_rule.interval) if dips else None,
+                estimate=_median(dips),
             )
             verdict = combined_verdict(
                 dip["dip_verdict"], count_verdict(lossless_rule, len(admitted) - lossless_runs)
@@ -2227,6 +2361,7 @@ def swap4_table(runs: list[dict]) -> pd.DataFrame:
         bootstrap_ci(np.asarray(gaps), ci=gap_rule.interval, statistic=_nearest_rank_p95)
         if gaps
         else None,
+        estimate=_nearest_rank_p95(gaps) if gaps else None,
     )
     return pd.DataFrame(
         [

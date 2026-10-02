@@ -68,19 +68,43 @@ def _cliffs_delta_value(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.mean(np.sign(a[:, None] - b[None, :])))
 
 
+def _pair_indices(
+    rng: np.random.Generator, a: np.ndarray, b: np.ndarray, n_resamples: int
+) -> np.ndarray:
+    """Indices that resample ``a[i]`` and ``b[i]`` together, one row per resample.
+
+    An effect the two members of a pair share then cancels instead of
+    widening the interval.
+    """
+    if len(a) != len(b):
+        raise ValueError("paired resampling needs one b value per a value")
+    return rng.integers(0, len(a), size=(n_resamples, len(a)))
+
+
 def cliffs_delta_ci(
-    a: np.ndarray, b: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, seed: int = 42
+    a: np.ndarray,
+    b: np.ndarray,
+    n_resamples: int = 10000,
+    ci: float = 0.95,
+    seed: int = 42,
+    *,
+    paired: bool = False,
 ) -> tuple[float, float]:
-    """Percentile bootstrap interval for Cliff's delta, resampling each group independently."""
+    """Percentile bootstrap interval for Cliff's delta.
+
+    Each group is resampled independently, or, with ``paired``, index-matched
+    pairs are resampled together.
+    """
     _require_samples(a, b)
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     rng = np.random.default_rng(seed)
-    deltas = np.array(
-        [
-            _cliffs_delta_value(rng.choice(a, size=len(a)), rng.choice(b, size=len(b)))
-            for _ in range(n_resamples)
-        ]
-    )
+    if paired:
+        samples = ((a[row], b[row]) for row in _pair_indices(rng, a, b, n_resamples))
+    else:
+        samples = (
+            (rng.choice(a, size=len(a)), rng.choice(b, size=len(b))) for _ in range(n_resamples)
+        )
+    deltas = np.array([_cliffs_delta_value(x, y) for x, y in samples])
     return _percentile_interval(deltas, ci)
 
 
@@ -163,22 +187,29 @@ def median_shift_ci(
     b: np.ndarray,
     *,
     relative: bool = False,
+    paired: bool = False,
     n_resamples: int = 10000,
     ci: float = 0.95,
     seed: int = 42,
 ) -> tuple[float, float, float]:
     """median(a) - median(b), or that difference over median(b), with a percentile bootstrap interval.
 
-    Each group is resampled independently, so this suits unpaired runs.
-    Returns (estimate, lower_bound, upper_bound).
+    Each group is resampled independently, which suits unpaired runs. With
+    ``paired``, ``a[i]`` and ``b[i]`` ran in the same block and each resample
+    draws whole pairs. Returns (estimate, lower_bound, upper_bound).
     """
     _require_samples(a, b)
     a, b = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     if relative and np.median(b) == 0:
         raise ValueError("a relative shift needs a non-zero reference median")
     rng = np.random.default_rng(seed)
-    medians_a = np.median(rng.choice(a, size=(n_resamples, len(a))), axis=1)
-    medians_b = np.median(rng.choice(b, size=(n_resamples, len(b))), axis=1)
+    if paired:
+        indices = _pair_indices(rng, a, b, n_resamples)
+        medians_a = np.median(a[indices], axis=1)
+        medians_b = np.median(b[indices], axis=1)
+    else:
+        medians_a = np.median(rng.choice(a, size=(n_resamples, len(a))), axis=1)
+        medians_b = np.median(rng.choice(b, size=(n_resamples, len(b))), axis=1)
     shifts = medians_a - medians_b
     estimate = float(np.median(a) - np.median(b))
     if relative:

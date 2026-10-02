@@ -522,6 +522,51 @@ def test_matrix_rejects_a_missing_malformed_or_drifted_threshold_table(mutate, m
     assert message in result.stderr
 
 
+def test_matrix_declares_how_replication_hosts_agree_with_the_canonical_host() -> None:
+    rule = json.loads(MATRIX.read_text())["replication_concordance"]
+    assert (rule["canonical_host"], rule["replication_hosts"]) == ("rpi5", ["jetson", "x86"])
+    assert rule["criteria_rules"] == ["one-sided-bound", "exact-count"]
+    assert [row["class"] for row in rule["classes"]] == [
+        "not-estimable",
+        "same-verdict",
+        "same-direction",
+        "opposite-direction",
+    ]
+    assert rule["canonical_verdict"].startswith("unchanged")
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (
+            lambda matrix: matrix.pop("replication_concordance"),
+            "replication_concordance must be an object",
+        ),
+        (
+            lambda matrix: matrix["replication_concordance"]["classes"].reverse(),
+            "replication_concordance differs from the frozen rule",
+        ),
+        (
+            lambda matrix: matrix["replication_concordance"]["criteria_rules"].append("every-run"),
+            "replication_concordance differs from the frozen rule",
+        ),
+        (
+            lambda matrix: matrix["hosts"]["jetson"].update(role="canonical"),
+            "replication_hosts must list every replication host",
+        ),
+    ],
+)
+def test_matrix_rejects_a_missing_or_drifted_replication_rule(mutate, message: str) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    mutate(matrix)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
 def test_density_requires_the_measured_container_floor() -> None:
     matrix = json.loads(MATRIX.read_text())
     matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]

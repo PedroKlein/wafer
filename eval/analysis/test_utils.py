@@ -880,6 +880,7 @@ def test_notebooks_never_select_latest_results_implicitly() -> None:
         assert (
             "resolve_result_batch" in source
             or "resolve_analysis_batch" in source
+            or "resolve_host_batches" in source
             or "WAFER_EVAL_BATCH_ID" in source
         ), path.name
         assert "except (FileNotFoundError" not in source, path.name
@@ -963,6 +964,73 @@ def test_cross_architecture_validates_each_side_against_its_own_host(
     utils.require_cross_architecture(pi_batch, x86_batch)
     with pytest.raises(ValueError, match="compares an rpi5 batch with an x86 batch"):
         utils.require_cross_architecture(x86_batch, pi_batch)
+
+
+def test_approved_host_batches_resolve_every_host_from_its_own_entry(
+    fake_results: pathlib.Path,
+):
+    pi_batch = canonical_batch(fake_results)
+    assert utils.approved_host_batches("e-val-1") == {"rpi5": pi_batch}
+
+    write_host_approval(fake_results, "jetson")
+    jetson_batch = fake_results / "eval/results/e-val-1/jetson-batch-a"
+    write_canonical_leaf(jetson_batch / "delay-50ms/run-01-attempt-01", host="jetson")
+    assert utils.approved_host_batches("e-val-1") == {"rpi5": pi_batch, "jetson": jetson_batch}
+
+    write_host_approval(fake_results, "x86")
+    with pytest.raises(FileNotFoundError, match="x86-batch-a"):
+        utils.approved_host_batches("e-val-1")
+
+
+def test_approved_host_batches_are_empty_without_approvals(fake_results: pathlib.Path):
+    (fake_results / "eval/final-batches.json").unlink()
+    assert utils.approved_host_batches("e-val-1") == {}
+
+
+def test_host_batches_never_report_a_batch_under_another_host(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    pi_batch = canonical_batch(fake_results)
+    write_host_approval(fake_results, "x86")
+    final_batches = fake_results / "eval/final-batches.json"
+    document = json.loads(final_batches.read_text())
+    pi_entry = document["batches"].pop("rpi5")
+    final_batches.write_text(json.dumps(document))
+    x86_batch = fake_results / "eval/results/e-val-1/x86-batch-a"
+    write_canonical_leaf(x86_batch / "delay-50ms/run-01-attempt-01", host="x86")
+    no_paths = {"rpi5": None, "jetson": None, "x86": None}
+
+    monkeypatch.setenv("WAFER_EVAL_BATCH_ID", "x86-batch-a")
+    assert utils.resolve_host_batches("e-val-1", no_paths) == ({"x86": x86_batch}, True)
+
+    document["batches"]["rpi5"] = pi_entry
+    final_batches.write_text(json.dumps(document))
+    assert utils.resolve_host_batches("e-val-1", no_paths) == (
+        {"rpi5": pi_batch, "x86": x86_batch},
+        True,
+    )
+
+    monkeypatch.setenv("WAFER_EVAL_BATCH_ID", "x86-batch-b")
+    with pytest.raises(FileNotFoundError, match="x86-batch-b"):
+        utils.resolve_host_batches("e-val-1", no_paths)
+
+
+def test_explicit_host_paths_select_diagnostic_mode_for_every_host(
+    fake_results: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+):
+    canonical_batch(fake_results)
+    diagnostic = fake_results / "eval/results/e-val-1/jetson-pilot"
+    diagnostic.mkdir()
+    monkeypatch.setenv("WAFER_EVAL_BATCH_ID", "batch-a")
+
+    assert utils.resolve_host_batches("e-val-1", {"rpi5": None, "jetson": str(diagnostic)}) == (
+        {"jetson": diagnostic},
+        False,
+    )
+    with pytest.raises(ValueError, match="unknown host tags"):
+        utils.resolve_host_batches("e-val-1", {"laptop": str(diagnostic)})
+    monkeypatch.delenv("WAFER_EVAL_BATCH_ID")
+    assert utils.resolve_host_batches("e-val-1", {"rpi5": None}) == ({}, False)
 
 
 if __name__ == "__main__":
