@@ -980,7 +980,7 @@
     },
     "e-swap-3": {
       "research_question": "rq3",
-      "purpose": "Compare output disruption around one control action: WAFER hot-swap to threshold-filter v2, WAFER restart, eKuiper rule update (PUT /rules/pipeline_a) to the same bound, and eKuiper make-before-break replacement by a rule with that bound.",
+      "purpose": "Compare output disruption around one control action: WAFER hot-swap to threshold-filter v2, WAFER restart, eKuiper rule update (PUT with triggered false, then start) to the same bound, and eKuiper make-before-break replacement by a rule with that bound.",
       "sample_unit": "run",
       "repetitions": 30,
       "warmup_secs": 30,

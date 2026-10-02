@@ -1748,10 +1748,11 @@ class FakeEkuiper:
     """The kuiper unit as `systemctl show` reports it and pipeline_a as its REST API does.
 
     The REST API also lists the rules, creates the replacement rule, which starts emitting
-    after ``replacement_quiet_polls`` status reads, updates pipeline_a in place, which then
-    publishes after ``update_quiet_polls`` status reads, and deletes rules. ``update_status``
-    is the HTTP status the update answers with. ``broken_off`` names the calls whose answer
-    ends early, and ``rule_list`` replaces the rule list with another body.
+    after ``replacement_quiet_polls`` status reads, updates pipeline_a in place and starts it,
+    after which it publishes after ``update_quiet_polls`` status reads, and deletes rules.
+    ``update_status`` and ``start_status`` are the HTTP statuses the update and the start
+    answer with. ``broken_off`` names the calls whose answer ends early, ``timed_out`` the
+    calls that get no answer, and ``rule_list`` replaces the rule list with another body.
     """
 
     def __init__(self) -> None:
@@ -1770,7 +1771,10 @@ class FakeEkuiper:
         self.updated_rule: dict | None = None
         self.update_quiet_polls = 1
         self.update_status = 200
+        self.started_updated_rule = False
+        self.start_status = 200
         self.broken_off: set[tuple[str, str]] = set()
+        self.timed_out: set[tuple[str, str]] = set()
         self.rule_list: object | None = None
 
     def check_output(self, command: list[str], **kwargs: object) -> str:
@@ -1788,6 +1792,9 @@ class FakeEkuiper:
         if (method, path) in self.broken_off:
             self.events.append(f"{method} {path} broken off")
             raise http.client.IncompleteRead(b"Rule pipeline_a", 24)
+        if (method, path) in self.timed_out:
+            self.events.append(f"{method} {path} timed out")
+            raise TimeoutError("timed out")
         if (method, path) == ("GET", "/rules"):
             self.events.append("rule-list")
             if self.rule_list is not None:
@@ -1830,18 +1837,39 @@ class FakeEkuiper:
                     io.BytesIO(b'{"error":1000,"message":"Update rule error"}'),
                 )
             self.updated_rule = json.loads(request.data)
-            # The update stops the rule and starts it on a new topology with new counters.
+            # An update with triggered false stops the rule and keeps the stopped run's counters.
+            assert self.updated_rule["triggered"] is False
             self.rule = {
                 **self.rule,
+                "status": "stopped",
+                "lastStopTimestamp": runner.time.time_ns() // 1_000_000,
+            }
+            return self._response(200, "Rule pipeline_a was updated successfully.")
+        if (method, path) == ("POST", "/rules/pipeline_a/start"):
+            self.events.append("start-pipeline_a")
+            if self.start_status != 200:
+                raise runner.urllib.error.HTTPError(
+                    url,
+                    self.start_status,
+                    "Bad Request",
+                    None,
+                    io.BytesIO(b'{"error":1000,"message":"start rule error"}'),
+                )
+            assert self.updated_rule is not None and request.data is None
+            # The start runs the saved rule on a new topology with new counters.
+            self.started_updated_rule = True
+            self.rule = {
+                **self.rule,
+                "status": "running",
                 "lastStartTimestamp": runner.time.time_ns() // 1_000_000,
                 "sink_mqtt_0_0_records_out_total": 0,
             }
-            return self._response(200, "Rule pipeline_a was updated successfully.")
+            return self._response(200, "Rule pipeline_a was started")
         assert (method, path) == ("GET", "/rules/pipeline_a/status"), (method, url)
         self.events.append("rule-status")
         if self.rule is None:
             raise runner.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
-        if self.updated_rule is not None:
+        if self.started_updated_rule:
             if self.update_quiet_polls > 0:
                 self.update_quiet_polls -= 1
             else:
@@ -5928,7 +5956,7 @@ def test_swap3_rule_update_is_the_arm_action_not_an_ekuiper_failure(
     assert exit_code == (None if crash else 0)
 
 
-def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits_for_output(
+def test_swap3_rule_update_puts_the_audited_rule_untriggered_starts_it_and_waits_for_output(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
 ) -> None:
     stub_ekuiper_run(monkeypatch, ekuiper)
@@ -5942,38 +5970,39 @@ def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits
         runner.AttemptSelection(output, False),
     )
 
-    # Two status reads before the updated rule's new sink counts output, the one that sees it,
+    # Two status reads before the started rule's new sink counts output, the one that sees it,
     # and the health snapshot after the run.
     action = ekuiper.events[ekuiper.events.index("update-pipeline_a") :]
-    assert action == ["update-pipeline_a"] + ["rule-status"] * 4
+    assert action == ["update-pipeline_a", "start-pipeline_a"] + ["rule-status"] * 4
     seeded = seeded_rules()["rule_payload"]
-    assert ekuiper.updated_rule == {
-        **seeded,
-        "sql": seeded["sql"].replace("temperature >= 50", "temperature >= 60"),
-    }
+    updated_sql = seeded["sql"].replace("temperature >= 50", "temperature >= 60")
+    assert ekuiper.updated_rule == {**seeded, "sql": updated_sql, "triggered": False}
     record = json.loads((output / "rule-update.json").read_text())
-    assert record["updated_sql"] == ekuiper.updated_rule["sql"]
+    assert record["updated_sql"] == updated_sql
     assert [
         (call["method"], call["path"], call["http_status"], call["request_sql"])
         for call in record["calls"]
-    ] == [("PUT", "/rules/pipeline_a", 200, ekuiper.updated_rule["sql"])] + [
-        ("GET", "/rules/pipeline_a/status", 200, None)
-    ] * 3
-    assert [call["request_body"] for call in record["calls"]] == [ekuiper.updated_rule] + [None] * 3
+    ] == [
+        ("PUT", "/rules/pipeline_a", 200, updated_sql),
+        ("POST", "/rules/pipeline_a/start", 200, None),
+    ] + [("GET", "/rules/pipeline_a/status", 200, None)] * 3
+    assert [call["request_body"] for call in record["calls"]] == [ekuiper.updated_rule] + [
+        None
+    ] * 4
     assert [
-        json.loads(call["body"])["sink_mqtt_0_0_records_out_total"] for call in record["calls"][1:]
+        json.loads(call["body"])["sink_mqtt_0_0_records_out_total"] for call in record["calls"][2:]
     ] == [0, 0, 1]
     timeline = json.loads((output / "disruption-timeline.json").read_text())
     stamps = [
         call[key] for call in record["calls"] for key in ("start_timestamp_ns", "end_timestamp_ns")
     ]
     assert stamps == sorted(stamps)
-    # eKuiper's answer to the PUT ends the action; the status reads come after it.
-    put = record["calls"][0]
+    # eKuiper's answer to the start ends the action; the status reads come after it.
+    put, start = record["calls"][:2]
     assert timeline["action_start_timestamp_ns"] <= put["start_timestamp_ns"]
     assert (timeline["action_end_timestamp_ns"], timeline["action_duration_ns"]) == (
-        put["end_timestamp_ns"],
-        put["end_offset_ns"],
+        start["end_timestamp_ns"],
+        start["end_offset_ns"],
     )
     assert timeline["action_end_timestamp_ns"] < stamps[-1]
     contract = load_contract()
@@ -5983,11 +6012,27 @@ def test_swap3_rule_update_puts_the_audited_rule_with_the_raised_bound_and_waits
     assert json.loads((output / "canonical-status.json").read_text())["status"] == "passed"
 
 
+@pytest.mark.parametrize(
+    ("refused", "detail", "calls"),
+    [
+        ("update_status", "eKuiper refused the pipeline_a update: 400", [("PUT", 400)]),
+        (
+            "start_status",
+            "eKuiper did not start the updated pipeline_a: 400",
+            [("PUT", 200), ("POST", 400)],
+        ),
+    ],
+)
 def test_swap3_rule_update_that_ekuiper_refuses_is_a_harness_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    refused: str,
+    detail: str,
+    calls: list[tuple[str, int]],
 ) -> None:
     stub_ekuiper_run(monkeypatch, ekuiper)
-    ekuiper.update_status = 400
+    setattr(ekuiper, refused, 400)
     output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
     stub_swap3_publisher(monkeypatch, output)
 
@@ -5999,9 +6044,9 @@ def test_swap3_rule_update_that_ekuiper_refuses_is_a_harness_failure(
 
     receipt = json.loads((output / "canonical-status.json").read_text())
     assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
-    assert "eKuiper refused the pipeline_a update: 400" in receipt["detail"]
+    assert detail in receipt["detail"]
     record = json.loads((output / "rule-update.json").read_text())
-    assert [(call["method"], call["http_status"]) for call in record["calls"]] == [("PUT", 400)]
+    assert [(call["method"], call["http_status"]) for call in record["calls"]] == calls
 
 
 def test_swap3_rule_update_that_never_publishes_times_out(
@@ -6015,12 +6060,13 @@ def test_swap3_rule_update_that_never_publishes_times_out(
         runner.update_ekuiper_rule(tmp_path, rule, runner.time.monotonic_ns(), timeout_secs=0.05)
 
     record = json.loads((tmp_path / "rule-update.json").read_text())
-    put, *reads = record["calls"]
-    assert put["method"] == "PUT" and reads and {call["method"] for call in reads} == {"GET"}
+    put, start, *reads = record["calls"]
+    assert (put["method"], start["method"]) == ("PUT", "POST")
+    assert reads and {call["method"] for call in reads} == {"GET"}
     # As in the make-before-break arm, the deadline is checked after each read that sees no
     # output, so the runner gives up at the first read that ends after it.
-    assert reads[-1]["end_offset_ns"] - put["end_offset_ns"] >= 50_000_000
-    assert all(call["end_offset_ns"] - put["end_offset_ns"] < 50_000_000 for call in reads[:-1])
+    assert reads[-1]["end_offset_ns"] - start["end_offset_ns"] >= 50_000_000
+    assert all(call["end_offset_ns"] - start["end_offset_ns"] < 50_000_000 for call in reads[:-1])
 
 
 @pytest.mark.parametrize(
@@ -6042,11 +6088,36 @@ def test_both_ekuiper_swap3_arms_wait_for_the_same_emission_signal(
     assert runner.ekuiper_rule_emitted(status, text) is emitted
 
 
-def test_swap3_rule_update_whose_answer_breaks_off_is_a_harness_failure(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ekuiper: FakeEkuiper
+@pytest.mark.parametrize(
+    ("failure", "call", "detail", "recorded"),
+    [
+        (
+            "broken_off",
+            ("PUT", "/rules/pipeline_a"),
+            "eKuiper broke off its answer to PUT /rules/pipeline_a",
+            [],
+        ),
+        (
+            "broken_off",
+            ("POST", "/rules/pipeline_a/start"),
+            "eKuiper broke off its answer to POST /rules/pipeline_a/start",
+            ["PUT"],
+        ),
+        ("timed_out", ("PUT", "/rules/pipeline_a"), "timed out", []),
+        ("timed_out", ("POST", "/rules/pipeline_a/start"), "timed out", ["PUT"]),
+    ],
+)
+def test_swap3_rule_update_whose_answer_breaks_off_or_never_comes_is_a_harness_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    ekuiper: FakeEkuiper,
+    failure: str,
+    call: tuple[str, str],
+    detail: str,
+    recorded: list[str],
 ) -> None:
     stub_ekuiper_run(monkeypatch, ekuiper)
-    ekuiper.broken_off.add(("PUT", "/rules/pipeline_a"))
+    getattr(ekuiper, failure).add(call)
     output = tmp_path / "ekuiper-rule-update/run-01-attempt-01"
     stub_swap3_publisher(monkeypatch, output)
 
@@ -6058,8 +6129,9 @@ def test_swap3_rule_update_whose_answer_breaks_off_is_a_harness_failure(
 
     receipt = json.loads((output / "canonical-status.json").read_text())
     assert (receipt["failure_class"], receipt["reasons"]) == ("infrastructure", ["harness-error"])
-    assert "eKuiper broke off its answer to PUT /rules/pipeline_a" in receipt["detail"]
-    assert json.loads((output / "rule-update.json").read_text())["calls"] == []
+    assert detail in receipt["detail"]
+    record = json.loads((output / "rule-update.json").read_text())
+    assert [call["method"] for call in record["calls"]] == recorded
 
 
 def test_swap3_rule_update_needs_the_audited_v1_rule(tmp_path: Path) -> None:

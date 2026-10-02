@@ -886,10 +886,14 @@ def _rule_update_adopted(call: dict, metric: str) -> bool:
 
 
 def check_swap3_rule_update(leaf: Path) -> list[str]:
-    """The REST calls of the in-place update: the PUT that is the action, then status reads.
+    """The REST calls of the in-place update: the PUT and the start that are the action, then
+    status reads.
 
-    The status reads stop at the first that shows output, and the runner reads again only
-    while less than 10 s have passed since the PUT returned, as the make-before-break arm does.
+    The PUT sends the audited rule with only its bound raised and ``triggered`` false, so
+    eKuiper saves it without running it, and the start runs it; the start's answer ends the
+    action. The status reads stop at the first that shows output, and the runner reads again
+    only while less than 10 s have passed since the start returned, as the make-before-break
+    arm does.
     """
     violations: list[str] = []
     record = _load_json(leaf / "rule-update.json", "rule-update.json", violations)
@@ -912,36 +916,40 @@ def check_swap3_rule_update(leaf: Path) -> list[str]:
             or record.get("offset_clock") != "monotonic"
             or record.get("timestamp_clock") != "unix-epoch"
             or not isinstance(calls, list)
-            or len(calls) < 2
+            or len(calls) < 3
             or [(call["method"], call["path"]) for call in calls]
-            != [("PUT", "/rules/pipeline_a")]
-            + [("GET", "/rules/pipeline_a/status")] * (len(calls) - 1)
+            != [("PUT", "/rules/pipeline_a"), ("POST", "/rules/pipeline_a/start")]
+            + [("GET", "/rules/pipeline_a/status")] * (len(calls) - 2)
         ):
             return violations + [
-                "rule-update.json must record one PUT /rules/pipeline_a "
-                "and the status reads after it"
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
             ]
-        put = calls[0]
+        put, start = calls[:2]
         if put["http_status"] != 200:
             violations.append("rule-update.json PUT /rules/pipeline_a did not return 200")
+        if start["http_status"] != 200:
+            violations.append("rule-update.json POST /rules/pipeline_a/start did not return 200")
         if (
-            put["request_body"] != updated_rule
+            updated_rule is None
+            or put["request_body"] != {**updated_rule, "triggered": False}
             or put["request_sql"] != record["updated_sql"]
-            or any(
-                call["request_body"] is not None or call["request_sql"] is not None
-                for call in calls[1:]
-            )
         ):
             violations.append(
                 "rule-update.json PUT does not send the audited pipeline_a rule "
-                "with only its bound raised"
+                "with only its bound raised and triggered false"
             )
-        adopted = [_rule_update_adopted(call, record["emission_metric"]) for call in calls[1:]]
+        if any(
+            call["request_body"] is not None or call["request_sql"] is not None
+            for call in calls[1:]
+        ):
+            violations.append("rule-update.json start or status reads send a body")
+        adopted = [_rule_update_adopted(call, record["emission_metric"]) for call in calls[2:]]
         if not adopted[-1]:
             violations.append("rule-update.json ends before the updated pipeline_a publishes")
         elif any(adopted[:-1]):
             violations.append("rule-update.json reads the status after the update was adopted")
-        if calls[-2]["end_offset_ns"] - put["end_offset_ns"] >= SWAP3_RULE_UPDATE_TIMEOUT_NS:
+        if calls[-2]["end_offset_ns"] - start["end_offset_ns"] >= SWAP3_RULE_UPDATE_TIMEOUT_NS:
             violations.append("rule-update.json sees the update adopted after the 10 s deadline")
         offsets = [
             int(call[key]) for call in calls for key in ("start_offset_ns", "end_offset_ns")
@@ -952,11 +960,11 @@ def check_swap3_rule_update(leaf: Path) -> list[str]:
         if offsets[0] < 0 or offsets != sorted(offsets) or stamps != sorted(stamps):
             violations.append("rule-update.json calls overlap or run out of order")
         if isinstance(timeline, dict) and (
-            stamps[0] < int(timeline["action_start_timestamp_ns"])
-            or offsets[1] != int(timeline["action_duration_ns"])
-            or stamps[1] != int(timeline["action_end_timestamp_ns"])
+            int(put["start_timestamp_ns"]) < int(timeline["action_start_timestamp_ns"])
+            or int(start["end_offset_ns"]) != int(timeline["action_duration_ns"])
+            or int(start["end_timestamp_ns"]) != int(timeline["action_end_timestamp_ns"])
         ):
-            violations.append("rule-update.json PUT does not span the E-Swap-3 action")
+            violations.append("rule-update.json PUT and start do not span the E-Swap-3 action")
     except (AttributeError, KeyError, TypeError, ValueError):
         violations.append("rule-update.json calls are malformed")
     return violations
@@ -1561,13 +1569,18 @@ def _rule_update_restarted(leaf: Path, rule_after: dict) -> bool:
         timeline.get("action_start_timestamp_ns") if isinstance(timeline, dict) else None
     )
     try:
-        put_answered_ns = record["calls"][0]["end_timestamp_ns"]
+        start = record["calls"][1]
+        start_answered_ns = (
+            start["end_timestamp_ns"]
+            if (start["method"], start["path"]) == ("POST", "/rules/pipeline_a/start")
+            else None
+        )
     except (IndexError, KeyError, TypeError):
-        put_answered_ns = None
+        start_answered_ns = None
     started_at_ms = rule_after.get("lastStartTimestamp")
     return (
-        all(type(value) is int for value in (action_started_ns, put_answered_ns, started_at_ms))
-        and action_started_ns - 1_000_000 <= started_at_ms * 1_000_000 <= put_answered_ns
+        all(type(value) is int for value in (action_started_ns, start_answered_ns, started_at_ms))
+        and action_started_ns - 1_000_000 <= started_at_ms * 1_000_000 <= start_answered_ns
     )
 
 
@@ -1577,13 +1590,13 @@ def check_ekuiper_health(leaf: Path, metadata: dict, experiment: str) -> list[st
     What they show about eKuiper is an outcome (``attempts.ekuiper_health_reasons``), not a
     violation; evidence the harness could not have written for this run is. Only the E-Swap-3
     eKuiper arms start a rule during the run, so elsewhere a new rule start time without a
-    unit restart means something outside the run started it. eKuiper answers the rule
-    update's PUT only after it stopped pipeline_a and started it again, and both steps stamp
-    ``lastStartTimestamp`` with the current wall time in whole milliseconds, so the rule's
-    start time lies between the action start in ``disruption-timeline.json`` and the PUT's
-    answer in ``rule-update.json``. The make-before-break arm deletes pipeline_a during the
-    run, so its ``after`` snapshot is of the replacement rule, which must have started at the
-    action.
+    unit restart means something outside the run started it. The rule update's PUT stops
+    pipeline_a without starting it, and eKuiper answers the start that follows only after it
+    stamped ``lastStartTimestamp`` with the current wall time in whole milliseconds, so the
+    rule's start time lies between the action start in ``disruption-timeline.json`` and the
+    start's answer in ``rule-update.json``. The make-before-break arm deletes pipeline_a
+    during the run, so its ``after`` snapshot is of the replacement rule, which must have
+    started at the action.
     """
     path = leaf / "ekuiper-health.json"
     if not path.is_file():

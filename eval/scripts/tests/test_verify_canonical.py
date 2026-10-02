@@ -932,7 +932,7 @@ def test_ekuiper_health_evidence_the_harness_could_not_have_written_is_rejected(
 
 
 def make_update_health(result: Path, last_start_ms: int = 2_060_010) -> dict:
-    """An eKuiper E-Swap-3 rule-update leaf whose PUT ran from t=60 to 20 ms later."""
+    """An eKuiper E-Swap-3 rule-update leaf whose PUT and start ran from t=60 to 20 ms later."""
     metadata_path = result / "metadata.json"
     metadata = json.loads(metadata_path.read_text())
     metadata.update(experiment="e-swap-3", condition="ekuiper-rule-update")
@@ -949,9 +949,16 @@ def make_update_health(result: Path, last_start_ms: int = 2_060_010) -> dict:
                 "calls": [
                     {
                         "method": "PUT",
+                        "path": "/rules/pipeline_a",
                         "start_timestamp_ns": 2_060_000_000_100,
+                        "end_timestamp_ns": 2_060_010_000_000,
+                    },
+                    {
+                        "method": "POST",
+                        "path": "/rules/pipeline_a/start",
+                        "start_timestamp_ns": 2_060_010_000_100,
                         "end_timestamp_ns": 2_060_020_000_000,
-                    }
+                    },
                 ]
             }
         )
@@ -968,7 +975,7 @@ def make_update_health(result: Path, last_start_ms: int = 2_060_010) -> dict:
 
 
 @pytest.mark.parametrize("last_start_ms", [2_059_999, 2_060_000, 2_060_010, 2_060_020])
-def test_swap3_rule_update_restarts_pipeline_a_within_its_put(
+def test_swap3_rule_update_starts_pipeline_a_again_by_the_start_answer(
     tmp_path: Path, last_start_ms: int
 ) -> None:
     result = make_ekuiper_result(tmp_path)
@@ -986,9 +993,21 @@ def test_swap3_rule_update_restarts_pipeline_a_within_its_put(
         (2_060_021, None),
         (2_060_010, lambda result: (result / "rule-update.json").unlink()),
         (2_060_010, lambda result: (result / "disruption-timeline.json").write_text("{}")),
+        (
+            2_060_010,
+            lambda result: rewrite_json(
+                result / "rule-update.json", lambda record: record["calls"].pop()
+            ),
+        ),
+        (
+            2_060_010,
+            lambda result: rewrite_json(
+                result / "rule-update.json", lambda record: record["calls"].reverse()
+            ),
+        ),
     ],
 )
-def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
+def test_swap3_rule_update_start_time_outside_its_put_and_start_is_rejected(
     tmp_path: Path, last_start_ms: int, mutate: Callable[[Path], object] | None
 ) -> None:
     result = make_ekuiper_result(tmp_path)
@@ -1089,37 +1108,114 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
-                leaf / "rule-update.json", lambda record: record["calls"].reverse()
+                leaf / "rule-update.json",
+                lambda record: record["calls"].reverse(),
             ),
-            "rule-update.json must record one PUT /rules/pipeline_a and the status reads after it",
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
-                leaf / "rule-update.json", lambda record: record["calls"].pop()
+                leaf / "rule-update.json",
+                lambda record: record["calls"].pop(),
             ),
             "rule-update.json ends before the updated pipeline_a publishes",
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
-                leaf / "rule-update.json", lambda record: record.update(calls=record["calls"][:1])
+                leaf / "rule-update.json",
+                lambda record: record.update(calls=record["calls"][:1]),
             ),
-            "rule-update.json must record one PUT /rules/pipeline_a and the status reads after it",
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
-                leaf / "rule-update.json", lambda record: record.update(calls=record["calls"][1:])
+                leaf / "rule-update.json",
+                lambda record: record.update(calls=record["calls"][:2]),
             ),
-            "rule-update.json must record one PUT /rules/pipeline_a and the status reads after it",
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
-                leaf / "rule-update.json", lambda record: record["calls"][0].update(http_status=400)
+                leaf / "rule-update.json",
+                lambda record: record.update(calls=record["calls"][1:]),
+            ),
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"].pop(1),
+            ),
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"].insert(0, record["calls"].pop(1)),
+            ),
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][1].update(path="/rules/pipeline_a/restart"),
+            ),
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"].insert(2, dict(record["calls"][1])),
+            ),
+            (
+                "rule-update.json must record one PUT /rules/pipeline_a, "
+                "one POST /rules/pipeline_a/start and the status reads after them"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][0].update(http_status=400),
             ),
             "rule-update.json PUT /rules/pipeline_a did not return 200",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][1].update(http_status=400),
+            ),
+            "rule-update.json POST /rules/pipeline_a/start did not return 200",
         ),
         (
             "ekuiper-rule-update",
@@ -1143,7 +1239,10 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0].update(request_sql=SWAP3_RETIRED_SQL),
             ),
-            "rule-update.json PUT does not send the audited pipeline_a rule with only its bound raised",
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
         ),
         (
             "ekuiper-rule-update",
@@ -1151,7 +1250,10 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0]["request_body"]["options"].update(concurrency=3),
             ),
-            "rule-update.json PUT does not send the audited pipeline_a rule with only its bound raised",
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
         ),
         (
             "ekuiper-rule-update",
@@ -1159,7 +1261,10 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0]["request_body"]["actions"][0]["mqtt"].update(qos=0),
             ),
-            "rule-update.json PUT does not send the audited pipeline_a rule with only its bound raised",
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
         ),
         (
             "ekuiper-rule-update",
@@ -1167,7 +1272,32 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0]["request_body"].update(sql=SWAP3_RETIRED_SQL),
             ),
-            "rule-update.json PUT does not send the audited pipeline_a rule with only its bound raised",
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][0]["request_body"].pop("triggered"),
+            ),
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][0]["request_body"].update(triggered=True),
+            ),
+            (
+                "rule-update.json PUT does not send the audited pipeline_a rule "
+                "with only its bound raised and triggered false"
+            ),
         ),
         (
             "ekuiper-rule-update",
@@ -1176,6 +1306,22 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 lambda record: record["calls"][0].pop("request_body"),
             ),
             "rule-update.json calls are malformed",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][1].update(request_body={"triggered": True}),
+            ),
+            "rule-update.json start or status reads send a body",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][2].update(request_sql=SWAP3_RETIRED_SQL),
+            ),
+            "rule-update.json start or status reads send a body",
         ),
         (
             "ekuiper-rule-update",
@@ -1200,8 +1346,8 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
                 lambda record: (
-                    record["calls"][1].update(end_offset_ns=10_000_000_001),
-                    record["calls"][2].update(
+                    record["calls"][2].update(end_offset_ns=10_000_000_001),
+                    record["calls"][3].update(
                         start_offset_ns=10_000_000_001, end_offset_ns=10_000_000_002
                     ),
                 ),
@@ -1214,29 +1360,42 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
                 leaf / "rule-update.json",
                 lambda record: record["calls"][0].update(start_timestamp_ns=1_060_004_999_999),
             ),
-            "rule-update.json PUT does not span the E-Swap-3 action",
+            "rule-update.json PUT and start do not span the E-Swap-3 action",
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
-                lambda record: record["calls"][0].update(end_offset_ns=0),
+                lambda record: record["calls"][1].update(end_offset_ns=0),
             ),
-            "rule-update.json PUT does not span the E-Swap-3 action",
+            "rule-update.json PUT and start do not span the E-Swap-3 action",
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
-                lambda record: record["calls"][0].update(end_timestamp_ns=1_060_005_000_000),
+                lambda record: record["calls"][1].update(end_timestamp_ns=1_060_005_000_000),
             ),
-            "rule-update.json PUT does not span the E-Swap-3 action",
+            "rule-update.json PUT and start do not span the E-Swap-3 action",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "disruption-timeline.json",
+                lambda timeline: timeline.update(
+                    action_end_timestamp_ns=1_060_005_000_002,
+                    action_end_offset_ns=2,
+                    action_end_monotonic_ns=5_000_000_002,
+                    action_duration_ns=2,
+                ),
+            ),
+            "rule-update.json PUT and start do not span the E-Swap-3 action",
         ),
         (
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
-                lambda record: record["calls"][1].update(start_offset_ns=0),
+                lambda record: record["calls"][0].update(end_offset_ns=1),
             ),
             "rule-update.json calls overlap or run out of order",
         ),
@@ -1244,7 +1403,23 @@ def test_swap3_rule_update_start_time_outside_its_put_is_rejected(
             "ekuiper-rule-update",
             lambda leaf: rewrite_json(
                 leaf / "rule-update.json",
-                lambda record: record["calls"][2].update(start_timestamp_ns=1_060_005_000_000),
+                lambda record: record["calls"][1].update(start_timestamp_ns=1_060_004_999_999),
+            ),
+            "rule-update.json calls overlap or run out of order",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][2].update(start_offset_ns=0),
+            ),
+            "rule-update.json calls overlap or run out of order",
+        ),
+        (
+            "ekuiper-rule-update",
+            lambda leaf: rewrite_json(
+                leaf / "rule-update.json",
+                lambda record: record["calls"][3].update(start_timestamp_ns=1_060_005_000_000),
             ),
             "rule-update.json calls overlap or run out of order",
         ),
@@ -1271,11 +1446,11 @@ def test_swap3_rule_update_record_of_a_good_run_passes(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     "mutate",
     [
-        # The runner reads again while the last read ended less than 10 s after the PUT, so
+        # The runner reads again while the last read ended less than 10 s after the start, so
         # the read that sees output may itself start after the deadline.
         lambda record: (
-            record["calls"][1].update(end_offset_ns=10_000_000_000),
-            record["calls"][2].update(start_offset_ns=10_010_000_000, end_offset_ns=10_011_000_000),
+            record["calls"][2].update(end_offset_ns=10_000_000_000),
+            record["calls"][3].update(start_offset_ns=10_010_000_000, end_offset_ns=10_011_000_000),
         ),
         # Like the make-before-break arm, adoption is the sink count alone; whether the rule
         # still runs is judged by the health snapshot after the run.
@@ -1497,7 +1672,8 @@ def swap3_rule_replacement(emitted: int = 1) -> dict:
 
 
 def swap3_rule_update(emitted: tuple[int, ...] = (0, 1), sql: str | None = None) -> dict:
-    """One in-place update whose PUT is the 1 ns action, then a status read per count."""
+    """One in-place update whose PUT and start are the 1 ns action, then a status read per
+    count."""
     updated_sql = SWAP3_RETIRED_SQL.replace("temperature >= 50", "temperature >= 60")
     sent_sql = updated_sql if sql is None else sql
     start = 1_060_005_000_000
@@ -1505,15 +1681,27 @@ def swap3_rule_update(emitted: tuple[int, ...] = (0, 1), sql: str | None = None)
         {
             "method": "PUT",
             "path": "/rules/pipeline_a",
-            "request_body": {**SWAP3_RETIRED_RULE, "sql": sent_sql},
+            "request_body": {**SWAP3_RETIRED_RULE, "sql": sent_sql, "triggered": False},
             "request_sql": sent_sql,
             "http_status": 200,
             "body": "Rule pipeline_a was updated successfully.",
             "start_offset_ns": 0,
+            "end_offset_ns": 0,
+            "start_timestamp_ns": start,
+            "end_timestamp_ns": start,
+        },
+        {
+            "method": "POST",
+            "path": "/rules/pipeline_a/start",
+            "request_body": None,
+            "request_sql": None,
+            "http_status": 200,
+            "body": "Rule pipeline_a was started",
+            "start_offset_ns": 0,
             "end_offset_ns": 1,
             "start_timestamp_ns": start,
             "end_timestamp_ns": start + 1,
-        }
+        },
     ]
     for index, count in enumerate(emitted, start=1):
         last = index == len(emitted)

@@ -4131,16 +4131,18 @@ def ekuiper_updated_rule(audit: Path) -> dict:
 def update_ekuiper_rule(
     output: Path, rule: dict, started_monotonic_ns: int, timeout_secs: float = 10.0
 ) -> tuple[int, int]:
-    """Update pipeline_a in place with one PUT and record each REST call in ``rule-update.json``.
+    """Update pipeline_a in place and record each REST call in ``rule-update.json``.
 
-    Unlike a stop and start, the update keeps the shared stream's MQTT subscription open; see
-    docs/benchmarks/ekuiper-comparator.md. eKuiper answers the PUT once it has stopped the
-    rule and started it again on a new topology, so that answer ends the arm's action, as the
-    runtime's answer ends a WAFER hot swap. The status reads after it wait for the updated
-    rule's output with the make-before-break arm's signal and deadline. The new topology's
-    sink counters start at zero, so a count above zero is output of the updated rule.
+    The update is eKuiper's two-call form: a PUT of the rule with ``triggered`` false, which
+    stops pipeline_a and saves the new rule, then a start, which runs it on a new topology.
+    Unlike a stop and start, this keeps the shared stream's MQTT subscription open, and unlike
+    a single PUT of a triggered rule, it leaves no planned topology attached to that
+    subscription; see docs/benchmarks/ekuiper-comparator.md. The answer to the start ends the
+    arm's action, as the runtime's answer ends a WAFER hot swap. The status reads after it wait
+    for the updated rule's output with the make-before-break arm's signal and deadline. The new
+    topology's sink counters start at zero, so a count above zero is output of the updated rule.
 
-    Returns the monotonic and Unix-epoch times at which the PUT was answered.
+    Returns the monotonic and Unix-epoch times at which the start was answered.
     """
     calls: list[dict] = []
     record = {
@@ -4176,22 +4178,25 @@ def update_ekuiper_rule(
         return status, body
 
     try:
-        status, body = call("PUT", "/rules/pipeline_a", rule)
+        status, body = call("PUT", "/rules/pipeline_a", {**rule, "triggered": False})
         if status != 200:
             raise RuntimeError(f"eKuiper refused the pipeline_a update: {status} {body}")
-        put = calls[0]
+        status, body = call("POST", "/rules/pipeline_a/start")
+        if status != 200:
+            raise RuntimeError(f"eKuiper did not start the updated pipeline_a: {status} {body}")
+        start = calls[1]
         while True:
             status, body = call("GET", "/rules/pipeline_a/status")
             if ekuiper_rule_emitted(status, body):
                 break
-            if calls[-1]["end_offset_ns"] - put["end_offset_ns"] >= timeout_secs * 1_000_000_000:
+            if calls[-1]["end_offset_ns"] - start["end_offset_ns"] >= timeout_secs * 1_000_000_000:
                 raise RuntimeError(
                     f"pipeline_a did not publish after its update within {timeout_secs:g} s"
                 )
             time.sleep(0.01)
     finally:
         write_json_atomic(output / "rule-update.json", record)
-    return started_monotonic_ns + put["end_offset_ns"], put["end_timestamp_ns"]
+    return started_monotonic_ns + start["end_offset_ns"], start["end_timestamp_ns"]
 
 
 def hot_swap_offsets(item: RunItem) -> list[float]:
