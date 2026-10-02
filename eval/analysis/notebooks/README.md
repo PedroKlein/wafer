@@ -24,6 +24,12 @@ Tables remain inline. Final figures are also written as PDF and PNG, and final t
 
 Missing and failed diagnostic conditions remain `PENDING` with a null value. They are not converted to zero or omitted. Canonical mode is different: wrong-host, dirty, mixed-SHA, throttled, failed, malformed, incomplete, or unapproved input raises an error instead of rendering a partial result.
 
+## Verdicts
+
+Every threshold a notebook compares against comes from `verdict_rules` in `eval/canonical-matrix.json`, read through `wafer_analysis.verdicts.declared_thresholds()`; no notebook or table builder keeps its own copy, and plot reference lines read the same values. A criterion with a threshold is `PASS` only when its one-sided 95% bound on the favourable side meets the threshold, `FAIL` only when the one-sided 95% bound on the other side misses it, and `INCONCLUSIVE` otherwise. The bounds are the two ends of a two-sided 90% percentile bootstrap interval that resamples runs, or run pairs for E-Perf-4. A criterion with no population to bound is `PENDING`. Zero-tolerance counts (loss, duplication, escapes, runs the system under test stopped) are compared exactly and never get an interval. E-Perf-10 keeps its tested-rate bracket (`PASS`, `FAIL` or `CENSORED`) and E-Val-1 keeps its every-run band. No significance test is run: verdicts come from bootstrap bounds only.
+
+Saved verdict tables carry `<prefix>_verdict`, `<prefix>_threshold`, `<prefix>_flips_at` (the bound the threshold has to cross to change the verdict) and `<prefix>_ci_half_width` for each bounded criterion, and `verdict` where a row combines criteria. `eval/RESULT-CONTRACT.md` lists every threshold, its rule and its columns.
+
 Percentile summaries are never presented as an empirical CDF.
 
 `test_notebook_execution.py` executes every notebook against both fixture states; `test_focused.py` checks labels.

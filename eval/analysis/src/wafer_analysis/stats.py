@@ -11,24 +11,21 @@ def _require_samples(*samples: np.ndarray) -> None:
 
 
 def bootstrap_ci(
-    data: np.ndarray, n_resamples: int = 10000, ci: float = 0.95
+    data: np.ndarray, n_resamples: int = 10000, ci: float = 0.95, *, statistic=np.median
 ) -> tuple[float, float]:
-    """Bootstrap confidence interval for the median.
+    """Percentile bootstrap interval for a one-sample statistic, the median by default.
 
     Returns (lower_bound, upper_bound).
     """
     _require_samples(data)
     rng = np.random.default_rng(42)
-    medians = np.array(
+    estimates = np.array(
         [
-            np.median(rng.choice(data, size=len(data), replace=True))
+            statistic(rng.choice(data, size=len(data), replace=True))
             for _ in range(n_resamples)
         ]
     )
-    alpha = (1 - ci) / 2
-    lower = float(np.percentile(medians, alpha * 100))
-    upper = float(np.percentile(medians, (1 - alpha) * 100))
-    return lower, upper
+    return _percentile_interval(estimates, ci)
 
 
 def cliffs_delta(a: np.ndarray, b: np.ndarray) -> tuple[float, str]:

@@ -36,6 +36,7 @@ from wafer_analysis.canonical import (
     target_latency_table,
     validation_gate_table,
 )
+from wafer_analysis import paths
 from wafer_analysis.focused import admitted_runs
 from wafer_analysis.stats import bootstrap_ci, cliffs_delta, median_shift_ci
 
@@ -81,7 +82,9 @@ def test_target_latency_uses_runs_and_reports_ci_effect_threshold_and_boundary()
     assert wafer["pooled_loss_ci95_high"] == 0
     assert wafer["mean_achieved_ratio"] == 1
     assert wafer["median_achieved_rate_msg_s"] == 1_000
-    assert bool(wafer["delivery_good"])
+    assert wafer["delivery_verdict"] == "PASS"
+    assert wafer["p95_ratio_verdict"] == "PASS"
+    assert wafer["verdict"] == "PASS"
     assert "pooled loss <= 0.01" in wafer["threshold"]
     assert wafer["claim_boundary"] == "matched 1,000 msg/s target load; not capacity"
     assert table["thesis_evidence"].eq(True).all()
@@ -1458,9 +1461,10 @@ def test_swap3_table_separates_event_metrics_and_applies_hot_swap_threshold() ->
     wafer = table.loc[table.strategy == "wafer-hotswap"].iloc[0]
     assert (
         wafer["threshold"]
-        == "upper bootstrap CI for median dip < 5%; zero loss; zero duplication"
+        == "one-sided 95% upper bound of the median dip < 5 percent; zero loss; zero duplication"
     )
     assert wafer["dip_ci95_high_percent"] < 5
+    assert wafer["verdict"] == "PASS"
 
 
 def swap4_runs() -> list[dict]:
@@ -1504,7 +1508,7 @@ def test_swap4_table_uses_one_event_per_run_and_reports_p95() -> None:
     assert table.loc[0, "drain_right_censored_runs"] == 0
     assert (
         table.loc[0, "threshold"]
-        == "across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s"
+        == "one-sided 95% upper bound of the across-run p95 sink gap < 100 ms; zero full-run loss; zero duplication; no receive at or after 130 s"
     )
     broken = swap4_runs()
     broken[0]["successful_swaps"] = 2
@@ -1638,9 +1642,9 @@ def test_branch_isolation_table_contrasts_each_attack_with_the_control() -> None
         branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 900})
     ).set_index("condition")
     assert table.loc["panic-attack", "throughput_drop_percent"] == pytest.approx(100 * 5 / 1_001)
-    assert table.loc["panic-attack", "isolated"]
+    assert table.loc["panic-attack", "verdict"] == "PASS"
     assert table.loc["epoch-loop-attack", "throughput_drop_percent"] == pytest.approx(100 * 100 / 1_001)
-    assert not table.loc["epoch-loop-attack", "isolated"]
+    assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
     low, high = table.loc["epoch-loop-attack", ["drop_ci95_low_percent", "drop_ci95_high_percent"]]
     assert low <= 100 * 100 / 1_001 <= high
     assert table.loc["epoch-loop-attack", "throughput_cliffs_delta"] == -1.0
@@ -1749,8 +1753,8 @@ def test_payload_table_pairs_wafer_and_native_runs_by_run_index() -> None:
     assert table.loc["10kb", "boundary_p50_ci95_high_ns"] <= 17_000
     assert table.loc["10kb", "native_median_service_p50_ns"] == pytest.approx(35_500)
     assert table.loc["10kb", "cliffs_delta_vs_native"] > 0
-    assert table.loc["10kb", "below_per_hop_reference"]
-    assert not table.loc["100kb", "below_per_hop_reference"]
+    assert table.loc["10kb", "per_hop_reference_verdict"] == "PASS"
+    assert table.loc["100kb", "per_hop_reference_verdict"] == "FAIL"
     assert table.loc["1kb", "wafer_pooled_loss"] == pytest.approx(1 / (30 * 60_000))
     assert "in-process path only" in table.loc["1kb", "claim_boundary"]
     assert "10 KiB packet limit" in table.loc["1kb", "claim_boundary"]
@@ -2044,8 +2048,9 @@ def test_branch_isolation_counts_an_attack_run_the_runtime_did_not_survive() -> 
 
     assert table.loc["panic-attack", "N_runs"] == 30
     assert table.loc["panic-attack", "runs_stopped_early"] == 1
-    assert not table.loc["panic-attack", "isolated"]
-    assert table.loc["epoch-loop-attack", "isolated"]
+    assert table.loc["panic-attack", "drop_verdict"] == "PASS"
+    assert table.loc["panic-attack", "verdict"] == "FAIL"
+    assert table.loc["epoch-loop-attack", "verdict"] == "PASS"
 
 
 def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
@@ -2055,3 +2060,228 @@ def test_recovery_table_counts_a_run_the_runtime_did_not_survive() -> None:
     row = recovery_table(records).iloc[0]
 
     assert (row["N_runs"], row["runs_stopped_early"], row["recovery_samples"]) == (30, 1, 87)
+
+
+EKUIPER_MEDIAN_P95_NS = 122_015.5
+
+
+def wafer_target_row(edit) -> pd.Series:
+    records = percentile_runs(("wafer", "native", "ekuiper"))
+    for record in records:
+        if record["condition"] == "wafer":
+            edit(record)
+    table = target_latency_table(records).set_index("condition")
+    assert table.loc[["native", "ekuiper"], "verdict"].isna().all()
+    return table.loc["wafer"]
+
+
+@pytest.mark.parametrize(("factor", "verdict"), [(1.0, "PASS"), (2.0, "INCONCLUSIVE"), (3.0, "FAIL")])
+def test_target_latency_ratio_verdict_reads_one_sided_bounds_over_runs(factor: float, verdict: str) -> None:
+    wafer_p95 = [factor * EKUIPER_MEDIAN_P95_NS + (run - 15.5) * 4_000 for run in range(1, 31)]
+    wafer = wafer_target_row(lambda record: record.update(p95_ns=wafer_p95[record["run_index"] - 1]))
+    _, low, high = median_shift_ci(
+        wafer_p95, [122_000 + run for run in range(1, 31)], relative=True, ci=0.9
+    )
+    assert (wafer["p95_ratio_verdict"], wafer["verdict"]) == (verdict, verdict)
+    assert wafer["p95_ratio_threshold"] == 2.0
+    assert wafer["p95_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
+    assert wafer["p95_ratio_flips_at"] == pytest.approx(
+        {"PASS": 1 + high, "INCONCLUSIVE": 1 + low, "FAIL": 1 + low}[verdict]
+    )
+
+
+@pytest.mark.parametrize(
+    ("lost", "verdict"), [((0, 0), "PASS"), ((0, 1_200), "INCONCLUSIVE"), ((3_000, 3_000), "FAIL")]
+)
+def test_target_latency_loss_verdict_resamples_runs(lost: tuple[int, int], verdict: str) -> None:
+    wafer = wafer_target_row(
+        lambda record: record.update(received_unique=60_000 - lost[record["run_index"] % 2])
+    )
+    assert wafer["loss_verdict"] == verdict
+    assert wafer["delivery_verdict"] == verdict
+    assert wafer["verdict"] == verdict
+
+
+@pytest.mark.parametrize(
+    ("ratios", "verdict"),
+    [((1.0, 1.0), "PASS"), ((1.0, 0.98), "INCONCLUSIVE"), ((0.95, 0.95), "FAIL")],
+)
+def test_target_latency_achieved_ratio_verdict_bounds_the_mean_over_runs(
+    ratios: tuple[float, float], verdict: str
+) -> None:
+    wafer = wafer_target_row(
+        lambda record: record.update(achieved_ratio=ratios[record["run_index"] % 2])
+    )
+    low, high = bootstrap_ci(np.asarray([ratios[run % 2] for run in range(1, 31)]), ci=0.9, statistic=np.mean)
+    assert wafer["achieved_ratio_verdict"] == verdict
+    assert wafer["achieved_ratio_ci_half_width"] == pytest.approx((high - low) / 2)
+    assert wafer["delivery_verdict"] == verdict
+
+
+def test_one_duplicate_fails_target_load_delivery_exactly() -> None:
+    wafer = wafer_target_row(lambda record: record.update(duplicates=int(record["run_index"] == 1)))
+    assert (wafer["loss_verdict"], wafer["achieved_ratio_verdict"]) == ("PASS", "PASS")
+    assert (wafer["delivery_verdict"], wafer["verdict"]) == ("FAIL", "FAIL")
+
+
+def test_branch_isolation_is_inconclusive_when_the_drop_bounds_straddle_the_threshold() -> None:
+    records = branch_records({"control": 1_000, "panic-attack": 990, "epoch-loop-attack": 900})
+    for record in records:
+        rate = {"control": 1_000, "panic-attack": 990, "epoch-loop-attack": 900}[record["condition"]]
+        record["branches"]["branch_a"]["throughput"]["mean_messages_per_second"] = (
+            rate + 2 * (record["run_index"] - 15.5)
+        )
+    table = branch_isolation_table(records).set_index("condition")
+    attack = table.loc["panic-attack"]
+    assert attack["throughput_drop_percent"] == pytest.approx(1.0)
+    assert (attack["drop_verdict"], attack["verdict"]) == ("INCONCLUSIVE", "INCONCLUSIVE")
+    assert attack["drop_threshold"] == 1.0
+    assert attack["drop_flips_at"] - attack["drop_ci_half_width"] < 1.0 < attack["drop_flips_at"]
+    assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
+    assert pd.isna(table.loc["control", "verdict"]) and pd.isna(table.loc["control", "drop_verdict"])
+
+
+def test_branch_isolation_drop_is_pending_without_a_control_measurement() -> None:
+    records = [
+        {"condition": "control", "run_index": record["run_index"], "sut_outcome_reasons": ["runtime-exit"]}
+        if record["condition"] == "control"
+        else record
+        for record in branch_records({"control": 1_000, "panic-attack": 995, "epoch-loop-attack": 995})
+    ]
+    records[-1] = {"condition": "epoch-loop-attack", "run_index": 30, "sut_outcome_reasons": ["runtime-exit"]}
+    table = branch_isolation_table(records).set_index("condition")
+    assert table.loc["panic-attack", "drop_verdict"] == "PENDING"
+    assert table.loc["panic-attack", "verdict"] == "PENDING"
+    assert table.loc["epoch-loop-attack", "drop_verdict"] == "PENDING"
+    assert table.loc["epoch-loop-attack", "verdict"] == "FAIL"
+
+
+SWAP3_DIPS = {
+    "PASS": lambda run: 2.0,
+    "INCONCLUSIVE": lambda run: 3.5 + 0.1 * run,
+    "FAIL": lambda run: 10.0,
+}
+
+
+@pytest.mark.parametrize("verdict", list(SWAP3_DIPS))
+def test_swap3_dip_verdict_reads_the_one_sided_upper_bound(verdict: str) -> None:
+    runs = swap3_runs()
+    for run in runs:
+        if run["strategy"] == "wafer-hotswap":
+            run["dip_percent"] = SWAP3_DIPS[verdict](run["run_index"])
+    table = swap3_table(runs).set_index("strategy")
+    wafer = table.loc["wafer-hotswap"]
+    low, high = bootstrap_ci(
+        np.asarray([SWAP3_DIPS[verdict](run) for run in range(1, 31)]), ci=0.9
+    )
+    assert (wafer["dip_verdict"], wafer["verdict"]) == (verdict, verdict)
+    assert wafer["dip_threshold"] == 5.0
+    assert wafer["dip_flips_at"] in (low, high)
+    assert wafer["dip_ci_half_width"] == pytest.approx((high - low) / 2)
+    assert table.loc[["wafer-restart", "ekuiper-restart"], "verdict"].isna().all()
+
+
+def test_swap3_loss_fails_the_hot_swap_whatever_the_dip() -> None:
+    runs = swap3_runs()
+    runs[0]["loss"] = 1
+    wafer = swap3_table(runs).set_index("strategy").loc["wafer-hotswap"]
+    assert (wafer["dip_verdict"], wafer["verdict"]) == ("PASS", "FAIL")
+
+
+def test_swap3_dip_is_pending_when_no_hot_swap_run_kept_running() -> None:
+    runs = [
+        {"strategy": "wafer-hotswap", "run_index": run["run_index"], "sut_outcome_reasons": ["swap-failed"]}
+        if run["strategy"] == "wafer-hotswap"
+        else run
+        for run in swap3_runs()
+    ]
+    wafer = swap3_table(runs).set_index("strategy").loc["wafer-hotswap"]
+    assert (wafer["dip_verdict"], wafer["verdict"]) == ("PENDING", "FAIL")
+    assert pd.isna(wafer["dip_flips_at"]) and pd.isna(wafer["dip_ci_half_width"])
+
+
+@pytest.mark.parametrize(
+    ("gaps", "verdict"),
+    [
+        ([run * 1_000_000 for run in range(1, 31)], "PASS"),
+        ([150_000_000 if run > 28 else run * 1_000_000 for run in range(1, 31)], "INCONCLUSIVE"),
+        ([200_000_000] * 30, "FAIL"),
+    ],
+)
+def test_swap4_gap_verdict_bounds_the_across_run_p95(gaps: list[int], verdict: str) -> None:
+    runs = swap4_runs()
+    for run, gap in zip(runs, gaps, strict=True):
+        run["sink_observed_output_gap_ns"] = gap
+    row = swap4_table(runs).iloc[0]
+    assert (row["p95_gap_verdict"], row["verdict"]) == (verdict, verdict)
+    assert row["p95_gap_threshold"] == 100_000_000
+    assert row["p95_sink_gap_ns"] == sorted(gaps)[28]
+
+
+def test_swap4_loss_fails_the_burst_swap_whatever_the_gap() -> None:
+    runs = swap4_runs()
+    runs[0]["sequence"]["duplicates"] = 1
+    row = swap4_table(runs).iloc[0]
+    assert (row["p95_gap_verdict"], row["verdict"]) == ("PASS", "FAIL")
+
+
+def test_payload_reference_is_inconclusive_when_its_bounds_straddle_the_reference() -> None:
+    records = payload_records()
+    for record in records:
+        if record["condition"] == "100kb":
+            record["service_p50_ns"] -= 11_000
+    row = payload_table(records).set_index("condition").loc["100kb"]
+    assert row["boundary_p50_ns"] == pytest.approx(50_000)
+    assert row["per_hop_reference_verdict"] == "INCONCLUSIVE"
+    assert row["per_hop_reference_threshold"] == 50_000
+    assert row["per_hop_reference_ci_half_width"] == pytest.approx(1_000)
+    assert "a reference, not a pass criterion" in row["threshold"]
+
+
+def declare_threshold(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, criterion: str, value: float | None
+) -> None:
+    """Point the analysis at a copy of the canonical matrix with one threshold changed or the table removed."""
+    matrix = json.loads((paths._find_repo_root() / "eval/canonical-matrix.json").read_text())
+    if value is None:
+        del matrix["verdict_rules"]
+    else:
+        row = next(
+            row for row in matrix["verdict_rules"]["thresholds"] if row["criterion"] == criterion
+        )
+        row["value"] = value
+    (tmp_path / "eval").mkdir()
+    (tmp_path / "eval/canonical-matrix.json").write_text(json.dumps(matrix))
+    monkeypatch.setattr(paths, "_find_repo_root", lambda: tmp_path)
+
+
+def test_a_changed_dip_threshold_in_the_matrix_changes_the_swap3_verdict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert swap3_table(swap3_runs()).set_index("strategy").loc["wafer-hotswap", "verdict"] == "PASS"
+    declare_threshold(tmp_path, monkeypatch, "e-swap-3-dip", 1.0)
+    wafer = swap3_table(swap3_runs()).set_index("strategy").loc["wafer-hotswap"]
+    assert (wafer["verdict"], wafer["dip_threshold"]) == ("FAIL", 1.0)
+    assert "median dip < 1 percent" in wafer["threshold"]
+
+
+def test_a_changed_competitive_ratio_in_the_matrix_moves_the_capacity_bracket(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cells = (["good", "good", "good", "bad", "bad"], ["good", "good", "good", "good", "bad"])
+    assert capacity_decision(*cells)["status"] == "CENSORED"
+    declare_threshold(tmp_path, monkeypatch, "e-perf-10-competitive-ratio", 0.5)
+    decision = capacity_decision(*cells)
+    assert (decision["branch"], decision["status"], decision["threshold"]) == (
+        "worst-case-pass",
+        "PASS",
+        0.5,
+    )
+
+
+def test_tables_refuse_a_matrix_without_declared_thresholds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    declare_threshold(tmp_path, monkeypatch, "", None)
+    with pytest.raises(ValueError, match="declares no verdict_rules"):
+        swap3_table(swap3_runs())

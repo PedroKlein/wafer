@@ -1,6 +1,6 @@
 # Non-functional requirements
 
-This reference lists the current quantitative requirements. The narrative explanation is in `docs/architecture/07-quality-requirements.md`; the executable definitions are in `eval/canonical-matrix.json`.
+This reference lists the current quantitative requirements. The narrative explanation is in `docs/architecture/07-quality-requirements.md`; the executable definitions are in `eval/canonical-matrix.json`. Its `verdict_rules` table declares every threshold below once. A criterion compared with a run-level statistic passes only when the one-sided 95% bootstrap bound on its favourable side meets the threshold, fails only when the bound on the other side misses it, and is otherwise inconclusive; zero-tolerance counts are exact. `eval/RESULT-CONTRACT.md` lists the rule for each criterion.
 
 ## RQ1: performance
 
@@ -32,7 +32,7 @@ E-Backpressure evaluates `slow`, `drop`, and `dead-letter` separately. Each poli
 |---|---|---|---|
 | NFR-SWAP-1 | Repeated stateless swap pause is bounded. | p95 sink-observed output gap < 100 ms. | E-Swap-1 |
 | NFR-SWAP-2 | Repeated swaps preserve sequence accounting. | Zero loss and duplication. | E-Swap-2 |
-| NFR-SWAP-3 | Event-aligned output disruption is bounded. | For 30 WAFER hot-swap runs, upper bootstrap CI for median dip < 5 percent with zero loss and duplication; restart strategies are measured comparators. | E-Swap-3 |
+| NFR-SWAP-3 | Event-aligned output disruption is bounded. | For 30 WAFER hot-swap runs, the one-sided 95% upper bootstrap bound of the median dip < 5 percent with zero loss and duplication; restart strategies are measured comparators. | E-Swap-3 |
 | NFR-SWAP-4 | One swap remains bounded during a true transient burst. | Across-run p95 sink gap < 100 ms with zero full-run loss and duplication over 30 independent 1,000/2,000/1,000 msg/s runs; source-origin primary and drain counts reconcile and no receive occurs at or after 130 s. | E-Swap-4 |
 | NFR-SWAP-5 | A process-time failure rolls back within the canary policy. | Pipeline continues and sequence evidence remains lossless. | E-Swap-5 |
 

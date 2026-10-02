@@ -1374,7 +1374,9 @@
     "diagnostic_batches_excluded": true,
     "attempt_policy": {
       "infrastructure_retries": 1,
-      "gate_experiments": ["e-val-1"]
+      "gate_experiments": [
+        "e-val-1"
+      ]
     },
     "wafer_config_catalog": [
       {
@@ -1651,6 +1653,299 @@
         "experiment": "e-val-1",
         "condition": "delay-50ms",
         "config": "eval/configs/canonical/e-val-1.toml"
+      }
+    ]
+  },
+  "verdict_rules": {
+    "schema_version": 1,
+    "one_sided_confidence": 0.95,
+    "resampling": "percentile bootstrap over runs, or over run pairs where the design pairs runs by index",
+    "pilot_data": "laptop shakedowns from 2026-07-21, Raspberry Pi diagnostic batches and capacity scouts",
+    "thresholds": [
+      {
+        "criterion": "e-val-1-p99-low",
+        "experiments": [
+          "e-val-1"
+        ],
+        "value": 45000000,
+        "unit": "ns",
+        "direction": ">=",
+        "statistic": "p99 latency of each run with the injected 50 ms delay",
+        "rule": "every-run",
+        "role": "gate",
+        "origin": "Lower end of the tolerance for the injected 50 ms delay, introduced on 2026-07-21 together with the delay-injector plugin and its first test",
+        "pilot_data_visible": "unknown"
+      },
+      {
+        "criterion": "e-val-1-p99-high",
+        "experiments": [
+          "e-val-1"
+        ],
+        "value": 55017471,
+        "unit": "ns",
+        "direction": "<=",
+        "statistic": "p99 latency of each run with the injected 50 ms delay",
+        "rule": "every-run",
+        "role": "gate",
+        "origin": "55 ms, widened on 2026-09-02 to the upper end of the 3-significant-digit HdrHistogram bucket that holds 55 ms, when diagnostic runs already existed",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-1-p95-ratio",
+        "experiments": [
+          "e-perf-1"
+        ],
+        "value": 2.0,
+        "unit": "ratio",
+        "direction": "<=",
+        "statistic": "median WAFER run p95 / median eKuiper run p95 at 1,000 msg/s",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "RQ1 tail-latency criterion (p95 within 2x eKuiper), recorded 2026-07-04 before any eKuiper run; run-level form fixed 2026-09-04",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-perf-1-pooled-loss",
+        "experiments": [
+          "e-perf-1"
+        ],
+        "value": 0.01,
+        "unit": "fraction",
+        "direction": "<=",
+        "statistic": "undelivered over intended messages, summed over the runs of one system",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "1 percent loss limit of the rate sweep (2026-08-31), applied to the target load on 2026-09-04",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-1-achieved-ratio",
+        "experiments": [
+          "e-perf-1"
+        ],
+        "value": 0.99,
+        "unit": "ratio",
+        "direction": ">=",
+        "statistic": "mean over the runs of one system of achieved / offered rate",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "Target-load delivery rule added on 2026-09-04",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-1-duplicates",
+        "experiments": [
+          "e-perf-1"
+        ],
+        "value": 0,
+        "unit": "messages",
+        "direction": "<=",
+        "statistic": "duplicate deliveries summed over the runs of one system",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "Target-load delivery rule added on 2026-09-04",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-4-boundary-p50",
+        "experiments": [
+          "e-perf-4"
+        ],
+        "value": 50000,
+        "unit": "ns",
+        "direction": "<",
+        "statistic": "median over run pairs of WAFER minus native service-time p50 at one payload size",
+        "rule": "one-sided-bound",
+        "role": "reference",
+        "origin": "RQ1 per-hop reference (under 50 microseconds per boundary crossing), recorded 2026-07-04 before any payload run; paired WAFER-minus-native form adopted 2026-10-01",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-perf-10-cell-loss",
+        "experiments": [
+          "e-perf-10"
+        ],
+        "value": 0.01,
+        "unit": "fraction",
+        "direction": "<=",
+        "statistic": "pooled loss of one system at one tested rate",
+        "rule": "per-rate-cell",
+        "role": "criterion",
+        "origin": "1 percent loss limit of the rate sweep, introduced 2026-08-31",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-10-cell-achieved-ratio",
+        "experiments": [
+          "e-perf-10"
+        ],
+        "value": 0.99,
+        "unit": "ratio",
+        "direction": ">=",
+        "statistic": "mean achieved / offered ratio of one system at one tested rate",
+        "rule": "per-rate-cell",
+        "role": "criterion",
+        "origin": "Added with the trace-free capacity envelope on 2026-09-04",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-10-cell-duplicates",
+        "experiments": [
+          "e-perf-10"
+        ],
+        "value": 0,
+        "unit": "messages",
+        "direction": "<=",
+        "statistic": "duplicate deliveries of one system at one tested rate",
+        "rule": "per-rate-cell",
+        "role": "criterion",
+        "origin": "Added with the trace-free capacity envelope on 2026-09-04",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-perf-10-competitive-ratio",
+        "experiments": [
+          "e-perf-10"
+        ],
+        "value": 0.7,
+        "unit": "ratio",
+        "direction": ">=",
+        "statistic": "WAFER / eKuiper tested-grid delivery ceiling, as the interval between the two brackets",
+        "rule": "tested-rate-bracket",
+        "role": "criterion",
+        "origin": "RQ1 competitiveness criterion (within 30 percent of eKuiper), recorded 2026-07-04 before any eKuiper run; bracketed ratio form fixed 2026-09-04 and 2026-10-01",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-iso-containment",
+        "experiments": [
+          "e-iso-1",
+          "e-iso-2",
+          "e-iso-3",
+          "e-iso-4",
+          "e-iso-5",
+          "e-iso-6"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "runs of one attack that its expected mechanism did not contain, counting runs the runtime did not survive",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "RQ2: every attack scenario contained, recorded 2026-07-04 before the first containment run",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-iso-7-throughput-drop",
+        "experiments": [
+          "e-iso-7"
+        ],
+        "value": 1.0,
+        "unit": "percent",
+        "direction": "<",
+        "statistic": "drop of the median branch-A run throughput below the control median, in percent of the control median",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "RQ2 healthy-branch criterion (under 1 percent throughput impact), recorded 2026-07-04 before the first E-Iso-7 run",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-iso-7-stopped-runs",
+        "experiments": [
+          "e-iso-7"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "attack runs the runtime did not survive",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "Runs the system under test ended counted as failures since 2026-10-01",
+        "pilot_data_visible": true
+      },
+      {
+        "criterion": "e-swap-2-lossless",
+        "experiments": [
+          "e-swap-2"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "E-Swap-1 runs with loss, duplicates or an early stop",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "RQ3 message accounting (zero loss, zero duplication), recorded by 2026-07-12, before any E-Swap run",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-swap-3-dip",
+        "experiments": [
+          "e-swap-3"
+        ],
+        "value": 5.0,
+        "unit": "percent",
+        "direction": "<",
+        "statistic": "median over WAFER hot-swap runs of the event-aligned throughput dip",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "RQ3 throughput-dip criterion (under 5 percent), recorded 2026-07-04 before any E-Swap-3 run; upper-bound form fixed 2026-09-04",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-swap-3-lossless",
+        "experiments": [
+          "e-swap-3"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "WAFER hot-swap runs with loss, duplicates or an early stop",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "RQ3 message accounting (zero loss, zero duplication), recorded by 2026-07-12, before any E-Swap run",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-swap-4-p95-gap",
+        "experiments": [
+          "e-swap-4"
+        ],
+        "value": 100000000,
+        "unit": "ns",
+        "direction": "<",
+        "statistic": "nearest-rank p95 over runs of the sink-observed gap, one swap per run",
+        "rule": "one-sided-bound",
+        "role": "criterion",
+        "origin": "100 ms swap pause target of the first specification (2026-02-14), written before the runtime existed; across-run sink-gap form fixed 2026-09-04",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-swap-4-lossless",
+        "experiments": [
+          "e-swap-4"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "runs with full-run loss, duplicates or an early stop",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "RQ3 message accounting (zero loss, zero duplication), recorded by 2026-07-12, before any E-Swap run",
+        "pilot_data_visible": false
+      },
+      {
+        "criterion": "e-swap-5-rollback",
+        "experiments": [
+          "e-swap-5"
+        ],
+        "value": 0,
+        "unit": "runs",
+        "direction": "<=",
+        "statistic": "runs with a failed rollback, no output after the final rollback, loss or duplicates",
+        "rule": "exact-count",
+        "role": "criterion",
+        "origin": "RQ3 failed-replacement recovery (the pipeline survives and loses no message), recorded by 2026-07-19, before any E-Swap run",
+        "pilot_data_visible": false
       }
     ]
   }

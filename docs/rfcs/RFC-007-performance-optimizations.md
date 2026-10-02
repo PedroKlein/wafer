@@ -70,7 +70,7 @@ Do NOT adopt `Sender::reserve`. In WAFER's post-refactor loops, `sender.send(out
 
 ### Decision 8: Benchmark-First Strategy
 
-Establish measurements before optimizing. Phase A: local development benchmarks (criterion, fast iteration). Phase B: evaluation-grade benchmarks (RPi 4, Jetson Orin — fixed CPU frequency, isolated cores, open-loop load gen, N=30-50 reps, 30s warmup exclusion, HdrHistogram, Mann-Whitney U, Bootstrap 95% CI). Phase C: cross-architecture validation on x86.
+Establish measurements before optimizing. Phase A: local development benchmarks (criterion, fast iteration). Phase B: evaluation-grade benchmarks (RPi 4, Jetson Orin; fixed CPU frequency, isolated cores, open-loop load gen, N=30-50 reps, 30s warmup exclusion, HdrHistogram, Bootstrap 95% CI). Phase C: cross-architecture validation on x86.
 
 ### Decision 9: Memory Limits Per-Node (StoreLimits) — Implement Now
 
