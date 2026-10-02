@@ -418,6 +418,84 @@ def test_eperf1_is_labelled_as_target_load_not_saturation_capacity() -> None:
     assert "Compares sustainable throughput" not in notebook_text
 
 
+def verdict_row(matrix: dict, criterion: str) -> dict:
+    return next(
+        row for row in matrix["verdict_rules"]["thresholds"] if row["criterion"] == criterion
+    )
+
+
+def test_matrix_declares_every_verdict_threshold_with_its_origin() -> None:
+    matrix = json.loads(MATRIX.read_text())
+    rules = matrix["verdict_rules"]
+    assert rules["one_sided_confidence"] == 0.95
+    by_criterion = {row["criterion"]: row for row in rules["thresholds"]}
+    assert by_criterion["e-perf-1-p95-ratio"]["value"] == 2.0
+    assert by_criterion["e-perf-4-boundary-p50"]["role"] == "reference"
+    assert by_criterion["e-perf-10-competitive-ratio"]["rule"] == "tested-rate-bracket"
+    assert by_criterion["e-swap-4-p95-gap"]["value"] == 100_000_000
+    assert all(
+        row["value"] == 0 for row in rules["thresholds"] if row["rule"] == "exact-count"
+    )
+    assert all(row["origin"] and row["pilot_data_visible"] in (True, False, "unknown") for row in rules["thresholds"])
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda matrix: matrix.pop("verdict_rules"), "verdict_rules must be an object"),
+        (
+            lambda matrix: matrix["verdict_rules"].update(thresholds=[]),
+            "verdict_rules thresholds must be a non-empty list",
+        ),
+        (
+            lambda matrix: verdict_row(matrix, "e-swap-4-p95-gap").update(value=200_000_000),
+            "verdict threshold e-swap-4-p95-gap differs from the frozen table",
+        ),
+        (
+            lambda matrix: verdict_row(matrix, "e-perf-1-p95-ratio").update(direction="<"),
+            "verdict threshold e-perf-1-p95-ratio differs from the frozen table",
+        ),
+        (
+            lambda matrix: verdict_row(matrix, "e-iso-containment").update(rule="one-sided-bound"),
+            "verdict threshold e-iso-containment differs from the frozen table",
+        ),
+        (
+            lambda matrix: verdict_row(matrix, "e-swap-3-dip").pop("origin"),
+            "verdict threshold e-swap-3-dip must have exactly the fields",
+        ),
+        (
+            lambda matrix: verdict_row(matrix, "e-swap-3-dip").update(pilot_data_visible="maybe"),
+            "verdict threshold e-swap-3-dip is malformed",
+        ),
+        (
+            lambda matrix: matrix["verdict_rules"]["thresholds"].remove(
+                verdict_row(matrix, "e-iso-7-throughput-drop")
+            ),
+            "verdict threshold e-iso-7-throughput-drop is missing",
+        ),
+        (
+            lambda matrix: matrix["verdict_rules"].update(one_sided_confidence=0.9),
+            "one_sided_confidence must be 0.95",
+        ),
+        (
+            lambda matrix: matrix["experiments"]["e-perf-10"]["capacity_envelope"].update(
+                competitive_ratio_threshold=0.8
+            ),
+            "verdict threshold e-perf-10-competitive-ratio disagrees with the value the experiment declares",
+        ),
+    ],
+)
+def test_matrix_rejects_a_missing_malformed_or_drifted_threshold_table(mutate, message: str) -> None:
+    matrix = json.loads(MATRIX.read_text())
+    mutate(matrix)
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "matrix.json"
+        write_json(path, matrix)
+        result = run_validator("matrix", str(path))
+    assert result.returncode == 1
+    assert message in result.stderr
+
+
 def test_density_requires_the_measured_container_floor() -> None:
     matrix = json.loads(MATRIX.read_text())
     matrix["experiments"]["e-density-1"]["required_outputs"] = ["binary-sizes.csv"]

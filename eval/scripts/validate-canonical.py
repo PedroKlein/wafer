@@ -51,6 +51,45 @@ PAYLOAD_BOUNDARY = (
 SWAP_SESSION_EXPERIMENTS = {"e-swap-1", "e-swap-2", "e-swap-5", "e-swap-6"}
 SWAP_SESSION_RUNS = 10
 SWAP_SESSION_EVENTS = 50
+VERDICT_THRESHOLD_FIELDS = {
+    "criterion",
+    "experiments",
+    "value",
+    "unit",
+    "direction",
+    "statistic",
+    "rule",
+    "role",
+    "origin",
+    "pilot_data_visible",
+}
+VERDICT_RULES = {"one-sided-bound", "exact-count", "every-run", "per-rate-cell", "tested-rate-bracket"}
+VERDICT_ROLES = {"criterion", "reference", "gate"}
+VERDICT_DIRECTIONS = {"<", "<=", ">", ">="}
+ISOLATION_ATTACKS = [f"e-iso-{index}" for index in range(1, 7)]
+# criterion: (experiments, value, unit, direction, rule, role)
+FROZEN_VERDICT_THRESHOLDS = {
+    "e-val-1-p99-low": (["e-val-1"], 45_000_000, "ns", ">=", "every-run", "gate"),
+    "e-val-1-p99-high": (["e-val-1"], 55_017_471, "ns", "<=", "every-run", "gate"),
+    "e-perf-1-p95-ratio": (["e-perf-1"], 2.0, "ratio", "<=", "one-sided-bound", "criterion"),
+    "e-perf-1-pooled-loss": (["e-perf-1"], 0.01, "fraction", "<=", "one-sided-bound", "criterion"),
+    "e-perf-1-achieved-ratio": (["e-perf-1"], 0.99, "ratio", ">=", "one-sided-bound", "criterion"),
+    "e-perf-1-duplicates": (["e-perf-1"], 0, "messages", "<=", "exact-count", "criterion"),
+    "e-perf-4-boundary-p50": (["e-perf-4"], 50_000, "ns", "<", "one-sided-bound", "reference"),
+    "e-perf-10-cell-loss": (["e-perf-10"], 0.01, "fraction", "<=", "per-rate-cell", "criterion"),
+    "e-perf-10-cell-achieved-ratio": (["e-perf-10"], 0.99, "ratio", ">=", "per-rate-cell", "criterion"),
+    "e-perf-10-cell-duplicates": (["e-perf-10"], 0, "messages", "<=", "per-rate-cell", "criterion"),
+    "e-perf-10-competitive-ratio": (["e-perf-10"], 0.7, "ratio", ">=", "tested-rate-bracket", "criterion"),
+    "e-iso-containment": (ISOLATION_ATTACKS, 0, "runs", "<=", "exact-count", "criterion"),
+    "e-iso-7-throughput-drop": (["e-iso-7"], 1.0, "percent", "<", "one-sided-bound", "criterion"),
+    "e-iso-7-stopped-runs": (["e-iso-7"], 0, "runs", "<=", "exact-count", "criterion"),
+    "e-swap-2-lossless": (["e-swap-2"], 0, "runs", "<=", "exact-count", "criterion"),
+    "e-swap-3-dip": (["e-swap-3"], 5.0, "percent", "<", "one-sided-bound", "criterion"),
+    "e-swap-3-lossless": (["e-swap-3"], 0, "runs", "<=", "exact-count", "criterion"),
+    "e-swap-4-p95-gap": (["e-swap-4"], 100_000_000, "ns", "<", "one-sided-bound", "criterion"),
+    "e-swap-4-lossless": (["e-swap-4"], 0, "runs", "<=", "exact-count", "criterion"),
+    "e-swap-5-rollback": (["e-swap-5"], 0, "runs", "<=", "exact-count", "criterion"),
+}
 
 
 def load_object(path: Path) -> dict:
@@ -501,6 +540,7 @@ def validate_matrix(matrix: dict) -> list[str]:
             errors.append(f"e-backpressure {policy} config has no file DLQ declaration")
 
     errors.extend(validate_payload_arms(experiments.get("e-perf-4", {}), campaign))
+    errors.extend(validate_verdict_rules(matrix))
 
     if experiments.get("e-perf-9", {}).get("cache_scope") != "linux-filesystem-page-cache":
         errors.append("e-perf-9 cache scope must be linux-filesystem-page-cache")
@@ -525,6 +565,83 @@ def validate_matrix(matrix: dict) -> list[str]:
     if campaign.get("expected_measured_leaves") != FINAL_MEASURED_LEAVES:
         errors.append(f"final_campaign expected_measured_leaves must be {FINAL_MEASURED_LEAVES}")
 
+    return errors
+
+
+def validate_verdict_rules(matrix: dict) -> list[str]:
+    rules = matrix.get("verdict_rules")
+    if not isinstance(rules, dict):
+        return ["verdict_rules must be an object holding the declared threshold table"]
+    errors = []
+    if rules.get("schema_version") != 1:
+        errors.append("verdict_rules schema_version must be 1")
+    if rules.get("one_sided_confidence") != 0.95:
+        errors.append("verdict_rules one_sided_confidence must be 0.95")
+    for field in ("resampling", "pilot_data"):
+        if not isinstance(rules.get(field), str) or not rules[field]:
+            errors.append(f"verdict_rules {field} must be a non-empty string")
+    thresholds = rules.get("thresholds")
+    if not isinstance(thresholds, list) or not thresholds:
+        return [*errors, "verdict_rules thresholds must be a non-empty list"]
+    declared = {}
+    for index, row in enumerate(thresholds):
+        name = row.get("criterion") if isinstance(row, dict) else None
+        label = f"verdict threshold {name or index}"
+        if not isinstance(row, dict) or set(row) != VERDICT_THRESHOLD_FIELDS:
+            errors.append(f"{label} must have exactly the fields {sorted(VERDICT_THRESHOLD_FIELDS)}")
+            continue
+        experiments = row["experiments"]
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(experiments, list)
+            or not experiments
+            or not set(experiments) <= EXPECTED_EXPERIMENTS
+            or type(row["value"]) not in (int, float)
+            or row["direction"] not in VERDICT_DIRECTIONS
+            or row["rule"] not in VERDICT_RULES
+            or row["role"] not in VERDICT_ROLES
+            or row["pilot_data_visible"] not in (True, False, "unknown")
+            or any(not isinstance(row[field], str) or not row[field] for field in ("unit", "statistic", "origin"))
+        ):
+            errors.append(f"{label} is malformed")
+            continue
+        if name in declared:
+            errors.append(f"{label} is declared twice")
+            continue
+        declared[name] = (
+            experiments,
+            row["value"],
+            row["unit"],
+            row["direction"],
+            row["rule"],
+            row["role"],
+        )
+    for name in sorted(declared.keys() | FROZEN_VERDICT_THRESHOLDS.keys()):
+        if name not in declared:
+            errors.append(f"verdict threshold {name} is missing")
+        elif name not in FROZEN_VERDICT_THRESHOLDS:
+            errors.append(f"verdict threshold {name} is not part of the frozen table")
+        elif declared[name] != FROZEN_VERDICT_THRESHOLDS[name]:
+            errors.append(f"verdict threshold {name} differs from the frozen table")
+
+    envelope = matrix.get("experiments", {}).get("e-perf-10", {}).get("capacity_envelope", {})
+    restated = {
+        "e-perf-10-competitive-ratio": envelope.get("competitive_ratio_threshold"),
+        "e-perf-10-cell-loss": (
+            envelope["max_loss_percent"] / 100
+            if type(envelope.get("max_loss_percent")) in (int, float)
+            else None
+        ),
+        "e-perf-10-cell-achieved-ratio": envelope.get("min_achieved_ratio"),
+        "e-swap-3-dip": matrix.get("experiments", {})
+        .get("e-swap-3", {})
+        .get("event_alignment", {})
+        .get("max_hot_swap_dip_percent"),
+    }
+    for name, value in restated.items():
+        if name in declared and declared[name][1] != value:
+            errors.append(f"verdict threshold {name} disagrees with the value the experiment declares")
     return errors
 
 
