@@ -1007,6 +1007,20 @@ def test_swap3_rule_restart_must_show_in_the_rule_start_time(tmp_path: Path) -> 
             ),
             "rule-replacement.json calls outlast the E-Swap-3 action",
         ),
+        (
+            "ekuiper-make-before-break",
+            lambda leaf: (leaf / "rule-replacement.json").write_text(
+                json.dumps({**swap3_rule_replacement(), "replacement_sql": SWAP3_RETIRED_SQL})
+            ),
+            "rule-replacement.json replacement_sql is not the audited pipeline_a rule "
+            "with temperature >= 60",
+        ),
+        (
+            "ekuiper-make-before-break",
+            lambda leaf: (leaf / "ekuiper-audit.json").unlink(),
+            "rule-replacement.json replacement_sql is not the audited pipeline_a rule "
+            "with temperature >= 60",
+        ),
     ],
 )
 def test_swap3_leaf_must_keep_the_record_of_its_own_arm_action(
@@ -1152,6 +1166,12 @@ SWAP3_SWAP_REQUEST = {
 }
 
 
+SWAP3_RETIRED_SQL = (
+    "SELECT device_id, temperature, humidity, ts, seq FROM wafer_telemetry "
+    "WHERE temperature >= 50 AND temperature <= 99999"
+)
+
+
 def swap3_rule_replacement(emitted: int = 1) -> dict:
     """The REST calls of one make-before-break replacement, inside a 1 ns action."""
     calls = [
@@ -1170,8 +1190,7 @@ def swap3_rule_replacement(emitted: int = 1) -> dict:
         "strategy": "ekuiper-make-before-break",
         "retired_rule": "pipeline_a",
         "replacement_rule": "pipeline_a_v2",
-        "replacement_sql": "SELECT device_id, temperature, humidity, ts, seq FROM "
-        "wafer_telemetry WHERE temperature >= 60 AND temperature <= 99999",
+        "replacement_sql": SWAP3_RETIRED_SQL.replace("temperature >= 50", "temperature >= 60"),
         "emission_metric": "sink_mqtt_0_0_records_out_total",
         "offset_clock": "monotonic",
         "status_polls": 2,
@@ -1324,6 +1343,9 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         (leaf / "swap_requests.json").write_text(json.dumps([SWAP3_SWAP_REQUEST]))
     if strategy == "ekuiper-make-before-break":
         (leaf / "rule-replacement.json").write_text(json.dumps(swap3_rule_replacement()))
+        (leaf / "ekuiper-audit.json").write_text(
+            json.dumps({"service": {"properties": {}}, "rule": {"sql": SWAP3_RETIRED_SQL}})
+        )
     interval_fragment = json.loads((leaf / "interval-latency.json").read_text())
     interval_fragment["aggregate_latency_count"] = 120_000
     interval_fragment["rows"][0]["latency_count"] = 120_000

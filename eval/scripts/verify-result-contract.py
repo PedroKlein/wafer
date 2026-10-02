@@ -106,6 +106,9 @@ SWAP3_STRATEGIES = {
     "ekuiper-make-before-break",
 }
 SWAP3_REPLACEMENT_PLUGIN = "wafer_threshold_filter_v2.wasm"
+# threshold-filter-v2 raises Pipeline A's lower bound from 50 to 60, and the eKuiper
+# replacement rule must make the same change to the pipeline_a SQL the audit recorded.
+SWAP3_RULE_BOUND_CHANGE = ("temperature >= 50", "temperature >= 60")
 SWAP3_PLACEBO_OFFSET_NS = -6_000_000_000
 PASS_THROUGH_PLUGIN = (
     "../../../plugins/pass-through/target/wasm32-wasip2/release/wafer_pass_through.wasm"
@@ -890,6 +893,19 @@ def check_swap3_action(leaf: Path, condition: object) -> list[str]:
     timeline = _load_json(leaf / "disruption-timeline.json", "disruption-timeline.json", [])
     if record is None:
         return violations
+    audit = _load_json(leaf / "ekuiper-audit.json", "ekuiper-audit.json", [])
+    rule = audit.get("rule") if isinstance(audit, dict) else None
+    retired_sql = rule.get("sql") if isinstance(rule, dict) else None
+    retired_bound, replacement_bound = SWAP3_RULE_BOUND_CHANGE
+    if (
+        not isinstance(retired_sql, str)
+        or retired_bound not in retired_sql
+        or record.get("replacement_sql") != retired_sql.replace(retired_bound, replacement_bound)
+    ):
+        violations.append(
+            "rule-replacement.json replacement_sql is not the audited pipeline_a rule "
+            f"with {replacement_bound}"
+        )
     expected_calls = [
         ("POST", "/rules", 201),
         ("GET", f"/rules/{EKUIPER_REPLACEMENT_RULE}/status", 200),
