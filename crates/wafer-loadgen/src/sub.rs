@@ -8,7 +8,7 @@
 //!
 //! Cancel model: two exit signals compete. Whichever fires first wins.
 //! 1. SIGTERM or SIGINT, handled from the start of the run.
-//! 2. `--total-messages` reached (or its default).
+//! 2. `--total-messages` distinct sequence numbers recorded (or its default).
 //!
 //! Both paths flush artifacts before returning. When a bounded side artifact
 //! overflows, recording continues and the run is written as `partial`.
@@ -47,8 +47,8 @@ pub struct SubscribeArgs {
     #[arg(long)]
     pub output_dir: PathBuf,
 
-    /// Exit gracefully after this many messages have been *observed* (parsed
-    /// or not). Set to 0 to run until SIGINT.
+    /// Exit gracefully after this many distinct sequence numbers have been
+    /// recorded; duplicates do not count. Set to 0 to run until SIGINT.
     #[arg(long, default_value_t = 0)]
     pub total_messages: u64,
 
@@ -249,10 +249,12 @@ pub async fn run_subscriber(args: SubscribeArgs) -> anyhow::Result<SubscriberRep
                             trace.as_mut(),
                             (receive_ns, elapsed_ns, &payload),
                         )?;
-                        if args.total_messages > 0 && recorder.total_messages() >= args.total_messages {
+                        if args.total_messages > 0
+                            && recorder.sequence().received_unique() >= args.total_messages
+                        {
                             exit_reason = "total-messages";
                             info!(
-                                total = recorder.total_messages(),
+                                unique = recorder.sequence().received_unique(),
                                 "Reached --total-messages; flushing artifacts"
                             );
                             break;

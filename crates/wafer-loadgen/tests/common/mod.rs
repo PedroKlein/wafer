@@ -1,6 +1,7 @@
-//! A minimal in-process MQTT 3.1.1 broker for publisher tests: it answers
-//! CONNECT, PUBLISH (`QoS` 1), SUBSCRIBE and PINGREQ, and lets a test withhold
-//! acknowledgements, refuse sessions or drop every open connection.
+//! A minimal in-process MQTT 3.1.1 broker for publisher and subscriber tests:
+//! it answers CONNECT, PUBLISH (`QoS` 1), SUBSCRIBE and PINGREQ, lets a test
+//! withhold acknowledgements, refuse sessions or drop every open connection,
+//! and sends a subscriber a fixed list of payloads once it subscribes.
 
 #![allow(dead_code, reason = "each integration test uses the subset of controls it needs")]
 #![expect(clippy::unwrap_used, reason = "test scaffolding: a failure here is a test failure")]
@@ -10,7 +11,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use bytes::BytesMut;
-use rumqttc::{ConnAck, ConnectReturnCode, Packet, PubAck, QoS, SubAck, SubscribeReasonCode};
+use rumqttc::{
+    ConnAck, ConnectReturnCode, Packet, PubAck, Publish, QoS, SubAck, SubscribeReasonCode,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::sync::CancellationToken;
@@ -24,6 +27,7 @@ struct Shared {
     connections: AtomicU64,
     publishes: AtomicU64,
     generation: std::sync::Mutex<CancellationToken>,
+    deliveries: std::sync::Mutex<Vec<Vec<u8>>>,
 }
 
 pub struct FakeBroker {
@@ -66,6 +70,11 @@ impl FakeBroker {
     /// Stop answering PUBLISH packets (or resume, with `false`).
     pub fn hold_acks(&self, hold: bool) {
         self.shared.hold_acks.store(hold, Ordering::Release);
+    }
+
+    /// Send these payloads, in order, to every client that subscribes.
+    pub fn deliver_on_subscribe(&self, payloads: Vec<Vec<u8>>) {
+        *self.shared.deliveries.lock().unwrap() = payloads;
     }
 
     /// Answer every CONNECT with a refusal.
@@ -130,7 +139,22 @@ async fn serve(mut stream: TcpStream, shared: Arc<Shared>) -> std::io::Result<()
                     .iter()
                     .map(|filter| SubscribeReasonCode::Success(filter.qos))
                     .collect();
-                Some(Packet::SubAck(SubAck::new(subscribe.pkid, codes)))
+                outgoing.clear();
+                Packet::SubAck(SubAck::new(subscribe.pkid, codes))
+                    .write(&mut outgoing, MAX_PACKET_BYTES)
+                    .unwrap();
+                let deliveries = shared.deliveries.lock().unwrap().clone();
+                for (filter, payload) in subscribe
+                    .filters
+                    .iter()
+                    .flat_map(|filter| deliveries.iter().map(move |payload| (filter, payload)))
+                {
+                    Packet::Publish(Publish::new(&filter.path, QoS::AtMostOnce, payload.clone()))
+                        .write(&mut outgoing, MAX_PACKET_BYTES)
+                        .unwrap();
+                }
+                stream.write_all(&outgoing).await?;
+                None
             }
             Packet::PingReq => Some(Packet::PingResp),
             Packet::Disconnect => return Ok(()),
