@@ -58,16 +58,6 @@ Do not quote old desktop or Raspberry Pi 4 shakedown values as current or final 
 
 **Known drift:** Some matrix entries describe the frozen final design with `thesis_evidence=true`; that declaration does not prove execution or admission. Read it together with campaign status, terminal receipts, and the external-gap rules. In particular, E-Perf-5's final definition remains incomplete until matched x86 execution exists.
 
-## Evidence
-
-- **Source:** [`eval/canonical-matrix.json`](../../eval/canonical-matrix.json) | symbols: `"enhanced_candidate"`, `"thesis_evidence": false`
-- **Source:** [`eval/RESULT-CONTRACT.md`](../../eval/RESULT-CONTRACT.md) | symbols: `Intervals and events are nested observations`, `E-Perf-5 remains PENDING`
-- **Source:** [`eval/scripts/run-experiment.sh`](../../eval/scripts/run-experiment.sh) | symbols: `Usage: run-experiment.sh`, `eval/RESULT-CONTRACT.md`, `eval/scripts/collect-results.sh`
-- **Source:** [`eval/scripts/collect-results.sh`](../../eval/scripts/collect-results.sh) | symbols: `never overwrites an existing directory`, `mkdir -p "$target"`
-- **Source:** [`eval/scripts/lib/canonical_runner.py`](../../eval/scripts/lib/canonical_runner.py) | symbols: `class RunItem`, `def build_schedule`, `def verify_result`, `def summarize_capacity_knee`
-- **Source:** [`eval/analysis/src/wafer_analysis/results_layout.py`](../../eval/analysis/src/wafer_analysis/results_layout.py) | symbols: `class ResultsLayout`, `def resolve_raw_relative`
-- **Test:** [`eval/scripts/tests/test_canonical_matrix.py`](../../eval/scripts/tests/test_canonical_matrix.py) | symbols: `def test_matrix_accepts_frozen_experiments`, `def test_final_capacity_repetitions_cannot_drop_below_30`
-
 ## Checkpoint
 
 Choose one figure from an analysis notebook and trace it back to its batch, the physical result leaves it reads, their independent run indexes, nested observations, and evidence class. Then explain why fifty swap events in each of five runs still means N=5 rather than N=250.

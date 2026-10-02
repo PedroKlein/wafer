@@ -116,19 +116,6 @@ The envelope unit tests establish shared host-side clone storage. The source-loo
 
 **Known drift:** None for the path described above. Host-side `Arc`/`Bytes` clones do not make Transform output or WIT strings zero-copy; fan-in also has no fairness or ordering guarantee.
 
-## Evidence
-
-- **Source:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `pub struct RuntimeEnvelope`, `Arc<EnvelopeHeader>`, `pub payload: Bytes`
-- **Source:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbols: `pub async fn run_source_loop`, `envelope.ensure_trace_id()`
-- **Source:** [`crates/wafer-core/src/runner/transform.rs`](../../crates/wafer-core/src/runner/transform.rs) | symbols: `pub async fn run_transform_loop_with_config`, `let result = transform.process(envelope).await`
-- **Source:** [`crates/wafer-core/src/runner/mod.rs`](../../crates/wafer-core/src/runner/mod.rs) | symbols: `pub async fn send_downstream`, `async fn send_one`, `sender.sender.reserve().await`
-- **Source:** [`crates/wafer-core/src/node/wasm.rs`](../../crates/wafer-core/src/node/wasm.rs) | symbols: `fn build_wit_message`, `pub async fn process`, `delete_buffer`
-- **Source:** [`wit/pipeline-types.wit`](../../wit/pipeline-types.wit) | symbols: `record message`, `payload: borrow<buffer>`, `record output-message`
-- **Source:** [`wit/pipeline-node.wit`](../../wit/pipeline-node.wit) | symbols: `interface transform`, `process: func(input: message)`
-- **Test:** [`crates/wafer-core/src/queue/envelope.rs`](../../crates/wafer-core/src/queue/envelope.rs) | symbols: `fn test_clone_shares_header_via_arc()`, `fn test_clone_shares_payload_bytes()`
-- **Test:** [`crates/wafer-core/src/runner/source.rs`](../../crates/wafer-core/src/runner/source.rs) | symbol: `async fn test_source_loop_messages_flow()`
-- **Test:** [`crates/wafer-core/src/testing/harness.rs`](../../crates/wafer-core/src/testing/harness.rs) | symbols: `fn pass_through_propagates_metadata()`, `fn pass_through_survives_epoch_deadline_wraparound()`
-
 ## Checkpoint
 
 Trace one message in your own words. Identify each ownership move, each intentional clone, the exact point at which payload bytes may be copied, and why cancellation waits around receive but not around the guest call.

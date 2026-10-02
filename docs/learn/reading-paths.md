@@ -55,10 +55,4 @@ Rust checkpoints: [crate](rust-in-context.md#crate), [Arc](rust-in-context.md#ar
 
 **Intended design:** The routes follow vertical flows so that a reader sees a value enter, cross a boundary, and reach its consumer before studying adjacent subsystems.
 
-**Known drift:** Architecture and status prose may summarize old or intended behavior. For every implementation claim, prefer the source and named tests on `main`. Some Wasm integration tests require prebuilt component fixtures; a skipped test is conditional evidence, not a passing runtime demonstration.
-
-## Evidence
-
-- **Source:** [`crates/wafer-runtime/src/main.rs`](../../crates/wafer-runtime/src/main.rs) | symbols: `fn main() -> ExitCode`, `async fn run`, `launch_pipeline_timed`
-- **Source:** [`crates/wafer-core/src/orchestrator/builder.rs`](../../crates/wafer-core/src/orchestrator/builder.rs) | symbols: `pub fn build_pipeline_with_io`, `fn wire_queues`
-- **Test:** [`crates/wafer-core/src/orchestrator/pipeline.rs`](../../crates/wafer-core/src/orchestrator/pipeline.rs) | symbols: `async fn test_spawn_creates_tasks()`, `async fn test_source_sink_real_loops_process_messages()`
+**Known drift:** Architecture and status prose may summarize old or intended behavior. For every implementation claim, prefer the source and tests on `main`. Some Wasm integration tests require prebuilt component fixtures; a skipped test is conditional evidence, not a passing runtime demonstration.
