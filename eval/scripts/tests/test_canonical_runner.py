@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -3610,6 +3611,22 @@ def test_repetitions_drops_alias_views_of_measured_runs() -> None:
     assert result.returncode == 0, result.stderr
     assert "PLAN e-perf-1 " in result.stdout
     assert "PLAN e-perf-2 " not in result.stdout
+
+
+def test_swap3_smoke_task_runs_every_arm_once_as_a_diagnostic_batch() -> None:
+    task = tomllib.loads((ROOT / "mise.toml").read_text())["tasks"]["smoke-swap3"]
+    command = shlex.split(task["run"])
+    assert command[:2] == ["./eval/scripts/run-rpi5-canonical.sh", "--execute"]
+    assert command[-1] == "$@"
+
+    result = run_runner("--batch-id", "test", "--dry-run", *command[2:-1])
+
+    assert result.returncode == 0, result.stderr
+    assert "DIAGNOSTIC repetitions=1: not thesis evidence" in result.stdout
+    plans = [line.split()[1:4] for line in result.stdout.splitlines() if line.startswith("PLAN ")]
+    assert sorted(plans) == sorted(
+        ["e-swap-3", f"condition={strategy}", "runs=1"] for strategy in runner.SWAP3_STRATEGIES
+    )
 
 
 def test_status_reports_done_and_pending_runs_and_resume_keeps_the_schedule(

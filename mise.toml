@@ -349,6 +349,10 @@ alias = "run-canonical-pi5"
 description = "Run or resume a campaign batch on this host (--host rpi5|jetson|x86, --batch-id ID)"
 run = './eval/scripts/run-rpi5-canonical.sh --execute "$@"'
 
+[tasks.smoke-swap3]
+description = "Run every E-Swap-3 arm once as a diagnostic batch, never evidence (--host as for run-campaign)"
+run = './eval/scripts/run-rpi5-canonical.sh --execute --experiments e-swap-3 --repetitions 1 "$@"'
+
 [tasks.campaign-status]
 description = "Print done and pending runs of a batch (--batch-id ID, --host as for run-campaign)"
 run = './eval/scripts/run-rpi5-canonical.sh --status "$@"'
