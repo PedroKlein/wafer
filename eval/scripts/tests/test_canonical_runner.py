@@ -4780,6 +4780,49 @@ def test_ekuiper_concurrency_diagnostic_changes_only_rule_concurrency() -> None:
     assert concurrency_one == concurrency_three
 
 
+def test_ekuiper_seed_drops_the_replacement_rule_before_recreating_pipeline_a(
+    tmp_path: Path,
+) -> None:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    curl = bin_dir / "curl"
+    curl.write_text(
+        "#!/usr/bin/env bash\n"
+        "method=GET\n"
+        "while [ \"$#\" -gt 0 ]; do\n"
+        "    case \"$1\" in\n"
+        "        -X) method=\"$2\"; shift 2 ;;\n"
+        "        http*) url=\"$1\"; shift ;;\n"
+        "        *) shift ;;\n"
+        "    esac\n"
+        "done\n"
+        "printf '%s %s\\n' \"$method\" \"$url\" >> \"$CURL_LOG\"\n"
+    )
+    curl.chmod(0o755)
+    log = tmp_path / "curl.log"
+
+    subprocess.run(
+        [str(ROOT / "eval/ekuiper/seed-pipeline-a.sh")],
+        check=True,
+        capture_output=True,
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "CURL_LOG": str(log),
+            "EKUIPER_URL": "http://ekuiper.test",
+        },
+    )
+
+    assert log.read_text().splitlines() == [
+        "GET http://ekuiper.test/",
+        "DELETE http://ekuiper.test/rules/pipeline_a",
+        "DELETE http://ekuiper.test/rules/pipeline_a_v2",
+        "DELETE http://ekuiper.test/streams/wafer_telemetry",
+        "POST http://ekuiper.test/streams",
+        "POST http://ekuiper.test/rules",
+    ]
+
+
 def test_external_subscriber_percentiles_do_not_parse_binary_hdr() -> None:
     item = next(
         item
