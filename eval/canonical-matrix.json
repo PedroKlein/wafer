@@ -452,7 +452,9 @@
       "required_outputs": [
         "latency.hdr",
         "throughput.csv",
-        "sequence.csv"
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json"
       ],
       "analysis": "09-saturation.ipynb",
       "thesis_evidence": true,
@@ -475,7 +477,9 @@
       "required_outputs": [
         "latency.hdr",
         "throughput.csv",
-        "sequence.csv"
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json"
       ],
       "analysis": "01-latency-cdf.ipynb",
       "thesis_evidence": true,
@@ -499,7 +503,9 @@
       "required_outputs": [
         "latency.hdr",
         "throughput.csv",
-        "sequence.csv"
+        "sequence.csv",
+        "publisher-summary.json",
+        "subscriber-metadata.json"
       ],
       "analysis": "08-depth-scaling.ipynb",
       "thesis_evidence": true,

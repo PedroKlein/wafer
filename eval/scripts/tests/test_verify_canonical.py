@@ -626,6 +626,69 @@ def write_ekuiper_health(
     (result / "ekuiper-health.json").write_text(json.dumps(health))
 
 
+def write_target_load_summaries(
+    result: Path, received_unique: int = 60_000, sequence_end: int | None = 60_000
+) -> None:
+    """A clean 60,000-message publisher and a subscriber that missed the rest at the tail."""
+    publisher = {
+        "schema_version": 1,
+        "intended": 60_000,
+        "rejected": 0,
+        "enqueued": 60_000,
+        "acked": 60_000,
+        "unacked_at_exit": 0,
+        "connects": 1,
+        "measurement_duration_ns": 60_000_000_000,
+        "deadline_misses": 0,
+        "exit_reason": "duration",
+    }
+    gaps = 60_000 - received_unique
+    subscriber = {
+        "started_at_ns": 1,
+        "ended_at_ns": 2,
+        "exit_reason": "sigint" if gaps else "total-messages",
+        "status": "complete",
+        "git_sha": "1" * 40,
+        "host_tag": "rpi5",
+        "sequence_end_exclusive": sequence_end,
+        "ignored_sequence_count": 12,
+        "total_recorded": received_unique,
+        "total_messages": received_unique,
+        "parse_errors": 0,
+        "negative_latency_count": 0,
+        "above_highest_latency_count": 0,
+        "clock_steps": 0,
+        "latency_p50_ns": 1,
+        "latency_p95_ns": 2,
+        "latency_p99_ns": 3,
+        "histogram_lowest_ns": 1_000,
+        "histogram_highest_ns": 3_600_000_000_000,
+        "histogram_sig_digits": 3,
+        "sequence": {
+            "expected": 60_000 if sequence_end else received_unique,
+            "total_received": received_unique,
+            "received_unique": received_unique,
+            "total_gaps": gaps if sequence_end else 0,
+            "total_duplicates": 0,
+            "out_of_range": 0,
+            "gap_ranges": [[received_unique, 59_999]] if gaps and sequence_end else [],
+            "duplicate_seqs": [],
+            "examples_truncated": False,
+        },
+    }
+    (result / "publisher-summary.json").write_text(json.dumps(publisher))
+    (result / "subscriber-metadata.json").write_text(json.dumps(subscriber))
+    for name in ("interval-latency.json", "interval-metrics.json"):
+        intervals = json.loads((result / name).read_text())
+        intervals["aggregate_latency_count"] = received_unique
+        intervals["rows"][0].update(
+            latency_count=received_unique,
+            received_events=received_unique,
+            throughput_messages=received_unique,
+        )
+        (result / name).write_text(json.dumps(intervals))
+
+
 def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
     source = make_result(root)
     result = root / "e-perf-1" / "rpi5-2026-08-30T00-00-00Z" / "ekuiper" / "run-01"
@@ -645,6 +708,7 @@ def make_ekuiper_result(root: Path, exit_code: int | None = 0) -> Path:
     audit = {"service": {"properties": {"MainPID": "4242", "Environment": "HOME=/var/lib/kuiper"}}}
     (result / "ekuiper-audit.json").write_text(json.dumps(audit))
     write_ekuiper_health(result)
+    write_target_load_summaries(result)
     return result
 
 
@@ -663,6 +727,36 @@ def test_final_ekuiper_result_rejects_a_service_that_inherited_gctrace(tmp_path:
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert traced.returncode != 0
     assert "GODEBUG" in traced.stdout + traced.stderr
+
+
+def test_target_load_tail_loss_is_admitted_data(tmp_path: Path) -> None:
+    result = make_ekuiper_result(tmp_path)
+    write_target_load_summaries(result, received_unique=59_000)
+
+    completed = run(result)
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("missing", "violation"),
+    [
+        ("publisher-summary.json", "missing required canonical artefact for e-perf-1: publisher-summary.json"),
+        (None, "subscriber-metadata.json does not declare the publisher's measured sequence range"),
+    ],
+)
+def test_target_load_result_requires_bounded_summaries_and_a_declared_range(
+    tmp_path: Path, missing: str | None, violation: str
+) -> None:
+    result = make_ekuiper_result(tmp_path)
+    write_target_load_summaries(result, received_unique=59_000, sequence_end=None)
+    if missing:
+        (result / missing).unlink()
+
+    completed = run(result)
+
+    assert completed.returncode == 1
+    assert violation in completed.stdout
 
 
 def test_canonical_ekuiper_result_requires_its_health_snapshots(tmp_path: Path) -> None:
@@ -944,7 +1038,9 @@ def make_swap3_canonical_leaf(root: Path, strategy: str = "wafer-hotswap") -> Pa
         "histogram_highest_ns": 3_600_000_000_000,
         "histogram_sig_digits": 3,
         "sequence": {
+            "expected": 120_000,
             "total_received": 120_000,
+            "received_unique": 120_000,
             "total_gaps": 0,
             "total_duplicates": 0,
             "out_of_range": 0,
@@ -2126,10 +2222,10 @@ def test_ekuiper_profile_verifier_enforces_diagnostic_pairing_and_limitations(
     runtime["interval_alignment"]["row_count"] = 61
     runtime_path.write_text(json.dumps(runtime))
     assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 62
+    runtime["interval_alignment"]["row_count"] = 67
     runtime_path.write_text(json.dumps(runtime))
     assert CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata) == []
-    runtime["interval_alignment"]["row_count"] = 63
+    runtime["interval_alignment"]["row_count"] = 68
     runtime_path.write_text(json.dumps(runtime))
     assert "interval alignment" in " ".join(
         CONTRACT.check_ekuiper_profile_artifacts(leaf, metadata)
